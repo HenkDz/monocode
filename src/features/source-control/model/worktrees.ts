@@ -20,6 +20,24 @@ export type Worktree = {
 };
 export type Worktrees = { worktrees: Worktree[]; defaultRoot: string };
 
+export type WorktreeSessionOptions = Partial<Pick<
+  Session, "harness" | "model" | "modelSettings" | "composerSeed" | "linkedWorkItem"
+>>;
+export type WorktreeCreationOptions = {
+  keepOpen: boolean;
+  session?: WorktreeSessionOptions;
+};
+
+/** Human names become Git refs; existing branch names must never be rewritten. */
+export function normalizeWorktreeBranch(name: string): string {
+  return name.normalize("NFKC").trim().toLowerCase()
+    .replace(/[^\p{L}\p{N}/._-]+/gu, "-")
+    .split("/")
+    .map((part) => part.replace(/\.{2,}/g, "-")
+      .replace(/^[.-]+|(?:\.lock|[.-])+$/g, ""))
+    .filter(Boolean).join("/");
+}
+
 export const listWorktrees = (cwd: string) =>
   invokeWorkspace<Worktrees>("git_worktrees", { cwd });
 
@@ -29,6 +47,8 @@ export async function createWorktree(
   base: string,
   existing: boolean,
 ) {
+  branch = existing ? branch.trim() : normalizeWorktreeBranch(branch);
+  if (!branch) throw new Error("Enter a worktree name containing letters or numbers.");
   const tree = await invoke<Worktree>("git_worktree_create", {
     cwd,
     branch,
@@ -81,10 +101,8 @@ export function orchestrationWorktreeBranchName(id: string): string {
 }
 
 export function namedWorktreeBranch(fragment: string): string | null {
-  const clean = fragment
-    .trim()
-    .replace(/^(?:mc|monocode)\/+/, "")
-    .replace(/^\/+|\/+$/g, "");
+  const clean = normalizeWorktreeBranch(fragment)
+    .replace(/^(?:mc|monocode)\/+/, "");
   return clean ? `mc/${clean}` : null;
 }
 

@@ -10,6 +10,8 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { HostStore } from "./store";
+import { WorkspaceCommands } from "./workspace-commands";
 import {
   createHostPath,
   hostFileDiff,
@@ -26,6 +28,61 @@ const roots: string[] = [];
 afterEach(() => {
   for (const root of roots.splice(0))
     rmSync(root, { recursive: true, force: true });
+});
+
+it("fetch distinguishes remote existence from upstream and sync sets tracking safely", async () => {
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "monocode-publication-")));
+  const remote = realpathSync.native(mkdtempSync(join(tmpdir(), "monocode-publication-remote-")));
+  roots.push(root, remote);
+  const git = (...args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
+  git("init", "-qb", "main");
+  git("config", "user.name", "Test");
+  git("config", "user.email", "test@example.test");
+  git("config", "commit.gpgsign", "false");
+  git("config", "push.autoSetupRemote", "false");
+  git("config", "push.default", "simple");
+  git("commit", "--allow-empty", "-qm", "base");
+  git("clone", "--bare", root, remote);
+  git("remote", "add", "origin", remote);
+  git("checkout", "-qb", "feat/inbox-parent-toggle");
+  const store = new HostStore(":memory:");
+  store.addProject(root, "Test");
+  const commands = new WorkspaceCommands(store, async (_id, action) => action());
+  try {
+    await commands.run("git_fetch", { cwd: root });
+    expect(await hostGitIndex(root)).toMatchObject({ remoteBranch: null, upstream: null, headPushed: true });
+    // The branch is created remotely at the base SHA, without configuring tracking.
+    git("--git-dir", remote, "update-ref", "refs/heads/feat/inbox-parent-toggle", git("rev-parse", "HEAD"));
+    expect((await hostGitIndex(root)).remoteBranch).toBeNull();
+    const head = git("rev-parse", "HEAD");
+    writeFileSync(join(root, "untracked.txt"), "keep me");
+    const status = git("status", "--porcelain=v1");
+    await commands.run("git_fetch", { cwd: root });
+    expect(git("rev-parse", "HEAD")).toBe(head);
+    expect(git("status", "--porcelain=v1")).toBe(status);
+    expect(await hostGitIndex(root)).toMatchObject({ remoteBranch: "origin/feat/inbox-parent-toggle", upstream: null, ahead: 0, behind: 0 });
+    git("commit", "--allow-empty", "-qm", "local work");
+    expect(await hostGitIndex(root)).toMatchObject({ ahead: 1, headPushed: false });
+    await commands.run("git_sync", { cwd: root });
+    expect(await hostGitIndex(root)).toMatchObject({ upstream: "origin/feat/inbox-parent-toggle", ahead: 0, aheadOfDefault: 1, headPushed: true });
+    // Compare with the same-name remote branch, not main, when tracking is removed.
+    git("branch", "--unset-upstream");
+    expect(await hostGitIndex(root)).toMatchObject({ upstream: null, ahead: 0, aheadOfDefault: 1 });
+    git("remote", "add", "other", remote);
+    await commands.run("git_fetch", { cwd: root });
+    git("branch", "--set-upstream-to=other/feat/inbox-parent-toggle");
+    await commands.run("git_push", { cwd: root });
+    expect(git("config", "branch.feat/inbox-parent-toggle.remote")).toBe("other");
+    git("branch", "--unset-upstream");
+    git("--git-dir", remote, "update-ref", "-d", "refs/heads/feat/inbox-parent-toggle");
+    await commands.run("git_fetch", { cwd: root });
+    expect((await hostGitIndex(root)).remoteBranch).toBeNull();
+    git("remote", "set-url", "origin", join(remote, "missing"));
+    await expect(commands.run("git_fetch", { cwd: root })).rejects.toThrow();
+    await expect(commands.run("git_fetch", { cwd: remote })).rejects.toThrow("outside");
+  } finally {
+    store.db.close();
+  }
 });
 
 it("reports a broken Git index instead of searching ignored files", async () => {

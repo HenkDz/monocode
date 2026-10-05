@@ -236,9 +236,10 @@ export function WorktreesPage({
           cwd={project}
           baseCwd={project}
           defaultRoot={data?.defaultRoot}
-          onCreated={() => {
-            setCreating(false);
-            refresh();
+          worktrees={data?.worktrees}
+          onCreated={async (_tree, options) => {
+            await refresh();
+            if (!options.keepOpen) setCreating(false);
           }}
           onCancel={() => setCreating(false)}
         />

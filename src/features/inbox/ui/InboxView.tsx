@@ -492,6 +492,7 @@ export function InboxView({
   const fetchQuery = useMemo<InboxQuery>(
     () => ({
       assignedToMe: activeFilters.assignedToMe,
+      includeGithubParents: activeFilters.includeGithubParents,
       state: fetchState,
       search: "",
       linearHiddenTeamIds,
@@ -499,6 +500,7 @@ export function InboxView({
     }),
     [
       activeFilters.assignedToMe,
+      activeFilters.includeGithubParents,
       fetchState,
       linearHiddenTeamIds,
       jiraHiddenProjectIds,
@@ -694,6 +696,7 @@ export function InboxView({
     let cancelled = false;
     if (cached) setRevalidating(true);
     else {
+      setItems([]);
       setLoading(true);
       setProviderErrors({});
     }

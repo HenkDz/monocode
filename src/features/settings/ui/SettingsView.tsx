@@ -191,7 +191,13 @@ import {
   projectName,
 } from "../../../shared/lib/paths";
 import { revealPath } from "../../../platform/tauri/fs";
-import { IS_LINUX, IS_MAC, IS_WIN } from "../../../platform/tauri/platform";
+import {
+  IS_LINUX,
+  IS_MAC,
+  IS_WIN,
+  MOD,
+  SHIFT,
+} from "../../../platform/tauri/platform";
 import {
   loadArchivedProjects,
   looksLikeProject,
@@ -298,6 +304,10 @@ import {
   loadClaudeHooks,
   loadCloseToTray,
   loadCollapsedProjectRailMode,
+  loadWorkspacePanelSide,
+  saveWorkspacePanelSide,
+  subscribeWorkspacePanelSide,
+  type WorkspacePanelSide,
   loadComposerRunner,
   loadDiffViewer,
   loadFileTabMode,
@@ -2236,6 +2246,7 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
             onChange={appearance.onCollapsedProjectRailMode}
           />
         </Row>
+        <WorkspacePanelSideRow />
         <Row
           id="interface-scale"
           label="Interface scale"
@@ -4411,5 +4422,30 @@ function Select({
         </Popover>
       ) : null}
     </div>
+  );
+}
+
+function WorkspacePanelSideRow() {
+  const side = useSyncExternalStore(
+    subscribeWorkspacePanelSide,
+    loadWorkspacePanelSide,
+    loadWorkspacePanelSide,
+  );
+  return (
+    <Row
+      id="workspace-panel-side"
+      label="Workspace panel"
+      description={`Dock Explorer and Changes beside the project rail or on the right edge. Hide it with ${MOD}${SHIFT}B.`}
+    >
+      <Segmented
+        label="Workspace panel"
+        value={side}
+        options={[
+          { value: "left", label: "Left" },
+          { value: "right", label: "Right" },
+        ]}
+        onChange={(next: WorkspacePanelSide) => saveWorkspacePanelSide(next)}
+      />
+    </Row>
   );
 }

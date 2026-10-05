@@ -164,6 +164,14 @@ export function InboxFiltersMenu({
         onClick={toggleAssigned}
       />
 
+      {source === "github" ? (
+        <FilterItem
+          label="Include parent repositories"
+          checked={filters.includeGithubParents}
+          onClick={() => onChange({ ...filters, includeGithubParents: !filters.includeGithubParents })}
+        />
+      ) : null}
+
       <SectionLabel>Status</SectionLabel>
       <FilterItem
         label="Open"

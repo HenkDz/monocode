@@ -866,6 +866,7 @@ pub struct GitDiffIndex {
     pub deletions: i64,
     pub remote: Option<String>,
     pub upstream: Option<String>,
+    pub remote_branch: Option<String>,
     pub default_branch: Option<String>,
     pub ahead: i64,
     pub behind: i64,
@@ -1104,6 +1105,14 @@ pub async fn git_pull(cwd: String) -> Result<(), String> {
     .map_err(|e| e.to_string())?
 }
 
+/// Refresh remote-tracking refs without changing HEAD, files, or upstream configuration.
+#[tauri::command]
+pub async fn git_fetch(cwd: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || git_fetch_for(&expand_home(&cwd)))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 /// Pull incoming commits, then push local commits.
 #[tauri::command]
 pub async fn git_sync(cwd: String) -> Result<(), String> {
@@ -1137,6 +1146,8 @@ pub struct GitPr {
     pub title: String,
     pub url: String,
     pub state: String,
+    #[serde(default)]
+    pub is_draft: bool,
 }
 
 /// Latest pull request for the current branch, if `gh` can see one.
@@ -1929,6 +1940,7 @@ fn git_diff_index_with(root: &Path, include_sync: bool) -> GitDiffIndex {
         deletions,
         remote: sync.remote,
         upstream: sync.upstream,
+        remote_branch: sync.remote_branch,
         default_branch: sync.default_branch,
         ahead: sync.ahead,
         behind: sync.behind,
@@ -2607,7 +2619,13 @@ fn git_push_for(root: &Path) -> Result<(), String> {
         return git_checked(root, &["push"]);
     }
     let remote = git_remote_name(root).ok_or_else(|| "No git remote to push to".to_string())?;
-    git_checked(root, &["push", "-u", &remote, "HEAD"])
+    let branch = git_branch(root).ok_or_else(|| "Not on a branch".to_string())?;
+    let refspec = format!("HEAD:refs/heads/{branch}");
+    git_checked(root, &["push", "--set-upstream", &remote, &refspec])
+}
+
+fn git_fetch_for(root: &Path) -> Result<(), String> {
+    git_checked(root, &["fetch", "--all", "--prune"])
 }
 
 fn git_sync_changes_for(root: &Path) -> Result<(), String> {
@@ -2660,7 +2678,7 @@ fn git_pr_status_for(root: &Path) -> Option<GitPr> {
             "--head",
             &head,
             "--json",
-            "number,title,url,state",
+            "number,title,url,state,isDraft",
             "--limit",
             "20",
             "--state",
@@ -4031,6 +4049,8 @@ fn parse_gh_pr_list(json: &str) -> Option<GitPr> {
         title: String,
         url: String,
         state: String,
+        #[serde(default, rename = "isDraft")]
+        is_draft: bool,
     }
     let rows: Vec<Row> = serde_json::from_str(json).ok()?;
     let mut best: Option<GitPr> = None;
@@ -4040,6 +4060,7 @@ fn parse_gh_pr_list(json: &str) -> Option<GitPr> {
             title: row.title,
             url: row.url,
             state: row.state.to_lowercase(),
+            is_draft: row.is_draft,
         };
         if pr.state == "open" {
             return Some(pr);
@@ -4569,6 +4590,7 @@ fn git_origin_repo(root: &Path) -> Option<String> {
 struct GitSync {
     remote: Option<String>,
     upstream: Option<String>,
+    remote_branch: Option<String>,
     default_branch: Option<String>,
     ahead: i64,
     behind: i64,
@@ -4579,6 +4601,13 @@ struct GitSync {
 fn git_sync_for(root: &Path) -> GitSync {
     let remote = git_remote_name(root);
     let upstream = git_stdout(root, &["rev-parse", "--abbrev-ref", "@{upstream}"]);
+    let remote_branch = remote
+        .as_ref()
+        .zip(git_branch(root))
+        .and_then(|(remote, branch)| {
+            let name = format!("{remote}/{branch}");
+            git_ref_exists(root, &format!("refs/remotes/{name}")).then_some(name)
+        });
     let default_branch = git_default_branch(root, remote.as_deref());
     let default_ref = match (&remote, &default_branch) {
         (Some(remote), Some(branch)) => Some(format!("{remote}/{branch}")),
@@ -4586,7 +4615,7 @@ fn git_sync_for(root: &Path) -> GitSync {
     };
     let (ahead, behind) = if upstream.is_some() {
         git_ahead_behind(root, "@{upstream}")
-    } else if let Some(base) = default_ref.as_deref() {
+    } else if let Some(base) = remote_branch.as_deref().or(default_ref.as_deref()) {
         git_ahead_behind(root, base)
     } else {
         (0, 0)
@@ -4610,6 +4639,7 @@ fn git_sync_for(root: &Path) -> GitSync {
     GitSync {
         remote,
         upstream,
+        remote_branch,
         default_branch,
         ahead,
         behind,
@@ -7381,6 +7411,70 @@ mod tests {
     }
 
     #[test]
+    fn git_sync_fetch_distinguishes_remote_branch_from_upstream() {
+        let repo = tmp("git-publication-repo");
+        let origin = tmp("git-publication-origin");
+        assert!(init_git_commit(&repo.0, &[("a.txt", "alpha\n")]));
+        let origin_url = origin.0.to_string_lossy().into_owned();
+        let repo_url = repo.0.to_string_lossy().into_owned();
+        assert!(git(&repo.0, &["clone", "--bare", &repo_url, &origin_url]));
+        assert!(git(&repo.0, &["remote", "add", "origin", &origin_url]));
+        assert!(git(
+            &repo.0,
+            &["checkout", "-b", "feat/inbox-parent-toggle"]
+        ));
+        git_fetch_for(&repo.0).unwrap();
+        let index = git_diff_index_for(&repo.0);
+        assert!(index.head_pushed); // Contained by main is not branch publication.
+        assert_eq!(index.remote_branch, None);
+        let head = git_stdout(&repo.0, &["rev-parse", "HEAD"]).unwrap();
+        assert!(git(
+            &origin.0,
+            &["update-ref", "refs/heads/feat/inbox-parent-toggle", &head]
+        ));
+        assert_eq!(git_diff_index_for(&repo.0).remote_branch, None);
+        std::fs::write(repo.0.join("a.txt"), "keep local edits\n").unwrap();
+        let status = git_stdout(&repo.0, &["status", "--porcelain"]);
+        git_fetch_for(&repo.0).unwrap();
+        let index = git_diff_index_for(&repo.0);
+        assert_eq!(
+            index.remote_branch.as_deref(),
+            Some("origin/feat/inbox-parent-toggle")
+        );
+        assert_eq!(index.upstream, None);
+        assert_eq!((index.ahead, index.behind), (0, 0));
+        assert_eq!(index.head.as_deref(), Some(head.as_str()));
+        assert_eq!(git_stdout(&repo.0, &["status", "--porcelain"]), status);
+        git_stage_file_for(&repo.0, "a.txt").unwrap();
+        git_commit_for(&repo.0, "local work").unwrap();
+        assert_eq!(git_diff_index_for(&repo.0).ahead, 1);
+        git_push_for(&repo.0).unwrap();
+        assert_eq!(
+            git_diff_index_for(&repo.0).upstream.as_deref(),
+            Some("origin/feat/inbox-parent-toggle")
+        );
+        assert!(git(&repo.0, &["branch", "--unset-upstream"]));
+        let index = git_diff_index_for(&repo.0);
+        assert_eq!((index.ahead, index.ahead_of_default), (0, 1));
+        assert!(git(
+            &origin.0,
+            &["update-ref", "-d", "refs/heads/feat/inbox-parent-toggle"]
+        ));
+        git_fetch_for(&repo.0).unwrap();
+        assert_eq!(git_diff_index_for(&repo.0).remote_branch, None);
+        assert!(git(
+            &repo.0,
+            &[
+                "remote",
+                "set-url",
+                "origin",
+                &format!("{origin_url}/missing")
+            ]
+        ));
+        assert!(git_fetch_for(&repo.0).is_err());
+    }
+
+    #[test]
     fn git_sync_counts_unpushed_commits() {
         let repo = tmp("git-ahead-repo");
         let origin = tmp("git-ahead-origin");
@@ -7487,6 +7581,43 @@ mod tests {
     }
 
     #[test]
+    fn git_push_sets_upstream_when_remote_branch_already_exists() {
+        let repo = tmp("git-publish-existing-branch");
+        let origin = tmp("git-publish-existing-origin");
+        if !init_git_commit(&repo.0, &[("a.txt", "alpha\n")]) {
+            return;
+        }
+        if Command::new("git")
+            .args(["init", "--bare"])
+            .current_dir(&origin.0)
+            .status()
+            .map(|status| !status.success())
+            .unwrap_or(true)
+        {
+            return;
+        }
+        let origin_url = origin.0.to_string_lossy().into_owned();
+        if !git(&repo.0, &["remote", "add", "origin", &origin_url])
+            || !git(&repo.0, &["push", "-u", "origin", "main"])
+            || !git(&repo.0, &["checkout", "-b", "feature"])
+            || !git(&repo.0, &["push", "origin", "feature"])
+        {
+            return;
+        }
+
+        assert_eq!(
+            git_stdout(&repo.0, &["rev-parse", "--abbrev-ref", "@{upstream}"]),
+            None
+        );
+        git_push_for(&repo.0).unwrap();
+
+        assert_eq!(
+            git_stdout(&repo.0, &["rev-parse", "--abbrev-ref", "@{upstream}"]).as_deref(),
+            Some("origin/feature")
+        );
+    }
+
+    #[test]
     fn git_sync_pulls_then_pushes() {
         let origin = tmp("git-sync-origin");
         let a = tmp("git-sync-a");
@@ -7555,6 +7686,12 @@ mod tests {
         assert_eq!(pr.number, 3);
         assert_eq!(pr.state, "open");
         assert_eq!(pr.title, "Now");
+        assert!(!pr.is_draft);
+        let draft = parse_gh_pr_list(
+            r#"[{"number":4,"title":"Draft","url":"https://example.com/4","state":"OPEN","isDraft":true}]"#,
+        )
+        .unwrap();
+        assert!(draft.is_draft);
     }
 
     #[test]

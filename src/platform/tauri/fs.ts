@@ -200,6 +200,9 @@ export type GitDiffIndex = {
   deletions: number;
   remote: string | null;
   upstream: string | null;
+  /** Same-name branch on the publication remote, from locally fetched refs.
+   * Absent on older hosts; null means no matching ref was found. */
+  remoteBranch?: string | null;
   defaultBranch: string | null;
   ahead: number;
   behind: number;
@@ -342,6 +345,10 @@ export function gitPull(cwd: string): Promise<void> {
   return invoke<void>("git_pull", { cwd });
 }
 
+export function gitFetch(cwd: string): Promise<void> {
+  return invoke<void>("git_fetch", { cwd });
+}
+
 export function gitSync(cwd: string): Promise<void> {
   return invoke<void>("git_sync", { cwd });
 }
@@ -363,6 +370,7 @@ export type GitPr = {
   title: string;
   url: string;
   state: string;
+  isDraft?: boolean;
 };
 
 export function gitPrStatus(cwd: string): Promise<GitPr | null> {

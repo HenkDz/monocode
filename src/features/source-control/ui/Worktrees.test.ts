@@ -1032,22 +1032,8 @@ it("uses searchable custom selects in the create worktree dialog", async () => {
   );
 
   expect(document.querySelector("select")).toBeNull();
-  const branchType = document.querySelector<HTMLButtonElement>(
-    '[aria-label^="Branch type:"]',
-  )!;
-  await act(async () => branchType.click());
-  let search = document.querySelector<HTMLInputElement>(
-    'input[placeholder="Search options…"]',
-  )!;
-  await act(async () => {
-    type(search, "existing");
-  });
-  expect(document.querySelectorAll('[role="option"]')).toHaveLength(1);
-  await act(async () =>
-    search.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
-    ),
-  );
+  await act(async () => button("Existing branch").click());
+  let search: HTMLInputElement;
 
   const existingBranch = document.querySelector<HTMLButtonElement>(
     '[aria-label^="Existing branch:"]',
@@ -1069,18 +1055,8 @@ it("uses searchable custom selects in the create worktree dialog", async () => {
   );
   expect(existingBranch.textContent).toContain("feature/search");
 
-  await act(async () => branchType.click());
-  search = document.querySelector<HTMLInputElement>(
-    'input[placeholder="Search options…"]',
-  )!;
-  await act(async () => {
-    type(search, "new");
-  });
-  await act(async () =>
-    search.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
-    ),
-  );
+  await act(async () => button("Smart").click());
+  await act(async () => document.querySelector<HTMLElement>("summary")!.click());
   const startFrom = document.querySelector<HTMLButtonElement>(
     '[aria-label^="Start from:"]',
   )!;

@@ -14,7 +14,7 @@ import {
   Settings,
   Zap,
 } from "../../shared/ui/icons";
-import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { useDragResize } from "../../shared/hooks/useDragResize";
 import { useLockOverscroll } from "../../shared/hooks/useLockOverscroll";
 import { useProjectDiffStats } from "../../features/source-control/hooks/useProjectDiffStats";
@@ -111,6 +111,7 @@ type Props = {
   automationsActive?: boolean;
   onTogglePanel?: () => void;
   onSelectProject: (path: string) => void;
+  renderProjectWorktrees?: (path: string, enabled: boolean) => ReactNode;
   onOpenProject: () => void;
   onRemoveProject?: (path: string, options: { purgeData: boolean }) => void;
   liveAgents?: LiveAgent[];
@@ -148,6 +149,7 @@ export function ProjectRail({
   automationsActive = false,
   onTogglePanel,
   onSelectProject,
+  renderProjectWorktrees,
   onOpenProject,
   onRemoveProject,
   liveAgents = [],
@@ -427,6 +429,7 @@ export function ProjectRail({
                   automationsActive
                 }
                 onSelect={onSelectProject}
+                renderProjectWorktrees={renderProjectWorktrees}
                 onTogglePin={toggleProjectPin}
                 onContextMenu={onProjectContextMenu}
                 onOpenMenu={projectMenu.open}
@@ -461,6 +464,7 @@ export function ProjectRail({
                         automationsActive
                       }
                       onSelect={onSelectProject}
+                      renderProjectWorktrees={renderProjectWorktrees}
                       onTogglePin={toggleProjectPin}
                       onContextMenu={onProjectContextMenu}
                       onOpenMenu={projectMenu.open}
@@ -504,6 +508,7 @@ export function ProjectRail({
                 searchActive || inboxActive || notesActive || automationsActive
               }
               onSelect={onSelectProject}
+              renderProjectWorktrees={renderProjectWorktrees}
               onTogglePin={toggleProjectPin}
               onContextMenu={onProjectContextMenu}
               onOpenMenu={projectMenu.open}
@@ -584,6 +589,7 @@ function ProjectSection({
   pinned,
   searchActive,
   onSelect,
+  renderProjectWorktrees,
   onTogglePin,
   onContextMenu,
   onOpenMenu,
@@ -605,6 +611,7 @@ function ProjectSection({
   pinned: boolean;
   searchActive: boolean;
   onSelect: (path: string) => void;
+  renderProjectWorktrees?: Props["renderProjectWorktrees"];
   onTogglePin: (path: string) => void;
   onContextMenu: (path: string, event: MouseEvent<HTMLElement>) => void;
   onOpenMenu: (path: string, x: number, y: number) => void;
@@ -634,6 +641,7 @@ function ProjectSection({
             pinned={pinned}
             sortable={sortable}
             onSelect={onSelect}
+            renderProjectWorktrees={renderProjectWorktrees}
             onTogglePin={onTogglePin}
             onContextMenu={onContextMenu}
             onOpenMenu={onOpenMenu}
@@ -683,6 +691,7 @@ function ProjectSectionHeader({
 }
 
 function ProjectGroupSection({
+  renderProjectWorktrees,
   group,
   items,
   muteStatuses,
@@ -703,6 +712,7 @@ function ProjectGroupSection({
   groupLogos,
   groupMascots,
 }: {
+  renderProjectWorktrees?: Props["renderProjectWorktrees"];
   group: ProjectGroup;
   items: RecentProject[];
   muteStatuses: ReadonlyMap<string, string | null>;
@@ -819,6 +829,7 @@ function ProjectGroupSection({
               pinned={false}
               sortable={sortable}
               onSelect={onSelect}
+              renderProjectWorktrees={renderProjectWorktrees}
               onTogglePin={onTogglePin}
               onContextMenu={onContextMenu}
               onOpenMenu={onOpenMenu}
@@ -847,6 +858,7 @@ function ProjectCard({
   pinned,
   sortable,
   onSelect,
+  renderProjectWorktrees,
   onTogglePin,
   onContextMenu,
   onOpenMenu,
@@ -864,6 +876,7 @@ function ProjectCard({
   pinned: boolean;
   sortable: SortableHandle;
   onSelect: (path: string) => void;
+  renderProjectWorktrees?: Props["renderProjectWorktrees"];
   onTogglePin: (path: string) => void;
   onContextMenu: (path: string, event: MouseEvent<HTMLElement>) => void;
   onOpenMenu: (path: string, x: number, y: number) => void;
@@ -873,6 +886,10 @@ function ProjectCard({
   groupLogos: ReturnType<typeof useTabGroupLogos>;
   groupMascots: Record<string, string>;
 }) {
+  const [expanded, setExpanded] = useState(selected);
+  useEffect(() => {
+    if (selected) setExpanded(true);
+  }, [selected]);
   const fallbackName = basename(item.path);
   const key = projectKey(item.path);
   const seed = projectName(item.path);
@@ -917,146 +934,179 @@ function ProjectCard({
     ? "min-w-0 max-w-[75%] shrink-0 truncate text-sm font-medium leading-tight"
     : nameClassName;
 
+  const hasWorktrees = !remote && !!renderProjectWorktrees;
   return (
     <div
       ref={(el) => sortable.setItemRef(item.path, el)}
-      data-selected={selected || undefined}
-      className={`reorder-item project-reorder-item group relative flex touch-none items-stretch rounded-md px-2 h-8 ${
-        selected
-          ? "bg-selection-strong text-content"
-          : "opacity-65"
-      } cursor-default`}
-      onPointerDown={(event) => {
-        if (event.button !== 0) return;
-        if ((event.target as HTMLElement | null)?.closest("[data-no-drag]")) {
-          return;
-        }
-        sortable.onItemPointerDown(item.path, event);
-      }}
-      onClick={(event) => {
-        if ((event.target as HTMLElement | null)?.closest("[data-no-drag]")) {
-          return;
-        }
-        if (sortable.consumeClick()) return;
-        onSelect(item.path);
-      }}
-      onContextMenu={(event) => onContextMenu(item.path, event)}
-      onKeyDown={(event) => {
-        if (
-          event.key !== "ContextMenu" &&
-          !(event.shiftKey && event.key === "F10")
-        ) return;
-        event.preventDefault();
-        event.stopPropagation();
-        const rect = event.currentTarget.getBoundingClientRect();
-        onOpenMenu(item.path, rect.left, rect.bottom);
-      }}
+      className="reorder-item"
     >
-      <button
-        type="button"
-        title={muteStatus ? `${cardTitle}\n${muteStatus}` : cardTitle}
-        aria-label={muteStatus ? `${cardAriaLabel}, ${muteStatus}` : cardAriaLabel}
-        aria-current={selected ? "true" : undefined}
-        className="flex min-w-0 flex-1 cursor-default items-center gap-2 text-left transition-[padding] duration-150 motion-reduce:transition-none group-hover:pr-6 group-has-[:focus-visible]:pr-6"
-      >
-        <div className="project-card-logo grid size-4 shrink-0 place-items-center transition-opacity group-hover:opacity-0">
-          {logoPath && !busy ? (
-            <ProjectLogoIcon
-              path={logoPath}
-              className="size-4 rounded-sm"
-              imageClassName="size-4"
-            />
-          ) : (
-            <ProjectMascot
-              project={seed}
-              color={color}
-              name={resolveTabGroupMascot(key, groupMascots)}
-              className="size-3"
-              active={busy}
-            />
-          )}
-        </div>
-        {busy ? (
-          <Shimmer as="span" duration={1.4} className={labelClassName}>
-            {name}
-          </Shimmer>
-        ) : (
-          <span className={labelClassName}>{name}</span>
-        )}
-        {machine ? (
-          <span className="min-w-0 flex-1 truncate text-[11px] leading-tight text-content/45">
-            {machine.name}
-          </span>
-        ) : null}
-        {hasChanges ? (
-          <span className="project-card-stats shrink-0 group-hover:hidden group-has-[:focus-visible]:hidden">
-            <ProjectDiffStat additions={additions} deletions={deletions} />
-          </span>
-        ) : null}
-        {remote ? (
-          <span
-            role="img"
-            aria-label={connection}
-            className="relative grid size-4 shrink-0 place-items-center text-content/45"
-          >
-            <Internet className="size-3" strokeWidth={1.75} aria-hidden="true" />
-            <span
-              aria-hidden="true"
-              className={`absolute right-0 bottom-0 size-1.5 rounded-full ring-1 ring-background-base ${
-                online ? "bg-emerald-400" : "bg-content/35"
-              }`}
-            />
-          </span>
-        ) : null}
-        {muteStatus ? (
-          <span
-            role="img"
-            aria-label={muteStatus}
-            title={muteStatus}
-            className="grid size-4 shrink-0 place-items-center text-amber-400"
-          >
-            <BellOff className="size-3.5" strokeWidth={1.75} aria-hidden="true" />
-          </span>
-        ) : null}
-      </button>
-      <button
-        type="button"
-        data-no-drag
-        title="Project options"
-        aria-label="Project options"
-        aria-haspopup="menu"
-        onPointerDown={(event) => event.stopPropagation()}
+      <div
+        data-selected={selected || undefined}
+        className={`project-reorder-item group relative flex touch-none items-stretch rounded-md px-2 h-8 ${
+          selected ? "bg-selection-strong text-content" : "opacity-65"
+        } cursor-default`}
+        onPointerDown={(event) => {
+          if (event.button !== 0) return;
+          if ((event.target as HTMLElement | null)?.closest("[data-no-drag]")) {
+            return;
+          }
+          sortable.onItemPointerDown(item.path, event);
+        }}
         onClick={(event) => {
+          if ((event.target as HTMLElement | null)?.closest("[data-no-drag]")) {
+            return;
+          }
+          if (sortable.consumeClick()) return;
+          onSelect(item.path);
+        }}
+        onContextMenu={(event) => onContextMenu(item.path, event)}
+        onKeyDown={(event) => {
+          if (
+            event.key !== "ContextMenu" &&
+            !(event.shiftKey && event.key === "F10")
+          )
+            return;
+          event.preventDefault();
           event.stopPropagation();
           const rect = event.currentTarget.getBoundingClientRect();
-          onOpenMenu(
-            item.path,
-            event.detail === 0 ? rect.left : event.clientX,
-            event.detail === 0 ? rect.bottom : event.clientY,
-          );
+          onOpenMenu(item.path, rect.left, rect.bottom);
         }}
-        className="absolute right-1 top-1/2 hidden size-6 -translate-y-1/2 place-items-center rounded-md text-content/55 hover:bg-content/8 hover:text-content group-hover:grid group-has-[:focus-visible]:grid"
       >
-        <MoreHorizontal className="size-4" strokeWidth={1.75} />
-      </button>
-      <button
-        type="button"
-        data-no-drag
-        title={pinned ? "Unpin project" : "Pin project"}
-        aria-label={pinned ? "Unpin project" : "Pin project"}
-        onPointerDown={(event) => event.stopPropagation()}
-        onClick={(event) => {
-          event.stopPropagation();
-          onTogglePin(item.path);
-        }}
-        className="absolute left-2 top-1/2 grid size-4 -translate-y-1/2 place-items-center rounded-sm text-content/55 opacity-0 pointer-events-none transition-opacity hover:text-content group-hover:pointer-events-auto group-hover:opacity-100"
-      >
-        {pinned ? (
-          <PinOff className="size-3.5" strokeWidth={1.75} />
-        ) : (
-          <Pin className="size-3.5" strokeWidth={1.75} />
-        )}
-      </button>
+        {hasWorktrees ? (
+          <button
+            type="button"
+            data-no-drag
+            aria-label={`${expanded ? "Collapse" : "Expand"} worktrees in ${name}`}
+            aria-expanded={expanded}
+            onClick={() => setExpanded((value) => !value)}
+            className="mr-1 grid w-4 shrink-0 place-items-center rounded-md text-content/60 hover:text-content"
+          >
+            {expanded ? (
+              <ChevronDown className="size-3" />
+            ) : (
+              <ChevronRight className="size-3" />
+            )}
+          </button>
+        ) : null}
+        <button
+          type="button"
+          title={muteStatus ? `${cardTitle}\n${muteStatus}` : cardTitle}
+          aria-label={
+            muteStatus ? `${cardAriaLabel}, ${muteStatus}` : cardAriaLabel
+          }
+          aria-current={selected ? "true" : undefined}
+          className="flex min-w-0 flex-1 cursor-default items-center gap-2 text-left transition-[padding] duration-150 motion-reduce:transition-none group-hover:pr-6 group-has-[:focus-visible]:pr-6"
+        >
+          <div className="project-card-logo grid size-4 shrink-0 place-items-center transition-opacity group-hover:opacity-0">
+            {logoPath && !busy ? (
+              <ProjectLogoIcon
+                path={logoPath}
+                className="size-4 rounded-sm"
+                imageClassName="size-4"
+              />
+            ) : (
+              <ProjectMascot
+                project={seed}
+                color={color}
+                name={resolveTabGroupMascot(key, groupMascots)}
+                className="size-3"
+                active={busy}
+              />
+            )}
+          </div>
+          {busy ? (
+            <Shimmer as="span" duration={1.4} className={labelClassName}>
+              {name}
+            </Shimmer>
+          ) : (
+            <span className={labelClassName}>{name}</span>
+          )}
+          {machine ? (
+            <span className="min-w-0 flex-1 truncate text-[11px] leading-tight text-content/45">
+              {machine.name}
+            </span>
+          ) : null}
+          {hasChanges ? (
+            <span className="project-card-stats shrink-0 group-hover:hidden group-has-[:focus-visible]:hidden">
+              <ProjectDiffStat additions={additions} deletions={deletions} />
+            </span>
+          ) : null}
+          {remote ? (
+            <span
+              role="img"
+              aria-label={connection}
+              className="relative grid size-4 shrink-0 place-items-center text-content/45"
+            >
+              <Internet
+                className="size-3"
+                strokeWidth={1.75}
+                aria-hidden="true"
+              />
+              <span
+                aria-hidden="true"
+                className={`absolute right-0 bottom-0 size-1.5 rounded-full ring-1 ring-background-base ${
+                  online ? "bg-emerald-400" : "bg-content/35"
+                }`}
+              />
+            </span>
+          ) : null}
+          {muteStatus ? (
+            <span
+              role="img"
+              aria-label={muteStatus}
+              title={muteStatus}
+              className="grid size-4 shrink-0 place-items-center text-amber-400"
+            >
+              <BellOff
+                className="size-3.5"
+                strokeWidth={1.75}
+                aria-hidden="true"
+              />
+            </span>
+          ) : null}
+        </button>
+        <button
+          type="button"
+          data-no-drag
+          title="Project options"
+          aria-label="Project options"
+          aria-haspopup="menu"
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.stopPropagation();
+            const rect = event.currentTarget.getBoundingClientRect();
+            onOpenMenu(
+              item.path,
+              event.detail === 0 ? rect.left : event.clientX,
+              event.detail === 0 ? rect.bottom : event.clientY,
+            );
+          }}
+          className="absolute right-1 top-1/2 hidden size-6 -translate-y-1/2 place-items-center rounded-md text-content/55 hover:bg-content/8 hover:text-content group-hover:grid group-has-[:focus-visible]:grid"
+        >
+          <MoreHorizontal className="size-4" strokeWidth={1.75} />
+        </button>
+        <button
+          type="button"
+          data-no-drag
+          title={pinned ? "Unpin project" : "Pin project"}
+          aria-label={pinned ? "Unpin project" : "Pin project"}
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.stopPropagation();
+            onTogglePin(item.path);
+          }}
+          className={`absolute ${hasWorktrees ? "left-7" : "left-2"} top-1/2 grid size-4 -translate-y-1/2 place-items-center rounded-sm text-content/55 opacity-0 pointer-events-none transition-opacity hover:text-content group-hover:pointer-events-auto group-hover:opacity-100`}
+        >
+          {pinned ? (
+            <PinOff className="size-3.5" strokeWidth={1.75} />
+          ) : (
+            <Pin className="size-3.5" strokeWidth={1.75} />
+          )}
+        </button>
+      </div>
+      {hasWorktrees && expanded
+        ? renderProjectWorktrees(item.path, statsEnabled)
+        : null}
     </div>
   );
 }

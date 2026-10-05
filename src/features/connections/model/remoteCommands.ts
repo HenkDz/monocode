@@ -32,6 +32,7 @@ const HOST_COMMANDS = new Set([
   "git_head_message",
   "git_push",
   "git_pull",
+  "git_fetch",
   "git_sync",
   "git_pr_status",
   "git_pr_create",

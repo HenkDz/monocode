@@ -16,6 +16,7 @@ vi.mock("../../../platform/tauri/fs", () => ({
   gitHistory: vi.fn(async () => []),
   gitPrStatus: vi.fn(async () => null),
   gitPull: vi.fn(async () => {}),
+  gitFetch: vi.fn(async () => {}),
   gitPush: vi.fn(async () => {}),
   gitSync: vi.fn(async () => {}),
   gitCommit: vi.fn(async () => {}),
@@ -50,9 +51,11 @@ vi.mock("../../inbox/model/inboxSelfActivity", () => ({
 import { GitChangesPanel } from "./GitChangesPanel";
 import {
   gitDiffIndex,
+  gitFetch,
   gitPrCreate,
   gitPull,
   gitPush,
+  gitSync,
   gitRangeContext,
   gitStageFile,
   gitUnstageFile,
@@ -74,6 +77,7 @@ function index(overrides: Partial<GitDiffIndex> = {}): GitDiffIndex {
     deletions: 0,
     remote: null,
     upstream: null,
+    remoteBranch: null,
     defaultBranch: "main",
     ahead: 0,
     behind: 0,
@@ -99,6 +103,9 @@ beforeEach(() => {
   );
   vi.mocked(gitDiffIndex).mockReset();
   vi.mocked(gitPull).mockReset();
+  vi.mocked(gitFetch).mockReset().mockResolvedValue(undefined);
+  vi.mocked(gitSync).mockClear();
+  vi.mocked(gitPush).mockClear();
   vi.mocked(gitStageFile).mockReset().mockResolvedValue(undefined);
   vi.mocked(gitUnstageFile).mockReset().mockResolvedValue(undefined);
   vi.mocked(notifyGitChanged).mockClear();
@@ -415,10 +422,138 @@ describe("GitChangesPanel folder actions", () => {
   });
 });
 
+describe("GitChangesPanel remote branch state", () => {
+  it.each(["/repo", "remote://machine/home/user/repo"])(
+    "fetches without an upstream and updates publication state for %s",
+    async (cwd) => {
+      vi.mocked(gitDiffIndex).mockResolvedValue(index({ remote: "origin" }));
+      await renderPanel(cwd);
+      expect(container.textContent).toContain("Publish Branch");
+      const pull = await openBranchMenu();
+      expect(pull.disabled).toBe(true);
+      expect(container.textContent).toContain("not found on origin (cached)");
+      expect(container.textContent).toContain("Upstream: not configured");
+      const fetch = [
+        ...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+      ].find((button) => button.textContent === "Fetch")!;
+      let finish!: () => void;
+      vi.mocked(gitFetch).mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            finish = resolve;
+          }),
+      );
+      await act(async () => fetch.click());
+      expect(fetch.disabled).toBe(true);
+      expect(
+        container.querySelector<HTMLButtonElement>(
+          '[aria-label="Branch actions"]',
+        )!.disabled,
+      ).toBe(true);
+      expect(gitPull).not.toHaveBeenCalled();
+      expect(gitPush).not.toHaveBeenCalled();
+      expect(gitSync).not.toHaveBeenCalled();
+      // Only remoteBranch changes: HEAD was already contained by origin/main.
+      vi.mocked(gitDiffIndex).mockResolvedValue(
+        index({ remote: "origin", remoteBranch: "origin/feature/pull" }),
+      );
+      const reads = vi.mocked(gitDiffIndex).mock.calls.length;
+      await act(async () => finish());
+      expect(gitFetch).toHaveBeenCalledExactlyOnceWith(cwd);
+      expect(vi.mocked(gitDiffIndex).mock.calls.length).toBeGreaterThan(reads);
+      expect(notifyGitChanged).toHaveBeenCalled();
+      expect(container.textContent).toContain("Fetch complete");
+      expect(container.textContent).toContain("Push & Set Upstream");
+      expect(container.textContent).not.toContain("Publish Branch");
+      await openBranchMenu();
+      expect(container.textContent).toContain(
+        "Remote branch: origin/feature/pull (cached)",
+      );
+      expect(container.textContent).toContain("Upstream: not configured");
+      const publish = [
+        ...container.querySelectorAll<HTMLButtonElement>("button"),
+      ].find((button) => button.textContent === "Push & Set Upstream")!;
+      await act(async () => publish.click());
+      expect(gitSync).toHaveBeenCalledExactlyOnceWith(cwd);
+    },
+  );
+
+  it("shows upstream separately and does not offer publication when tracking", async () => {
+    vi.mocked(gitDiffIndex).mockResolvedValue(
+      index({
+        remote: "origin",
+        remoteBranch: "origin/feature/pull",
+        upstream: "origin/feature/pull",
+      }),
+    );
+    await renderPanel();
+    expect((await openBranchMenu()).disabled).toBe(false);
+    expect(container.textContent).toContain("Upstream: origin/feature/pull");
+    expect(container.textContent).not.toContain("Publish Branch");
+    expect(container.textContent).not.toContain("Push & Set Upstream");
+    await act(async () => {
+      container
+        .querySelector('[role="menu"]')!
+        .dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+        );
+    });
+    expect(container.querySelector('[role="menu"]')).toBeNull();
+    expect(document.activeElement).toBe(
+      container.querySelector('[aria-label="Branch actions"]'),
+    );
+  });
+
+  it("disables fetch without a remote and reports unknown state for older hosts", async () => {
+    vi.mocked(gitDiffIndex).mockResolvedValue(index());
+    await renderPanel();
+    await openBranchMenu();
+    expect(container.textContent).toContain("No remote configured");
+    expect(
+      [
+        ...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+      ].every((button) => button.disabled),
+    ).toBe(true);
+    vi.mocked(gitDiffIndex).mockResolvedValue(
+      index({ remote: "origin", remoteBranch: undefined }),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+    expect(container.textContent).toContain(
+      "Remote branch: unknown (update host)",
+    );
+  });
+
+  it("reports fetch failures and releases the shared busy state", async () => {
+    const alert = vi.spyOn(window, "alert").mockImplementation(() => {});
+    vi.mocked(gitDiffIndex).mockResolvedValue(index({ remote: "origin" }));
+    vi.mocked(gitFetch).mockRejectedValueOnce(
+      new Error("Authentication failed"),
+    );
+    await renderPanel();
+    await openBranchMenu();
+    const fetch = [
+      ...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+    ].find((button) => button.textContent === "Fetch")!;
+    vi.mocked(notifyGitChanged).mockClear();
+    await act(async () => fetch.click());
+    expect(alert).toHaveBeenCalledWith("Authentication failed");
+    expect(container.textContent).not.toContain("Fetch complete");
+    expect(notifyGitChanged).not.toHaveBeenCalled();
+    expect(
+      container.querySelector<HTMLButtonElement>(
+        '[aria-label="Branch actions"]',
+      )!.disabled,
+    ).toBe(false);
+    alert.mockRestore();
+  });
+});
+
 describe("GitChangesPanel pull action", () => {
   it("disables Pull when the branch has no upstream", async () => {
     vi.mocked(gitDiffIndex).mockResolvedValue(
-      index({ remote: null, upstream: null }),
+      index({ remote: "origin", upstream: null }),
     );
     await renderPanel();
 

@@ -1,3 +1,4 @@
+import { createPortal } from "react-dom";
 import { NO_BRANCH_LABEL } from "../../features/source-control/model/worktrees";
 import {
   type WorktreeFocus,
@@ -5,6 +6,7 @@ import {
   useWorktreeFocus,
 } from "../../features/source-control/model/worktreeFocus";
 import { SidebarWorktreeSwitcher } from "../../features/source-control/ui/SidebarWorktreeSwitcher";
+import { WorkspaceHeading } from "../../features/source-control/ui/WorkspaceHeading";
 import { OrchestrationSidebarAgents } from "../../features/orchestration/ui/OrchestrationSidebarAgents";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
@@ -127,7 +129,10 @@ import type {
 } from "../../features/sessions/model/session";
 import type { LiveAgent } from "../../features/sessions/model/liveAgents";
 import type { SessionSummary } from "../../features/sessions/data/sessionStore";
-import type { SettingsSectionId } from "../../features/settings/model/settings";
+import type {
+  SettingsSectionId,
+  WorkspacePanelSide,
+} from "../../features/settings/model/settings";
 import type { InstalledUpdate } from "../model/updateNotice";
 import { TAB_GROUP_COLORS } from "../../features/workspace/model/tabGroups";
 import { useDragResize } from "../../shared/hooks/useDragResize";
@@ -294,6 +299,10 @@ type Props = {
   liveAgents?: LiveAgent[];
   onSelectAgent?: (sessionId: string) => void;
   onSelectProject?: (path: string) => void;
+  renderProjectWorktrees?: ComponentProps<typeof ProjectRail>["renderProjectWorktrees"];
+  /** Where the panel docks; "right" renders it into `panelHost`. */
+  panelSide?: WorkspacePanelSide;
+  panelHost?: HTMLElement | null;
   onOpenProject?: () => void;
   onRemoveProject?: (path: string, options: { purgeData: boolean }) => void;
   onNew?: () => string | void;
@@ -387,6 +396,9 @@ function SidebarComponent({
   liveAgents = [],
   onSelectAgent,
   onSelectProject,
+  renderProjectWorktrees,
+  panelSide = "left",
+  panelHost = null,
   onOpenProject,
   onRemoveProject,
   onNew,
@@ -419,7 +431,20 @@ function SidebarComponent({
   onDismissUpdate,
 }: Props) {
   const remoteProject = isRemoteProjectPath(cwd);
-  const tab: SidebarTabId = requestedTab;
+  // With the project rail open, its worktree tree is the one place to pick a
+  // worktree or a session. The Sessions tab and the workspace switcher would
+  // only repeat it, so the panel narrows to the focused worktree's context.
+  const railNavigatesWorktrees =
+    !!renderProjectWorktrees &&
+    !!onSelectProject &&
+    !!onOpenProject &&
+    !!projectRailOpen &&
+    !remoteProject &&
+    looksLikeProject(cwd);
+  const tab: SidebarTabId =
+    railNavigatesWorktrees && requestedTab === "sessions"
+      ? "files"
+      : requestedTab;
   const remote = useRemoteProjectSessions(cwd, remoteProject);
   const hostProject = remoteProject ? remoteProjectFor(cwd) : undefined;
   const remoteChange = async (
@@ -541,6 +566,7 @@ function SidebarComponent({
       ? remotePath(hostProject.environmentId, remoteExecutionCwd ?? hostProject.cwd)
       : gitCwd || cwd;
   const resize = useDragResize({
+    direction: panelSide === "right" ? "left" : "right",
     min: MIN_WIDTH,
     max: () => Math.min(MAX_WIDTH, Math.floor(window.innerWidth * 0.5)),
     defaultWidth: DEFAULT_WIDTH,
@@ -721,11 +747,13 @@ function SidebarComponent({
   const sessionListKey = `${cwd}\0${sessionFilters.showArchived}\0${sessionFilters.time}\0${sessionFilters.hiddenHarnesses.join(",")}\0${sessionFilters.status.working}\0${sessionFilters.status.needsApproval}\0${sessionFilters.status.done}\0${searchQuery}`;
   const sessionHarnesses = harnessesInSessions(projectSessions);
   const narrowedByUser = searchNarrowed || filtersActive;
-  const visibleTabs = tabOrder.filter((itemId) => itemId !== "inbox");
+  const hiddenTab = (itemId: SidebarTab) =>
+    itemId === "inbox" || (railNavigatesWorktrees && itemId === "sessions");
+  const visibleTabs = tabOrder.filter((itemId) => !hiddenTab(itemId));
   const sortable = useAnimatedReorder(visibleTabs, (ids) => {
     let index = 0;
     const next = tabOrder.map((itemId) =>
-      itemId === "inbox" ? itemId : ids[index++],
+      hiddenTab(itemId) ? itemId : ids[index++],
     );
     setTabOrder(next);
     saveSidebarTabOrder(next);
@@ -781,6 +809,8 @@ function SidebarComponent({
   const drawerRendered = drawerVisible || drawerClosing;
   const drawerAnimation = useRef<Animation | null>(null);
   const panelOpen = open || drawerVisible;
+  // The temporary drawer always slides out beside the compact rail.
+  const dockedRight = panelSide === "right" && !!panelHost && !drawerMode;
   const gitStatuses = useGitFileStatuses(gitRoot, panelOpen && tab === "files");
   const changeStats = useProjectDiffStats(gitRoot, panelOpen);
 
@@ -1622,7 +1652,9 @@ function SidebarComponent({
       data-tauri-drag-region="deep"
     >
       <div className="flex min-w-0 flex-1 items-center">
-        {!remoteProject && cwd && cwd !== "~" ? (
+        {railNavigatesWorktrees ? (
+          <WorkspaceHeading cwd={cwd} pending={workspaceSwitchPending} />
+        ) : !remoteProject && cwd && cwd !== "~" ? (
           <SidebarWorktreeSwitcher
             cwd={cwd}
             tabStats={worktreeTabStats}
@@ -1636,14 +1668,16 @@ function SidebarComponent({
           </span>
         )}
       </div>
-      <WorkspaceTitleActions onSearch={onGoToFile} onNew={onNew} />
+      <WorkspaceTitleActions onSearch={onGoToFile} />
     </div>
   );
 
   const sidebarContent = (
     <aside
       ref={resize.setPaneRef}
-      className="body-glass relative flex h-full min-h-0 shrink-0 flex-col border-r border-stroke"
+      className={`body-glass relative flex h-full min-h-0 shrink-0 flex-col border-stroke ${
+        dockedRight ? "border-l" : "border-r"
+      }`}
     >
       {railVisible ? (
         <>
@@ -2173,7 +2207,7 @@ function SidebarComponent({
         aria-valuenow={resize.width}
         aria-valuemin={MIN_WIDTH}
         aria-valuemax={MAX_WIDTH}
-        className={`absolute inset-y-0 -right-px z-10 w-1.5 cursor-col-resize touch-none ${
+        className={`absolute inset-y-0 ${dockedRight ? "-left-px" : "-right-px"} z-10 w-1.5 cursor-col-resize touch-none ${
           resize.dragging ? "bg-content/15" : "hover:bg-content/10"
         }`}
         onPointerDown={resize.onPointerDown}
@@ -2243,6 +2277,7 @@ function SidebarComponent({
           automationsActive={automationsActive}
           onTogglePanel={onToggleProjectRail}
           onSelectProject={onSelectProject}
+          renderProjectWorktrees={renderProjectWorktrees}
           onOpenProject={onOpenProject}
           onRemoveProject={onRemoveProject}
           settingsOpen={settingsOpen}
@@ -2256,7 +2291,11 @@ function SidebarComponent({
           onDismissUpdate={onDismissUpdate}
         />
       ) : null}
-      {sidebarVisible ? sidebarContent : null}
+      {sidebarVisible
+        ? dockedRight
+          ? createPortal(sidebarContent, panelHost!)
+          : sidebarContent
+        : null}
       {drawerRendered ? (
         // Pinned to the right edge, so the sidebar slides in as the width grows.
         <div

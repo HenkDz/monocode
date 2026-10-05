@@ -86,7 +86,10 @@ import {
   type WorktreeFocus,
   useWorktreeFocus,
   worktreeFocus,
+  setWorktreeFocus,
 } from "../features/source-control/model/worktreeFocus";
+import { ProjectWorktrees } from "../features/source-control/ui/ProjectWorktrees";
+import { summarizeOrchestration } from "../features/orchestration/model/orchestrationSummary";
 import {
   assertWorktreeFilesClosed,
   createOrchestrationWorktree,
@@ -103,6 +106,7 @@ import {
   sessionInWorktree,
   temporaryWorktreeBranchName,
   worktreeSessionIds,
+  type WorktreeSessionOptions,
   type Worktree,
 } from "../features/source-control/model/worktrees";
 import { UsageFooter } from "./shell/UsageFooter";
@@ -603,6 +607,8 @@ import {
   loadCloseToTray,
   loadAutosave,
   loadCollapsedProjectRailMode,
+  loadWorkspacePanelSide,
+  subscribeWorkspacePanelSide,
   loadFileTabMode,
   loadLiveAgentsEnabled,
   loadNotesEnabled,
@@ -1044,6 +1050,13 @@ function Workspace({
     loadLiveAgentsEnabled,
     () => true,
   );
+  const workspacePanelSide = useSyncExternalStore(
+    subscribeWorkspacePanelSide,
+    loadWorkspacePanelSide,
+    loadWorkspacePanelSide,
+  );
+  const [workspacePanelHost, setWorkspacePanelHost] =
+    useState<HTMLDivElement | null>(null);
   const [collapsedProjectRailMode, setCollapsedProjectRailMode] =
     useState<CollapsedProjectRailMode>(loadCollapsedProjectRailMode);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -1166,6 +1179,7 @@ function Workspace({
       ),
   );
   const workspacePins = useRef(restoredPins);
+  const workspaceSessionRequest = useRef(0);
   const tabWorkspace = useCallback(
     (tab: WorkspaceTab, list: readonly Session[]) => {
       const pinnedTab = workspacePins.current.get(tab.id);
@@ -1218,6 +1232,7 @@ function Workspace({
   // including opening a session in the same tab or selecting a project.
   const setActiveTabId = useCallback(
     (id: string) => {
+      workspaceSessionRequest.current++;
       workspaceNavigation.cancel();
       setActiveTabIdState(id);
     },
@@ -1925,8 +1940,9 @@ function Workspace({
     };
   }, [flushHarnessEvents, keepWorkspaceTab, readProjectReturnMemory]);
 
-  const refreshHistory = useCallback(async (cwd: string) => {
-    if (!cwd || cwd === "~") return;
+  const historyLoads = useRef(new Map<string, Promise<boolean>>());
+  const refreshHistory = useCallback((cwd: string): Promise<boolean> => {
+    if (!cwd || cwd === "~") return Promise.resolve(false);
     // `history` holds every visited project's rows and the sidebar filters it
     // by cwd, so a project loaded once paints from cache on the way back and
     // revalidates quietly underneath the cards already on screen. Whether the
@@ -1934,20 +1950,32 @@ function Workspace({
     // tracked here — a status set from this effect lands a render too late to
     // suppress the empty state.
     const key = normalizeProjectPath(cwd);
-    setHistoryErrorCwd((prev) => (prev === key ? null : prev));
-    try {
-      const rows = await listSessionsByProject(cwd);
-      if (cwd !== sidebarCwdRef.current) return;
-      setHistory((current) => replaceProjectHistory(current, cwd, rows));
-      setLoadedProjects((prev) =>
-        prev.has(key) ? prev : new Set(prev).add(key),
-      );
-    } catch {
-      if (cwd !== sidebarCwdRef.current) return;
-      // A failed revalidate keeps the cached cards rather than replacing a
-      // good list with an error.
-      if (!loadedProjectsRef.current.has(key)) setHistoryErrorCwd(key);
-    }
+    const pending = historyLoads.current.get(key);
+    if (pending) return pending;
+    const load = (async () => {
+      setHistoryErrorCwd((prev) => (prev === key ? null : prev));
+      try {
+        const rows = await listSessionsByProject(cwd);
+        setHistory((current) => replaceProjectHistory(current, cwd, rows));
+        setLoadedProjects((prev) =>
+          prev.has(key) ? prev : new Set(prev).add(key),
+        );
+        return true;
+      } catch {
+        // Expanded projects can load independently without replacing the
+        // current project's error or discarding another project's cached rows.
+        if (
+          cwd === sidebarCwdRef.current &&
+          !loadedProjectsRef.current.has(key)
+        )
+          setHistoryErrorCwd(key);
+        return false;
+      } finally {
+        historyLoads.current.delete(key);
+      }
+    })();
+    historyLoads.current.set(key, load);
+    return load;
   }, []);
 
   useEffect(() => {
@@ -2316,9 +2344,13 @@ function Workspace({
   }, []);
 
   const createWorkspaceTab = useCallback(
-    (cwd: string, focus?: WorktreeFocus) => {
+    (cwd: string, focus?: WorktreeFocus, options?: WorktreeSessionOptions) => {
       const session = {
-        ...newDefaultSession(cwd, sessionDefaults?.runtimeMode),
+        ...(options?.harness
+          ? newSession(options.harness, cwd, options.model, sessionDefaults?.runtimeMode, options.modelSettings)
+          : newDefaultSession(cwd, sessionDefaults?.runtimeMode)),
+        composerSeed: options?.composerSeed,
+        linkedWorkItem: options?.linkedWorkItem,
         ...(focus && !sameProjectPath(focus.path, cwd)
           ? { worktreeCwd: focus.path, branch: focus.branch ?? undefined }
           : {}),
@@ -4207,7 +4239,11 @@ function Workspace({
   }, [inboxAskPortal, inboxViewOpen]);
 
   const onSelectHistorySession = useCallback(
-    async (sessionId: string) => {
+    async (
+      sessionId: string,
+      workspace?: { project: string; tree: Worktree },
+    ) => {
+      const request = ++workspaceSessionRequest.current;
       workspaceNavigation.cancel();
       let session = await ensureOpenSession(sessionId);
       if (!session || session.inboxAsk) return;
@@ -4219,6 +4255,35 @@ function Workspace({
         session = await ensureOpenSession(parentId);
         if (!session) return;
       }
+      if (workspace) {
+        // Tree navigation changes the view, never the conversation's checkout.
+        if (
+          request !== workspaceSessionRequest.current ||
+          session.worktreeRemoved ||
+          workspace.tree.missing ||
+          !sameProjectPath(session.cwd, workspace.project) ||
+          !isEqualOrInside(sessionWorkCwd(session), workspace.tree.path)
+        )
+          return;
+        setSearchViewOpen(false);
+        setInboxViewOpen(false);
+        setNotesViewOpen(false);
+        setAutomationsViewOpen(false);
+        setSettingsOpen(false);
+        setWorktreeFocus(
+          workspace.project,
+          sameProjectPath(workspace.tree.path, workspace.project)
+            ? undefined
+            : { path: workspace.tree.path, branch: workspace.tree.branch },
+        );
+        const openTab = findOpenSessionTab(
+          tabsRef.current,
+          sessionsRef.current,
+          session.id,
+        );
+        if (openTab) workspacePins.current.set(openTab.id, workspace.tree.path);
+        setRecents(rememberProject(workspace.project));
+      }
       if (looksLikeProject(session.cwd))
         setProjectCwd(normalizeProjectPath(session.cwd));
       const linkedUpdate = linkedSessionUpdatesRef.current.get(session.id);
@@ -4226,11 +4291,12 @@ function Workspace({
         if (linkedUpdate) revealLinkedSessionUpdate(session.id, linkedUpdate);
         return;
       }
-      if (replaceBlankPaneWithSession(session)) {
+      if (!workspace && replaceBlankPaneWithSession(session)) {
         if (linkedUpdate) revealLinkedSessionUpdate(session.id, linkedUpdate);
         return;
       }
       const tab = newTab(session.id);
+      if (workspace) workspacePins.current.set(tab.id, workspace.tree.path);
       appendTab(tab, session.cwd);
       setActiveTabId(tab.id);
       setComposerFocused(true);
@@ -5355,6 +5421,7 @@ function Workspace({
 
   const onSelectWorkspace = useCallback(
     (focus?: WorktreeFocus) => {
+      workspaceSessionRequest.current++;
       setProjectCwd(sidebarCwdRef.current);
       workspaceNavigation.selectWorkspace(sidebarCwdRef.current, focus);
     },
@@ -5440,6 +5507,7 @@ function Workspace({
 
   const onSelectProject = useCallback(
     (path: string) => {
+      workspaceSessionRequest.current++;
       workspaceNavigation.cancel();
       openProjects([path]);
       workspaceNavigation.selectProject(path);
@@ -5449,6 +5517,45 @@ function Workspace({
       workspaceNavigation.cancel,
       workspaceNavigation.selectProject,
     ],
+  );
+
+  const onSelectProjectWorktree = useCallback(
+    (project: string, tree: Worktree) => {
+      if (tree.missing) return;
+      workspaceSessionRequest.current++;
+      openProjects([project]);
+      workspaceNavigation.selectWorkspace(
+        project,
+        sameProjectPath(tree.path, project)
+          ? undefined
+          : { path: tree.path, branch: tree.branch },
+      );
+    },
+    [openProjects, workspaceNavigation.selectWorkspace],
+  );
+
+  const onNewWorktreeSession = useCallback(
+    (project: string, tree: Worktree, options?: WorktreeSessionOptions) => {
+      if (tree.missing) return;
+      workspaceSessionRequest.current++;
+      workspaceNavigation.cancel();
+      const focus = sameProjectPath(tree.path, project)
+        ? undefined
+        : { path: tree.path, branch: tree.branch };
+      setWorktreeFocus(project, focus);
+      setSearchViewOpen(false);
+      setInboxViewOpen(false);
+      setNotesViewOpen(false);
+      setAutomationsViewOpen(false);
+      setSettingsOpen(false);
+      setProjectCwd(project);
+      setRecents(rememberProject(project));
+      const tabId = createWorkspaceTab(project, focus, options);
+      workspacePins.current.set(tabId, tree.path);
+      setActiveTabId(tabId);
+      setComposerFocused(true);
+    },
+    [createWorkspaceTab, setActiveTabId, workspaceNavigation.cancel],
   );
 
   const pickProject = useCallback(async () => {
@@ -9709,6 +9816,22 @@ function Workspace({
     () => ciRepairSessions(history, sessions),
     [history, sessions],
   );
+  const sidebarOpenSessions = useMemo(
+    () => {
+      const runs = new Map(orchestrationRuns.map((run) => [run.leadId, run]));
+      return sessions
+        .filter((session) => !session.inboxAsk && !session.orchestrationLeadId)
+        .map((session) => {
+          const run = runs.get(session.id);
+          return {
+            ...summaryFromSession(session),
+            ...(run ? { orchestration: summarizeOrchestration(run, sessions) } : {}),
+          };
+        });
+    },
+    [sessions, orchestrationRuns],
+  );
+
   const openProjectSessions = useMemo(
     () =>
       sessions
@@ -10743,6 +10866,7 @@ function Workspace({
       onToggleSidebar={onToggleSidebar}
       onToggleSessionSidebar={onToggleSessionSidebar}
       onSelect={activateTab}
+      onNew={onNew}
       onNewTerminal={onNewTerminal}
       onOpenSettings={onOpenSettings}
       onOpenInbox={onOpenInbox}
@@ -10771,6 +10895,8 @@ function Workspace({
           <div className="flex min-h-0 min-w-0 flex-1">
             <Sidebar
               cwd={sidebarCwd}
+              panelSide={workspacePanelSide}
+              panelHost={workspacePanelHost}
               gitCwd={gitCwd}
               worktreeTabStats={worktreeTabStats}
               onSelectWorkspace={onSelectWorkspace}
@@ -10848,6 +10974,32 @@ function Workspace({
               liveAgents={liveAgents}
               onSelectAgent={onSelectLiveAgent}
               onSelectProject={onSelectProject}
+              renderProjectWorktrees={(project, enabled) => (
+                <ProjectWorktrees
+                  project={project}
+                  currentProject={sidebarCwd}
+                  enabled={enabled}
+                  history={history}
+                  openSessions={sidebarOpenSessions}
+                  busySessionIds={busySessionIds}
+                  approvalSessionIds={approvalSessionIds}
+                  unseenFinishedIds={unseenFinishedIds}
+                  liveAgents={liveAgents}
+                  activeSessionId={active?.id}
+                  switchPending={
+                    workspaceNavigation.pending?.project === project
+                  }
+                  switchError={
+                    workspaceNavigation.error?.project === project
+                      ? workspaceNavigation.error.message
+                      : undefined
+                  }
+                  onLoadHistory={refreshHistory}
+                  onSelectWorktree={onSelectProjectWorktree}
+                  onNewSession={onNewWorktreeSession}
+                  onSelectSession={onSelectHistorySession}
+                />
+              )}
               onOpenProject={pickProject}
               onRemoveProject={onRemoveProject}
               onNew={onNew}
@@ -11074,6 +11226,9 @@ function Workspace({
                       onClose={() => closeLinkedWorkItemPanel(panel.sessionId)}
                     />
                   ))}
+                  {workspacePanelSide === "right" ? (
+                    <div ref={setWorkspacePanelHost} className="contents" />
+                  ) : null}
                 </main>
               </div>
               {searchViewOpen ? (

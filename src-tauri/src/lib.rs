@@ -325,6 +325,7 @@ pub fn run() {
             fs::git_staged_context,
             fs::git_push,
             fs::git_pull,
+            fs::git_fetch,
             fs::git_sync,
             fs::git_range_context,
             fs::git_pr_status,

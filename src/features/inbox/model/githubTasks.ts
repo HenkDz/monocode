@@ -155,6 +155,7 @@ export type GithubWorkItemQuery = {
 };
 
 export type InboxQuery = Omit<GithubWorkItemQuery, "kind"> & {
+  includeGithubParents?: boolean;
   linearHiddenTeamIds?: string[];
   jiraHiddenProjectIds?: string[];
 };
@@ -186,6 +187,7 @@ type InboxListCache = InboxListResult & {
 
 let inboxListCache: InboxListCache | null = null;
 let inboxCacheGeneration = 0;
+let inboxListRequest = 0;
 const inboxListInflight = new Map<string, Promise<InboxListResult>>();
 const repoByPath = new Map<string, string>();
 const repositoriesByPath = new Map<string, string[]>();
@@ -240,7 +242,7 @@ export function inboxListCacheKey(
     .join("|");
   const teams = [...(query.linearHiddenTeamIds ?? [])].sort().join(",");
   const jiraProjects = [...(query.jiraHiddenProjectIds ?? [])].sort().join(",");
-  return `${query.assignedToMe ? 1 : 0}:${query.state}:${paths}:${teams}:${jiraProjects}`;
+  return `${query.assignedToMe ? 1 : 0}:${query.state}:${paths}:${teams}:${jiraProjects}:${query.includeGithubParents !== false ? 1 : 0}`;
 }
 
 export function peekInboxList(
@@ -727,9 +729,10 @@ export async function listInboxItems(
   const pending = inboxListInflight.get(key);
   if (pending) return pending;
   const generation = inboxCacheGeneration;
+  const request = ++inboxListRequest;
   const promise = fetchInboxItems(projects, query)
     .then((result) => {
-      if (generation === inboxCacheGeneration) {
+      if (generation === inboxCacheGeneration && request === inboxListRequest) {
         inboxListCache = { key, ...result, fetchedAt: Date.now() };
       }
       return result;
@@ -752,7 +755,8 @@ async function fetchInboxItems(
   );
   const resolved = discovery.flatMap((result, index) =>
     result.status === "fulfilled"
-      ? result.value.map((repo) => ({ path: unique[index]!.path, repo }))
+      ? (query.includeGithubParents === false ? result.value.slice(0, 1) : result.value)
+          .map((repo) => ({ path: unique[index]!.path, repo }))
       : [],
   );
   const grouped = groupProjectsByRepo(resolved);

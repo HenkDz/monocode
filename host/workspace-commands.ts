@@ -62,6 +62,7 @@ export const WORKSPACE_COMMANDS = [
   "git_head_message",
   "git_push",
   "git_pull",
+  "git_fetch",
   "git_sync",
   "git_pr_status",
   "git_pr_create",
@@ -173,6 +174,8 @@ export class WorkspaceCommands {
         return this.gitAction(input.cwd, "push");
       case "git_pull":
         return this.gitCommand(input.cwd, ["pull", "--ff-only"]).then(() => undefined);
+      case "git_fetch":
+        return this.gitCommand(input.cwd, ["fetch", "--all", "--prune"]).then(() => undefined);
       case "git_sync":
         return this.gitSync(input.cwd);
       case "git_pr_status":
@@ -497,7 +500,8 @@ export class WorkspaceCommands {
   }
 
   private async gitSync(cwd: unknown) {
-    await this.gitCommand(cwd, ["pull", "--ff-only"]);
+    const upstream = await this.gitCommand(cwd, ["rev-parse", "--abbrev-ref", "@{upstream}"]).catch(() => "");
+    if (upstream.trim()) await this.gitCommand(cwd, ["pull", "--ff-only"]);
     await this.gitAction(cwd, "push");
   }
 
@@ -513,7 +517,7 @@ export class WorkspaceCommands {
   }
 
   private async gitPrStatus(cwd: unknown) {
-    const output = await this.ghCommand(cwd, ["pr", "view", "--json", "number,title,url,state"])
+    const output = await this.ghCommand(cwd, ["pr", "view", "--json", "number,title,url,state,isDraft"])
       .catch(() => "");
     if (!output) return null;
     const pr = JSON.parse(output) as GitPr;

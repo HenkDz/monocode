@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useProjectWorktrees } from "../hooks/useProjectWorktrees";
 import { useWorktreeFocus, type WorktreeFocus } from "../model/worktreeFocus";
-import { createWorktree } from "../model/worktrees";
+import { createWorktree, normalizeWorktreeBranch } from "../model/worktrees";
 import { pathKey, prettyCwd } from "../../../shared/lib/paths";
 import { Popover } from "../../../shared/ui/Popover";
 import {
@@ -45,8 +45,8 @@ export function SidebarWorktreeSwitcher({
   const main = data?.worktrees.find((tree) => tree.isMain);
   const worktrees =
     data?.worktrees.filter((tree) => !tree.isMain && !tree.missing) ?? [];
-  const createName = query.trim();
-  const normalizedQuery = createName.toLocaleLowerCase();
+  const createName = normalizeWorktreeBranch(query);
+  const normalizedQuery = query.trim().toLocaleLowerCase();
   const rows = [
     {
       path: main?.path ?? cwd,

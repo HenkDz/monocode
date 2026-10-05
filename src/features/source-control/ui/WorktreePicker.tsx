@@ -322,7 +322,10 @@ export function WorktreePicker({
           cwd={cwd}
           baseCwd={worktreeRemoved ? cwd : executionCwd}
           defaultRoot={data?.defaultRoot}
-          onCreated={async (tree) => {
+          worktrees={data?.worktrees}
+          onCreated={async (tree, options) => {
+            await refresh();
+            if (options.keepOpen) return;
             setCreating(false);
             setOpen(true);
             await select(tree);

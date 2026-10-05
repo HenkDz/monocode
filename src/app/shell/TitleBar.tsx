@@ -5,6 +5,7 @@ import {
   DashboardSquare,
   Inbox,
   PanelLeft,
+  Plus,
   Settings,
   StickyNote,
   Terminal,
@@ -91,6 +92,7 @@ type Props = {
   onToggleSidebar: () => void;
   onToggleSessionSidebar?: () => void;
   onSelect: (id: string) => void;
+  onNew?: () => void;
   onNewTerminal?: () => void;
   onOpenSettings?: () => void;
   onOpenInbox?: () => void;
@@ -608,6 +610,7 @@ function TitleBarComponent({
   onToggleSidebar,
   onToggleSessionSidebar,
   onSelect,
+  onNew,
   onNewTerminal,
   onOpenSettings,
   onOpenInbox,
@@ -942,7 +945,9 @@ function TitleBarComponent({
         }`}
       >
         <div
-          className="relative h-full min-w-0 flex-1 overflow-hidden"
+          className={`relative h-full min-w-0 overflow-hidden ${
+            onNew ? "flex-initial" : "flex-1"
+          }`}
           onWheel={(event) => {
             const el = tabStripRef.current;
             if (!el || el.scrollWidth <= el.clientWidth) return;
@@ -1036,6 +1041,19 @@ function TitleBarComponent({
             })}
           </div>
         </div>
+        {onNew ? (
+          <>
+            <div
+              className="flex shrink-0 items-center px-1"
+              data-tauri-drag-region="false"
+            >
+              <IconButton label={`New session (${MOD}T)`} onClick={onNew}>
+                <Plus className="size-3.5" strokeWidth={1.75} />
+              </IconButton>
+            </div>
+            {!IS_MAC && !IS_WIN ? null : <div className="min-w-0 flex-1" />}
+          </>
+        ) : null}
 
         {!IS_MAC && !IS_WIN ? (
           <div className="flex min-w-0 flex-1 items-center justify-center px-4">

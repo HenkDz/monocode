@@ -1,4 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { invoke, isTauri } from "@tauri-apps/api/core";
+vi.mock("@tauri-apps/api/core", async (original) => ({
+  ...(await original<typeof import("@tauri-apps/api/core")>()),
+  invoke: vi.fn(),
+  isTauri: vi.fn(() => false),
+}));
 import {
   resetHarnessModelOverlays,
   setHarnessModels,
@@ -18,6 +24,7 @@ import {
   registerHarness,
   resetHarnessIdlePark,
   sendHarnessTurn,
+  TurnAuthorizationError,
   type HarnessAdapter,
 } from "./registry";
 import type { SendTurnInput, SteerTurnInput } from "./types";
@@ -43,6 +50,8 @@ function stub(
 
 describe("harness registry", () => {
   afterEach(() => {
+    vi.mocked(isTauri).mockReturnValue(false);
+    vi.mocked(invoke).mockReset();
     resetHarnessModelOverlays();
     resetHarnessIdlePark();
     vi.useRealTimers();
@@ -61,6 +70,34 @@ describe("harness registry", () => {
         .filter((id) => id === "claude" || id === "codex" || id === "cursor")
         .sort(),
     ).toEqual(["claude", "codex", "cursor"]);
+  });
+
+  it("rejects authorization as a failed send without starting the provider or emitting output", async () => {
+    vi.mocked(isTauri).mockReturnValue(true);
+    const message =
+      "This checkout is controlled by an orchestrator. Stop that run before starting independent work.";
+    vi.mocked(invoke).mockRejectedValueOnce(message);
+    const sendTurn = vi.fn();
+    registerHarness(stub("codex", { sendTurn }));
+    const onEvent = vi.fn();
+    const sending = sendHarnessTurn({
+      harness: "codex",
+      sessionId: "rejected",
+      cwd: "/home/projects/app",
+      model: "codex:gpt-5.4",
+      runtimeMode: "supervised",
+      text: "Hello",
+      onEvent,
+    });
+    await expect(sending).rejects.toBeInstanceOf(TurnAuthorizationError);
+    await expect(sending).rejects.toThrow(message);
+    expect(sendTurn).not.toHaveBeenCalled();
+    expect(onEvent).not.toHaveBeenCalled();
+    expect(invoke).toHaveBeenCalledExactlyOnceWith("control_authorize_turn", {
+      sessionId: "rejected",
+      cwd: "/home/projects/app",
+      appAccess: false,
+    });
   });
 
   it("announces readiness when the provider accepts, while preserving the caller's acceptance callback", async () => {

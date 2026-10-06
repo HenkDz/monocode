@@ -1677,4 +1677,10 @@ describe("local orchestration", () => {
     expect(f.manager.submissionError("other")).toContain("active orchestrator");
     expect(f.manager.submissionError("lead")).toBeNull();
   });
+  it("does not block a home-folder session containing a controlled checkout", async () => {
+    const f = setup();
+    await f.start();
+    f.sessions.push({ ...newSession("claude", "/"), id: "home", busy: false });
+    expect(f.manager.submissionError("home")).toBeNull();
+  });
 });

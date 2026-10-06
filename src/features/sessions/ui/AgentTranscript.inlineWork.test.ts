@@ -4,6 +4,15 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Block } from "../model/session";
 import { AgentTranscript } from "./AgentTranscript";
+import {
+  appendUser,
+  stopStreaming,
+} from "../../../integrations/harness/core/apply";
+import { newSession } from "../model/session";
+import {
+  monoMessageDeliveries,
+  rejectMessageSend,
+} from "../../monos/model/monoMessaging";
 
 let container: HTMLDivElement;
 let root: Root;
@@ -63,6 +72,61 @@ function settleTicker() {
   act(() => vi.advanceTimersByTime(850));
   act(() => vi.advanceTimersByTime(340));
 }
+
+it.each([true, false])(
+  "renders a rejected turn as Not sent, not assistant work (Mono: %s)",
+  (mono) => {
+    const error =
+      "This checkout is controlled by an orchestrator. Stop that run before starting independent work.";
+    const attachments = [
+      {
+        id: "file",
+        name: "note.txt",
+        kind: "file" as const,
+        mimeType: "text/plain",
+        size: 12,
+        path: "/tmp/note.txt",
+      },
+    ];
+    const submitted = appendUser(
+      newSession("codex", "/tmp"),
+      "Inspect this",
+      attachments,
+    );
+    const blockId = submitted.blocks[0].id;
+    const session = stopStreaming(
+      rejectMessageSend(
+        submitted,
+        { id: blockId, blockId, text: "Inspect this", attachments },
+        error,
+      ),
+    );
+    const retry = vi.fn();
+    render(session.blocks, {
+      inlineWork: mono,
+      busy: session.busy,
+      ...(mono
+        ? { agentMascot: { mascot: "cat" as const, color: "#6ba" } }
+        : {}),
+      messageDeliveries: monoMessageDeliveries(session),
+      onRetryMessage: retry,
+    });
+    const bubble = container.querySelector("[data-prompt-anchor]")!;
+    expect(bubble.getAttribute("data-message-delivery")).toBe("failed");
+    expect(bubble.textContent).toContain("Inspect this");
+    expect(bubble.textContent).toContain("note.txt");
+    expect(bubble.querySelector('[role="alert"]')?.textContent).toBe(
+      `Not sent · ${error}`,
+    );
+    expect(container.querySelector("[data-mono-work]")).toBeNull();
+    expect(container.textContent).not.toMatch(/worked for/i);
+    const button = [
+      ...bubble.querySelectorAll<HTMLButtonElement>("button"),
+    ].find((button) => button.textContent === "Retry")!;
+    act(() => button.click());
+    expect(retry).toHaveBeenCalledWith(blockId);
+  },
+);
 
 it("keeps the opening and reply outside a noninteractive work summary", () => {
   render([

@@ -101,6 +101,32 @@ export function monoMessageDeliveries(
   );
 }
 
+/** Retain the original send payload, not the provider prompt or display-only files. */
+export function rejectMessageSend(
+  session: Session,
+  message: QueuedMessage,
+  error: string,
+): Session {
+  const existing = session.blocks.find((block) => block.id === message.blockId);
+  const pending = existing ? session : enqueueMonoMessage(session, message);
+  const blockId = existing?.id ?? message.id;
+  return {
+    ...pending,
+    queueStatus: "paused",
+    blocks: pending.blocks.map((block) =>
+      block.id === blockId
+        ? { ...block, startedAt: undefined, durationMs: undefined }
+        : block,
+    ),
+    queuedMessages: [
+      { ...message, blockId, error },
+      ...(pending.queuedMessages ?? []).filter(
+        (entry) => entry.id !== message.id,
+      ),
+    ],
+  };
+}
+
 const legacyBubbles = new WeakMap<QueuedMessage, Block>();
 /** Older queues had no bubble; pending pasted images also need their saved bytes. */
 export function monoPendingTranscriptBlocks(

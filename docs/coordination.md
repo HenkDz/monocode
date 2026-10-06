@@ -156,6 +156,20 @@ Per-member skills/MCP are deliberately not implemented. Follow-up adapter invest
 
 Audit verification so far: eight native control tests pass, including Mono/plain-lead/worker capability separation and distinct, active-turn-only Habit control identity. The trusted UI associates a Manager Habit with its owning run before submission, without acquiring `managerTurnId` or sharing the Manager token. Focused validation: 322 frontend tests and TypeScript pass. These cover Habit ownership, usage-limit versus genuine pause, nested worker checkout exclusion, direct-edge enforcement and permission escalation. An unconstrained full frontend run exhausted Windows virtual memory; the two-worker rerun reached 4,823 passing tests with one sidebar-label regression, now fixed and passing in the focused suite. Live two-project/provider/PR acceptance and dark/light screenshots remain pending. No push, new remote PR, merge, deployment or phone notification has been performed.
 
+### Lock-fix integration and audit checkpoint
+
+Local merge `bf0e191` integrates `HenkDz/mono-lock-fix` at `0d1779a` after org/audit checkpoint `dc70c7e`. The registry conflict retains both typed failed-send errors and the trusted Mono identity flag. `App.tsx` merged automatically and was inspected: app-CLI launch preflight runs before session/tab creation and throws `retryable:false`; the CLI cannot mistake a user-facing parked Retry message for successful app delegation. The native overlap implementation comes from the lock-fix branch unchanged.
+
+Post-merge verification:
+
+- Frontend: **4,832 passed, 13 skipped**, 457 passing files (`NODE_OPTIONS=--no-experimental-webstorage`, two Vitest workers). The merge initially exposed a registry assertion missing the new Mono identity field; it now tests both plain and Mono rejection paths.
+- TypeScript and production frontend build pass. Packaged native debug build passes.
+- Full native library suite: **509 passed, 1 ignored, 1 failed**. The pre-existing `mcp::tests::discovers_provider_configs_without_exposing_credentials` failure still discovers extra machine-installed provider configs. No credentials were changed to make this test pass. Native control/Habit/capability tests pass.
+- Real packaged preview: `target/manager-verified-preview/monocode-org-chart-bf0e191.exe`, isolated identifier `com.monocode.desktop.mono-org-test`. The first Manager message created the default team. A real Claude turn ran read-only `memory.read` and `projects.list` successfully, reported the correct `nour` branch and team, and left the persisted Manager run **active**. Only the bounded read-only CLI calls were approved through the original permission UI. No worker or repository mutation was requested in this smoke test.
+- Actual preview captures: [expanded team and Team page, dark](../target/org-team-dark.png), [light](../target/org-team-light.png). These are not fabricated PR/worker screenshots. A later in-flight session was detected, so no restart or shutdown was forced.
+
+Audit items 1–3 and 5–8 have implementation/regression coverage, including the Habit race avoided by not acquiring a Manager turn, provider-limit event holding, and preflight rejection of nested retained worker checkouts. Item 4 uses the stricter fail-closed permission rule described above, also applied to a Manager's `control respond` to avoid an alternate permission-grant path. **Still unverified:** live Habit execution, live member facts/verdicts, two-project fanout with Reviewer changes/approval, restart mid-run, and the full requested screenshot set. A new live non-draft PR also requires authority to push; the current instruction remains local-only. The org-chart feature is therefore still a WIP, not acceptance-complete.
+
 ## Sidebar density
 
 - Active-only filtering is a project-row filter button, revealed alongside existing actions on hover, keyboard focus or touch. Its pressed state persists per project; an enabled filter stays visible, with a filtered-out count in the existing footer. Pagination remains independent for ordinary worktrees.

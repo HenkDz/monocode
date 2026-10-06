@@ -72,7 +72,7 @@ describe("harness registry", () => {
     ).toEqual(["claude", "codex", "cursor"]);
   });
 
-  it("rejects authorization as a failed send without starting the provider or emitting output", async () => {
+  it.each([false, true])("rejects authorization without provider output (Mono identity: %s)", async (monoSession) => {
     vi.mocked(isTauri).mockReturnValue(true);
     const message =
       "This checkout is controlled by an orchestrator. Stop that run before starting independent work.";
@@ -87,6 +87,7 @@ describe("harness registry", () => {
       model: "codex:gpt-5.4",
       runtimeMode: "supervised",
       text: "Hello",
+      monoSession,
       onEvent,
     });
     await expect(sending).rejects.toBeInstanceOf(TurnAuthorizationError);
@@ -97,6 +98,7 @@ describe("harness registry", () => {
       sessionId: "rejected",
       cwd: "/home/projects/app",
       appAccess: false,
+      monoSession,
     });
   });
 

@@ -33,7 +33,6 @@ import {
   worktreeSessionGroups,
 } from "../model/worktreeSessions";
 import type { Worktree, WorktreeSessionOptions } from "../model/worktrees";
-import { CreateWorktreeDialog } from "./CreateWorktreeDialog";
 
 /** Older idle sessions fold behind "Show more"; anything active stays listed. */
 const SESSION_LIMIT = 5;
@@ -91,7 +90,6 @@ export function ProjectWorktrees({
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const [showAll, setShowAll] = useState<Set<string>>(() => new Set());
   const [worktreeLimit, setWorktreeLimit] = useState(WORKTREE_PAGE);
-  const [creating, setCreating] = useState(false);
   const [historyError, setHistoryError] = useState(false);
   const [historyPending, setHistoryPending] = useState(true);
   const [menu, setMenu] = useState<{
@@ -175,21 +173,6 @@ export function ProjectWorktrees({
       className="ml-5 pb-1"
       aria-label={`Worktrees for ${projectName(project)}`}
     >
-      <div className="flex h-7 items-center gap-2 px-1">
-        <span className="min-w-0 flex-1 text-xs text-content/60">
-          Worktrees
-        </span>
-        <button
-          type="button"
-          className={smallButton}
-          disabled={!data || !!error}
-          aria-label={`New worktree in ${projectName(project)}`}
-          title="New worktree"
-          onClick={() => setCreating(true)}
-        >
-          <Plus className="size-3.5" />
-        </button>
-      </div>
       {!data && !error ? (
         <p className="flex items-center gap-2 px-2 py-1 text-xs text-content/60">
           <Loader className="size-3 animate-spin" />
@@ -240,7 +223,9 @@ export function ProjectWorktrees({
         const selected =
           !!focusedPath &&
           sameProjectPath(focus?.path ?? project, tree.path);
-        const label = tree.branch ?? `Detached ${tree.head.slice(0, 7)}`;
+        const managerTask = [...managerRuns].reverse().filter((run) => run.projectManager)
+          .flatMap((run) => [...run.tasks].reverse()).find((task) => task.workspace && pathKey(task.workspace.checkoutCwd) === key);
+        const label = managerTask?.title ?? tree.branch ?? `Detached ${tree.head.slice(0, 7)}`;
         const workerStatus = managerWorktreeStatus(managerRuns, tree.path, approvalSessionIds, prStatuses);
         const progress = tree.missing
           ? "Missing folder"
@@ -308,7 +293,7 @@ export function ProjectWorktrees({
                 aria-current={selected ? "true" : undefined}
                 aria-label={`Open worktree ${label}`}
                 aria-busy={selected && switchPending}
-                title={`${prettyCwd(tree.path)}\n${progress}${tree.dirty ? "\nUncommitted changes" : ""}`}
+                title={`${tree.branch ?? "Detached"}\n${prettyCwd(tree.path)}\n${progress}${tree.dirty ? "\nUncommitted changes" : ""}`}
                 onClick={() => onSelectWorktree(project, tree)}
                 className={`flex h-full min-w-0 flex-1 items-center gap-2 text-left text-xs transition-[padding] duration-150 motion-reduce:transition-none group-hover/worktree:pr-14 group-focus-within/worktree:pr-14 group-data-[actions-open=true]/worktree:pr-14 [@media(hover:none)]:pr-14 disabled:opacity-40 ${selected ? "text-content" : "text-content/65"}`}
               >
@@ -555,21 +540,6 @@ export function ProjectWorktrees({
               else if (id === "toggle") toggle(tree.path);
               else if (id === "refresh") await refresh();
             })().catch((error) => setActionError(String(error)));
-          }}
-        />
-      ) : null}
-      {creating ? (
-        <CreateWorktreeDialog
-          cwd={project}
-          baseCwd={focus?.path ?? project}
-          defaultRoot={data?.defaultRoot}
-          worktrees={data?.worktrees}
-          sessionOptions
-          onCancel={() => setCreating(false)}
-          onCreated={async (tree, options) => {
-            await refresh();
-            onNewSession(project, tree, options?.session);
-            if (!options?.keepOpen) setCreating(false);
           }}
         />
       ) : null}

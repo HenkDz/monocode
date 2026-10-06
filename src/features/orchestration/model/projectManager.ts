@@ -38,6 +38,7 @@ export type ManagerAttention = {
   project: string;
   kind: "decision" | "reply" | "ready";
   question: string;
+  notificationId?: string;
 };
 
 export function managerAttention(
@@ -55,6 +56,7 @@ export function managerAttention(
       items.push({
         key: session.id,
         id: session.id,
+        notificationId: `${session.blocks.filter((block) => block.role === "user").slice(-1)[0]?.id ?? ""}:${session.pendingQuestion?.requestId ?? approval?.id ?? "reply"}`,
         project: session.cwd,
         kind: session.pendingQuestion || approval ? "decision" : "reply",
         question:
@@ -74,6 +76,7 @@ export function managerAttention(
         items.push({
           key: `${run.leadId}:${task.id}`,
           id: run.leadId,
+          notificationId: `${task.lastDispatchId ?? task.id}:${task.status}`,
           project: run.cwd,
           kind: blocked ? "decision" : "ready",
           question: blocked

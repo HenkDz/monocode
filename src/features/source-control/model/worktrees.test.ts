@@ -13,6 +13,7 @@ import {
   assertWorktreeFilesClosed,
   worktreeSessionIds,
   normalizeWorktreeBranch,
+  orchestrationWorktreeBranchName,
   createWorktree,
   type Worktree,
 } from "./worktrees";
@@ -31,6 +32,12 @@ const tree: Worktree = {
 };
 
 describe("worktree naming", () => {
+  it("uses readable manager titles without changing legacy orchestration names", () => {
+    expect(orchestrationWorktreeBranchName("abc-123", "PM reviewer checklist")).toBe("mc/pm-reviewer-checklist");
+    expect(orchestrationWorktreeBranchName("abc-123", "../ //")).toBe("mc/worker");
+    expect(orchestrationWorktreeBranchName("abc-123")).toBe("mc/orch-abc123");
+    expect(orchestrationWorktreeBranchName("id", "x".repeat(43) + ".lock-extra")).toBe("mc/" + "x".repeat(43));
+  });
   it.each([
     ["sidebar worktree", "sidebar-worktree"],
     ["  Feature/Better sidebar  ", "feature/better-sidebar"],

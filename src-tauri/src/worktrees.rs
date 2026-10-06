@@ -400,10 +400,92 @@ fn create_seeded(root: &Path, branch: &str) -> Result<Worktree, String> {
 pub async fn git_orchestration_worktree_create(
     cwd: String,
     branch: String,
+    task_id: Option<String>,
 ) -> Result<Worktree, String> {
-    tauri::async_runtime::spawn_blocking(move || create_seeded(&expand_home(&cwd), branch.trim()))
-        .await
-        .map_err(|error| error.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        // Persist task ownership before creation so crash recovery keeps its name.
+        static CREATION: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = CREATION
+            .lock()
+            .map_err(|_| "Worker creation lock unavailable")?;
+        let root = expand_home(&cwd);
+        let branch = match task_id {
+            Some(id) => reserve_worker_branch(&root, branch.trim(), &id)?,
+            None => branch.trim().to_string(),
+        };
+        create_seeded(&root, &branch)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+fn reserve_worker_branch(root: &Path, proposed: &str, id: &str) -> Result<String, String> {
+    if id.is_empty() || id.len() > 64 || !id.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-')
+    {
+        return Err("Invalid worker task identity".into());
+    }
+    if !proposed.starts_with("mc/") {
+        return Err("Invalid worker branch namespace".into());
+    }
+    git(root, &["check-ref-format", "--branch", proposed])?;
+    let key = format!("monocode.worker-{id}.branch");
+    if let Ok(saved) = git(root, &["config", "--local", "--get", &key]) {
+        let saved = saved.trim();
+        if !saved.starts_with("mc/") {
+            return Err("Invalid saved worker branch".into());
+        }
+        git(root, &["check-ref-format", "--branch", saved])?;
+        return Ok(saved.to_string());
+    }
+    let reserved = git(
+        root,
+        &[
+            "config",
+            "--local",
+            "--get-regexp",
+            "^monocode\\.worker-.*\\.branch$",
+        ],
+    )
+    .unwrap_or_default();
+    for suffix in 1..=10_000 {
+        let candidate = if suffix == 1 {
+            proposed.to_string()
+        } else {
+            format!("{proposed}-{suffix}")
+        };
+        let occupied = reserved.lines().any(|line| {
+            line.split_once(' ')
+                .is_some_and(|(_, value)| value == candidate)
+        }) || git(
+            root,
+            &["show-ref", "--verify", &format!("refs/heads/{candidate}")],
+        )
+        .is_ok();
+        if !occupied {
+            git(root, &["config", "--local", &key, &candidate])?;
+            return Ok(candidate);
+        }
+    }
+    Err("No available worker branch name".into())
+}
+
+fn owned_worker_branch(root: &Path, branch: &str) -> bool {
+    branch.starts_with("mc/orch-")
+        || git(
+            root,
+            &[
+                "config",
+                "--local",
+                "--get-regexp",
+                "^monocode\\.worker-.*\\.branch$",
+            ],
+        )
+        .is_ok_and(|entries| {
+            entries.lines().any(|line| {
+                line.split_once(' ')
+                    .is_some_and(|(_, value)| value == branch)
+            })
+        })
 }
 
 fn rename_branch(root: &Path, path: &Path, branch: &str) -> Result<Worktree, String> {
@@ -747,7 +829,7 @@ pub fn git_orchestration_worktree_remove(
     let conn = store.lock_conn()?;
     let removed = remove_with_sessions(&conn, &root, &path, true, true)?;
     if let Some(branch) = branch {
-        if branch.starts_with("mc/orch-") {
+        if owned_worker_branch(&root, &branch) {
             if let Err(error) = git(Path::new(&removed.project_cwd), &["branch", "-D", &branch]) {
                 eprintln!("Orchestration worktree removed; temporary branch cleanup will need a retry: {error}");
             }
@@ -761,7 +843,7 @@ pub async fn git_orchestration_branch_remove(cwd: String, branch: String) -> Res
     tauri::async_runtime::spawn_blocking(move || {
         let root = expand_home(&cwd);
         let branch = branch.trim();
-        if !branch.starts_with("mc/orch-") {
+        if !owned_worker_branch(&root, branch) {
             return Err("Only orchestration temporary branches can be removed here".into());
         }
         git(&root, &["check-ref-format", "--branch", branch])?;
@@ -821,6 +903,33 @@ mod tests {
         assert_eq!(trees[1].path, "/a\nquoted\"path");
         assert!(trees[1].locked && trees[1].prunable);
         assert!(!trees[1].is_main);
+    }
+
+    #[test]
+    fn worker_names_are_reserved_unique_and_recoverable() {
+        let repo = repo();
+        let root = repo.0.join("repo");
+        assert_eq!(
+            reserve_worker_branch(&root, "mc/review", "one").unwrap(),
+            "mc/review"
+        );
+        assert_eq!(
+            reserve_worker_branch(&root, "mc/review", "two").unwrap(),
+            "mc/review-2"
+        );
+        assert_eq!(
+            reserve_worker_branch(&root, "mc/renamed-task", "one").unwrap(),
+            "mc/review"
+        );
+        git(&root, &["branch", "mc/existing"]).unwrap();
+        assert_eq!(
+            reserve_worker_branch(&root, "mc/existing", "three").unwrap(),
+            "mc/existing-2"
+        );
+        assert!(reserve_worker_branch(&root, "main", "four").is_err());
+        assert!(reserve_worker_branch(&root, "mc/review", "bad\nkey").is_err());
+        assert!(owned_worker_branch(&root, "mc/review"));
+        assert!(!owned_worker_branch(&root, "mc/existing"));
     }
 
     #[test]

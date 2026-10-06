@@ -379,6 +379,7 @@ import {
 
 import { SkillsPage } from "../../skills/ui/SkillsPage";
 import { ProjectNotificationSettings } from "../../notifications/ui/ProjectNotificationSettings";
+import { NtfySettings } from "../../notifications/ui/NtfySettings";
 import { WorktreesPage } from "../../source-control/ui/WorktreesPage";
 import {
   removeWorktree,
@@ -1169,6 +1170,7 @@ function InboxPage({
         id={settingDomId("project-notifications")}
         data-setting-id="project-notifications"
       >
+        <NtfySettings />
         <ProjectNotificationSettings
           cwd={cwd}
           recents={recents}

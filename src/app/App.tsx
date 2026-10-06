@@ -1,5 +1,8 @@
 import { acceptQuickLaunch } from "./model/quickLaunchSession";
+import { useProjectWorktrees } from "../features/source-control/hooks/useProjectWorktrees";
+import { useManagerPhoneNotifications } from "../features/notifications/hooks/useManagerPhoneNotifications";
 import { isProjectManager, projectManagerId, managerAttention } from "../features/orchestration/model/projectManager";
+import { CreateWorktreeDialog } from "../features/source-control/ui/CreateWorktreeDialog";
 import { usePrStatuses } from "../features/source-control/hooks/usePrStatus";
 import { ProjectManagerRow } from "../features/orchestration/ui/ProjectManagerRow";
 import { gitPrStatus } from "../platform/tauri/fs";
@@ -1167,6 +1170,8 @@ function Workspace({
   activeTabIdRef.current = activeTabId;
 
   const projectWorktree = useWorktreeFocus(projectCwd);
+  const [creatingWorktreeProject, setCreatingWorktreeProject] = useState<string>();
+  const creatingWorktrees = useProjectWorktrees(creatingWorktreeProject ?? "", !!creatingWorktreeProject);
   /** Tab or session id -> the workspace it was opened or moved in. A tab
    * belongs to the workspace it was opened in, whatever worktree it runs in:
    * opening a session, or moving one from its composer, never switches the
@@ -1825,6 +1830,7 @@ function Workspace({
   const { statuses: managerPrStatuses } = usePrStatuses(orchestrationRuns.filter(run => run.projectManager).flatMap(run => run.tasks.flatMap(task =>
     task.accepted && task.workspace ? [{ cwd: task.workspace.checkoutCwd, branch: task.workspace.branch }] : [])));
   const managerQuestions = useMemo(() => managerAttention(sessions, orchestrationRuns, unseenFinishedIds, managerPrStatuses), [sessions, orchestrationRuns, unseenFinishedIds, managerPrStatuses]);
+  useManagerPhoneNotifications(managerQuestions);
 
   const liveAgents = useMemo(
     () =>
@@ -9035,7 +9041,8 @@ function Workspace({
                 })
               : await createOrchestrationWorktree(
                   leadCheckoutCwd,
-                  orchestrationWorktreeBranchName(task.id),
+                  orchestrationWorktreeBranchName(task.id, run.projectManager ? task.title : undefined),
+                  run.projectManager ? task.id : undefined,
                 ).then((tree) =>
                   workspaceIdentity(
                     projectCwd,
@@ -11104,6 +11111,7 @@ function Workspace({
                 />
                 </>
               )}
+              onNewWorktree={setCreatingWorktreeProject}
               onOpenProject={pickProject}
               onRemoveProject={onRemoveProject}
               onNew={onNew}
@@ -11138,6 +11146,18 @@ function Workspace({
               onDismissUpdate={() => setUpdateNotice(null)}
             />
 
+            {creatingWorktreeProject && <CreateWorktreeDialog
+              cwd={creatingWorktreeProject}
+              defaultRoot={creatingWorktrees.data?.defaultRoot}
+              worktrees={creatingWorktrees.data?.worktrees}
+              baseCwd={worktreeFocus(creatingWorktreeProject)?.path ?? creatingWorktreeProject}
+              sessionOptions
+              onCancel={() => setCreatingWorktreeProject(undefined)}
+              onCreated={(tree, options) => {
+                onNewWorktreeSession(creatingWorktreeProject, tree, options?.session);
+                if (!options?.keepOpen) setCreatingWorktreeProject(undefined);
+              }}
+            />}
             <div className="body-glass flex min-h-0 min-w-0 flex-1 flex-col">
               <div
                 className={

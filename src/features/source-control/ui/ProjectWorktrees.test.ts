@@ -273,37 +273,10 @@ it("disables missing worktrees and keeps the last list visible when refreshing f
   expect(container.textContent).toContain("Git unavailable");
 });
 
-it("creates a worktree using the existing dialog and starts a session there", async () => {
+it("does not render the removed Worktrees header or duplicate creation action", async () => {
   await render();
-  act(() => button("New worktree in repo").click());
-  await act(async () => button("Confirm creation").click());
-  expect(refresh).toHaveBeenCalledTimes(1);
-  expect(props.onNewSession).toHaveBeenCalledWith(
-    "/repo",
-    expect.objectContaining({ path: "/trees/new" }),
-    undefined,
-  );
-});
-
-it("forwards agent and prompt choices while keeping batch creation open", async () => {
-  creationOptions = {
-    keepOpen: true,
-    session: {
-      harness: "codex",
-      model: "gpt-5.4",
-      composerSeed: "Fix the sidebar",
-    },
-  };
-  await render();
-  act(() => button("New worktree in repo").click());
-  await act(async () => button("Confirm creation").click());
-  expect(props.onNewSession).toHaveBeenCalledWith(
-    "/repo",
-    expect.objectContaining({ path: "/trees/new" }),
-    creationOptions.session,
-  );
-  await act(async () => button("Confirm creation").click());
-  expect(props.onNewSession).toHaveBeenCalledTimes(2);
+  expect(container.querySelector('[aria-label="New worktree in repo"]')).toBeNull();
+  expect([...container.querySelectorAll("span")].some((item) => item.textContent === "Worktrees")).toBe(false);
 });
 
 it("suspends history loading with a hidden rail and retries failed history without losing live sessions", async () => {
@@ -323,6 +296,7 @@ it("renders collapsible worktrees under pinned, grouped, and ordinary projects w
   saveProjectGroups([{ id: "clients", name: "Clients", collapsed: false }]);
   saveProjectGroupAssignments({ [pathKey("/grouped")]: "clients" });
   const onSelectProject = vi.fn();
+  const onNewWorktree = vi.fn();
   const renderProjectWorktrees = vi.fn((path: string) =>
     createElement(
       "div",
@@ -339,6 +313,7 @@ it("renders collapsible worktrees under pinned, grouped, and ordinary projects w
           openedAt: 1,
         })),
         onSelectProject,
+        onNewWorktree,
         onOpenProject: vi.fn(),
         renderProjectWorktrees,
       }),
@@ -357,7 +332,10 @@ it("renders collapsible worktrees under pinned, grouped, and ordinary projects w
       '[data-project-group="clients"] [data-project-trees="/grouped"]',
     ),
   ).not.toBeNull();
+  act(() => button("Create new worktree in ordinary").click());
+  expect(onNewWorktree).toHaveBeenCalledWith("/ordinary");
   expect(onSelectProject).not.toHaveBeenCalled();
+  expect(container.querySelector(".project-reorder-item[data-selected]")?.className).not.toContain("bg-selection");
   act(() => button("Collapse worktrees in ordinary").click());
   expect(
     container.querySelector('[data-project-trees="/ordinary"]'),

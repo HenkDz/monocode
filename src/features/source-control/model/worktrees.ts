@@ -62,10 +62,12 @@ export async function createWorktree(
 export async function createOrchestrationWorktree(
   cwd: string,
   branch: string,
+  taskId?: string,
 ) {
   const tree = await invoke<Worktree>("git_orchestration_worktree_create", {
     cwd,
     branch,
+    taskId,
   });
   notifyGitChanged();
   return tree;
@@ -95,7 +97,8 @@ export function temporaryWorktreeBranchName(
   return `mc/${token || Date.now().toString(36)}`;
 }
 
-export function orchestrationWorktreeBranchName(id: string): string {
+export function orchestrationWorktreeBranchName(id: string, title?: string): string {
+  if (title) return `mc/${normalizeWorktreeBranch(title).replace(/\//g, "-").slice(0, 48).replace(/(?:\.lock|[.-])+$/g, "") || "worker"}`;
   const token = id.replace(/[^a-zA-Z0-9]/g, "").slice(0, 12).toLowerCase();
   return `mc/orch-${token || Date.now().toString(36)}`;
 }

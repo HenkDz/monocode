@@ -823,6 +823,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
                 onMouseDown={focusPane}
               >
                 <AgentTranscript
+                  managerProject={isProjectManager(session.id) ? session.cwd : undefined}
                   blocks={session.blocks}
                   busy={!!session.busy}
                   visible={visible}

@@ -1,3 +1,4 @@
+import { ManagerAvatar } from "../../orchestration/ui/ManagerAvatar";
 import {
   ArrowUp,
   Check,
@@ -165,6 +166,7 @@ const FIRST_PAINT_TURNS = 3;
 const TURN_PAGE_SIZE = 20;
 
 type Props = {
+  managerProject?: string;
   blocks: Block[];
   busy?: boolean;
   cwd?: string;
@@ -209,6 +211,7 @@ type Props = {
 };
 
 function AgentTranscriptComponent({
+  managerProject,
   blocks: sourceBlocks,
   busy,
   cwd,
@@ -884,6 +887,7 @@ function AgentTranscriptComponent({
           const foldLineRow = (
             <TurnRow key="work-fold" folded={!showFoldLine}>
               <WorkFoldLine
+                managerProject={managerProject}
                 title={foldTitle}
                 kind={workKind(folded)}
                 harness={turnHarness}
@@ -993,6 +997,7 @@ function AgentTranscriptComponent({
                 : null}
               {durationMs != null && settled ? (
                 <TurnDuration
+                  managerProject={managerProject}
                   elapsedMs={durationMs}
                   metrics={userBlock?.turnMetrics}
                   labelHidden={showFoldLine}
@@ -1107,6 +1112,7 @@ function backgroundLabel(tasks: string[]): string {
  * to the last, so it is not repeated here.
  */
 function TurnDuration({
+  managerProject,
   elapsedMs,
   metrics,
   labelHidden = false,
@@ -1120,6 +1126,7 @@ function TurnDuration({
   onSecondOpinion,
   onHandoff,
 }: {
+  managerProject?: string;
   elapsedMs: number | null;
   metrics?: TurnMetrics;
   /** True when the fold line above already keeps the time for this turn. */
@@ -1176,7 +1183,7 @@ function TurnDuration({
         <span className="flex min-w-0 items-center gap-2.5">
           {dot}
           <span className="flex min-w-0 items-center gap-1.5">
-            {harness ? (
+            {managerProject ? <ManagerAvatar project={managerProject} /> : harness ? (
               <HarnessIcon harness={harness} className="size-3.5 shrink-0" />
             ) : null}
             <span className="min-w-0 truncate" title={label}>
@@ -1967,6 +1974,7 @@ function turnItemKey(item: TurnItem): string {
  * prompt, answer, and a receipt for the work in between.
  */
 function WorkFoldLine({
+  managerProject,
   title,
   kind,
   harness,
@@ -1975,6 +1983,7 @@ function WorkFoldLine({
   open,
   onToggle,
 }: {
+  managerProject?: string;
   title: ReactNode;
   kind: ActivityPhaseKind;
   harness?: HarnessId;
@@ -1994,7 +2003,7 @@ function WorkFoldLine({
         />
       ) : (
         <>
-          {harness ? (
+          {managerProject ? <ManagerAvatar project={managerProject} /> : harness ? (
             <HarnessIcon
               harness={harness}
               className={`size-3.5 shrink-0 ${expandable ? "group-hover:opacity-0" : ""}`}

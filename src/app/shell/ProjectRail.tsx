@@ -14,7 +14,14 @@ import {
   Settings,
   Zap,
 } from "../../shared/ui/icons";
-import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent,
+  type ReactNode,
+} from "react";
 import { useDragResize } from "../../shared/hooks/useDragResize";
 import { useLockOverscroll } from "../../shared/hooks/useLockOverscroll";
 import { useProjectDiffStats } from "../../features/source-control/hooks/useProjectDiffStats";
@@ -27,10 +34,7 @@ import {
   PROJECT_RAIL_WIDTH_MIN,
   saveProjectRailWidth,
 } from "../../features/settings/model/appearance";
-import {
-  basename,
-  type GitDiffStats,
-} from "../../platform/tauri/fs";
+import { basename, type GitDiffStats } from "../../platform/tauri/fs";
 import { IS_MAC, MOD } from "../../platform/tauri/platform";
 import { formatInteger } from "../../shared/lib/numbers";
 import { pathKey, projectKey, projectName } from "../../shared/lib/paths";
@@ -111,6 +115,7 @@ type Props = {
   automationsActive?: boolean;
   onTogglePanel?: () => void;
   onSelectProject: (path: string) => void;
+  onNewWorktree?: (project: string) => void;
   renderProjectWorktrees?: (path: string, enabled: boolean) => ReactNode;
   onOpenProject: () => void;
   onRemoveProject?: (path: string, options: { purgeData: boolean }) => void;
@@ -150,6 +155,7 @@ export function ProjectRail({
   onTogglePanel,
   onSelectProject,
   renderProjectWorktrees,
+  onNewWorktree,
   onOpenProject,
   onRemoveProject,
   liveAgents = [],
@@ -330,7 +336,11 @@ export function ProjectRail({
   const pinnedIds = sections.pinned.map((item) => item.path);
   const projectIds = groupedProjectSections.ungrouped.map((item) => item.path);
   const pinnedSortable = useAnimatedReorder(pinnedIds, onReorderPinned, "y");
-  const projectSortable = useAnimatedReorder(projectIds, onReorderProjects, "y");
+  const projectSortable = useAnimatedReorder(
+    projectIds,
+    onReorderProjects,
+    "y",
+  );
   return (
     <nav
       ref={resize.setPaneRef}
@@ -430,6 +440,7 @@ export function ProjectRail({
                 }
                 onSelect={onSelectProject}
                 renderProjectWorktrees={renderProjectWorktrees}
+                onNewWorktree={onNewWorktree}
                 onTogglePin={toggleProjectPin}
                 onContextMenu={onProjectContextMenu}
                 onOpenMenu={projectMenu.open}
@@ -465,6 +476,7 @@ export function ProjectRail({
                       }
                       onSelect={onSelectProject}
                       renderProjectWorktrees={renderProjectWorktrees}
+                      onNewWorktree={onNewWorktree}
                       onTogglePin={toggleProjectPin}
                       onContextMenu={onProjectContextMenu}
                       onOpenMenu={projectMenu.open}
@@ -509,6 +521,7 @@ export function ProjectRail({
               }
               onSelect={onSelectProject}
               renderProjectWorktrees={renderProjectWorktrees}
+              onNewWorktree={onNewWorktree}
               onTogglePin={toggleProjectPin}
               onContextMenu={onProjectContextMenu}
               onOpenMenu={projectMenu.open}
@@ -590,6 +603,7 @@ function ProjectSection({
   searchActive,
   onSelect,
   renderProjectWorktrees,
+  onNewWorktree,
   onTogglePin,
   onContextMenu,
   onOpenMenu,
@@ -611,6 +625,7 @@ function ProjectSection({
   pinned: boolean;
   searchActive: boolean;
   onSelect: (path: string) => void;
+  onNewWorktree?: (project: string) => void;
   renderProjectWorktrees?: Props["renderProjectWorktrees"];
   onTogglePin: (path: string) => void;
   onContextMenu: (path: string, event: MouseEvent<HTMLElement>) => void;
@@ -642,6 +657,7 @@ function ProjectSection({
             sortable={sortable}
             onSelect={onSelect}
             renderProjectWorktrees={renderProjectWorktrees}
+            onNewWorktree={onNewWorktree}
             onTogglePin={onTogglePin}
             onContextMenu={onContextMenu}
             onOpenMenu={onOpenMenu}
@@ -692,6 +708,7 @@ function ProjectSectionHeader({
 
 function ProjectGroupSection({
   renderProjectWorktrees,
+  onNewWorktree,
   group,
   items,
   muteStatuses,
@@ -712,6 +729,7 @@ function ProjectGroupSection({
   groupLogos,
   groupMascots,
 }: {
+  onNewWorktree?: (project: string) => void;
   renderProjectWorktrees?: Props["renderProjectWorktrees"];
   group: ProjectGroup;
   items: RecentProject[];
@@ -758,7 +776,9 @@ function ProjectGroupSection({
         className="project-reorder-item group relative flex h-8 items-stretch rounded-md px-2 opacity-65 cursor-default"
         onContextMenu={(event) => {
           event.preventDefault();
-          event.currentTarget.querySelector<HTMLButtonElement>("button")?.focus();
+          event.currentTarget
+            .querySelector<HTMLButtonElement>("button")
+            ?.focus();
           openMenu(event.currentTarget, event.clientX, event.clientY);
         }}
       >
@@ -811,7 +831,7 @@ function ProjectGroupSection({
             event.stopPropagation();
             openMenu(event.currentTarget);
           }}
-          className="absolute right-1 top-1/2 hidden size-6 -translate-y-1/2 place-items-center rounded-md text-content/55 hover:bg-content/8 hover:text-content group-hover:grid group-has-[:focus-visible]:grid"
+          className="absolute right-1 top-1/2 grid size-6 -translate-y-1/2 place-items-center rounded-md text-content/55 pointer-events-none opacity-0 transition-opacity duration-150 motion-reduce:transition-none hover:bg-content/8 hover:text-content group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100"
         >
           <MoreHorizontal className="size-4" strokeWidth={1.75} />
         </button>
@@ -830,6 +850,7 @@ function ProjectGroupSection({
               sortable={sortable}
               onSelect={onSelect}
               renderProjectWorktrees={renderProjectWorktrees}
+              onNewWorktree={onNewWorktree}
               onTogglePin={onTogglePin}
               onContextMenu={onContextMenu}
               onOpenMenu={onOpenMenu}
@@ -859,6 +880,7 @@ function ProjectCard({
   sortable,
   onSelect,
   renderProjectWorktrees,
+  onNewWorktree,
   onTogglePin,
   onContextMenu,
   onOpenMenu,
@@ -876,6 +898,7 @@ function ProjectCard({
   pinned: boolean;
   sortable: SortableHandle;
   onSelect: (path: string) => void;
+  onNewWorktree?: (project: string) => void;
   renderProjectWorktrees?: Props["renderProjectWorktrees"];
   onTogglePin: (path: string) => void;
   onContextMenu: (path: string, event: MouseEvent<HTMLElement>) => void;
@@ -943,7 +966,7 @@ function ProjectCard({
       <div
         data-selected={selected || undefined}
         className={`project-reorder-item group relative flex touch-none items-stretch rounded-md px-2 h-8 ${
-          selected ? "bg-selection-strong text-content" : "opacity-65"
+          selected ? "text-content" : "text-content/65"
         } cursor-default`}
         onPointerDown={(event) => {
           if (event.button !== 0) return;
@@ -995,7 +1018,7 @@ function ProjectCard({
             muteStatus ? `${cardAriaLabel}, ${muteStatus}` : cardAriaLabel
           }
           aria-current={selected ? "true" : undefined}
-          className="flex min-w-0 flex-1 cursor-default items-center gap-2 text-left transition-[padding] duration-150 motion-reduce:transition-none group-hover:pr-6 group-has-[:focus-visible]:pr-6"
+          className="flex min-w-0 flex-1 cursor-default items-center gap-2 text-left transition-[padding] duration-150 motion-reduce:transition-none group-hover:pr-12 group-focus-within:pr-12 [@media(hover:none)]:pr-12"
         >
           <div className="project-card-logo grid size-4 shrink-0 place-items-center transition-opacity group-hover:opacity-0">
             {logoPath && !busy ? (
@@ -1081,7 +1104,7 @@ function ProjectCard({
               event.detail === 0 ? rect.bottom : event.clientY,
             );
           }}
-          className="absolute right-1 top-1/2 hidden size-6 -translate-y-1/2 place-items-center rounded-md text-content/55 hover:bg-content/8 hover:text-content group-hover:grid group-has-[:focus-visible]:grid"
+          className={`absolute ${hasWorktrees && onNewWorktree ? "right-7" : "right-1"} top-1/2 grid size-6 -translate-y-1/2 place-items-center rounded-md text-content/55 pointer-events-none opacity-0 transition-opacity duration-150 motion-reduce:transition-none hover:bg-content/8 hover:text-content group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100`}
         >
           <MoreHorizontal className="size-4" strokeWidth={1.75} />
         </button>
@@ -1103,10 +1126,27 @@ function ProjectCard({
             <Pin className="size-3.5" strokeWidth={1.75} />
           )}
         </button>
+        {hasWorktrees && onNewWorktree ? (
+          <button
+            type="button"
+            data-no-drag
+            title="Create new worktree"
+            aria-label={`Create new worktree in ${name}`}
+            onClick={(event) => {
+              event.stopPropagation();
+              onNewWorktree(item.path);
+            }}
+            className="absolute right-1 top-1/2 grid size-6 -translate-y-1/2 place-items-center rounded-md text-content/55 pointer-events-none opacity-0 transition-opacity duration-150 motion-reduce:transition-none hover:bg-content/8 hover:text-content group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100"
+          >
+            <Plus className="size-3.5" />
+          </button>
+        ) : null}
       </div>
-      {hasWorktrees && expanded
-        ? renderProjectWorktrees(item.path, statsEnabled)
-        : null}
+      {hasWorktrees && expanded ? (
+        <div className="mt-0.5">
+          {renderProjectWorktrees(item.path, statsEnabled)}
+        </div>
+      ) : null}
     </div>
   );
 }

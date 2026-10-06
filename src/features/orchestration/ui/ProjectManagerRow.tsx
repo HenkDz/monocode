@@ -1,5 +1,5 @@
 import { useState, useSyncExternalStore } from "react";
-import { MessageSquare } from "../../../shared/ui/icons";
+import { ManagerAvatar } from "./ManagerAvatar";
 import { orchestrator, orchestrationPathKey } from "../model/orchestration";
 import type { ManagerAttention } from "../model/projectManager";
 import { useProjectWorktrees } from "../../source-control/hooks/useProjectWorktrees";
@@ -21,7 +21,10 @@ export function ProjectManagerRow({
 }) {
   const [opening, setOpening] = useState(false);
   const [error, setError] = useState<string>();
-  const { data } = useProjectWorktrees(project, enabled && !project.startsWith("remote:"));
+  const { data } = useProjectWorktrees(
+    project,
+    enabled && !project.startsWith("remote:"),
+  );
   const runs = useSyncExternalStore(
     orchestrator.subscribe,
     orchestrator.snapshot,
@@ -49,14 +52,28 @@ export function ProjectManagerRow({
           ? "Running"
           : undefined;
   return (
-    <div>
+    <div className="ml-5 mb-0.5">
       <button
         type="button"
         disabled={opening}
         aria-label="Open project manager"
         aria-busy={opening}
         aria-current={selected ? "page" : undefined}
-        className={`flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-xs focus-visible:outline-accent disabled:opacity-50 ${selected ? "bg-selection text-content" : "text-content/70 hover:bg-content/5 hover:text-content"}`}
+        title={
+          waiting.length
+            ? [
+                waiting.filter((item) => item.kind === "decision").length &&
+                  `${waiting.filter((item) => item.kind === "decision").length} awaiting your decision`,
+                waiting.filter((item) => item.kind === "ready").length &&
+                  `${waiting.filter((item) => item.kind === "ready").length} ready to merge`,
+                waiting.filter((item) => item.kind === "reply").length &&
+                  `${waiting.filter((item) => item.kind === "reply").length} new replies`,
+              ]
+                .filter(Boolean)
+                .join(" · ")
+            : label || "Manager"
+        }
+        className={`flex h-8 w-full items-center gap-1 rounded-md pl-5 pr-2 text-left text-xs focus-visible:outline-accent disabled:opacity-50 ${selected ? "bg-selection text-content" : "text-content/70 hover:bg-content/5 hover:text-content"}`}
         onClick={() => {
           setOpening(true);
           setError(undefined);
@@ -65,7 +82,20 @@ export function ProjectManagerRow({
             .finally(() => setOpening(false));
         }}
       >
-        <MessageSquare className="size-3.5 shrink-0" />
+        <ManagerAvatar
+          project={project}
+          status={
+            decision
+              ? "decision"
+              : ready
+                ? "ready"
+                : waiting.length
+                  ? "reply"
+                  : label
+                    ? "running"
+                    : undefined
+          }
+        />
         <span>Manager</span>
         {label && (
           <span
@@ -74,9 +104,6 @@ export function ProjectManagerRow({
             title={label}
             className="ml-auto flex items-center gap-1.5 text-[10px] text-content/50"
           >
-            <span
-              className={`size-1.5 rounded-full ${decision ? "bg-amber-400" : ready ? "bg-emerald-400" : waiting.length ? "bg-accent" : "bg-content/30 motion-safe:animate-pulse"}`}
-            />
             {waiting.length > 1 ? waiting.length : null}
           </span>
         )}

@@ -299,6 +299,7 @@ type Props = {
   liveAgents?: LiveAgent[];
   onSelectAgent?: (sessionId: string) => void;
   onSelectProject?: (path: string) => void;
+  onNewWorktree?: (project: string) => void;
   renderProjectWorktrees?: ComponentProps<typeof ProjectRail>["renderProjectWorktrees"];
   /** Where the panel docks; "right" renders it into `panelHost`. */
   panelSide?: WorkspacePanelSide;
@@ -397,6 +398,7 @@ function SidebarComponent({
   onSelectAgent,
   onSelectProject,
   renderProjectWorktrees,
+  onNewWorktree,
   panelSide = "left",
   panelHost = null,
   onOpenProject,
@@ -2278,6 +2280,7 @@ function SidebarComponent({
           onTogglePanel={onToggleProjectRail}
           onSelectProject={onSelectProject}
           renderProjectWorktrees={renderProjectWorktrees}
+                onNewWorktree={onNewWorktree}
           onOpenProject={onOpenProject}
           onRemoveProject={onRemoveProject}
           settingsOpen={settingsOpen}

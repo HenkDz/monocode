@@ -25,6 +25,7 @@ mod mcp;
 mod menu;
 mod notes;
 mod notifications;
+mod ntfy;
 mod pasteboard;
 mod pi_usage;
 mod project_logo;
@@ -283,6 +284,9 @@ pub fn run() {
             default_cwd,
             home_dir,
             notifications::notification_permission,
+            ntfy::ntfy_settings,
+            ntfy::ntfy_save,
+            ntfy::ntfy_send,
             notifications::request_notification_permission,
             notifications::show_notification,
             notifications::open_notification_settings,

@@ -1,5 +1,15 @@
 # Project managers
 
+## Mono integration: upstream v0.8.0
+
+The standalone `grand-orchestrator-spec.md` is superseded by `orchestrator-as-mono.md`: Monos remain the app-wide agents; Project Managers remain folder-scoped agents. The unfinished standalone prototype is parked, not shipped, at `d62c333` on local branch `nour-orchestrator-wip`. The merge starts from `bc71317` and integrates local tag `upstream-v0.8.0` (`0c77a85`). No push.
+
+Phase 1 preserves both navigation models, Manager retention/recovery/identity, single-line worktrees, colored review cards, ntfy, branch force-delete confirmation, and upstream Monos/streaming/Inbox fixes. The shared Inbox cache retains both rate-limit fallback and latest-request protection. Opening a Mono supersedes pending Manager navigation. Right-docked Explorer support is retained alongside Mono detail panels.
+
+Verification: 4,805 frontend tests passed, 13 skipped; TypeScript and production build passed. Native suite: 504 passed, 1 ignored, 1 failed (`mcp::tests::discovers_provider_configs_without_exposing_credentials` includes machine-installed providers rather than only fixture providers; `mcp.rs` is identical to upstream). An initial parallel native compilation exhausted memory; rerunning with one compiler job completed. An upstream habit test assumed a 12-hour locale; its assertion now also accepts the equivalent 24-hour display. Existing CSS-highlight and bundle-size warnings remain.
+
+An isolated native profile (`com.monocode.desktop.mono-merge-test`) rendered Monos and Managers together. Opening the Mono displayed its own header; selecting Manager restored its standalone header with zero worktree tabs. No provider turn was submitted. Screenshots: [Mono and Manager side by side](../target/mono-merge-mono-dark.png), [Manager before reuse, dark](../target/mono-merge-manager-before-dark.png), [Manager before reuse, light](../target/mono-merge-manager-before-light.png). These use a test Mono and the real local checkout; installed-app sessions were not changed.
+
 Latest round preserves the local `2f2fea7` navigation, queue, colored diffs/checks and notifications changes.
 
 Each local Git project has a Manager row above its worktrees. Opening it uses a normal session pane; the blank pane is ephemeral. The first message starts the provider and the existing persistent Orchestrator. There is no enable form, checkout selector, coordination overlay or grand orchestrator.

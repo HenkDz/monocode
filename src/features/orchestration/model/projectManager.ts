@@ -19,6 +19,13 @@ export function managerTaskMerged(
   task: OrchestrationTask,
   pr?: GitPr | null,
 ): boolean {
+  return managerTaskFinished(task, pr) && pr?.state === "merged";
+}
+
+export function managerTaskFinished(
+  task: OrchestrationTask,
+  pr?: GitPr | null,
+): boolean {
   return !!(
     task.status === "completed" &&
     task.accepted &&
@@ -26,7 +33,7 @@ export function managerTaskMerged(
     task.acceptedDispatchId === task.lastDispatchId &&
     task.prUrl &&
     pr?.url === task.prUrl &&
-    pr.state === "merged"
+    (pr.state === "merged" || pr.state === "closed")
   );
 }
 
@@ -34,7 +41,7 @@ export function managerQueueRank(
   task: OrchestrationTask,
   pr?: GitPr | null,
 ): number {
-  if (managerTaskMerged(task, pr) || task.status === "cancelled") return 3;
+  if (managerTaskFinished(task, pr) || task.status === "cancelled") return 3;
   if (["blocked", "failed", "interrupted"].includes(task.status)) return 0;
   if (managerPrReady(task, pr)) return 1;
   return 2;

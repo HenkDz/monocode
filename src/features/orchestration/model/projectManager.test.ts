@@ -5,6 +5,8 @@ import {
   managerWorktreeStatus,
   managerAttention,
   managerTaskMerged,
+  managerTaskFinished,
+  managerQueueRank,
   reviewedManagerPullRequest,
 } from "./projectManager";
 import type { OrchestrationRun } from "./orchestrationState";
@@ -32,6 +34,12 @@ it("does not hide a new correction dispatch just because its previous PR merged"
   } as OrchestrationRun["tasks"][number];
   const pr = { number: 1, title: "PR", state: "merged", url: task.prUrl! };
   expect(managerTaskMerged(task, pr)).toBe(true);
+  const closed = { ...pr, state: "closed" };
+  expect(managerTaskFinished(task, closed)).toBe(true);
+  expect(managerQueueRank(task, closed)).toBe(3);
+  expect(managerTaskMerged(task, closed)).toBe(false);
+  expect(managerTaskFinished({ ...task, lastDispatchId: "correction" }, closed)).toBe(false);
+  expect(managerTaskFinished(task, { ...closed, url: "another-pr" })).toBe(false);
   expect(
     managerTaskMerged({ ...task, status: "running", accepted: false }, pr),
   ).toBe(false);

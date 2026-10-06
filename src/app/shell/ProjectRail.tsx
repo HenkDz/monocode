@@ -6,6 +6,7 @@ import {
   Internet,
   Inbox,
   MoreHorizontal,
+  ListFilter,
   Pin,
   PinOff,
   File,
@@ -25,6 +26,7 @@ import {
 import { useDragResize } from "../../shared/hooks/useDragResize";
 import { useLockOverscroll } from "../../shared/hooks/useLockOverscroll";
 import { useProjectDiffStats } from "../../features/source-control/hooks/useProjectDiffStats";
+import { useActiveWorktrees } from "../../features/source-control/hooks/useActiveWorktrees";
 import { useAnimatedReorder } from "../../shared/hooks/useAnimatedReorder";
 import { useTabGroupLogos } from "../../features/projects/hooks/useTabGroupLogos";
 import {
@@ -921,10 +923,7 @@ function ProjectCard({
   const color = resolveTabGroupColor(key, groupColors, groupCustomColors, seed);
   const diffEnabled = statsEnabled && Boolean(item.path) && item.path !== "~";
   const stats = useProjectDiffStats(item.path, diffEnabled);
-  const files = stats?.files ?? 0;
-  const additions = stats?.additions ?? 0;
-  const deletions = stats?.deletions ?? 0;
-  const hasChanges = files > 0 || additions > 0 || deletions > 0;
+  const [activeOnly, setActiveOnly] = useActiveWorktrees(item.path);
   const remote = remoteProjectFor(item.path);
   const { machines } = useRemoteMachines(!!remote);
   const machine = remote
@@ -1018,7 +1017,7 @@ function ProjectCard({
             muteStatus ? `${cardAriaLabel}, ${muteStatus}` : cardAriaLabel
           }
           aria-current={selected ? "true" : undefined}
-          className="flex min-w-0 flex-1 cursor-default items-center gap-2 text-left transition-[padding] duration-150 motion-reduce:transition-none group-hover:pr-12 group-focus-within:pr-12 [@media(hover:none)]:pr-12"
+          className={`flex min-w-0 flex-1 cursor-default items-center gap-2 text-left transition-[padding] duration-150 motion-reduce:transition-none ${hasWorktrees ? `group-hover:pr-20 group-focus-within:pr-20 [@media(hover:none)]:pr-20 ${activeOnly ? "pr-6" : ""}` : "group-hover:pr-12 group-focus-within:pr-12 [@media(hover:none)]:pr-12"}`}
         >
           <div className="project-card-logo grid size-4 shrink-0 place-items-center transition-opacity group-hover:opacity-0">
             {logoPath && !busy ? (
@@ -1047,11 +1046,6 @@ function ProjectCard({
           {machine ? (
             <span className="min-w-0 flex-1 truncate text-[11px] leading-tight text-content/45">
               {machine.name}
-            </span>
-          ) : null}
-          {hasChanges ? (
-            <span className="project-card-stats shrink-0 group-hover:hidden group-has-[:focus-visible]:hidden">
-              <span aria-label="Uncommitted changes" title="Uncommitted changes" className="block size-1.5 rounded-full bg-content/40" />
             </span>
           ) : null}
           {remote ? (
@@ -1088,6 +1082,20 @@ function ProjectCard({
             </span>
           ) : null}
         </button>
+        {hasWorktrees && (
+          <button
+            type="button"
+            data-no-drag
+            aria-label="Show active only"
+            aria-pressed={activeOnly}
+            title={activeOnly ? "Filtered: showing active worktrees only" : "Show active worktrees only"}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => { event.stopPropagation(); setActiveOnly(!activeOnly); }}
+            className={`absolute right-1 ${onNewWorktree ? "group-hover:right-14 group-focus-within:right-14 [@media(hover:none)]:right-14" : "group-hover:right-7 group-focus-within:right-7 [@media(hover:none)]:right-7"} top-1/2 grid size-6 -translate-y-1/2 place-items-center rounded-md transition-opacity hover:bg-content/8 focus-visible:outline-accent ${activeOnly ? "text-accent opacity-100" : "text-content/55 pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100"}`}
+          >
+            <ListFilter className="size-3.5" />
+          </button>
+        )}
         <button
           type="button"
           data-no-drag

@@ -107,7 +107,7 @@ Previous polish and the colored diff/check chips were checkpointed locally in `8
    - Operational worker failures go to Manager, not directly to human notifications. Only explicit Manager questions/approvals require human attention. Scope/product decisions, destructive/irreversible authority and safety refusals still escalate. Provider switching must never bypass a safety refusal. The manager classifies recovery reasons; this is not a semantic safety-refusal detector or an enforcement sandbox.
 2. **Two-way navigation.** The branch and Go to worktree button open the producing worker session through normal workspace navigation; its harness/model is displayed. PR ready on a worktree opens Manager and scrolls to that task's card, including repeated requests for the same card.
 3. **Worktree menu.** New session offers installed harnesses; Open in reuses editor detection, folder reveal and terminal code. Give to Manager asks for a task and submits the named retained checkout. Open PR uses the known open PR; Create PR opens an explicit title/base/description form and requires clean, already-published commits. It never silently pushes. Removal reuses the existing confirmation and session-preserving lifecycle; primary checkouts are not removable here. Optional local branch cleanup uses Git's `-d`, never force deletion. Unmerged branches are retained. Partial cleanup reports that the worktree was removed and retries only branch cleanup, not deletion again. Remote branches are untouched.
-4. **Checkout-specific counts.** Addition/deletion counts use each worktree's checkout, not the project aggregate. The project row shows only a subtle change dot. Metadata sits below the title within the same worktree row so narrow sidebars retain readable names.
+4. **Checkout-specific counts.** Addition/deletion counts use each worktree's checkout, not the project aggregate. The sidebar-density round below replaces second-line metadata and removes the project change dot.
 5. **Single-session rows.** Exactly one session opens directly from its worktree row without repeating the title. Multiple sessions retain their expandable list. Existing orchestration controls remain available even when their lead is the only session; their Resume behavior is unchanged.
 6. **Review queue.** Manager expands into its owned worktrees, ordered blocked/needs decision, ready, then active work. User-created worktrees remain separate with independent pagination. A confirmed matching merged PR for the accepted dispatch changes the card to Merged with Remove worktree and puts the checkout in collapsed Done. A previous merged PR cannot hide a newer correction dispatch. Next cycles ready cards; Alt+Shift+N does the same while focus is in the cards, without intercepting correction typing. The chat status strip links running work, explicit user questions and ready cards. Per-project Active only hides idle/detached/merged rows, but retains focused or attention-needing work so navigation and user work do not disappear.
 
@@ -129,7 +129,27 @@ Previous polish and the colored diff/check chips were checkpointed locally in `8
 
 Packaged deliverable: `target/manager-verified-preview/monocode-round3-final.exe` (same isolated preview identifier). Built, not relaunched over the user's active preview. Installed-app sessions were not changed. Local commits only; no push, PR publication, merge, deployment or phone notification was performed in this round.
 
+## Sidebar density
+
+- Active-only filtering is a project-row filter button, revealed alongside existing actions on hover, keyboard focus or touch. Its pressed state persists per project; an enabled filter stays visible, with a filtered-out count in the existing footer. Pagination remains independent for ordinary worktrees.
+- Manager has a collapse arrow only when it owns worktrees, and shows the owned count when collapsed. Ownership is scoped to that sidebar project folder. Its worktrees are indented under a guide; primary and user-created worktrees align with Manager as siblings.
+- Worktree and session titles stay single-line. Nonzero checkout counts occupy the right-hand slot; status takes priority. Hover/focus/touch replaces metadata with actions. Full worktree names remain in tooltips. Review in Manager remains available in the worktree menu.
+- Matching closed or merged PRs for the current accepted dispatch move into collapsed Done; closed is never relabelled merged. Removal remains available there. A newer correction dispatch stays active. The project-row change dot is removed.
+- Verification: **4,325 frontend tests passed, 13 skipped**; TypeScript and production frontend build passed (existing CSS-highlight and bundle-size warnings). No native code changed. Resume/identity and colored review cards are retained. The active native preview was not restarted or replaced.
+- Screenshots use actual components with representative data for the same three projects, not live project state. The dzdistro fixture has 112 worktrees (107 paginated). Measured visible worktree rows are consistently 30px, previously up to 50.5px with metadata. Hover captures exercise the first Manager-owned row. Local fixture and capture script: `target/sidebar-density.tsx`, `target/sidebar-density-shots.mjs`.
+
+| State | Before | After |
+| --- | --- | --- |
+| Dark idle | [Before](../target/sidebar-density-before-dark-idle.png) | [After](../target/sidebar-density-after-dark-idle.png) |
+| Dark hover | [Before](../target/sidebar-density-before-dark-hover.png) | [After](../target/sidebar-density-after-dark-hover.png) |
+| Dark filtered | [Before](../target/sidebar-density-before-dark-filtered.png) | [After](../target/sidebar-density-after-dark-filtered.png) |
+| Light idle | [Before](../target/sidebar-density-before-light-idle.png) | [After](../target/sidebar-density-after-light-idle.png) |
+| Light hover | [Before](../target/sidebar-density-before-light-hover.png) | [After](../target/sidebar-density-after-light-hover.png) |
+| Light filtered | [Before](../target/sidebar-density-before-light-filtered.png) | [After](../target/sidebar-density-after-light-filtered.png) |
+
 ## Resume and folder identity verification
+
+The following evidence records the Resume/identity baseline preserved by the sidebar-density round.
 
 - Full frontend suite: **4,323 passed, 13 skipped** (405 passing files). Focused orchestration suite: **109 passed**. Regressions cover idle restore without even a transient pause, single retained-worker redispatch, interrupted Manager turns, provider discovery/unavailability, user-message budget reset, Stop preserving workers, folder identity/display name, captured PR bases, and the Continue card/attention state.
 - Native: **13 worktree tests, 1 project-folder test and 2 PR-status tests passed**. A real linked-project fixture with a unique v4 commit proves worker HEAD equals v4 and differs from main. PR parsing exposes the base branch; frontend review rejects wrong/unknown bases, drafts, closed or missing PRs.

@@ -11174,7 +11174,7 @@ function Workspace({
               renderProjectWorktrees={(project, enabled) => (
                 <ProjectWorktrees
                   key={project}
-                  renderManager={(expanded, onToggle) => <ProjectManagerRow project={project} enabled={enabled} selected={!chromeSurfaceOpen && managerActive && sameProjectPath(active.cwd, project)} onOpen={onOpenProjectManager} attention={managerQuestions} running={sessions.some(s => isProjectManager(s.id) && sameProjectPath(s.cwd, project) && s.busy)} expanded={expanded} onToggle={onToggle} />}
+                  renderManager={(expanded, onToggle, ownedCount) => <ProjectManagerRow project={project} enabled={enabled} selected={!chromeSurfaceOpen && managerActive && sameProjectPath(active.cwd, project)} onOpen={onOpenProjectManager} attention={managerQuestions} running={sessions.some(s => isProjectManager(s.id) && sameProjectPath(s.cwd, project) && s.busy)} expanded={expanded} onToggle={onToggle} ownedCount={ownedCount} />}
                   onRemove={onRemoveWorktree}
                   onOpenTerminal={onOpenTerminal}
                   onGiveToManager={async (project, tree, goal) => {

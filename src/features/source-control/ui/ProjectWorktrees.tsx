@@ -24,6 +24,7 @@ import { DeleteWorktreeDialog } from "./DeleteWorktreeDialog";
 import { Modal } from "../../../shared/ui/Modal";
 import { prStatusKey } from "../hooks/usePrStatus";
 import { useProjectDiffStats } from "../hooks/useProjectDiffStats";
+import { useActiveWorktrees } from "../hooks/useActiveWorktrees";
 import {
   gitDiffIndex,
   gitPrCreate,
@@ -76,7 +77,7 @@ const SESSION_LIMIT = 5;
 const WORKTREE_PAGE = 5;
 
 type Props = {
-  renderManager?: (expanded: boolean, onToggle: () => void) => ReactNode;
+  renderManager?: (expanded: boolean, onToggle: () => void, ownedCount: number) => ReactNode;
   onRemove?: (
     cwd: string,
     path: string,
@@ -165,14 +166,7 @@ export function ProjectWorktrees({
   const [creatingPr, setCreatingPr] = useState<Worktree>();
   const [queueExpanded, setQueueExpanded] = useState(true);
   const [doneExpanded, setDoneExpanded] = useState(false);
-  const filterKey = `monocode.activeWorktrees:${pathKey(project)}`;
-  const [activeOnly, setActiveOnly] = useState(() => {
-    try {
-      return localStorage.getItem(filterKey) === "1";
-    } catch {
-      return false;
-    }
-  });
+  const [activeOnly] = useActiveWorktrees(project);
   useEffect(() => {
     if (!menu) return;
     let disposed = false;
@@ -241,7 +235,7 @@ export function ProjectWorktrees({
     );
   const taskByPath = new Map(
     managerRuns
-      .filter((run) => run.projectManager)
+      .filter((run) => run.projectManager && sameProjectPath(run.cwd, project))
       .flatMap((run) => run.tasks)
       .filter((task) => task.workspace)
       .map((task) => [pathKey(task.workspace!.checkoutCwd), task]),
@@ -280,6 +274,7 @@ export function ProjectWorktrees({
       (groups.get(pathKey(tree.path)) ?? []).some(needsAttention),
   );
   const hiddenTrees = filteredTrees.length - listedTrees.length;
+  const filteredOut = trees.length - filteredTrees.length;
   const sections = renderManager
     ? [
         {
@@ -359,21 +354,6 @@ export function ProjectWorktrees({
           </button>
         </p>
       ) : null}
-      <label className="flex items-center justify-end gap-1 px-2 py-1 text-[11px] text-content/50">
-        <input
-          type="checkbox"
-          checked={activeOnly}
-          onChange={(event) => {
-            setActiveOnly(event.target.checked);
-            try {
-              localStorage.setItem(filterKey, event.target.checked ? "1" : "0");
-            } catch {
-              /* Session-only when storage is unavailable. */
-            }
-          }}
-        />
-        Active only
-      </label>
       {sections.map((section) => (
         <div
           key={section.name}
@@ -382,15 +362,15 @@ export function ProjectWorktrees({
           hidden={section.name === "Done" && !queueExpanded}
         >
           {section.name === "Manager queue" &&
-            renderManager?.(queueExpanded, () =>
-              setQueueExpanded(!queueExpanded),
+            renderManager?.(queueExpanded, () => setQueueExpanded(!queueExpanded),
+              trees.filter(tree => taskByPath.has(pathKey(tree.path))).length,
             )}
           {section.name === "Done" && section.trees.length > 0 && (
             <button
               type="button"
               aria-expanded={doneExpanded}
               onClick={() => setDoneExpanded(!doneExpanded)}
-              className="ml-5 flex items-center gap-1 rounded px-2 py-1 text-[11px] text-content/50 hover:text-content"
+              className="ml-7 flex h-7 items-center gap-1 rounded px-2 text-[11px] text-content/50 hover:text-content"
             >
               {doneExpanded ? (
                 <ChevronDown className="size-3" />
@@ -405,7 +385,7 @@ export function ProjectWorktrees({
             className={
               section.name === "Worktrees"
                 ? ""
-                : "ml-2 border-l border-content/10 pl-1"
+                : "ml-7 border-l border-content/10 pl-1"
             }
           >
             {section.trees.map((tree) => {
@@ -464,7 +444,7 @@ export function ProjectWorktrees({
                   className={`my-1 rounded-md border border-transparent hover:border-content/15 hover:bg-content/5 focus-within:border-content/15 focus-within:bg-content/5 ${sessions.length === 1 && sessions[0].id === activeSessionId ? "bg-selection" : ""} ${menu?.tree.path === tree.path ? "border-content/15 bg-content/5" : ""}`}
                 >
                   <div
-                    className="group/worktree relative flex h-7 items-center gap-1 rounded-md px-1"
+                    className="group/worktree relative flex h-7 items-center gap-1 rounded-md"
                     data-actions-open={
                       menu?.tree.path === tree.path || undefined
                     }
@@ -518,7 +498,7 @@ export function ProjectWorktrees({
                       aria-current={selected ? "true" : undefined}
                       aria-label={`Open worktree ${label}`}
                       aria-busy={selected && switchPending}
-                      title={`${tree.branch ?? "Detached"}\n${prettyCwd(tree.path)}\n${progress}${tree.dirty ? "\nUncommitted changes" : ""}`}
+                      title={`${label}\n${tree.branch ?? "Detached"}\n${prettyCwd(tree.path)}\n${workerStatus || progress}${tree.dirty ? "\nUncommitted changes" : ""}`}
                       onClick={() =>
                         sessions.length === 1
                           ? onSelectSession(sessions[0].id, { project, tree })
@@ -532,7 +512,7 @@ export function ProjectWorktrees({
                       >
                         {label}
                       </span>
-                      <span className="min-w-0 flex-1 truncate text-[11px] text-content/40">
+                      <span className="shrink-0 text-[11px] text-content/40">
                         {tree.isMain ? "primary" : ""}
                       </span>
                       {!expanded && sessions.length > 1 ? (
@@ -544,6 +524,11 @@ export function ProjectWorktrees({
                         </span>
                       ) : null}
                     </button>
+                    <div data-worktree-metadata className="ml-auto flex max-w-[45%] shrink-0 items-center gap-1 overflow-hidden pr-1 text-[11px] text-content/50 group-hover/worktree:hidden group-focus-within/worktree:hidden group-data-[actions-open=true]/worktree:hidden [@media(hover:none)]:hidden">
+                      {workerStatus || activeProgress ? (
+                        <span className={`truncate ${workerStatus === "PR ready" ? "text-emerald-600 dark:text-emerald-400" : ""}`}>{workerStatus || progress}</span>
+                      ) : <WorktreeDiffStat path={tree.path} enabled={enabled && !tree.missing} />}
+                    </div>
                     <button
                       type="button"
                       className={`${worktreeAction} right-8`}
@@ -581,34 +566,6 @@ export function ProjectWorktrees({
                     >
                       <MoreHorizontal className="size-3.5" />
                     </button>
-                  </div>
-                  <div className="ml-6 flex flex-wrap items-center gap-x-2 text-[11px] text-content/50 empty:hidden">
-                    <WorktreeDiffStat
-                      path={tree.path}
-                      enabled={enabled && !tree.missing}
-                    />
-                    {workerStatus === "PR ready" && managerTask ? (
-                      <button
-                        type="button"
-                        className="rounded px-1 py-0.5 text-emerald-600 dark:text-emerald-400 hover:bg-content/10 focus-visible:outline-accent"
-                        onClick={() => {
-                          const run = managerRuns.find((run) =>
-                            run.tasks.some(
-                              (task) => task.id === managerTask.id,
-                            ),
-                          );
-                          if (run)
-                            orchestrationActions?.openManagerCard?.(
-                              run.leadId,
-                              managerTask.id,
-                            );
-                        }}
-                      >
-                        PR ready
-                      </button>
-                    ) : (
-                      workerStatus || (activeProgress ? progress : null)
-                    )}
                   </div>
                   {expanded ? (
                     <div className="ml-7">
@@ -653,7 +610,7 @@ export function ProjectWorktrees({
                               onClick={() =>
                                 onSelectSession(session.id, { project, tree })
                               }
-                              className={`flex min-h-7 w-full min-w-0 items-center gap-2 rounded-md px-2 py-1 text-left disabled:opacity-40 ${session.id === activeSessionId ? "bg-selection text-content" : "text-content/70 hover:bg-content/5"}`}
+                              className={`flex h-7 w-full min-w-0 items-center gap-2 rounded-md px-2 text-left disabled:opacity-40 ${session.id === activeSessionId ? "bg-selection text-content" : "text-content/70 hover:bg-content/5"}`}
                             >
                               <HarnessIcon
                                 harness={session.harness}
@@ -663,13 +620,6 @@ export function ProjectWorktrees({
                                 <span className="block truncate text-xs">
                                   {title}
                                 </span>
-                                {waiting || busy || done ? (
-                                  <span
-                                    className={`block truncate text-[11px] ${waiting ? "text-amber-400" : "text-content/60"}`}
-                                  >
-                                    {waiting ? status : activity || status}
-                                  </span>
-                                ) : null}
                               </span>
                               {waiting ? (
                                 <CircleAlert className="mt-0.5 size-3 shrink-0 text-amber-400" />
@@ -733,7 +683,7 @@ export function ProjectWorktrees({
           </div>
         </div>
       ))}
-      {hiddenTrees > 0 || worktreeLimit > WORKTREE_PAGE ? (
+      {hiddenTrees > 0 || filteredOut > 0 || worktreeLimit > WORKTREE_PAGE ? (
         <div className="flex gap-1 px-1">
           {hiddenTrees > 0 ? (
             <button
@@ -741,11 +691,11 @@ export function ProjectWorktrees({
               className="rounded-md px-2 py-1 text-left text-[11px] text-content/50 hover:bg-content/5 hover:text-content"
               onClick={() => setWorktreeLimit((limit) => limit + WORKTREE_PAGE)}
             >
-              Show {Math.min(WORKTREE_PAGE, hiddenTrees)} more worktree
-              {Math.min(WORKTREE_PAGE, hiddenTrees) === 1 ? "" : "s"}
+              Show {Math.min(WORKTREE_PAGE, hiddenTrees)} more
               <span className="text-content/35"> · {hiddenTrees} hidden</span>
             </button>
           ) : null}
+          {filteredOut > 0 ? <span className="px-2 py-1 text-[11px] text-content/35">{filteredOut} filtered out</span> : null}
           {worktreeLimit > WORKTREE_PAGE ? (
             <button
               type="button"
@@ -768,6 +718,12 @@ export function ProjectWorktrees({
             </div>
           }
           items={[
+            ...(taskByPath.has(pathKey(menu.tree.path)) ? [{
+              kind: "item" as const,
+              id: "review-manager",
+              label: "Review in Manager",
+              disabled: !orchestrationActions?.openManagerCard,
+            }] : []),
             {
               kind: "item",
               id: "open",
@@ -858,7 +814,11 @@ export function ProjectWorktrees({
             closeMenu();
             setActionError(undefined);
             void (async () => {
-              if (id === "open") onSelectWorktree(project, tree);
+              if (id === "review-manager") {
+                const task = taskByPath.get(pathKey(tree.path));
+                const run = managerRuns.find((run) => run.projectManager && sameProjectPath(run.cwd, project) && run.tasks.includes(task!));
+                if (run && task) orchestrationActions?.openManagerCard?.(run.leadId, task.id);
+              } else if (id === "open") onSelectWorktree(project, tree);
               else if (id.startsWith("new:")) {
                 setCollapsed((current) => {
                   const next = new Set(current);
@@ -1107,8 +1067,8 @@ function WorktreeDiffStat({
       aria-label={`${stats.additions} additions, ${stats.deletions} deletions`}
       className="flex shrink-0 gap-1 text-[11px] tabular-nums"
     >
-      <span className="text-diff-add-fg">+{stats.additions}</span>
-      <span className="text-diff-del-fg">−{stats.deletions}</span>
+      {!!stats.additions && <span className="text-diff-add-fg">+{stats.additions}</span>}
+      {!!stats.deletions && <span className="text-diff-del-fg">−{stats.deletions}</span>}
     </span>
   );
 }

@@ -14,6 +14,7 @@ export function ProjectManagerRow({
   selected = false,
   expanded,
   onToggle,
+  ownedCount = 0,
 }: {
   project: string;
   onOpen(project: string): Promise<void>;
@@ -23,6 +24,7 @@ export function ProjectManagerRow({
   selected?: boolean;
   expanded?: boolean;
   onToggle?: () => void;
+  ownedCount?: number;
 }) {
   const [opening, setOpening] = useState(false);
   const [error, setError] = useState<string>();
@@ -58,7 +60,7 @@ export function ProjectManagerRow({
           : undefined;
   return (
     <div className="relative mb-0.5">
-      {onToggle && (
+      {onToggle && ownedCount > 0 && (
         <button
           type="button"
           aria-label="Toggle Manager queue"
@@ -116,7 +118,7 @@ export function ProjectManagerRow({
                     : undefined
           }
         />
-        <span>Manager</span>
+        <span>Manager{expanded === false && ownedCount > 0 ? ` · ${ownedCount}` : ""}</span>
         {label && (
           <span
             role="status"

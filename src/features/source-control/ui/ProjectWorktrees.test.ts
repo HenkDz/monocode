@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { Storage } from "happy-dom";
 import { ProjectWorktrees } from "./ProjectWorktrees";
 import { ProjectRail } from "../../../app/shell/ProjectRail";
+import { ProjectManagerRow } from "../../orchestration/ui/ProjectManagerRow";
 import { useProjectWorktrees } from "../hooks/useProjectWorktrees";
 import { setWorktreeFocus, worktreeFocus } from "../model/worktreeFocus";
 import type { Worktree, WorktreeCreationOptions } from "../model/worktrees";
@@ -158,7 +159,7 @@ afterEach(async () => {
 it("groups Manager worktrees by attention, folds merged work, and links PR status back to its card", async () => {
   const worktrees = [
     tree("/repo", "main", true),
-    ...["running", "ready", "blocked", "merged"].map((id) =>
+    ...["running", "ready", "blocked", "merged", "closed"].map((id) =>
       tree(`/queue/${id}`, id),
     ),
   ];
@@ -172,14 +173,14 @@ it("groups Manager worktrees by attention, folds merged work, and links PR statu
         : tree.branch === "blocked"
           ? "failed"
           : "completed",
-    accepted: ["ready", "merged"].includes(tree.branch!),
+    accepted: ["ready", "merged", "closed"].includes(tree.branch!),
     lastDispatchId: "d",
     acceptedDispatchId: "d",
     prUrl: `https://example.com/${tree.branch}`,
     workspace: { checkoutCwd: tree.path, branch: tree.branch },
   }));
   const runs = [
-    { leadId: "manager", projectManager: true, tasks },
+    { leadId: "manager", cwd: "/repo", projectManager: true, tasks },
   ] as OrchestrationRun[];
   const snapshot = vi.spyOn(orchestrator, "snapshot").mockReturnValue(runs);
   vi.mocked(useProjectWorktrees).mockReturnValue({
@@ -190,7 +191,7 @@ it("groups Manager worktrees by attention, folds merged work, and links PR statu
     number: 1,
     title: path,
     url: `https://example.com/${path.split("/").at(-1)}`,
-    state: path.endsWith("merged") ? "merged" : "open",
+    state: path.endsWith("merged") ? "merged" : path.endsWith("closed") ? "closed" : "open",
   }));
   props.renderManager = (expanded, toggle) =>
     createElement(
@@ -223,13 +224,11 @@ it("groups Manager worktrees by attention, folds merged work, and links PR statu
         row.getAttribute("data-worktree"),
       ),
     ).toEqual(["/queue/blocked", "/queue/ready", "/queue/running"]);
-    await act(async () =>
-      [...queue.querySelectorAll("button")]
-        .find((button) => button.textContent === "PR ready")!
-        .click(),
-    );
+    await act(async () => button("Actions for ready").click());
+    await act(async () => menuItem("Review in Manager").click());
     expect(openManagerCard).toHaveBeenCalledWith("manager", "ready");
     const done = container.querySelector('[aria-label="Done"]')!;
+    expect(done.querySelector('[data-worktree="/queue/closed"]')).not.toBeNull();
     expect(
       done.querySelector('[data-worktree="/queue/merged"]')?.parentElement
         ?.hidden,
@@ -241,11 +240,10 @@ it("groups Manager worktrees by attention, folds merged work, and links PR statu
       done.querySelector('[data-worktree="/queue/merged"]')?.parentElement
         ?.hidden,
     ).toBe(false);
-    await act(async () =>
-      (
-        container.querySelector('input[type="checkbox"]') as HTMLInputElement
-      ).click(),
-    );
+    await act(async () => {
+      localStorage.setItem("monocode.activeWorktrees:/repo", "1");
+      window.dispatchEvent(new Event("storage"));
+    });
     expect(
       container.querySelector('[data-worktree="/queue/merged"]'),
     ).toBeNull();
@@ -259,6 +257,8 @@ it("groups Manager worktrees by attention, folds merged work, and links PR statu
 });
 
 it("uses each checkout for line counts and guards primary removal", async () => {
+  props.busySessionIds = new Set();
+  props.approvalSessionIds = new Set();
   vi.mocked(useProjectDiffStats).mockImplementation((path) =>
     path === "/trees/a" ? { files: 1, additions: 12, deletions: 3 } : null,
   );
@@ -470,6 +470,13 @@ it("renders collapsible worktrees under pinned, grouped, and ordinary projects w
   expect(
     container.querySelector('[data-project-trees="/ordinary"]'),
   ).not.toBeNull();
+  const filters = [...container.querySelectorAll<HTMLButtonElement>('[aria-label="Show active only"]')];
+  expect(filters).toHaveLength(3);
+  await act(async () => filters[0].click());
+  expect(filters[0].getAttribute("aria-pressed")).toBe("true");
+  expect(filters[0].title).toContain("Filtered");
+  expect(filters[1].getAttribute("aria-pressed")).toBe("false");
+  expect(onSelectProject).not.toHaveBeenCalled();
   act(() => button("Expand worktrees in pinned").click());
   act(() => button("Expand worktrees in grouped").click());
   expect(
@@ -493,6 +500,32 @@ it("renders collapsible worktrees under pinned, grouped, and ordinary projects w
   expect(
     container.querySelector('[data-project-trees="/grouped"]'),
   ).not.toBeNull();
+});
+
+it("only offers Manager collapse when it owns worktrees and counts collapsed items", async () => {
+  const manager = { project: "/repo", onOpen: vi.fn(), onToggle: vi.fn(), expanded: false };
+  await act(async () => root.render(createElement(ProjectManagerRow, manager)));
+  expect(container.querySelector('[aria-label="Toggle Manager queue"]')).toBeNull();
+  await act(async () => root.render(createElement(ProjectManagerRow, { ...manager, ownedCount: 2 })));
+  expect(container.textContent).toContain("Manager · 2");
+  await act(async () => button("Toggle Manager queue").click());
+  expect(manager.onToggle).toHaveBeenCalledOnce();
+});
+
+it("keeps metadata in the title row, prioritizes status, and omits zero counts", async () => {
+  vi.mocked(useProjectDiffStats).mockReturnValue({ files: 1, additions: 12, deletions: 0 });
+  try {
+    await render();
+    const row = () => container.querySelector('[data-worktree="/trees/a"] [data-worktree-metadata]')!;
+    expect(row().textContent).toContain("working");
+    expect(row().textContent).not.toContain("+12");
+    props.busySessionIds = new Set();
+    await render();
+    expect(row().textContent).toBe("+12");
+    expect(row().parentElement?.className).toContain("h-7");
+    expect(row().className).toContain("group-focus-within/worktree:hidden");
+    expect(row().className).toContain("[@media(hover:none)]:hidden");
+  } finally { vi.mocked(useProjectDiffStats).mockReturnValue(null); }
 });
 
 it("folds older idle sessions behind show more but keeps active ones listed", async () => {
@@ -538,7 +571,7 @@ it("pages worktrees five at a time and keeps busy ones listed", async () => {
   const listed = () => container.querySelectorAll("[data-worktree]").length;
   const more = () =>
     [...container.querySelectorAll("button")].find((item) =>
-      /^Show \d more worktree/.test(item.textContent ?? ""),
+      /^Show \d more/.test(item.textContent ?? ""),
     );
   expect(listed()).toBe(6);
   expect(
@@ -546,7 +579,7 @@ it("pages worktrees five at a time and keeps busy ones listed", async () => {
   ).not.toBeNull();
   await act(async () => more()!.click());
   expect(listed()).toBe(11);
-  expect(more()!.textContent).toContain("Show 2 more worktrees");
+  expect(more()!.textContent).toContain("Show 2 more");
   await act(async () => more()!.click());
   expect(listed()).toBe(13);
   expect(more()).toBeUndefined();
@@ -634,6 +667,7 @@ it.each(["merged", "closed"])(
     const runs = [
       {
         leadId: "project-manager-test",
+        cwd: "/repo",
         projectManager: true,
         tasks: [
           {

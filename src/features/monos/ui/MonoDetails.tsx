@@ -1,4 +1,10 @@
-import { useEffect, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useId,
+  useState,
+  type ComponentProps,
+  type ReactNode,
+} from "react";
 import type { HarnessId } from "../../sessions/model/session";
 import { ModelPicker, ModelSettingRows } from "../../sessions/ui/ModelPicker";
 import type { MonoLook, MonoState } from "../model/mono";
@@ -19,7 +25,13 @@ import { MonoTeamPage } from "./MonoTeamPage";
 import { findMono } from "../model/mono";
 import { habitActions, HabitsList, useHabits } from "./MonoHabits";
 import { MemoryPage, SoulPage } from "./MonoFilePages";
-import { PageHeader, Property } from "./monoPanelParts";
+import {
+  MonoPanelTabs,
+  PageHeader,
+  Property,
+  type MonoPanelTab,
+} from "./monoPanelParts";
+import { MonoActivityContent } from "./MonoActivityPanel";
 import { PanelStack, type StackPage } from "./PanelStack";
 import { MonoSidebar, MonoSidebarHeader } from "./MonoSidebar";
 
@@ -29,6 +41,9 @@ type Route =
   | { kind: "habit"; id: string };
 
 type Props = {
+  tab?: MonoPanelTab;
+  onTabChange?: (tab: MonoPanelTab) => void;
+  activity?: ComponentProps<typeof MonoActivityContent>;
   teamRequest?: number;
   open: boolean;
   monoId: string;
@@ -51,6 +66,9 @@ type Props = {
  * memory open directly as pages that slide over it.
  */
 export function MonoDetails({
+  tab = "details",
+  onTabChange,
+  activity,
   teamRequest,
   open,
   monoId,
@@ -66,6 +84,7 @@ export function MonoDetails({
   onReset,
   windowControls,
 }: Props) {
+  const panelId = useId();
   const files = useMonoFiles(monoId, state.status);
   const habits = useHabits(monoId, state.status);
   const actions = habitActions(monoId);
@@ -178,58 +197,82 @@ export function MonoDetails({
   return (
     <MonoSidebar
       open={open}
-      kind="details"
-      label={`${agent.name} details`}
+      kind={tab}
+      label={`${agent.name} ${tab}`}
       color={agent.color}
       windowControls={windowControls}
     >
-      <PanelStack pages={pages}>
-        {/* Pages replace this header too, keeping their back button at the top. */}
-        <MonoSidebarHeader title="Details" onClose={onClose} />
-        <MonoSettingsPage
-          monoId={monoId}
-          agent={agent}
-          onOpen={(page) => push({ kind: page })}
-          onReset={onReset}
-          counts={{
-            habits: habits?.length,
-            memory: files ? memoryLines(files.memory).length : undefined,
-          }}
-        >
-          <dl className="flex flex-col gap-0.5 border-t border-stroke px-4 py-3">
-            <Property label="Model">
-              <ModelPicker
-                harness={harness}
-                model={model}
-                values={modelSettings}
-                project={cwd}
-                hideSettings
-                side="bottom"
-                variant="plain"
-                onChange={onModelChange}
-                onSettingsChange={onModelSettingsChange}
-              />
-            </Property>
-            <ModelSettingRows
-              harness={harness}
-              model={model}
-              values={modelSettings}
-              side="bottom"
-              onSettingsChange={onModelSettingsChange}
-              row={({ label, control }) => (
-                <Property label={label}>{control}</Property>
-              )}
+      <MonoSidebarHeader
+        title={tab === "details" ? "Details" : "Activity"}
+        onClose={onClose}
+      >
+        {onTabChange ? (
+          <MonoPanelTabs
+            active={tab}
+            onChange={onTabChange}
+            panelId={panelId}
+          />
+        ) : undefined}
+      </MonoSidebarHeader>
+      <div
+        id={panelId}
+        role="tabpanel"
+        aria-labelledby={onTabChange ? `${panelId}-${tab}` : undefined}
+        className="flex min-h-0 flex-1 flex-col"
+      >
+        <PanelStack pages={tab === "details" ? pages : []}>
+          {tab === "activity" ? (
+            <MonoActivityContent
+              key={activity?.blocks[0]?.id ?? "empty"}
+              {...(activity ?? { blocks: [], live: false })}
             />
-            <Property label="Projects">
-              {findMono(monoId)?.role === "manager" ? (
-                <span className="text-xs">{agent.projects[0]?.name}</span>
-              ) : (
-                <MonoProjects monoId={monoId} projects={agent.projects} />
-              )}
-            </Property>
-          </dl>
-        </MonoSettingsPage>
-      </PanelStack>
+          ) : (
+            <MonoSettingsPage
+              monoId={monoId}
+              agent={agent}
+              onOpen={(page) => push({ kind: page })}
+              onReset={onReset}
+              counts={{
+                habits: habits?.length,
+                memory: files ? memoryLines(files.memory).length : undefined,
+              }}
+            >
+              <dl className="flex flex-col gap-0.5 border-t border-stroke px-4 py-3">
+                <Property label="Model">
+                  <ModelPicker
+                    harness={harness}
+                    model={model}
+                    values={modelSettings}
+                    project={cwd}
+                    hideSettings
+                    side="bottom"
+                    variant="plain"
+                    onChange={onModelChange}
+                    onSettingsChange={onModelSettingsChange}
+                  />
+                </Property>
+                <ModelSettingRows
+                  harness={harness}
+                  model={model}
+                  values={modelSettings}
+                  side="bottom"
+                  onSettingsChange={onModelSettingsChange}
+                  row={({ label, control }) => (
+                    <Property label={label}>{control}</Property>
+                  )}
+                />
+                <Property label="Projects">
+                  {findMono(monoId)?.role === "manager" ? (
+                    <span className="text-xs">{agent.projects[0]?.name}</span>
+                  ) : (
+                    <MonoProjects monoId={monoId} projects={agent.projects} />
+                  )}
+                </Property>
+              </dl>
+            </MonoSettingsPage>
+          )}
+        </PanelStack>
+      </div>
     </MonoSidebar>
   );
 }

@@ -134,7 +134,7 @@ import { ProviderSignInDialog } from "../features/sessions/ui/ProviderSignInDial
 import { TitleBar, type Tab as TitleTab } from "./shell/TitleBar";
 import { WindowControls } from "./shell/WindowControls";
 import { MonoDetails } from "../features/monos/ui/MonoDetails";
-import { MonoActivityPanel } from "../features/monos/ui/MonoActivityPanel";
+import type { MonoPanelTab } from "../features/monos/ui/monoPanelParts";
 import {
   resolveMonoActivity,
   type MonoActivitySelection,
@@ -1124,17 +1124,15 @@ function Workspace({
   const [monoViewId, setMonoViewId] = useState<string | null>(() => loadMonoView(getCurrentWindow().label));
   useEffect(() => saveMonoView(getCurrentWindow().label, monoViewId), [monoViewId]);
   const [monoDetailsOpen, setMonoDetailsOpen] = useState(false);
+  const [monoPanelTab, setMonoPanelTab] = useState<MonoPanelTab>("details");
   const [monoTeamRequest, setMonoTeamRequest] = useState(0);
   const [monoActivity, setMonoActivity] =
     useState<MonoActivitySelection | null>(null);
   const onShowMonoActivity = useCallback(
     (sessionId: string, turnId: string, blocks: Block[]) => {
-      setMonoDetailsOpen(false);
-      setMonoActivity((previous) =>
-        previous?.sessionId === sessionId && previous.turnId === turnId
-          ? null
-          : { sessionId, turnId, blocks },
-      );
+      setMonoDetailsOpen(true);
+      setMonoPanelTab("activity");
+      setMonoActivity({ sessionId, turnId, blocks });
     },
     [],
   );
@@ -4646,6 +4644,7 @@ function Workspace({
 
   /** A new Mono opens straight away, ready to be told what it works on. */
   const onCreateMono = useCallback(() => {
+    setMonoPanelTab("details");
     setMonoDetailsOpen(true);
     void onOpenMono(createMono().id);
   }, [onOpenMono]);
@@ -4655,6 +4654,7 @@ function Workspace({
       const { monoId } = (event as CustomEvent<{ monoId: string }>).detail;
       if (!findMono(monoId)) return;
       void onOpenMono(monoId).then(() => {
+        setMonoPanelTab("details");
         setMonoDetailsOpen(true);
         setMonoTeamRequest(Date.now());
       });
@@ -13480,13 +13480,26 @@ function Workspace({
     monoActivity,
     monoViewSession,
   );
-  const monoSidebarOpen = monoDetailsOpen || !!selectedMonoActivity;
+  const monoSidebarOpen = monoDetailsOpen;
   const monoDetailsPanel =
     monoViewMono && monoViewSession ? (
       <MonoDetails
         teamRequest={monoTeamRequest}
         key={monoViewMono.id}
-        open={monoDetailsOpen && !selectedMonoActivity}
+        open={monoSidebarOpen}
+        tab={monoPanelTab}
+        onTabChange={(tab) => {
+          setMonoPanelTab(tab);
+          if (tab === "activity") setMonoActivity(null);
+        }}
+        activity={selectedMonoActivity ? {
+          blocks: selectedMonoActivity.blocks,
+          live: selectedMonoActivity.live,
+          cwd: sessionWorkCwd(monoViewSession),
+          onApproval: monoViewSession.worktreeRemoved ? undefined : (requestId, decision) => onApproval(monoViewSession.id, requestId, decision),
+          onOpenFile,
+          onOpenDiff,
+        } : undefined}
         monoId={monoViewMono.id}
         cwd={monoViewSession.cwd}
         agent={monoLook(monoViewMono)}
@@ -13502,26 +13515,6 @@ function Workspace({
         }
         onClose={() => setMonoDetailsOpen(false)}
         onReset={() => onResetMono(monoViewSession.id)}
-        windowControls={monoCovers && !IS_MAC ? <WindowControls /> : undefined}
-      />
-    ) : null;
-  const monoActivityPanel =
-    monoViewMono && monoViewSession && selectedMonoActivity ? (
-      <MonoActivityPanel
-        key={`${monoViewMono.id}:${selectedMonoActivity.turnId}`}
-        agent={monoLook(monoViewMono)}
-        blocks={selectedMonoActivity.blocks}
-        live={selectedMonoActivity.live}
-        cwd={sessionWorkCwd(monoViewSession)}
-        onClose={() => setMonoActivity(null)}
-        onApproval={
-          monoViewSession.worktreeRemoved
-            ? undefined
-            : (requestId, decision) =>
-                onApproval(monoViewSession.id, requestId, decision)
-        }
-        onOpenFile={onOpenFile}
-        onOpenDiff={onOpenDiff}
         windowControls={monoCovers && !IS_MAC ? <WindowControls /> : undefined}
       />
     ) : null;
@@ -13589,13 +13582,15 @@ function Workspace({
           : undefined
       }
       onShowMonoDetails={
-        monoCovers && !monoDetailsOpen
+        monoCovers
           ? () => {
-              setMonoActivity(null);
+              setMonoPanelTab("details");
               setMonoDetailsOpen(true);
             }
           : undefined
       }
+      onToggleMonoPanel={monoCovers ? () => setMonoDetailsOpen(open => !open) : undefined}
+      monoPanelOpen={monoSidebarOpen}
       hideWindowControls={monoCovers && monoSidebarOpen && !!monoDetailsPanel}
       activeId={monoViewSession ? "" : activeTabId}
       standaloneTitle={!monoCovers && managerActive ? "Manager" : undefined}
@@ -14107,7 +14102,7 @@ function Workspace({
                                       composerFocusToken={composerFocusToken}
                                       onShowMonoActivity={onShowMonoActivity}
                                       monoActivityTurnId={
-                                        selectedMonoActivity?.turnId
+                                        monoSidebarOpen && monoPanelTab === "activity" ? selectedMonoActivity?.turnId : undefined
                                       }
                                     />
                                   </div>
@@ -14149,7 +14144,6 @@ function Workspace({
                     </main>
                   </div>
                   {monoCovers ? monoDetailsPanel : null}
-                  {monoCovers ? monoActivityPanel : null}
                 </div>
               </div>
               {searchViewOpen ? (

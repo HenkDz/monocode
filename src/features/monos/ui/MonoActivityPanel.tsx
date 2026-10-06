@@ -3,6 +3,7 @@ import { workSummaryLine } from "../../sessions/model/transcriptActivity";
 import { MonoActivityTrail } from "../../sessions/ui/AgentTranscript";
 import type { MonoLook } from "../model/mono";
 import { MonoSidebar, MonoSidebarHeader } from "./MonoSidebar";
+import { Empty } from "./monoPanelParts";
 
 /** A selected turn's trail, in the order it happened. */
 export function MonoActivityPanel({
@@ -15,8 +16,6 @@ export function MonoActivityPanel({
   onClose: () => void;
   windowControls?: ReactNode;
 }) {
-  // A settled turn sums up its work; a live one's steps speak for themselves.
-  const summary = trail.live ? "" : workSummaryLine(trail.blocks);
   return (
     <MonoSidebar
       open
@@ -26,27 +25,39 @@ export function MonoActivityPanel({
       windowControls={windowControls}
     >
       <MonoSidebarHeader title="Activity" onClose={onClose} />
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-none">
-        <div className="px-3 pb-3 pt-3">
-          <p className="flex min-w-0 items-center gap-1.5 px-1 text-[11px] leading-4 text-content/45">
-            <span
-              aria-hidden
-              className={`size-1.5 shrink-0 rounded-full ${
-                trail.live
-                  ? "animate-pulse bg-[var(--mono-color)]"
-                  : "bg-content/30"
-              }`}
-            />
-            <span className="shrink-0 text-content/70">
-              {trail.live ? "Working" : "Finished"}
-            </span>
-            {summary ? <span className="truncate">· {summary}</span> : null}
-          </p>
-        </div>
-        <div className="px-3 pb-4">
-          <MonoActivityTrail {...trail} />
-        </div>
-      </div>
+      <MonoActivityContent {...trail} />
     </MonoSidebar>
+  );
+}
+
+/** The existing trail, reusable inside the tabbed Details panel. */
+export function MonoActivityContent(
+  trail: ComponentProps<typeof MonoActivityTrail>,
+) {
+  // A settled turn sums up its work; a live one's steps speak for themselves.
+  const summary = trail.live ? "" : workSummaryLine(trail.blocks);
+  if (!trail.blocks.length) return <Empty>No activity yet.</Empty>;
+  return (
+    <div className="min-h-0 flex-1 overflow-y-auto overscroll-none">
+      <div className="px-3 pb-3 pt-3">
+        <p className="flex min-w-0 items-center gap-1.5 px-1 text-[11px] leading-4 text-content/45">
+          <span
+            aria-hidden
+            className={`size-1.5 shrink-0 rounded-full ${
+              trail.live
+                ? "animate-pulse bg-[var(--mono-color)]"
+                : "bg-content/30"
+            }`}
+          />
+          <span className="shrink-0 text-content/70">
+            {trail.live ? "Working" : "Finished"}
+          </span>
+          {summary ? <span className="truncate">· {summary}</span> : null}
+        </p>
+      </div>
+      <div className="px-3 pb-4">
+        <MonoActivityTrail {...trail} />
+      </div>
+    </div>
   );
 }

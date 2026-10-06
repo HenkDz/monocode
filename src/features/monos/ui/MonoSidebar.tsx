@@ -70,9 +70,11 @@ export function MonoSidebar({
 export function MonoSidebarHeader({
   title,
   onClose,
+  children,
 }: {
   title: string;
   onClose: () => void;
+  children?: ReactNode;
 }) {
   return (
     <header
@@ -80,9 +82,11 @@ export function MonoSidebarHeader({
       style={{ paddingRight: "var(--mono-window-controls-width)" }}
       data-tauri-drag-region="deep"
     >
-      <h3 className="flex min-w-0 flex-1 items-center pl-4 text-[13px] font-medium text-content">
-        {title}
-      </h3>
+      {children ?? (
+        <h3 className="flex min-w-0 flex-1 items-center pl-4 text-[13px] font-medium text-content">
+          {title}
+        </h3>
+      )}
       <div className="flex shrink-0 items-center gap-0.5 px-3">
         <IconButton
           label={`Hide ${title.toLowerCase()}`}

@@ -63,6 +63,17 @@ export type OrchestrationDispatch = {
 export type OrchestrationTask = {
   id: string;
   monoGoalId?: string;
+  memberId?: string;
+  memberName?: string;
+  memberMascot?: string;
+  memberColor?: string;
+  reviewOf?: { taskId: string; dispatchId: string };
+  reviewVerdict?: {
+    decision: "approve" | "changes";
+    notes: string;
+    dispatchId: string;
+  };
+  reviewedBy?: string;
   assignmentId?: string;
   sessionId: string;
   title: string;

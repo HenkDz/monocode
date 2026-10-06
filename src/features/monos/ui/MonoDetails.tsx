@@ -15,6 +15,8 @@ import { HabitPage } from "./HabitPage";
 import { NewHabitPage } from "./NewHabitPage";
 import { MonoProjects } from "./MonoProjects";
 import { MonoSettingsPage } from "./MonoSettingsPage";
+import { MonoTeamPage } from "./MonoTeamPage";
+import { findMono } from "../model/mono";
 import { habitActions, HabitsList, useHabits } from "./MonoHabits";
 import { MemoryPage, SoulPage } from "./MonoFilePages";
 import { PageHeader, Property } from "./monoPanelParts";
@@ -23,10 +25,11 @@ import { MonoSidebar, MonoSidebarHeader } from "./MonoSidebar";
 
 /** A page opened directly from Details, or one habit inside its list. */
 type Route =
-  | { kind: "habits" | "soul" | "memory" | "new-habit" }
+  | { kind: "habits" | "soul" | "memory" | "new-habit" | "team" }
   | { kind: "habit"; id: string };
 
 type Props = {
+  teamRequest?: number;
   open: boolean;
   monoId: string;
   /** Its conversation's folder, which the model picker reads settings from. */
@@ -48,6 +51,7 @@ type Props = {
  * memory open directly as pages that slide over it.
  */
 export function MonoDetails({
+  teamRequest,
   open,
   monoId,
   cwd,
@@ -68,10 +72,26 @@ export function MonoDetails({
   const [routes, setRoutes] = useState<Route[]>([]);
   // Another Mono starts at its own front page.
   useEffect(() => setRoutes([]), [monoId]);
+  useEffect(() => {
+    if (teamRequest) setRoutes([{ kind: "team" }]);
+  }, [teamRequest]);
   const push = (route: Route) => setRoutes((current) => [...current, route]);
   const back = () => setRoutes((current) => current.slice(0, -1));
 
   const pages: StackPage[] = routes.flatMap((route, depth): StackPage[] => {
+    if (route.kind === "team")
+      return [
+        {
+          key: "team",
+          node: (
+            <MonoTeamPage
+              monoId={monoId}
+              fallback={{ harness, model, modelSettings }}
+              onBack={back}
+            />
+          ),
+        },
+      ];
     if (route.kind === "habits")
       return [
         {
@@ -201,7 +221,11 @@ export function MonoDetails({
               )}
             />
             <Property label="Projects">
-              <MonoProjects monoId={monoId} projects={agent.projects} />
+              {findMono(monoId)?.role === "manager" ? (
+                <span className="text-xs">{agent.projects[0]?.name}</span>
+              ) : (
+                <MonoProjects monoId={monoId} projects={agent.projects} />
+              )}
             </Property>
           </dl>
         </MonoSettingsPage>
@@ -211,7 +235,7 @@ export function MonoDetails({
 }
 
 /** The agent's files, reloaded when it finishes a turn or the app regains focus. */
-function useMonoFiles(
+export function useMonoFiles(
   monoId: string,
   status: MonoState["status"],
 ): MonoFiles | undefined {

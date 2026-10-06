@@ -32,7 +32,10 @@ import type { Worktree, Worktrees } from "../../source-control/model/worktrees";
 import { pathKey, projectName } from "../../../shared/lib/paths";
 import type { SplitDir } from "../../workspace/model/layout";
 import { consumeOperatorCommand } from "../../sessions/model/operatorCommand";
-import { sessionConversationPage, type SessionReadOptions } from "./sessionConversation";
+import {
+  sessionConversationPage,
+  type SessionReadOptions,
+} from "./sessionConversation";
 import {
   CARD_FIELDS,
   parseCard,
@@ -82,7 +85,16 @@ export type AppSessionPlacement = {
 };
 
 export type AgentAppHost = {
-  managerAction?(source: Session, requestId: string, action: string, input: Record<string, unknown>): Promise<unknown>;
+  answerTeam?(
+    source: Session,
+    input: Record<string, unknown>,
+  ): Promise<unknown>;
+  managerAction?(
+    source: Session,
+    requestId: string,
+    action: string,
+    input: Record<string, unknown>,
+  ): Promise<unknown>;
   start(
     launch: QuickLaunch,
     id: string,
@@ -91,7 +103,10 @@ export type AgentAppHost = {
   ): Promise<void>;
   sessions(cwd: string): Promise<AppSessionListing[]>;
   session(id: string): Promise<Session | null>;
-  readConversation?(session: Session, options: SessionReadOptions): Promise<ReturnType<typeof sessionConversationPage>>;
+  readConversation?(
+    session: Session,
+    options: SessionReadOptions,
+  ): Promise<ReturnType<typeof sessionConversationPage>>;
   send(
     id: string,
     prompt: string,
@@ -119,7 +134,9 @@ export type AgentAppHost = {
    * The Mono a session works for: its own conversation or one of its habit
    * runs. Its projects are the ones it may name with "project".
    */
-  monoOf?(sessionId: string): { id: string; projects: readonly string[] } | undefined;
+  monoOf?(
+    sessionId: string,
+  ): { id: string; projects: readonly string[] } | undefined;
   /** A hidden run of one of a Mono's habits: it may remember, not schedule. */
   isHabitRun?(sessionId: string): boolean;
   /** Puts a card in the Mono's chat, or holds it for a habit run's report. */
@@ -148,6 +165,7 @@ export type AgentAppHost = {
 };
 
 const FIELDS = new Map<string, readonly string[]>([
+  ["team.answer", ["monoId", "requestId", "answers", "skip", "decision"]],
   ["projects.list", []],
   ["projects.status", ["projectId", "before"]],
   ["goals.assign", ["projectId", "goal"]],
@@ -297,11 +315,10 @@ function requireProject(
     const byPath = mono.projects.find(
       (path) => pathKey(path) === pathKey(named),
     );
-    const byName = mono.projects.filter(
-      (path) => projectName(path) === named,
-    );
+    const byName = mono.projects.filter((path) => projectName(path) === named);
     const match = byPath ?? (byName.length === 1 ? byName[0] : undefined);
-    if (!match) throw new Error(`Not one of your projects. Yours: ${choices()}`);
+    if (!match)
+      throw new Error(`Not one of your projects. Yours: ${choices()}`);
     return match;
   }
   const own = mono.projects.find(
@@ -491,7 +508,7 @@ async function handleSoul(
  * from the top when the user saved the same file in between.
  */
 async function editAgentFile<T>(
-  host: AgentAppHost,
+  host: Pick<AgentAppHost, "readAgentFile" | "writeAgentFile">,
   monoId: string,
   path: AgentFilePath,
   edit: (text: string) => { text: string; result: T },
@@ -508,8 +525,7 @@ async function editAgentFile<T>(
         await host.writeAgentFile(monoId, path, next.text, current.hash);
       return next.result;
     } catch (error) {
-      if (!(error instanceof MonoFileConflict) || attempt >= 2)
-        throw error;
+      if (!(error instanceof MonoFileConflict) || attempt >= 2) throw error;
     }
   }
 }
@@ -520,7 +536,7 @@ async function editAgentFile<T>(
  * saved MEMORY.md in between, the trim waits for the next write.
  */
 async function keepMemoryInBudget(
-  host: AgentAppHost,
+  host: Pick<AgentAppHost, "readAgentFile" | "writeAgentFile">,
   monoId: string,
   keep: string,
   date: string,
@@ -541,11 +557,14 @@ async function keepMemoryInBudget(
   return fitted.moved;
 }
 
-async function handleMemory(
+export async function handleMemory(
   source: Session,
   action: string,
   input: Record<string, unknown>,
-  host: AgentAppHost,
+  host: Pick<
+    AgentAppHost,
+    "monoOf" | "agentFiles" | "readAgentFile" | "writeAgentFile" | "now"
+  >,
 ): Promise<unknown> {
   const monoId = host.monoOf?.(source.id)?.id;
   if (!monoId) throw new Error("Memory belongs to the Mono's conversation");
@@ -596,7 +615,10 @@ async function handleMemory(
       const hits = searchMemory(texts, query, { since });
       return hits.length
         ? { hits }
-        : { hits, note: "Nothing in memory matches. It may never have been saved." };
+        : {
+            hits,
+            note: "Nothing in memory matches. It may never have been saved.",
+          };
     }
     case "memory.read": {
       if (path !== "MEMORY.md") {
@@ -615,7 +637,11 @@ async function handleMemory(
       };
     }
     case "memory.add": {
-      const entry = memoryEntry(requiredString(input.fact, "fact"), date, until);
+      const entry = memoryEntry(
+        requiredString(input.fact, "fact"),
+        date,
+        until,
+      );
       const added = await editAgentFile(host, monoId, path, (text) => {
         const next = addMemoryEntry(text, entry);
         return { text: next.text, result: next.added };
@@ -626,7 +652,11 @@ async function handleMemory(
     }
     case "memory.replace": {
       const find = requiredString(input.find, "find", 2000);
-      const entry = memoryEntry(requiredString(input.fact, "fact"), date, until);
+      const entry = memoryEntry(
+        requiredString(input.fact, "fact"),
+        date,
+        until,
+      );
       await editAgentFile(host, monoId, path, (text) => ({
         text: supersedeMemoryEntry(text, find, entry, date),
         result: undefined,
@@ -689,7 +719,11 @@ async function handleHabits(
       return { habits: (await habits.load(monoId)).map(habitView) };
     case "habits.add": {
       const name = requiredString(input.name, "name", 80);
-      const instructions = requiredString(input.instructions, "instructions", 4_000);
+      const instructions = requiredString(
+        input.instructions,
+        "instructions",
+        4_000,
+      );
       const schedule = habitSchedule(input.schedule);
       const habit = await habits.update(monoId, (list) => {
         if (list.length >= HABITS_MAX)
@@ -782,8 +816,14 @@ export async function handleAgentApp(
   host: AgentAppHost,
 ): Promise<unknown> {
   fields(action, input);
+  if (action === "team.answer") {
+    if (!host.monoOf?.(source.id) || !host.answerTeam)
+      throw new Error("Only a direct boss may answer this question");
+    return host.answerTeam(source, input);
+  }
   if ((MANAGER_ACTIONS as readonly string[]).includes(action)) {
-    if (!host.monoOf?.(source.id) || !host.managerAction) throw new Error("Only a Mono or its approved habit may manage goals");
+    if (!host.monoOf?.(source.id) || !host.managerAction)
+      throw new Error("Only a Mono or its approved habit may manage goals");
     return host.managerAction(source, requestId, action, input);
   }
   if (action.startsWith("soul."))
@@ -831,14 +871,18 @@ export async function handleAgentApp(
     }
     case "sessions.read": {
       const id = requiredString(input.sessionId, "sessionId", 256);
-      const target = id === source.id && host.isMono?.(id)
-        ? source : await projectSession(source, id, input, host);
+      const target =
+        id === source.id && host.isMono?.(id)
+          ? source
+          : await projectSession(source, id, input, host);
       const options = {
         before: optionalString(input.before, "before", 256),
         limit: input.limit as number | undefined,
         maxChars: input.maxChars as number | undefined,
       };
-      return host.readConversation ? host.readConversation(target, options) : sessionConversationPage(target, options);
+      return host.readConversation
+        ? host.readConversation(target, options)
+        : sessionConversationPage(target, options);
     }
     case "sessions.send": {
       const id = requiredString(input.sessionId, "sessionId", 256);
@@ -919,7 +963,8 @@ export async function handleAgentApp(
           { direction: placement as SplitDir, besideSessionId },
           ...(notifyMonoId ? [notifyMonoId] : []),
         );
-      else if (notifyMonoId) await host.start(launch, id, undefined, notifyMonoId);
+      else if (notifyMonoId)
+        await host.start(launch, id, undefined, notifyMonoId);
       else await host.start(launch, id);
       return {
         id,

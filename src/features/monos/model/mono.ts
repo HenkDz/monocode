@@ -1,4 +1,6 @@
 import { projectKey, projectName } from "../../../shared/lib/paths";
+import { validateMonoOrg, withDefaultTeam } from "./monoOrg";
+import { HARNESSES, type HarnessId } from "../../sessions/model/session";
 import {
   loadTabGroupColors,
   loadTabGroupCustomColors,
@@ -33,6 +35,15 @@ export const MONO_COLORS = [
  */
 export type Mono = {
   id: string;
+  role?: "orchestrator" | "manager" | "member";
+  reportsTo?: string;
+  specialty?: string;
+  teamInitialized?: boolean;
+  workerProfile?: {
+    harness: HarnessId;
+    model: string;
+    modelSettings?: Record<string, string>;
+  };
   lastUsedAt?: number;
   /** Original Manager folder; its existing engine key is retained after migration. */
   managerProject?: string;
@@ -157,11 +168,49 @@ function parseMono(value: unknown): Mono | undefined {
   const name = text("name");
   const instructions = text("instructions");
   const legacyProject = text("legacyProject");
+  const profile = record(entry.workerProfile);
+  const settings = record(profile.modelSettings);
+  const workerProfile =
+    HARNESSES.includes(profile.harness as HarnessId) &&
+    typeof profile.model === "string" &&
+    profile.model.length > 0 &&
+    profile.model.length <= 256
+      ? {
+          harness: profile.harness as HarnessId,
+          model: profile.model,
+          modelSettings: Object.fromEntries(
+            Object.entries(settings).filter(
+              ([key, value]) =>
+                key.length <= 100 &&
+                typeof value === "string" &&
+                value.length <= 1000,
+            ),
+          ) as Record<string, string>,
+        }
+      : undefined;
   return {
     id: entry.id,
-    ...(typeof entry.lastUsedAt === "number" && Number.isFinite(entry.lastUsedAt) ? { lastUsedAt: entry.lastUsedAt } : {}),
-    ...(text("managerProject") ? { managerProject: text("managerProject") } : {}),
-    ...(Array.isArray(entry.workerProjects) ? { workerProjects: entry.workerProjects.filter((path): path is string => typeof path === "string") } : {}),
+    ...(["orchestrator", "manager", "member"].includes(String(entry.role))
+      ? { role: entry.role as Mono["role"] }
+      : {}),
+    ...(text("reportsTo") ? { reportsTo: text("reportsTo") } : {}),
+    ...(text("specialty") ? { specialty: text("specialty") } : {}),
+    ...(entry.teamInitialized === true ? { teamInitialized: true } : {}),
+    ...(workerProfile ? { workerProfile } : {}),
+    ...(typeof entry.lastUsedAt === "number" &&
+    Number.isFinite(entry.lastUsedAt)
+      ? { lastUsedAt: entry.lastUsedAt }
+      : {}),
+    ...(text("managerProject")
+      ? { managerProject: text("managerProject") }
+      : {}),
+    ...(Array.isArray(entry.workerProjects)
+      ? {
+          workerProjects: entry.workerProjects.filter(
+            (path): path is string => typeof path === "string",
+          ),
+        }
+      : {}),
     ...(sessionId ? { sessionId } : {}),
     ...(name ? { name } : {}),
     mascot: text("mascot") ?? PROJECT_MASCOTS[0].name,
@@ -185,6 +234,7 @@ export function listMonos(): Mono[] {
 }
 
 function saveRoster(roster: readonly Mono[]): void {
+  validateMonoOrg(roster);
   try {
     localStorage.setItem(ROSTER_KEY, JSON.stringify(roster));
   } catch {
@@ -206,32 +256,128 @@ export function isMonoSession(sessionId: string): boolean {
   return !!monoForSession(sessionId);
 }
 
-/** The most recently used single-project Mono owns the project's one sidebar slot. */
-export function dedicatedMono(project: string, roster = listMonos()): Mono | undefined {
-  return roster.filter(mono => mono.projects.length === 1 && projectKey(mono.projects[0]) === projectKey(project))
-    .sort((a, b) => (b.lastUsedAt ?? 0) - (a.lastUsedAt ?? 0) || a.id.localeCompare(b.id))[0];
+/** Only the dedicated Manager owns a project's sidebar slot. */
+export function dedicatedMono(
+  project: string,
+  roster = listMonos(),
+): Mono | undefined {
+  return roster
+    .filter(
+      (mono) =>
+        mono.role === "manager" &&
+        mono.projects.length === 1 &&
+        projectKey(mono.projects[0]) === projectKey(project),
+    )
+    .sort(
+      (a, b) =>
+        (b.lastUsedAt ?? 0) - (a.lastUsedAt ?? 0) || a.id.localeCompare(b.id),
+    )[0];
 }
 
 export function railMonos(roster = listMonos()): Mono[] {
-  return roster.filter(mono => mono.projects.length !== 1 || dedicatedMono(mono.projects[0], roster)?.id !== mono.id);
+  return roster.filter((mono) => !mono.role || mono.role === "orchestrator");
 }
 
 /** Conversion keeps the conversation ID and all existing engine/worker references. */
-export function adoptManagerMono(sessionId: string, project: string, at = Date.now()): Mono {
+export function adoptManagerMono(
+  sessionId: string,
+  project: string,
+  at = Date.now(),
+  profile?: Mono["workerProfile"],
+): Mono {
   const existing = monoForSession(sessionId);
-  if (existing) return existing;
+  if (existing?.role === "manager" && existing.teamInitialized) return existing;
+  const occupied = dedicatedMono(project);
+  if (occupied && occupied.sessionId !== sessionId)
+    throw Error("Another Manager already owns this project's conversation");
   const key = projectKey(project);
   const seed = projectName(project);
   const mono: Mono = {
-    id: sessionId, sessionId, managerProject: project, projects: [project], lastUsedAt: at,
-    name: `${resolveTabGroupLabel(key, loadTabGroupLabels(), seed)} Manager`,
-    mascot: projectMascot(seed, resolveTabGroupMascot(key, loadTabGroupMascots())).name,
-    color: resolveTabGroupColor(key, loadTabGroupColors(), loadTabGroupCustomColors(), seed),
+    ...existing,
+    id: existing?.id ?? sessionId,
+    sessionId,
+    managerProject: project,
+    projects: [project],
+    lastUsedAt: at,
+    role: "manager",
+    reportsTo: listMonos().find((mono) => mono.role === "orchestrator")?.id,
+    workerProfile: existing?.workerProfile ?? profile,
+    name:
+      existing?.name ??
+      `${resolveTabGroupLabel(key, loadTabGroupLabels(), seed)} Manager`,
+    mascot:
+      existing?.mascot ??
+      projectMascot(seed, resolveTabGroupMascot(key, loadTabGroupMascots()))
+        .name,
+    color:
+      existing?.color ??
+      resolveTabGroupColor(
+        key,
+        loadTabGroupColors(),
+        loadTabGroupCustomColors(),
+        seed,
+      ),
   };
   // Migration must fail closed if storage is unavailable, not claim conversion succeeded.
-  localStorage.setItem(ROSTER_KEY, JSON.stringify([...listMonos(), mono]));
+  const roster = withDefaultTeam(
+    [...listMonos().filter((entry) => entry.id !== mono.id), mono],
+    mono.id,
+  );
+  validateMonoOrg(roster);
+  localStorage.setItem(ROSTER_KEY, JSON.stringify(roster));
   window.dispatchEvent(new CustomEvent(MONOS_CHANGED));
-  return mono;
+  return roster.find((entry) => entry.id === mono.id)!;
+}
+
+export function setOrchestrator(id: string, enabled: boolean): void {
+  const roster = listMonos();
+  const target = roster.find((mono) => mono.id === id);
+  if (!target || target.role === "manager" || target.role === "member")
+    throw Error("Choose a plain Mono as Orchestrator");
+  if (!enabled && target.role !== "orchestrator") return;
+  const next = roster.map((mono) =>
+    mono.id === id
+      ? {
+          ...mono,
+          role: enabled ? ("orchestrator" as const) : undefined,
+          reportsTo: undefined,
+        }
+      : mono.role === "manager"
+        ? { ...mono, reportsTo: enabled ? id : undefined }
+        : mono,
+  );
+  validateMonoOrg(next);
+  saveRoster(next);
+}
+
+export function addTeamMember(
+  managerId: string,
+  name: string,
+  specialty: string,
+): Mono {
+  const manager = findMono(managerId);
+  if (manager?.role !== "manager") throw Error("Only a Manager owns a team");
+  if (
+    !name.trim() ||
+    name.length > 80 ||
+    !specialty.trim() ||
+    specialty.length > 80
+  )
+    throw Error("Use a name and specialty under 80 characters");
+  const member: Mono = {
+    id: newMonoId(),
+    role: "member",
+    reportsTo: managerId,
+    name: name.trim(),
+    specialty: specialty.trim(),
+    projects: [...manager.projects],
+    ...nextMonoLook(),
+    color: manager.color,
+    workerProfile: manager.workerProfile,
+    instructions: `You are the ${specialty.trim()} specialist. Work only on assignments from your Manager, verify the result, and report facts, tests and blockers to your Manager. Never message teammates directly.`,
+  };
+  saveRoster([...listMonos(), member]);
+  return member;
 }
 
 /**
@@ -315,8 +461,10 @@ export function updateMono(
 
 /** Forgets the Mono and its background. Its folder of files stays on disk. */
 export function removeMono(id: string): void {
+  const next = listMonos().filter((mono) => mono.id !== id);
+  validateMonoOrg(next);
   removeMonoBackground(id);
-  saveRoster(listMonos().filter((mono) => mono.id !== id));
+  saveRoster(next);
 }
 
 export function reorderMonos(ids: readonly string[]): void {

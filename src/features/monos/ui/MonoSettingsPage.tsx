@@ -9,12 +9,13 @@ import {
   saveMonoName,
   subscribeMonos,
   updateMono,
+  setOrchestrator,
   type MonoLook,
 } from "../model/mono";
 import { ConfirmReset } from "./ConfirmReset";
 import { ColorPicker, MascotPicker, PageHeader } from "./monoPanelParts";
 
-export type SettingsPage = "habits" | "soul" | "memory";
+export type SettingsPage = "habits" | "soul" | "memory" | "team";
 
 /**
  * Who the Mono is: its face and name up top, then what it does, who it is
@@ -40,6 +41,8 @@ export function MonoSettingsPage({
   children?: ReactNode;
 }) {
   const lock = useLockOverscroll<HTMLDivElement>();
+  const mono = findMono(monoId);
+  const [roleError, setRoleError] = useState<string>();
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-mono-settings>
       {onBack ? <PageHeader title="Settings" onBack={onBack} /> : null}
@@ -71,19 +74,50 @@ export function MonoSettingsPage({
         </div>
 
         {children}
+        {(!mono?.role || mono.role === "orchestrator") && (
+          <label className="flex items-center gap-2 px-4 py-3 text-xs">
+            <input
+              type="checkbox"
+              checked={mono?.role === "orchestrator"}
+              onChange={(event) => {
+                try {
+                  setOrchestrator(monoId, event.target.checked);
+                  setRoleError(undefined);
+                } catch (error) {
+                  setRoleError(String(error));
+                }
+              }}
+            />
+            Orchestrator · leads project Managers
+          </label>
+        )}
+        {roleError && (
+          <p role="alert" className="px-4 text-xs text-red-400">
+            {roleError}
+          </p>
+        )}
 
         <nav className="flex flex-col gap-px border-t border-stroke p-2">
+          {(mono?.role === "manager" || mono?.role === "orchestrator") && (
+            <NavRow
+              label={mono.role === "orchestrator" ? "Managers" : "Team"}
+              description="Direct reports, roles and models."
+              onClick={() => onOpen("team")}
+            />
+          )}
           <NavRow
             label="Soul"
             description="Defines who this bot is and the rules it follows. Always included in its context."
             onClick={() => onOpen("soul")}
           />
-          <NavRow
-            label="Habits"
-            description="Recurring tasks this bot runs on its own."
-            count={counts?.habits}
-            onClick={() => onOpen("habits")}
-          />
+          {mono?.role !== "member" && (
+            <NavRow
+              label="Habits"
+              description="Recurring tasks this bot runs on its own."
+              count={counts?.habits}
+              onClick={() => onOpen("habits")}
+            />
+          )}
           <NavRow
             label="Memory"
             description="Facts and preferences this bot remembers."

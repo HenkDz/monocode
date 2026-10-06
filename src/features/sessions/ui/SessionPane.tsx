@@ -1,6 +1,9 @@
 import { GripVertical, X } from "../../../shared/ui/icons";
 import { isProjectManager } from "../../orchestration/model/projectManager";
-import { ProjectManagerReview, ProjectManagerStatus } from "../../orchestration/ui/ProjectManagerReview";
+import {
+  ProjectManagerReview,
+  ProjectManagerStatus,
+} from "../../orchestration/ui/ProjectManagerReview";
 import {
   memo,
   useCallback,
@@ -64,6 +67,7 @@ import {
 import { EmptySession } from "./EmptySession";
 import {
   monoForSession,
+  findMono,
   monoLook,
   monosSnapshot,
   subscribeMonos,
@@ -352,12 +356,18 @@ const LocalSessionPane = memo(function LocalSessionPane({
     orchestrator.snapshot,
     orchestrator.snapshot,
   );
-  const ownedRuns = orchestrationRuns.filter(run => run.projectManager && (run.ownerSessionId ?? run.leadId) === session.id);
-  const managed = ownedRuns.length > 0 || isProjectManager(session.id) || orchestrationRuns.some(
+  const ownedRuns = orchestrationRuns.filter(
     (run) =>
-      (run.status === "active" || run.status === "paused") &&
-      sameCheckout(orchestrationCheckoutCwd(run), sessionWorkCwd(session)),
+      run.projectManager && (run.ownerSessionId ?? run.leadId) === session.id,
   );
+  const managed =
+    ownedRuns.length > 0 ||
+    isProjectManager(session.id) ||
+    orchestrationRuns.some(
+      (run) =>
+        (run.status === "active" || run.status === "paused") &&
+        sameCheckout(orchestrationCheckoutCwd(run), sessionWorkCwd(session)),
+    );
   const title = sessionDisplayTitle(session.title, session.harness);
   const isEmpty = session.blocks.length === 0;
   const messageDeliveries = useMemo(
@@ -389,7 +399,14 @@ const LocalSessionPane = memo(function LocalSessionPane({
   // Renames, instructions and mascot picks re-render the agent's look.
   useSyncExternalStore(subscribeMonos, monosSnapshot);
   const mono = monoForSession(session.id);
+  const questionDelegated =
+    mono?.role === "manager" &&
+    !!mono.reportsTo &&
+    !!findMono(mono.reportsTo)?.sessionId;
   const agent = mono ? monoLook(mono) : undefined;
+  const memberTask = orchestrationRuns
+    .flatMap((run) => run.tasks)
+    .find((task) => task.sessionId === session.id && task.memberId);
   // A Mono shows only its own background, never the project's or the app's.
   const projectBackground = mono
     ? monoChatBackground(mono.id)
@@ -654,7 +671,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
       inboxCard={session.inboxCard}
       noteCard={session.noteCard}
       handoffCard={session.handoffCard}
-      question={session.pendingQuestion}
+      question={questionDelegated ? undefined : session.pendingQuestion}
       onQuoteRequestConsumed={acknowledgeQuote}
       onInboxCardDismiss={() => onInboxCardDismiss?.(session.id)}
       onNoteCardDismiss={() => onNoteCardDismiss?.(session.id)}
@@ -829,10 +846,23 @@ const LocalSessionPane = memo(function LocalSessionPane({
       ) : null}
       <div className="flex min-h-0 min-w-0 flex-1">
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-        {ownedRuns.map(run => <ProjectManagerStatus key={run.leadId} run={run} needsUser={!!session.pendingQuestion} onDecision={() => {
-          const question = transcriptScope.current?.parentElement?.querySelector<HTMLElement>("[data-question-form]");
-          question?.scrollIntoView({ block: "center" }); question?.querySelector<HTMLElement>("button, input, textarea")?.focus();
-        }} />)}
+          {ownedRuns.map((run) => (
+            <ProjectManagerStatus
+              key={run.leadId}
+              run={run}
+              needsUser={!!session.pendingQuestion}
+              onDecision={() => {
+                const question =
+                  transcriptScope.current?.parentElement?.querySelector<HTMLElement>(
+                    "[data-question-form]",
+                  );
+                question?.scrollIntoView({ block: "center" });
+                question
+                  ?.querySelector<HTMLElement>("button, input, textarea")
+                  ?.focus();
+              }}
+            />
+          ))}
           <div
             ref={transcriptScope}
             className={`@container relative min-h-0 flex-1${
@@ -905,7 +935,11 @@ const LocalSessionPane = memo(function LocalSessionPane({
                   onMouseDown={focusPane}
                 >
                   <AgentTranscript
-                    managerProject={!agent && isProjectManager(session.id) ? session.cwd : undefined}
+                    managerProject={
+                      !agent && isProjectManager(session.id)
+                        ? session.cwd
+                        : undefined
+                    }
                     blocks={
                       agent && !monoTranscript.viewingOlderPage
                         ? monoPendingTranscriptBlocks(
@@ -930,8 +964,18 @@ const LocalSessionPane = memo(function LocalSessionPane({
                     busy={!!session.busy && !monoTranscript.viewingOlderPage}
                     visible={visible}
                     cwd={workCwd}
-                    agentName={agent?.name}
-                    agentMascot={agent}
+                    agentName={agent?.name ?? memberTask?.memberName}
+                    agentMascot={
+                      agent ??
+                      (memberTask?.memberMascot && memberTask.memberColor
+                        ? {
+                            name: memberTask.memberName ?? "Member",
+                            mascot: memberTask.memberMascot,
+                            color: memberTask.memberColor,
+                            projects: [],
+                          }
+                        : undefined)
+                    }
                     bottomAligned={!!agent}
                     inlineWork={!!agent}
                     messageDeliveries={agent ? messageDeliveries : undefined}
@@ -1019,11 +1063,17 @@ const LocalSessionPane = memo(function LocalSessionPane({
                         : undefined
                     }
                     latestTurnAccessory={
-                      ownedRuns.length ? <>{ownedRuns.map(run => <ProjectManagerReview key={run.leadId} run={run} />)}</> : remote ||
-                      session.inboxAsk ||
-                      session.worktreeRemoved ||
-                      monoTranscript.viewingOlderPage ||
-                      draftBlock ? undefined : (
+                      ownedRuns.length ? (
+                        <>
+                          {ownedRuns.map((run) => (
+                            <ProjectManagerReview key={run.leadId} run={run} />
+                          ))}
+                        </>
+                      ) : remote ||
+                        session.inboxAsk ||
+                        session.worktreeRemoved ||
+                        monoTranscript.viewingOlderPage ||
+                        draftBlock ? undefined : (
                         <SessionReview
                           sessionId={session.id}
                           cwd={workCwd}
@@ -1105,7 +1155,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
                     onResume={() => onResumeQueue(session.id)}
                     variant="messages"
                   />
-                  {session.pendingQuestion ? (
+                  {session.pendingQuestion && !questionDelegated ? (
                     <QuestionForm
                       prompt={session.pendingQuestion}
                       onReply={replyQuestion}

@@ -223,6 +223,7 @@ export function sendHarnessTurn(input: SendTurnInput & { harness: HarnessId }) {
         sessionId: input.sessionId,
         cwd: input.cwd,
         appAccess: input.appAccess === true,
+        monoSession: input.monoSession === true,
       });
     activeTurnSessions.add(input.sessionId);
     try {

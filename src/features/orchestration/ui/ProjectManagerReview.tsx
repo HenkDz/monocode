@@ -4,6 +4,7 @@ import { ExternalLink as ArrowUpRight } from "../../../shared/ui/icons";
 import { HARNESS_TITLE } from "../../sessions/model/session";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ManagerAvatar } from "./ManagerAvatar";
+import { PixelMascot } from "../../projects/ui/PixelMascot";
 import { githubPrDiff, type GithubPrDiff } from "../../inbox/model/githubTasks";
 import { useGithubPrChecks } from "../../inbox/hooks/useGithubPrChecks";
 import { summarizePrChecks } from "../../inbox/model/githubPrChecks";
@@ -53,10 +54,17 @@ export function ProjectManagerStatus({
       <button
         type="button"
         disabled={!needsUser && (run.status !== "paused" || run.recovering)}
-        onClick={() => run.status === "paused" ? document.getElementById("manager-continue")?.scrollIntoView({ block: "center" }) : onDecision?.()}
+        onClick={() =>
+          run.status === "paused"
+            ? document
+                .getElementById("manager-continue")
+                ?.scrollIntoView({ block: "center" })
+            : onDecision?.()
+        }
         className="rounded px-2 py-1 text-amber-600 dark:text-amber-400 disabled:opacity-40"
       >
-        {needsUser || (run.status === "paused" && !run.recovering) ? 1 : 0} needs you
+        {needsUser || (run.status === "paused" && !run.recovering) ? 1 : 0}{" "}
+        needs you
       </button>
       {groups.map(({ label, tasks }) => (
         <button
@@ -124,17 +132,40 @@ export function ProjectManagerReview({ run }: { run: OrchestrationRun }) {
         }
       }}
     >
-      {run.recoveryNotice && <p role="status" className="text-xs text-content/60">{run.recoveryNotice}</p>}
+      {run.recoveryNotice && (
+        <p role="status" className="text-xs text-content/60">
+          {run.recoveryNotice}
+        </p>
+      )}
       {run.status === "paused" && !run.recovering && (
-        <section id="manager-continue" aria-label="Manager needs your decision" className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-sm">
-          <p className="font-medium text-amber-600 dark:text-amber-400">Manager needs your decision</p>
-          <p className="mt-1 text-content/70">{run.error || run.lastPauseReason || "The Manager could not continue."}</p>
-          <button type="button" disabled={continuing} className="mt-2 rounded px-2 py-1 text-amber-600 hover:bg-amber-500/10 focus-visible:outline-accent disabled:opacity-50"
+        <section
+          id="manager-continue"
+          aria-label="Manager needs your decision"
+          className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-sm"
+        >
+          <p className="font-medium text-amber-600 dark:text-amber-400">
+            Manager needs your decision
+          </p>
+          <p className="mt-1 text-content/70">
+            {run.error ||
+              run.lastPauseReason ||
+              "The Manager could not continue."}
+          </p>
+          <button
+            type="button"
+            disabled={continuing}
+            className="mt-2 rounded px-2 py-1 text-amber-600 hover:bg-amber-500/10 focus-visible:outline-accent disabled:opacity-50"
             onClick={() => {
               setContinuing(true);
               setContinueError(undefined);
-              void orchestrator.continueManager(run.leadId).catch(error => setContinueError(String(error))).finally(() => setContinuing(false));
-            }}>{continuing ? "Continuing…" : "Continue"}</button>
+              void orchestrator
+                .continueManager(run.leadId)
+                .catch((error) => setContinueError(String(error)))
+                .finally(() => setContinuing(false));
+            }}
+          >
+            {continuing ? "Continuing…" : "Continue"}
+          </button>
           {continueError && <p role="alert">{continueError}</p>}
         </section>
       )}
@@ -243,13 +274,26 @@ export function ReadyCard({
       <div
         className={`mb-2 flex items-center gap-2 font-medium ${merged ? "text-violet-600 dark:text-violet-400" : "text-emerald-600 dark:text-emerald-400"}`}
       >
-        <ManagerAvatar
-          project={run.cwd}
-          status={merged ? undefined : "ready"}
-        />
+        {task.memberMascot && task.memberColor ? (
+          <PixelMascot
+            name={task.memberMascot}
+            color={task.memberColor}
+            still
+            className="size-5"
+          />
+        ) : (
+          <ManagerAvatar
+            project={run.cwd}
+            status={merged ? undefined : "ready"}
+          />
+        )}
         <span>{merged ? "Merged" : "Ready to merge"}</span>
       </div>
       <h3 className="text-sm font-semibold text-content">{task.title}</h3>
+      <p className="mt-1 text-content/60">
+        {task.memberName ? `${task.memberName} · ` : ""}Reviewed by{" "}
+        {task.reviewedBy ?? "Manager"}
+      </p>
       <div className="mt-1 flex min-w-0 items-center gap-1">
         <button
           type="button"

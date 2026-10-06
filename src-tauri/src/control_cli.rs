@@ -90,7 +90,9 @@ const ACTIONS: [&str; 13] = [
     "list", "delegate", "get", "steer", "message", "retry", "reassign", "cancel", "wait", "review", "finish",
     "respond", "answer",
 ];
-const APP_ACTIONS: [&str; 32] = [
+const APP_ACTIONS: [&str; 34] = [
+    "team.answer",
+    "reviews.submit",
     "projects.list",
     "projects.status",
     "goals.assign",
@@ -229,10 +231,17 @@ Actions:
   habits.remove  {"id":"..."}
   projects.list  Mono only. List assigned projects and worker-engine summaries.
   projects.status {projectId,before?} Read a bounded page of project goals.
-  goals.assign   Multi-project Mono only. {projectId,goal}; reuse requestId on retry.
+  goals.assign   Orchestrator only, to a direct Manager. {projectId,goal}; reuse requestId.
   goals.message  {goalId,text} Message an existing goal.
   goals.cancel   {goalId} Cancel only this goal's workers; retain work.
   prs.ready      List ready PRs in assigned projects.
+  team.answer    Direct boss only. {monoId,requestId,answers} or {monoId,requestId,skip:true}.
+                  For a permission: {monoId,requestId,decision:"allow"|"deny"}.
+                  Never allow beyond the user's existing authority.
+  reviews.submit Reviewer worker only. {decision:"approve"|"changes",notes:"..."}.
+                  Reviews the exact implementing dispatch assigned by the Manager.
+                  Member workers may also memory.add {fact:"..."}: three short,
+                  redacted project facts per task, not transcripts.
   chat.card      Mono or habit only. Post a card to the Mono's chat:
                  {type:"dispatch"|"status"|"ready",goalIds?:["id"]} shows stored goal state.
                   {"type":"pr","repo":"owner/repo","number":123,"note":"..."}

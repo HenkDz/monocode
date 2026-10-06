@@ -123,8 +123,17 @@ it("owns separate project engines from one Mono conversation and restores their 
   f.manager.registerMonoEngine("engine-b", f.lead.id, "mono", "/repo/b");
   await f.manager.start("engine-a", ["codex"], 2, undefined, true);
   await f.manager.start("engine-b", ["codex"], 2, undefined, true);
-  expect(f.manager.run("engine-a")).toMatchObject({ cwd: "/repo/a", ownerSessionId: "lead", ownerMonoId: "mono", projectManager: true });
-  expect(f.manager.run("engine-b")).toMatchObject({ cwd: "/repo/b", ownerSessionId: "lead", tasks: [] });
+  expect(f.manager.run("engine-a")).toMatchObject({
+    cwd: "/repo/a",
+    ownerSessionId: "lead",
+    ownerMonoId: "mono",
+    projectManager: true,
+  });
+  expect(f.manager.run("engine-b")).toMatchObject({
+    cwd: "/repo/b",
+    ownerSessionId: "lead",
+    tasks: [],
+  });
   expect(f.host.stop).toHaveBeenCalledWith("lead");
   expect(f.manager.submissionError("lead")).toBeNull();
   const restored = new Orchestrator(f.store);
@@ -132,10 +141,179 @@ it("owns separate project engines from one Mono conversation and restores their 
   await restored.hydrate("engine-a");
   expect(restored.ownerSession("engine-a")).toBe("lead");
   expect(restored.run("engine-a")?.cwd).toBe("/repo/a");
-  expect(() => restored.registerMonoEngine("engine-a", "other", "other", "/repo/a")).toThrow("already belongs");
+  expect(() =>
+    restored.registerMonoEngine("engine-a", "other", "other", "/repo/a"),
+  ).toThrow("already belongs");
+});
+
+it("allows an owning Mono's habit without acquiring or ending its Manager turn", async () => {
+  const f = setup();
+  f.lead.busy = false;
+  f.manager.registerMonoEngine("lead", "lead", "manager-mono", "/repo");
+  await f.manager.start("lead", ["codex"], 2, undefined, true);
+  f.sessions.push({ ...newSession("codex", "/repo"), id: "habit" });
+  f.host.habitOwnerMono = (id) => (id === "habit" ? "manager-mono" : undefined);
+  expect(f.manager.submissionError("habit")).toBeNull();
+  expect(f.manager.run("lead")?.status).toBe("active");
+  expect(f.manager.run("lead")?.managerTurnId).toBeUndefined();
+  f.host.habitOwnerMono = () => "another-mono";
+  expect(f.manager.submissionError("habit")).toContain("active orchestrator");
+});
+
+it("keeps usage-limited Managers active but holds events for genuinely paused owners", async () => {
+  const f = setup();
+  f.lead.busy = false;
+  f.manager.registerMonoEngine("lead", "lead", "manager-mono", "/repo");
+  await f.manager.start("lead", ["codex"], 2, undefined, true);
+  const turn = await f.manager.beginManagerTurn("lead", true);
+  await f.manager.endManagerTurn("lead", turn, {
+    status: "failed",
+    text: "",
+    error: "Usage limit reached",
+  });
+  expect(f.manager.run("lead")?.status).toBe("active");
+  const failed = await f.manager.beginManagerTurn("lead", true);
+  await f.manager.endManagerTurn("lead", failed, {
+    status: "failed",
+    text: "",
+    error: "Provider crashed",
+  });
+  expect(f.manager.submissionError("lead", true)).toContain("Continue");
+});
+
+it("preflights independent launches in retained worker checkouts and nested folders", async () => {
+  const f = setup();
+  await f.start();
+  await f.delegate(["src"]);
+  await vi.waitFor(() => expect(f.tasks()[0].workspace).toBeDefined());
+  const checkout = f.tasks()[0].workspace!.checkoutCwd;
+  expect(
+    f.manager.submissionError("new", false, {
+      cwd: "/repo",
+      worktreeCwd: checkout,
+    }),
+  ).toContain("worker checkout");
+  expect(
+    f.manager.submissionError("new", false, { cwd: `${checkout}/src` }),
+  ).toContain("worker checkout");
+  expect(
+    f.manager.submissionError("new", false, { cwd: `${checkout}-other` }),
+  ).toBeNull();
 });
 
 describe("worker assignment prompts", () => {
+  it("requires an authenticated Reviewer verdict on the latest dispatch before the PR gate", async () => {
+    const f = setup();
+    f.host.reviewerFor = () => ({ id: "reviewer", name: "Reviewer" });
+    f.host.reviewedPullRequest = vi.fn(
+      async () => "https://github.com/example/app/pull/1",
+    );
+    f.lead.busy = false;
+    await f.manager.start("lead", ["codex"], 2, undefined, true);
+    f.lead.busy = true;
+    await f.delegate(["src"], {
+      member: "backend",
+      memberName: "Backend",
+      memberMascot: "cat",
+      memberColor: "#aaaaaa",
+    });
+    const impl = f.tasks()[0];
+    await vi.waitFor(() =>
+      expect(f.completions.has(impl.sessionId)).toBe(true),
+    );
+    const write = vi.fn(async () => ({ added: true }));
+    await f.manager.recordMemberFact(
+      impl.sessionId,
+      "fact-1",
+      { fact: "Project uses UTC timestamps" },
+      write,
+    );
+    await f.manager.recordMemberFact(
+      impl.sessionId,
+      "fact-1",
+      { fact: "Project uses UTC timestamps" },
+      write,
+    );
+    expect(write).toHaveBeenCalledTimes(1);
+    await f.manager.recordMemberFact(
+      impl.sessionId,
+      "fact-2",
+      { fact: "Second fact" },
+      write,
+    );
+    await f.manager.recordMemberFact(
+      impl.sessionId,
+      "fact-3",
+      { fact: "Third fact" },
+      write,
+    );
+    await expect(
+      f.manager.recordMemberFact(
+        impl.sessionId,
+        "fact-4",
+        { fact: "Fourth fact" },
+        write,
+      ),
+    ).rejects.toThrow("three facts");
+    f.completions.get(impl.sessionId)!({
+      status: "completed",
+      text: "Implemented, tests passed",
+    });
+    await vi.waitFor(() => expect(f.tasks()[0].status).toBe("completed"));
+    await expect(f.call("review", { taskId: impl.id })).rejects.toThrow(
+      "Reviewer must approve",
+    );
+    await f.delegate(["."], {
+      member: "reviewer",
+      memberName: "Reviewer",
+      memberMascot: "ghost",
+      memberColor: "#aaaaaa",
+      reviewTaskId: impl.id,
+    });
+    const review = f.tasks()[1];
+    await vi.waitFor(() =>
+      expect(f.completions.has(review.sessionId)).toBe(true),
+    );
+    await expect(
+      f.manager.recordReviewerResult(impl.sessionId, "fake", {
+        decision: "approve",
+        notes: "Self approved",
+      }),
+    ).rejects.toThrow("Only this team's assigned Reviewer");
+    await f.manager.recordReviewerResult(review.sessionId, "verdict", {
+      decision: "approve",
+      notes: "Exact diff and tests reviewed",
+    });
+    await expect(f.call("review", { taskId: impl.id })).rejects.toThrow(
+      "Reviewer must approve",
+    );
+    f.completions.get(review.sessionId)!({
+      status: "completed",
+      text: "Approved",
+    });
+    await vi.waitFor(() => expect(f.tasks()[1].status).toBe("completed"));
+    await expect(f.call("review", { taskId: impl.id })).resolves.toMatchObject({
+      accepted: true,
+    });
+    expect(f.tasks()[0].reviewedBy).toBe("Reviewer");
+    const priorCompletion = f.completions.get(impl.sessionId);
+    await f.call("message", {
+      taskId: impl.id,
+      text: "Make one more correction",
+    });
+    await vi.waitFor(() => expect(f.tasks()[0].status).toBe("running"));
+    await vi.waitFor(() =>
+      expect(f.completions.get(impl.sessionId)).not.toBe(priorCompletion),
+    );
+    f.completions.get(impl.sessionId)!({
+      status: "completed",
+      text: "Corrected",
+    });
+    await vi.waitFor(() => expect(f.tasks()[0].status).toBe("completed"));
+    await expect(f.call("review", { taskId: impl.id })).rejects.toThrow(
+      "Reviewer must approve",
+    );
+  });
   it("keeps the task text and wraps it in the assignment envelope", () => {
     const sent = workerTurnPrompt("Review the branch.", ["src/App.tsx"]);
     expect(sent.startsWith("Review the branch.")).toBe(true);
@@ -158,7 +336,9 @@ describe("local orchestration", () => {
     const restored = new Orchestrator(f.store);
     restored.bind(f.host);
     const states: string[] = [];
-    restored.subscribe(() => { if (restored.run("lead")) states.push(restored.run("lead")!.status); });
+    restored.subscribe(() => {
+      if (restored.run("lead")) states.push(restored.run("lead")!.status);
+    });
     await restored.hydrate("lead");
     expect(restored.run("lead")?.status).toBe("active");
     expect(states).not.toContain("paused");
@@ -168,7 +348,10 @@ describe("local orchestration", () => {
     const crashed = new Orchestrator(f.store);
     crashed.bind(f.host);
     await crashed.hydrate("lead");
-    expect(crashed.run("lead")).toMatchObject({ status: "paused", error: expect.stringContaining("Manager's last turn") });
+    expect(crashed.run("lead")).toMatchObject({
+      status: "paused",
+      error: expect.stringContaining("Manager's last turn"),
+    });
     expect(f.host.submit).not.toHaveBeenCalled();
   });
 
@@ -187,9 +370,21 @@ describe("local orchestration", () => {
     await restored.hydrate("lead");
     await restored.hydrate("lead");
     await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledTimes(2));
-    expect(restored.run("lead")).toMatchObject({ status: "active", recoveryNotice: "Continued 1 worker after restart from retained checkouts." });
-    expect(restored.run("lead")!.tasks[0]).toMatchObject({ sessionId: original.sessionId, workspace: original.workspace, status: "running" });
-    expect(f.host.submit).toHaveBeenLastCalledWith(original.sessionId, expect.stringContaining("Preserve completed work"), expect.any(Function));
+    expect(restored.run("lead")).toMatchObject({
+      status: "active",
+      recoveryNotice:
+        "Continued 1 worker after restart from retained checkouts.",
+    });
+    expect(restored.run("lead")!.tasks[0]).toMatchObject({
+      sessionId: original.sessionId,
+      workspace: original.workspace,
+      status: "running",
+    });
+    expect(f.host.submit).toHaveBeenLastCalledWith(
+      original.sessionId,
+      expect.stringContaining("Preserve completed work"),
+      expect.any(Function),
+    );
   });
 
   it("resets the continuation budget on user turns and exposes failed turns without replaying them", async () => {
@@ -199,8 +394,15 @@ describe("local orchestration", () => {
     f.manager.run("lead")!.continuations = 20;
     const turn = await f.manager.beginManagerTurn("lead", true);
     expect(f.manager.run("lead")!.continuations).toBe(0);
-    await f.manager.endManagerTurn("lead", turn, { status: "failed", text: "", error: "Provider unavailable" });
-    expect(f.manager.run("lead")).toMatchObject({ status: "paused", error: "Provider unavailable" });
+    await f.manager.endManagerTurn("lead", turn, {
+      status: "failed",
+      text: "",
+      error: "Provider unavailable",
+    });
+    expect(f.manager.run("lead")).toMatchObject({
+      status: "paused",
+      error: "Provider unavailable",
+    });
     await f.manager.continueManager("lead");
     expect(f.manager.run("lead")!.status).toBe("active");
     expect(f.host.submit).toHaveBeenCalledOnce();
@@ -231,7 +433,10 @@ describe("local orchestration", () => {
     await f.delegate(["src"]);
     await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledOnce());
     let discovered!: () => void;
-    f.host.probeProviders = () => new Promise<void>(resolve => { discovered = resolve; });
+    f.host.probeProviders = () =>
+      new Promise<void>((resolve) => {
+        discovered = resolve;
+      });
     f.host.choices = () => [];
     const restored = new Orchestrator(f.store);
     restored.bind(f.host);
@@ -240,7 +445,11 @@ describe("local orchestration", () => {
     expect(f.host.submit).toHaveBeenCalledOnce();
     discovered();
     await loading;
-    expect(restored.run("lead")).toMatchObject({ status: "paused", recovering: undefined, error: expect.stringContaining("provider is unavailable") });
+    expect(restored.run("lead")).toMatchObject({
+      status: "paused",
+      recovering: undefined,
+      error: expect.stringContaining("provider is unavailable"),
+    });
     const blocked = new Orchestrator(f.store);
     blocked.bind(f.host);
     await blocked.hydrate("lead");
@@ -252,12 +461,20 @@ describe("local orchestration", () => {
     const f = setup();
     f.lead.busy = false;
     f.lead.cwd = "/worktrees/browser-link-4";
-    f.host.projectIdentity = vi.fn(async () => ({ name: "Browser Link 4", branch: "v4" }));
+    f.host.projectIdentity = vi.fn(async () => ({
+      name: "Browser Link 4",
+      branch: "v4",
+    }));
     await f.manager.start("lead", ["codex"], 2, undefined, true);
     f.lead.busy = true;
     await f.delegate(["src"]);
-    expect(f.manager.prompt("lead", "Build")).toContain('Manager for "Browser Link 4"');
-    expect(f.manager.run("lead")!.workspace).toMatchObject({ checkoutCwd: f.lead.cwd, branch: "v4" });
+    expect(f.manager.prompt("lead", "Build")).toContain(
+      'Manager for "Browser Link 4"',
+    );
+    expect(f.manager.run("lead")!.workspace).toMatchObject({
+      checkoutCwd: f.lead.cwd,
+      branch: "v4",
+    });
     expect(f.tasks()[0].baseBranch).toBe("v4");
   });
 
@@ -268,14 +485,22 @@ describe("local orchestration", () => {
     f.lead.busy = false;
     await f.manager.start("lead", ["codex"], 2, undefined, true);
     f.lead.busy = true;
-    await f.call("delegate", { title: "Recover", prompt: "Original scope", files: ["src"] });
+    await f.call("delegate", {
+      title: "Recover",
+      prompt: "Original scope",
+      files: ["src"],
+    });
     await vi.waitFor(() => expect(f.tasks()[0].status).toBe("running"));
     await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledTimes(1));
     const original = f.tasks()[0];
     expect(original.model).toBe(f.lead.model);
-    await expect(f.call("reassign", { taskId: original.id, reason: "quota" })).rejects.toThrow("Cancel");
+    await expect(
+      f.call("reassign", { taskId: original.id, reason: "quota" }),
+    ).rejects.toThrow("Cancel");
     await f.call("cancel", { taskId: original.id });
-    await expect(f.call("reassign", { taskId: original.id, reason: "safety" })).rejects.toThrow("Safety refusals");
+    await expect(
+      f.call("reassign", { taskId: original.id, reason: "safety" }),
+    ).rejects.toThrow("Safety refusals");
     const input = { taskId: original.id, reason: "configuration" };
     const result = await f.call("reassign", input, "replace-once");
     expect(await f.call("reassign", input, "replace-once")).toEqual(result);
@@ -286,10 +511,17 @@ describe("local orchestration", () => {
     expect(replacement.workspace).toEqual(original.workspace);
     expect(replacement.files).toEqual(original.files);
     expect(replacement.prompt).toBe(original.prompt);
-    expect(f.sessions.some(s => s.id === original.sessionId)).toBe(true);
+    expect(f.sessions.some((s) => s.id === original.sessionId)).toBe(true);
     expect(f.host.cleanupWorker).not.toHaveBeenCalled();
-    expect(f.host.submit).toHaveBeenLastCalledWith(replacement.sessionId, expect.stringContaining("Original scope"), expect.any(Function));
-    f.completions.get(original.sessionId)!({ status: "completed", text: "Late old result" });
+    expect(f.host.submit).toHaveBeenLastCalledWith(
+      replacement.sessionId,
+      expect.stringContaining("Original scope"),
+      expect.any(Function),
+    );
+    f.completions.get(original.sessionId)!({
+      status: "completed",
+      text: "Late old result",
+    });
     expect(f.tasks()[0].status).toBe("running");
   });
 
@@ -297,33 +529,64 @@ describe("local orchestration", () => {
     const f = setup();
     f.lead.busy = false;
     await f.manager.start("lead", ["codex"], 2, undefined, true);
-    expect(f.manager.prompt("lead", "Goal")).toContain("Never rephrase, change models, or switch providers to bypass a refusal");
+    expect(f.manager.prompt("lead", "Goal")).toContain(
+      "Never rephrase, change models, or switch providers to bypass a refusal",
+    );
     f.lead.busy = true;
-    const input = { title: "Goal one", prompt: "Implement", harness: "codex", files: ["."] };
+    const input = {
+      title: "Goal one",
+      prompt: "Implement",
+      harness: "codex",
+      files: ["."],
+    };
     const first = await f.call("delegate", input, "stable-assignment");
     expect(await f.call("delegate", input, "stable-assignment")).toEqual(first);
     await f.delegate(["."], { title: "Goal two", checkout: "named-worktree" });
-    await vi.waitFor(() => expect(f.tasks().map(task => task.status)).toEqual(["running", "running"]));
+    await vi.waitFor(() =>
+      expect(f.tasks().map((task) => task.status)).toEqual([
+        "running",
+        "running",
+      ]),
+    );
     expect(f.tasks()[1].checkout).toBe("named-worktree");
     const task = f.tasks()[0];
-    f.completions.get(task.sessionId)!({ status: "completed", text: "Tests passed" });
+    f.completions.get(task.sessionId)!({
+      status: "completed",
+      text: "Tests passed",
+    });
     await vi.waitFor(() => expect(f.tasks()[0].status).toBe("completed"));
-    f.host.reviewedPullRequest = vi.fn(async () => { throw new Error("No open PR"); });
-    await expect(f.call("review", { taskId: task.id })).rejects.toThrow("No open PR");
+    f.host.reviewedPullRequest = vi.fn(async () => {
+      throw new Error("No open PR");
+    });
+    await expect(f.call("review", { taskId: task.id })).rejects.toThrow(
+      "No open PR",
+    );
     expect(f.tasks()[0].accepted).toBe(false);
-    f.host.reviewedPullRequest = vi.fn(async () => "https://github.com/example/repo/pull/1");
+    f.host.reviewedPullRequest = vi.fn(
+      async () => "https://github.com/example/repo/pull/1",
+    );
     f.host.notifyReady = vi.fn();
-    const reviewInput = { taskId: task.id, checks: "Diff reviewed; focused tests passed" };
+    const reviewInput = {
+      taskId: task.id,
+      checks: "Diff reviewed; focused tests passed",
+    };
     await f.call("review", reviewInput, "review-once");
     await f.call("review", reviewInput, "review-once");
     await f.call("review", reviewInput);
     expect(f.host.notifyReady).toHaveBeenCalledTimes(1);
     expect(f.tasks()[0].checksSummary).toBe(reviewInput.checks);
-    expect(f.tasks()[0]).toMatchObject({ accepted: true, prUrl: "https://github.com/example/repo/pull/1", acceptedDispatchId: f.tasks()[0].lastDispatchId });
+    expect(f.tasks()[0]).toMatchObject({
+      accepted: true,
+      prUrl: "https://github.com/example/repo/pull/1",
+      acceptedDispatchId: f.tasks()[0].lastDispatchId,
+    });
     expect(f.tasks()[0].workspace).toBeDefined();
     expect(f.host.integrateWorker).not.toHaveBeenCalled();
     expect(f.host.cleanupWorker).not.toHaveBeenCalled();
-    await f.call("message", { taskId: task.id, text: "Address review feedback" });
+    await f.call("message", {
+      taskId: task.id,
+      text: "Address review feedback",
+    });
     await vi.waitFor(() => expect(f.tasks()[0].status).toBe("running"));
     expect(f.tasks()[0].accepted).toBe(false);
   });
@@ -336,12 +599,20 @@ describe("local orchestration", () => {
     await f.delegate(["src"]);
     await vi.waitFor(() => expect(f.tasks()[0].status).toBe("running"));
     const recovered = new Orchestrator(f.store);
-    await vi.waitFor(() => expect(f.completions.has(f.tasks()[0].sessionId)).toBe(true));
+    await vi.waitFor(() =>
+      expect(f.completions.has(f.tasks()[0].sessionId)).toBe(true),
+    );
     recovered.bind(f.host);
     vi.mocked(f.host.submit).mockClear();
     await recovered.hydrate("lead");
-    expect(recovered.run("lead")).toMatchObject({ projectManager: true, status: "paused" });
-    expect(recovered.run("lead")!.tasks[0]).toMatchObject({ status: "interrupted", workspace: f.tasks()[0].workspace });
+    expect(recovered.run("lead")).toMatchObject({
+      projectManager: true,
+      status: "paused",
+    });
+    expect(recovered.run("lead")!.tasks[0]).toMatchObject({
+      status: "interrupted",
+      workspace: f.tasks()[0].workspace,
+    });
     expect(f.host.submit).not.toHaveBeenCalled();
     await recovered.start("lead", ["codex"], 2);
     await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledOnce());
@@ -1289,7 +1560,10 @@ describe("local orchestration", () => {
       if (run.continuations === 1) f.lead.busy = true;
     });
     f.lead.busy = false;
-    f.completions.get(f.tasks()[0].sessionId)!({ status: "completed", text: "Tests pass" });
+    f.completions.get(f.tasks()[0].sessionId)!({
+      status: "completed",
+      text: "Tests pass",
+    });
     await vi.waitFor(() => {
       expect(f.lead.busy).toBe(true);
       expect(f.tasks()[0].delivered).toBe(false);
@@ -1297,7 +1571,9 @@ describe("local orchestration", () => {
     });
     expect(f.manager.run("lead")!.status).toBe("active");
     expect(f.host.submit).toHaveBeenCalledTimes(1);
-    f.store.save.mockImplementation(async (run) => { f.saved.set(run.leadId, structuredClone(run)); });
+    f.store.save.mockImplementation(async (run) => {
+      f.saved.set(run.leadId, structuredClone(run));
+    });
     f.lead.busy = false;
     f.manager.sync();
     await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledTimes(2));

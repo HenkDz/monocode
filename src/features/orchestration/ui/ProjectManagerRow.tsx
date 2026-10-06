@@ -1,5 +1,12 @@
 import { useState, useSyncExternalStore } from "react";
-import { dedicatedMono, monoLook, monosSnapshot, subscribeMonos } from "../../monos/model/mono";
+import {
+  dedicatedMono,
+  listMonos,
+  monoLook,
+  monosSnapshot,
+  subscribeMonos,
+} from "../../monos/model/mono";
+import { openCardSession } from "../../monos/model/monoCards";
 import { PixelMascot } from "../../projects/ui/PixelMascot";
 import { ChevronDown, ChevronRight } from "../../../shared/ui/icons";
 import { ManagerAvatar } from "./ManagerAvatar";
@@ -32,6 +39,11 @@ export function ProjectManagerRow({
   useSyncExternalStore(subscribeMonos, monosSnapshot);
   const mono = dedicatedMono(project);
   const look = mono && monoLook(mono);
+  const members = mono
+    ? listMonos().filter(
+        (member) => member.role === "member" && member.reportsTo === mono.id,
+      )
+    : [];
   const [error, setError] = useState<string>();
   const { data } = useProjectWorktrees(
     project,
@@ -45,6 +57,7 @@ export function ProjectManagerRow({
   const run = runs.find(
     (run) =>
       run.projectManager &&
+      (!mono || run.ownerMonoId === mono.id || run.leadId === mono.sessionId) &&
       orchestrationPathKey(run.cwd) === orchestrationPathKey(project),
   );
   if (project.startsWith("remote:") || !data?.worktrees.length) return null;
@@ -52,10 +65,14 @@ export function ProjectManagerRow({
     (item) =>
       orchestrationPathKey(item.project) === orchestrationPathKey(project),
   );
-  const decision = waiting.some((item) => item.kind === "decision");
+  const decision =
+    waiting.some((item) => item.kind === "decision") ||
+    run?.tasks.some((task) =>
+      ["blocked", "failed", "interrupted"].includes(task.status),
+    ) === true;
   const ready = waiting.some((item) => item.kind === "ready");
   const label = decision
-    ? "Needs your decision"
+    ? waiting.some(item => item.kind === "decision") ? "Needs your decision" : "Needs attention"
     : ready
       ? "Ready to merge"
       : waiting.length
@@ -65,7 +82,7 @@ export function ProjectManagerRow({
           : undefined;
   return (
     <div className="relative mb-0.5">
-      {onToggle && ownedCount > 0 && (
+      {onToggle && (ownedCount > 0 || members.length > 0) && (
         <button
           type="button"
           aria-label="Toggle Manager queue"
@@ -109,21 +126,36 @@ export function ProjectManagerRow({
             .finally(() => setOpening(false));
         }}
       >
-        {look ? <PixelMascot name={look.mascot} color={look.color} still className="size-5 shrink-0" status={decision ? "needs-you" : label === "Running" ? "working" : "idle"} /> : <ManagerAvatar
-          project={project}
-          status={
-            decision
-              ? "decision"
-              : ready
-                ? "ready"
-                : waiting.length
-                  ? "reply"
-                  : label
-                    ? "running"
-                    : undefined
-          }
-        />}
-        <span className="truncate">{look?.name ?? "Manager"}{expanded === false && ownedCount > 0 ? ` · ${ownedCount}` : ""}</span>
+        {look ? (
+          <PixelMascot
+            name={look.mascot}
+            color={look.color}
+            still
+            className="size-5 shrink-0"
+            status={
+              decision ? "needs-you" : label === "Running" ? "working" : "idle"
+            }
+          />
+        ) : (
+          <ManagerAvatar
+            project={project}
+            status={
+              decision
+                ? "decision"
+                : ready
+                  ? "ready"
+                  : waiting.length
+                    ? "reply"
+                    : label
+                      ? "running"
+                      : undefined
+            }
+          />
+        )}
+        <span className="truncate">
+          {look?.name ?? "Manager"}
+          {expanded === false && ownedCount > 0 ? ` · ${ownedCount}` : ""}
+        </span>
         {label && (
           <span
             role="status"
@@ -135,6 +167,60 @@ export function ProjectManagerRow({
           </span>
         )}
       </button>
+      {expanded !== false &&
+        members.map((member) => {
+          const look = monoLook(member);
+          const tasks = runs
+            .filter((run) => run.ownerMonoId === mono?.id)
+            .flatMap((run) => run.tasks)
+            .filter((task) => task.memberId === member.id);
+          const task =
+            tasks.find(
+              (task) => task.status === "running" || task.status === "blocked",
+            ) ??
+            tasks.filter((task) => task.status !== "cancelled").slice(-1)[0];
+          return (
+            <button
+              type="button"
+              key={member.id}
+              className="flex h-7 w-full min-w-0 items-center gap-1.5 rounded-md pl-9 pr-2 text-left text-xs text-content/60 hover:bg-content/5 focus-visible:outline-accent"
+              title={
+                task
+                  ? `${look.name} · ${task.title} · ${task.status}`
+                  : look.name
+              }
+              onClick={() =>
+                task
+                  ? openCardSession(task.sessionId)
+                  : window.dispatchEvent(
+                      new CustomEvent("monocode:open-team", {
+                        detail: { monoId: mono!.id },
+                      }),
+                    )
+              }
+            >
+              <PixelMascot
+                name={look.mascot}
+                color={look.color}
+                still
+                className="size-4 shrink-0"
+              />
+              <span className="shrink-0">{look.name}</span>
+              {task && (
+                <>
+                  <span className="truncate text-content/40">
+                    · {task.title}
+                  </span>
+                  <span
+                    className={`ml-auto shrink-0 text-[10px] ${task.status === "blocked" ? "text-amber-500" : "text-content/40"}`}
+                  >
+                    {task.status}
+                  </span>
+                </>
+              )}
+            </button>
+          );
+        })}
       {error && (
         <p role="alert" className="px-2 text-xs text-red-400">
           {error}

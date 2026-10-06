@@ -1,6 +1,6 @@
 //! Authenticated loopback transport. App windows own execution; callers never
 //! receive arbitrary Tauri command access or direct database write access.
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Component, Path, PathBuf};
@@ -38,12 +38,14 @@ struct Inner {
     workers: HashMap<String, String>,
     scratch: HashMap<String, PathBuf>,
     active: HashMap<String, ActiveTurn>,
+    mono_sessions: HashSet<String>,
+    habit_grants: HashMap<String, Grant>,
 }
 impl Inner {
     // Provider processes can stay alive between turns, so install the token
     // before their first spawn. request_grant still requires an opted-in turn.
     fn prepare_app_grant(&mut self, session: &str, window: &str, cwd: &str) -> bool {
-        if self.workers.contains_key(session) || self.grants.contains_key(session) {
+        if self.grants.contains_key(session) && !self.mono_sessions.contains(session) {
             return false;
         }
         let token = self
@@ -106,6 +108,8 @@ impl Inner {
         self.workers.retain(|id, _| !ids.contains(id));
         self.scratch.retain(|id, _| !ids.contains(id));
         self.active.retain(|id, _| !ids.contains(id));
+        self.mono_sessions.retain(|id| !ids.contains(id));
+        self.habit_grants.retain(|id, _| !ids.contains(id));
         self.pending.retain(|_, pending| {
             if pending.window != label {
                 return true;
@@ -158,17 +162,27 @@ struct Event {
     input: Value,
 }
 
+#[cfg(test)]
 fn request_grant(host: &Inner, namespace: &str, token: &str) -> Result<Grant, String> {
+    request_action_grant(host, namespace, token, "")
+}
+
+fn request_action_grant(host: &Inner, namespace: &str, token: &str, action: &str) -> Result<Grant, String> {
     let grant = match namespace {
-        "control" => host.grants.values().find(|grant| grant.token == token),
+        "control" => host.grants.values().chain(host.habit_grants.values()).find(|grant| grant.token == token),
         "app" => host.app_grants.values().find(|grant| grant.token == token),
         _ => return Err("Unknown control namespace".into()),
     }
     .cloned()
     .ok_or("Connection revoked or unauthorized")?;
+    if namespace == "control" && host.habit_grants.contains_key(&grant.session)
+        && (!host.workers.get(&grant.session).is_some_and(|owner| host.grants.get(owner).is_some_and(|parent| parent.window == grant.window))
+            || !host.active.get(&grant.session).is_some_and(|turn| turn.window == grant.window && turn.app_allowed)) {
+        return Err(APP_TURN_INACTIVE.into());
+    }
     if namespace == "app"
-        && (host.grants.contains_key(&grant.session)
-            || host.workers.contains_key(&grant.session)
+        && ((host.grants.contains_key(&grant.session) && !host.mono_sessions.contains(&grant.session))
+            || (host.workers.contains_key(&grant.session) && !host.habit_grants.contains_key(&grant.session) && !matches!(action, "reviews.submit" | "memory.add"))
             || !host
                 .active
                 .get(&grant.session)
@@ -238,7 +252,7 @@ fn serve(mut stream: TcpStream, app: &AppHandle, inner: &Arc<Mutex<Inner>>) {
         let (tx, rx) = mpsc::channel();
         let grant = {
             let mut host = inner.lock().map_err(|_| "Control service unavailable")?;
-            let grant = request_grant(&host, &request.namespace, &request.token)?;
+            let grant = request_action_grant(&host, &request.namespace, &request.token, &request.action)?;
             if host.pending.len() >= 24 {
                 return Err("Too many pending control requests".into());
             }
@@ -349,6 +363,7 @@ pub fn control_disable(
         inner.grants.remove(&session_id);
         inner.workers.retain(|_, parent| parent != &session_id);
         let workers = inner.workers.clone();
+        inner.habit_grants.retain(|id, _| workers.contains_key(id));
         inner.scratch.retain(|id, _| workers.contains_key(id));
     }
     Ok(())
@@ -360,6 +375,7 @@ pub fn control_attach_worker(
     host: State<'_, ControlHost>,
     lead_id: String,
     session_id: String,
+    mono_habit: Option<bool>,
 ) -> Result<String, String> {
     let mut inner = host
         .inner
@@ -376,8 +392,17 @@ pub fn control_attach_worker(
         Some(path) if path.is_dir() => path.clone(),
         _ => create_worker_scratch()?,
     };
+    if mono_habit == Some(true) {
+        let parent = inner.grants[&lead_id].clone();
+        inner.habit_grants.entry(session_id.clone()).or_insert_with(|| Grant {
+            window: parent.window, cwd: parent.cwd, session: session_id.clone(),
+            token: format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple()),
+        });
+    } else {
+        inner.habit_grants.remove(&session_id);
+    }
     inner.workers.insert(session_id.clone(), lead_id);
-    inner.app_grants.remove(&session_id);
+    // A retained worker process keeps its token; request_action_grant narrows it.
     inner.scratch.insert(session_id, scratch.clone());
     Ok(worker_scratch_path(&scratch))
 }
@@ -427,6 +452,7 @@ pub fn control_authorize_turn(
     session_id: String,
     cwd: String,
     app_access: bool,
+    mono_session: Option<bool>,
 ) -> Result<(), String> {
     let cwd = std::fs::canonicalize(crate::fs::expand_home(&cwd)).map_err(|e| e.to_string())?;
     let cwd = comparison_path(&cwd);
@@ -444,6 +470,11 @@ pub fn control_authorize_turn(
         {
             return Err("This checkout is controlled by an orchestrator. Stop that run before starting independent work.".into());
         }
+    }
+    if mono_session == Some(true) && !inner.workers.contains_key(&session_id) {
+        inner.mono_sessions.insert(session_id.clone());
+    } else {
+        inner.mono_sessions.remove(&session_id);
     }
     let eligible = inner.prepare_app_grant(&session_id, window.label(), &cwd);
     let app_allowed = app_access && eligible;
@@ -488,7 +519,7 @@ pub fn configure_child(app: &AppHandle, session_id: &str, cmd: &mut Command) {
         return;
     };
     if let Ok(inner) = host.inner.lock() {
-        if let Some(grant) = inner.grants.get(session_id) {
+        if let Some(grant) = inner.grants.get(session_id).or_else(|| inner.habit_grants.get(session_id)) {
             cmd.env("MONOCODE_CONTROL_ENDPOINT", &host.endpoint)
                 .env("MONOCODE_CONTROL_TOKEN", &grant.token);
         }
@@ -706,6 +737,53 @@ mod tests {
         assert!(request_grant(&inner, "app", &token).is_ok());
         inner.active.remove("ordinary");
         assert!(request_grant(&inner, "app", &token).is_err());
+    }
+
+    #[test]
+    fn mono_leads_keep_app_actions_and_workers_have_only_two_actions() {
+        let mut inner = Inner::default();
+        assert!(inner.prepare_app_grant("lead", "main", "/repo"));
+        let token = inner.app_grants["lead"].token.clone();
+        inner.grants.insert("lead".into(), Grant { window: "main".into(), session: "lead".into(), cwd: "/repo".into(), token: "control-token".into() });
+        inner.active.insert("lead".into(), ActiveTurn { window: "main".into(), cwd: "/repo".into(), app_allowed: true });
+        assert!(request_action_grant(&inner, "app", &token, "chat.card").is_err());
+        inner.mono_sessions.insert("lead".into());
+        assert!(inner.prepare_app_grant("lead", "main", "/repo"));
+        for action in ["soul.read", "memory.add", "habits.list", "chat.card", "team.answer", "projects.list", "goals.assign"] {
+            assert!(request_action_grant(&inner, "app", &token, action).is_ok());
+        }
+        assert!(request_action_grant(&inner, "control", &token, "list").is_err());
+        inner.workers.insert("worker".into(), "lead".into());
+        assert!(inner.prepare_app_grant("worker", "main", "/repo-worker"));
+        let worker_token = inner.app_grants["worker"].token.clone();
+        inner.active.insert("worker".into(), ActiveTurn { window: "main".into(), cwd: "/repo-worker".into(), app_allowed: true });
+        for action in ["reviews.submit", "memory.add"] {
+            assert!(request_action_grant(&inner, "app", &worker_token, action).is_ok());
+        }
+        for action in ["sessions.start", "team.answer", "goals.assign", "soul.update", "memory.read", "chat.card", ""] {
+            assert!(request_action_grant(&inner, "app", &worker_token, action).is_err());
+        }
+        inner.active.remove("worker");
+        assert!(request_action_grant(&inner, "app", &worker_token, "reviews.submit").is_err());
+        inner.active.remove("lead");
+        assert!(request_action_grant(&inner, "app", &token, "memory.add").is_err());
+    }
+
+    #[test]
+    fn manager_habit_has_its_own_active_only_control_identity() {
+        let mut inner = Inner::default();
+        inner.grants.insert("manager".into(), Grant { session: "manager".into(), window: "main".into(), cwd: "/repo".into(), token: "manager-control".into() });
+        inner.workers.insert("habit".into(), "manager".into());
+        inner.habit_grants.insert("habit".into(), Grant { session: "habit".into(), window: "main".into(), cwd: "/repo".into(), token: "habit-control".into() });
+        assert!(request_action_grant(&inner, "control", "habit-control", "delegate").is_err());
+        inner.active.insert("habit".into(), ActiveTurn { window: "main".into(), cwd: "/repo".into(), app_allowed: true });
+        assert_eq!(request_action_grant(&inner, "control", "habit-control", "delegate").unwrap().session, "habit");
+        assert!(inner.prepare_app_grant("habit", "main", "/repo"));
+        let app = inner.app_grants["habit"].token.clone();
+        assert!(request_action_grant(&inner, "app", &app, "memory.read").is_ok());
+        assert!(request_action_grant(&inner, "control", &app, "delegate").is_err());
+        inner.grants.remove("manager");
+        assert!(request_action_grant(&inner, "control", "habit-control", "delegate").is_err());
     }
     #[cfg(not(windows))]
     #[test]

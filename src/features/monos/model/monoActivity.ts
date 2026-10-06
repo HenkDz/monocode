@@ -12,8 +12,15 @@ export function resolveMonoActivity(
   selection: MonoActivitySelection | null,
   session: Pick<Session, "id" | "blocks" | "busy"> | undefined,
 ) {
-  if (!selection || selection.sessionId !== session?.id) return null;
+  if (!session || (selection && selection.sessionId !== session.id))
+    return null;
   const turns = groupMonoTurns(session.blocks);
+  if (!selection) {
+    const latest = turns[turns.length - 1];
+    return latest
+      ? { turnId: latest[0].id, blocks: latest, live: !!session.busy }
+      : null;
+  }
   const current = turns.find((turn) => turn[0].id === selection.turnId);
   return {
     turnId: selection.turnId,

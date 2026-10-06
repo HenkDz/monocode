@@ -26,6 +26,58 @@ import {
   type MonoFile,
 } from "../model/monoFiles";
 
+export type MonoPanelTab = "details" | "activity";
+
+export function MonoPanelTabs({
+  active,
+  onChange,
+  panelId,
+}: {
+  active: MonoPanelTab;
+  onChange: (tab: MonoPanelTab) => void;
+  panelId: string;
+}) {
+  const tabs = ["details", "activity"] as const;
+  return (
+    <div
+      role="tablist"
+      aria-label="Mono panel"
+      className="flex min-w-0 flex-1 items-stretch gap-4 pl-4"
+    >
+      {tabs.map((tab) => (
+        <button
+          key={tab}
+          id={`${panelId}-${tab}`}
+          type="button"
+          role="tab"
+          aria-selected={active === tab}
+          aria-controls={panelId}
+          tabIndex={active === tab ? 0 : -1}
+          onClick={() => onChange(tab)}
+          onKeyDown={(event) => {
+            if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key))
+              return;
+            event.preventDefault();
+            const next =
+              event.key === "Home"
+                ? "details"
+                : event.key === "End"
+                  ? "activity"
+                  : tab === "details"
+                    ? "activity"
+                    : "details";
+            onChange(next);
+            document.getElementById(`${panelId}-${next}`)?.focus();
+          }}
+          className={`border-b-2 text-[13px] font-medium hover:text-content focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent ${active === tab ? "border-[var(--mono-color)] text-content" : "border-transparent text-content/60"}`}
+        >
+          {tab === "details" ? "Details" : "Activity"}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 /** The top of a page in the Mono's panel: back, a title, and its actions. */
 export function PageHeader({
   title,

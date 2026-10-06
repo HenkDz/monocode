@@ -863,6 +863,19 @@ pub async fn git_orchestration_branch_remove(cwd: String, branch: String) -> Res
     .map_err(|error| error.to_string())?
 }
 
+#[tauri::command(async)]
+pub async fn git_worktree_branch_remove(cwd: String, branch: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = expand_home(&cwd);
+        git(&root, &["check-ref-format", "--branch", &branch])?;
+        if list(&root)?.iter().any(|tree| tree.branch.as_deref() == Some(branch.as_str())) {
+            return Err("This branch still has a worktree; nothing was deleted.".into());
+        }
+        // Git refuses unmerged work. Never force-delete a user branch.
+        git(&root, &["branch", "-d", "--", &branch]).map(|_| ())
+    }).await.map_err(|error| error.to_string())?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -894,6 +907,23 @@ mod tests {
         )
         .unwrap();
         Repo(dir)
+    }
+
+    #[test]
+    fn sidebar_branch_cleanup_refuses_checked_out_and_unmerged_work() {
+        let fixture = repo();
+        let root = fixture.0.join("repo");
+        let remove = |branch: &str| tauri::async_runtime::block_on(git_worktree_branch_remove(path_to_js(&root), branch.into()));
+        assert!(remove("main").unwrap_err().contains("still has a worktree"));
+        git(&root, &["branch", "merged"]).unwrap();
+        remove("merged").unwrap();
+        assert!(git(&root, &["rev-parse", "--verify", "refs/heads/merged"]).is_err());
+        git(&root, &["checkout", "-b", "unmerged"]).unwrap();
+        git(&root, &["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "retained"]).unwrap();
+        git(&root, &["checkout", "main"]).unwrap();
+        assert!(remove("unmerged").is_err());
+        assert!(git(&root, &["rev-parse", "--verify", "refs/heads/unmerged"]).is_ok());
+        assert!(remove("--force").is_err());
     }
 
     #[test]

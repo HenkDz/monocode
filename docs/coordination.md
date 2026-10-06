@@ -91,3 +91,33 @@ These are real sidebar/card components rendered in an isolated browser harness w
 | Review card | [Screenshot](../target/manager-polish-dark-card.png) | [Screenshot](../target/manager-polish-light-card.png) |
 
 Latest local executable: `target/manager-verified-preview/monocode-polished.exe`, using the existing isolated `com.monocode.desktop.manager-review-verified` profile. The installed app is not replaced.
+
+## Round 3: recovery and worktree review (2026-10-06)
+
+Previous polish and the colored diff/check chips were checkpointed locally in `8d2cf70`. This round preserves the standalone Manager navigation and does not change the sidebar Resume action.
+
+1. **Worker recovery.** Manager can cancel a running worker, confirm it stopped, then call `reassign` with the same task ID, an available harness/model and a reason (`quota`, `unavailable`, `configuration`, `stuck`, `failed`). This creates a fresh session without mutating the old provider session. The task scope, dependencies, retained worktree/branch, commits and old conversation remain; uncertain external effects must be inspected first. Repeated request IDs return the same receipt, and late results from the previous dispatch cannot settle the replacement. Busy checkouts and already-started dependents block replacement. New assignments with omitted harness/model use the Manager's current selection, not an earlier worker's choice. There is currently no separate per-project worker-model setting.
+   - Operational worker failures go to Manager, not directly to human notifications. Only explicit Manager questions/approvals require human attention. Scope/product decisions, destructive/irreversible authority and safety refusals still escalate. Provider switching must never bypass a safety refusal. The manager classifies recovery reasons; this is not a semantic safety-refusal detector or an enforcement sandbox.
+2. **Two-way navigation.** The branch and Go to worktree button open the producing worker session through normal workspace navigation; its harness/model is displayed. PR ready on a worktree opens Manager and scrolls to that task's card, including repeated requests for the same card.
+3. **Worktree menu.** New session offers installed harnesses; Open in reuses editor detection, folder reveal and terminal code. Give to Manager asks for a task and submits the named retained checkout. Open PR uses the known open PR; Create PR opens an explicit title/base/description form and requires clean, already-published commits. It never silently pushes. Removal reuses the existing confirmation and session-preserving lifecycle; primary checkouts are not removable here. Optional local branch cleanup uses Git's `-d`, never force deletion. Unmerged branches are retained. Partial cleanup reports that the worktree was removed and retries only branch cleanup, not deletion again. Remote branches are untouched.
+4. **Checkout-specific counts.** Addition/deletion counts use each worktree's checkout, not the project aggregate. The project row shows only a subtle change dot. Metadata sits below the title within the same worktree row so narrow sidebars retain readable names.
+5. **Single-session rows.** Exactly one session opens directly from its worktree row without repeating the title. Multiple sessions retain their expandable list. Existing orchestration controls remain available even when their lead is the only session; their Resume behavior is unchanged.
+6. **Review queue.** Manager expands into its owned worktrees, ordered blocked/needs decision, ready, then active work. User-created worktrees remain separate with independent pagination. A confirmed matching merged PR for the accepted dispatch changes the card to Merged with Remove worktree and puts the checkout in collapsed Done. A previous merged PR cannot hide a newer correction dispatch. Next cycles ready cards; Alt+Shift+N does the same while focus is in the cards, without intercepting correction typing. The chat status strip links running work, explicit user questions and ready cards. Per-project Active only hides idle/detached/merged rows, but retains focused or attention-needing work so navigation and user work do not disappear.
+
+### Round 3 verification and screenshots
+
+- Full frontend suite: **4,314 passed, 13 skipped** (405 passing files). Coverage includes provider replacement/idempotency/late callbacks, exact accepted-dispatch merge state, two-way card navigation, Next, queue sorting/filtering, per-checkout counts, single-session selection, primary protection, and partial removal recovery.
+- Native: **12 worktree tests and 6 CLI tests passed**. This includes real temporary Git repositories proving checked-out and unmerged branches survive cleanup. Native-library clippy with warnings denied passes.
+- TypeScript, production frontend and native debug builds pass. Existing production chunk-size/CSS-highlight warnings remain.
+- Screenshots below use real components in a clearly labelled isolated fixture. The recovery screenshot runs the actual Orchestrator against an in-memory host and verifies a Codex-to-Claude replacement; no provider request, live PR, or remote write is implied. The fixture includes 102 idle worktrees. Sources: `target/round3-preview.tsx`, `target/round3-screenshots.mjs`.
+
+| Item | Screenshot |
+| --- | --- |
+| 1. Retained, idempotent worker recovery | [Recovery](../target/manager-round3-1-recovery.png) |
+| 2. PR cards and worker links; colored diffs/checks | [Cards](../target/manager-round3-2-review-cards.png) |
+| 3. Worktree context menu | [Menu](../target/manager-round3-3-worktree-menu.png), [Open in](../target/manager-round3-3-open-in.png), [Agent picker](../target/manager-round3-3-agent-picker.png) |
+| 4. Per-worktree counts | [Counts](../target/manager-round3-4-worktree-counts.png) |
+| 5. Single-session worktree selection | [Single session](../target/manager-round3-5-single-session.png) |
+| 6. Manager queue, merged card and collapsed Done | [Queue](../target/manager-round3-6-queue-merged.png), [Active only](../target/manager-round3-6-active-only.png), [Light theme](../target/manager-round3-6-light.png) |
+
+Packaged deliverable: `target/manager-verified-preview/monocode-round3-final.exe` (same isolated preview identifier). Built, not relaunched over the user's active preview. Installed-app sessions were not changed. Local commits only; no push, PR publication, merge, deployment or phone notification was performed in this round.

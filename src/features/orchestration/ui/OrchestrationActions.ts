@@ -33,6 +33,10 @@ export const OrchestrationActions = createContext<{
   confirm(leadId: string, blockId: string): Promise<void>;
   retry(leadId: string, blockId: string): void;
   open(sessionId: string): void;
+  openWorker?(sessionId: string): void;
+  openManagerCard?(leadId: string, taskId: string): void;
+  reviewTarget?: { taskId: string; revision: number };
+  removeManagerWorktree?(project: string, path: string): Promise<void>;
   /** Open every worker of a run as tabs beside the lead, not sidebar rows. */
   openAgents?(workers: OrchestrationWorkerDetail[]): void;
 } | null>(null);

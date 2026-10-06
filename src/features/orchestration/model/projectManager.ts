@@ -7,6 +7,31 @@ import { prStatusKey } from "../../source-control/hooks/usePrStatus";
 const PREFIX = "project-manager-";
 export const isProjectManager = (id: string) => id.startsWith(PREFIX);
 
+export function managerTaskMerged(
+  task: OrchestrationTask,
+  pr?: GitPr | null,
+): boolean {
+  return !!(
+    task.status === "completed" &&
+    task.accepted &&
+    task.lastDispatchId &&
+    task.acceptedDispatchId === task.lastDispatchId &&
+    task.prUrl &&
+    pr?.url === task.prUrl &&
+    pr.state === "merged"
+  );
+}
+
+export function managerQueueRank(
+  task: OrchestrationTask,
+  pr?: GitPr | null,
+): number {
+  if (managerTaskMerged(task, pr) || task.status === "cancelled") return 3;
+  if (["blocked", "failed", "interrupted"].includes(task.status)) return 0;
+  if (managerPrReady(task, pr)) return 1;
+  return 2;
+}
+
 export function managerPrReady(
   task: OrchestrationTask,
   pr?: GitPr | null,
@@ -69,19 +94,15 @@ export function managerAttention(
   }
   for (const run of runs.filter((r) => r.projectManager)) {
     for (const task of run.tasks) {
-      const blocked = ["blocked", "failed", "interrupted"].includes(
-        task.status,
-      );
-      if (blocked || managerPrReady(task, taskPrStatus(task, statuses)))
+      // Worker problems go to Manager; only its explicit escalation needs a human.
+      if (managerPrReady(task, taskPrStatus(task, statuses)))
         items.push({
           key: `${run.leadId}:${task.id}`,
           id: run.leadId,
           notificationId: `${task.lastDispatchId ?? task.id}:${task.status}`,
           project: run.cwd,
-          kind: blocked ? "decision" : "ready",
-          question: blocked
-            ? `${task.title}: ${task.error || task.status}`
-            : task.title,
+          kind: "ready",
+          question: task.title,
         });
     }
   }

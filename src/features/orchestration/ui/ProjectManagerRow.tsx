@@ -1,4 +1,5 @@
 import { useState, useSyncExternalStore } from "react";
+import { ChevronDown, ChevronRight } from "../../../shared/ui/icons";
 import { ManagerAvatar } from "./ManagerAvatar";
 import { orchestrator, orchestrationPathKey } from "../model/orchestration";
 import type { ManagerAttention } from "../model/projectManager";
@@ -11,6 +12,8 @@ export function ProjectManagerRow({
   running = false,
   enabled = true,
   selected = false,
+  expanded,
+  onToggle,
 }: {
   project: string;
   onOpen(project: string): Promise<void>;
@@ -18,6 +21,8 @@ export function ProjectManagerRow({
   running?: boolean;
   enabled?: boolean;
   selected?: boolean;
+  expanded?: boolean;
+  onToggle?: () => void;
 }) {
   const [opening, setOpening] = useState(false);
   const [error, setError] = useState<string>();
@@ -52,7 +57,22 @@ export function ProjectManagerRow({
           ? "Running"
           : undefined;
   return (
-    <div className="ml-5 mb-0.5">
+    <div className="relative mb-0.5">
+      {onToggle && (
+        <button
+          type="button"
+          aria-label="Toggle Manager queue"
+          aria-expanded={expanded}
+          onClick={onToggle}
+          className="absolute left-1 top-2 z-10 grid size-4 place-items-center rounded text-content/50 hover:text-content focus-visible:outline-accent"
+        >
+          {expanded ? (
+            <ChevronDown className="size-3" />
+          ) : (
+            <ChevronRight className="size-3" />
+          )}
+        </button>
+      )}
       <button
         type="button"
         disabled={opening}

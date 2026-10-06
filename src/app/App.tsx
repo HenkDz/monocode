@@ -96,6 +96,7 @@ import {
   setWorktreeFocus,
 } from "../features/source-control/model/worktreeFocus";
 import { ProjectWorktrees } from "../features/source-control/ui/ProjectWorktrees";
+import { DeleteWorktreeDialog } from "../features/source-control/ui/DeleteWorktreeDialog";
 import { summarizeOrchestration } from "../features/orchestration/model/orchestrationSummary";
 import {
   assertWorktreeFilesClosed,
@@ -9052,6 +9053,8 @@ function Workspace({
                 ));
         if (!workspace) throw new Error("Worker worktree could not be prepared.");
         const checkoutCwd = workspace.checkoutCwd;
+        if (run.projectManager && sessionsRef.current.some(session => session.id !== task.sessionId && session.busy && sameProjectPath(sessionWorkCwd(session), checkoutCwd)))
+          throw new Error("The retained worktree is in use. Stop that session before replacing its worker.");
         const scratchDir = await invoke<string>("control_attach_worker", {
           leadId: run.leadId,
           sessionId: task.sessionId,
@@ -9699,9 +9702,22 @@ function Workspace({
     },
     [],
   );
+  const [reviewTarget, setReviewTarget] = useState<{ taskId: string; revision: number }>();
+  const [managerRemoval, setManagerRemoval] = useState<{ project: string; tree: Worktree }>();
   const orchestrationActions = useMemo(
     () => ({
       open: onOpenApprovalSession,
+      openWorker: (id: string) => { void onSelectHistorySession(id); },
+      openManagerCard: (id: string, taskId: string) => {
+        setReviewTarget(current => ({ taskId, revision: (current?.revision ?? 0) + 1 }));
+        void onSelectHistorySession(id);
+      },
+      reviewTarget,
+      removeManagerWorktree: async (project: string, path: string) => {
+        const tree = (await listWorktrees(project)).worktrees.find(tree => sameProjectPath(tree.path, path));
+        if (!tree || tree.isMain || tree.locked) throw new Error("This worktree cannot be removed.");
+        setManagerRemoval({ project, tree });
+      },
       openAgents: queueWorkerPanes,
       update: (
         leadId: string,
@@ -9794,6 +9810,8 @@ function Workspace({
     [
       onOpenApprovalSession,
       queueWorkerPanes,
+      onSelectHistorySession,
+      reviewTarget,
       onSubmit,
       updateOrchestrationCard,
     ],
@@ -11002,6 +11020,10 @@ function Workspace({
         >
           {compactTitleBar ? workspaceTitleBar : null}
           <div className="flex min-h-0 min-w-0 flex-1">
+            {managerRemoval && <DeleteWorktreeDialog cwd={managerRemoval.project} tree={managerRemoval.tree} sessionCount={worktreeSessionIds(managerRemoval.tree, sessions).length} allowDeleteSessions={false}
+              onRemove={(cwd, path, force) => onRemoveWorktree(cwd, path, force, true)}
+              onDeleteBranch={() => invoke<void>("git_worktree_branch_remove", { cwd: managerRemoval.project, branch: managerRemoval.tree.branch })}
+              onClose={() => setManagerRemoval(undefined)} onDeleted={() => setManagerRemoval(undefined)} />}
             <Sidebar
               cwd={sidebarCwd}
               panelSide={workspacePanelSide}
@@ -11084,8 +11106,18 @@ function Workspace({
               onSelectAgent={onSelectLiveAgent}
               onSelectProject={onSelectProject}
               renderProjectWorktrees={(project, enabled) => (
-                <><ProjectManagerRow project={project} enabled={enabled} selected={!chromeSurfaceOpen && managerActive && sameProjectPath(active.cwd, project)} onOpen={onOpenProjectManager} attention={managerQuestions} running={sessions.some(s => isProjectManager(s.id) && sameProjectPath(s.cwd, project) && s.busy)} />
                 <ProjectWorktrees
+                  key={project}
+                  renderManager={(expanded, onToggle) => <ProjectManagerRow project={project} enabled={enabled} selected={!chromeSurfaceOpen && managerActive && sameProjectPath(active.cwd, project)} onOpen={onOpenProjectManager} attention={managerQuestions} running={sessions.some(s => isProjectManager(s.id) && sameProjectPath(s.cwd, project) && s.busy)} expanded={expanded} onToggle={onToggle} />}
+                  onRemove={onRemoveWorktree}
+                  onOpenTerminal={onOpenTerminal}
+                  onGiveToManager={async (project, tree, goal) => {
+                    await onOpenProjectManager(project);
+                    const root = await invoke<string>("project_root", { project });
+                    const id = await projectManagerId(root);
+                    if (sessionsRef.current.find(s => s.id === id)?.busy) throw new Error("Manager is busy. Wait for this turn to finish before handing over a worktree.");
+                    onSubmit(id, `${goal}\n\nUse this existing worktree for the assignment (checkout): ${JSON.stringify(tree.path)}. Preserve its existing changes.`, []);
+                  }}
                   project={project}
                   currentProject={sidebarCwd}
                   enabled={enabled}
@@ -11109,7 +11141,6 @@ function Workspace({
                   onNewSession={onNewWorktreeSession}
                   onSelectSession={onSelectHistorySession}
                 />
-                </>
               )}
               onNewWorktree={setCreatingWorktreeProject}
               onOpenProject={pickProject}

@@ -1,6 +1,6 @@
 import { ChevronDown, GripVertical, X } from "../../../shared/ui/icons";
 import { isProjectManager } from "../../orchestration/model/projectManager";
-import { ProjectManagerReview } from "../../orchestration/ui/ProjectManagerReview";
+import { ProjectManagerReview, ProjectManagerStatus } from "../../orchestration/ui/ProjectManagerReview";
 import {
   memo,
   useCallback,
@@ -761,6 +761,10 @@ const LocalSessionPane = memo(function LocalSessionPane({
         </div>
       ) : null}
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+        {isProjectManager(session.id) && orchestrationRuns.find(run => run.leadId === session.id) ? <ProjectManagerStatus run={orchestrationRuns.find(run => run.leadId === session.id)!} needsUser={!!session.pendingQuestion} onDecision={() => {
+          const question = transcriptScope.current?.parentElement?.querySelector<HTMLElement>("[data-question-form]");
+          question?.scrollIntoView({ block: "center" }); question?.querySelector<HTMLElement>("button, input, textarea")?.focus();
+        }} /> : null}
         <div
           ref={transcriptScope}
           className="@container relative min-h-0 flex-1"

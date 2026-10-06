@@ -43,6 +43,10 @@ Actions, with the JSON object each one takes:
             Send a stopped worker another turn within its existing scope; it
             keeps its session, checkout and history.
   retry     {"taskId":"...","text":"...","files":["src/feature"]}
+  reassign  {"taskId":"...","harness":"<id>","model":"<id>","reason":"quota|unavailable|configuration|stuck|failed"}
+            Project Manager only. Cancel a running worker first and confirm it stopped.
+            Retains task scope, dependencies and checkout; creates a fresh worker session.
+            Never use for a safety refusal. Omitted harness/model use the Manager's current choice.
             Retry a stopped worker with corrected project-relative write
             scopes. Use this only when the additional files are required.
   cancel    {"taskId":"..."}
@@ -82,8 +86,8 @@ MonoCode sets MONOCODE_CONTROL_ENDPOINT and MONOCODE_CONTROL_TOKEN for the lead
 agent's process only. They are already in your environment; never print them.
 "#;
 
-const ACTIONS: [&str; 12] = [
-    "list", "delegate", "get", "steer", "message", "retry", "cancel", "wait", "review", "finish",
+const ACTIONS: [&str; 13] = [
+    "list", "delegate", "get", "steer", "message", "retry", "reassign", "cancel", "wait", "review", "finish",
     "respond", "answer",
 ];
 const APP_ACTIONS: [&str; 13] = [

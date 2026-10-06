@@ -132,6 +132,38 @@ describe("worker assignment prompts", () => {
 });
 
 describe("local orchestration", () => {
+  it("defaults to the current Manager model and reassigns stopped workers without losing scope or checkout", async () => {
+    const f = setup();
+    f.lead.harness = "codex";
+    f.lead.model = "codex:test";
+    f.lead.busy = false;
+    await f.manager.start("lead", ["codex"], 2, undefined, true);
+    f.lead.busy = true;
+    await f.call("delegate", { title: "Recover", prompt: "Original scope", files: ["src"] });
+    await vi.waitFor(() => expect(f.tasks()[0].status).toBe("running"));
+    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledTimes(1));
+    const original = f.tasks()[0];
+    expect(original.model).toBe(f.lead.model);
+    await expect(f.call("reassign", { taskId: original.id, reason: "quota" })).rejects.toThrow("Cancel");
+    await f.call("cancel", { taskId: original.id });
+    await expect(f.call("reassign", { taskId: original.id, reason: "safety" })).rejects.toThrow("Safety refusals");
+    const input = { taskId: original.id, reason: "configuration" };
+    const result = await f.call("reassign", input, "replace-once");
+    expect(await f.call("reassign", input, "replace-once")).toEqual(result);
+    await vi.waitFor(() => expect(f.tasks()[0].status).toBe("running"));
+    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledTimes(2));
+    const replacement = f.tasks()[0];
+    expect(replacement.sessionId).not.toBe(original.sessionId);
+    expect(replacement.workspace).toEqual(original.workspace);
+    expect(replacement.files).toEqual(original.files);
+    expect(replacement.prompt).toBe(original.prompt);
+    expect(f.sessions.some(s => s.id === original.sessionId)).toBe(true);
+    expect(f.host.cleanupWorker).not.toHaveBeenCalled();
+    expect(f.host.submit).toHaveBeenLastCalledWith(replacement.sessionId, expect.stringContaining("Original scope"), expect.any(Function));
+    f.completions.get(original.sessionId)!({ status: "completed", text: "Late old result" });
+    expect(f.tasks()[0].status).toBe("running");
+  });
+
   it("runs independent project goals concurrently, retains reviewed PR worktrees and preserves receipts", async () => {
     const f = setup();
     f.lead.busy = false;

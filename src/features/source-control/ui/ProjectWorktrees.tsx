@@ -1,6 +1,42 @@
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import {
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
+import { OrchestrationActions } from "../../orchestration/ui/OrchestrationActions";
+import { invoke } from "@tauri-apps/api/core";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import {
+  HARNESSES,
+  HARNESS_TITLE,
+  type HarnessId,
+} from "../../sessions/model/session";
+import { isHarnessAvailable } from "../../../integrations/harness/core/availability";
+import {
+  listExternalEditors,
+  openInExternalEditor,
+  type ExternalEditor,
+} from "../../../platform/tauri/fs";
+import { DeleteWorktreeDialog } from "./DeleteWorktreeDialog";
+import { Modal } from "../../../shared/ui/Modal";
+import { prStatusKey } from "../hooks/usePrStatus";
+import { useProjectDiffStats } from "../hooks/useProjectDiffStats";
+import {
+  gitDiffIndex,
+  gitPrCreate,
+  gitPrStatus,
+  notifyGitChanged,
+} from "../../../platform/tauri/fs";
 import { orchestrator } from "../../orchestration/model/orchestration";
-import { isProjectManager, managerWorktreeStatus } from "../../orchestration/model/projectManager";
+import {
+  isProjectManager,
+  managerWorktreeStatus,
+  managerQueueRank,
+  taskPrStatus,
+} from "../../orchestration/model/projectManager";
 import type { SessionSummary } from "../../sessions/data/sessionStore";
 import type { LiveAgent } from "../../sessions/model/liveAgents";
 import { sessionDisplayTitle } from "../../sessions/model/session";
@@ -40,6 +76,19 @@ const SESSION_LIMIT = 5;
 const WORKTREE_PAGE = 5;
 
 type Props = {
+  renderManager?: (expanded: boolean, onToggle: () => void) => ReactNode;
+  onRemove?: (
+    cwd: string,
+    path: string,
+    force: boolean,
+    keepSessions: boolean,
+  ) => Promise<void>;
+  onOpenTerminal?: (path: string) => void;
+  onGiveToManager?: (
+    project: string,
+    tree: Worktree,
+    goal: string,
+  ) => Promise<void>;
   project: string;
   currentProject: string;
   enabled: boolean;
@@ -66,6 +115,10 @@ type Props = {
 };
 
 export function ProjectWorktrees({
+  renderManager,
+  onRemove,
+  onOpenTerminal,
+  onGiveToManager,
   project,
   currentProject,
   enabled,
@@ -84,7 +137,12 @@ export function ProjectWorktrees({
   onSelectSession,
 }: Props) {
   const { data, error, refresh } = useProjectWorktrees(project, enabled);
-  const managerRuns = useSyncExternalStore(orchestrator.subscribe, orchestrator.snapshot, orchestrator.snapshot);
+  const orchestrationActions = useContext(OrchestrationActions);
+  const managerRuns = useSyncExternalStore(
+    orchestrator.subscribe,
+    orchestrator.snapshot,
+    orchestrator.snapshot,
+  );
   const prStatuses = usePrStatusCache();
   const focus = useWorktreeFocus(project);
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
@@ -99,6 +157,36 @@ export function ProjectWorktrees({
     trigger: HTMLElement;
   }>();
   const [actionError, setActionError] = useState<string>();
+  const [editors, setEditors] = useState<ExternalEditor[]>([]);
+  const [deleting, setDeleting] = useState<Worktree>();
+  const [giving, setGiving] = useState<Worktree>();
+  const [goal, setGoal] = useState("");
+  const [givingBusy, setGivingBusy] = useState(false);
+  const [creatingPr, setCreatingPr] = useState<Worktree>();
+  const [queueExpanded, setQueueExpanded] = useState(true);
+  const [doneExpanded, setDoneExpanded] = useState(false);
+  const filterKey = `monocode.activeWorktrees:${pathKey(project)}`;
+  const [activeOnly, setActiveOnly] = useState(() => {
+    try {
+      return localStorage.getItem(filterKey) === "1";
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    if (!menu) return;
+    let disposed = false;
+    void listExternalEditors()
+      .then((items) => {
+        if (!disposed) setEditors(items ?? []);
+      })
+      .catch(() => {
+        if (!disposed) setEditors([]);
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [menu]);
   const closeMenu = () => {
     menu?.trigger.focus();
     setMenu(undefined);
@@ -135,9 +223,11 @@ export function ProjectWorktrees({
   );
   const agents = new Map(liveAgents.map((agent) => [agent.id, agent]));
   const trees = data?.worktrees ?? [];
-  const focusedPath = !isProjectManager(activeSessionId ?? "") && sameProjectPath(project, currentProject)
-    ? (focus?.path ?? project)
-    : undefined;
+  const focusedPath =
+    !isProjectManager(activeSessionId ?? "") &&
+    sameProjectPath(project, currentProject)
+      ? (focus?.path ?? project)
+      : undefined;
   const needsAttention = (session: SessionSummary) =>
     session.id === activeSessionId ||
     approvalSessionIds.has(session.id) ||
@@ -149,14 +239,74 @@ export function ProjectWorktrees({
         (session.orchestration?.live &&
           ["running", "queued", "cancelling"].includes(task.status)),
     );
-  const listedTrees = trees.filter(
-    (tree, index) =>
-      index < worktreeLimit ||
+  const taskByPath = new Map(
+    managerRuns
+      .filter((run) => run.projectManager)
+      .flatMap((run) => run.tasks)
+      .filter((task) => task.workspace)
+      .map((task) => [pathKey(task.workspace!.checkoutCwd), task]),
+  );
+  const rank = (tree: Worktree) => {
+    const task = taskByPath.get(pathKey(tree.path));
+    return task ? managerQueueRank(task, taskPrStatus(task, prStatuses)) : 2;
+  };
+  const filteredTrees = trees.filter(
+    (tree) =>
+      !activeOnly ||
+      (groups.get(pathKey(tree.path)) ?? []).some(needsAttention) ||
+      (!!focusedPath && sameProjectPath(focusedPath, tree.path)) ||
+      (tree.branch &&
+        rank(tree) !== 3 &&
+        (!!tree.dirty ||
+          !!managerWorktreeStatus(
+            managerRuns,
+            tree.path,
+            approvalSessionIds,
+            prStatuses,
+          ))),
+  );
+  const regularPage = new Set(
+    filteredTrees
+      .filter((tree) => !renderManager || !taskByPath.has(pathKey(tree.path)))
+      .slice(0, worktreeLimit)
+      .map((tree) => pathKey(tree.path)),
+  );
+  const listedTrees = filteredTrees.filter(
+    (tree) =>
+      regularPage.has(pathKey(tree.path)) ||
+      (!!renderManager && taskByPath.has(pathKey(tree.path))) ||
       (!!focusedPath && sameProjectPath(focusedPath, tree.path)) ||
       !!managerWorktreeStatus(managerRuns, tree.path, undefined, prStatuses) ||
       (groups.get(pathKey(tree.path)) ?? []).some(needsAttention),
   );
-  const hiddenTrees = trees.length - listedTrees.length;
+  const hiddenTrees = filteredTrees.length - listedTrees.length;
+  const sections = renderManager
+    ? [
+        {
+          name: "Manager queue",
+          trees: listedTrees
+            .filter(
+              (tree) => taskByPath.has(pathKey(tree.path)) && rank(tree) !== 3,
+            )
+            .sort((a, b) => rank(a) - rank(b)),
+          expanded: queueExpanded,
+        },
+        {
+          name: "Done",
+          trees: listedTrees.filter(
+            (tree) => taskByPath.has(pathKey(tree.path)) && rank(tree) === 3,
+          ),
+          expanded: doneExpanded,
+        },
+        {
+          name: "Worktrees",
+          trees: listedTrees.filter(
+            (tree) => !taskByPath.has(pathKey(tree.path)),
+          ),
+          expanded: true,
+        },
+      ]
+    : [{ name: "Worktrees", trees: listedTrees, expanded: true }];
   const toggle = (path: string) =>
     setCollapsed((current) => {
       const next = new Set(current);
@@ -209,250 +359,380 @@ export function ProjectWorktrees({
           </button>
         </p>
       ) : null}
-      {listedTrees.map((tree) => {
-        const key = pathKey(tree.path);
-        const sessions = groups.get(key) ?? [];
-        const expanded = !collapsed.has(key);
-        const listed = showAll.has(key)
-          ? sessions
-          : sessions.filter(
-              (session, index) =>
-                index < SESSION_LIMIT || needsAttention(session),
-            );
-        const hiddenCount = sessions.length - listed.length;
-        const selected =
-          !!focusedPath &&
-          sameProjectPath(focus?.path ?? project, tree.path);
-        const managerTask = [...managerRuns].reverse().filter((run) => run.projectManager)
-          .flatMap((run) => [...run.tasks].reverse()).find((task) => task.workspace && pathKey(task.workspace.checkoutCwd) === key);
-        const label = managerTask?.title ?? tree.branch ?? `Detached ${tree.head.slice(0, 7)}`;
-        const workerStatus = managerWorktreeStatus(managerRuns, tree.path, approvalSessionIds, prStatuses);
-        const progress = tree.missing
-          ? "Missing folder"
-          : worktreeProgress(
-              sessions,
-              busySessionIds,
-              approvalSessionIds,
-              unseenFinishedIds,
-            );
-        const activeProgress =
-          tree.missing ||
-          sessions.some(
-            (session) =>
-              approvalSessionIds.has(session.id) ||
-              busySessionIds.has(session.id) ||
-              unseenFinishedIds.has(session.id),
-          );
-        return (
-          <div
-            key={key}
-            data-worktree={tree.path}
-            className={`my-1 rounded-md border border-transparent hover:border-content/15 hover:bg-content/5 focus-within:border-content/15 focus-within:bg-content/5 ${menu?.tree.path === tree.path ? "border-content/15 bg-content/5" : ""}`}
-          >
-            <div
-              className="group/worktree relative flex h-7 items-center gap-1 rounded-md px-1"
-              data-actions-open={menu?.tree.path === tree.path || undefined}
-              onContextMenu={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                const trigger =
-                  event.currentTarget.querySelector<HTMLButtonElement>(
-                    "[data-worktree-menu]",
-                  )!;
-                setMenu({ tree, x: event.clientX, y: event.clientY, trigger });
-              }}
-              onKeyDown={(event) => {
-                if (
-                  event.key !== "ContextMenu" &&
-                  !(event.shiftKey && event.key === "F10")
-                )
-                  return;
-                event.preventDefault();
-                event.stopPropagation();
-                const trigger = event.target as HTMLElement;
-                const rect = trigger.getBoundingClientRect();
-                setMenu({ tree, x: rect.left, y: rect.bottom, trigger });
-              }}
+      <label className="flex items-center justify-end gap-1 px-2 py-1 text-[11px] text-content/50">
+        <input
+          type="checkbox"
+          checked={activeOnly}
+          onChange={(event) => {
+            setActiveOnly(event.target.checked);
+            try {
+              localStorage.setItem(filterKey, event.target.checked ? "1" : "0");
+            } catch {
+              /* Session-only when storage is unavailable. */
+            }
+          }}
+        />
+        Active only
+      </label>
+      {sections.map((section) => (
+        <div
+          key={section.name}
+          role="group"
+          aria-label={section.name}
+          hidden={section.name === "Done" && !queueExpanded}
+        >
+          {section.name === "Manager queue" &&
+            renderManager?.(queueExpanded, () =>
+              setQueueExpanded(!queueExpanded),
+            )}
+          {section.name === "Done" && section.trees.length > 0 && (
+            <button
+              type="button"
+              aria-expanded={doneExpanded}
+              onClick={() => setDoneExpanded(!doneExpanded)}
+              className="ml-5 flex items-center gap-1 rounded px-2 py-1 text-[11px] text-content/50 hover:text-content"
             >
-              <button
-                type="button"
-                className="grid w-4 shrink-0 place-items-center text-content/40 hover:text-content focus-visible:outline-accent"
-                aria-expanded={expanded}
-                aria-label={`${expanded ? "Collapse" : "Expand"} sessions in ${label}`}
-                onClick={() => toggle(tree.path)}
-              >
-                {expanded ? (
-                  <ChevronDown className="size-3" />
-                ) : (
-                  <ChevronRight className="size-3" />
-                )}
-              </button>
-              <button
-                type="button"
-                disabled={tree.missing}
-                aria-current={selected ? "true" : undefined}
-                aria-label={`Open worktree ${label}`}
-                aria-busy={selected && switchPending}
-                title={`${tree.branch ?? "Detached"}\n${prettyCwd(tree.path)}\n${progress}${tree.dirty ? "\nUncommitted changes" : ""}`}
-                onClick={() => onSelectWorktree(project, tree)}
-                className={`flex h-full min-w-0 flex-1 items-center gap-2 text-left text-xs transition-[padding] duration-150 motion-reduce:transition-none group-hover/worktree:pr-14 group-focus-within/worktree:pr-14 group-data-[actions-open=true]/worktree:pr-14 [@media(hover:none)]:pr-14 disabled:opacity-40 ${selected ? "text-content" : "text-content/65"}`}
-              >
-                <WorktreePrIcon tree={tree} enabled={enabled} />
-                <span
-                  className={`min-w-0 truncate ${selected ? "font-medium" : ""}`}
-                >
-                  {label}
-                </span>
-                <span className="min-w-0 flex-1 truncate text-[11px] text-content/40">
-                  {tree.isMain ? "primary" : ""}
-                </span>
-                {workerStatus ? <span className="shrink-0 text-[11px] text-content/60">{workerStatus}</span> : activeProgress ? (
-                  <span
-                    className={`max-w-[110px] truncate text-[11px] ${sessions.some((session) => approvalSessionIds.has(session.id)) ? "text-amber-400" : "text-content/60"}`}
-                  >
-                    {progress}
-                  </span>
-                ) : !expanded && sessions.length ? (
-                  <span
-                    className="text-[11px] tabular-nums text-content/45"
-                    title={progress}
-                  >
-                    {sessions.length}
-                  </span>
-                ) : null}
-              </button>
-              <button
-                type="button"
-                className={`${worktreeAction} right-8`}
-                disabled={tree.missing}
-                aria-label={`New session in ${label}`}
-                title={`New session in ${label}`}
-                onClick={() => {
-                  setCollapsed((current) => {
-                    const next = new Set(current);
-                    next.delete(key);
-                    return next;
-                  });
-                  onNewSession(project, tree);
-                }}
-              >
-                <Plus className="size-3.5" />
-              </button>
-              <button
-                type="button"
-                data-worktree-menu
-                aria-label={`Actions for ${label}`}
-                aria-haspopup="menu"
-                aria-expanded={menu?.tree.path === tree.path}
-                className={`${worktreeAction} right-1`}
-                onClick={(event) => {
-                  const trigger = event.currentTarget;
-                  const rect = trigger.getBoundingClientRect();
-                  setMenu({ tree, x: rect.left, y: rect.bottom, trigger });
-                }}
-              >
-                <MoreHorizontal className="size-3.5" />
-              </button>
-            </div>
-            {expanded ? (
-              <div className="ml-7">
-                {listed.map((session) => {
-                  const waiting = approvalSessionIds.has(session.id);
-                  const busy = !waiting && busySessionIds.has(session.id);
-                  const done =
-                    !waiting && !busy && unseenFinishedIds.has(session.id);
-                  const status = waiting
-                    ? "Needs input"
-                    : busy
-                      ? "Working"
-                      : done
-                        ? "Done"
-                        : "Idle";
-                  const title = sessionDisplayTitle(
-                    session.title,
-                    session.harness,
+              {doneExpanded ? (
+                <ChevronDown className="size-3" />
+              ) : (
+                <ChevronRight className="size-3" />
+              )}
+              Done · {section.trees.length}
+            </button>
+          )}
+          <div
+            hidden={!section.expanded}
+            className={
+              section.name === "Worktrees"
+                ? ""
+                : "ml-2 border-l border-content/10 pl-1"
+            }
+          >
+            {section.trees.map((tree) => {
+              const key = pathKey(tree.path);
+              const sessions = groups.get(key) ?? [];
+              const expanded = sessions.length > 1 && !collapsed.has(key);
+              const listed = showAll.has(key)
+                ? sessions
+                : sessions.filter(
+                    (session, index) =>
+                      index < SESSION_LIMIT || needsAttention(session),
                   );
-                  const activity = agents.get(session.id)?.activity;
-                  return (
-                    <div key={session.id} data-worktree-session={session.id}>
+              const hiddenCount = sessions.length - listed.length;
+              const selected =
+                !!focusedPath &&
+                sameProjectPath(focus?.path ?? project, tree.path);
+              const managerTask = [...managerRuns]
+                .reverse()
+                .filter((run) => run.projectManager)
+                .flatMap((run) => [...run.tasks].reverse())
+                .find(
+                  (task) =>
+                    task.workspace &&
+                    pathKey(task.workspace.checkoutCwd) === key,
+                );
+              const label =
+                managerTask?.title ??
+                tree.branch ??
+                `Detached ${tree.head.slice(0, 7)}`;
+              const workerStatus = managerWorktreeStatus(
+                managerRuns,
+                tree.path,
+                approvalSessionIds,
+                prStatuses,
+              );
+              const progress = tree.missing
+                ? "Missing folder"
+                : worktreeProgress(
+                    sessions,
+                    busySessionIds,
+                    approvalSessionIds,
+                    unseenFinishedIds,
+                  );
+              const activeProgress =
+                tree.missing ||
+                sessions.some(
+                  (session) =>
+                    approvalSessionIds.has(session.id) ||
+                    busySessionIds.has(session.id) ||
+                    unseenFinishedIds.has(session.id),
+                );
+              return (
+                <div
+                  key={key}
+                  data-worktree={tree.path}
+                  className={`my-1 rounded-md border border-transparent hover:border-content/15 hover:bg-content/5 focus-within:border-content/15 focus-within:bg-content/5 ${sessions.length === 1 && sessions[0].id === activeSessionId ? "bg-selection" : ""} ${menu?.tree.path === tree.path ? "border-content/15 bg-content/5" : ""}`}
+                >
+                  <div
+                    className="group/worktree relative flex h-7 items-center gap-1 rounded-md px-1"
+                    data-actions-open={
+                      menu?.tree.path === tree.path || undefined
+                    }
+                    onContextMenu={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      const trigger =
+                        event.currentTarget.querySelector<HTMLButtonElement>(
+                          "[data-worktree-menu]",
+                        )!;
+                      setMenu({
+                        tree,
+                        x: event.clientX,
+                        y: event.clientY,
+                        trigger,
+                      });
+                    }}
+                    onKeyDown={(event) => {
+                      if (
+                        event.key !== "ContextMenu" &&
+                        !(event.shiftKey && event.key === "F10")
+                      )
+                        return;
+                      event.preventDefault();
+                      event.stopPropagation();
+                      const trigger = event.target as HTMLElement;
+                      const rect = trigger.getBoundingClientRect();
+                      setMenu({ tree, x: rect.left, y: rect.bottom, trigger });
+                    }}
+                  >
+                    {sessions.length > 1 ? (
                       <button
                         type="button"
-                        disabled={tree.missing}
-                        aria-label={`${title}, ${status}`}
-                        aria-current={
-                          session.id === activeSessionId ? "true" : undefined
-                        }
-                        title={
-                          activity
-                            ? `${title}\n${status}: ${activity}`
-                            : `${title}\n${status}`
-                        }
-                        onClick={() =>
-                          onSelectSession(session.id, { project, tree })
-                        }
-                        className={`flex min-h-7 w-full min-w-0 items-center gap-2 rounded-md px-2 py-1 text-left disabled:opacity-40 ${session.id === activeSessionId ? "bg-selection text-content" : "text-content/70 hover:bg-content/5"}`}
+                        className="grid w-4 shrink-0 place-items-center text-content/40 hover:text-content focus-visible:outline-accent"
+                        aria-expanded={expanded}
+                        aria-label={`${expanded ? "Collapse" : "Expand"} sessions in ${label}`}
+                        onClick={() => toggle(tree.path)}
                       >
-                        <HarnessIcon
-                          harness={session.harness}
-                          className="size-3 shrink-0 text-content/50"
-                        />
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate text-xs">
-                            {title}
-                          </span>
-                          {waiting || busy || done ? (
-                            <span
-                              className={`block truncate text-[11px] ${waiting ? "text-amber-400" : "text-content/60"}`}
-                            >
-                              {waiting ? status : activity || status}
-                            </span>
-                          ) : null}
-                        </span>
-                        {waiting ? (
-                          <CircleAlert className="mt-0.5 size-3 shrink-0 text-amber-400" />
-                        ) : busy ? (
-                          <Loader className="mt-0.5 size-3 shrink-0 animate-spin text-accent" />
-                        ) : done ? (
-                          <Check className="mt-0.5 size-3 shrink-0 text-emerald-400" />
-                        ) : null}
+                        {expanded ? (
+                          <ChevronDown className="size-3" />
+                        ) : (
+                          <ChevronRight className="size-3" />
+                        )}
                       </button>
-                      {session.orchestration?.tasks.length ? (
-                        <div className="px-2 pb-2">
-                          <OrchestrationSidebarAgents
-                            leadId={session.id}
-                            summary={session.orchestration}
-                          />
-                        </div>
+                    ) : (
+                      <span className="w-4 shrink-0" />
+                    )}
+                    <button
+                      type="button"
+                      disabled={tree.missing}
+                      aria-current={selected ? "true" : undefined}
+                      aria-label={`Open worktree ${label}`}
+                      aria-busy={selected && switchPending}
+                      title={`${tree.branch ?? "Detached"}\n${prettyCwd(tree.path)}\n${progress}${tree.dirty ? "\nUncommitted changes" : ""}`}
+                      onClick={() =>
+                        sessions.length === 1
+                          ? onSelectSession(sessions[0].id, { project, tree })
+                          : onSelectWorktree(project, tree)
+                      }
+                      className={`flex h-full min-w-0 flex-1 items-center gap-2 text-left text-xs transition-[padding] duration-150 motion-reduce:transition-none group-hover/worktree:pr-14 group-focus-within/worktree:pr-14 group-data-[actions-open=true]/worktree:pr-14 [@media(hover:none)]:pr-14 disabled:opacity-40 ${selected ? "text-content" : "text-content/65"}`}
+                    >
+                      <WorktreePrIcon tree={tree} enabled={enabled} />
+                      <span
+                        className={`min-w-0 truncate ${selected ? "font-medium" : ""}`}
+                      >
+                        {label}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-[11px] text-content/40">
+                        {tree.isMain ? "primary" : ""}
+                      </span>
+                      {!expanded && sessions.length > 1 ? (
+                        <span
+                          className="text-[11px] tabular-nums text-content/45"
+                          title={progress}
+                        >
+                          {sessions.length}
+                        </span>
+                      ) : null}
+                    </button>
+                    <button
+                      type="button"
+                      className={`${worktreeAction} right-8`}
+                      disabled={tree.missing}
+                      aria-label={`New session in ${label}`}
+                      title={`New session in ${label}`}
+                      onClick={() => {
+                        setCollapsed((current) => {
+                          const next = new Set(current);
+                          next.delete(key);
+                          return next;
+                        });
+                        onNewSession(project, tree);
+                      }}
+                    >
+                      <Plus className="size-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      data-worktree-menu
+                      aria-label={`Actions for ${label}`}
+                      aria-haspopup="menu"
+                      aria-expanded={menu?.tree.path === tree.path}
+                      className={`${worktreeAction} right-1`}
+                      onClick={(event) => {
+                        const trigger = event.currentTarget;
+                        const rect = trigger.getBoundingClientRect();
+                        setMenu({
+                          tree,
+                          x: rect.left,
+                          y: rect.bottom,
+                          trigger,
+                        });
+                      }}
+                    >
+                      <MoreHorizontal className="size-3.5" />
+                    </button>
+                  </div>
+                  <div className="ml-6 flex flex-wrap items-center gap-x-2 text-[11px] text-content/50 empty:hidden">
+                    <WorktreeDiffStat
+                      path={tree.path}
+                      enabled={enabled && !tree.missing}
+                    />
+                    {workerStatus === "PR ready" && managerTask ? (
+                      <button
+                        type="button"
+                        className="rounded px-1 py-0.5 text-emerald-600 dark:text-emerald-400 hover:bg-content/10 focus-visible:outline-accent"
+                        onClick={() => {
+                          const run = managerRuns.find((run) =>
+                            run.tasks.some(
+                              (task) => task.id === managerTask.id,
+                            ),
+                          );
+                          if (run)
+                            orchestrationActions?.openManagerCard?.(
+                              run.leadId,
+                              managerTask.id,
+                            );
+                        }}
+                      >
+                        PR ready
+                      </button>
+                    ) : (
+                      workerStatus || (activeProgress ? progress : null)
+                    )}
+                  </div>
+                  {expanded ? (
+                    <div className="ml-7">
+                      {listed.map((session) => {
+                        const waiting = approvalSessionIds.has(session.id);
+                        const busy = !waiting && busySessionIds.has(session.id);
+                        const done =
+                          !waiting &&
+                          !busy &&
+                          unseenFinishedIds.has(session.id);
+                        const status = waiting
+                          ? "Needs input"
+                          : busy
+                            ? "Working"
+                            : done
+                              ? "Done"
+                              : "Idle";
+                        const title = sessionDisplayTitle(
+                          session.title,
+                          session.harness,
+                        );
+                        const activity = agents.get(session.id)?.activity;
+                        return (
+                          <div
+                            key={session.id}
+                            data-worktree-session={session.id}
+                          >
+                            <button
+                              type="button"
+                              disabled={tree.missing}
+                              aria-label={`${title}, ${status}`}
+                              aria-current={
+                                session.id === activeSessionId
+                                  ? "true"
+                                  : undefined
+                              }
+                              title={
+                                activity
+                                  ? `${title}\n${status}: ${activity}`
+                                  : `${title}\n${status}`
+                              }
+                              onClick={() =>
+                                onSelectSession(session.id, { project, tree })
+                              }
+                              className={`flex min-h-7 w-full min-w-0 items-center gap-2 rounded-md px-2 py-1 text-left disabled:opacity-40 ${session.id === activeSessionId ? "bg-selection text-content" : "text-content/70 hover:bg-content/5"}`}
+                            >
+                              <HarnessIcon
+                                harness={session.harness}
+                                className="size-3 shrink-0 text-content/50"
+                              />
+                              <span className="min-w-0 flex-1">
+                                <span className="block truncate text-xs">
+                                  {title}
+                                </span>
+                                {waiting || busy || done ? (
+                                  <span
+                                    className={`block truncate text-[11px] ${waiting ? "text-amber-400" : "text-content/60"}`}
+                                  >
+                                    {waiting ? status : activity || status}
+                                  </span>
+                                ) : null}
+                              </span>
+                              {waiting ? (
+                                <CircleAlert className="mt-0.5 size-3 shrink-0 text-amber-400" />
+                              ) : busy ? (
+                                <Loader className="mt-0.5 size-3 shrink-0 animate-spin text-accent" />
+                              ) : done ? (
+                                <Check className="mt-0.5 size-3 shrink-0 text-emerald-400" />
+                              ) : null}
+                            </button>
+                            {session.orchestration?.tasks.length ? (
+                              <div className="px-2 pb-2">
+                                <OrchestrationSidebarAgents
+                                  leadId={session.id}
+                                  summary={session.orchestration}
+                                />
+                              </div>
+                            ) : null}
+                          </div>
+                        );
+                      })}
+                      {hiddenCount > 0 || showAll.has(key) ? (
+                        <button
+                          type="button"
+                          className="w-full rounded-md px-2 py-1 text-left text-[11px] text-content/50 hover:bg-content/5 hover:text-content"
+                          onClick={() =>
+                            setShowAll((current) => {
+                              const next = new Set(current);
+                              if (next.has(key)) next.delete(key);
+                              else next.add(key);
+                              return next;
+                            })
+                          }
+                        >
+                          {hiddenCount > 0
+                            ? `Show ${hiddenCount} more`
+                            : "Show less"}
+                        </button>
+                      ) : null}
+                      {!sessions.length && historyPending && !historyError ? (
+                        <p className="px-2 py-1 text-[11px] text-content/45">
+                          Loading sessions…
+                        </p>
                       ) : null}
                     </div>
-                  );
-                })}
-                {hiddenCount > 0 || showAll.has(key) ? (
-                  <button
-                    type="button"
-                    className="w-full rounded-md px-2 py-1 text-left text-[11px] text-content/50 hover:bg-content/5 hover:text-content"
-                    onClick={() =>
-                      setShowAll((current) => {
-                        const next = new Set(current);
-                        if (next.has(key)) next.delete(key);
-                        else next.add(key);
-                        return next;
-                      })
-                    }
-                  >
-                    {hiddenCount > 0 ? `Show ${hiddenCount} more` : "Show less"}
-                  </button>
-                ) : null}
-                {!sessions.length && historyPending && !historyError ? (
-                  <p className="px-2 py-1 text-[11px] text-content/45">
-                    Loading sessions…
-                  </p>
-                ) : null}
-              </div>
-            ) : null}
+                  ) : null}
+                  {sessions.length === 1 &&
+                  sessions[0].orchestration?.tasks.length ? (
+                    <div
+                      data-worktree-session={sessions[0].id}
+                      className="ml-7"
+                    >
+                      <OrchestrationSidebarAgents
+                        leadId={sessions[0].id}
+                        summary={sessions[0].orchestration}
+                      />
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
           </div>
-        );
-      })}
+        </div>
+      ))}
       {hiddenTrees > 0 || worktreeLimit > WORKTREE_PAGE ? (
         <div className="flex gap-1 px-1">
           {hiddenTrees > 0 ? (
@@ -499,16 +779,57 @@ export function ProjectWorktrees({
               id: "new",
               label: "New session",
               disabled: menu.tree.missing,
+              submenu: HARNESSES.filter(isHarnessAvailable).map((harness) => ({
+                kind: "item",
+                id: `new:${harness}`,
+                label: HARNESS_TITLE[harness],
+              })),
             },
             {
               kind: "item",
-              id: "reveal",
-              label: "Reveal folder",
+              id: "open-in",
+              label: "Open in",
               disabled: menu.tree.missing,
+              submenu: [
+                { kind: "item", id: "reveal", label: "Explorer" },
+                ...editors.map((editor) => ({
+                  kind: "item" as const,
+                  id: `editor:${editor.id}`,
+                  label: editor.name,
+                })),
+                {
+                  kind: "item",
+                  id: "terminal",
+                  label: "Terminal",
+                  disabled: !onOpenTerminal,
+                },
+              ],
+            },
+            {
+              kind: "item",
+              id: "manager",
+              label: "Give to Manager…",
+              disabled:
+                menu.tree.isMain || menu.tree.missing || !onGiveToManager,
             },
             { kind: "sep" },
-            { kind: "item", id: "copy-path", label: "Copy Path" },
-            { kind: "item", id: "copy-name", label: "Copy Worktree Name" },
+            {
+              kind: "item",
+              id: "pr",
+              label:
+                prStatuses.get(prStatusKey(menu.tree.path, menu.tree.branch))
+                  ?.state === "open"
+                  ? "Open PR"
+                  : "Create PR",
+              disabled: menu.tree.missing || !menu.tree.branch,
+            },
+            { kind: "item", id: "copy-path", label: "Copy path" },
+            {
+              kind: "item",
+              id: "copy-name",
+              label: "Copy branch",
+              disabled: !menu.tree.branch,
+            },
             { kind: "sep" },
             {
               kind: "item",
@@ -518,6 +839,18 @@ export function ProjectWorktrees({
                 : "Collapse sessions",
             },
             { kind: "item", id: "refresh", label: "Refresh worktrees" },
+            { kind: "sep" },
+            {
+              kind: "item",
+              id: "remove",
+              label: "Remove worktree…",
+              danger: true,
+              disabled:
+                menu.tree.isMain ||
+                menu.tree.locked ||
+                !menu.tree.branch ||
+                !onRemove,
+            },
           ]}
           onClose={closeMenu}
           onPick={(id) => {
@@ -526,24 +859,257 @@ export function ProjectWorktrees({
             setActionError(undefined);
             void (async () => {
               if (id === "open") onSelectWorktree(project, tree);
-              else if (id === "new") {
+              else if (id.startsWith("new:")) {
                 setCollapsed((current) => {
                   const next = new Set(current);
                   next.delete(pathKey(tree.path));
                   return next;
                 });
-                onNewSession(project, tree);
+                onNewSession(project, tree, {
+                  harness: id.slice(4) as HarnessId,
+                });
               } else if (id === "reveal") await revealPath(tree.path);
-              else if (id === "copy-path") await copyText(tree.path);
-              else if (id === "copy-name")
-                await copyText(projectName(tree.path));
+              else if (id.startsWith("editor:"))
+                await openInExternalEditor(id.slice(7), tree.path);
+              else if (id === "terminal") onOpenTerminal?.(tree.path);
+              else if (id === "manager") {
+                setGoal("");
+                setGiving(tree);
+              } else if (id === "remove" && !tree.isMain) setDeleting(tree);
+              else if (id === "pr") {
+                const pr = prStatuses.get(prStatusKey(tree.path, tree.branch));
+                if (pr?.state === "open") await openUrl(pr.url);
+                else setCreatingPr(tree);
+              } else if (id === "copy-path") await copyText(tree.path);
+              else if (id === "copy-name") await copyText(tree.branch ?? "");
               else if (id === "toggle") toggle(tree.path);
               else if (id === "refresh") await refresh();
             })().catch((error) => setActionError(String(error)));
           }}
         />
       ) : null}
+      {deleting && onRemove && (
+        <DeleteWorktreeDialog
+          cwd={project}
+          tree={deleting}
+          sessionCount={(groups.get(pathKey(deleting.path)) ?? []).length}
+          allowDeleteSessions={false}
+          onRemove={(cwd, path, force) => onRemove(cwd, path, force, true)}
+          onDeleteBranch={() =>
+            invoke<void>("git_worktree_branch_remove", {
+              cwd: project,
+              branch: deleting.branch,
+            })
+          }
+          onClose={() => {
+            setDeleting(undefined);
+            void refresh();
+          }}
+          onDeleted={() => {
+            setDeleting(undefined);
+            void refresh();
+          }}
+        />
+      )}
+      {creatingPr && (
+        <WorktreeCreatePr
+          tree={creatingPr}
+          onClose={() => setCreatingPr(undefined)}
+        />
+      )}
+      {giving && (
+        <Modal
+          title="Give to Manager"
+          size="sm"
+          onClose={() => {
+            if (!givingBusy) setGiving(undefined);
+          }}
+        >
+          <form
+            className="space-y-3 p-4 text-sm"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (!goal.trim() || givingBusy) return;
+              setGivingBusy(true);
+              setActionError(undefined);
+              void onGiveToManager?.(project, giving, goal.trim())
+                .then(() => setGiving(undefined))
+                .catch((reason) => setActionError(String(reason)))
+                .finally(() => setGivingBusy(false));
+            }}
+          >
+            <p className="text-content/60">
+              Use existing worktree: {giving.branch}
+            </p>
+            <label className="block">
+              Task
+              <textarea
+                autoFocus
+                required
+                value={goal}
+                disabled={givingBusy}
+                onChange={(event) => setGoal(event.target.value)}
+                className="mt-2 w-full rounded border border-stroke bg-transparent p-2"
+              />
+            </label>
+            {actionError && (
+              <p role="alert" className="text-red-400">
+                {actionError}
+              </p>
+            )}
+            <button
+              type="submit"
+              disabled={givingBusy || !goal.trim()}
+              className="rounded bg-content/10 px-3 py-2 disabled:opacity-40"
+            >
+              {givingBusy ? "Sending…" : "Send to Manager"}
+            </button>
+          </form>
+        </Modal>
+      )}
     </div>
+  );
+}
+
+function WorktreeCreatePr({
+  tree,
+  onClose,
+}: {
+  tree: Worktree;
+  onClose: () => void;
+}) {
+  const [title, setTitle] = useState(tree.branch ?? "");
+  const [body, setBody] = useState("");
+  const [base, setBase] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  useEffect(() => {
+    let disposed = false;
+    void gitDiffIndex(tree.path)
+      .then((index) => {
+        if (!disposed) setBase(index.defaultBranch ?? "");
+      })
+      .catch((reason) => {
+        if (!disposed) setError(String(reason));
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [tree.path]);
+  return (
+    <Modal
+      title="Create pull request"
+      size="sm"
+      onClose={() => {
+        if (!busy) onClose();
+      }}
+    >
+      <form
+        className="space-y-3 p-4 text-sm"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (busy) return;
+          setBusy(true);
+          setError(undefined);
+          void (async () => {
+            const existing = await gitPrStatus(tree.path);
+            if (existing?.state === "open") {
+              await openUrl(existing.url);
+              onClose();
+              return;
+            }
+            const index = await gitDiffIndex(tree.path);
+            if (
+              index.branch !== tree.branch ||
+              !index.headPushed ||
+              index.files.length ||
+              index.branch === base.trim()
+            )
+              throw new Error(
+                "Commit and publish this branch first, keep the checkout clean, and choose a different base. Nothing was pushed or created.",
+              );
+            const url = await gitPrCreate(
+              tree.path,
+              title.trim(),
+              body,
+              base.trim(),
+              tree.branch!,
+            );
+            notifyGitChanged();
+            await openUrl(url);
+            onClose();
+          })()
+            .catch((reason) => setError(String(reason)))
+            .finally(() => setBusy(false));
+        }}
+      >
+        <p className="text-content/60">
+          {tree.branch} · Creates a PR from already-published commits. Does not
+          push or merge.
+        </p>
+        <label className="block">
+          Title
+          <input
+            required
+            value={title}
+            disabled={busy}
+            onChange={(e) => setTitle(e.target.value)}
+            className="mt-1 w-full rounded border border-stroke bg-transparent p-2"
+          />
+        </label>
+        <label className="block">
+          Base branch
+          <input
+            required
+            value={base}
+            disabled={busy}
+            onChange={(e) => setBase(e.target.value)}
+            className="mt-1 w-full rounded border border-stroke bg-transparent p-2"
+          />
+        </label>
+        <label className="block">
+          Description
+          <textarea
+            value={body}
+            disabled={busy}
+            onChange={(e) => setBody(e.target.value)}
+            className="mt-1 w-full rounded border border-stroke bg-transparent p-2"
+          />
+        </label>
+        {error && (
+          <p role="alert" className="text-red-400">
+            {error}
+          </p>
+        )}
+        <button
+          type="submit"
+          disabled={busy || !title.trim() || !base.trim()}
+          className="rounded bg-content/10 px-3 py-2 disabled:opacity-40"
+        >
+          {busy ? "Creating…" : "Create PR"}
+        </button>
+      </form>
+    </Modal>
+  );
+}
+
+function WorktreeDiffStat({
+  path,
+  enabled,
+}: {
+  path: string;
+  enabled: boolean;
+}) {
+  const stats = useProjectDiffStats(path, enabled);
+  if (!stats || (!stats.additions && !stats.deletions)) return null;
+  return (
+    <span
+      aria-label={`${stats.additions} additions, ${stats.deletions} deletions`}
+      className="flex shrink-0 gap-1 text-[11px] tabular-nums"
+    >
+      <span className="text-diff-add-fg">+{stats.additions}</span>
+      <span className="text-diff-del-fg">−{stats.deletions}</span>
+    </span>
   );
 }
 

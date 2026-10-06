@@ -17,8 +17,13 @@ import {
 import { savePinnedProjects } from "../../projects/model/recents";
 import { pathKey } from "../../../shared/lib/paths";
 import { copyText } from "../../../platform/tauri/clipboard";
+import { useProjectDiffStats } from "../hooks/useProjectDiffStats";
 import { OrchestrationWorkers } from "../../orchestration/ui/OrchestrationActions";
-import { orchestrator, type OrchestrationRun } from "../../orchestration/model/orchestration";
+import { OrchestrationActions } from "../../orchestration/ui/OrchestrationActions";
+import {
+  orchestrator,
+  type OrchestrationRun,
+} from "../../orchestration/model/orchestration";
 import {
   gitPrStatus,
   revealPath,
@@ -33,6 +38,9 @@ vi.mock("../../../platform/tauri/fs", async (importOriginal) => ({
 }));
 vi.mock("../../../platform/tauri/clipboard", () => ({
   copyText: vi.fn(async () => {}),
+}));
+vi.mock("../../../integrations/harness/core/availability", () => ({
+  isHarnessAvailable: () => true,
 }));
 
 vi.mock("../hooks/useProjectWorktrees", () => ({
@@ -147,6 +155,131 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
+it("groups Manager worktrees by attention, folds merged work, and links PR status back to its card", async () => {
+  const worktrees = [
+    tree("/repo", "main", true),
+    ...["running", "ready", "blocked", "merged"].map((id) =>
+      tree(`/queue/${id}`, id),
+    ),
+  ];
+  const tasks = worktrees.slice(1).map((tree) => ({
+    id: tree.branch,
+    title: tree.branch,
+    sessionId: `s-${tree.branch}`,
+    status:
+      tree.branch === "running"
+        ? "running"
+        : tree.branch === "blocked"
+          ? "failed"
+          : "completed",
+    accepted: ["ready", "merged"].includes(tree.branch!),
+    lastDispatchId: "d",
+    acceptedDispatchId: "d",
+    prUrl: `https://example.com/${tree.branch}`,
+    workspace: { checkoutCwd: tree.path, branch: tree.branch },
+  }));
+  const runs = [
+    { leadId: "manager", projectManager: true, tasks },
+  ] as OrchestrationRun[];
+  const snapshot = vi.spyOn(orchestrator, "snapshot").mockReturnValue(runs);
+  vi.mocked(useProjectWorktrees).mockReturnValue({
+    data: { worktrees, defaultRoot: "/queue" },
+    refresh,
+  });
+  vi.mocked(gitPrStatus).mockImplementation(async (path) => ({
+    number: 1,
+    title: path,
+    url: `https://example.com/${path.split("/").at(-1)}`,
+    state: path.endsWith("merged") ? "merged" : "open",
+  }));
+  props.renderManager = (expanded, toggle) =>
+    createElement(
+      "button",
+      { onClick: toggle, "aria-expanded": expanded },
+      "Manager",
+    );
+  const openManagerCard = vi.fn();
+  try {
+    await act(async () =>
+      root.render(
+        createElement(
+          OrchestrationActions.Provider,
+          {
+            value: {
+              open: vi.fn(),
+              update: vi.fn(),
+              retry: vi.fn(),
+              confirm: vi.fn(),
+              openManagerCard,
+            },
+          },
+          createElement(ProjectWorktrees, props),
+        ),
+      ),
+    );
+    const queue = container.querySelector('[aria-label="Manager queue"]')!;
+    expect(
+      [...queue.querySelectorAll("[data-worktree]")].map((row) =>
+        row.getAttribute("data-worktree"),
+      ),
+    ).toEqual(["/queue/blocked", "/queue/ready", "/queue/running"]);
+    await act(async () =>
+      [...queue.querySelectorAll("button")]
+        .find((button) => button.textContent === "PR ready")!
+        .click(),
+    );
+    expect(openManagerCard).toHaveBeenCalledWith("manager", "ready");
+    const done = container.querySelector('[aria-label="Done"]')!;
+    expect(
+      done.querySelector('[data-worktree="/queue/merged"]')?.parentElement
+        ?.hidden,
+    ).toBe(true);
+    await act(async () =>
+      (done.querySelector("button") as HTMLButtonElement).click(),
+    );
+    expect(
+      done.querySelector('[data-worktree="/queue/merged"]')?.parentElement
+        ?.hidden,
+    ).toBe(false);
+    await act(async () =>
+      (
+        container.querySelector('input[type="checkbox"]') as HTMLInputElement
+      ).click(),
+    );
+    expect(
+      container.querySelector('[data-worktree="/queue/merged"]'),
+    ).toBeNull();
+    expect(
+      container.querySelector('[data-worktree="/queue/running"]'),
+    ).not.toBeNull();
+    expect(localStorage.getItem("monocode.activeWorktrees:/repo")).toBe("1");
+  } finally {
+    snapshot.mockRestore();
+  }
+});
+
+it("uses each checkout for line counts and guards primary removal", async () => {
+  vi.mocked(useProjectDiffStats).mockImplementation((path) =>
+    path === "/trees/a" ? { files: 1, additions: 12, deletions: 3 } : null,
+  );
+  props.onRemove = vi.fn(async () => {});
+  try {
+    await render();
+    expect(
+      container.querySelector('[data-worktree="/trees/a"]')?.textContent,
+    ).toContain("+12−3");
+    expect(
+      container.querySelector('[data-worktree="/trees/b"]')?.textContent,
+    ).not.toContain("+12");
+    await act(async () => button("Actions for main").click());
+    expect(menuItem("Remove worktree…").disabled).toBe(true);
+    expect(menuItem("Give to Manager…").disabled).toBe(true);
+    expect(props.onRemove).not.toHaveBeenCalled();
+  } finally {
+    vi.mocked(useProjectDiffStats).mockReturnValue(null);
+  }
+});
+
 it("shows main and all worktrees with blank and live sessions even in an inactive project", async () => {
   await render();
   const a = container.querySelector('[data-worktree="/trees/a"]')!;
@@ -156,12 +289,12 @@ it("shows main and all worktrees with blank and live sessions even in an inactiv
   expect(b.textContent).toContain("1 needs input");
   expect(
     container.querySelector('[data-worktree="/repo"]')?.textContent,
-  ).toContain("main-chat");
+  ).toContain("main");
   expect(props.onLoadHistory).toHaveBeenCalledExactlyOnceWith("/repo");
   act(() => button("Collapse sessions in feature-a").click());
   expect(a.textContent).toContain("1 working");
   expect(a.textContent).not.toContain("a-chat");
-  expect(b.textContent).toContain("b-chat");
+  expect(b.textContent).toContain("feature-b");
   props = {
     ...props,
     busySessionIds: new Set(),
@@ -191,7 +324,12 @@ it("uses quiet single-line idle rows, with selection only on the active session"
   expect(button("Open worktree main").parentElement!.className).not.toContain(
     "bg-selection",
   );
-  expect(button("main-chat, Idle").className).toContain("bg-selection");
+  expect(
+    container.querySelector('[data-worktree="/repo"]')?.className,
+  ).toContain("bg-selection");
+  expect(
+    container.querySelector('[data-worktree-session="main-chat"]'),
+  ).toBeNull();
   expect(container.querySelectorAll('[class*="border-l"]')).toHaveLength(0);
   act(() => button("Collapse sessions in feature-a").click());
   expect(button("Open worktree feature-a").textContent).toContain("2");
@@ -213,13 +351,17 @@ it("overlays worktree actions and only reserves title space when they are reveal
     const action = button(label);
     expect(action.parentElement).toBe(row);
     expect(action.className.split(" ")).toContain("absolute");
-    expect(action.className).toContain("group-focus-within/worktree:opacity-100");
+    expect(action.className).toContain(
+      "group-focus-within/worktree:opacity-100",
+    );
     expect(action.tabIndex).toBe(0);
   }
   expect(row.hasAttribute("data-actions-open")).toBe(false);
   act(() => button("Actions for feature-a").click());
   expect(row.getAttribute("data-actions-open")).toBe("true");
-  expect(open.className).toContain("group-data-[actions-open=true]/worktree:pr-14");
+  expect(open.className).toContain(
+    "group-data-[actions-open=true]/worktree:pr-14",
+  );
   act(() =>
     document.dispatchEvent(
       new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
@@ -232,10 +374,10 @@ it("overlays worktree actions and only reserves title space when they are reveal
 it("switches and creates repeated sessions in the explicit checkout without mutating its bindings", async () => {
   await render();
   act(() => button("Open worktree feature-b").click());
-  expect(props.onSelectWorktree).toHaveBeenCalledWith(
-    "/repo",
-    expect.objectContaining({ path: "/trees/b" }),
-  );
+  expect(props.onSelectSession).toHaveBeenCalledWith("b-chat", {
+    project: "/repo",
+    tree: expect.objectContaining({ path: "/trees/b" }),
+  });
   expect(worktreeFocus("/repo")).toBeUndefined();
   act(() => button("Collapse sessions in feature-a").click());
   act(() => {
@@ -275,8 +417,14 @@ it("disables missing worktrees and keeps the last list visible when refreshing f
 
 it("does not render the removed Worktrees header or duplicate creation action", async () => {
   await render();
-  expect(container.querySelector('[aria-label="New worktree in repo"]')).toBeNull();
-  expect([...container.querySelectorAll("span")].some((item) => item.textContent === "Worktrees")).toBe(false);
+  expect(
+    container.querySelector('[aria-label="New worktree in repo"]'),
+  ).toBeNull();
+  expect(
+    [...container.querySelectorAll("span")].some(
+      (item) => item.textContent === "Worktrees",
+    ),
+  ).toBe(false);
 });
 
 it("suspends history loading with a hidden rail and retries failed history without losing live sessions", async () => {
@@ -335,7 +483,9 @@ it("renders collapsible worktrees under pinned, grouped, and ordinary projects w
   act(() => button("Create new worktree in ordinary").click());
   expect(onNewWorktree).toHaveBeenCalledWith("/ordinary");
   expect(onSelectProject).not.toHaveBeenCalled();
-  expect(container.querySelector(".project-reorder-item[data-selected]")?.className).not.toContain("bg-selection");
+  expect(
+    container.querySelector(".project-reorder-item[data-selected]")?.className,
+  ).not.toContain("bg-selection");
   act(() => button("Collapse worktrees in ordinary").click());
   expect(
     container.querySelector('[data-project-trees="/ordinary"]'),
@@ -467,19 +617,55 @@ it("refreshes PR status on focus and Git changes and retains known status on fai
   expect(label()).toBe("Closed PR #42: Sidebar fix");
 });
 
-it.each(["merged", "closed"])("stops force-listing an accepted manager worktree when its PR is %s", async state => {
-  const worktrees = [tree("/repo", "main", true), ...Array.from({ length: 8 }, (_, i) => tree(`/terminal-pr/${state}/${i}`, `branch-${i}`))];
-  vi.mocked(useProjectWorktrees).mockReturnValue({ data: { worktrees, defaultRoot: "/terminal-pr" }, refresh });
-  const last = worktrees.at(-1)!;
-  const runs = [{ leadId: "project-manager-test", projectManager: true, tasks: [{ id: "t", status: "completed", accepted: true, lastDispatchId: "d", acceptedDispatchId: "d", prUrl: "https://example.com/42", workspace: { checkoutCwd: last.path, branch: last.branch } }] }] as OrchestrationRun[];
-  const snapshot = vi.spyOn(orchestrator, "snapshot").mockReturnValue(runs);
-  vi.mocked(gitPrStatus).mockResolvedValue({ number: 42, title: "Docs", url: "https://example.com/42", state });
-  try {
-    await render();
-    expect(container.querySelectorAll("[data-worktree]")).toHaveLength(5);
-    expect(container.querySelector(`[data-worktree="${last.path}"]`)).toBeNull();
-  } finally { snapshot.mockRestore(); }
-});
+it.each(["merged", "closed"])(
+  "stops force-listing an accepted manager worktree when its PR is %s",
+  async (state) => {
+    const worktrees = [
+      tree("/repo", "main", true),
+      ...Array.from({ length: 8 }, (_, i) =>
+        tree(`/terminal-pr/${state}/${i}`, `branch-${i}`),
+      ),
+    ];
+    vi.mocked(useProjectWorktrees).mockReturnValue({
+      data: { worktrees, defaultRoot: "/terminal-pr" },
+      refresh,
+    });
+    const last = worktrees.at(-1)!;
+    const runs = [
+      {
+        leadId: "project-manager-test",
+        projectManager: true,
+        tasks: [
+          {
+            id: "t",
+            status: "completed",
+            accepted: true,
+            lastDispatchId: "d",
+            acceptedDispatchId: "d",
+            prUrl: "https://example.com/42",
+            workspace: { checkoutCwd: last.path, branch: last.branch },
+          },
+        ],
+      },
+    ] as OrchestrationRun[];
+    const snapshot = vi.spyOn(orchestrator, "snapshot").mockReturnValue(runs);
+    vi.mocked(gitPrStatus).mockResolvedValue({
+      number: 42,
+      title: "Docs",
+      url: "https://example.com/42",
+      state,
+    });
+    try {
+      await render();
+      expect(container.querySelectorAll("[data-worktree]")).toHaveLength(5);
+      expect(
+        container.querySelector(`[data-worktree="${last.path}"]`),
+      ).toBeNull();
+    } finally {
+      snapshot.mockRestore();
+    }
+  },
+);
 
 it("does not query PRs for hidden, detached, or missing worktrees", async () => {
   props.enabled = false;
@@ -597,7 +783,7 @@ it("opens the clicked worktree's menu without switching, copies its path, and re
     document.querySelector('[role="menu"]')?.getAttribute("aria-label"),
   ).toBe("Worktree actions");
   expect(props.onSelectWorktree).not.toHaveBeenCalled();
-  await act(async () => menuItem("Copy Path").click());
+  await act(async () => menuItem("Copy path").click());
   expect(copyText).toHaveBeenLastCalledWith("/trees/b");
   expect(document.querySelector('[role="menu"]')).toBeNull();
   expect(document.activeElement).toBe(button("Actions for feature-b"));
@@ -612,9 +798,11 @@ it("opens the clicked worktree's menu without switching, copies its path, and re
     ),
   );
   await act(async () => menuItem("New session").click());
+  await act(async () => menuItem("Codex").click());
   expect(props.onNewSession).toHaveBeenLastCalledWith(
     "/repo",
     expect.objectContaining({ path: "/trees/a" }),
+    { harness: "codex" },
   );
   expect(document.activeElement).toBe(button("Open worktree feature-a"));
 });
@@ -622,8 +810,8 @@ it("opens the clicked worktree's menu without switching, copies its path, and re
 it("supports menu actions and exposes failures without navigating to a different checkout", async () => {
   await render();
   act(() => button("Actions for feature-a").click());
-  await act(async () => menuItem("Copy Worktree Name").click());
-  expect(copyText).toHaveBeenLastCalledWith("a");
+  await act(async () => menuItem("Copy branch").click());
+  expect(copyText).toHaveBeenLastCalledWith("feature-a");
   act(() => button("Actions for feature-a").click());
   await act(async () => menuItem("Open worktree").click());
   expect(props.onSelectWorktree).toHaveBeenLastCalledWith(
@@ -640,7 +828,8 @@ it("supports menu actions and exposes failures without navigating to a different
   expect(refresh).toHaveBeenCalledOnce();
   vi.mocked(revealPath).mockRejectedValueOnce(new Error("Folder unavailable"));
   act(() => button("Actions for feature-b").click());
-  await act(async () => menuItem("Reveal folder").click());
+  await act(async () => menuItem("Open in").click());
+  await act(async () => menuItem("Explorer").click());
   expect(revealPath).toHaveBeenLastCalledWith("/trees/b");
   expect(container.querySelector('[role="alert"]')?.textContent).toContain(
     "Folder unavailable",
@@ -657,9 +846,9 @@ it("keeps missing worktree copy actions available but disables checkout actions"
   });
   await render();
   act(() => button("Actions for gone").click());
-  for (const label of ["Open worktree", "New session", "Reveal folder"])
+  for (const label of ["Open worktree", "New session", "Open in"])
     expect(menuItem(label).disabled).toBe(true);
-  expect(menuItem("Copy Path").disabled).toBe(false);
+  expect(menuItem("Copy path").disabled).toBe(false);
   act(() =>
     document
       .querySelector('[role="menu"]')!
@@ -731,6 +920,8 @@ it("shows saved and live subagents under their lead inside the hover/focus workt
     expect.objectContaining({ sessionId: "worker", leadId: "lead" }),
   );
   expect(props.onSelectSession).not.toHaveBeenCalled();
-  act(() => button("Collapse sessions in feature-a").click());
-  expect(card.querySelector("[data-orchestration-agent]")).toBeNull();
+  expect(
+    container.querySelector('[aria-label="Collapse sessions in feature-a"]'),
+  ).toBeNull();
+  expect(card.querySelector("[data-orchestration-agent]")).not.toBeNull();
 });

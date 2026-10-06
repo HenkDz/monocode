@@ -396,6 +396,7 @@ pub fn run() {
             worktrees::git_worktree_remove,
             worktrees::git_orchestration_worktree_remove,
             worktrees::git_orchestration_branch_remove,
+            worktrees::git_worktree_branch_remove,
             fs::create_path,
             fs::rename_path,
             fs::delete_path,

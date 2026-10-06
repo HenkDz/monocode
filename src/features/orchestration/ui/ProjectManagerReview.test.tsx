@@ -6,6 +6,15 @@ import { ProjectManagerReview } from "./ProjectManagerReview";
 import { orchestrator } from "../model/orchestration";
 import type { OrchestrationRun } from "../model/orchestrationState";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { OrchestrationActions } from "./OrchestrationActions";
+import { prStatusKey } from "../../source-control/hooks/usePrStatus";
+const statusView = vi.hoisted(() => ({ statuses: new Map() }));
+vi.mock("../../source-control/hooks/usePrStatus", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../source-control/hooks/usePrStatus")
+  >()),
+  usePrStatusCache: () => statusView.statuses,
+}));
 const checkView = vi.hoisted(() => ({
   loading: false,
   error: null as string | null,
@@ -25,6 +34,99 @@ vi.mock("../../inbox/hooks/useGithubPrChecks", () => ({
   useGithubPrChecks: () => checkView,
 }));
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+
+it("navigates to workers, cycles ready cards and offers removal only after matching merged evidence", async () => {
+  const tasks = ["one", "two"].map((id) => ({
+    id,
+    title: id,
+    sessionId: `worker-${id}`,
+    harness: "codex",
+    model: "codex:test",
+    status: "completed",
+    accepted: true,
+    lastDispatchId: id,
+    acceptedDispatchId: id,
+    prUrl: `https://github.com/example/repo/pull/${id === "one" ? 1 : 2}`,
+    workspace: { checkoutCwd: `/${id}`, branch: id },
+  }));
+  const run = { cwd: "/repo", leadId: "manager", tasks } as OrchestrationRun;
+  const openWorker = vi.fn();
+  const remove = vi.fn(async () => {});
+  const actions = {
+    openWorker,
+    removeManagerWorktree: remove,
+    open: vi.fn(),
+    update: vi.fn(),
+    confirm: vi.fn(),
+    retry: vi.fn(),
+  };
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  const scroll = vi
+    .spyOn(HTMLElement.prototype, "scrollIntoView")
+    .mockImplementation(() => {});
+  const render = () =>
+    act(async () =>
+      root.render(
+        <OrchestrationActions.Provider value={actions}>
+          <ProjectManagerReview run={run} />
+        </OrchestrationActions.Provider>,
+      ),
+    );
+  try {
+    await render();
+    await act(async () =>
+      (
+        host.querySelector('[aria-label="Go to worktree"]') as HTMLButtonElement
+      ).click(),
+    );
+    expect(openWorker).toHaveBeenCalledWith("worker-one");
+    expect(host.textContent).toContain("Codex · codex:test");
+    await act(async () =>
+      [...host.querySelectorAll("button")]
+        .find((button) => button.textContent === "Next")!
+        .click(),
+    );
+    expect(document.activeElement?.id).toBe("manager-review-two");
+    await act(async () =>
+      document.activeElement?.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "N",
+          altKey: true,
+          shiftKey: true,
+          bubbles: true,
+        }),
+      ),
+    );
+    expect(document.activeElement?.id).toBe("manager-review-one");
+    statusView.statuses = new Map([
+      [prStatusKey("/one", "one"), { url: tasks[0].prUrl, state: "merged" }],
+    ]);
+    await render();
+    const merged = host.querySelector('[aria-label="Merged: one"]')!;
+    expect(merged.textContent).not.toContain("Send back");
+    await act(async () =>
+      [...merged.querySelectorAll("button")]
+        .find((button) => button.textContent === "Remove worktree")!
+        .click(),
+    );
+    expect(remove).toHaveBeenCalledWith("/repo", "/one");
+    statusView.statuses = new Map([
+      [
+        prStatusKey("/one", "one"),
+        { url: "https://other/pr", state: "merged" },
+      ],
+    ]);
+    await render();
+    expect(host.querySelector('[aria-label="Merged: one"]')).toBeNull();
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+    scroll.mockRestore();
+    statusView.statuses = new Map();
+  }
+});
 
 it("opens the PR and worker diff and resumes to send corrections without losing a failed draft", async () => {
   const run = {

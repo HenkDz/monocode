@@ -1051,7 +1051,7 @@ function ProjectCard({
           ) : null}
           {hasChanges ? (
             <span className="project-card-stats shrink-0 group-hover:hidden group-has-[:focus-visible]:hidden">
-              <ProjectDiffStat additions={additions} deletions={deletions} />
+              <span aria-label="Uncommitted changes" title="Uncommitted changes" className="block size-1.5 rounded-full bg-content/40" />
             </span>
           ) : null}
           {remote ? (
@@ -1156,37 +1156,6 @@ function isBusyPath(path: string, busy: Set<string>): boolean {
     if (sameProjectPath(path, other)) return true;
   }
   return false;
-}
-
-function ProjectDiffStat({
-  additions,
-  deletions,
-}: {
-  additions: number;
-  deletions: number;
-}) {
-  if (additions <= 0 && deletions <= 0) return null;
-
-  const label = [
-    additions > 0 ? `+${formatInteger(additions)}` : "",
-    deletions > 0 ? `-${formatInteger(deletions)}` : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
-
-  return (
-    <span
-      title={`${label} uncommitted`}
-      className="flex shrink-0 items-center gap-1 font-sans text-[11px] font-semibold tabular-nums"
-    >
-      {additions > 0 ? (
-        <span className="text-diff-add-fg">+{formatInteger(additions)}</span>
-      ) : null}
-      {deletions > 0 ? (
-        <span className="text-diff-del-fg">-{formatInteger(deletions)}</span>
-      ) : null}
-    </span>
-  );
 }
 
 function projectCardTitle(

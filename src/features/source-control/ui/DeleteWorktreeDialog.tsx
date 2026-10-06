@@ -47,6 +47,8 @@ export function DeleteWorktreeDialog({
   onRemove,
   onClose,
   onDeleted,
+  onDeleteBranch,
+  allowDeleteSessions = true,
 }: {
   cwd: string;
   tree: Worktree;
@@ -59,9 +61,13 @@ export function DeleteWorktreeDialog({
   ) => Promise<void>;
   onClose: () => void;
   onDeleted: () => void;
+  onDeleteBranch?: () => Promise<void>;
+  allowDeleteSessions?: boolean;
 }) {
   const [busy, setBusy] = useState(false);
   const [deleteSessions, setDeleteSessions] = useState(false);
+  const [deleteBranch, setDeleteBranch] = useState(false);
+  const [removed, setRemoved] = useState(false);
   const [error, setError] = useState<string>();
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -71,7 +77,11 @@ export function DeleteWorktreeDialog({
     try {
       // Confirmation covers the complete destructive action, including any
       // local changes that appeared after the last status refresh.
-      await onRemove(cwd, tree.path, true, deleteSessions);
+      if (!removed) {
+        await onRemove(cwd, tree.path, true, deleteSessions);
+        setRemoved(true);
+      }
+      if (deleteBranch) await onDeleteBranch?.();
       onDeleted();
     } catch (e) {
       setError(String(e));
@@ -132,7 +142,9 @@ export function DeleteWorktreeDialog({
                   <span className="font-medium text-content">
                     {tree.branch}
                   </span>{" "}
-                  branch and its commits are kept.
+                  {deleteBranch
+                    ? "local branch will also be deleted if Git confirms it is merged. Remote branches are untouched."
+                    : "branch and its commits are kept."}
                 </>
               ) : (
                 "The branch is kept."
@@ -141,12 +153,32 @@ export function DeleteWorktreeDialog({
             {!!tree.unpushed && (
               <Consequence icon={CloudUpload}>
                 {tree.unpushed} commit{tree.unpushed === 1 ? " is" : "s are"}{" "}
-                not on a remote. They stay on the branch.
+                not on a remote.{" "}
+                {deleteBranch
+                  ? "Branch deletion may lose access to these commits."
+                  : "They stay on the branch."}
               </Consequence>
             )}
           </ul>
         </div>
-        {sessionCount > 0 && (
+        {onDeleteBranch && tree.branch && (
+          <label className="flex gap-2">
+            <input
+              type="checkbox"
+              checked={deleteBranch}
+              disabled={busy || removed}
+              onChange={(e) => setDeleteBranch(e.target.checked)}
+            />
+            Also delete local branch (merged only)
+          </label>
+        )}
+        {removed && (
+          <p role="status">
+            Worktree removed; branch cleanup failed. Retry cleanup or close this
+            dialog. Sessions were retained.
+          </p>
+        )}
+        {sessionCount > 0 && allowDeleteSessions && (
           <div className="flex items-center justify-between gap-3 rounded-lg border border-content/10 p-3">
             <span
               id="delete-worktree-sessions-label"

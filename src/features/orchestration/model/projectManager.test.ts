@@ -4,10 +4,29 @@ import {
   projectManagerId,
   managerWorktreeStatus,
   managerAttention,
+  managerTaskMerged,
 } from "./projectManager";
 import type { OrchestrationRun } from "./orchestrationState";
 import { newSession } from "../../sessions/model/session";
 import { prStatusKey } from "../../source-control/hooks/usePrStatus";
+
+it("does not hide a new correction dispatch just because its previous PR merged", () => {
+  const task = {
+    status: "completed",
+    accepted: true,
+    lastDispatchId: "d",
+    acceptedDispatchId: "d",
+    prUrl: "https://example.com/pr",
+  } as OrchestrationRun["tasks"][number];
+  const pr = { number: 1, title: "PR", state: "merged", url: task.prUrl! };
+  expect(managerTaskMerged(task, pr)).toBe(true);
+  expect(
+    managerTaskMerged({ ...task, status: "running", accepted: false }, pr),
+  ).toBe(false);
+  expect(managerTaskMerged({ ...task, lastDispatchId: "correction" }, pr)).toBe(
+    false,
+  );
+});
 
 it("uses one durable project identity across Windows spellings", async () => {
   const id = await projectManagerId("C:/Projects/My Repo");
@@ -42,7 +61,7 @@ it("shares unread, blocked and ready attention and clears terminal PRs", () => {
     managerAttention([session], [run], new Set([session.id]), new Map()).map(
       (i) => i.kind,
     ),
-  ).toEqual(["reply", "ready", "decision"]);
+  ).toEqual(["reply", "ready"]);
   for (const state of ["merged", "closed"]) {
     const statuses = new Map([
       [
@@ -57,7 +76,7 @@ it("shares unread, blocked and ready attention and clears terminal PRs", () => {
       managerAttention([session], [run], new Set(), statuses).map(
         (i) => i.kind,
       ),
-    ).toEqual(["decision"]);
+    ).toEqual([]);
   }
   expect(
     managerAttention(

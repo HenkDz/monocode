@@ -73,7 +73,7 @@ export function monoSessionCompletionMessage(
 }
 
 /** One app turn containing the full group's outcomes, including failed launches. */
-function completionMessage(
+export function completionMessage(
   id: string,
   results: MonoSessionCompletionResult[],
 ): QueuedMessage {

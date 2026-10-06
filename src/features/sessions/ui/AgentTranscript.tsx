@@ -1,4 +1,5 @@
 import { ManagerAvatar } from "../../orchestration/ui/ManagerAvatar";
+import { MonoChatCard } from "../../monos/ui/MonoChatCard";
 import {
   ArrowUp,
   Check,
@@ -1917,6 +1918,8 @@ const TranscriptBlock = memo(function TranscriptBlock({
 }) {
   if (block.role === "user") {
     return (
+      <>
+      {block.monoSource && <div className="mb-1 flex items-center justify-end gap-2 text-xs text-content/60"><PixelMascot name={block.monoSource.mascot} color={block.monoSource.color} still className="size-5" />From {block.monoSource.name}</div>}
       <UserMessageBlock
         block={block}
         layout={layout}
@@ -1933,8 +1936,11 @@ const TranscriptBlock = memo(function TranscriptBlock({
         onSendDraft={onSendDraft}
         onRemoveDraft={onRemoveDraft}
       />
+      </>
     );
   }
+
+  if (block.monoCard && block.monoCardOwner) return <MonoChatCard card={block.monoCard} monoId={block.monoCardOwner} blockId={block.id} />;
 
   if (block.role === "image") {
     return block.image ? <GeneratedImage image={block.image} /> : null;

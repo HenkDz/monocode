@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { parseCard } from "../../monos/model/monoCards";
 import { isMonoSession } from "../../monos/model/mono";
 import {
   isWeakToolTitle,
@@ -208,6 +209,11 @@ function sanitizeMonoSessionCompletion(
 }
 
 /** Pending images need their bytes until delivery; object URLs never survive reloads. */
+function sanitizeMonoSource(value: QueuedMessage["monoSource"]): QueuedMessage["monoSource"] {
+  if (!value || [value.id, value.name, value.mascot, value.color, value.goalId].some(field => typeof field !== "string" || !field || field.length > 256)) return undefined;
+  return { id: value.id, name: value.name, mascot: value.mascot, color: value.color, goalId: value.goalId };
+}
+
 function sanitizeQueuedMessages(value: unknown): QueuedMessage[] {
   if (!Array.isArray(value)) return [];
   const seen = new Set<string>();
@@ -278,6 +284,7 @@ function sanitizeQueuedMessages(value: unknown): QueuedMessage[] {
           ? { blockId: message.blockId }
           : {}),
         text: message.text,
+        monoSource: sanitizeMonoSource(message.monoSource),
         attachments,
         ...(noteCard ? { noteCard } : {}),
         ...(handoffCard ? { handoffCard } : {}),
@@ -934,6 +941,10 @@ function sanitizeBlock(
   // the user's own after a reload.
   if (block.role === "user" && block.internal) next.internal = true;
   const completion = sanitizeMonoSessionCompletion(block.monoSessionCompletion);
+  next.monoSource = sanitizeMonoSource(block.monoSource);
+  if (block.monoCard && typeof block.monoCardOwner === "string" && block.monoCardOwner.length <= 256) {
+    try { next.monoCard = parseCard(block.monoCard); next.monoCardOwner = block.monoCardOwner; } catch { /* Ignore malformed saved cards. */ }
+  }
   if (block.role === "user" && block.internal && completion)
     next.monoSessionCompletion = completion;
   const turnMetrics = sanitizeTurnMetrics(block.turnMetrics);

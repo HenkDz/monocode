@@ -209,7 +209,7 @@ function strings(value: unknown, label: string, max = 64): string[] {
  */
 const FIELDS = new Map<string, string[]>([
   ["list", []],
-  ["delegate", ["title", "harness", "model", "prompt", "files", "dependsOn", "checkout"]],
+  ["delegate", ["title", "harness", "model", "prompt", "files", "dependsOn", "checkout", "monoGoalId"]],
   ["get", ["taskId"]],
   ["message", ["taskId", "text"]],
   ["retry", ["taskId", "text", "files"]],
@@ -1202,6 +1202,7 @@ export class Orchestrator {
         );
         const created: OrchestrationTask = {
           id: crypto.randomUUID(),
+          ...(input.monoGoalId == null ? {} : { monoGoalId: text(input.monoGoalId, "monoGoalId", 128) }),
           sessionId: crypto.randomUUID(),
           title,
           prompt,

@@ -90,7 +90,13 @@ const ACTIONS: [&str; 13] = [
     "list", "delegate", "get", "steer", "message", "retry", "reassign", "cancel", "wait", "review", "finish",
     "respond", "answer",
 ];
-const APP_ACTIONS: [&str; 26] = [
+const APP_ACTIONS: [&str; 32] = [
+    "projects.list",
+    "projects.status",
+    "goals.assign",
+    "goals.message",
+    "goals.cancel",
+    "prs.ready",
     "models.list",
     "sessions.list",
     "sessions.read",

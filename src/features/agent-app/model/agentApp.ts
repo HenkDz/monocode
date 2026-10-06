@@ -1,4 +1,5 @@
 import { isHarnessAvailable } from "../../../integrations/harness/core/availability";
+import { MANAGER_ACTIONS } from "../../monos/model/monoManagerGoals";
 import { looksLikeProject } from "../../projects/model/recents";
 import {
   mergeModelSettings,
@@ -81,6 +82,7 @@ export type AppSessionPlacement = {
 };
 
 export type AgentAppHost = {
+  managerAction?(source: Session, requestId: string, action: string, input: Record<string, unknown>): Promise<unknown>;
   start(
     launch: QuickLaunch,
     id: string,
@@ -146,6 +148,12 @@ export type AgentAppHost = {
 };
 
 const FIELDS = new Map<string, readonly string[]>([
+  ["projects.list", []],
+  ["projects.status", ["projectId", "before"]],
+  ["goals.assign", ["projectId", "goal"]],
+  ["goals.message", ["goalId", "text"]],
+  ["goals.cancel", ["goalId"]],
+  ["prs.ready", []],
   ["models.list", []],
   ["sessions.list", ["project"]],
   ["sessions.read", ["sessionId", "before", "limit", "maxChars", "project"]],
@@ -774,6 +782,10 @@ export async function handleAgentApp(
   host: AgentAppHost,
 ): Promise<unknown> {
   fields(action, input);
+  if ((MANAGER_ACTIONS as readonly string[]).includes(action)) {
+    if (!host.monoOf?.(source.id) || !host.managerAction) throw new Error("Only a Mono or its approved habit may manage goals");
+    return host.managerAction(source, requestId, action, input);
+  }
   if (action.startsWith("soul."))
     return handleSoul(source, action, input, host);
   if (action.startsWith("memory."))

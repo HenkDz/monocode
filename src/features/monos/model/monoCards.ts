@@ -7,6 +7,7 @@ import { habitSchedule, type HabitSchedule } from "./monoHabits";
  * "Merged" the next day.
  */
 export type MonoCard =
+  | { type: "dispatch" | "status" | "ready"; goalIds?: string[] }
   | {
       type: "pr";
       /** owner/name; the project's own repository when left out. */
@@ -31,6 +32,7 @@ export type MonoCard =
 
 export const CARD_FIELDS = [
   "type",
+  "goalIds",
   "repo",
   "number",
   "note",
@@ -66,6 +68,13 @@ function only(input: Record<string, unknown>, allowed: string[]) {
 /** A card from the CLI's input, checked field by field. */
 export function parseCard(input: Record<string, unknown>): MonoCard {
   switch (input.type) {
+    case "dispatch":
+    case "status":
+    case "ready": {
+      only(input, ["goalIds"]);
+      if (input.goalIds !== undefined && (!Array.isArray(input.goalIds) || input.goalIds.length > 100)) throw new Error("goalIds must contain at most 100 goals");
+      return { type: input.type, ...(input.goalIds === undefined ? {} : { goalIds: (input.goalIds as unknown[]).map(id => text(id, "goalId", 128)) }) };
+    }
     case "pr": {
       only(input, ["repo", "number", "note"]);
       const number = input.number;
@@ -114,7 +123,7 @@ export function parseCard(input: Record<string, unknown>): MonoCard {
       };
     }
     default:
-      throw new Error("type must be pr, session, choices or habit");
+      throw new Error("type must be pr, session, choices, habit, dispatch, status or ready");
   }
 }
 

@@ -157,7 +157,7 @@ export function ProjectManagerReview({ run }: { run: OrchestrationRun }) {
   );
 }
 
-function ReadyCard({
+export function ReadyCard({
   run,
   task,
   merged,

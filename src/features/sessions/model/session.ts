@@ -259,6 +259,7 @@ export type MonoSessionCompletion = {
 };
 
 export type QueuedMessage = {
+  monoSource?: { id: string; name: string; mascot: string; color: string; goalId: string };
   id: string;
   /** User bubble already shown optimistically in a Mono's conversation. */
   blockId?: string;
@@ -325,6 +326,7 @@ export type Block = {
   intent?: Extract<TurnIntent, "plan" | "orchestrate">;
   /** Stable CLI request that submitted this turn, for safe retries. */
   appRequestId?: string;
+  monoSource?: QueuedMessage["monoSource"];
   /** Provider-reported token metrics for this user turn, when available. */
   turnMetrics?: TurnMetrics;
   tool?: {
@@ -375,6 +377,8 @@ export type Block = {
   monoHabit?: { id: string; name: string; at: number };
   /** A card a Mono put in its chat; see `features/monos/model/monoCards`. */
   monoCard?: import("../../monos/model/monoCards").MonoCard;
+  /** Set by the app, never accepted from card CLI input. */
+  monoCardOwner?: string;
 };
 
 export type RuntimeMode =

@@ -62,6 +62,7 @@ export type OrchestrationDispatch = {
 
 export type OrchestrationTask = {
   id: string;
+  monoGoalId?: string;
   assignmentId?: string;
   sessionId: string;
   title: string;

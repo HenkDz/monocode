@@ -100,6 +100,7 @@ type Props = {
   unseenFinishedIds: ReadonlySet<string>;
   liveAgents: readonly LiveAgent[];
   activeSessionId?: string;
+  selectionEnabled?: boolean;
   switchPending?: boolean;
   switchError?: string;
   onLoadHistory: (project: string) => Promise<boolean>;
@@ -130,6 +131,7 @@ export function ProjectWorktrees({
   unseenFinishedIds,
   liveAgents,
   activeSessionId,
+  selectionEnabled = true,
   switchPending,
   switchError,
   onLoadHistory,
@@ -218,6 +220,7 @@ export function ProjectWorktrees({
   const agents = new Map(liveAgents.map((agent) => [agent.id, agent]));
   const trees = data?.worktrees ?? [];
   const focusedPath =
+    selectionEnabled &&
     !isProjectManager(activeSessionId ?? "") &&
     sameProjectPath(project, currentProject)
       ? (focus?.path ?? project)
@@ -401,6 +404,7 @@ export function ProjectWorktrees({
               const hiddenCount = sessions.length - listed.length;
               const selected =
                 !!focusedPath &&
+                !(expanded && sessions.some(session => session.id === activeSessionId)) &&
                 sameProjectPath(focus?.path ?? project, tree.path);
               const managerTask = [...managerRuns]
                 .reverse()

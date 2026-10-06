@@ -191,6 +191,21 @@ export function enqueueMonoSessionCompletion(
   mono: Session,
   message: QueuedMessage,
 ): Session {
+  const blocker = message.monoSessionCompletion?.blocker;
+  if (blocker) {
+    const pending = mono.pendingMonoEvents?.find(entry => entry.monoSessionCompletion?.blocker?.key === blocker.key);
+    const receipt = mono.blocks.find(block => block.monoSessionCompletion?.blocker?.key === blocker.key);
+    const previous = (receipt ?? pending)?.monoSessionCompletion;
+    if (previous?.blocker) {
+      const requests = [...new Set([...previous.blocker.requests, ...blocker.requests])];
+      if (requests.length === previous.blocker.requests.length) return mono;
+      const completion = { ...previous, blocker: { key: blocker.key, requests } };
+      return { ...mono,
+        blocks: receipt ? mono.blocks.map(block => block === receipt ? { ...block, monoSessionCompletion: completion } : block) : mono.blocks,
+        pendingMonoEvents: pending ? mono.pendingMonoEvents?.map(entry => entry === pending ? { ...entry, monoSessionCompletion: completion } : entry) : mono.pendingMonoEvents,
+      };
+    }
+  }
   if (
     mono.queuedMessages?.some((entry) => entry.id === message.id) ||
     mono.pendingMonoEvents?.some((entry) => entry.id === message.id || entry.text === message.text) ||

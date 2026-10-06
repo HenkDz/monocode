@@ -201,6 +201,8 @@ function sanitizeMonoSessionCompletion(
     sessionId: completion.sessionId,
     title: completion.title,
     status: completion.status,
+    ...(completion.blocker && typeof completion.blocker.key === "string" && Array.isArray(completion.blocker.requests) && completion.blocker.requests.every(id => typeof id === "string")
+      ? { blocker: { key: completion.blocker.key, requests: [...new Set(completion.blocker.requests)] } } : {}),
     ...(typeof completion.sessionCount === "number" &&
     Number.isInteger(completion.sessionCount) &&
     completion.sessionCount > 1

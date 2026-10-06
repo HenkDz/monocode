@@ -1219,6 +1219,11 @@ function AgentTranscriptComponent({
               }`}
             >
               {stampAt != null ? <DaySeparator at={stampAt} /> : null}
+              {turn[0].monoSessionCompletion?.blocker && (
+                <div data-blocker-notice className="px-4 py-1 text-xs text-content/50">
+                  Decision requested · {turn[0].monoSessionCompletion.blocker.requests.length} requests
+                </div>
+              )}
               {items.flatMap((item, itemIndex) => {
                 const inFold =
                   !!fold && itemIndex >= fold.start && itemIndex <= fold.end;

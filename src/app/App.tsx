@@ -5,6 +5,8 @@ import {
   updateMono,
 } from "../features/monos/model/mono";
 import { monoEngineId } from "../features/monos/model/monoEngines";
+import { loadMonoView, saveMonoView, monoForView, monoViewProject, memberDetailsView, memberTasks, selectedOrgMono } from "../features/monos/model/monoNavigation";
+import { MemberDetails } from "../features/monos/ui/MonoTeamPage";
 import {
   assertDirectReport,
   resolveTeamMember,
@@ -1119,7 +1121,8 @@ function Workspace({
   const [activeTabId, setActiveTabIdState] = useState(
     () => windowTransfer?.activeTabId ?? resumed?.activeTabId ?? seed.tab.id,
   );
-  const [monoViewId, setMonoViewId] = useState<string | null>(null);
+  const [monoViewId, setMonoViewId] = useState<string | null>(() => loadMonoView(getCurrentWindow().label));
+  useEffect(() => saveMonoView(getCurrentWindow().label, monoViewId), [monoViewId]);
   const [monoDetailsOpen, setMonoDetailsOpen] = useState(false);
   const [monoTeamRequest, setMonoTeamRequest] = useState(0);
   const [monoActivity, setMonoActivity] =
@@ -1528,12 +1531,17 @@ function Workspace({
       tabs: tabsRef.current,
       sessions: sessionsRef.current,
       activeTabId: activeTabIdRef.current,
+      activeStandaloneId: monoViewIdRef.current ?? (() => {
+        const tab = tabsRef.current.find(tab => tab.id === activeTabIdRef.current);
+        const member = selectedOrgMono(tab?.focusedId, null, orchestrator.snapshot());
+        return member ? memberDetailsView(member) : null;
+      })(),
     });
     return projectReturnRef.current;
   }, []);
   useEffect(() => {
     readProjectReturnMemory();
-  }, [activeTabId, tabs, sessions, readProjectReturnMemory]);
+  }, [activeTabId, tabs, sessions, monoViewId, readProjectReturnMemory]);
 
   const tabVisitRef = useRef(emptyTabVisitHistory(activeTabId));
   const tabVisitFromHistoryRef = useRef(false);
@@ -1979,9 +1987,9 @@ function Workspace({
   }
   const approvalSessionIds = approvalSessionIdsRef.current;
 
-  const activeSessionId = inboxViewOpen
-    ? inboxAskPortal?.sessionId
-    : (monoViewSession?.id ?? active?.id);
+  const activeSessionId = searchViewOpen || notesViewOpen || automationsViewOpen || settingsOpen
+    ? undefined : inboxViewOpen ? inboxAskPortal?.sessionId
+    : monoViewId ? monoViewSession?.id : active?.id;
   const activeSessionIdRef = useRef(activeSessionId);
   activeSessionIdRef.current = activeSessionId;
 
@@ -2407,12 +2415,7 @@ function Workspace({
       sessions,
       activeTabId,
       projectCwd,
-      reconcileProjectReturn({
-        memory: projectReturnRef.current,
-        tabs,
-        sessions,
-        activeTabId,
-      }),
+      readProjectReturnMemory(),
       projectTerminals,
       lastDockSide ?? undefined,
       keepWorkspaceTab,
@@ -2433,6 +2436,8 @@ function Workspace({
     lastDockSide,
     windowTransfer,
     keepWorkspaceTab,
+    monoViewId,
+    readProjectReturnMemory,
     projectWorktree?.path,
     workspaceNavigation.revision,
   ]);
@@ -4601,6 +4606,7 @@ function Workspace({
       setNotesViewOpen(false);
       setAutomationsViewOpen(false);
       lastMonoIdRef.current = monoId;
+      setSettingsOpen(false);
       const session = await ensureMonoSession(monoId, {
         home: homeDir,
         load: ensureOpenSession,
@@ -4824,6 +4830,38 @@ function Workspace({
       revealLinkedSessionUpdate,
     ],
   );
+
+  const onOpenMember = useCallback(async (memberId: string) => {
+    const member = findMono(memberId);
+    if (member?.role !== "member") return;
+    const task = memberTasks(orchestrator.snapshot(), memberId)[0];
+    if (task && await ensureOpenSession(task.sessionId)) {
+      await onSelectHistorySession(task.sessionId);
+      return;
+    }
+    workspaceSessionRequest.current++;
+    workspaceNavigation.cancel();
+    monoViewRequest.current++;
+    setSearchViewOpen(false);
+    setInboxViewOpen(false);
+    setNotesViewOpen(false);
+    setAutomationsViewOpen(false);
+    setSettingsOpen(false);
+    setMonoActivity(null);
+    const view = memberDetailsView(memberId);
+    monoViewIdRef.current = view;
+    setMonoViewId(view);
+    setComposerFocused(false);
+  }, [onSelectHistorySession, ensureOpenSession, workspaceNavigation.cancel]);
+
+  const restoredMonoView = useRef(false);
+  useEffect(() => {
+    if (restoredMonoView.current) return;
+    restoredMonoView.current = true;
+    const view = monoViewIdRef.current;
+    const mono = monoForView(view);
+    if (mono && !view?.startsWith("mono-member:")) void onOpenMono(mono.id);
+  }, [onOpenMono]);
 
   const openReminderSession = useCallback(
     async (sessionId: string) => {
@@ -6067,6 +6105,13 @@ function Workspace({
 
   const onSelectProject = useCallback(
     (path: string) => {
+      const remembered = readProjectReturnMemory().get(pathKey(path));
+      const mono = monoForView(remembered);
+      if (mono && monoViewProject(remembered) && sameProjectPath(monoViewProject(remembered)!, path)) {
+        if (mono.role === "member") void onOpenMember(mono.id);
+        else void onOpenMono(mono.id);
+        return;
+      }
       workspaceSessionRequest.current++;
       closeMonoView();
       workspaceNavigation.cancel();
@@ -6075,6 +6120,9 @@ function Workspace({
     },
     [
       openProjects,
+      readProjectReturnMemory,
+      onOpenMember,
+      onOpenMono,
       closeMonoView,
       workspaceNavigation.cancel,
       workspaceNavigation.selectProject,
@@ -9015,6 +9063,7 @@ function Workspace({
             if (head.monoSessionCompletion && latest.monoTranscript?.before != null &&
                 await invoke<boolean>("mono_session_event_delivered", {
                   sessionId: latest.id, eventId: head.id, text: head.text,
+                  blockerKey: head.monoSessionCompletion.blocker?.key,
                 })) {
               setSessions(previous => previous.map(entry => entry.id === latest.id
                 ? dequeueQueuedMessage(entry, head.id) : entry));
@@ -11072,6 +11121,11 @@ function Workspace({
                     },
                   ],
                 );
+                message.monoSessionCompletion!.blocker = {
+                  key: JSON.stringify([source.id, [...source.blocks].reverse().find(block => block.role === "user" && !block.internal)?.id,
+                    question ? ["question", question.questions] : ["approval", approval!.tool?.title, approval!.text]]),
+                  requests: [String(question?.requestId ?? approval!.id)],
+                };
                 await queueMonoSessionCompletion(target.id, message);
               }
             }
@@ -13421,6 +13475,7 @@ function Workspace({
 
   // Renames, mascot picks and new projects show up on the rail.
   const monoViewMono = monoViewId ? monoForSession(monoViewId) : undefined;
+  const memberDetailsMono = monoViewId?.startsWith("mono-member:") ? monoForView(monoViewId) : undefined;
   const selectedMonoActivity = resolveMonoActivity(
     monoActivity,
     monoViewSession,
@@ -13519,6 +13574,7 @@ function Workspace({
     notesViewOpen ||
     automationsViewOpen;
   const compactProjectRail = collapsedProjectRailMode === "compact";
+  const sidebarOrgId = chromeSurfaceOpen ? undefined : selectedOrgMono(activeSessionId, monoViewId, orchestrationRuns);
   const compactRailActive = compactProjectRail && !projectRailOpen;
   const compactTitleNavigation =
     IS_MAC && compactRailActive && !chromeSurfaceOpen;
@@ -13633,7 +13689,7 @@ function Workspace({
               sessions={sidebarHistory}
               busySessionIds={busySessionIds}
               approvalSessionIds={approvalSessionIds}
-              activeSessionId={activeSessionId}
+              activeSessionId={sidebarOrgId ? undefined : activeSessionId}
               status={historyFailed ? "error" : "idle"}
               pending={historyPending}
               onSelectSession={onSelectHistorySession}
@@ -13697,12 +13753,12 @@ function Workspace({
                       project={project}
                       enabled={enabled}
                       selected={
-                        monoViewMono
-                          ? monoViewMono.id === dedicatedMono(project)?.id
-                          : !chromeSurfaceOpen &&
-                            managerActive &&
-                            sameProjectPath(active.cwd, project)
+                        !chromeSurfaceOpen && (sidebarOrgId
+                          ? sidebarOrgId === dedicatedMono(project)?.id
+                          : !monoCovers && managerActive && sameProjectPath(active.cwd, project))
                       }
+                      selectedMemberId={sidebarOrgId}
+                      onOpenMember={onOpenMember}
                       onOpen={onOpenProjectManager}
                       attention={managerQuestions}
                       running={sessions.some(
@@ -13744,7 +13800,8 @@ function Workspace({
                   approvalSessionIds={approvalSessionIds}
                   unseenFinishedIds={unseenFinishedIds}
                   liveAgents={liveAgents}
-                  activeSessionId={active?.id}
+                  activeSessionId={sidebarOrgId ? undefined : activeSessionId}
+                  selectionEnabled={!chromeSurfaceOpen && !sidebarOrgId && !monoCovers}
                   switchPending={
                     workspaceNavigation.pending?.project === project
                   }
@@ -13765,7 +13822,7 @@ function Workspace({
               monos={
                 monosEnabled
                   ? {
-                      activeId: monoViewMono?.id,
+                      activeId: sidebarOrgId,
                       states: monoRail.states,
                       unseenIds: monoRail.unseen,
                       onOpen: (monoId) => void onOpenMono(monoId),
@@ -14010,6 +14067,13 @@ function Workspace({
                                 </div>
                               </div>
                             ))}
+                            {memberDetailsMono && (
+                              <div data-member-details={memberDetailsMono.id} className="absolute inset-0 flex min-h-0 flex-col overflow-y-auto bg-background">
+                                <MemberDetails key={memberDetailsMono.id} member={memberDetailsMono}
+                                  fallback={{ harness: sessionDefaults.harness, model: sessionDefaults.model, modelSettings: sessionDefaults.modelSettings }}
+                                  onBack={() => { const manager = findMono(memberDetailsMono.reportsTo ?? ""); if (manager) void onOpenMono(manager.id); else closeMonoView(); }} />
+                              </div>
+                            )}
                             {sessions
                               .filter((session) => isMonoSession(session.id))
                               .map((session) => {

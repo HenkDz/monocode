@@ -18,6 +18,7 @@ import { MonoSettingsPage } from "./MonoSettingsPage";
 import { useMonoFiles } from "./MonoDetails";
 import { orchestrator } from "../../orchestration/model/orchestration";
 import { openCardSession } from "../model/monoCards";
+import { memberTasks } from "../model/monoNavigation";
 
 export function MonoTeamPage({
   monoId,
@@ -173,7 +174,7 @@ export function MonoTeamPage({
   );
 }
 
-function MemberDetails({
+export function MemberDetails({
   member,
   fallback,
   onBack,
@@ -183,6 +184,8 @@ function MemberDetails({
   onBack(): void;
 }) {
   const [page, setPage] = useState("details");
+  const runs = useSyncExternalStore(orchestrator.subscribe, orchestrator.snapshot, orchestrator.snapshot);
+  const tasks = memberTasks(runs, member.id).slice(0, 8);
   const files = useMonoFiles(member.id, "idle");
   const look = monoLook(member);
   const profile = member.workerProfile ?? fallback;
@@ -249,6 +252,15 @@ function MemberDetails({
           />
         </Property>
       </dl>
+      <section className="border-t border-stroke px-4 py-3" aria-label="Member tasks">
+        <h3 className="mb-2 text-xs text-content/60">Recent tasks</h3>
+        {tasks.length ? tasks.map(task => (
+          <button key={task.id} type="button" onClick={() => openCardSession(task.sessionId)}
+            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-content/5 focus-visible:outline-accent">
+            <span className="min-w-0 flex-1 truncate">{task.title}</span><span className="text-content/50">{task.status}</span>
+          </button>
+        )) : <p className="text-xs text-content/50">No tasks yet. Your Manager assigns work here.</p>}
+      </section>
     </MonoSettingsPage>
   );
 }

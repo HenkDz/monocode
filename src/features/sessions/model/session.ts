@@ -251,6 +251,7 @@ export type Attachment = {
 };
 
 export type MonoSessionCompletion = {
+  blocker?: { key: string; requests: string[] };
   sessionId: string;
   title: string;
   status: "completed" | "failed" | "cancelled";

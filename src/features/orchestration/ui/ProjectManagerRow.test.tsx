@@ -4,6 +4,33 @@ import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
 import { ProjectManagerRow } from "./ProjectManagerRow";
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+
+it("selects members with native keyboard-focusable buttons and only one current row", async () => {
+  localStorage.setItem("monocode:mono-roster", JSON.stringify([
+    { id: "m", role: "manager", managerProject: "/repo", projects: ["/repo"], mascot: "cat", color: "#aaaaaa" },
+    { id: "b", role: "member", reportsTo: "m", name: "Backend", projects: ["/repo"], mascot: "cat", color: "#aaaaaa" },
+  ]));
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  const open = vi.fn(async () => {});
+  try {
+    await act(async () => root.render(<ProjectManagerRow project="/repo" onOpen={open} onOpenMember={open} selected />));
+    expect(host.querySelectorAll('[aria-current="page"]')).toHaveLength(1);
+    const member = host.querySelector<HTMLButtonElement>('[aria-label="Open Backend"]')!;
+    member.focus();
+    expect(document.activeElement).toBe(member);
+    await act(async () => member.click());
+    expect(open).toHaveBeenCalledWith("b");
+    await act(async () => root.render(<ProjectManagerRow project="/repo" onOpen={open} onOpenMember={open} selectedMemberId="b" />));
+    expect(host.querySelectorAll('[aria-current="page"]')).toHaveLength(1);
+    expect(host.querySelector('[aria-current="page"]')?.getAttribute("aria-label")).toBe("Open Backend");
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+    localStorage.removeItem("monocode:mono-roster");
+  }
+});
 const trees = vi.hoisted(() => ({
   data: { worktrees: [{}] } as { worktrees: unknown[] } | undefined,
 }));

@@ -6,7 +6,7 @@ import {
   monosSnapshot,
   subscribeMonos,
 } from "../../monos/model/mono";
-import { openCardSession } from "../../monos/model/monoCards";
+import { memberTasks } from "../../monos/model/monoNavigation";
 import { PixelMascot } from "../../projects/ui/PixelMascot";
 import { ChevronDown, ChevronRight } from "../../../shared/ui/icons";
 import { ManagerAvatar } from "./ManagerAvatar";
@@ -24,6 +24,8 @@ export function ProjectManagerRow({
   expanded,
   onToggle,
   ownedCount = 0,
+  selectedMemberId,
+  onOpenMember,
 }: {
   project: string;
   onOpen(project: string): Promise<void>;
@@ -34,6 +36,8 @@ export function ProjectManagerRow({
   expanded?: boolean;
   onToggle?: () => void;
   ownedCount?: number;
+  selectedMemberId?: string;
+  onOpenMember?: (memberId: string) => Promise<void>;
 }) {
   const [opening, setOpening] = useState(false);
   useSyncExternalStore(subscribeMonos, monosSnapshot);
@@ -170,40 +174,30 @@ export function ProjectManagerRow({
       {expanded !== false &&
         members.map((member) => {
           const look = monoLook(member);
-          const tasks = runs
-            .filter((run) => run.ownerMonoId === mono?.id)
-            .flatMap((run) => run.tasks)
-            .filter((task) => task.memberId === member.id);
-          const task =
-            tasks.find(
-              (task) => task.status === "running" || task.status === "blocked",
-            ) ??
-            tasks.filter((task) => task.status !== "cancelled").slice(-1)[0];
+          const tasks = memberTasks(runs, member.id);
+          const task = tasks[0];
+          const memberRunning = tasks.some(task => task.status === "running");
+          const memberSelected = member.id === selectedMemberId;
           return (
             <button
               type="button"
               key={member.id}
-              className="flex h-7 w-full min-w-0 items-center gap-1.5 rounded-md pl-9 pr-2 text-left text-xs text-content/60 hover:bg-content/5 focus-visible:outline-accent"
+              aria-current={memberSelected ? "page" : undefined}
+              aria-label={`Open ${look.name}${memberRunning ? ", running" : ""}`}
+              className={`flex h-7 w-full min-w-0 items-center gap-1.5 rounded-md pl-9 pr-2 text-left text-xs focus-visible:outline-accent ${memberSelected ? "bg-selection text-content" : "text-content/60 hover:bg-content/5"}`}
               title={
                 task
                   ? `${look.name} · ${task.title} · ${task.status}`
                   : look.name
               }
-              onClick={() =>
-                task
-                  ? openCardSession(task.sessionId)
-                  : window.dispatchEvent(
-                      new CustomEvent("monocode:open-team", {
-                        detail: { monoId: mono!.id },
-                      }),
-                    )
-              }
+              onClick={() => { setError(undefined); void onOpenMember?.(member.id).catch(reason => setError(String(reason))); }}
             >
               <PixelMascot
                 name={look.mascot}
                 color={look.color}
                 still
                 className="size-4 shrink-0"
+                status={memberRunning ? "working" : task?.status === "blocked" ? "needs-you" : "idle"}
               />
               <span className="shrink-0">{look.name}</span>
               {task && (

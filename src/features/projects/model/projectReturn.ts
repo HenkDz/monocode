@@ -2,6 +2,7 @@ import { leafIds, type WorkspaceTab } from "../../workspace/model/layout";
 import type { Session } from "../../sessions/model/session";
 import { pathKey } from "../../../shared/lib/paths";
 import { sameProjectPath } from "./recents";
+import { monoViewProject } from "../../monos/model/monoNavigation";
 
 export type ProjectReturnMemory = ReadonlyMap<string, string>;
 
@@ -10,6 +11,7 @@ type ProjectReturnContext = {
   tabs: WorkspaceTab[];
   sessions: Session[];
   activeTabId: string;
+  activeStandaloneId?: string | null;
 };
 
 type PaneProject = Map<string, string>;
@@ -103,6 +105,7 @@ export function reconcileProjectReturn({
   tabs,
   sessions,
   activeTabId,
+  activeStandaloneId,
 }: Omit<ProjectReturnContext, "sessions"> & {
   sessions: readonly Pick<Session, "id" | "cwd">[];
 }): ProjectReturnMemory {
@@ -112,6 +115,11 @@ export function reconcileProjectReturn({
 
   const next = new Map<string, string>();
   for (const [project, saved] of memory) {
+    const standaloneProject = monoViewProject(saved);
+    if (standaloneProject && sameProjectPath(standaloneProject, project)) {
+      next.set(project, saved);
+      continue;
+    }
     const asPane = byPane.get(saved);
     if (asPane === project) {
       next.set(project, saved);
@@ -125,8 +133,9 @@ export function reconcileProjectReturn({
     }
   }
 
-  const activePaneId = activeTab?.focusedId;
-  const activeProject = activePaneId ? byPane.get(activePaneId) : undefined;
+  const activePaneId = activeStandaloneId ?? activeTab?.focusedId;
+  const standaloneProject = monoViewProject(activeStandaloneId);
+  const activeProject = activeStandaloneId ? (standaloneProject && pathKey(standaloneProject)) : activePaneId ? byPane.get(activePaneId) : undefined;
   if (activeProject && activePaneId) next.set(activeProject, activePaneId);
 
   if (

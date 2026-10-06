@@ -88,7 +88,7 @@ export function managerAttention(
   statuses: ReadonlyMap<string, GitPr | null>,
 ): ManagerAttention[] {
   const items: ManagerAttention[] = [];
-  for (const session of sessions.filter((s) => isProjectManager(s.id))) {
+  for (const session of sessions.filter((s) => isProjectManager(s.id) || runs.some(run => run.projectManager && run.ownerSessionId === s.id))) {
     const approval = session.blocks.find(
       (block) => block.approval && !block.approval.decided,
     );
@@ -109,7 +109,7 @@ export function managerAttention(
   }
   for (const run of runs.filter((r) => r.projectManager)) {
     if (run.status === "paused" && !run.recovering) items.push({
-      key: `${run.leadId}:continue`, id: run.leadId, project: run.cwd,
+      key: `${run.leadId}:continue`, id: run.ownerSessionId ?? run.leadId, project: run.cwd,
       kind: "decision", question: run.error || "Manager needs your decision to continue",
       notificationId: `continue:${run.error ?? run.lastPauseReason ?? "paused"}`,
     });
@@ -118,7 +118,7 @@ export function managerAttention(
       if (managerPrReady(task, taskPrStatus(task, statuses)))
         items.push({
           key: `${run.leadId}:${task.id}`,
-          id: run.leadId,
+          id: run.ownerSessionId ?? run.leadId,
           notificationId: `${task.lastDispatchId ?? task.id}:${task.status}`,
           project: run.cwd,
           kind: "ready",

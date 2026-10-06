@@ -1,4 +1,6 @@
 import { useState, useSyncExternalStore } from "react";
+import { dedicatedMono, monoLook, monosSnapshot, subscribeMonos } from "../../monos/model/mono";
+import { PixelMascot } from "../../projects/ui/PixelMascot";
 import { ChevronDown, ChevronRight } from "../../../shared/ui/icons";
 import { ManagerAvatar } from "./ManagerAvatar";
 import { orchestrator, orchestrationPathKey } from "../model/orchestration";
@@ -27,6 +29,9 @@ export function ProjectManagerRow({
   ownedCount?: number;
 }) {
   const [opening, setOpening] = useState(false);
+  useSyncExternalStore(subscribeMonos, monosSnapshot);
+  const mono = dedicatedMono(project);
+  const look = mono && monoLook(mono);
   const [error, setError] = useState<string>();
   const { data } = useProjectWorktrees(
     project,
@@ -104,7 +109,7 @@ export function ProjectManagerRow({
             .finally(() => setOpening(false));
         }}
       >
-        <ManagerAvatar
+        {look ? <PixelMascot name={look.mascot} color={look.color} still className="size-5 shrink-0" status={decision ? "needs-you" : label === "Running" ? "working" : "idle"} /> : <ManagerAvatar
           project={project}
           status={
             decision
@@ -117,8 +122,8 @@ export function ProjectManagerRow({
                     ? "running"
                     : undefined
           }
-        />
-        <span>Manager{expanded === false && ownedCount > 0 ? ` · ${ownedCount}` : ""}</span>
+        />}
+        <span className="truncate">{look?.name ?? "Manager"}{expanded === false && ownedCount > 0 ? ` · ${ownedCount}` : ""}</span>
         {label && (
           <span
             role="status"

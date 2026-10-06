@@ -303,9 +303,28 @@ export class Orchestrator {
     { signature: string; promise: Promise<unknown> }
   >();
   private host: OrchestrationHost | null = null;
+  private monoOwners = new Map<string, { sessionId: string; monoId: string; project: string }>();
   constructor(private readonly store: Storage = storage) {}
   bind(host: OrchestrationHost) {
-    this.host = host;
+    this.host = Object.assign(Object.create(host) as OrchestrationHost, {
+      session: (id: string) => {
+        const owner = this.monoOwners.get(id);
+        const session = host.session(owner?.sessionId ?? id);
+        return session && owner ? { ...session, id, cwd: owner.project, worktreeCwd: undefined } : session;
+      },
+      submit: (id: string, text: string, done: (outcome: ControlOutcome) => void) => host.submit(this.ownerSession(id), this.monoOwners.has(id) ? `[Worker report for project ${this.monoOwners.get(id)!.project}; use this project in control calls.]\n${text}` : text, done),
+      stop: (id: string) => host.stop(this.ownerSession(id)),
+      notifyReady: (id: string, task: OrchestrationTask) => host.notifyReady?.(this.ownerSession(id), task),
+    });
+  }
+  ownerSession(id: string) { return this.monoOwners.get(id)?.sessionId ?? this.run(id)?.ownerSessionId ?? id; }
+  assertCanDeleteOwner(id: string) {
+    if (this.runs.some(run => run.ownerSessionId === id && run.tasks.length)) throw new Error("This Mono owns retained worker history. Keep its conversation until its worktrees and review records have been retired.");
+  }
+  registerMonoEngine(id: string, sessionId: string, monoId: string, project: string) {
+    const existing = this.monoOwners.get(id);
+    if (existing && (existing.sessionId !== sessionId || !sameCheckout(existing.project, project))) throw new Error("Engine already belongs to another Mono or project");
+    this.monoOwners.set(id, { sessionId, monoId, project });
   }
   subscribe = (listener: () => void) => {
     this.listeners.add(listener);
@@ -320,7 +339,7 @@ export class Orchestrator {
   forSession(id: string) {
     return this.runs.find(
       (run) =>
-        run.leadId === id || run.tasks.some((task) => task.sessionId === id),
+        run.leadId === id || run.ownerSessionId === id || run.tasks.some((task) => task.sessionId === id),
     );
   }
   resumeBlocker(leadId: string, checkoutCwd?: string): Session | undefined {
@@ -518,6 +537,9 @@ export class Orchestrator {
       const loaded = await this.store.load(id);
       if (!loaded || this.run(id) || this.deleted.has(id)) return;
       const normalized = normalizeOrchestrationRun(loaded);
+      if (normalized.ownerSessionId && normalized.ownerMonoId) this.registerMonoEngine(id, normalized.ownerSessionId, normalized.ownerMonoId, orchestrationCheckoutCwd(normalized));
+      const owner = this.monoOwners.get(id);
+      if (owner) { normalized.ownerSessionId = owner.sessionId; normalized.ownerMonoId = owner.monoId; }
       // Old root-derived managers may have been opened through a linked folder.
       // Keep their ID and transcript, but attach ownership to their actual root checkout.
       const run = normalized.projectManager ? {
@@ -856,6 +878,7 @@ export class Orchestrator {
       await this.commit({
         version: 2,
         leadId,
+        ...(this.monoOwners.has(leadId) ? { ownerSessionId: this.monoOwners.get(leadId)!.sessionId, ownerMonoId: this.monoOwners.get(leadId)!.monoId } : {}),
         cwd: lead.cwd,
         workspace,
         canonicalRoot,
@@ -896,9 +919,11 @@ export class Orchestrator {
     const session = this.host?.session(id);
     if (!session) return null;
     const own = this.forSession(id);
+    if (own?.ownerSessionId === id) return null;
     if (
       own &&
       own.leadId !== id &&
+      own.ownerSessionId !== id &&
       (own.status === "active" || own.tasks.some(activeTask))
     )
       return "This worker is managed by the orchestrator. Send instructions through its lead or stop the run first.";
@@ -906,6 +931,7 @@ export class Orchestrator {
       (run) =>
         (run.status === "active" || run.tasks.some(activeTask)) &&
         run.leadId !== id &&
+        run.ownerSessionId !== id &&
         sameCheckout(
           orchestrationCheckoutCwd(run),
           session.worktreeCwd ?? session.cwd,
@@ -924,6 +950,11 @@ export class Orchestrator {
     )
       return "Return the lead to its original project or stop orchestration first.";
     return null;
+  }
+  promptForOwner(id: string, prompt: string): string {
+    const runs = this.runs.filter(run => run.ownerSessionId === id);
+    if (!runs.length) return this.prompt(id, prompt);
+    return runs.reduce((text, run) => this.prompt(run.leadId, text), prompt) + "\nFor every control CLI call include project with the exact project folder. Each project has a separate worker run; never mix task IDs or branch bases between them.";
   }
   prompt(id: string, prompt: string): string {
     const run = this.run(id);

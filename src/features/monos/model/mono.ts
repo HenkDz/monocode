@@ -33,6 +33,11 @@ export const MONO_COLORS = [
  */
 export type Mono = {
   id: string;
+  lastUsedAt?: number;
+  /** Original Manager folder; its existing engine key is retained after migration. */
+  managerProject?: string;
+  /** Retained engine folders, including folders removed from active assignments. */
+  workerProjects?: string[];
   /** Its conversation; absent until it is first opened. */
   sessionId?: string;
   /** Replaces the mascot's own name. */
@@ -154,6 +159,9 @@ function parseMono(value: unknown): Mono | undefined {
   const legacyProject = text("legacyProject");
   return {
     id: entry.id,
+    ...(typeof entry.lastUsedAt === "number" && Number.isFinite(entry.lastUsedAt) ? { lastUsedAt: entry.lastUsedAt } : {}),
+    ...(text("managerProject") ? { managerProject: text("managerProject") } : {}),
+    ...(Array.isArray(entry.workerProjects) ? { workerProjects: entry.workerProjects.filter((path): path is string => typeof path === "string") } : {}),
     ...(sessionId ? { sessionId } : {}),
     ...(name ? { name } : {}),
     mascot: text("mascot") ?? PROJECT_MASCOTS[0].name,
@@ -196,6 +204,34 @@ export function monoForSession(sessionId: string): Mono | undefined {
 
 export function isMonoSession(sessionId: string): boolean {
   return !!monoForSession(sessionId);
+}
+
+/** The most recently used single-project Mono owns the project's one sidebar slot. */
+export function dedicatedMono(project: string, roster = listMonos()): Mono | undefined {
+  return roster.filter(mono => mono.projects.length === 1 && projectKey(mono.projects[0]) === projectKey(project))
+    .sort((a, b) => (b.lastUsedAt ?? 0) - (a.lastUsedAt ?? 0) || a.id.localeCompare(b.id))[0];
+}
+
+export function railMonos(roster = listMonos()): Mono[] {
+  return roster.filter(mono => mono.projects.length !== 1 || dedicatedMono(mono.projects[0], roster)?.id !== mono.id);
+}
+
+/** Conversion keeps the conversation ID and all existing engine/worker references. */
+export function adoptManagerMono(sessionId: string, project: string, at = Date.now()): Mono {
+  const existing = monoForSession(sessionId);
+  if (existing) return existing;
+  const key = projectKey(project);
+  const seed = projectName(project);
+  const mono: Mono = {
+    id: sessionId, sessionId, managerProject: project, projects: [project], lastUsedAt: at,
+    name: `${resolveTabGroupLabel(key, loadTabGroupLabels(), seed)} Manager`,
+    mascot: projectMascot(seed, resolveTabGroupMascot(key, loadTabGroupMascots())).name,
+    color: resolveTabGroupColor(key, loadTabGroupColors(), loadTabGroupCustomColors(), seed),
+  };
+  // Migration must fail closed if storage is unavailable, not claim conversion succeeded.
+  localStorage.setItem(ROSTER_KEY, JSON.stringify([...listMonos(), mono]));
+  window.dispatchEvent(new CustomEvent(MONOS_CHANGED));
+  return mono;
 }
 
 /**

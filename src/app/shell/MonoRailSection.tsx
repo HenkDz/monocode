@@ -22,6 +22,7 @@ import {
   dismissMonoIntro,
   findMono,
   listMonos,
+  railMonos,
   MONO_STATUS_LABEL,
   monoIntroDismissed,
   nextMonoLook,
@@ -67,11 +68,11 @@ export function MonoRailSection({
   introAvailable = false,
 }: MonoRailProps) {
   const snapshot = useSyncExternalStore(subscribeMonos, monosSnapshot);
-  const monos = useMemo(() => listMonos(), [snapshot]);
+  const monos = useMemo(() => railMonos(), [snapshot]);
   const [addButton, setAddButton] = useState<HTMLButtonElement | null>(null);
   // Shown once ever, and only the user's choice puts it away.
   const showIntro =
-    introAvailable && monos.length === 0 && !monoIntroDismissed();
+    introAvailable && listMonos().length === 0 && !monoIntroDismissed();
   const ids = monos.map((mono) => mono.id);
   const sortable = useAnimatedReorder(ids, reorderMonos, "y");
   const [menu, setMenu] = useState<{ id: string; anchor: PopoverAnchor }>();

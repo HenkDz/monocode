@@ -1,7 +1,8 @@
 import { useEffect, useReducer } from "react";
 import { projectKey, projectName } from "../../../shared/lib/paths";
 import { subscribeProjectPathsChanged } from "../../projects/model/recents";
-import { ProjectMascot } from "../../projects/ui/ProjectMascot";
+import { PixelMascot } from "../../projects/ui/PixelMascot";
+import { projectMascot } from "../../projects/model/projectMascots";
 import {
   loadTabGroupColors,
   loadTabGroupCustomColors,
@@ -36,10 +37,11 @@ export function ManagerAvatar({
         backgroundColor: `color-mix(in srgb, ${color} 14%, transparent)`,
       }}
     >
-      <ProjectMascot
-        project={seed}
-        name={resolveTabGroupMascot(key, loadTabGroupMascots())}
-        className="size-3"
+      <PixelMascot
+        name={projectMascot(seed, resolveTabGroupMascot(key, loadTabGroupMascots())).name}
+        color={color}
+        still
+        className="size-5"
       />
       {status && (
         <span

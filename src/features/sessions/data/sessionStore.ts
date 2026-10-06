@@ -284,7 +284,7 @@ function sanitizeQueuedMessages(value: unknown): QueuedMessage[] {
           ? { blockId: message.blockId }
           : {}),
         text: message.text,
-        monoSource: sanitizeMonoSource(message.monoSource),
+        ...(sanitizeMonoSource(message.monoSource) ? { monoSource: sanitizeMonoSource(message.monoSource) } : {}),
         attachments,
         ...(noteCard ? { noteCard } : {}),
         ...(handoffCard ? { handoffCard } : {}),
@@ -941,7 +941,8 @@ function sanitizeBlock(
   // the user's own after a reload.
   if (block.role === "user" && block.internal) next.internal = true;
   const completion = sanitizeMonoSessionCompletion(block.monoSessionCompletion);
-  next.monoSource = sanitizeMonoSource(block.monoSource);
+  const monoSource = sanitizeMonoSource(block.monoSource);
+  if (monoSource) next.monoSource = monoSource;
   if (block.monoCard && typeof block.monoCardOwner === "string" && block.monoCardOwner.length <= 256) {
     try { next.monoCard = parseCard(block.monoCard); next.monoCardOwner = block.monoCardOwner; } catch { /* Ignore malformed saved cards. */ }
   }

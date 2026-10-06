@@ -19,6 +19,7 @@ export type GoalOrigin = { kind: "user" | "habit" | "event"; messageId: string }
 export type ManagerProject = { id: string; name: string; folder: string; branch?: string; managerId: string; managerExists: boolean; running: number; needsDecision: number; ready: number; blocked: string[]; goals: string[] };
 export type ManagerReadyPr = { goalId?: string; projectId: string; project: string; managerId: string; taskId: string; title: string; branch: string; url: string; cwd: string; checks: string };
 export type ManagerGoalHost = {
+  mayDelegate(monoId: string): boolean;
   projects(monoId: string): Promise<ManagerProject[]>;
   status(monoId: string, projectId: string, before?: string): Promise<unknown>;
   ready(monoId: string): Promise<ManagerReadyPr[]>;
@@ -116,6 +117,7 @@ export class MonoManagerGoals {
       let goal: MonoManagerGoal;
       let message: string;
       if (action === "goals.assign") {
+        if (!host.mayDelegate(monoId)) throw Error("Only multi-project Monos may delegate goals; use this Mono's worker engine instead");
         if (origin.kind === "event") throw Error("Reports cannot create goals; only user messages or user-approved habits can assign work");
         const project = allowed(text(input.projectId, "projectId", 4096));
         if (!project) throw Error("Not one of this Mono's registered projects. Ask the user to add it in Mono details.");
@@ -144,7 +146,7 @@ export class MonoManagerGoals {
           const run = runs.find(run => run.leadId === goal.managerId);
           const tasks = run?.tasks.filter(task => task.monoGoalId === goal.id) ?? [];
           const prUrls = tasks.flatMap(task => task.accepted && task.acceptedDispatchId === task.lastDispatchId && task.prUrl ? [task.prUrl] : []);
-          const state: GoalStatus = decisions.has(goal.managerId) ? "needs-you"
+          const state: GoalStatus = decisions.has(run?.ownerSessionId ?? goal.managerId) ? "needs-you"
             : run?.status === "paused" || tasks.some(task => ["failed", "blocked", "interrupted"].includes(task.status)) ? "blocked"
             : tasks.length && tasks.every(task => task.status === "cancelled") ? "cancelled"
             : tasks.length && tasks.every(task => task.status === "cancelled" || managerTaskFinished(task, statuses.get(prStatusKey(task.workspace?.checkoutCwd ?? "", task.workspace?.branch)))) ? "done"

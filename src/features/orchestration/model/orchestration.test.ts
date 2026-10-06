@@ -116,6 +116,25 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+it("owns separate project engines from one Mono conversation and restores their owner", async () => {
+  const f = setup();
+  f.lead.busy = false;
+  f.manager.registerMonoEngine("engine-a", f.lead.id, "mono", "/repo/a");
+  f.manager.registerMonoEngine("engine-b", f.lead.id, "mono", "/repo/b");
+  await f.manager.start("engine-a", ["codex"], 2, undefined, true);
+  await f.manager.start("engine-b", ["codex"], 2, undefined, true);
+  expect(f.manager.run("engine-a")).toMatchObject({ cwd: "/repo/a", ownerSessionId: "lead", ownerMonoId: "mono", projectManager: true });
+  expect(f.manager.run("engine-b")).toMatchObject({ cwd: "/repo/b", ownerSessionId: "lead", tasks: [] });
+  expect(f.host.stop).toHaveBeenCalledWith("lead");
+  expect(f.manager.submissionError("lead")).toBeNull();
+  const restored = new Orchestrator(f.store);
+  restored.bind(f.host);
+  await restored.hydrate("engine-a");
+  expect(restored.ownerSession("engine-a")).toBe("lead");
+  expect(restored.run("engine-a")?.cwd).toBe("/repo/a");
+  expect(() => restored.registerMonoEngine("engine-a", "other", "other", "/repo/a")).toThrow("already belongs");
+});
+
 describe("worker assignment prompts", () => {
   it("keeps the task text and wraps it in the assignment envelope", () => {
     const sent = workerTurnPrompt("Review the branch.", ["src/App.tsx"]);

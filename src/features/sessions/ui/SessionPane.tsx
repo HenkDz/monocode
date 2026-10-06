@@ -352,7 +352,8 @@ const LocalSessionPane = memo(function LocalSessionPane({
     orchestrator.snapshot,
     orchestrator.snapshot,
   );
-  const managed = isProjectManager(session.id) || orchestrationRuns.some(
+  const ownedRuns = orchestrationRuns.filter(run => run.projectManager && (run.ownerSessionId ?? run.leadId) === session.id);
+  const managed = ownedRuns.length > 0 || isProjectManager(session.id) || orchestrationRuns.some(
     (run) =>
       (run.status === "active" || run.status === "paused") &&
       sameCheckout(orchestrationCheckoutCwd(run), sessionWorkCwd(session)),
@@ -828,10 +829,10 @@ const LocalSessionPane = memo(function LocalSessionPane({
       ) : null}
       <div className="flex min-h-0 min-w-0 flex-1">
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-        {isProjectManager(session.id) && orchestrationRuns.find(run => run.leadId === session.id) ? <ProjectManagerStatus run={orchestrationRuns.find(run => run.leadId === session.id)!} needsUser={!!session.pendingQuestion} onDecision={() => {
+        {ownedRuns.map(run => <ProjectManagerStatus key={run.leadId} run={run} needsUser={!!session.pendingQuestion} onDecision={() => {
           const question = transcriptScope.current?.parentElement?.querySelector<HTMLElement>("[data-question-form]");
           question?.scrollIntoView({ block: "center" }); question?.querySelector<HTMLElement>("button, input, textarea")?.focus();
-        }} /> : null}
+        }} />)}
           <div
             ref={transcriptScope}
             className={`@container relative min-h-0 flex-1${
@@ -904,7 +905,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
                   onMouseDown={focusPane}
                 >
                   <AgentTranscript
-                    managerProject={isProjectManager(session.id) ? session.cwd : undefined}
+                    managerProject={!agent && isProjectManager(session.id) ? session.cwd : undefined}
                     blocks={
                       agent && !monoTranscript.viewingOlderPage
                         ? monoPendingTranscriptBlocks(
@@ -1018,7 +1019,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
                         : undefined
                     }
                     latestTurnAccessory={
-                      isProjectManager(session.id) && orchestrationRuns.find(run => run.leadId === session.id) ? <ProjectManagerReview run={orchestrationRuns.find(run => run.leadId === session.id)!} /> : remote ||
+                      ownedRuns.length ? <>{ownedRuns.map(run => <ProjectManagerReview key={run.leadId} run={run} />)}</> : remote ||
                       session.inboxAsk ||
                       session.worktreeRemoved ||
                       monoTranscript.viewingOlderPage ||

@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { takeRunCards, type MonoCard } from "../../features/monos/model/monoCards";
 import type { ControlOutcome } from "../../features/orchestration/model/orchestration";
 import {
   newSession,
@@ -55,6 +56,7 @@ export type MonoHabitHost = {
     habit: Habit,
     text: string,
     title: string,
+    cards?: MonoCard[],
   ): void;
   /** Puts an approval the run is waiting on to the user, in the Mono's chat. */
   askApproval(
@@ -208,7 +210,8 @@ export function useMonoHabits(host: MonoHabitHost, enabled = true) {
 
       const report =
         outcome.status === "completed" ? habitReport(reply) : undefined;
-      if (report) host.post(monoSessionId, habit, report, look.name);
+      const cards = takeRunCards(run.id);
+      if (report) host.post(monoSessionId, habit, report, look.name, cards);
       await updateHabits(monoId, (habits) => ({
         habits: habits.map((entry) =>
           entry.id === habit.id

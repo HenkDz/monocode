@@ -1,5 +1,7 @@
 import { sessionConversationPage } from "../features/agent-app/model/sessionConversation";
-import { publishCardSessions } from "../features/monos/model/monoCards";
+import { adoptManagerMono, dedicatedMono, updateMono } from "../features/monos/model/mono";
+import { monoEngineId } from "../features/monos/model/monoEngines";
+import { publishCardSessions, holdRunCard } from "../features/monos/model/monoCards";
 import { MANAGER_ACTIONS, monoManagerGoals, monoGoalOrigins, type ManagerGoalHost } from "../features/monos/model/monoManagerGoals";
 import { readMonoConversation } from "../features/monos/model/monoConversation";
 import {
@@ -4486,6 +4488,7 @@ function Workspace({
   /** A Mono's conversation is a view over the existing workspace tabs. */
   const onOpenMono = useCallback(
     async (monoId: string) => {
+      updateMono(monoId, mono => ({ ...mono, lastUsedAt: Date.now() }));
       workspaceSessionRequest.current++;
       setMonoActivity(null);
       workspaceNavigation.cancel();
@@ -4547,6 +4550,7 @@ function Workspace({
         throw new Error("This Mono's conversation is no longer available.");
       if (removingSessionIds.current.has(sessionId))
         throw new Error("This conversation is already being reset.");
+      orchestrator.assertCanDeleteOwner(sessionId);
 
       removingSessionIds.current.add(sessionId);
       pendingPersist.current.delete(sessionId);
@@ -4629,7 +4633,7 @@ function Workspace({
       const parentId =
         session.orchestrationLeadId ??
         orchestrator.forSession(sessionId)?.leadId;
-      if (parentId && parentId !== sessionId && !isProjectManager(parentId)) {
+      if (parentId && parentId !== sessionId && !isProjectManager(parentId) && !orchestrator.run(parentId)?.projectManager) {
         setInspectedWorkerId(sessionId);
         session = await ensureOpenSession(parentId);
         if (request !== workspaceSessionRequest.current) return;
@@ -5460,6 +5464,10 @@ function Workspace({
     async (monoId: string) => {
       const mono = findMono(monoId);
       if (!mono) return;
+      if (mono.sessionId) {
+        try { orchestrator.assertCanDeleteOwner(mono.sessionId); }
+        catch (error) { window.alert(String(error)); return; }
+      }
       const { name } = monoLook(mono);
       const confirmed = await ask(
         `Delete ${name}? Its conversation will be deleted and its habits stop. This can’t be undone.`,
@@ -6610,32 +6618,47 @@ function Workspace({
       // Output already received belongs before the submitted user message.
       // Flush before reading the session too, since pending errors can settle it.
       flushHarnessEvents();
-      if (isProjectManager(sessionId) && !options?.managerTurnPrepared && !sessionsRef.current.find(session => session.id === sessionId)?.busy) {
+      if ((isProjectManager(sessionId) || !!(monoForSession(sessionId) ?? findMono(habitRunMono(sessionId) ?? ""))?.projects.length) && !options?.managerTurnPrepared && !sessionsRef.current.find(session => session.id === sessionId)?.busy) {
         return (async () => {
           let turnId: string | undefined;
+          const prepared: { id: string; turnId?: string }[] = [];
           try {
-            await orchestrator.hydrate(sessionId);
-            if (orchestrator.run(sessionId)?.status !== "active") {
-              if (options?.managed) throw new Error("Manager needs your decision before continuing.");
-              await probeHarnessAvailability();
-              await orchestrator.start(sessionId, HARNESSES.filter(isHarnessAvailable), 4, undefined, true);
+            const current = sessionsRef.current.find(session => session.id === sessionId)!;
+            const priorMono = monoForSession(sessionId) ?? findMono(habitRunMono(sessionId) ?? "");
+            const mono = priorMono ?? adoptManagerMono(sessionId, current.cwd);
+            if (!priorMono) void onOpenMono(mono.id);
+            for (const project of mono.projects) {
+              if (remoteProjectFor(project)) continue;
+              const folder = await invoke<string>("project_root", { project });
+              const id = await monoEngineId(mono, folder);
+              const ownerSessionId = mono.sessionId ?? sessionId;
+              if (ownerSessionId !== sessionId && !(await ensureOpenSession(ownerSessionId))) throw new Error("Habit owner conversation is unavailable");
+              orchestrator.registerMonoEngine(id, ownerSessionId, mono.id, folder);
+              if (!mono.workerProjects?.some(path => sameProjectPath(path, folder))) updateMono(mono.id, latest => ({ ...latest, workerProjects: [...new Set([...(latest.workerProjects ?? []), folder])] }));
+              await orchestrator.hydrate(id);
+              if (orchestrator.run(id)?.status !== "active") {
+                if (options?.managed || options?.monoSessionCompletion) continue;
+                await probeHarnessAvailability();
+                await orchestrator.start(id, HARNESSES.filter(isHarnessAvailable), 4, undefined, true);
+              }
+              turnId = await orchestrator.beginManagerTurn(id, !options?.managed && !options?.monoSessionCompletion);
+              prepared.push({ id, turnId });
             }
-            turnId = await orchestrator.beginManagerTurn(sessionId, !options?.managed);
             const accepted = await submitSessionRef.current(sessionId, text, attachments, {
               ...options, managerTurnPrepared: true,
               onSettled: outcome => {
-                void orchestrator.endManagerTurn(sessionId, turnId, outcome).catch(console.error);
+                for (const entry of prepared) void orchestrator.endManagerTurn(entry.id, entry.turnId, outcome).catch(console.error);
                 options?.onSettled?.(outcome);
               },
             });
             if (!accepted) {
               if (!options?.managed) saveDraftRef.current(sessionId, text, attachments);
-              await orchestrator.endManagerTurn(sessionId, turnId, { status: "failed", text: "", error: "Manager could not accept the turn. Continue when ready." });
+              for (const entry of prepared) await orchestrator.endManagerTurn(entry.id, entry.turnId, { status: "failed", text: "", error: "Mono could not accept the turn. Continue when ready." });
             }
             return accepted;
           } catch (error) {
             if (!options?.managed) saveDraftRef.current(sessionId, text, attachments);
-            await orchestrator.endManagerTurn(sessionId, turnId, { status: "failed", text: "", error: String(error) });
+            for (const entry of prepared) await orchestrator.endManagerTurn(entry.id, entry.turnId, { status: "failed", text: "", error: String(error) });
             enqueueHarnessEvent(sessionId, { type: "status", text: String(error) });
             flushHarnessEvents();
             return false;
@@ -7770,8 +7793,8 @@ function Workspace({
               ...(editedResend ? { onAccepted: acceptEditedResend } : {}),
               onEvent: routeTurnEvent,
             });
-          let sendText = orchestrator.prompt(
-            sessionId,
+          let sendText = orchestrator.promptForOwner(
+            findMono(habitRunMono(sessionId) ?? "")?.sessionId ?? sessionId,
             inboxAskPrompt(
               rawCommand ? undefined : current.inboxAsk,
               wrap && !rawCommand
@@ -7979,7 +8002,7 @@ function Workspace({
             );
             const visible = sessionId === activeSessionIdRef.current;
             // A habit's hidden run speaks through its Mono's chat instead.
-            if (finished && !isHabitRun(sessionId))
+            if (finished && !isHabitRun(sessionId) && !options?.monoSessionCompletion && !options?.managed && !orchestrator.snapshot().some(run => run.ownerSessionId === sessionId))
               void announceSessionFinished(finished, visible);
           }, 0);
           notifyReviewChanged(sessionId);
@@ -8142,7 +8165,7 @@ function Workspace({
       );
       setSessions(sessionsRef.current);
     },
-    post: (monoId, habit, text, name) =>
+    post: (monoId, habit, text, name, cards = []) => {
       appendToMono(
         monoId,
         {
@@ -8156,7 +8179,10 @@ function Workspace({
             { ...posted, title: name },
             monoId === activeSessionIdRef.current,
           ),
-      ),
+      );
+      const owner = monoForSession(monoId);
+      if (owner) for (const card of cards) appendToMono(monoId, { id: crypto.randomUUID(), role: "assistant", text: "", monoCard: card, monoCardOwner: owner.id });
+    },
     // The chat shows it like any approval, and the usual approval banner
     // fires for the Mono; the answer is routed back in onApproval.
     askApproval: (monoId, habit, runId, block) => {
@@ -10019,17 +10045,19 @@ function Workspace({
 
   const onOpenApprovalSession = useCallback(
     (sessionId: string) => {
+      const ownerMono = monoForSession(orchestrator.ownerSession(sessionId));
+      if (ownerMono) { void onOpenMono(ownerMono.id); return; }
       const parentId =
         sessionsRef.current.find((session) => session.id === sessionId)
           ?.orchestrationLeadId ?? orchestrator.forSession(sessionId)?.leadId;
-      if (parentId && parentId !== sessionId && !isProjectManager(parentId)) {
+      if (parentId && parentId !== sessionId && !isProjectManager(parentId) && !orchestrator.run(parentId)?.projectManager) {
         setInspectedWorkerId(sessionId);
         if (!focusOpenSession(parentId)) void onSelectHistorySession(parentId);
       } else if (!focusOpenSession(sessionId)) {
         void onSelectHistorySession(sessionId);
       }
     },
-    [focusOpenSession, onSelectHistorySession],
+    [focusOpenSession, onSelectHistorySession, onOpenMono],
   );
 
   useEffect(() => {
@@ -10065,7 +10093,7 @@ function Workspace({
         const projectCwd = orchestrationProjectCwd(run);
         const leadCheckoutCwd = orchestrationCheckoutCwd(run);
         const lead = sessionsRef.current.find(
-          (session) => session.id === run.leadId,
+          (session) => session.id === (run.ownerSessionId ?? run.leadId),
         );
         if (!lead) throw new Error("Lead session is unavailable");
         const namedTree = task.checkout && !task.workspace ? await listWorktrees(projectCwd).then(listed => {
@@ -10452,8 +10480,15 @@ function Workspace({
       sessionsRef.current = migrated;
       setSessions(migrated);
     }
-    for (const session of sessions.filter(session => isProjectManager(session.id) && !remoteProjectFor(session.cwd)))
+    for (const session of sessions.filter(session => isProjectManager(session.id) && !remoteProjectFor(session.cwd))) {
+      if (session.blocks.length || session.providerSessionId) {
+        try {
+          const mono = adoptManagerMono(session.id, session.cwd);
+          orchestrator.registerMonoEngine(session.id, session.id, mono.id, mono.managerProject ?? session.cwd);
+        } catch (error) { console.error("Manager migration could not be saved", error); continue; }
+      }
       void orchestrator.hydrate(session.id).catch(console.error);
+    }
     orchestrator.sync();
   }, [sessions]);
 
@@ -10471,6 +10506,8 @@ function Workspace({
           if (sessionsRef.current.some(session => session.id === id)) continue;
           const stored = await getSession(id);
           if (cancelled || !stored || !sameProjectPath(sessionWorkCwd(stored), folder)) continue;
+          const mono = adoptManagerMono(id, folder);
+          orchestrator.registerMonoEngine(id, id, mono.id, folder);
           const session = { ...stored, cwd: folder, worktreeCwd: undefined };
           if (session.providerSessionId) bindHarnessSession(session.harness, id, session.providerSessionId, folder, session.providerAccountId, session.blocks);
           if (!sessionsRef.current.some(entry => entry.id === id)) {
@@ -10485,10 +10522,15 @@ function Workspace({
 
   const ensureProjectManager = useCallback(async (project: string) => {
     const folder = await invoke<string>("project_root", { project });
-    const id = await projectManagerId(folder);
+    const legacyId = await projectManagerId(folder);
+    // A promoted Mono keeps its old conversation; a new placeholder must not reuse it.
+    const id = monoForSession(legacyId)
+      ? sessionsRef.current.find(session => isProjectManager(session.id) && !monoForSession(session.id) && sameProjectPath(session.cwd, folder))?.id ?? `project-manager-placeholder-${crypto.randomUUID()}`
+      : legacyId;
     if (!sessionsRef.current.some(session => session.id === id)) {
       const stored = await getSession(id);
       if (stored && !sameProjectPath(sessionWorkCwd(stored), folder)) throw new Error("The saved Manager no longer matches this project.");
+      if (stored) adoptManagerMono(id, folder);
       const session = stored ? { ...stored, cwd: folder, worktreeCwd: undefined } : { ...newDefaultSession(folder, sessionDefaults?.runtimeMode), id, title: "Manager" };
       if (stored && (stored.cwd !== folder || stored.worktreeCwd)) await upsertSession(session);
       if (session.providerSessionId) bindHarnessSession(session.harness, id, session.providerSessionId, folder, session.providerAccountId, session.blocks);
@@ -10508,6 +10550,14 @@ function Workspace({
       running = true;
       try {
         for (const mono of listMonos()) {
+          if (mono.sessionId && await ensureOpenSession(mono.sessionId)) {
+            for (const project of [...new Set([...mono.projects, ...(mono.workerProjects ?? []), ...(mono.managerProject ? [mono.managerProject] : [])])]) {
+              if (remoteProjectFor(project)) continue;
+              const id = await monoEngineId(mono, project);
+              orchestrator.registerMonoEngine(id, mono.sessionId, mono.id, project);
+              await orchestrator.hydrate(id);
+            }
+          }
           await monoManagerGoals.recover(mono.id, managerGoalHost.current);
           const events = monoManagerGoals.events(mono.id);
           if (!events.length || !mono.sessionId) continue;
@@ -10537,13 +10587,16 @@ function Workspace({
 
   const managerGoalHost = useRef<ManagerGoalHost>(null!);
   managerGoalHost.current = {
+    mayDelegate: monoId => (findMono(monoId)?.projects.length ?? 0) > 1,
     projects: async monoId => {
       const mono = findMono(monoId);
       if (!mono) throw new Error("Mono no longer exists");
       const look = monoLook(mono);
       return Promise.all(look.projects.filter(project => recents.some(recent => sameProjectPath(recent.path, project.path)) && !remoteProjectFor(project.path)).map(async project => {
         const folder = await invoke<string>("project_root", { project: project.path });
-        const managerId = await projectManagerId(folder);
+        const owner = dedicatedMono(folder) ?? mono;
+        const managerId = await monoEngineId(owner, folder);
+        if (owner.sessionId) orchestrator.registerMonoEngine(managerId, owner.sessionId, owner.id, folder);
         await orchestrator.hydrate(managerId);
         const run = orchestrator.run(managerId);
         const tasks = run?.tasks ?? [];
@@ -10572,10 +10625,21 @@ function Workspace({
       const mono = findMono(goal.monoId);
       const project = (await managerGoalHost.current.projects(goal.monoId)).find(project => project.id === goal.projectId);
       if (!mono || !project) throw new Error("Goal's project is no longer assigned");
-      const id = await ensureProjectManager(project.folder);
-      if (id !== goal.managerId) throw new Error("Manager identity changed");
-      if (cancel) for (const task of orchestrator.run(id)?.tasks ?? []) {
-        if (task.monoGoalId === goal.id && task.status !== "cancelled") await orchestrator.cancelTask(id, task.id);
+      const savedOwner = orchestrator.run(goal.managerId)?.ownerMonoId;
+      const owner = (savedOwner && findMono(savedOwner)) || dedicatedMono(project.folder) || mono;
+      const target = await ensureMonoSession(owner.id, {
+        home: homeDir, load: ensureOpenSession,
+        create: path => newDefaultSession(path, sessionDefaults?.runtimeMode),
+        add: session => { sessionsRef.current = [...sessionsRef.current, session]; setSessions(sessionsRef.current); },
+      });
+      if (!target) throw new Error("The owning Mono is unavailable");
+      const id = target.id;
+      const engineId = await monoEngineId(owner, project.folder);
+      if (engineId !== goal.managerId) throw new Error("Goal ownership changed; retain the original owner instead of redispatching");
+      orchestrator.registerMonoEngine(engineId, id, owner.id, project.folder);
+      await orchestrator.hydrate(engineId);
+      if (cancel) for (const task of orchestrator.run(engineId)?.tasks ?? []) {
+        if (task.monoGoalId === goal.id && task.status !== "cancelled") await orchestrator.cancelTask(engineId, task.id);
       }
       const current = sessionsRef.current.find(session => session.id === id)!;
       if (current.blocks.some(block => block.appRequestId === receiptId) || current.queuedMessages?.some(item => item.id === receiptId)) return;
@@ -10601,12 +10665,25 @@ function Workspace({
     }>("monocode-control-request", ({ payload }) => {
       const handle = async () => {
         if (payload.namespace === "control") {
+          const sourceSessionId = payload.sessionId;
+          const mono = monoForSession(payload.sessionId) ?? findMono(habitRunMono(payload.sessionId) ?? "");
+          if (mono) {
+            const project = payload.input.project ?? (mono.projects.length === 1 ? mono.projects[0] : undefined);
+            if (typeof project !== "string" || !mono.projects.some(path => sameProjectPath(path, project))) throw new Error("Choose an assigned project for this control call");
+            const id = await monoEngineId(mono, project);
+            const { project: _project, ...input } = payload.input;
+            payload = { ...payload, sessionId: id, input };
+          }
           if (payload.action === "delegate" && payload.input.monoGoalId == null) {
-            const source = sessionsRef.current.find(session => session.id === payload.sessionId);
+            const source = sessionsRef.current.find(session => session.id === sourceSessionId);
             const origin = source?.blocks.filter(block => block.role === "user").slice(-1)[0]?.monoSource;
             if (origin) payload.input = { ...payload.input, monoGoalId: origin.goalId };
           }
           if (payload.action === "delegate" && payload.input.monoGoalId != null && !monoManagerGoals.goals().some(goal => goal.id === payload.input.monoGoalId && goal.managerId === payload.sessionId && goal.state !== "cancelled")) throw new Error("Goal does not belong to this Manager");
+          if (mono && payload.action === "delegate") {
+            const origin = monoGoalOrigins.get(sourceSessionId);
+            if (!sessionsRef.current.find(session => session.id === sourceSessionId)?.busy || !origin || (origin.kind === "event" && !payload.input.monoGoalId)) throw new Error("Reports cannot start new work; message an existing goal instead");
+          }
           return orchestrator.handle(
             payload.sessionId,
             payload.requestId,
@@ -10623,7 +10700,7 @@ function Workspace({
           !source ||
           source.inboxAsk ||
           source.orchestrationLeadId ||
-          orchestrator.run(source.id)
+          (orchestrator.run(source.id) && !monoForSession(source.id))
         )
           throw new Error("This session cannot use the MonoCode app CLI");
         if ((MANAGER_ACTIONS as readonly string[]).includes(payload.action)) {
@@ -10866,10 +10943,17 @@ function Workspace({
               return saved;
             },
             isMono: (id) => isMonoSession(id),
-            postCard: (_id, card) => {
+            postCard: async (_id, card) => {
               if (!sourceMono) throw new Error("Card owner no longer exists");
               if ((card.type === "dispatch" || card.type === "status" || card.type === "ready") && card.goalIds?.some(id => !monoManagerGoals.goals(sourceMono.id).some(goal => goal.id === id))) throw new Error("Card references another Mono's goal");
-              appendToMono(sourceMono.id, { id: `mono-card-${payload.requestId}`, role: "assistant", text: "", monoCard: card, monoCardOwner: sourceMono.id });
+              if (isHabitRun(source.id)) { holdRunCard(source.id, card); return; }
+              const target = sessionsRef.current.find(session => session.id === sourceMono.sessionId);
+              if (!target) throw new Error("Mono chat is unavailable");
+              const id = `mono-card-${payload.requestId}`;
+              if (target.blocks.some(block => block.id === id)) return;
+              const next: Session = { ...target, blocks: [...target.blocks, { id, role: "assistant", text: "", monoCard: card, monoCardOwner: sourceMono.id }] };
+              await upsertSession(next);
+              setSessions(previous => previous.map(session => session.id === target.id && !session.blocks.some(block => block.id === id) ? { ...session, blocks: [...session.blocks, next.blocks[next.blocks.length - 1]] } : session));
             },
             isHabitRun: (id) => isHabitRun(id),
             monoOf: (id) => {
@@ -11135,21 +11219,26 @@ function Workspace({
   );
 
   const onOpenProjectManager = useCallback(async (project: string) => {
+    const mono = dedicatedMono(project);
+    if (mono) return onOpenMono(mono.id);
     closeMonoView();
     const request = ++workspaceSessionRequest.current;
     workspaceNavigation.cancel();
     const id = await ensureProjectManager(project);
     if (request !== workspaceSessionRequest.current) return;
     await onSelectHistorySession(id);
-  }, [onSelectHistorySession, ensureProjectManager, workspaceNavigation.cancel, closeMonoView]);
+  }, [onSelectHistorySession, ensureProjectManager, workspaceNavigation.cancel, closeMonoView, onOpenMono]);
 
   useEffect(() => {
-    publishCardSessions(sessions.map(session => ({ id: session.id, title: session.title, harness: session.harness, busy: session.busy, needsInput: !!session.pendingQuestion })), id => {
+    publishCardSessions(sessions.map(session => ({ id: session.id, title: session.title, harness: session.harness, busy: !!session.busy, needsInput: !!session.pendingQuestion })), id => {
+      id = orchestrator.ownerSession(id);
       const session = sessionsRef.current.find(session => session.id === id);
-      if (session && isProjectManager(id)) void onOpenProjectManager(session.cwd);
+      const mono = monoForSession(id);
+      if (mono) void onOpenMono(mono.id);
+      else if (session && isProjectManager(id)) void onOpenProjectManager(session.cwd);
       else void onSelectHistorySession(id);
     });
-  }, [sessions, onOpenProjectManager, onSelectHistorySession]);
+  }, [sessions, onOpenProjectManager, onSelectHistorySession, onOpenMono]);
   useEffect(() => {
     const reply = (event: Event) => {
       const { monoId, text } = (event as CustomEvent<{ monoId: string; text: string }>).detail;
@@ -11249,7 +11338,7 @@ function Workspace({
     () => {
       const runs = new Map(orchestrationRuns.map((run) => [run.leadId, run]));
       const rows = sessions
-        .filter((session) => !session.inboxAsk && !isProjectManager(session.id) && (!session.orchestrationLeadId || isProjectManager(session.orchestrationLeadId)))
+        .filter((session) => !session.inboxAsk && !isProjectManager(session.id) && !isMonoSession(session.id) && (!session.orchestrationLeadId || isProjectManager(session.orchestrationLeadId) || orchestrator.run(session.orchestrationLeadId)?.projectManager))
         .map((session) => {
           const run = runs.get(session.id);
           return {
@@ -12538,7 +12627,7 @@ function Workspace({
               renderProjectWorktrees={(project, enabled) => (
                 <ProjectWorktrees
                   key={project}
-                  renderManager={(expanded, onToggle, ownedCount) => <ProjectManagerRow project={project} enabled={enabled} selected={!chromeSurfaceOpen && managerActive && sameProjectPath(active.cwd, project)} onOpen={onOpenProjectManager} attention={managerQuestions} running={sessions.some(s => isProjectManager(s.id) && sameProjectPath(s.cwd, project) && s.busy)} expanded={expanded} onToggle={onToggle} ownedCount={ownedCount} />}
+                  renderManager={(expanded, onToggle, ownedCount) => <ProjectManagerRow project={project} enabled={enabled} selected={monoViewMono ? monoViewMono.id === dedicatedMono(project)?.id : !chromeSurfaceOpen && managerActive && sameProjectPath(active.cwd, project)} onOpen={onOpenProjectManager} attention={managerQuestions} running={sessions.some(s => (s.id === dedicatedMono(project)?.sessionId || isProjectManager(s.id) && sameProjectPath(s.cwd, project)) && s.busy)} expanded={expanded} onToggle={onToggle} ownedCount={ownedCount} />}
                   onRemove={onRemoveWorktree}
                   onOpenTerminal={onOpenTerminal}
                   onGiveToManager={async (project, tree, goal) => {

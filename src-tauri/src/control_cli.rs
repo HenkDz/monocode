@@ -227,7 +227,14 @@ Actions:
                   "schedule":{...},"enabled":false}  Change or pause one.
   habits.run     {"id":"..."}  Run one within a minute, to try it out.
   habits.remove  {"id":"..."}
+  projects.list  Mono only. List assigned projects and worker-engine summaries.
+  projects.status {projectId,before?} Read a bounded page of project goals.
+  goals.assign   Multi-project Mono only. {projectId,goal}; reuse requestId on retry.
+  goals.message  {goalId,text} Message an existing goal.
+  goals.cancel   {goalId} Cancel only this goal's workers; retain work.
+  prs.ready      List ready PRs in assigned projects.
   chat.card      Mono or habit only. Post a card to the Mono's chat:
+                 {type:"dispatch"|"status"|"ready",goalIds?:["id"]} shows stored goal state.
                   {"type":"pr","repo":"owner/repo","number":123,"note":"..."}
                   {"type":"session","sessionId":"...","note":"..."}
                   {"type":"choices","options":["First choice","Second choice"]}

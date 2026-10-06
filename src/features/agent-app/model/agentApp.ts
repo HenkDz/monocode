@@ -123,7 +123,7 @@ export type AgentAppHost = {
   /** A hidden run of one of a Mono's habits: it may remember, not schedule. */
   isHabitRun?(sessionId: string): boolean;
   /** Puts a card in the Mono's chat, or holds it for a habit run's report. */
-  postCard?(sourceSessionId: string, card: MonoCard): void;
+  postCard?(sourceSessionId: string, card: MonoCard): void | Promise<void>;
   habits?: {
     load(monoId: string): Promise<Habit[]>;
     update<T>(
@@ -799,7 +799,7 @@ export async function handleAgentApp(
     )
       throw new Error("Only a Mono can put cards in its chat");
     const card = parseCard(input);
-    host.postCard(source.id, card);
+    await host.postCard(source.id, card);
     return {
       posted: card.type,
       note: host.isMono(source.id)

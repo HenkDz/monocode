@@ -105,6 +105,9 @@ export type OrchestrationRun = {
   /** Version 1 remains readable; every committed snapshot is migrated to 2. */
   version: 1 | 2;
   leadId: string;
+  /** A Mono may own multiple project engines while keeping one conversation. */
+  ownerSessionId?: string;
+  ownerMonoId?: string;
   /** Legacy project identity. Use workspace.checkoutCwd for filesystem work. */
   cwd: string;
   workspace?: OrchestrationWorkspace;

@@ -61,7 +61,14 @@ it("retains sessions and does not repeat worktree deletion after branch cleanup 
       "Worktree removed; branch cleanup failed",
     );
     expect(deleted).not.toHaveBeenCalled();
+    expect(branch).toHaveBeenLastCalledWith(false);
+    const force = [...document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')][1];
+    expect(force.checked).toBe(false);
+    await act(async () => force.click());
+    expect(document.body.textContent).toContain("Commits not saved elsewhere may be lost");
+    expect(document.querySelector('button[type="submit"]')?.textContent).toContain("Force delete branch");
     await submit();
+    expect(branch).toHaveBeenLastCalledWith(true);
     expect(remove).toHaveBeenCalledTimes(1);
     expect(branch).toHaveBeenCalledTimes(2);
     expect(deleted).toHaveBeenCalledTimes(1);

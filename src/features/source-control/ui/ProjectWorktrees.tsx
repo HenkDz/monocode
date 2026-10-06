@@ -855,10 +855,11 @@ export function ProjectWorktrees({
           sessionCount={(groups.get(pathKey(deleting.path)) ?? []).length}
           allowDeleteSessions={false}
           onRemove={(cwd, path, force) => onRemove(cwd, path, force, true)}
-          onDeleteBranch={() =>
+          onDeleteBranch={(force) =>
             invoke<void>("git_worktree_branch_remove", {
               cwd: project,
               branch: deleting.branch,
+              force,
             })
           }
           onClose={() => {

@@ -11088,7 +11088,7 @@ function Workspace({
           <div className="flex min-h-0 min-w-0 flex-1">
             {managerRemoval && <DeleteWorktreeDialog cwd={managerRemoval.project} tree={managerRemoval.tree} sessionCount={worktreeSessionIds(managerRemoval.tree, sessions).length} allowDeleteSessions={false}
               onRemove={(cwd, path, force) => onRemoveWorktree(cwd, path, force, true)}
-              onDeleteBranch={() => invoke<void>("git_worktree_branch_remove", { cwd: managerRemoval.project, branch: managerRemoval.tree.branch })}
+              onDeleteBranch={(force) => invoke<void>("git_worktree_branch_remove", { cwd: managerRemoval.project, branch: managerRemoval.tree.branch, force })}
               onClose={() => setManagerRemoval(undefined)} onDeleted={() => setManagerRemoval(undefined)} />}
             <Sidebar
               cwd={sidebarCwd}

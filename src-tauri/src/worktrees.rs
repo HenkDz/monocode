@@ -864,15 +864,15 @@ pub async fn git_orchestration_branch_remove(cwd: String, branch: String) -> Res
 }
 
 #[tauri::command(async)]
-pub async fn git_worktree_branch_remove(cwd: String, branch: String) -> Result<(), String> {
+pub async fn git_worktree_branch_remove(cwd: String, branch: String, force: Option<bool>) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         let root = expand_home(&cwd);
         git(&root, &["check-ref-format", "--branch", &branch])?;
         if list(&root)?.iter().any(|tree| tree.branch.as_deref() == Some(branch.as_str())) {
             return Err("This branch still has a worktree; nothing was deleted.".into());
         }
-        // Git refuses unmerged work. Never force-delete a user branch.
-        git(&root, &["branch", "-d", "--", &branch]).map(|_| ())
+        // Conservative by default; only explicit user confirmation permits -D.
+        git(&root, &["branch", if force == Some(true) { "-D" } else { "-d" }, "--", &branch]).map(|_| ())
     }).await.map_err(|error| error.to_string())?
 }
 
@@ -913,7 +913,7 @@ mod tests {
     fn sidebar_branch_cleanup_refuses_checked_out_and_unmerged_work() {
         let fixture = repo();
         let root = fixture.0.join("repo");
-        let remove = |branch: &str| tauri::async_runtime::block_on(git_worktree_branch_remove(path_to_js(&root), branch.into()));
+        let remove = |branch: &str| tauri::async_runtime::block_on(git_worktree_branch_remove(path_to_js(&root), branch.into(), None));
         assert!(remove("main").unwrap_err().contains("still has a worktree"));
         git(&root, &["branch", "merged"]).unwrap();
         remove("merged").unwrap();
@@ -924,6 +924,11 @@ mod tests {
         assert!(remove("unmerged").is_err());
         assert!(git(&root, &["rev-parse", "--verify", "refs/heads/unmerged"]).is_ok());
         assert!(remove("--force").is_err());
+        let force_remove = |branch: &str| tauri::async_runtime::block_on(git_worktree_branch_remove(path_to_js(&root), branch.into(), Some(true)));
+        assert!(force_remove("main").unwrap_err().contains("still has a worktree"));
+        assert!(force_remove("--force").is_err());
+        force_remove("unmerged").unwrap();
+        assert!(git(&root, &["rev-parse", "--verify", "refs/heads/unmerged"]).is_err());
     }
 
     #[test]

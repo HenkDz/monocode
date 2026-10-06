@@ -61,12 +61,13 @@ export function DeleteWorktreeDialog({
   ) => Promise<void>;
   onClose: () => void;
   onDeleted: () => void;
-  onDeleteBranch?: () => Promise<void>;
+  onDeleteBranch?: (force: boolean) => Promise<void>;
   allowDeleteSessions?: boolean;
 }) {
   const [busy, setBusy] = useState(false);
   const [deleteSessions, setDeleteSessions] = useState(false);
   const [deleteBranch, setDeleteBranch] = useState(false);
+  const [forceBranch, setForceBranch] = useState(false);
   const [removed, setRemoved] = useState(false);
   const [error, setError] = useState<string>();
   const submit = async (event: FormEvent) => {
@@ -81,7 +82,7 @@ export function DeleteWorktreeDialog({
         await onRemove(cwd, tree.path, true, deleteSessions);
         setRemoved(true);
       }
-      if (deleteBranch) await onDeleteBranch?.();
+      if (deleteBranch) await onDeleteBranch?.(forceBranch);
       onDeleted();
     } catch (e) {
       setError(String(e));
@@ -143,7 +144,9 @@ export function DeleteWorktreeDialog({
                     {tree.branch}
                   </span>{" "}
                   {deleteBranch
-                    ? "local branch will also be deleted if Git confirms it is merged. Remote branches are untouched."
+                    ? forceBranch
+                      ? "local branch will be force-deleted, even if unmerged. Commits not saved elsewhere may be lost. Remote branches are untouched."
+                      : "local branch will also be deleted if Git confirms it is merged. Remote branches are untouched."
                     : "branch and its commits are kept."}
                 </>
               ) : (
@@ -169,13 +172,24 @@ export function DeleteWorktreeDialog({
               disabled={busy || removed}
               onChange={(e) => setDeleteBranch(e.target.checked)}
             />
-            Also delete local branch (merged only)
+            Also delete local branch
+          </label>
+        )}
+        {onDeleteBranch && deleteBranch && (
+          <label className="flex gap-2 text-red-400">
+            <input
+              type="checkbox"
+              checked={forceBranch}
+              disabled={busy}
+              onChange={(e) => setForceBranch(e.target.checked)}
+            />
+            Force delete unmerged branch — commits may be lost
           </label>
         )}
         {removed && (
           <p role="status">
             Worktree removed; branch cleanup failed. Retry cleanup or close this
-            dialog. Sessions were retained.
+            dialog. Sessions were {deleteSessions ? "deleted" : "retained"}.
           </p>
         )}
         {sessionCount > 0 && allowDeleteSessions && (
@@ -191,7 +205,7 @@ export function DeleteWorktreeDialog({
               role="switch"
               aria-labelledby="delete-worktree-sessions-label"
               aria-checked={deleteSessions}
-              disabled={busy}
+              disabled={busy || removed}
               onClick={() => setDeleteSessions(!deleteSessions)}
               className={`relative h-5 w-9 shrink-0 rounded-full transition-colors disabled:opacity-40 ${deleteSessions ? "bg-red-500" : "bg-content/20"}`}
             >
@@ -221,7 +235,11 @@ export function DeleteWorktreeDialog({
             className="inline-flex items-center gap-1.5 rounded-md bg-red-500/20 px-3 py-1.5 font-medium text-red-400 hover:bg-red-500/30 disabled:opacity-40 disabled:hover:bg-red-500/20 active:scale-[0.97]"
           >
             {busy && <Loader className="size-3.5 animate-spin" />}
-            {sessionCount && deleteSessions
+            {removed
+              ? forceBranch ? "Force delete branch" : "Retry branch cleanup"
+              : forceBranch && deleteBranch
+                ? "Delete worktree and force delete branch"
+                : sessionCount && deleteSessions
               ? `Delete worktree and session${sessionCount === 1 ? "" : "s"}`
               : "Delete worktree"}
           </button>

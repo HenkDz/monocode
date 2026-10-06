@@ -81,6 +81,8 @@ export type OrchestrationTask = {
   /** An open, non-draft PR confirmed at manager review time. */
   prUrl?: string;
   checksSummary?: string;
+  /** The project folder's branch when this assignment was created. */
+  baseBranch?: string;
   /** Optional existing worktree explicitly named in an assignment. */
   checkout?: string;
   result: string;
@@ -112,6 +114,12 @@ export type OrchestrationRun = {
   proposalId?: string;
   maxWorkers: number;
   projectManager?: boolean;
+  projectName?: string;
+  /** Persisted before a manager turn; absence means an idle manager is safe to restore. */
+  managerTurnId?: string;
+  recoveryNotice?: string;
+  /** Restore is in progress, not a request for human intervention. */
+  recovering?: boolean;
   cli: string;
   tasks: OrchestrationTask[];
   dispatches?: OrchestrationDispatch[];

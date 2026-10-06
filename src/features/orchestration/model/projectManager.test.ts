@@ -5,10 +5,22 @@ import {
   managerWorktreeStatus,
   managerAttention,
   managerTaskMerged,
+  reviewedManagerPullRequest,
 } from "./projectManager";
 import type { OrchestrationRun } from "./orchestrationState";
 import { newSession } from "../../sessions/model/session";
 import { prStatusKey } from "../../source-control/hooks/usePrStatus";
+
+it("accepts only an open non-draft PR targeting the assignment's captured project branch", () => {
+  const task = { baseBranch: "v4" } as OrchestrationRun["tasks"][number];
+  const pr = { number: 4, title: "V4", url: "https://example.invalid/4", state: "open", baseRefName: "v4" };
+  expect(reviewedManagerPullRequest(task, pr)).toBe(pr.url);
+  expect(() => reviewedManagerPullRequest(task, { ...pr, baseRefName: "main" })).toThrow("assignment branch: v4");
+  expect(() => reviewedManagerPullRequest(task, { ...pr, baseRefName: undefined })).toThrow("assignment branch");
+  expect(() => reviewedManagerPullRequest(task, { ...pr, isDraft: true })).toThrow("non-draft");
+  expect(() => reviewedManagerPullRequest(task, { ...pr, state: "closed" })).toThrow("open");
+  expect(() => reviewedManagerPullRequest(task, null)).toThrow("lookup failure");
+});
 
 it("does not hide a new correction dispatch just because its previous PR merged", () => {
   const task = {
@@ -34,6 +46,15 @@ it("uses one durable project identity across Windows spellings", async () => {
   expect(await projectManagerId("c:\\projects\\my repo")).toBe(id);
   expect(isProjectManager(id)).toBe(true);
   expect(await projectManagerId("C:/Projects/Other")).not.toBe(id);
+  expect(await projectManagerId("C:/Projects/My Repo-worktrees/browser-link-4")).not.toBe(id);
+});
+
+it("makes a paused manager a decision in the shared Inbox and badge state", () => {
+  const run = { leadId: "project-manager-test", cwd: "/v4", projectManager: true, status: "paused", error: "Provider unavailable", tasks: [] } as unknown as OrchestrationRun;
+  expect(managerAttention([], [run], new Set(), new Map())).toEqual([
+    expect.objectContaining({ kind: "decision", project: "/v4", question: "Provider unavailable" }),
+  ]);
+  expect(managerAttention([], [{ ...run, status: "active" }], new Set(), new Map())).toEqual([]);
 });
 
 it("shares unread, blocked and ready attention and clears terminal PRs", () => {

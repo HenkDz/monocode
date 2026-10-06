@@ -1,4 +1,4 @@
-//! Resolve a project's canonical root using the existing Git worktree registry.
+//! Validate and canonicalize the registered project folder, including linked checkouts.
 use std::path::Path;
 
 fn canonical(path: &str) -> Result<String, String> {
@@ -40,7 +40,7 @@ pub fn project_root(project: String) -> Result<String, String> {
     {
         return Err("Project is not a registered Git checkout".into());
     }
-    canonical(trees.first().ok_or("Project has no worktrees")?)
+    Ok(project)
 }
 
 #[cfg(test)]
@@ -92,7 +92,7 @@ mod tests {
         assert!(!target.starts_with("//?/"));
         assert!(same(
             &project_root(worker.to_str().unwrap().into()).unwrap(),
-            &target
+            &canonical(worker.to_str().unwrap()).unwrap()
         ));
         assert!(!same(
             &project_root(other.to_str().unwrap().into()).unwrap(),
@@ -101,7 +101,10 @@ mod tests {
         assert!(project_root(root.to_str().unwrap().into()).is_err());
         if cfg!(windows) {
             let same_target = project_root(worker.to_string_lossy().to_uppercase()).unwrap();
-            assert!(same(&same_target, &target));
+            assert!(same(
+                &same_target,
+                &canonical(worker.to_str().unwrap()).unwrap()
+            ));
         }
         git(&project, &["worktree", "remove", worker.to_str().unwrap()]);
         assert!(project_root(worker.to_str().unwrap().into()).is_err());

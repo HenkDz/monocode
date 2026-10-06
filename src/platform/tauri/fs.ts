@@ -366,6 +366,7 @@ export function gitRangeContext(cwd: string): Promise<GitRangeContext> {
 }
 
 export type GitPr = {
+  baseRefName?: string;
   number: number;
   title: string;
   url: string;

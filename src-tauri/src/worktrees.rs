@@ -1011,6 +1011,27 @@ mod tests {
     }
 
     #[test]
+    fn manager_worker_starts_from_linked_project_branch_not_repository_main() {
+        let repo = repo();
+        let root = repo.0.join("repo");
+        let linked = create(&root, "v4", "main", false).unwrap();
+        let folder = Path::new(&linked.path);
+        git_checked(
+            folder,
+            &[
+                "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                "commit", "--allow-empty", "-m", "v4 only",
+            ],
+        )
+        .unwrap();
+        let worker = create_seeded(folder, "mc/v4-worker").unwrap();
+        assert_eq!(worker.head, git(folder, &["rev-parse", "HEAD"]).unwrap().trim());
+        assert_ne!(worker.head, git(&root, &["rev-parse", "HEAD"]).unwrap().trim());
+        assert_eq!(git(folder, &["branch", "--show-current"]).unwrap().trim(), "v4");
+        assert_eq!(list(&root).unwrap().len(), 3);
+    }
+
+    #[test]
     fn orchestration_worktree_starts_from_the_lead_checkout_contents() {
         let repo = repo();
         let root = repo.0.join("repo");

@@ -35,6 +35,25 @@ vi.mock("../../inbox/hooks/useGithubPrChecks", () => ({
 }));
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
+it("explains a real blocker in chat and continues explicitly, without a Resume link", async () => {
+  const continueManager = vi.spyOn(orchestrator, "continueManager").mockResolvedValue();
+  const host = document.createElement("div");
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(<ProjectManagerReview run={{ leadId: "manager", tasks: [], status: "paused", error: "Provider unavailable" } as unknown as OrchestrationRun} />));
+    expect(host.textContent).toContain("Provider unavailable");
+    expect(host.textContent).not.toContain("Resume");
+    await act(async () => host.querySelector("button")!.click());
+    expect(continueManager).toHaveBeenCalledWith("manager");
+    await act(async () => root.render(<ProjectManagerReview run={{ leadId: "manager", tasks: [], status: "active", recoveryNotice: "Continued 2 workers after restart." } as unknown as OrchestrationRun} />));
+    expect(host.textContent).toContain("Continued 2 workers");
+    expect(host.querySelector("button")).toBeNull();
+  } finally {
+    await act(async () => root.unmount());
+    continueManager.mockRestore();
+  }
+});
+
 it("navigates to workers, cycles ready cards and offers removal only after matching merged evidence", async () => {
   const tasks = ["one", "two"].map((id) => ({
     id,

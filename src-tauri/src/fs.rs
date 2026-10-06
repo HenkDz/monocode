@@ -1142,6 +1142,8 @@ pub async fn git_range_context(cwd: String) -> Result<GitRangeContext, String> {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct GitPr {
+    #[serde(default)]
+    pub base_ref_name: Option<String>,
     pub number: i64,
     pub title: String,
     pub url: String,
@@ -2680,7 +2682,7 @@ fn git_pr_status_for(root: &Path) -> Option<GitPr> {
             "--head",
             &branch,
             "--json",
-            "number,title,url,state,isDraft,headRepositoryOwner",
+            "number,title,url,state,isDraft,headRepositoryOwner,baseRefName",
             "--limit",
             "20",
             "--state",
@@ -4049,6 +4051,8 @@ fn parse_gh_pr_list(json: &str, owner: &str) -> Option<GitPr> {
     #[derive(Deserialize)]
     struct Row {
         number: i64,
+        #[serde(default, rename = "baseRefName")]
+        base_ref_name: Option<String>,
         title: String,
         url: String,
         state: String,
@@ -4068,6 +4072,7 @@ fn parse_gh_pr_list(json: &str, owner: &str) -> Option<GitPr> {
             continue;
         }
         let pr = GitPr {
+            base_ref_name: row.base_ref_name,
             number: row.number,
             title: row.title,
             url: row.url,
@@ -7716,6 +7721,16 @@ mod tests {
             "owner"
         )
         .is_none());
+    }
+
+    #[test]
+    fn pr_status_exposes_assignment_base_for_manager_review() {
+        let pr = parse_gh_pr_list(
+            r#"[{"number":4,"title":"V4","url":"https://example.invalid/4","state":"OPEN","baseRefName":"v4","headRepositoryOwner":{"login":"owner"}}]"#,
+            "owner",
+        )
+        .unwrap();
+        assert_eq!(pr.base_ref_name.as_deref(), Some("v4"));
     }
 
     #[test]

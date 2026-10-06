@@ -52,11 +52,11 @@ export function ProjectManagerStatus({
     >
       <button
         type="button"
-        disabled={!needsUser}
-        onClick={onDecision}
+        disabled={!needsUser && (run.status !== "paused" || run.recovering)}
+        onClick={() => run.status === "paused" ? document.getElementById("manager-continue")?.scrollIntoView({ block: "center" }) : onDecision?.()}
         className="rounded px-2 py-1 text-amber-600 dark:text-amber-400 disabled:opacity-40"
       >
-        {needsUser ? 1 : 0} needs you
+        {needsUser || (run.status === "paused" && !run.recovering) ? 1 : 0} needs you
       </button>
       {groups.map(({ label, tasks }) => (
         <button
@@ -82,6 +82,8 @@ export function ProjectManagerStatus({
 }
 
 export function ProjectManagerReview({ run }: { run: OrchestrationRun }) {
+  const [continuing, setContinuing] = useState(false);
+  const [continueError, setContinueError] = useState<string>();
   const statuses = usePrStatusCache();
   const actions = useContext(OrchestrationActions);
   const ready = run.tasks.filter((task) =>
@@ -122,6 +124,20 @@ export function ProjectManagerReview({ run }: { run: OrchestrationRun }) {
         }
       }}
     >
+      {run.recoveryNotice && <p role="status" className="text-xs text-content/60">{run.recoveryNotice}</p>}
+      {run.status === "paused" && !run.recovering && (
+        <section id="manager-continue" aria-label="Manager needs your decision" className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-sm">
+          <p className="font-medium text-amber-600 dark:text-amber-400">Manager needs your decision</p>
+          <p className="mt-1 text-content/70">{run.error || run.lastPauseReason || "The Manager could not continue."}</p>
+          <button type="button" disabled={continuing} className="mt-2 rounded px-2 py-1 text-amber-600 hover:bg-amber-500/10 focus-visible:outline-accent disabled:opacity-50"
+            onClick={() => {
+              setContinuing(true);
+              setContinueError(undefined);
+              void orchestrator.continueManager(run.leadId).catch(error => setContinueError(String(error))).finally(() => setContinuing(false));
+            }}>{continuing ? "Continuing…" : "Continue"}</button>
+          {continueError && <p role="alert">{continueError}</p>}
+        </section>
+      )}
       {run.tasks
         .filter(
           (task) =>

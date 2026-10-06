@@ -132,6 +132,116 @@ describe("worker assignment prompts", () => {
 });
 
 describe("local orchestration", () => {
+  it("restores idle managers without pausing, but retains real manager interruptions", async () => {
+    const f = setup();
+    f.lead.busy = false;
+    await f.manager.start("lead", ["codex"], 2, undefined, true);
+    const restored = new Orchestrator(f.store);
+    restored.bind(f.host);
+    const states: string[] = [];
+    restored.subscribe(() => { if (restored.run("lead")) states.push(restored.run("lead")!.status); });
+    await restored.hydrate("lead");
+    expect(restored.run("lead")?.status).toBe("active");
+    expect(states).not.toContain("paused");
+    expect(f.host.submit).not.toHaveBeenCalled();
+    const turn = await restored.beginManagerTurn("lead", true);
+    expect(turn).toBeTruthy();
+    const crashed = new Orchestrator(f.store);
+    crashed.bind(f.host);
+    await crashed.hydrate("lead");
+    expect(crashed.run("lead")).toMatchObject({ status: "paused", error: expect.stringContaining("Manager's last turn") });
+    expect(f.host.submit).not.toHaveBeenCalled();
+  });
+
+  it("automatically continues restart-interrupted workers once from their retained checkout", async () => {
+    const f = setup();
+    f.lead.harness = "codex";
+    f.lead.model = "codex:test";
+    f.lead.busy = false;
+    await f.manager.start("lead", ["codex"], 2, undefined, true);
+    f.lead.busy = true;
+    await f.delegate(["src"]);
+    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledOnce());
+    const original = structuredClone(f.tasks()[0]);
+    const restored = new Orchestrator(f.store);
+    restored.bind(f.host);
+    await restored.hydrate("lead");
+    await restored.hydrate("lead");
+    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledTimes(2));
+    expect(restored.run("lead")).toMatchObject({ status: "active", recoveryNotice: "Continued 1 worker after restart from retained checkouts." });
+    expect(restored.run("lead")!.tasks[0]).toMatchObject({ sessionId: original.sessionId, workspace: original.workspace, status: "running" });
+    expect(f.host.submit).toHaveBeenLastCalledWith(original.sessionId, expect.stringContaining("Preserve completed work"), expect.any(Function));
+  });
+
+  it("resets the continuation budget on user turns and exposes failed turns without replaying them", async () => {
+    const f = setup();
+    f.lead.busy = false;
+    await f.manager.start("lead", ["codex"], 2, undefined, true);
+    f.manager.run("lead")!.continuations = 20;
+    const turn = await f.manager.beginManagerTurn("lead", true);
+    expect(f.manager.run("lead")!.continuations).toBe(0);
+    await f.manager.endManagerTurn("lead", turn, { status: "failed", text: "", error: "Provider unavailable" });
+    expect(f.manager.run("lead")).toMatchObject({ status: "paused", error: "Provider unavailable" });
+    await f.manager.continueManager("lead");
+    expect(f.manager.run("lead")!.status).toBe("active");
+    expect(f.host.submit).toHaveBeenCalledOnce();
+  });
+
+  it("treats stopping a Manager as an interruption, preserving its workers for Continue", async () => {
+    const f = setup();
+    f.lead.busy = false;
+    await f.manager.start("lead", ["codex"], 2, undefined, true);
+    f.lead.busy = true;
+    await f.delegate(["src"]);
+    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledOnce());
+    await f.manager.stopForSession("lead");
+    expect(f.manager.run("lead")?.status).toBe("paused");
+    expect(f.tasks()[0].status).toBe("interrupted");
+    expect(f.tasks()[0].workspace).toBeDefined();
+    expect(f.host.stop).toHaveBeenCalledWith("lead");
+    expect(f.host.cleanupWorker).not.toHaveBeenCalled();
+  });
+
+  it("does not replay a saved safety/provider blocker and waits for provider discovery during recovery", async () => {
+    const f = setup();
+    f.lead.harness = "codex";
+    f.lead.model = "codex:test";
+    f.lead.busy = false;
+    await f.manager.start("lead", ["codex"], 2, undefined, true);
+    f.lead.busy = true;
+    await f.delegate(["src"]);
+    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledOnce());
+    let discovered!: () => void;
+    f.host.probeProviders = () => new Promise<void>(resolve => { discovered = resolve; });
+    f.host.choices = () => [];
+    const restored = new Orchestrator(f.store);
+    restored.bind(f.host);
+    const loading = restored.hydrate("lead");
+    await vi.waitFor(() => expect(discovered).toBeTypeOf("function"));
+    expect(f.host.submit).toHaveBeenCalledOnce();
+    discovered();
+    await loading;
+    expect(restored.run("lead")).toMatchObject({ status: "paused", recovering: undefined, error: expect.stringContaining("provider is unavailable") });
+    const blocked = new Orchestrator(f.store);
+    blocked.bind(f.host);
+    await blocked.hydrate("lead");
+    expect(blocked.run("lead")?.status).toBe("paused");
+    expect(f.host.submit).toHaveBeenCalledOnce();
+  });
+
+  it("uses the folder display name and captures its branch for each assignment", async () => {
+    const f = setup();
+    f.lead.busy = false;
+    f.lead.cwd = "/worktrees/browser-link-4";
+    f.host.projectIdentity = vi.fn(async () => ({ name: "Browser Link 4", branch: "v4" }));
+    await f.manager.start("lead", ["codex"], 2, undefined, true);
+    f.lead.busy = true;
+    await f.delegate(["src"]);
+    expect(f.manager.prompt("lead", "Build")).toContain('Manager for "Browser Link 4"');
+    expect(f.manager.run("lead")!.workspace).toMatchObject({ checkoutCwd: f.lead.cwd, branch: "v4" });
+    expect(f.tasks()[0].baseBranch).toBe("v4");
+  });
+
   it("defaults to the current Manager model and reassigns stopped workers without losing scope or checkout", async () => {
     const f = setup();
     f.lead.harness = "codex";

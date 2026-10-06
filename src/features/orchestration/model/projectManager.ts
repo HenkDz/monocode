@@ -7,6 +7,14 @@ import { prStatusKey } from "../../source-control/hooks/usePrStatus";
 const PREFIX = "project-manager-";
 export const isProjectManager = (id: string) => id.startsWith(PREFIX);
 
+export function reviewedManagerPullRequest(task: OrchestrationTask, pr: GitPr | null): string {
+  if (!pr || pr.state !== "open" || pr.isDraft || !pr.url)
+    throw new Error("Could not confirm an open non-draft PR for this worker branch. If it already exists, report the lookup failure; do not republish it or inspect credentials.");
+  if (task.baseBranch && pr.baseRefName !== task.baseBranch)
+    throw new Error(`This PR must target the project's assignment branch: ${task.baseBranch}.`);
+  return pr.url;
+}
+
 export function managerTaskMerged(
   task: OrchestrationTask,
   pr?: GitPr | null,
@@ -93,6 +101,11 @@ export function managerAttention(
       });
   }
   for (const run of runs.filter((r) => r.projectManager)) {
+    if (run.status === "paused" && !run.recovering) items.push({
+      key: `${run.leadId}:continue`, id: run.leadId, project: run.cwd,
+      kind: "decision", question: run.error || "Manager needs your decision to continue",
+      notificationId: `continue:${run.error ?? run.lastPauseReason ?? "paused"}`,
+    });
     for (const task of run.tasks) {
       // Worker problems go to Manager; only its explicit escalation needs a human.
       if (managerPrReady(task, taskPrStatus(task, statuses)))
@@ -109,11 +122,11 @@ export function managerAttention(
   return items;
 }
 
-/** Native resolution supplies the repository root, never the selected worktree. */
-export async function projectManagerId(root: string): Promise<string> {
+/** Native resolution supplies the registered sidebar folder, including linked worktrees. */
+export async function projectManagerId(folder: string): Promise<string> {
   const digest = await crypto.subtle.digest(
     "SHA-256",
-    new TextEncoder().encode(orchestrationPathKey(root)),
+    new TextEncoder().encode(orchestrationPathKey(folder)),
   );
   return (
     PREFIX +

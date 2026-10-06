@@ -128,29 +128,6 @@ export function ProjectManagerRow({
           </span>
         )}
       </button>
-      {run?.status === "paused" && (
-        <button
-          type="button"
-          disabled={opening}
-          className="ml-7 rounded px-1 text-[11px] text-content/60 hover:text-content focus-visible:outline-accent"
-          onClick={() => {
-            setOpening(true);
-            setError(undefined);
-            void orchestrator
-              .start(
-                run.leadId,
-                run.allowedHarnesses,
-                run.maxWorkers,
-                undefined,
-                true,
-              )
-              .catch((reason) => setError(String(reason)))
-              .finally(() => setOpening(false));
-          }}
-        >
-          Resume
-        </button>
-      )}
       {error && (
         <p role="alert" className="px-2 text-xs text-red-400">
           {error}

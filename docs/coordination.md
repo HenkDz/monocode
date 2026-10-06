@@ -1,26 +1,33 @@
 # Project managers
 
+Latest round preserves the local `2f2fea7` navigation, queue, colored diffs/checks and notifications changes.
+
 Each local Git project has a Manager row above its worktrees. Opening it uses a normal session pane; the blank pane is ephemeral. The first message starts the provider and the existing persistent Orchestrator. There is no enable form, checkout selector, coordination overlay or grand orchestrator.
 
 The Manager is a standalone chat surface: its selected sidebar row opens a simple Manager header, without worktree tabs, a new-tab action, or the worktree Explorer panel. Worktree tab sets remain intact in the background. Managers are excluded from workspace tab memory, blank-pane replacement, split/drop chat placement and legacy worker-tab consolidation. Project-manager worker chats remain independently selectable. Superseded async selections cannot steal focus back from a later click.
 
-Manager identity is derived from the native-resolved repository root, so opening the same repository through another registered checkout does not create another manager. The session keeps the existing sidebar project identity but executes at the repository root. It cannot be retargeted through the composer.
+Manager identity is derived from the canonical registered sidebar folder. A linked project folder has its own Manager, distinct from the repository root's Manager. It executes in that folder and uses the sidebar display name. Existing root-derived IDs and chats remain intact for the root project; linked folders receive new IDs. It cannot be retargeted through the composer.
 
 ## Worker lifecycle
 
 - Delegate creates an isolated worker worktree. An optional checkout path or branch reuses an existing non-primary worktree named by the user. Missing, foreign and already-owned checkouts are rejected.
 - Workers use full-access mode through the ordinary provider/session pipeline. Questions and approvals go to the manager's existing answer/respond tools.
 - Several goals can run concurrently (four worker slots per manager). Independent worktrees do not contend for logical file scopes. Up to forty unreviewed assignments may be outstanding.
+- New workers start at the registered folder's current branch. Each assignment captures that branch as its PR base; review rejects a PR targeting another branch. Existing assignments retain their original base after branch changes. Named worktrees retain their existing history; ownership checks span managers.
 - The manager reads actual diffs and test results, asks workers for corrections, and opens a non-draft PR. Review confirms an open PR for that worker branch and records the exact accepted dispatch. It never integrates into the project root or deletes the worker checkout.
 - PR ready means manager-reviewed with an open non-draft PR at review time, not a claim that remote branch-protection or CI gates have passed. The user reviews and merges.
-- Worker status is displayed on its worktree row. The Manager row distinguishes running, needs decision (including blocked/failed workers), new replies, and ready PRs, with a count of waiting items. Unseen plain-text replies get attention without falsely claiming every reply is a question.
+- Worker status is displayed on its worktree row. Worker problems go to the Manager; the Manager row distinguishes running, explicit needs-decision blockers/escalations, new replies, and ready PRs, with a count of waiting items. Unseen plain-text replies get attention without falsely claiming every reply is a question.
 - Accepted PRs have an inline card with the branch/worktree, checks summary, PR link, Open PR, Open diff (the committed GitHub PR diff), and Send back. Corrections resume the run and go to the retained worker. A failed send keeps the correction draft.
 - Questions and ready PRs use the existing notification preferences and Inbox. Ordinary non-manager orchestration workers retain their notifications. OS notifications alone do not provide phone delivery.
 - Shared PR status refreshes on focus, visibility and Git events. Merged/closed PRs clear readiness and stop forcing their worktrees into the sidebar. Failed lookups preserve the last known state; this is not a real-time webhook subscription.
 
 ## Persistence and recovery
 
-The existing SQLite session/run storage, dispatch identities, request receipts, provider adapters and stop/recovery machinery remain authoritative. Reopening pauses uncertain work; sending a user message resumes it directly. Nothing is replayed just by opening its chat. Retries retain their worker session and worktree, and uncertain external effects must be inspected before retrying. Automatic result delivery rechecks the lead after persistence so it cannot race a user's resumed turn and spuriously pause the run.
+The existing SQLite session/run storage, dispatch identities, request receipts, provider adapters and stop/recovery machinery remain authoritative. Idle Managers stay active across restart. Restart-interrupted workers continue automatically from retained sessions/worktrees, with a persisted status line in the Manager chat. Provider discovery completes before recovery. Saved Managers recover even when their pane is not selected.
+
+A Manager turn is marked durably before submission. An interrupted/failed Manager turn, unavailable provider, save failure or safety blocker requires a decision: the shared amber badge/Inbox entry and inline **Continue** card explain why. Stopping a Manager interrupts rather than discards its workers. Sending a user message also resumes. The automatic-continuation budget resets on user turns; hitting its cap produces the same decision card. There is no sidebar Resume link. Ordinary orchestrator recovery remains manual.
+
+Recovery never authorizes repeating uncertain external effects: workers must inspect existing work and push/PR outcomes before retrying. Dispatch IDs and request receipts remain authoritative, and concurrent hydration shares one restore operation. Automatic result delivery rechecks the lead after persistence so it cannot race a user's resumed turn.
 
 The old preview's coordination metadata is not deleted or automatically migrated into active work. No separate registry, queue service, session database or hosting dependency was added.
 
@@ -121,3 +128,12 @@ Previous polish and the colored diff/check chips were checkpointed locally in `8
 | 6. Manager queue, merged card and collapsed Done | [Queue](../target/manager-round3-6-queue-merged.png), [Active only](../target/manager-round3-6-active-only.png), [Light theme](../target/manager-round3-6-light.png) |
 
 Packaged deliverable: `target/manager-verified-preview/monocode-round3-final.exe` (same isolated preview identifier). Built, not relaunched over the user's active preview. Installed-app sessions were not changed. Local commits only; no push, PR publication, merge, deployment or phone notification was performed in this round.
+
+## Resume and folder identity verification
+
+- Full frontend suite: **4,323 passed, 13 skipped** (405 passing files). Focused orchestration suite: **109 passed**. Regressions cover idle restore without even a transient pause, single retained-worker redispatch, interrupted Manager turns, provider discovery/unavailability, user-message budget reset, Stop preserving workers, folder identity/display name, captured PR bases, and the Continue card/attention state.
+- Native: **13 worktree tests, 1 project-folder test and 2 PR-status tests passed**. A real linked-project fixture with a unique v4 commit proves worker HEAD equals v4 and differs from main. PR parsing exposes the base branch; frontend review rejects wrong/unknown bases, drafts, closed or missing PRs.
+- TypeScript, native-library clippy with warnings denied, production frontend and native debug builds pass. Existing bundle-size warnings remain.
+- Isolated native lifecycle test: actual process restart, native SQLite persistence and real Git worktrees, with a **deterministic worker adapter** (not a live model). The idle root Manager remained active; the separate v4 Manager continued its interrupted worker once with the same session/check­out and a new dispatch. A second process restart repeated this without duplicate submission. A forced Manager failure produced one decision and the amber Continue card. No push, PR, provider request or phone notification was sent.
+- Evidence: [restored worker](../target/manager-identity-show.png), [Continue card and amber badge](../target/manager-identity-failManager.png), [native recovery state](../target/manager-identity-recover.json). Harness: `target/manager-identity-runtime.tsx` and `target/manager-identity-runtime.mjs`. The isolated test app and its dedicated dev server were closed afterward.
+- Final local binary: `target/manager-verified-preview/monocode-manager-resume-identity-verified.exe`, SHA-256 `38cccc9c6456c814bdea0c96ed70cdb824f318bf528b7f8da2e4313fc0e19cd4`. Built for the existing isolated preview profile, **not launched over the user's active preview**. Installed-app sessions remain untouched.

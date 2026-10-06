@@ -1,11 +1,11 @@
 import { acceptQuickLaunch } from "./model/quickLaunchSession";
 import { useProjectWorktrees } from "../features/source-control/hooks/useProjectWorktrees";
 import { useManagerPhoneNotifications } from "../features/notifications/hooks/useManagerPhoneNotifications";
-import { isProjectManager, projectManagerId, managerAttention } from "../features/orchestration/model/projectManager";
+import { isProjectManager, projectManagerId, managerAttention, reviewedManagerPullRequest } from "../features/orchestration/model/projectManager";
 import { CreateWorktreeDialog } from "../features/source-control/ui/CreateWorktreeDialog";
 import { usePrStatuses } from "../features/source-control/hooks/usePrStatus";
 import { ProjectManagerRow } from "../features/orchestration/ui/ProjectManagerRow";
-import { gitPrStatus } from "../platform/tauri/fs";
+import { gitBranches, gitPrStatus } from "../platform/tauri/fs";
 import { useWorkspaceNavigation } from "./hooks/useWorkspaceNavigation";
 import { useIdleSessionDetach } from "./hooks/useIdleSessionDetach";
 import {
@@ -234,6 +234,8 @@ import {
   insertTabBesideActive,
   removeTabFromGroup,
   tabGroupProject,
+  loadTabGroupLabels,
+  resolveTabGroupLabel,
 } from "../features/workspace/model/tabGroups";
 import { type WindowTransferPayload } from "./model/windowTransfer";
 import {
@@ -357,6 +359,7 @@ import {
   isEqualOrInside,
   pathKey,
   projectName,
+  projectKey,
   rebasePath,
   resolveWorkspacePath,
 } from "../shared/lib/paths";
@@ -742,6 +745,7 @@ type SubmitOptions = ComposerTurnOptions & {
   planBlockId?: string;
   buildTarget?: PlanBuildTarget;
   managed?: boolean;
+  managerTurnPrepared?: boolean;
   orchestrationRetry?: OrchestrationProposal;
   appRequestId?: string;
   onSettled?: (outcome: ControlOutcome) => void;
@@ -6207,18 +6211,32 @@ function Workspace({
       // Output already received belongs before the submitted user message.
       // Flush before reading the session too, since pending errors can settle it.
       flushHarnessEvents();
-      if (isProjectManager(sessionId) && !options?.managed && orchestrator.run(sessionId)?.status !== "active") {
+      if (isProjectManager(sessionId) && !options?.managerTurnPrepared && !sessionsRef.current.find(session => session.id === sessionId)?.busy) {
         return (async () => {
+          let turnId: string | undefined;
           try {
             await orchestrator.hydrate(sessionId);
-            // Sending is explicit intent to resume; opening the pane alone never replays work.
-            if (orchestrator.run(sessionId)?.status !== "active")
+            if (orchestrator.run(sessionId)?.status !== "active") {
+              if (options?.managed) throw new Error("Manager needs your decision before continuing.");
+              await probeHarnessAvailability();
               await orchestrator.start(sessionId, HARNESSES.filter(isHarnessAvailable), 4, undefined, true);
-            const accepted = await submitSessionRef.current(sessionId, text, attachments, options);
-            if (!accepted) saveDraftRef.current(sessionId, text, attachments);
+            }
+            turnId = await orchestrator.beginManagerTurn(sessionId, !options?.managed);
+            const accepted = await submitSessionRef.current(sessionId, text, attachments, {
+              ...options, managerTurnPrepared: true,
+              onSettled: outcome => {
+                void orchestrator.endManagerTurn(sessionId, turnId, outcome).catch(console.error);
+                options?.onSettled?.(outcome);
+              },
+            });
+            if (!accepted) {
+              if (!options?.managed) saveDraftRef.current(sessionId, text, attachments);
+              await orchestrator.endManagerTurn(sessionId, turnId, { status: "failed", text: "", error: "Manager could not accept the turn. Continue when ready." });
+            }
             return accepted;
           } catch (error) {
-            saveDraftRef.current(sessionId, text, attachments);
+            if (!options?.managed) saveDraftRef.current(sessionId, text, attachments);
+            await orchestrator.endManagerTurn(sessionId, turnId, { status: "failed", text: "", error: String(error) });
             enqueueHarnessEvent(sessionId, { type: "status", text: String(error) });
             flushHarnessEvents();
             return false;
@@ -8998,6 +9016,12 @@ function Workspace({
 
   useLayoutEffect(() => {
     orchestrator.bind({
+      probeProviders: probeHarnessAvailability,
+      projectIdentity: async cwd => {
+        const branches = await gitBranches(cwd);
+        if (!branches.current || branches.detached) throw new Error("Choose a project branch before starting Manager work.");
+        return { name: resolveTabGroupLabel(projectKey(cwd), loadTabGroupLabels(), basename(cwd)), branch: branches.current };
+      },
       session: (id) => sessionsRef.current.find((session) => session.id === id),
       sessions: () => sessionsRef.current,
       choices: () =>
@@ -9016,10 +9040,12 @@ function Workspace({
           const tree = listed.worktrees.find(tree => sameProjectPath(tree.path, task.checkout!) || tree.branch === task.checkout);
           if (!tree || tree.missing || tree.isMain) throw new Error("Name an existing non-primary worktree in this project.");
           if (sessionsRef.current.some(session => session.busy && sameProjectPath(sessionWorkCwd(session), tree.path))) throw new Error("The named worktree is already in use.");
-          if (run.tasks.some(other => other.id !== task.id && other.workspace && sameProjectPath(other.workspace.checkoutCwd, tree.path) && other.status !== "cancelled")) throw new Error("Another assignment owns this worktree; continue that worker instead.");
+          if (orchestrator.snapshot().some(owner => owner.tasks.some(other => other.id !== task.id && other.workspace && sameProjectPath(other.workspace.checkoutCwd, tree.path) && other.status !== "cancelled"))) throw new Error("Another assignment owns this worktree; continue that worker instead.");
           return workspaceIdentity(projectCwd, tree.path, tree.branch ?? undefined);
         }) : undefined;
         const workerMode = run.projectManager ? "full-access" : lead.runtimeMode;
+        if (run.projectManager && !task.workspace && !namedTree && task.baseBranch && (await gitBranches(leadCheckoutCwd)).current !== task.baseBranch)
+          throw new Error("The project branch changed after assignment. Restore its branch before continuing this worker.");
         const workspace = namedTree ?? (
           task.workspacePolicy === "shared"
             ? workspaceIdentity(projectCwd, leadCheckoutCwd)
@@ -9066,7 +9092,7 @@ function Workspace({
           if (
             existing.harness !== task.harness ||
             existing.model !== task.model ||
-            !sameProjectPath(existing.cwd, projectCwd) ||
+            (!run.projectManager && !sameProjectPath(existing.cwd, projectCwd)) ||
             (!existing.worktreeRemoved &&
               !sameProjectPath(sessionWorkCwd(existing), checkoutCwd))
           )
@@ -9154,8 +9180,7 @@ function Workspace({
       },
       reviewedPullRequest: async task => {
         const pr = await gitPrStatus(task.workspace!.checkoutCwd);
-        if (!pr || pr.state !== "open" || pr.isDraft || !pr.url) throw new Error("Could not confirm an open non-draft PR for this worker branch. If it already exists, report the lookup failure; do not republish it or inspect credentials.");
-        return pr.url;
+        return reviewedManagerPullRequest(task, pr);
       },
       notifyReady: (leadId, task) => {
         const manager = sessionsRef.current.find(session => session.id === leadId);
@@ -9384,8 +9409,47 @@ function Workspace({
   }, [checkOpenWorktreeFiles, submitSession, onStop, flushHarnessEvents]);
 
   useEffect(() => {
+    // Restored managers must recover even when another project/pane is selected.
+    const migrated = sessionsRef.current.map(session =>
+      isProjectManager(session.id) && session.worktreeCwd
+        ? { ...session, cwd: session.worktreeCwd, worktreeCwd: undefined }
+        : session);
+    if (migrated.some((session, index) => session !== sessionsRef.current[index])) {
+      for (const session of migrated.filter((entry, index) => entry !== sessionsRef.current[index]))
+        void upsertSession(session).catch(console.error);
+      sessionsRef.current = migrated;
+      setSessions(migrated);
+    }
+    for (const session of sessions.filter(session => isProjectManager(session.id) && !remoteProjectFor(session.cwd)))
+      void orchestrator.hydrate(session.id).catch(console.error);
     orchestrator.sync();
   }, [sessions]);
+
+  useEffect(() => {
+    // A saved Manager can own workers without being in the restored tab set.
+    // Read only existing sessions; never create a chat merely because a folder is listed.
+    let cancelled = false;
+    void (async () => {
+      for (const { path } of recents) {
+        if (cancelled) break;
+        if (remoteProjectFor(path)) continue;
+        try {
+          const folder = await invoke<string>("project_root", { project: path });
+          const id = await projectManagerId(folder);
+          if (sessionsRef.current.some(session => session.id === id)) continue;
+          const stored = await getSession(id);
+          if (cancelled || !stored || !sameProjectPath(sessionWorkCwd(stored), folder)) continue;
+          const session = { ...stored, cwd: folder, worktreeCwd: undefined };
+          if (session.providerSessionId) bindHarnessSession(session.harness, id, session.providerSessionId, folder, session.providerAccountId, session.blocks);
+          if (!sessionsRef.current.some(entry => entry.id === id)) {
+            sessionsRef.current = [...sessionsRef.current, session];
+            setSessions(sessionsRef.current);
+          }
+        } catch (error) { console.error("Could not restore project Manager", error); }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [recents]);
 
   useEffect(() => {
     const listening = listen<{
@@ -9839,7 +9903,9 @@ function Workspace({
       if (request !== workspaceSessionRequest.current) return;
       if (stored && !sameProjectPath(sessionWorkCwd(stored), target.projectCwd)) throw new Error("The saved Manager no longer matches this project.");
       // Like a normal blank pane, no provider or durable session starts until a message is sent.
-      const session = stored ?? { ...newDefaultSession(project, sessionDefaults?.runtimeMode), id, title: "Manager", worktreeCwd: sameProjectPath(project, target.projectCwd) ? undefined : target.projectCwd };
+      const session = stored ? { ...stored, cwd: target.projectCwd, worktreeCwd: undefined } : { ...newDefaultSession(target.projectCwd, sessionDefaults?.runtimeMode), id, title: "Manager" };
+      if (stored && (stored.cwd !== session.cwd || stored.worktreeCwd)) await upsertSession(session);
+      if (request !== workspaceSessionRequest.current) return;
       if (session.providerSessionId) bindHarnessSession(session.harness, id, session.providerSessionId, target.projectCwd, session.providerAccountId, session.blocks);
       if (!sessionsRef.current.some(session => session.id === id)) {
         sessionsRef.current = [...sessionsRef.current, session];

@@ -8,6 +8,12 @@ import type {
 const RESULT_MAX_CHARS = 12_000;
 const BATCH_RESULT_MAX_CHARS = 48_000;
 
+/** A specific pending decision owns the escalation, not its generic goal update. */
+export function coveredGoalDecision(state: string, source: Session | undefined): boolean {
+  return (state === "needs-you" || state === "blocked") && !!source &&
+    (!!source.pendingQuestion || source.blocks.some(block => block.approval && !block.approval.decided));
+}
+
 /** Freeze this turn's result before either conversation starts another turn. */
 type CompletionOptions = {
   requestId: string;

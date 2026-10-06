@@ -10,6 +10,7 @@ import {
 import { newSession, type Session } from "../../sessions/model/session";
 import {
   enqueueMonoSessionCompletion,
+  coveredGoalDecision,
   monoSessionCompletionMessage,
 } from "./monoSessionCompletion";
 
@@ -25,6 +26,14 @@ const options = {
 };
 
 describe("Mono session completion notifications", () => {
+  it("does not escalate both a goal status and its specific pending permission", () => {
+    const source = { ...newSession("claude", "/app"), blocks: [{ id: "permission", role: "assistant" as const, text: "Access", approval: { requestId: 1 } }] };
+    expect(coveredGoalDecision("needs-you", source)).toBe(true);
+    expect(coveredGoalDecision("blocked", source)).toBe(true);
+    expect(coveredGoalDecision("done", source)).toBe(false);
+    expect(coveredGoalDecision("ready", source)).toBe(false);
+    expect(coveredGoalDecision("blocked", { ...source, blocks: [] })).toBe(false);
+  });
   it("delivers identical events once, never through the user's outbox", () => {
     const event = monoSessionCompletionMessage(options);
     let mono = enqueueMonoSessionCompletion(newSession("claude", options.project), event);

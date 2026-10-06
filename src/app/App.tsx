@@ -36,6 +36,7 @@ import {
 import { TurnAuthorizationError } from "../integrations/harness/core/registry";
 import {
   enqueueMonoSessionCompletion,
+  coveredGoalDecision,
   completionMessage,
   monoSessionCompletionResult,
   MonoSessionCompletionBatches,
@@ -1524,6 +1525,9 @@ function Workspace({
     resumed?.projectReturnMemory ?? new Map(),
   );
   const readProjectReturnMemory = useCallback(() => {
+    // Global views do not select the workspace tab hidden behind them.
+    if (searchViewOpen || inboxViewOpen || notesViewOpen || automationsViewOpen || settingsOpen)
+      return projectReturnRef.current;
     projectReturnRef.current = reconcileProjectReturn({
       memory: projectReturnRef.current,
       tabs: tabsRef.current,
@@ -1536,7 +1540,7 @@ function Workspace({
       })(),
     });
     return projectReturnRef.current;
-  }, []);
+  }, [searchViewOpen, inboxViewOpen, notesViewOpen, automationsViewOpen, settingsOpen]);
   useEffect(() => {
     readProjectReturnMemory();
   }, [activeTabId, tabs, sessions, monoViewId, readProjectReturnMemory]);
@@ -11158,12 +11162,22 @@ function Workspace({
           if (!events.length || !mono.sessionId) continue;
           const current = await ensureOpenSession(mono.sessionId);
           if (!current) continue;
+          const reports = events.filter(goal => {
+            const sourceId = orchestrator.ownerSession(goal.managerId) ?? goal.managerId;
+            const sourceMono = monoForSession(sourceId);
+            return sourceMono?.reportsTo !== mono.id || !coveredGoalDecision(goal.state,
+              sessionsRef.current.find(session => session.id === sourceId));
+          });
+          if (!reports.length) {
+            await monoManagerGoals.acknowledgeEvents(mono.id, events);
+            continue;
+          }
           const message = completionMessage(
-            `mono-goals-${events
+            `mono-goals-${reports
               .map((goal) => `${goal.id}-${goal.updatedAt}`)
               .join("_")
               .slice(0, 450)}`,
-            events.map((goal) => ({
+            reports.map((goal) => ({
               sessionId: goal.managerId,
               project: goal.projectId,
               title: goal.title.slice(0, 200),

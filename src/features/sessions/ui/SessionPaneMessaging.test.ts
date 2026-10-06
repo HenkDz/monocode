@@ -6,6 +6,7 @@ import { SessionPane, type SessionPaneProps } from "./SessionPane";
 import { clearComposerDraft, setComposerDraft } from "../model/draftCache";
 
 const probes = vi.hoisted(() => ({
+  mono: true,
   pick: vi.fn(),
   transcript: vi.fn(),
   runs: [],
@@ -38,18 +39,22 @@ vi.mock("../../orchestration/model/orchestration", async (original) => ({
 }));
 vi.mock("../../monos/model/mono", async (original) => ({
   ...(await original<typeof import("../../monos/model/mono")>()),
-  monoForSession: () => ({
-    id: "mono",
-    sessionId: "chat",
-    name: "Captain",
-    mascot: "cat",
-    color: "#6ba",
-    projects: [],
-  }),
+  monoForSession: () =>
+    probes.mono
+      ? {
+          id: "mono",
+          sessionId: "chat",
+          name: "Captain",
+          mascot: "cat",
+          color: "#6ba",
+          projects: [],
+        }
+      : undefined,
 }));
 let container: HTMLDivElement;
 let root: Root;
 beforeEach(() => {
+  probes.mono = true;
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal(
     "ResizeObserver",
@@ -209,10 +214,16 @@ it("shows usage recovery above the Mono input and routes the reset option", () =
   pane.session.usageLimit = { resetsAt: Date.now() + 3600_000 };
   pane.onUsageLimitResumeAtReset = vi.fn();
   render(pane);
-  expect(container.querySelector("[data-usage-limit]")?.textContent).toContain("usage limit reached");
-  expect(container.querySelector('[aria-label="Choose another model"]')).not.toBeNull();
+  expect(container.querySelector("[data-usage-limit]")?.textContent).toContain(
+    "usage limit reached",
+  );
+  expect(
+    container.querySelector('[aria-label="Choose another model"]'),
+  ).not.toBeNull();
   expect(field().value).toBe("Keep my draft");
-  const reset = [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.trim() === "Resume at reset")!;
+  const reset = [
+    ...container.querySelectorAll<HTMLButtonElement>("button"),
+  ].find((button) => button.textContent?.trim() === "Resume at reset")!;
   act(() => reset.click());
   expect(pane.onUsageLimitResumeAtReset).toHaveBeenCalledWith("chat", true);
   render({ ...pane, session: { ...pane.session, usageLimit: undefined } });
@@ -302,3 +313,33 @@ it("keeps rapid sends out of the queue and steer interface", () => {
   ).toBeNull();
   expect(container.textContent).not.toContain("Steer");
 });
+
+it.each([true, false])(
+  "wires a rejected turn's retry notice for Mono and normal sessions (Mono: %s)",
+  (mono) => {
+    probes.mono = mono;
+    const pane = props();
+    pane.onResumeQueue = vi.fn();
+    pane.session = {
+      ...pane.session,
+      queueStatus: "paused",
+      queuedMessages: [
+        {
+          id: "user",
+          blockId: "user",
+          text: "Hello",
+          attachments: [],
+          error: "Checkout controlled",
+        },
+      ],
+    };
+    render(pane);
+    const transcript = probes.transcript.mock.calls.at(-1)![0];
+    expect(transcript.messageDeliveries.get("user")).toEqual({
+      status: "failed",
+      error: "Checkout controlled",
+    });
+    act(() => transcript.onRetryMessage("user"));
+    expect(pane.onResumeQueue).toHaveBeenCalledWith("chat");
+  },
+);

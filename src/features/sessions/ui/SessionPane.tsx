@@ -978,10 +978,8 @@ const LocalSessionPane = memo(function LocalSessionPane({
                     }
                     bottomAligned={!!agent}
                     inlineWork={!!agent}
-                    messageDeliveries={agent ? messageDeliveries : undefined}
-                    onRetryMessage={
-                      agent ? () => onResumeQueue(session.id) : undefined
-                    }
+                    messageDeliveries={messageDeliveries}
+                    onRetryMessage={() => onResumeQueue(session.id)}
                     onShowWork={
                       agent && onShowMonoActivity
                         ? (turnId, blocks) =>

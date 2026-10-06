@@ -1275,6 +1275,10 @@ export class Orchestrator {
     void this.pump();
     this.sync();
   }
+  assertCanLaunch(id: string, candidate: Pick<Session, "cwd" | "worktreeCwd">): void {
+    const blocked = this.submissionError(id, false, candidate);
+    if (blocked) throw Object.assign(new Error(`${blocked} Do not retry this launch; delegate via goals.assign or the project's Manager.`), { retryable: false });
+  }
   submissionError(
     id: string,
     managed = false,

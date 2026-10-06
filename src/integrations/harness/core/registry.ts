@@ -210,6 +210,9 @@ export function listHarnesses(): HarnessAdapter[] {
   return [...adapters.values()];
 }
 
+/** A local send rejection, before the provider has received the turn. */
+export class TurnAuthorizationError extends Error {}
+
 export function sendHarnessTurn(input: SendTurnInput & { harness: HarnessId }) {
   return queueSessionOperation(input.sessionId, async () => {
     const adapter = requireHarness(input.harness);
@@ -218,13 +221,20 @@ export function sendHarnessTurn(input: SendTurnInput & { harness: HarnessId }) {
     }
     cancelIdlePark(input.sessionId);
     const controlled = typeof isTauri === "function" && isTauri();
-    if (controlled)
-      await invoke("control_authorize_turn", {
-        sessionId: input.sessionId,
-        cwd: input.cwd,
-        appAccess: input.appAccess === true,
-        monoSession: input.monoSession === true,
-      });
+    if (controlled) {
+      try {
+        await invoke("control_authorize_turn", {
+          sessionId: input.sessionId,
+          cwd: input.cwd,
+          appAccess: input.appAccess === true,
+          monoSession: input.monoSession === true,
+        });
+      } catch (error) {
+        throw new TurnAuthorizationError(
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    }
     activeTurnSessions.add(input.sessionId);
     try {
       await adapter.sendTurn({

@@ -42,6 +42,19 @@ struct Inner {
     habit_grants: HashMap<String, Grant>,
 }
 impl Inner {
+    fn conflicting_active_turn(&self, session_id: &str, checkout: &str) -> Option<&str> {
+        self.active
+            .iter()
+            .find(|(id, turn)| id.as_str() != session_id && path_within(&turn.cwd, checkout))
+            .map(|(id, _)| id.as_str())
+    }
+
+    fn checkout_grant(&self, cwd: &str) -> Option<&Grant> {
+        self.grants
+            .values()
+            .find(|grant| path_within(cwd, &grant.cwd))
+    }
+
     // Provider processes can stay alive between turns, so install the token
     // before their first spawn. request_grant still requires an opted-in turn.
     fn prepare_app_grant(&mut self, session: &str, window: &str, cwd: &str) -> bool {
@@ -129,6 +142,10 @@ pub struct ControlHost {
 
 fn paths_overlap(a: &str, b: &str) -> bool {
     a == b || a.starts_with(&format!("{b}/")) || b.starts_with(&format!("{a}/"))
+}
+
+fn path_within(path: &str, checkout: &str) -> bool {
+    path == checkout || path.starts_with(&format!("{checkout}/"))
 }
 
 /** Windows paths compare case-insensitively; POSIX paths must retain case. */
@@ -311,11 +328,7 @@ pub fn control_enable(
         .inner
         .lock()
         .map_err(|_| "Control service unavailable")?;
-    if let Some((id, _)) = inner
-        .active
-        .iter()
-        .find(|(id, turn)| *id != &session_id && paths_overlap(&turn.cwd, &cwd))
-    {
+    if let Some(id) = inner.conflicting_active_turn(&session_id, &cwd) {
         return Err(format!(
             "Another session ({id}) is running in this checkout. Stop it before enabling orchestration."
         ));
@@ -460,11 +473,7 @@ pub fn control_authorize_turn(
         .inner
         .lock()
         .map_err(|_| "Control service unavailable")?;
-    if let Some(lead) = inner
-        .grants
-        .values()
-        .find(|grant| paths_overlap(&grant.cwd, &cwd))
-    {
+    if let Some(lead) = inner.checkout_grant(&cwd) {
         if lead.window != window.label()
             || (lead.session != session_id && inner.workers.get(&session_id) != Some(&lead.session))
         {
@@ -939,5 +948,78 @@ mod tests {
         assert!(paths_overlap("/repo", "/repo/src"));
         assert!(paths_overlap("/repo/src", "/repo"));
         assert!(!paths_overlap("/repo", "/repo2"));
+    }
+
+    #[test]
+    fn controlled_checkout_does_not_block_parent_turns() {
+        let checkout = comparison_path(Path::new("C:/Users/Nooro/projects/App"));
+        for (cwd, blocked) in [
+            ("C:/Users/Nooro", false),
+            ("C:/Users/Nooro/projects/App", true),
+            ("C:/Users/Nooro/projects/App/src", true),
+            ("C:/Users/Nooro/projects/App-other", false),
+        ] {
+            assert_eq!(
+                path_within(&comparison_path(Path::new(cwd)), &checkout),
+                blocked
+            );
+        }
+        #[cfg(windows)]
+        assert!(path_within(
+            &comparison_path(Path::new("c:\\users\\nooro\\PROJECTS\\app\\src")),
+            &checkout,
+        ));
+    }
+
+    #[test]
+    fn busy_home_habit_does_not_block_enabling_a_project_manager() {
+        let home = comparison_path(Path::new("C:/Users/Nooro"));
+        let checkout = format!("{home}/projects/app");
+        let mut inner = Inner::default();
+        inner.active.insert(
+            "habit".into(),
+            ActiveTurn {
+                window: "main".into(),
+                cwd: home,
+                app_allowed: true,
+            },
+        );
+        assert!(inner
+            .conflicting_active_turn("manager", &checkout)
+            .is_none());
+        for cwd in [&checkout, &format!("{checkout}/src")] {
+            inner.active.get_mut("habit").unwrap().cwd = cwd.clone();
+            assert_eq!(
+                inner.conflicting_active_turn("manager", &checkout),
+                Some("habit")
+            );
+        }
+        inner.active.get_mut("habit").unwrap().cwd = format!("{checkout}-other");
+        assert!(inner
+            .conflicting_active_turn("manager", &checkout)
+            .is_none());
+        inner.active.get_mut("habit").unwrap().cwd = checkout.clone();
+        assert!(inner.conflicting_active_turn("habit", &checkout).is_none());
+    }
+
+    #[test]
+    fn home_habit_is_allowed_while_a_project_manager_grant_exists() {
+        let home = comparison_path(Path::new("C:/Users/Nooro"));
+        let checkout = format!("{home}/projects/app");
+        let mut inner = Inner::default();
+        inner.grants.insert(
+            "manager".into(),
+            Grant {
+                window: "main".into(),
+                session: "manager".into(),
+                cwd: checkout.clone(),
+                token: "control-token".into(),
+            },
+        );
+        assert!(inner.checkout_grant(&home).is_none());
+        assert!(inner.checkout_grant(&format!("{checkout}-other")).is_none());
+        for cwd in [&checkout, &format!("{checkout}/src")] {
+            assert_eq!(inner.checkout_grant(cwd).unwrap().session, "manager");
+        }
     }
 }

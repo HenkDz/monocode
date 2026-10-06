@@ -187,6 +187,15 @@ it("preflights independent launches in retained worker checkouts and nested fold
   await f.delegate(["src"]);
   await vi.waitFor(() => expect(f.tasks()[0].workspace).toBeDefined());
   const checkout = f.tasks()[0].workspace!.checkoutCwd;
+  const createSession = vi.fn();
+  const launch = () => {
+    f.manager.assertCanLaunch("new", { cwd: "/repo", worktreeCwd: checkout });
+    createSession();
+    return true; // UI acceptance may otherwise mean only parked for Retry.
+  };
+  expect(launch).toThrow("Do not retry this launch");
+  try { launch(); } catch (error) { expect(error).toMatchObject({ retryable: false }); }
+  expect(createSession).not.toHaveBeenCalled();
   expect(
     f.manager.submissionError("new", false, {
       cwd: "/repo",
@@ -1952,5 +1961,11 @@ describe("local orchestration", () => {
     });
     expect(f.manager.submissionError("other")).toContain("active orchestrator");
     expect(f.manager.submissionError("lead")).toBeNull();
+  });
+  it("does not block a home-folder session containing a controlled checkout", async () => {
+    const f = setup();
+    await f.start();
+    f.sessions.push({ ...newSession("claude", "/"), id: "home", busy: false });
+    expect(f.manager.submissionError("home")).toBeNull();
   });
 });

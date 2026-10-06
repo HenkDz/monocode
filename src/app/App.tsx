@@ -29,7 +29,9 @@ import {
 import {
   acknowledgeMonoMessage,
   enqueueMonoMessage,
+  rejectMessageSend,
 } from "../features/monos/model/monoMessaging";
+import { TurnAuthorizationError } from "../integrations/harness/core/registry";
 import {
   enqueueMonoSessionCompletion,
   completionMessage,
@@ -6870,9 +6872,20 @@ function Workspace({
         options?.managed,
       );
       if (controlError) {
-        enqueueHarnessEvent(sessionId, { type: "status", text: controlError });
-        flushHarnessEvents();
-        return false;
+        if (options?.managed) {
+          options.onSettled?.({ status: "failed", text: "", error: controlError });
+          return false;
+        }
+        setSessions(prev => prev.map(session => session.id === sessionId
+          ? rejectMessageSend(session, {
+              ...(session.queuedMessages?.find(message => message.id === options?.queuedMessageId)),
+              id: options?.queuedMessageId ?? crypto.randomUUID(),
+              text, attachments, intent: options?.intent,
+              noteCard: options?.noteCard ?? session.noteCard,
+              handoffCard: options?.handoffCard ?? session.handoffCard,
+            }, controlError)
+          : session));
+        return true;
       }
       if (options?.managed) {
         const target = sessionsRef.current.find((s) => s.id === sessionId);
@@ -7032,7 +7045,7 @@ function Workspace({
       // The Mono has app access in every turn, without the command.
       const mono = isMonoSession(sessionId);
       const queuedMonoMessage =
-        mono && options?.queuedMessageId
+        options?.queuedMessageId
           ? current.queuedMessages?.find(
               (message) => message.id === options.queuedMessageId,
             )
@@ -7586,6 +7599,9 @@ function Workspace({
       if (!options?.resendEdited) {
         flushSync(commitSubmittedTurn);
       }
+      const submittedBlockId = options?.resendEdited ? undefined :
+        queuedMonoMessage?.blockId ?? [...(sessionsRef.current.find(session => session.id === sessionId)?.blocks ?? [])]
+          .reverse().find(block => block.role === "user" && block.startedAt != null)?.id;
 
       const launchTitleGeneration = (workCwd: string) => {
         if (
@@ -8174,7 +8190,16 @@ function Workspace({
               ? error.message
               : String(error) || `${current.harness} adapter failed`;
           controlOutcome.error = message;
-          if (!providerFailureSeen) {
+          if (error instanceof TurnAuthorizationError) {
+            setSessions(prev => prev.map(session => session.id === sessionId
+              ? rejectMessageSend(session, {
+                  ...queuedMonoMessage,
+                  id: options?.queuedMessageId ?? submittedBlockId ?? crypto.randomUUID(),
+                  blockId: submittedBlockId,
+                  text, attachments, noteCard, handoffCard, intent,
+                }, message)
+              : session));
+          } else if (!providerFailureSeen) {
             enqueueHarnessEvent(sessionId, {
               type: "session.error",
               message,
@@ -9161,7 +9186,7 @@ function Workspace({
       ) {
         return;
       }
-      if (monoForSession(sessionId)) {
+      if (monoForSession(sessionId) || session.queuedMessages[0].error) {
         setSessions((prev) =>
           prev.map((entry) =>
             entry.id === sessionId
@@ -11641,14 +11666,10 @@ function Workspace({
               return { answered: true, monoId: child.id };
             },
             start: async (launch, id, placement, notifyMonoId) => {
-              const blocked = orchestrator.submissionError(id, false, {
+              orchestrator.assertCanLaunch(id, {
                 cwd: launch.cwd,
                 worktreeCwd: launch.worktreeCwd,
               });
-              if (blocked)
-                throw new Error(
-                  `${blocked} Do not retry this launch; delegate via goals.assign or the project's Manager.`,
-                );
               const open = sessionsRef.current.find(
                 (session) => session.id === id,
               );
@@ -11929,6 +11950,7 @@ function Workspace({
               response: {
                 ok: false,
                 error: error instanceof Error ? error.message : String(error),
+                ...(error instanceof Error && "retryable" in error && error.retryable === false ? { retryable: false } : {}),
               },
             }),
         )

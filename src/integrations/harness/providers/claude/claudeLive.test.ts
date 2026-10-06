@@ -4,7 +4,9 @@ import { registerHarness, resetHarnessIdlePark, sendHarnessTurn } from "../../co
 vi.mock("@tauri-apps/api/core", async original => ({
   ...(await original<typeof import("@tauri-apps/api/core")>()),
   isTauri: vi.fn(() => false),
-  invoke: vi.fn(async command => command === "app_cli_path" ? "C:/preview/monocode-org.exe" : undefined),
+  invoke: vi.fn(async command => command === "app_cli_approval_policy" ? {
+    executable: "C:/preview/monocode-org.exe", tempDir: "C:/Temp", actions: ["goals.assign"],
+  } : undefined),
 }));
 import { applyHarnessEvent } from "../../core/apply";
 import { newSession } from "../../../../features/sessions/model/session";

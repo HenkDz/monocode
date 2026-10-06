@@ -49,11 +49,32 @@ function stub(
 }
 
 describe("harness registry", () => {
+  it.each([false, true])("checks temp input's real location before deciding (inside: %s)", async inside => {
+    vi.mocked(isTauri).mockReturnValue(true);
+    vi.mocked(invoke).mockImplementation(async command => command === "app_cli_approval_policy" ? {
+      executable: "C:/preview/app.exe", tempDir: "C:/Temp", actions: ["memory.read"],
+    } : command === "app_cli_input_is_temp" ? inside : undefined);
+    let settle!: () => void;
+    const onEvent = vi.fn(() => settle());
+    const respondApproval = vi.fn(() => settle());
+    registerHarness(stub("claude", { respondApproval, async sendTurn(input) {
+      const wait = new Promise<void>(resolve => { settle = resolve; });
+      input.onEvent({ type: "approval.requested", requestId: 3, title: "Read input",
+        command: ['C:/preview/app.exe', 'app', 'memory.read', '--input', 'C:/Temp/input.json'] });
+      await wait;
+    } }));
+    await sendHarnessTurn({ harness: "claude", sessionId: "temp-input", cwd: "C:/Users/nooro", model: "test",
+      runtimeMode: "supervised", orgMono: true, text: "Read memory", onEvent });
+    expect(respondApproval).toHaveBeenCalledTimes(inside ? 1 : 0);
+    expect(onEvent).toHaveBeenCalledTimes(inside ? 0 : 1);
+  });
   it.each(["claude", "codex", "cursor", "pi"] as const)(
     "%s: supervised org Mono assigns through the app CLI without a visible approval", async harness => {
       vi.mocked(isTauri).mockReturnValue(true);
       const executable = "C:/preview/monocode-org.exe";
-      vi.mocked(invoke).mockImplementation(async command => command === "app_cli_path" ? executable : undefined);
+      vi.mocked(invoke).mockImplementation(async command => command === "app_cli_approval_policy" ? {
+        executable, tempDir: "C:/Temp", actions: ["goals.assign", "projects.list"],
+      } : undefined);
       const onEvent = vi.fn();
       let accept!: () => void;
       const respondApproval = vi.fn(() => accept());
@@ -78,7 +99,9 @@ describe("harness registry", () => {
 
   it.each([false, true])("retains other approvals (org Mono: %s)", async orgMono => {
     vi.mocked(isTauri).mockReturnValue(true);
-    vi.mocked(invoke).mockImplementation(async command => command === "app_cli_path" ? "C:/preview/app.exe" : undefined);
+    vi.mocked(invoke).mockImplementation(async command => command === "app_cli_approval_policy" ? {
+      executable: "C:/preview/app.exe", tempDir: "C:/Temp", actions: ["projects.list"],
+    } : undefined);
     const respondApproval = vi.fn();
     const onEvent = vi.fn();
     registerHarness(stub("claude", { respondApproval, async sendTurn(input) {

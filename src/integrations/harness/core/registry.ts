@@ -5,7 +5,7 @@ import type {
   TurnIntent,
 } from "../../../features/sessions/model/session";
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { isDirectAppCliCommand } from "./appCliApproval";
+import { appCliCommandTokens, isDirectAppCliCommand, type AppCliApprovalPolicy } from "./appCliApproval";
 import type { GeneratedSessionTitle } from "../../../features/sessions/model/sessionTitle";
 import type { PrContent } from "../../../features/source-control/model/gitText";
 import { hasLiveCatalog } from "../../../features/sessions/model/models";
@@ -237,8 +237,8 @@ export function sendHarnessTurn(input: SendTurnInput & { harness: HarnessId }) {
       }
     }
     const appCli = controlled && input.orgMono
-      ? await invoke<string>("app_cli_path").catch(() => "")
-      : "";
+      ? await invoke<AppCliApprovalPolicy>("app_cli_approval_policy").catch(() => undefined)
+      : undefined;
     const automaticApprovals = new Set<number>();
     activeTurnSessions.add(input.sessionId);
     try {
@@ -246,11 +246,20 @@ export function sendHarnessTurn(input: SendTurnInput & { harness: HarnessId }) {
         ...input,
         onEvent: (event) => {
           if (event.type === "approval.requested" && appCli &&
-              isDirectAppCliCommand(event.command, appCli)) {
+              isDirectAppCliCommand(event.command, appCli.executable, appCli)) {
             if (!automaticApprovals.has(event.requestId)) {
               automaticApprovals.add(event.requestId);
               // Some adapters install their pending resolver immediately after emitting.
-              queueMicrotask(() => adapter.respondApproval(input.sessionId, event.requestId, "allow"));
+              queueMicrotask(async () => {
+                const tokens = appCliCommandTokens(event.command)!;
+                const inputFlag = tokens.indexOf("--input", 3);
+                const allowed = inputFlag < 0 || await invoke<boolean>("app_cli_input_is_temp", {
+                  path: tokens[inputFlag + 1],
+                }).catch(() => false);
+                if (!automaticApprovals.has(event.requestId)) return;
+                if (allowed) adapter.respondApproval(input.sessionId, event.requestId, "allow");
+                else if (automaticApprovals.delete(event.requestId)) input.onEvent(event);
+              });
             }
             return;
           }
@@ -263,6 +272,7 @@ export function sendHarnessTurn(input: SendTurnInput & { harness: HarnessId }) {
         },
       });
     } finally {
+      automaticApprovals.clear();
       activeTurnSessions.delete(input.sessionId);
       if (controlled)
         await invoke("control_turn_finished", { sessionId: input.sessionId });

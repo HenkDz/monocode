@@ -283,6 +283,8 @@ pub fn run() {
             control::control_authorize_turn,
             control::control_turn_finished,
             control::app_cli_path,
+            control_cli::app_cli_approval_policy,
+            control_cli::app_cli_input_is_temp,
             default_cwd,
             home_dir,
             notifications::notification_permission,

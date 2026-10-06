@@ -293,6 +293,25 @@ pub fn app_help() -> String {
     APP_USAGE.replace("{exe}", &exe)
 }
 
+#[tauri::command]
+pub fn app_cli_approval_policy() -> Result<Value, String> {
+    Ok(json!({
+        "executable": std::env::current_exe().map_err(|e| e.to_string())?.to_string_lossy(),
+        "tempDir": std::env::temp_dir().to_string_lossy(),
+        "actions": APP_ACTIONS.as_slice(),
+    }))
+}
+
+#[tauri::command]
+pub fn app_cli_input_is_temp(path: String) -> bool {
+    temp_input_within(std::path::Path::new(&path), &std::env::temp_dir())
+}
+
+fn temp_input_within(path: &std::path::Path, root: &std::path::Path) -> bool {
+    let (Ok(path), Ok(root)) = (path.canonicalize(), root.canonicalize()) else { return false; };
+    path != root && path.starts_with(root) && path.is_file()
+}
+
 enum Parsed {
     Help,
     Call(String, Value, String),
@@ -571,6 +590,28 @@ mod tests {
         assert!(call(&["delegate", "--json", "[]"]).is_err());
         assert!(call(&["delegate", "--json", "{}", "--json", "{}"]).is_err());
         assert!(call(&["unknown"]).is_err());
+    }
+
+    #[test]
+    fn approval_policy_uses_cli_actions_and_real_temp_files() {
+        let policy = app_cli_approval_policy().unwrap();
+        assert_eq!(policy["actions"], json!(APP_ACTIONS.as_slice()));
+        let root = std::env::temp_dir().join(format!("monocode-cli-approval-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let input = root.join("input.json");
+        std::fs::write(&input, "{}").unwrap();
+        assert!(temp_input_within(&input, &root));
+        assert!(!temp_input_within(&root, &root));
+        assert!(!temp_input_within(&root.join("missing.json"), &root));
+        assert!(!temp_input_within(&input, &root.join("other")));
+        #[cfg(unix)] {
+            let escape = root.join("escape");
+            std::os::unix::fs::symlink(std::env::current_exe().unwrap(), &escape).unwrap();
+            assert!(!temp_input_within(&escape, &root));
+            std::fs::remove_file(escape).unwrap();
+        }
+        std::fs::remove_file(input).unwrap();
+        std::fs::remove_dir(root).unwrap();
     }
     #[test]
     fn explains_help_and_malformed_invocations() {

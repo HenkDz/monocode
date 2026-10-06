@@ -25,6 +25,19 @@ const options = {
 };
 
 describe("Mono session completion notifications", () => {
+  it("delivers identical events once, never through the user's outbox", () => {
+    const event = monoSessionCompletionMessage(options);
+    let mono = enqueueMonoSessionCompletion(newSession("claude", options.project), event);
+    mono = enqueueMonoSessionCompletion(mono, { ...event, id: "duplicate-source" });
+    expect(mono.queuedMessages).toBeUndefined();
+    expect(mono.pendingMonoEvents).toHaveLength(1);
+    expect(queuedMessageForSubmit(mono, event.id, "dispatch")).toBe(event);
+    const delivered = dequeueQueuedMessage({ ...mono, blocks: [{ id: "receipt", role: "user", internal: true,
+      appRequestId: event.id, text: event.text }] }, event.id);
+    expect(delivered.pendingMonoEvents).toHaveLength(0);
+    expect(enqueueMonoSessionCompletion(delivered, event)).toBe(delivered);
+    expect(enqueueMonoSessionCompletion(delivered, { ...event, id: "another-source" })).toBe(delivered);
+  });
   it("accepts immediately, then queues completion behind chat without steering a busy Mono", async () => {
     let mono: Session = {
       ...newSession("codex", "/code/project"),
@@ -55,6 +68,8 @@ describe("Mono session completion notifications", () => {
     settle(options.outcome);
     expect(mono.queuedMessages?.map((message) => message.id)).toEqual([
       "chat",
+    ]);
+    expect(mono.pendingMonoEvents?.map((message) => message.id)).toEqual([
       "mono-completion-app-mono-request",
     ]);
     const next = dequeueQueuedMessage(mono, "chat");

@@ -318,6 +318,27 @@ pub fn mono_session_find(
     Ok(ids)
 }
 
+fn event_delivered(conn: &Connection, session_id: &str, event_id: &str, text: &str) -> rusqlite::Result<bool> {
+    // ponytail: scan only this Mono's archived receipts; add a receipt index if long histories make this slow.
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM mono_blocks WHERE session_id = ?1
+         AND json_extract(block_json, '$.internal') = 1
+         AND (json_extract(block_json, '$.appRequestId') = ?2
+              OR json_extract(block_json, '$.text') = ?3))",
+        params![session_id, event_id, text],
+        |row| row.get(0),
+    )
+}
+
+#[tauri::command(async)]
+pub fn mono_session_event_delivered(
+    store: State<'_, SessionStore>, session_id: String, event_id: String, text: String,
+) -> Result<bool, String> {
+    session_store::validate_id(&session_id, "session")?;
+    let conn = store.lock_conn()?;
+    event_delivered(&conn, &session_id, &event_id, &text).map_err(|e| e.to_string())
+}
+
 /// Replace only the changed suffix. Anchors prevent a partially loaded client
 /// from ever deleting history outside its window. Missing anchors fail closed.
 fn upsert_with_mode(
@@ -530,6 +551,22 @@ mod tests {
                 .blocks,
             json!([])
         );
+    }
+
+    #[test]
+    fn event_receipts_deduplicate_outside_the_loaded_window() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let conn = store.lock_conn().unwrap();
+        let mut session = sample("mono-events", 25);
+        session.blocks[0]["internal"] = json!(true);
+        session.blocks[0]["appRequestId"] = json!("event-1");
+        session.blocks[0]["text"] = json!("Manager needs a decision");
+        upsert(&conn, &session, None, None, true).unwrap();
+        assert!(!page(&conn, "mono-events", None, None).unwrap().blocks.iter().any(|b| b["appRequestId"] == "event-1"));
+        assert!(event_delivered(&conn, "mono-events", "event-1", "different").unwrap());
+        assert!(event_delivered(&conn, "mono-events", "duplicate-id", "Manager needs a decision").unwrap());
+        assert!(!event_delivered(&conn, "other-mono", "event-1", "Manager needs a decision").unwrap());
+        assert!(!event_delivered(&conn, "mono-events", "new", "new event").unwrap());
     }
 
     #[test]

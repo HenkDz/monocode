@@ -262,12 +262,12 @@ it("shows pending messages in the conversation and routes retry from the bubble"
   expect(field()).not.toBeNull();
 });
 
-it("keeps a completion notification queued beside the Mono's composer", () => {
+it("keeps internal notifications out of the Mono's composer and user outbox", () => {
   const pane = props();
   pane.session = {
     ...pane.session,
     busy: true,
-    queuedMessages: [
+    pendingMonoEvents: [
       {
         id: "notification",
         text: "Hidden completion review prompt",
@@ -281,10 +281,9 @@ it("keeps a completion notification queued beside the Mono's composer", () => {
     ],
   };
   render(pane);
-  const queue = container.querySelector("[data-message-queue]")!;
-  expect(queue.textContent).toContain("Session completed: API fix");
-  expect(queue.textContent).not.toContain("Hidden completion review prompt");
-  expect(queue.textContent).not.toContain("Steer");
+  expect(container.querySelector("[data-message-queue]")).toBeNull();
+  expect(container.textContent).not.toContain("Hidden completion review prompt");
+  expect(container.textContent).not.toContain("Session completed: API fix");
   expect(field()).not.toBeNull();
 });
 

@@ -107,6 +107,17 @@ export function rejectMessageSend(
   message: QueuedMessage,
   error: string,
 ): Session {
+  if (message.monoSessionCompletion) {
+    return {
+      ...session,
+      queueStatus: "paused",
+      blocks: session.blocks.filter(block => block.id !== message.blockId),
+      pendingMonoEvents: [
+        { ...message, blockId: undefined, error },
+        ...(session.pendingMonoEvents ?? []).filter(entry => entry.id !== message.id),
+      ],
+    };
+  }
   const existing = session.blocks.find((block) => block.id === message.blockId);
   const pending = existing ? session : enqueueMonoMessage(session, message);
   const blockId = existing?.id ?? message.id;

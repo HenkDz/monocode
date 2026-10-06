@@ -479,6 +479,7 @@ pub fn run() {
             mono_transcript::mono_session_page,
             mono_transcript::mono_session_upsert,
             mono_transcript::mono_session_find,
+            mono_transcript::mono_session_event_delivered,
             session_store::session_delete,
             session_store::session_set_archived,
             session_store::session_set_pinned,

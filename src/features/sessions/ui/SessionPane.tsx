@@ -80,7 +80,6 @@ import {
   monoMessageDeliveries,
   monoPendingTranscriptBlocks,
 } from "../../monos/model/monoMessaging";
-import { MessageQueue } from "./MessageQueue";
 import { useMonoTranscript } from "../../monos/hooks/useMonoTranscript";
 import { MONO_PAGE_TURNS } from "../data/sessionStore";
 import { useComposerDockMotion } from "./useComposerDockMotion";
@@ -1141,18 +1140,6 @@ const LocalSessionPane = memo(function LocalSessionPane({
             >
               {agent ? (
                 <>
-                  <MessageQueue
-                    messages={(session.queuedMessages ?? []).filter(
-                      (message) => !!message.monoSessionCompletion,
-                    )}
-                    status={session.queueStatus}
-                    sendingId={session.sendingQueuedMessageId}
-                    onDelete={(messageId) =>
-                      onDeleteQueuedMessage(session.id, messageId)
-                    }
-                    onResume={() => onResumeQueue(session.id)}
-                    variant="messages"
-                  />
                   {session.pendingQuestion && !questionDelegated ? (
                     <QuestionForm
                       prompt={session.pendingQuestion}

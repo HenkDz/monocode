@@ -2,7 +2,7 @@ import { isPreparingHandoff } from "./handoff";
 import type { QueuedMessage, Session } from "./session";
 
 export function queuedHead(session: Session): QueuedMessage | undefined {
-  return session.queuedMessages?.[0];
+  return session.queuedMessages?.[0] ?? session.pendingMonoEvents?.[0];
 }
 
 /** Hold auto-dispatch only while the item about to send is being edited. */
@@ -20,8 +20,9 @@ export function dequeueQueuedMessage(
   );
   return {
     ...session,
+    pendingMonoEvents: session.pendingMonoEvents?.filter(message => message.id !== messageId),
     queuedMessages: queuedMessages.length > 0 ? queuedMessages : undefined,
-    queueStatus: queuedMessages.length > 0 ? session.queueStatus : undefined,
+    queueStatus: queuedMessages.length > 0 || session.pendingMonoEvents?.some(message => message.id !== messageId) ? session.queueStatus : undefined,
     editingQueuedMessageId:
       session.editingQueuedMessageId === messageId
         ? undefined
@@ -79,7 +80,7 @@ export function queuedMessageForSubmit(
   messageId: string,
   mode: "dispatch" | "steer",
 ): QueuedMessage | undefined {
-  const message = session.queuedMessages?.find(
+  const message = [...(session.queuedMessages ?? []), ...(session.pendingMonoEvents ?? [])].find(
     (entry) => entry.id === messageId,
   );
   if (!message) return undefined;

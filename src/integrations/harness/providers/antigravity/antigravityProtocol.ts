@@ -15,6 +15,7 @@ import { acpAgentInfo } from "../../core/acpSubagents";
 export type AntigravityModeId = "default" | "auto_edit" | "yolo";
 
 export type AntigravityPermissionRequest = {
+  command?: string;
   title: string;
   kind?: string;
   callId?: string;
@@ -138,6 +139,7 @@ export function permissionRequestFromAcp(
     preview,
     optionIds,
     optionKinds,
+    command: kind === "execute" || kind === "shell" ? command ?? extractShellCommand(tool) : undefined,
   };
 }
 

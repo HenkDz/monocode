@@ -96,6 +96,8 @@ export type HarnessEvent =
     }
   | {
       type: "approval.requested";
+      /** Full provider command, never a display title or permission pattern. */
+      command?: string | string[];
       requestId: number;
       title: string;
       kind?: string;
@@ -180,6 +182,8 @@ export type HarnessSessionInput = {
 export type SendTurnInput = HarnessSessionInput & {
   /** Trusted UI identity; never supplied by an agent CLI request. */
   monoSession?: boolean;
+  /** Trusted app identity, not inferred from the prompt or provider output. */
+  orgMono?: boolean;
   text: string;
   attachments?: Attachment[];
   /** Called once the provider has accepted the user turn. */

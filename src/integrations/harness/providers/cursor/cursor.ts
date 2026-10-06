@@ -743,6 +743,9 @@ async function handlePermission(live: Live, id: number, params: unknown) {
 
   live.onEvent({
     type: "approval.requested",
+    command: kind === "execute" || kind === "shell"
+      ? command ?? extractShellCommand(tool.rawInput, tool.raw_input, tool.input, subject)
+      : undefined,
     requestId: id,
     title,
     kind,

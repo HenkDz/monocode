@@ -49,6 +49,7 @@ const EFFORT_LABELS: Record<string, string> = {
 };
 
 export type GrokPermissionRequest = {
+  command?: string;
   title: string;
   kind?: string;
   callId?: string;
@@ -282,6 +283,7 @@ export function permissionRequestFromAcp(
       stringField(tool, "tool_call_id") ??
       stringField(rec ?? {}, "toolCallId"),
     preview: mergePreview(preview, grok.path, grok.query, kind),
+    command: kind === "execute" || kind === "shell" ? command : undefined,
     optionIds,
   };
 }

@@ -38,6 +38,18 @@ function codexRecord(): SessionRecord {
 describe("restoring a session whose repair cannot be persisted", () => {
   beforeEach(() => invoke.mockReset());
 
+  it("migrates duplicated legacy notifications out of the user outbox", async () => {
+    const event = { id: "event", text: "Manager needs a decision", attachments: [],
+      monoSessionCompletion: { sessionId: "manager", title: "Manager", status: "completed" } };
+    invoke.mockImplementation(async (cmd: string) => cmd === "session_get" ? {
+      ...codexRecord(), blocks: [], queuedMessages: [event, { ...event, id: "duplicate" },
+        { id: "user", text: "My follow-up", attachments: [] }],
+    } : null);
+    const session = await getSession("s1");
+    expect(session?.queuedMessages?.map(message => message.id)).toEqual(["user"]);
+    expect(session?.pendingMonoEvents?.map(message => message.id)).toEqual(["event"]);
+  });
+
   it("still returns the repaired session when the write fails", async () => {
     invoke.mockImplementation((cmd: string) => {
       if (cmd === "session_get") return Promise.resolve(codexRecord());

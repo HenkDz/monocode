@@ -148,7 +148,8 @@ function persistableMeta(
 ): Omit<SessionUpsertPayload, "blocks"> {
   const linkedWorkItem = sanitizeLinkedWorkItem(session.linkedWorkItem);
   const queuedMessages = includeQueue
-    ? sanitizeQueuedMessages(session.queuedMessages)
+    // Keep the existing durable queue format; split app events out on hydration.
+    ? sanitizeQueuedMessages([...(session.queuedMessages ?? []), ...(session.pendingMonoEvents ?? [])])
     : [];
   return {
     id: session.id,
@@ -469,7 +470,7 @@ function blockToken(block: Block): number {
 export function persistFingerprint(session: Session): string {
   // Pasted image bytes can be megabytes. Like transcript blocks, queue rows
   // are immutable, so their identity detects edits without serializing bytes.
-  const queue = (session.queuedMessages ?? []).map((message) => {
+  const queue = [...(session.queuedMessages ?? []), ...(session.pendingMonoEvents ?? [])].map((message) => {
     let token = queuedMessageTokens.get(message);
     if (token === undefined) {
       token = ++lastQueuedMessageToken;
@@ -1390,7 +1391,11 @@ function recordToSession(record: SessionRecord): Session {
         .filter((block): block is Block => block != null)
     : [];
   const linkedWorkItem = sanitizeLinkedWorkItem(record.linkedWorkItem);
-  const queuedMessages = sanitizeQueuedMessages(record.queuedMessages);
+  const waiting = sanitizeQueuedMessages(record.queuedMessages);
+  const queuedMessages = waiting.filter(message => !message.monoSessionCompletion);
+  const pendingMonoEvents = waiting.filter((message, index) => message.monoSessionCompletion &&
+    waiting.findIndex(entry => entry.id === message.id || (entry.monoSessionCompletion && entry.text === message.text)) === index &&
+    !blocks.some(block => block.appRequestId === message.id || (block.internal && block.text === message.text)));
   return {
     id: record.id,
     cwd: record.cwd,
@@ -1403,6 +1408,7 @@ function recordToSession(record: SessionRecord): Session {
     runtimeMode: asRuntimeMode(record.runtimeMode),
     title: record.title,
     blocks,
+    ...(pendingMonoEvents.length ? { pendingMonoEvents } : {}),
     // A restart interrupted the active turn. Let the user resume pending work.
     ...(queuedMessages.length
       ? { queuedMessages, queueStatus: "paused" as const }

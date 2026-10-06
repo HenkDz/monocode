@@ -447,6 +447,8 @@ export type Session = {
   backgroundTasks?: string[];
   /** Follow-ups retained until they have been delivered. */
   queuedMessages?: QueuedMessage[];
+  /** App-owned context; never editable user outbox entries. */
+  pendingMonoEvents?: QueuedMessage[];
   /** Paused after user stops current turn; resuming waits for continued turn. */
   queueStatus?: MessageQueueStatus;
   /** Prevent auto-dispatch while this queued row is being edited. In-memory only. */

@@ -44,6 +44,8 @@ export function MessageQueue({
       if (editingIdRef.current) onEditingChangeRef.current?.();
     };
   }, []);
+  // Legacy saved queues may still contain app events before hydration migrates them.
+  messages = messages.filter(message => !message.monoSessionCompletion);
   if (messages.length === 0) return null;
   const paused = status === "paused";
   const failed = messages.some((message) => message.error);
@@ -100,11 +102,7 @@ export function MessageQueue({
           const sending = sendingId === message.id;
           const editing = editingId === message.id;
           const label =
-            (message.monoSessionCompletion
-              ? message.monoSessionCompletion.sessionCount
-                ? `${message.monoSessionCompletion.sessionCount} sessions finished`
-                : `Session ${message.monoSessionCompletion.status}: ${message.monoSessionCompletion.title}`
-              : message.text.trim()) ||
+            message.text.trim() ||
             message.noteCard?.title ||
             message.handoffCard?.brief ||
             `${message.attachments.length} attachment${message.attachments.length === 1 ? "" : "s"}`;

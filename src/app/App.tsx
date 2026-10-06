@@ -507,6 +507,7 @@ import {
   canSteerQueuedHead,
   dequeueQueuedMessage,
   queuedMessageForSubmit,
+  queuedHead,
 } from "../features/sessions/model/messageQueue";
 import { deliverQueuedFollowUp } from "../features/sessions/model/queuedFollowUp";
 import {
@@ -6872,7 +6873,7 @@ function Workspace({
         options?.managed,
       );
       if (controlError) {
-        if (options?.managed) {
+        if (options?.managed || options?.monoSessionCompletion) {
           options.onSettled?.({ status: "failed", text: "", error: controlError });
           return false;
         }
@@ -7046,7 +7047,7 @@ function Workspace({
       const mono = isMonoSession(sessionId);
       const queuedMonoMessage =
         options?.queuedMessageId
-          ? current.queuedMessages?.find(
+          ? [...(current.queuedMessages ?? []), ...(current.pendingMonoEvents ?? [])].find(
               (message) => message.id === options.queuedMessageId,
             )
           : undefined;
@@ -8006,6 +8007,10 @@ function Workspace({
               runtimeMode: current.runtimeMode,
               intent: intent === "orchestrate" ? "plan" : intent,
               monoSession: isMonoSession(sessionId),
+              orgMono: ["orchestrator", "manager", "member"].includes(
+                (monoForSession(sessionId) ?? findMono(habitRunMono(sessionId) ?? "") ??
+                  findMono(orchestrator.forSession(sessionId)?.tasks.find(task => task.sessionId === sessionId)?.memberId ?? ""))?.role ?? "",
+              ),
               // A /operator user turn enables app access for this thread;
               // orchestration leads retain their separate control access.
               controlsAgents:
@@ -8662,13 +8667,20 @@ function Workspace({
         removingSessionIds.current.has(monoId)
       )
         return;
-      setSessions((previous) =>
+      const current = sessionsRef.current.find(session => session.id === monoId);
+      if (!current || enqueueMonoSessionCompletion(current, message) === current) return;
+      const update = (previous: Session[]) =>
         previous.map((session) =>
           session.id === monoId
             ? enqueueMonoSessionCompletion(session, message)
             : session,
-        ),
-      );
+        );
+      // Publish before awaiting persistence: never restore an older transcript
+      // over a concurrent send/receipt when the database write finishes.
+      sessionsRef.current = update(sessionsRef.current);
+      flushSync(() => setSessions(update));
+      const latest = sessionsRef.current.find(session => session.id === monoId);
+      if (latest) await upsertSession(latest);
     },
     [ensureOpenSession],
   );
@@ -8937,7 +8949,7 @@ function Workspace({
     const timers: number[] = [];
     const scheduled = new Set<string>();
     for (const session of sessions) {
-      const queued = session.queuedMessages ?? [];
+      const queued = [...(session.queuedMessages ?? []), ...(session.pendingMonoEvents ?? [])];
       if (queued.length === 0) continue;
 
       if (!session.busy && session.queueStatus === "resuming") {
@@ -8973,7 +8985,7 @@ function Workspace({
           const latest = sessionsRef.current.find(
             (entry) => entry.id === session.id,
           );
-          const head = latest?.queuedMessages?.[0];
+          const head = latest && queuedHead(latest);
           if (
             !latest ||
             !head ||
@@ -8999,6 +9011,16 @@ function Workspace({
               ),
             );
           try {
+            // Duplicate receipts can be outside the loaded transcript window.
+            if (head.monoSessionCompletion && latest.monoTranscript?.before != null &&
+                await invoke<boolean>("mono_session_event_delivered", {
+                  sessionId: latest.id, eventId: head.id, text: head.text,
+                })) {
+              setSessions(previous => previous.map(entry => entry.id === latest.id
+                ? dequeueQueuedMessage(entry, head.id) : entry));
+              setQueueDispatchVersion(value => value + 1);
+              return;
+            }
             const accepted = await submitSession(
               session.id,
               head.text,
@@ -9030,7 +9052,7 @@ function Workspace({
                 (steering
                   ? canSteerQueuedHead(current)
                   : canDispatchQueuedHead(current)) &&
-                current.queuedMessages?.[0] === head
+                queuedHead(current) === head
               ) {
                 setSessions((prev) =>
                   prev.map((entry) =>
@@ -11050,19 +11072,7 @@ function Workspace({
                     },
                   ],
                 );
-                const next = enqueueMonoSessionCompletion(
-                  sessionsRef.current.find(
-                    (session) => session.id === target.id,
-                  ) ?? target,
-                  message,
-                );
-                if (next !== target) {
-                  await upsertSession(next);
-                  sessionsRef.current = sessionsRef.current.map((session) =>
-                    session.id === next.id ? next : session,
-                  );
-                  setSessions(sessionsRef.current);
-                }
+                await queueMonoSessionCompletion(target.id, message);
               }
             }
           }
@@ -11114,16 +11124,7 @@ function Workspace({
               truncated: false,
             })),
           );
-          const next = enqueueMonoSessionCompletion(
-            sessionsRef.current.find((session) => session.id === current.id) ??
-              current,
-            message,
-          );
-          await upsertSession(next);
-          sessionsRef.current = sessionsRef.current.map((session) =>
-            session.id === next.id ? next : session,
-          );
-          setSessions(sessionsRef.current);
+          await queueMonoSessionCompletion(current.id, message);
           await monoManagerGoals.acknowledgeEvents(mono.id, events);
         }
       } catch (error) {
@@ -11135,7 +11136,7 @@ function Workspace({
     const timer = window.setInterval(() => void poll(), 25_000);
     void poll();
     return () => window.clearInterval(timer);
-  }, [ensureOpenSession]);
+  }, [ensureOpenSession, queueMonoSessionCompletion]);
 
   useEffect(() => {
     void monoManagerGoals

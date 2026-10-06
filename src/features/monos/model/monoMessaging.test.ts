@@ -18,6 +18,18 @@ function message(id: string): QueuedMessage {
 }
 
 describe("optimistic Mono messages", () => {
+  it("keeps rejected internal events out of the user outbox and transcript", () => {
+    const session = newSession("claude", "/tmp");
+    const event = { ...message("event"), blockId: "receipt", monoSessionCompletion: {
+      sessionId: "manager", title: "Manager", status: "completed" as const,
+    } };
+    const rejected = rejectMessageSend({ ...session, blocks: [{ id: "receipt", role: "user", text: event.text,
+      internal: true, appRequestId: event.id }] }, event, "Checkout controlled");
+    expect(rejected.queuedMessages).toBeUndefined();
+    expect(rejected.blocks).toEqual([]);
+    expect(rejected.pendingMonoEvents).toHaveLength(1);
+    expect(monoMessageDeliveries(rejected).size).toBe(0);
+  });
   it("retains a rejected turn's original attachments and reuses its bubble on retry", () => {
     const attachments = [
       {

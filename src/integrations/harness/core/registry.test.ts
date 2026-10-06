@@ -49,6 +49,48 @@ function stub(
 }
 
 describe("harness registry", () => {
+  it.each(["claude", "codex", "cursor", "pi"] as const)(
+    "%s: supervised org Mono assigns through the app CLI without a visible approval", async harness => {
+      vi.mocked(isTauri).mockReturnValue(true);
+      const executable = "C:/preview/monocode-org.exe";
+      vi.mocked(invoke).mockImplementation(async command => command === "app_cli_path" ? executable : undefined);
+      const onEvent = vi.fn();
+      let accept!: () => void;
+      const respondApproval = vi.fn(() => accept());
+      registerHarness(stub(harness, {
+        respondApproval,
+        async sendTurn(input) {
+          expect(input.runtimeMode).toBe("supervised");
+          // ACP adapters install their resolver after emitting the request.
+          input.onEvent({ type: "approval.requested", requestId: 1, title: "Run app CLI",
+            command: `"${executable}" app goals.assign --json '{"projectId":"nou","goal":"Test"}'` });
+          await new Promise<void>(resolve => { accept = resolve; });
+          input.onEvent({ type: "approval.resolved", requestId: 1, decision: "allow" });
+        },
+      }));
+      await sendHarnessTurn({ harness, sessionId: `org-${harness}`, cwd: "C:/Users/nooro",
+        model: "test", runtimeMode: "supervised", monoSession: true, orgMono: true,
+        text: "Assign a goal", onEvent });
+      expect(respondApproval).toHaveBeenCalledExactlyOnceWith(`org-${harness}`, 1, "allow");
+      expect(onEvent).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([false, true])("retains other approvals (org Mono: %s)", async orgMono => {
+    vi.mocked(isTauri).mockReturnValue(true);
+    vi.mocked(invoke).mockImplementation(async command => command === "app_cli_path" ? "C:/preview/app.exe" : undefined);
+    const respondApproval = vi.fn();
+    const onEvent = vi.fn();
+    registerHarness(stub("claude", { respondApproval, async sendTurn(input) {
+      for (const command of orgMono ? [undefined, '"C:/preview/app.exe" app projects.list && whoami', "whoami"] : ['"C:/preview/app.exe" app projects.list']) {
+        input.onEvent({ type: "approval.requested", requestId: 1, title: '"C:/preview/app.exe" app projects.list', command });
+      }
+    } }));
+    await sendHarnessTurn({ harness: "claude", sessionId: "ordinary", cwd: "C:/Users/nooro", model: "test",
+      runtimeMode: "supervised", monoSession: true, orgMono, text: "Hello", onEvent });
+    expect(respondApproval).not.toHaveBeenCalled();
+    expect(onEvent).toHaveBeenCalledTimes(orgMono ? 3 : 1);
+  });
   afterEach(() => {
     vi.mocked(isTauri).mockReturnValue(false);
     vi.mocked(invoke).mockReset();

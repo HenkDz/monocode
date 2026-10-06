@@ -1103,6 +1103,7 @@ async function handleControlRequest(
   const pending = waitApproval(live, uiId, control.requestId, input);
   live.onEvent({
     type: "approval.requested",
+    command: toolName.toLowerCase() === "bash" && typeof input.command === "string" ? input.command : undefined,
     requestId: uiId,
     title: toolTitle(toolName, input),
     kind: toolKindFromName(toolName),

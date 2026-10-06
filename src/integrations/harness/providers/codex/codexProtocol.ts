@@ -1339,6 +1339,8 @@ export function mapApprovalRequest(
       kind: "command",
       event: {
         type: "approval.requested",
+        command: typeof rec.command === "string" ? rec.command :
+          Array.isArray(rec.command) && rec.command.every(part => typeof part === "string") ? rec.command : undefined,
         requestId,
         title: readable
           ? presentation.title

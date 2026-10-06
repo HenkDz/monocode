@@ -5,6 +5,7 @@ import type {
   TurnIntent,
 } from "../../../features/sessions/model/session";
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { isDirectAppCliCommand } from "./appCliApproval";
 import type { GeneratedSessionTitle } from "../../../features/sessions/model/sessionTitle";
 import type { PrContent } from "../../../features/source-control/model/gitText";
 import { hasLiveCatalog } from "../../../features/sessions/model/models";
@@ -235,10 +236,27 @@ export function sendHarnessTurn(input: SendTurnInput & { harness: HarnessId }) {
         );
       }
     }
+    const appCli = controlled && input.orgMono
+      ? await invoke<string>("app_cli_path").catch(() => "")
+      : "";
+    const automaticApprovals = new Set<number>();
     activeTurnSessions.add(input.sessionId);
     try {
       await adapter.sendTurn({
         ...input,
+        onEvent: (event) => {
+          if (event.type === "approval.requested" && appCli &&
+              isDirectAppCliCommand(event.command, appCli)) {
+            if (!automaticApprovals.has(event.requestId)) {
+              automaticApprovals.add(event.requestId);
+              // Some adapters install their pending resolver immediately after emitting.
+              queueMicrotask(() => adapter.respondApproval(input.sessionId, event.requestId, "allow"));
+            }
+            return;
+          }
+          if (event.type === "approval.resolved" && automaticApprovals.delete(event.requestId)) return;
+          input.onEvent(event);
+        },
         onAccepted: () => {
           input.onEvent({ type: "turn.ready" });
           input.onAccepted?.();

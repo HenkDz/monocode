@@ -1,4 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { isTauri } from "@tauri-apps/api/core";
+import { registerHarness, resetHarnessIdlePark, sendHarnessTurn } from "../../core/registry";
+vi.mock("@tauri-apps/api/core", async original => ({
+  ...(await original<typeof import("@tauri-apps/api/core")>()),
+  isTauri: vi.fn(() => false),
+  invoke: vi.fn(async command => command === "app_cli_path" ? "C:/preview/monocode-org.exe" : undefined),
+}));
 import { applyHarnessEvent } from "../../core/apply";
 import { newSession } from "../../../../features/sessions/model/session";
 import {
@@ -72,10 +79,13 @@ async function startTurn(
     runtimeMode?: RuntimeMode;
     intent?: TurnIntent;
     providerAccountId?: string;
+    orgMono?: boolean;
   } = {},
 ) {
   const events: HarnessEvent[] = [];
-  const turn = sendClaudeTurn({
+  const send = options.orgMono ? (input: Parameters<typeof sendClaudeTurn>[0]) =>
+    sendHarnessTurn({ ...input, harness: "claude", orgMono: true, monoSession: true }) : sendClaudeTurn;
+  const turn = send({
     sessionId,
     cwd: "/repo",
     model: "claude:claude-sonnet-5",
@@ -935,6 +945,31 @@ describe("claude legacy account resume", () => {
 });
 
 describe("claude subagents", () => {
+  it("auto-approves an Orchestrator's direct goal assignment before any approval reaches the UI", async () => {
+    vi.mocked(isTauri).mockReturnValue(true);
+    registerHarness({ id: "claude", live: true, sendTurn: sendClaudeTurn,
+      respondApproval: respondClaudeApproval, cancelTurn: cancelClaudeTurn,
+      stopSession: stopClaudeSession, forgetSession: async () => {},
+      bindSession: () => {}, steerTurn: async () => {},
+    });
+    try {
+      const { events, turn } = await startTurn("s1", { orgMono: true, runtimeMode: "supervised" });
+      emit({ type: "control_request", request_id: "goal-assignment", request: {
+        subtype: "can_use_tool", tool_name: "Bash", tool_use_id: "assign",
+        input: { command: '"C:/preview/monocode-org.exe" app goals.assign --json \'{"projectId":"nou","goal":"Test"}\'' },
+      } });
+      await waitFor(() => parse().some(message =>
+        (message.response as Record<string, unknown>)?.request_id === "goal-assignment"), "automatic CLI approval");
+      expect(parse().find(message => (message.response as Record<string, unknown>)?.request_id === "goal-assignment"))
+        .toMatchObject({ response: { response: { behavior: "allow" } } });
+      expect(events.some(event => event.type === "approval.requested" || event.type === "approval.resolved")).toBe(false);
+      emit({ type: "result", subtype: "success", session_id: "sess_1" });
+      await turn;
+    } finally {
+      vi.mocked(isTauri).mockReturnValue(false);
+      resetHarnessIdlePark();
+    }
+  });
   it.each(["allow", "deny"] as const)(
     "routes a child permission decision: %s",
     async (decision) => {

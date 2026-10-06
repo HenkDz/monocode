@@ -20,6 +20,16 @@ import {
   shouldPersistSession,
 } from "./sessionStore";
 
+it("persists internal events without adding them to the user outbox", () => {
+  const session = newSession("claude", "/tmp");
+  const event = { id: "event", text: "Manager needs a decision", attachments: [],
+    monoSessionCompletion: { sessionId: "manager", title: "Manager", status: "completed" as const } };
+  const pending = { ...session, pendingMonoEvents: [event] };
+  expect(persistFingerprint(pending)).not.toBe(persistFingerprint(session));
+  expect(sanitizeSessionForPersist(pending).queuedMessages).toEqual([event]);
+  expect(pending.queuedMessages).toBeUndefined();
+});
+
 it("fingerprints queued message edits, ordering, errors and pause state", () => {
   const session = newSession("codex", "/tmp");
   const first = { id: "first", text: "One", attachments: [] };

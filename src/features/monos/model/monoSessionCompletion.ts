@@ -193,12 +193,13 @@ export function enqueueMonoSessionCompletion(
 ): Session {
   if (
     mono.queuedMessages?.some((entry) => entry.id === message.id) ||
-    mono.blocks.some((block) => block.appRequestId === message.id)
+    mono.pendingMonoEvents?.some((entry) => entry.id === message.id || entry.text === message.text) ||
+    mono.blocks.some((block) => block.appRequestId === message.id || (block.internal && block.text === message.text))
   )
     return mono;
   return {
     ...mono,
-    queuedMessages: [...(mono.queuedMessages ?? []), message],
+    pendingMonoEvents: [...(mono.pendingMonoEvents ?? []), message],
     queueStatus: mono.queueStatus === "paused" ? "paused" : "active",
   };
 }

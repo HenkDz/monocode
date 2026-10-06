@@ -1,6 +1,7 @@
 import { closeLeaf, leafIds, type WorkspaceTab } from "../../workspace/model/layout";
 import type { OrchestrationRun } from "./orchestration";
 import type { Session } from "../../sessions/model/session";
+import { isProjectManager } from "./projectManager";
 
 export function releaseOrchestrationWorker(
   session: Session,
@@ -63,6 +64,7 @@ export function consolidateOrchestrationTabs(
 ) {
   const parents = new Map(
     runs.flatMap((run) =>
+      !run.projectManager && !isProjectManager(run.leadId) &&
       tabs.some((tab) => leafIds(tab.layout).includes(run.leadId))
         ? run.tasks.map((task) => [task.sessionId, run.leadId] as const)
         : [],

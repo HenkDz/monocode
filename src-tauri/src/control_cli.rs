@@ -21,6 +21,8 @@ Actions, with the JSON object each one takes:
             "files" is the write scope: project-relative paths, where a
             directory covers its descendants and ["."] reserves the whole
             checkout. "dependsOn" holds taskIds that must be reviewed first.
+            Project Managers may pass "checkout":"<path or branch>" to reuse
+            a worktree explicitly named by the user; omitted creates one.
   get       {"taskId":"..."}
             One task, including its latest result.
   wait      {"timeoutSeconds":20}
@@ -45,8 +47,10 @@ Actions, with the JSON object each one takes:
             scopes. Use this only when the additional files are required.
   cancel    {"taskId":"..."}
             Cancel a task, whether it is running or still queued.
-  review    {"taskId":"..."}
+  review    {"taskId":"...","checks":"Short summary of diff review and tests"}
             Accept a completed task's result.
+            Project Managers: inspect diff and tests, open a non-draft PR,
+            then review. The worktree is retained; the user reviews and merges.
   finish    {}
             End the run, once every task is accepted or cancelled.
 

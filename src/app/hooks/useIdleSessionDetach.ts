@@ -32,6 +32,7 @@ export function useIdleSessionDetach({
   skipForgetSessionIds,
   persistSession,
   setSessions,
+  retainedSessionIds,
 }: {
   sessions: Session[];
   sessionsRef: RefObject<Session[]>;
@@ -45,21 +46,23 @@ export function useIdleSessionDetach({
   skipForgetSessionIds: RefObject<Set<string>>;
   persistSession: (session: Session | undefined) => void;
   setSessions: Dispatch<SetStateAction<Session[]>>;
+  retainedSessionIds?: ReadonlySet<string>;
 }) {
   // Dropping a session re-renders the whole app, so it waits until a switch
   // has painted, and a burst of switches pays for it once.
-  const detachInputs = useRef({ orchestrationRuns, liveAgentsEnabled });
-  detachInputs.current = { orchestrationRuns, liveAgentsEnabled };
+  const detachInputs = useRef({ orchestrationRuns, liveAgentsEnabled, retainedSessionIds });
+  detachInputs.current = { orchestrationRuns, liveAgentsEnabled, retainedSessionIds };
   const unseenFinishedRef = useRef(unseenFinishedIds);
   unseenFinishedRef.current = unseenFinishedIds;
   const detachTimer = useRef<number | null>(null);
   const detachIdleSessions = useCallback(() => {
     detachTimer.current = null;
     const sessions = sessionsRef.current;
-    const { orchestrationRuns, liveAgentsEnabled } = detachInputs.current;
+    const { orchestrationRuns, liveAgentsEnabled, retainedSessionIds } = detachInputs.current;
     const visibleIds = new Set(
       tabsRef.current.flatMap((tab) => leafIds(tab.layout)),
     );
+    for (const id of retainedSessionIds ?? []) visibleIds.add(id);
     // Inbox owns these panes independently of project tabs. Keep their drafts
     // and attachments mounted when the panel closes or switches items.
     for (const session of sessions) {
@@ -133,6 +136,7 @@ export function useIdleSessionDetach({
     tabs,
     liveAgentsEnabled,
     orchestrationRuns,
+    retainedSessionIds,
     detachIdleSessions,
   ]);
 

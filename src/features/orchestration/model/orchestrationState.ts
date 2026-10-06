@@ -78,6 +78,11 @@ export type OrchestrationTask = {
   dependsOn: string[];
   status: TaskStatus;
   accepted: boolean;
+  /** An open, non-draft PR confirmed at manager review time. */
+  prUrl?: string;
+  checksSummary?: string;
+  /** Optional existing worktree explicitly named in an assignment. */
+  checkout?: string;
   result: string;
   error?: string;
   /** A retained worker can continue safely with this recovery turn. */
@@ -106,6 +111,7 @@ export type OrchestrationRun = {
   allowedModels?: OrchestrationChoice[];
   proposalId?: string;
   maxWorkers: number;
+  projectManager?: boolean;
   cli: string;
   tasks: OrchestrationTask[];
   dispatches?: OrchestrationDispatch[];

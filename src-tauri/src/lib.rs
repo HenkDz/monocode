@@ -28,6 +28,7 @@ mod notifications;
 mod pasteboard;
 mod pi_usage;
 mod project_logo;
+mod project_root;
 mod pty;
 #[cfg(target_os = "macos")]
 mod quick_composer;
@@ -272,6 +273,7 @@ pub fn run() {
             control::control_reply,
             control::control_save,
             control::control_load,
+            project_root::project_root,
             control::control_scopes,
             control::control_write_path,
             control::control_attach_worker,

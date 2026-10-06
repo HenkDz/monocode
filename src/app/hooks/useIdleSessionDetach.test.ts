@@ -108,6 +108,7 @@ function run(status: OrchestrationRun["status"]): OrchestrationRun {
 }
 
 type WorkspaceState = {
+  retainedSessionIds?: ReadonlySet<string>;
   sessions: Session[];
   tabs: WorkspaceTab[];
   orchestrationRuns: OrchestrationRun[];
@@ -209,6 +210,16 @@ async function advance(milliseconds = 250) {
 }
 
 describe("orchestration worker detachment", () => {
+  it("retains app-level manager chats without tabs and releases inspected workers when closed", async () => {
+    const workspace = mountWorkspace({ sessions: [chat("grand"), chat("manager"), chat("inspected")], tabs: [], orchestrationRuns: [], liveAgentsEnabled: false, retainedSessionIds: new Set(["grand", "manager", "inspected"]) });
+    await advance();
+    expect(workspace.snapshot().sessions).toHaveLength(3);
+    expect(mocks.forgetHarnessSession).not.toHaveBeenCalled();
+    workspace.update({ retainedSessionIds: new Set(["grand", "manager"]) });
+    await advance();
+    expect(workspace.snapshot().sessions.map(s => s.id)).toEqual(["grand", "manager"]);
+    expect(mocks.forgetHarnessSession).toHaveBeenCalledWith("claude", "inspected");
+  });
   it("retains finished workers until their lead closes, then persists and forgets them", async () => {
     const workspace = mountWorkspace();
     await advance();

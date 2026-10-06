@@ -1,4 +1,6 @@
 import { ChevronDown, GripVertical, X } from "../../../shared/ui/icons";
+import { isProjectManager } from "../../orchestration/model/projectManager";
+import { ProjectManagerReview } from "../../orchestration/ui/ProjectManagerReview";
 import {
   memo,
   useCallback,
@@ -317,7 +319,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
     orchestrator.snapshot,
     orchestrator.snapshot,
   );
-  const managed = orchestrationRuns.some(
+  const managed = isProjectManager(session.id) || orchestrationRuns.some(
     (run) =>
       (run.status === "active" || run.status === "paused") &&
       sameCheckout(orchestrationCheckoutCwd(run), sessionWorkCwd(session)),
@@ -567,6 +569,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
       compactSupported={canCompactHarnessContext(session.harness)}
       recents={recents}
       hideProjectPicker={
+        isProjectManager(session.id) ||
         !!session.inboxAsk ||
         (hideProjectPicker ? !showDeckProjectPicker : false)
       }
@@ -889,7 +892,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
                       : undefined
                   }
                   latestTurnAccessory={
-                    remote ||
+                    isProjectManager(session.id) && orchestrationRuns.find(run => run.leadId === session.id) ? <ProjectManagerReview run={orchestrationRuns.find(run => run.leadId === session.id)!} /> : remote ||
                     session.inboxAsk ||
                     session.worktreeRemoved ||
                     draftBlock ? undefined : (

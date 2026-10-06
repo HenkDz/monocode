@@ -14,6 +14,7 @@ import type { Worktree } from "../../features/source-control/model/worktrees";
 import type { WorkspaceTab } from "../../features/workspace/model/layout";
 import {
   filterTabsForProject,
+  isManagerTab,
   workspaceTabCwd,
 } from "../../features/workspace/model/workspaceTabGroups";
 import { pathKey } from "../../shared/lib/paths";
@@ -131,12 +132,13 @@ export function useWorkspaceNavigation(options: Options) {
             view.sessions,
             next.project,
           ).filter((entry) => {
+            if (isManagerTab(entry)) return false;
             const workspace = view.tabWorkspace(entry, view.sessions);
             return !workspace || sameProjectPath(workspace, path);
           });
           const workspace = view.tabWorkspace(tab, view.sessions);
           const target =
-            !workspace || sameProjectPath(workspace, path)
+            !isManagerTab(tab) && (!workspace || sameProjectPath(workspace, path))
               ? tab
               : (scoped.find((entry) => entry.id === memory.current.get(key)) ??
                 scoped[scoped.length - 1]);
@@ -145,6 +147,7 @@ export function useWorkspaceNavigation(options: Options) {
             tabId = target.id;
           } else if (
             session &&
+            !isManagerTab(tab) &&
             isBlankSession(session) &&
             sameProjectPath(session.cwd, next.project)
           ) {
@@ -167,7 +170,7 @@ export function useWorkspaceNavigation(options: Options) {
             );
             if (!isCurrent()) continue;
             tabId = tab.id;
-          } else if (next.kind === "project") {
+          } else if (next.kind === "project" && !isManagerTab(tab)) {
             // Returning through the project rail keeps its landing
             // conversation when the remembered workspace has no open tab.
             // Its checkout stays attached to that conversation.
@@ -236,7 +239,7 @@ export function useWorkspaceNavigation(options: Options) {
     if (request.current) return;
     const view = latest.current;
     const tab = view.tabs.find((entry) => entry.id === view.activeTabId);
-    if (!tab) return;
+    if (!tab || isManagerTab(tab)) return;
     const project = workspaceTabCwd(tab, view.sessions);
     if (!project || project === "~" || isRemoteProjectPath(project)) return;
     const path = worktreeFocus(project)?.path ?? project;

@@ -1,4 +1,8 @@
 import { acceptQuickLaunch } from "./model/quickLaunchSession";
+import { isProjectManager, projectManagerId, managerAttention } from "../features/orchestration/model/projectManager";
+import { usePrStatuses } from "../features/source-control/hooks/usePrStatus";
+import { ProjectManagerRow } from "../features/orchestration/ui/ProjectManagerRow";
+import { gitPrStatus } from "../platform/tauri/fs";
 import { useWorkspaceNavigation } from "./hooks/useWorkspaceNavigation";
 import { useIdleSessionDetach } from "./hooks/useIdleSessionDetach";
 import {
@@ -386,6 +390,7 @@ import {
   workspaceTabCwd,
   workspaceTabWorktree,
   focusedWorkspaceTabCwd,
+  isManagerTab,
 } from "../features/workspace/model/workspaceTabGroups";
 import { applyAddToChatRequest } from "../features/sessions/model/addChatToWorkspace";
 import {
@@ -480,6 +485,7 @@ import {
   loadNotificationsEnabled,
   NOTIFICATION_CLICK_EVENT,
   announceSessionFinished,
+  notifySession,
   probeNotificationPermission,
   setWindowFocused,
 } from "../features/notifications/model/notifications";
@@ -1182,6 +1188,7 @@ function Workspace({
   const workspaceSessionRequest = useRef(0);
   const tabWorkspace = useCallback(
     (tab: WorkspaceTab, list: readonly Session[]) => {
+      if (isManagerTab(tab)) return workspaceTabWorktree(tab, list);
       const pinnedTab = workspacePins.current.get(tab.id);
       if (pinnedTab) return pinnedTab;
       for (const id of leafIds(tab.layout)) {
@@ -1200,6 +1207,7 @@ function Workspace({
    * tabs from other worktrees close with it instead of piling up. */
   const keepWorkspaceTab = useCallback(
     (tab: WorkspaceTab) => {
+      if (isManagerTab(tab)) return true;
       const project = workspaceTabCwd(tab, sessionsRef.current);
       if (!project || isRemoteProjectPath(project)) return true;
       const workspace = tabWorkspace(tab, sessionsRef.current);
@@ -1549,6 +1557,7 @@ function Workspace({
       (session) => activeTab && leafIds(activeTab.layout).includes(session.id),
     );
   const activeTabSessionIds = activeTab ? leafIds(activeTab.layout) : [];
+  const managerActive = !!active && isProjectManager(active.id);
   const activeLinkedWorkItemPanel = activeTab
     ? (linkedWorkItemPanels.get(activeTab.focusedId) ??
       [...linkedWorkItemPanels.values()]
@@ -1812,6 +1821,10 @@ function Workspace({
     busySessionIds,
     activeSessionId,
   );
+  const retainedSessionIds = useMemo(() => new Set(sessions.filter(s => isProjectManager(s.id)).map(s => s.id)), [sessions]);
+  const { statuses: managerPrStatuses } = usePrStatuses(orchestrationRuns.filter(run => run.projectManager).flatMap(run => run.tasks.flatMap(task =>
+    task.accepted && task.workspace ? [{ cwd: task.workspace.checkoutCwd, branch: task.workspace.branch }] : [])));
+  const managerQuestions = useMemo(() => managerAttention(sessions, orchestrationRuns, unseenFinishedIds, managerPrStatuses), [sessions, orchestrationRuns, unseenFinishedIds, managerPrStatuses]);
 
   const liveAgents = useMemo(
     () =>
@@ -2181,6 +2194,7 @@ function Workspace({
   // keeps its child for a few minutes after a turn so follow-ups stay instant,
   // then parks it and resumes on the next prompt.
   useIdleSessionDetach({
+    retainedSessionIds,
     sessions,
     sessionsRef,
     tabs,
@@ -2565,7 +2579,7 @@ function Workspace({
 
   const onSplit = useCallback(
     (dir: SplitDir) => {
-      if (!activeTab) return;
+      if (!activeTab || isManagerTab(activeTab)) return;
       const session = newDefaultSession(
         sessionDefaults?.cwd ?? projectCwd,
         sessionDefaults?.runtimeMode,
@@ -3558,6 +3572,7 @@ function Workspace({
     if (!sidebarCwd || sidebarCwd === "~" || isRemoteProjectPath(sidebarCwd))
       return stats;
     for (const tab of filterTabsForProject(tabs, sessions, sidebarCwd)) {
+      if (isManagerTab(tab)) continue;
       const workspace = tabWorkspace(tab, sessions) ?? sidebarCwd;
       const key = pathKey(workspace);
       const entry = stats.get(key) ?? { tabs: 0, busy: false };
@@ -3573,10 +3588,12 @@ function Workspace({
     // A projectless session belongs to no project, so it stands on its own
     // rather than trailing the last project's tabs.
     const active = tabs.find((tab) => tab.id === activeTabId);
+    if (active && isManagerTab(active)) return [active];
     if (active && !workspaceTabCwd(active, sessions)) return [active];
     // Each worktree keeps its own tabs; the others stay open, just hidden.
     const worktree = projectWorktree?.path ?? projectCwd;
     return filterTabsForProject(tabs, sessions, projectCwd).filter((tab) => {
+      if (isManagerTab(tab)) return false;
       if (tab.id === activeTabId) return true;
       const workspace = tabWorkspace(tab, sessions);
       return !workspace || sameProjectPath(workspace, worktree);
@@ -3878,7 +3895,7 @@ function Workspace({
     const tab =
       tabsRef.current.find((entry) => entry.id === activeTabIdRef.current) ??
       tabsRef.current[0];
-    if (!tab) return false;
+    if (!tab || isManagerTab(tab) || isProjectManager(session.id)) return false;
 
     const paneId = isBlankSession(
       sessionsRef.current.find((entry) => entry.id === tab.focusedId),
@@ -4246,15 +4263,25 @@ function Workspace({
       const request = ++workspaceSessionRequest.current;
       workspaceNavigation.cancel();
       let session = await ensureOpenSession(sessionId);
+      if (request !== workspaceSessionRequest.current) return;
       if (!session || session.inboxAsk) return;
       const parentId =
         session.orchestrationLeadId ??
         orchestrator.forSession(sessionId)?.leadId;
-      if (parentId && parentId !== sessionId) {
+      if (parentId && parentId !== sessionId && !isProjectManager(parentId)) {
         setInspectedWorkerId(sessionId);
         session = await ensureOpenSession(parentId);
+        if (request !== workspaceSessionRequest.current) return;
         if (!session) return;
       }
+      // A Manager is a project chat, not a worktree landing or a blank pane
+      // that can be replaced by another conversation.
+      if (isProjectManager(session.id)) workspace = undefined;
+      setSearchViewOpen(false);
+      setInboxViewOpen(false);
+      setNotesViewOpen(false);
+      setAutomationsViewOpen(false);
+      setSettingsOpen(false);
       if (workspace) {
         // Tree navigation changes the view, never the conversation's checkout.
         if (
@@ -5134,6 +5161,7 @@ function Workspace({
 
   const onCwdChange = useCallback(
     (sessionId: string, cwd: string) => {
+      if (isProjectManager(sessionId)) return;
       const normalized = normalizeProjectPath(cwd);
       const current = sessionsRef.current.find((s) => s.id === sessionId);
       const previous = current?.cwd;
@@ -5291,6 +5319,7 @@ function Workspace({
       isCurrent: () => boolean = () => true,
     ) => {
       if (!isCurrent()) return;
+      if (isProjectManager(sessionId)) throw new Error("The Manager stays at the project root.");
       const current = sessionsRef.current.find((s) => s.id === sessionId);
       if (
         !current ||
@@ -6171,6 +6200,24 @@ function Workspace({
       // Output already received belongs before the submitted user message.
       // Flush before reading the session too, since pending errors can settle it.
       flushHarnessEvents();
+      if (isProjectManager(sessionId) && !options?.managed && orchestrator.run(sessionId)?.status !== "active") {
+        return (async () => {
+          try {
+            await orchestrator.hydrate(sessionId);
+            // Sending is explicit intent to resume; opening the pane alone never replays work.
+            if (orchestrator.run(sessionId)?.status !== "active")
+              await orchestrator.start(sessionId, HARNESSES.filter(isHarnessAvailable), 4, undefined, true);
+            const accepted = await submitSessionRef.current(sessionId, text, attachments, options);
+            if (!accepted) saveDraftRef.current(sessionId, text, attachments);
+            return accepted;
+          } catch (error) {
+            saveDraftRef.current(sessionId, text, attachments);
+            enqueueHarnessEvent(sessionId, { type: "status", text: String(error) });
+            flushHarnessEvents();
+            return false;
+          }
+        })();
+      }
       const controlError = orchestrator.submissionError(
         sessionId,
         options?.managed,
@@ -8918,7 +8965,7 @@ function Workspace({
       const parentId =
         sessionsRef.current.find((session) => session.id === sessionId)
           ?.orchestrationLeadId ?? orchestrator.forSession(sessionId)?.leadId;
-      if (parentId && parentId !== sessionId) {
+      if (parentId && parentId !== sessionId && !isProjectManager(parentId)) {
         setInspectedWorkerId(sessionId);
         if (!focusOpenSession(parentId)) void onSelectHistorySession(parentId);
       } else if (!focusOpenSession(sessionId)) {
@@ -8958,7 +9005,15 @@ function Workspace({
           (session) => session.id === run.leadId,
         );
         if (!lead) throw new Error("Lead session is unavailable");
-        const workspace =
+        const namedTree = task.checkout && !task.workspace ? await listWorktrees(projectCwd).then(listed => {
+          const tree = listed.worktrees.find(tree => sameProjectPath(tree.path, task.checkout!) || tree.branch === task.checkout);
+          if (!tree || tree.missing || tree.isMain) throw new Error("Name an existing non-primary worktree in this project.");
+          if (sessionsRef.current.some(session => session.busy && sameProjectPath(sessionWorkCwd(session), tree.path))) throw new Error("The named worktree is already in use.");
+          if (run.tasks.some(other => other.id !== task.id && other.workspace && sameProjectPath(other.workspace.checkoutCwd, tree.path) && other.status !== "cancelled")) throw new Error("Another assignment owns this worktree; continue that worker instead.");
+          return workspaceIdentity(projectCwd, tree.path, tree.branch ?? undefined);
+        }) : undefined;
+        const workerMode = run.projectManager ? "full-access" : lead.runtimeMode;
+        const workspace = namedTree ?? (
           task.workspacePolicy === "shared"
             ? workspaceIdentity(projectCwd, leadCheckoutCwd)
             : task.workspace
@@ -8987,7 +9042,8 @@ function Workspace({
                     tree.path,
                     tree.branch ?? undefined,
                   ),
-                );
+                ));
+        if (!workspace) throw new Error("Worker worktree could not be prepared.");
         const checkoutCwd = workspace.checkoutCwd;
         const scratchDir = await invoke<string>("control_attach_worker", {
           leadId: run.leadId,
@@ -9017,7 +9073,7 @@ function Workspace({
               : checkoutCwd,
             branch: workspace.branch,
             worktreeRemoved: false,
-            runtimeMode: lead.runtimeMode,
+            runtimeMode: workerMode,
             orchestrationLeadId: run.leadId,
           };
           await upsertSession(synced);
@@ -9037,7 +9093,7 @@ function Workspace({
             "The saved worker no longer matches its approved model. Create a new assignment.",
           );
         const fresh = {
-          ...newSession(task.harness, projectCwd, task.model, lead.runtimeMode),
+          ...newSession(task.harness, projectCwd, task.model, workerMode),
           ...(sameProjectPath(projectCwd, checkoutCwd)
             ? {}
             : { worktreeCwd: checkoutCwd, branch: workspace.branch }),
@@ -9062,7 +9118,7 @@ function Workspace({
                 ? undefined
                 : workspace.branch,
               worktreeRemoved: false,
-              runtimeMode: lead.runtimeMode,
+              runtimeMode: workerMode,
             }
           : {
               ...fresh,
@@ -9085,6 +9141,15 @@ function Workspace({
         setSessions(next);
         // Workers belong to the lead's agent panel; no workspace tab is created.
         return { scratchDir, workspace };
+      },
+      reviewedPullRequest: async task => {
+        const pr = await gitPrStatus(task.workspace!.checkoutCwd);
+        if (!pr || pr.state !== "open" || pr.isDraft || !pr.url) throw new Error("Could not confirm an open non-draft PR for this worker branch. If it already exists, report the lookup failure; do not republish it or inspect credentials.");
+        return pr.url;
+      },
+      notifyReady: (leadId, task) => {
+        const manager = sessionsRef.current.find(session => session.id === leadId);
+        if (manager) void notifySession(manager, { kind: "prReady", title: task.title }, activeSessionIdRef.current === leadId);
       },
       integrateWorker: async (run, task) => {
         const fromCwd = task.workspace?.checkoutCwd;
@@ -9738,6 +9803,29 @@ function Workspace({
     [onOpenApprovalSession],
   );
 
+  const onOpenProjectManager = useCallback(async (project: string) => {
+    const request = ++workspaceSessionRequest.current;
+    workspaceNavigation.cancel();
+    const target = { projectCwd: await invoke<string>("project_root", { project }) };
+    const id = await projectManagerId(target.projectCwd);
+    if (request !== workspaceSessionRequest.current) return;
+    if (!sessionsRef.current.some(session => session.id === id)) {
+      const stored = await getSession(id);
+      if (request !== workspaceSessionRequest.current) return;
+      if (stored && !sameProjectPath(sessionWorkCwd(stored), target.projectCwd)) throw new Error("The saved Manager no longer matches this project.");
+      // Like a normal blank pane, no provider or durable session starts until a message is sent.
+      const session = stored ?? { ...newDefaultSession(project, sessionDefaults?.runtimeMode), id, title: "Manager", worktreeCwd: sameProjectPath(project, target.projectCwd) ? undefined : target.projectCwd };
+      if (session.providerSessionId) bindHarnessSession(session.harness, id, session.providerSessionId, target.projectCwd, session.providerAccountId, session.blocks);
+      if (!sessionsRef.current.some(session => session.id === id)) {
+        sessionsRef.current = [...sessionsRef.current, session];
+        setSessions(sessionsRef.current);
+      }
+    }
+    await orchestrator.hydrate(id);
+    if (request !== workspaceSessionRequest.current) return;
+    await onSelectHistorySession(id);
+  }, [onSelectHistorySession, sessionDefaults?.runtimeMode, workspaceNavigation.cancel]);
+
   const nextTitleTabs: TitleTab[] = deckProjectTabs.map((tab) =>
     toTitleTab(tab, sessions, dirtyFiles, unseenFinishedIds),
   );
@@ -9819,8 +9907,8 @@ function Workspace({
   const sidebarOpenSessions = useMemo(
     () => {
       const runs = new Map(orchestrationRuns.map((run) => [run.leadId, run]));
-      return sessions
-        .filter((session) => !session.inboxAsk && !session.orchestrationLeadId)
+      const rows = sessions
+        .filter((session) => !session.inboxAsk && !isProjectManager(session.id) && (!session.orchestrationLeadId || isProjectManager(session.orchestrationLeadId)))
         .map((session) => {
           const run = runs.get(session.id);
           return {
@@ -9828,6 +9916,19 @@ function Workspace({
             ...(run ? { orchestration: summarizeOrchestration(run, sessions) } : {}),
           };
         });
+      // History hides ordinary orchestration children. Retained manager workers
+      // still need a worktree-row link before their providers are resumed.
+      for (const run of orchestrationRuns.filter(run => run.projectManager)) {
+        for (const task of run.tasks) {
+          if (!task.workspace || rows.some(row => row.id === task.sessionId)) continue;
+          const dispatch = run.dispatches?.find(dispatch => dispatch.id === task.lastDispatchId);
+          rows.push({ id: task.sessionId, cwd: run.cwd, worktreeCwd: task.workspace.checkoutCwd,
+            branch: task.workspace.branch, orchestrationLeadId: run.leadId, title: task.title,
+            harness: task.harness, model: task.model, runtimeMode: "full-access",
+            createdAt: dispatch?.startedAt ?? 0, updatedAt: dispatch?.updatedAt ?? 0 });
+        }
+      }
+      return rows;
     },
     [sessions, orchestrationRuns],
   );
@@ -10854,6 +10955,7 @@ function Workspace({
   const workspaceTitleBar = (
     <TitleBar
       tabs={titleTabs}
+      standaloneTitle={managerActive ? "Manager" : undefined}
       activeId={activeTabId}
       cwd={sidebarCwd}
       projectRailOpen={projectRailOpen}
@@ -10864,7 +10966,7 @@ function Workspace({
       onGoBack={onRailBack}
       onGoForward={onRailForward}
       onToggleSidebar={onToggleSidebar}
-      onToggleSessionSidebar={onToggleSessionSidebar}
+      onToggleSessionSidebar={managerActive ? undefined : onToggleSessionSidebar}
       onSelect={activateTab}
       onNew={onNew}
       onNewTerminal={onNewTerminal}
@@ -10909,7 +11011,7 @@ function Workspace({
                   : undefined
               }
               explorerRootLabel={explorerRootLabel}
-              open={sessionSidebarOpen}
+              open={sessionSidebarOpen && !managerActive}
               tab={sidebarTab}
               onTabChange={setSidebarTab}
               filesSearchOpen={filesSearchOpen}
@@ -10975,6 +11077,7 @@ function Workspace({
               onSelectAgent={onSelectLiveAgent}
               onSelectProject={onSelectProject}
               renderProjectWorktrees={(project, enabled) => (
+                <><ProjectManagerRow project={project} enabled={enabled} selected={!chromeSurfaceOpen && managerActive && sameProjectPath(active.cwd, project)} onOpen={onOpenProjectManager} attention={managerQuestions} running={sessions.some(s => isProjectManager(s.id) && sameProjectPath(s.cwd, project) && s.busy)} />
                 <ProjectWorktrees
                   project={project}
                   currentProject={sidebarCwd}
@@ -10999,6 +11102,7 @@ function Workspace({
                   onNewSession={onNewWorktreeSession}
                   onSelectSession={onSelectHistorySession}
                 />
+                </>
               )}
               onOpenProject={pickProject}
               onRemoveProject={onRemoveProject}
@@ -11021,7 +11125,7 @@ function Workspace({
               titleBarAbove={compactTitleBar}
               onToggleProjectRail={onToggleProjectRail}
               unseenFinishedIds={unseenFinishedIds}
-              inboxUnseen={inboxUnseen}
+              inboxUnseen={inboxUnseen || managerQuestions.length > 0}
               linkedSessionUpdateIds={linkedSessionUpdateIds}
               settingsOpen={settingsOpen}
               settingsSection={settingsSection}
@@ -11289,6 +11393,7 @@ function Workspace({
                   onAskRestart={onRestartInboxAsk}
                   onAskMount={setInboxAskPortal}
                   sessions={inboxRelatedSessions}
+                  managerQuestions={managerQuestions}
                   repairSessions={repairSessions}
                   onRepairChecks={onRepairChecks}
                   onOpenSession={onOpenInboxSession}

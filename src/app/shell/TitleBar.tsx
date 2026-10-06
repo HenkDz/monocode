@@ -80,6 +80,7 @@ export type Tab = {
 
 type Props = {
   tabs: Tab[];
+  standaloneTitle?: string;
   activeId: string;
   cwd: string;
   projectRailOpen?: boolean;
@@ -598,6 +599,7 @@ export function OverlayNav({
 
 function TitleBarComponent({
   tabs,
+  standaloneTitle,
   activeId,
   cwd,
   projectRailOpen = true,
@@ -944,6 +946,11 @@ function TitleBarComponent({
           showProjectButton ? " border-l border-stroke" : ""
         }`}
       >
+        {standaloneTitle ? (
+          <div className="flex min-w-0 flex-1 items-center px-4 text-xs font-medium text-content/80" aria-label="Standalone chat">
+            {standaloneTitle}
+          </div>
+        ) : <>
         <div
           className={`relative h-full min-w-0 overflow-hidden ${
             onNew ? "flex-initial" : "flex-1"
@@ -1062,9 +1069,10 @@ function TitleBarComponent({
             </span>
           </div>
         ) : null}
+        </>}
         {trailingControls}
       </div>
-      {tabMenu && contextTab ? (
+      {!standaloneTitle && tabMenu && contextTab ? (
         <ExplorerMenu
           x={tabMenu.x}
           y={tabMenu.y}

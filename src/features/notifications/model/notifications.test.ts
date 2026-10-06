@@ -12,6 +12,12 @@ import { newSession, type Session } from "../../sessions/model/session";
 const KEY = "monocode.notifications";
 
 describe("pendingInputNotifications", () => {
+  it("notifies the user of manager escalations, not worker questions", () => {
+    const manager = chat({ id: "project-manager-test", pendingQuestion: { requestId: 1, questions: [] } });
+    const worker = { ...manager, id: "worker", orchestrationLeadId: manager.id };
+    const ordinaryWorker = { ...worker, id: "ordinary-worker", orchestrationLeadId: "ordinary-lead" };
+    expect([...pendingInputNotifications([manager, worker, ordinaryWorker]).values()].map(item => item.session.id)).toEqual([manager.id, ordinaryWorker.id]);
+  });
   it("detects a second approval without an intervening idle render", () => {
     const session = chat({
       blocks: [
@@ -161,6 +167,9 @@ describe("shouldNotify", () => {
 });
 
 describe("notificationText", () => {
+  it("names a reviewed PR through the ordinary notification path", () => {
+    expect(notificationText(chat(), { kind: "prReady", title: "Docs" }).body).toBe("Ready to merge: Docs");
+  });
   it("leads with the app, then the session title, then the reply", () => {
     const session = chat({
       blocks: [

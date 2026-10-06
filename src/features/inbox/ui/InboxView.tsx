@@ -383,6 +383,7 @@ type Props = {
   repairSessions?: CiRepairProps["repairSessions"];
   onRepairChecks?: CiRepairProps["onRepairChecks"];
   sessions?: readonly SessionSummary[];
+  managerQuestions?: readonly { id: string; key?: string; project: string; question: string; kind?: "decision" | "reply" | "ready" }[];
   onOpenSession?: (sessionId: string) => void | Promise<void>;
   /** Session-card destination to reveal after the Inbox list loads. */
   target?: LinkedWorkItem | null;
@@ -404,6 +405,7 @@ export function InboxView({
   repairSessions,
   onRepairChecks,
   sessions = [],
+  managerQuestions = [],
   onOpenSession,
   target = null,
   onOpenIntegrations,
@@ -910,6 +912,16 @@ export function InboxView({
       ref={resize.setPaneRef}
       className="relative flex h-full min-h-0 shrink-0 flex-col border-r border-stroke"
     >
+      {managerQuestions.length > 0 && <section aria-label="Manager questions" className="max-h-48 shrink-0 overflow-y-auto border-b border-stroke p-2">
+        {(["decision", "ready", "reply"] as const).map(kind => <div key={kind}>
+        {managerQuestions.some(item => (item.kind ?? "decision") === kind) && <h2 className="px-2 py-1 text-xs font-medium text-content/60">{kind === "ready" ? "Ready to merge" : kind === "reply" ? "New replies" : "Needs your decision"}</h2>}
+        {managerQuestions.filter(item => (item.kind ?? "decision") === kind).map(item => <button key={item.key ?? item.id} type="button"
+          onClick={() => void onOpenSession?.(item.id)}
+          className="flex w-full flex-col gap-1 rounded-md p-2 text-left text-xs hover:bg-content/5 focus-visible:outline-accent">
+          <span className="text-content/50">{projectName(item.project)} · Manager</span><span className="line-clamp-2">{item.question}</span>
+        </button>)}
+        </div>)}
+      </section>}
       <div className="flex h-9 shrink-0 items-center gap-px border-b border-stroke px-2">
         {visibleSources.length > 0 ? (
           <div

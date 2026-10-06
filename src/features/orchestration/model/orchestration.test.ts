@@ -132,6 +132,59 @@ describe("worker assignment prompts", () => {
 });
 
 describe("local orchestration", () => {
+  it("runs independent project goals concurrently, retains reviewed PR worktrees and preserves receipts", async () => {
+    const f = setup();
+    f.lead.busy = false;
+    await f.manager.start("lead", ["codex"], 2, undefined, true);
+    expect(f.manager.prompt("lead", "Goal")).toContain("Never rephrase, change models, or switch providers to bypass a refusal");
+    f.lead.busy = true;
+    const input = { title: "Goal one", prompt: "Implement", harness: "codex", files: ["."] };
+    const first = await f.call("delegate", input, "stable-assignment");
+    expect(await f.call("delegate", input, "stable-assignment")).toEqual(first);
+    await f.delegate(["."], { title: "Goal two", checkout: "named-worktree" });
+    await vi.waitFor(() => expect(f.tasks().map(task => task.status)).toEqual(["running", "running"]));
+    expect(f.tasks()[1].checkout).toBe("named-worktree");
+    const task = f.tasks()[0];
+    f.completions.get(task.sessionId)!({ status: "completed", text: "Tests passed" });
+    await vi.waitFor(() => expect(f.tasks()[0].status).toBe("completed"));
+    f.host.reviewedPullRequest = vi.fn(async () => { throw new Error("No open PR"); });
+    await expect(f.call("review", { taskId: task.id })).rejects.toThrow("No open PR");
+    expect(f.tasks()[0].accepted).toBe(false);
+    f.host.reviewedPullRequest = vi.fn(async () => "https://github.com/example/repo/pull/1");
+    f.host.notifyReady = vi.fn();
+    const reviewInput = { taskId: task.id, checks: "Diff reviewed; focused tests passed" };
+    await f.call("review", reviewInput, "review-once");
+    await f.call("review", reviewInput, "review-once");
+    await f.call("review", reviewInput);
+    expect(f.host.notifyReady).toHaveBeenCalledTimes(1);
+    expect(f.tasks()[0].checksSummary).toBe(reviewInput.checks);
+    expect(f.tasks()[0]).toMatchObject({ accepted: true, prUrl: "https://github.com/example/repo/pull/1", acceptedDispatchId: f.tasks()[0].lastDispatchId });
+    expect(f.tasks()[0].workspace).toBeDefined();
+    expect(f.host.integrateWorker).not.toHaveBeenCalled();
+    expect(f.host.cleanupWorker).not.toHaveBeenCalled();
+    await f.call("message", { taskId: task.id, text: "Address review feedback" });
+    await vi.waitFor(() => expect(f.tasks()[0].status).toBe("running"));
+    expect(f.tasks()[0].accepted).toBe(false);
+  });
+
+  it("recovers a project manager without replaying workers until explicit resume", async () => {
+    const f = setup();
+    f.lead.busy = false;
+    await f.manager.start("lead", ["codex"], 2, undefined, true);
+    f.lead.busy = true;
+    await f.delegate(["src"]);
+    await vi.waitFor(() => expect(f.tasks()[0].status).toBe("running"));
+    const recovered = new Orchestrator(f.store);
+    await vi.waitFor(() => expect(f.completions.has(f.tasks()[0].sessionId)).toBe(true));
+    recovered.bind(f.host);
+    vi.mocked(f.host.submit).mockClear();
+    await recovered.hydrate("lead");
+    expect(recovered.run("lead")).toMatchObject({ projectManager: true, status: "paused" });
+    expect(recovered.run("lead")!.tasks[0]).toMatchObject({ status: "interrupted", workspace: f.tasks()[0].workspace });
+    expect(f.host.submit).not.toHaveBeenCalled();
+    await recovered.start("lead", ["codex"], 2);
+    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledOnce());
+  });
   it("stops and forgets a deleted lead without persisting it again", async () => {
     const f = setup();
     await f.start();
@@ -1064,6 +1117,29 @@ describe("local orchestration", () => {
     expect(f.manager.run("lead")!.status).toBe("stopped");
     expect(f.store.disable).toHaveBeenCalledWith("lead");
     expect(f.host.submit).toHaveBeenCalledTimes(1);
+  });
+  it("defers results when a user turn starts during continuation persistence", async () => {
+    const f = setup();
+    await f.start();
+    await f.delegate(["a"]);
+    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledTimes(1));
+    f.store.save.mockImplementation(async (run) => {
+      f.saved.set(run.leadId, structuredClone(run));
+      if (run.continuations === 1) f.lead.busy = true;
+    });
+    f.lead.busy = false;
+    f.completions.get(f.tasks()[0].sessionId)!({ status: "completed", text: "Tests pass" });
+    await vi.waitFor(() => {
+      expect(f.lead.busy).toBe(true);
+      expect(f.tasks()[0].delivered).toBe(false);
+      expect(f.manager.run("lead")!.continuations).toBe(0);
+    });
+    expect(f.manager.run("lead")!.status).toBe("active");
+    expect(f.host.submit).toHaveBeenCalledTimes(1);
+    f.store.save.mockImplementation(async (run) => { f.saved.set(run.leadId, structuredClone(run)); });
+    f.lead.busy = false;
+    f.manager.sync();
+    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledTimes(2));
   });
   it("returns worker output to an idle lead once", async () => {
     const f = setup();

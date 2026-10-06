@@ -77,6 +77,14 @@ fn list(root: &Path) -> Result<Vec<Worktree>, String> {
     )?))
 }
 
+pub(crate) fn registered_checkouts(root: &Path) -> Result<Vec<String>, String> {
+    Ok(list(root)?
+        .into_iter()
+        .filter(|tree| !tree.prunable)
+        .map(|tree| tree.path)
+        .collect())
+}
+
 fn same_path(a: &Path, b: &Path) -> bool {
     let a = a.canonicalize().unwrap_or_else(|_| a.to_path_buf());
     let b = b.canonicalize().unwrap_or_else(|_| b.to_path_buf());

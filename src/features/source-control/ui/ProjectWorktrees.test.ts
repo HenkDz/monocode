@@ -18,6 +18,7 @@ import { savePinnedProjects } from "../../projects/model/recents";
 import { pathKey } from "../../../shared/lib/paths";
 import { copyText } from "../../../platform/tauri/clipboard";
 import { OrchestrationWorkers } from "../../orchestration/ui/OrchestrationActions";
+import { orchestrator, type OrchestrationRun } from "../../orchestration/model/orchestration";
 import {
   gitPrStatus,
   revealPath,
@@ -195,6 +196,37 @@ it("uses quiet single-line idle rows, with selection only on the active session"
   act(() => button("Collapse sessions in feature-a").click());
   expect(button("Open worktree feature-a").textContent).toContain("2");
   expect(button("Open worktree feature-a").title).toContain("2 sessions");
+});
+
+it("overlays worktree actions and only reserves title space when they are revealed", async () => {
+  await render();
+  const open = button("Open worktree feature-a");
+  const row = open.parentElement!;
+  expect(row.className).toContain("relative");
+  expect(open.className.split(" ")).not.toContain("pr-14");
+  expect(open.className).toContain("transition-[padding]");
+  expect(open.className).toContain("group-hover/worktree:pr-14");
+  expect(open.className).toContain("group-focus-within/worktree:pr-14");
+  expect(open.className).toContain("[@media(hover:none)]:pr-14");
+  expect(open.className).toContain("motion-reduce:transition-none");
+  for (const label of ["New session in feature-a", "Actions for feature-a"]) {
+    const action = button(label);
+    expect(action.parentElement).toBe(row);
+    expect(action.className.split(" ")).toContain("absolute");
+    expect(action.className).toContain("group-focus-within/worktree:opacity-100");
+    expect(action.tabIndex).toBe(0);
+  }
+  expect(row.hasAttribute("data-actions-open")).toBe(false);
+  act(() => button("Actions for feature-a").click());
+  expect(row.getAttribute("data-actions-open")).toBe("true");
+  expect(open.className).toContain("group-data-[actions-open=true]/worktree:pr-14");
+  act(() =>
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    ),
+  );
+  expect(row.hasAttribute("data-actions-open")).toBe(false);
+  expect(document.activeElement).toBe(button("Actions for feature-a"));
 });
 
 it("switches and creates repeated sessions in the explicit checkout without mutating its bindings", async () => {
@@ -429,7 +461,7 @@ it.each([
   },
 );
 
-it("refreshes PR status on focus and Git changes and falls back safely on failure", async () => {
+it("refreshes PR status on focus and Git changes and retains known status on failure", async () => {
   const pr: GitPr = {
     number: 42,
     title: "Sidebar fix",
@@ -451,7 +483,24 @@ it("refreshes PR status on focus and Git changes and falls back safely on failur
   expect(label()).toContain("Closed PR #42");
   vi.mocked(gitPrStatus).mockRejectedValue(new Error("GitHub unavailable"));
   await act(async () => window.dispatchEvent(new Event("focus")));
-  expect(label()).toBe("No PR status available");
+  expect(label()).toBe("Closed PR #42: Sidebar fix");
+  vi.mocked(gitPrStatus).mockResolvedValue(null);
+  await act(async () => window.dispatchEvent(new Event("focus")));
+  expect(label()).toBe("Closed PR #42: Sidebar fix");
+});
+
+it.each(["merged", "closed"])("stops force-listing an accepted manager worktree when its PR is %s", async state => {
+  const worktrees = [tree("/repo", "main", true), ...Array.from({ length: 8 }, (_, i) => tree(`/terminal-pr/${state}/${i}`, `branch-${i}`))];
+  vi.mocked(useProjectWorktrees).mockReturnValue({ data: { worktrees, defaultRoot: "/terminal-pr" }, refresh });
+  const last = worktrees.at(-1)!;
+  const runs = [{ leadId: "project-manager-test", projectManager: true, tasks: [{ id: "t", status: "completed", accepted: true, lastDispatchId: "d", acceptedDispatchId: "d", prUrl: "https://example.com/42", workspace: { checkoutCwd: last.path, branch: last.branch } }] }] as OrchestrationRun[];
+  const snapshot = vi.spyOn(orchestrator, "snapshot").mockReturnValue(runs);
+  vi.mocked(gitPrStatus).mockResolvedValue({ number: 42, title: "Docs", url: "https://example.com/42", state });
+  try {
+    await render();
+    expect(container.querySelectorAll("[data-worktree]")).toHaveLength(5);
+    expect(container.querySelector(`[data-worktree="${last.path}"]`)).toBeNull();
+  } finally { snapshot.mockRestore(); }
 });
 
 it("does not query PRs for hidden, detached, or missing worktrees", async () => {

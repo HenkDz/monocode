@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { isProjectManager } from "../../orchestration/model/projectManager";
 import { HARNESS_TITLE, sessionDisplayTitle, type Session } from "../../sessions/model/session";
 import { loadSoundsEnabled, playCue } from "../../settings/model/sounds";
 import {
@@ -111,7 +112,7 @@ export type InputNotificationEvent = {
   kind: "approval" | "question";
   requestId: number;
 };
-export type NotificationEvent = "finished" | InputNotificationEvent;
+export type NotificationEvent = "finished" | InputNotificationEvent | { kind: "prReady"; title: string };
 
 type PendingInputNotification = {
   session: Session;
@@ -124,7 +125,7 @@ export function pendingInputNotifications(
 ): Map<string, PendingInputNotification> {
   const pending = new Map<string, PendingInputNotification>();
   for (const session of sessions) {
-    if (session.inboxAsk) continue;
+    if (session.inboxAsk || (session.orchestrationLeadId && isProjectManager(session.orchestrationLeadId))) continue;
     for (const block of session.blocks) {
       if (block.approval && !block.approval.decided) {
         pending.set(
@@ -173,6 +174,7 @@ export function notificationText(
   const subtitle = sessionDisplayTitle(session.title, session.harness);
   const harness = HARNESS_TITLE[session.harness];
   if (event !== "finished") {
+    if (event.kind === "prReady") return { title, subtitle, body: clip(`Ready to merge: ${event.title}`) };
     if (event.kind === "question") {
       const question =
         session.pendingQuestion?.requestId === event.requestId
@@ -235,7 +237,7 @@ export async function notifySession(
   if (!project) return false;
   return notifyProjectSession(session, event, sessionVisible, {
     projectId: project.id,
-    category: event === "finished" ? "agentFinished" : "agentInput",
+    category: event === "finished" || event.kind === "prReady" ? "agentFinished" : "agentInput",
     occurredAt,
   });
 }

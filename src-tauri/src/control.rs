@@ -379,7 +379,7 @@ pub fn control_attach_worker(
     inner.workers.insert(session_id.clone(), lead_id);
     inner.app_grants.remove(&session_id);
     inner.scratch.insert(session_id, scratch.clone());
-    Ok(scratch.to_string_lossy().into_owned())
+    Ok(worker_scratch_path(&scratch))
 }
 
 fn create_worker_scratch() -> Result<PathBuf, String> {
@@ -399,7 +399,25 @@ fn create_worker_scratch() -> Result<PathBuf, String> {
 fn configure_worker_scratch(cmd: &mut Command, path: &Path) {
     // Native temp-file helpers and shell mktemp use the same private scope
     // that is named in the worker's assignment prompt.
-    cmd.env("TMPDIR", path).env("TMP", path).env("TEMP", path);
+    let shell_path = worker_scratch_path(path);
+    cmd.env("TMPDIR", &shell_path)
+        .env("TMP", &shell_path)
+        .env("TEMP", &shell_path);
+}
+
+fn worker_scratch_path(path: &Path) -> String {
+    let value = crate::fs::path_to_js(path);
+    // Git Bash cannot use canonicalize's Win32 device prefix as TMPDIR.
+    // Keep the canonical PathBuf for ownership checks; expose a shell path.
+    if cfg!(windows) {
+        if let Some(unc) = value.strip_prefix("//?/UNC/") {
+            return format!("//{unc}");
+        }
+        if let Some(drive) = value.strip_prefix("//?/") {
+            return drive.to_string();
+        }
+    }
+    value
 }
 
 #[tauri::command]
@@ -715,10 +733,13 @@ mod tests {
         }
         let mut cmd = Command::new("unused");
         configure_worker_scratch(&mut cmd, &first);
+        let shell_path = worker_scratch_path(&first);
+        assert!(Path::new(&shell_path).is_dir());
+        assert!(!shell_path.starts_with("//?/"));
         for key in ["TMPDIR", "TMP", "TEMP"] {
-            assert!(cmd
-                .get_envs()
-                .any(|(name, value)| name == key && value == Some(first.as_os_str())));
+            assert!(cmd.get_envs().any(
+                |(name, value)| name == key && value == Some(std::ffi::OsStr::new(&shell_path))
+            ));
         }
         let new_file = first.join("new/helper.py");
         assert_eq!(

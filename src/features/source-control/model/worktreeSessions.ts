@@ -3,6 +3,7 @@ import { compareSessionSummaries } from "../../sessions/data/sessionHistory";
 import { sameProjectPath } from "../../projects/model/recents";
 import { isEqualOrInside, pathKey } from "../../../shared/lib/paths";
 import type { Worktree } from "./worktrees";
+import { isProjectManager } from "../../orchestration/model/projectManager";
 
 /** Live rows override saved checkout bindings, including unsaved blank tabs. */
 export function worktreeSessionGroups(
@@ -30,7 +31,8 @@ export function worktreeSessionGroups(
     if (
       !sameProjectPath(session.cwd, project) ||
       session.archived ||
-      session.orchestrationLeadId ||
+      isProjectManager(session.id) ||
+      (session.orchestrationLeadId && !isProjectManager(session.orchestrationLeadId)) ||
       session.worktreeRemoved
     )
       continue;

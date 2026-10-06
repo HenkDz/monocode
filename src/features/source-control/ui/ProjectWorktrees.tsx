@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { orchestrator } from "../../orchestration/model/orchestration";
+import { isProjectManager, managerWorktreeStatus } from "../../orchestration/model/projectManager";
 import type { SessionSummary } from "../../sessions/data/sessionStore";
 import type { LiveAgent } from "../../sessions/model/liveAgents";
 import { sessionDisplayTitle } from "../../sessions/model/session";
@@ -24,7 +26,7 @@ import {
   Plus,
 } from "../../../shared/ui/icons";
 import { useProjectWorktrees } from "../hooks/useProjectWorktrees";
-import { usePrStatus } from "../hooks/usePrStatus";
+import { usePrStatus, usePrStatusCache } from "../hooks/usePrStatus";
 import { useWorktreeFocus } from "../model/worktreeFocus";
 import {
   worktreeProgress,
@@ -83,6 +85,8 @@ export function ProjectWorktrees({
   onSelectSession,
 }: Props) {
   const { data, error, refresh } = useProjectWorktrees(project, enabled);
+  const managerRuns = useSyncExternalStore(orchestrator.subscribe, orchestrator.snapshot, orchestrator.snapshot);
+  const prStatuses = usePrStatusCache();
   const focus = useWorktreeFocus(project);
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const [showAll, setShowAll] = useState<Set<string>>(() => new Set());
@@ -133,7 +137,7 @@ export function ProjectWorktrees({
   );
   const agents = new Map(liveAgents.map((agent) => [agent.id, agent]));
   const trees = data?.worktrees ?? [];
-  const focusedPath = sameProjectPath(project, currentProject)
+  const focusedPath = !isProjectManager(activeSessionId ?? "") && sameProjectPath(project, currentProject)
     ? (focus?.path ?? project)
     : undefined;
   const needsAttention = (session: SessionSummary) =>
@@ -151,6 +155,7 @@ export function ProjectWorktrees({
     (tree, index) =>
       index < worktreeLimit ||
       (!!focusedPath && sameProjectPath(focusedPath, tree.path)) ||
+      !!managerWorktreeStatus(managerRuns, tree.path, undefined, prStatuses) ||
       (groups.get(pathKey(tree.path)) ?? []).some(needsAttention),
   );
   const hiddenTrees = trees.length - listedTrees.length;
@@ -164,6 +169,7 @@ export function ProjectWorktrees({
     });
   const smallButton =
     "grid size-6 shrink-0 place-items-center rounded-md text-content/60 hover:bg-content/8 hover:text-content disabled:opacity-40";
+  const worktreeAction = `${smallButton} absolute top-1/2 -translate-y-1/2 pointer-events-none opacity-0 transition-opacity duration-150 motion-reduce:transition-none group-hover/worktree:pointer-events-auto group-hover/worktree:opacity-100 group-focus-within/worktree:pointer-events-auto group-focus-within/worktree:opacity-100 group-data-[actions-open=true]/worktree:pointer-events-auto group-data-[actions-open=true]/worktree:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100`;
   return (
     <div
       className="ml-5 pb-1"
@@ -232,9 +238,10 @@ export function ProjectWorktrees({
             );
         const hiddenCount = sessions.length - listed.length;
         const selected =
-          sameProjectPath(project, currentProject) &&
+          !!focusedPath &&
           sameProjectPath(focus?.path ?? project, tree.path);
         const label = tree.branch ?? `Detached ${tree.head.slice(0, 7)}`;
+        const workerStatus = managerWorktreeStatus(managerRuns, tree.path, approvalSessionIds, prStatuses);
         const progress = tree.missing
           ? "Missing folder"
           : worktreeProgress(
@@ -258,7 +265,8 @@ export function ProjectWorktrees({
             className={`my-1 rounded-md border border-transparent hover:border-content/15 hover:bg-content/5 focus-within:border-content/15 focus-within:bg-content/5 ${menu?.tree.path === tree.path ? "border-content/15 bg-content/5" : ""}`}
           >
             <div
-              className="group/worktree flex h-7 items-center gap-1 rounded-md px-1"
+              className="group/worktree relative flex h-7 items-center gap-1 rounded-md px-1"
+              data-actions-open={menu?.tree.path === tree.path || undefined}
               onContextMenu={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
@@ -302,7 +310,7 @@ export function ProjectWorktrees({
                 aria-busy={selected && switchPending}
                 title={`${prettyCwd(tree.path)}\n${progress}${tree.dirty ? "\nUncommitted changes" : ""}`}
                 onClick={() => onSelectWorktree(project, tree)}
-                className={`flex h-full min-w-0 flex-1 items-center gap-2 text-left text-xs disabled:opacity-40 ${selected ? "text-content" : "text-content/65"}`}
+                className={`flex h-full min-w-0 flex-1 items-center gap-2 text-left text-xs transition-[padding] duration-150 motion-reduce:transition-none group-hover/worktree:pr-14 group-focus-within/worktree:pr-14 group-data-[actions-open=true]/worktree:pr-14 [@media(hover:none)]:pr-14 disabled:opacity-40 ${selected ? "text-content" : "text-content/65"}`}
               >
                 <WorktreePrIcon tree={tree} enabled={enabled} />
                 <span
@@ -313,7 +321,7 @@ export function ProjectWorktrees({
                 <span className="min-w-0 flex-1 truncate text-[11px] text-content/40">
                   {tree.isMain ? "primary" : ""}
                 </span>
-                {activeProgress ? (
+                {workerStatus ? <span className="shrink-0 text-[11px] text-content/60">{workerStatus}</span> : activeProgress ? (
                   <span
                     className={`max-w-[110px] truncate text-[11px] ${sessions.some((session) => approvalSessionIds.has(session.id)) ? "text-amber-400" : "text-content/60"}`}
                   >
@@ -330,7 +338,7 @@ export function ProjectWorktrees({
               </button>
               <button
                 type="button"
-                className={`${smallButton} opacity-0 group-hover/worktree:opacity-100 group-focus-within/worktree:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100`}
+                className={`${worktreeAction} right-8`}
                 disabled={tree.missing}
                 aria-label={`New session in ${label}`}
                 title={`New session in ${label}`}
@@ -351,7 +359,7 @@ export function ProjectWorktrees({
                 aria-label={`Actions for ${label}`}
                 aria-haspopup="menu"
                 aria-expanded={menu?.tree.path === tree.path}
-                className={`${smallButton} opacity-0 group-hover/worktree:opacity-100 group-focus-within/worktree:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100`}
+                className={`${worktreeAction} right-1`}
                 onClick={(event) => {
                   const trigger = event.currentTarget;
                   const rect = trigger.getBoundingClientRect();

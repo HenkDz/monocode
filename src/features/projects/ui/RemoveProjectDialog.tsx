@@ -7,6 +7,7 @@ import { projectSessionCount } from "../model/projectData";
 type Props = {
   name: string;
   path: string;
+  archiveTeam?: boolean;
   onCancel: () => void;
   onConfirm: () => void;
 };
@@ -14,8 +15,10 @@ type Props = {
 /**
  * Delete drops the project from the rail and its saved chats. The folder on
  * disk is left alone; opening it again brings the project back empty.
+ * Managed projects instead archive their team and retain history/worktrees.
  */
-export function RemoveProjectDialog({ name, path, onCancel, onConfirm }: Props) {
+export function RemoveProjectDialog({ name, path, archiveTeam = false, onCancel, onConfirm }: Props) {
+  const action = archiveTeam ? "Archive" : "Delete";
   const [sessions, setSessions] = useState<number | null>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
 
@@ -50,24 +53,22 @@ export function RemoveProjectDialog({ name, path, onCancel, onConfirm }: Props) 
       <div
         role="dialog"
         aria-modal="true"
-        aria-label={`Delete ${name}`}
+        aria-label={`${action} ${name}`}
         onMouseDown={(event) => event.stopPropagation()}
         className="absolute z-[1] left-1/2 top-[22%] flex w-[min(420px,calc(100vw-24px))] -translate-x-1/2 flex-col gap-3 rounded-lg border border-content/10 bg-background-base dark:bg-content/5 p-4 shadow-xl backdrop-blur-xl"
       >
         <div className="flex flex-col gap-1">
           <h2 className="text-[13px] font-medium leading-tight text-content">
-            Delete “{name}”?
+            {action} “{name}”?
           </h2>
           <p className="text-[12px] leading-snug text-content/55">
-            All conversations for this project will be deleted. It also
-            leaves the sidebar. The folder on disk stays put, and opening it
-            again brings the project back empty.
+            {archiveTeam
+              ? "The Manager and team will be archived and their runs stopped. Conversations, worktrees and branches are kept. Reopen the project to restore its team."
+              : "All conversations for this project will be deleted. It also leaves the sidebar. The folder on disk stays put, and opening it again brings the project back empty."}
           </p>
           {sessions != null && sessions > 0 ? (
             <p className="text-[12px] leading-snug text-content/45">
-              {sessions === 1
-                ? "1 saved conversation will be removed."
-                : `${sessions} saved conversations will be removed.`}
+              {sessions} saved conversation{sessions === 1 ? "" : "s"} will be {archiveTeam ? "kept" : "removed"}.
             </p>
           ) : null}
           <p className="truncate text-[11px] leading-tight text-content/40">
@@ -89,7 +90,7 @@ export function RemoveProjectDialog({ name, path, onCancel, onConfirm }: Props) 
             onClick={onConfirm}
             className="rounded-md bg-red-500/20 px-3 py-1.5 text-[12px] font-medium text-red-300 hover:bg-red-500/30"
           >
-            Delete
+            {action}
           </button>
         </div>
       </div>

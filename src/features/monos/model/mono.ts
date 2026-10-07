@@ -35,6 +35,8 @@ export const MONO_COLORS = [
  */
 export type Mono = {
   id: string;
+  /** Project removal hides the team without discarding identity or history. */
+  archivedAt?: number;
   role?: "orchestrator" | "manager" | "member";
   reportsTo?: string;
   specialty?: string;
@@ -190,6 +192,9 @@ function parseMono(value: unknown): Mono | undefined {
       : undefined;
   return {
     id: entry.id,
+    ...(typeof entry.archivedAt === "number" && Number.isFinite(entry.archivedAt)
+      ? { archivedAt: entry.archivedAt }
+      : {}),
     ...(["orchestrator", "manager", "member"].includes(String(entry.role))
       ? { role: entry.role as Mono["role"] }
       : {}),
@@ -226,18 +231,22 @@ function parseMono(value: unknown): Mono | undefined {
 }
 
 /** Every Mono, in the order the rail shows them. */
-export function listMonos(): Mono[] {
+export function listMonos(includeArchived = false): Mono[] {
   migrateLegacyMonoStorage();
   const parsed = readJson(ROSTER_KEY);
   if (!Array.isArray(parsed)) return [];
-  return parsed.flatMap((entry) => parseMono(entry) ?? []);
+  return parsed.flatMap((entry) => {
+    const mono = parseMono(entry);
+    return mono && (includeArchived || mono.archivedAt == null) ? [mono] : [];
+  });
 }
 
-function saveRoster(roster: readonly Mono[]): void {
+function saveRoster(roster: readonly Mono[], strict = false): void {
   validateMonoOrg(roster);
   try {
     localStorage.setItem(ROSTER_KEY, JSON.stringify(roster));
-  } catch {
+  } catch (error) {
+    if (strict) throw error;
     return;
   }
   window.dispatchEvent(new CustomEvent(MONOS_CHANGED));
@@ -249,7 +258,7 @@ export function findMono(id: string): Mono | undefined {
 
 /** The Mono whose conversation this is. */
 export function monoForSession(sessionId: string): Mono | undefined {
-  return listMonos().find((mono) => mono.sessionId === sessionId);
+  return listMonos(true).find((mono) => mono.sessionId === sessionId);
 }
 
 export function isMonoSession(sessionId: string): boolean {
@@ -320,7 +329,7 @@ export function adoptManagerMono(
   };
   // Migration must fail closed if storage is unavailable, not claim conversion succeeded.
   const roster = withDefaultTeam(
-    [...listMonos().filter((entry) => entry.id !== mono.id), mono],
+    [...listMonos(true).filter((entry) => entry.id !== mono.id), mono],
     mono.id,
   );
   validateMonoOrg(roster);
@@ -330,7 +339,7 @@ export function adoptManagerMono(
 }
 
 export function setOrchestrator(id: string, enabled: boolean): void {
-  const roster = listMonos();
+  const roster = listMonos(true);
   const target = roster.find((mono) => mono.id === id);
   if (!target || target.role === "manager" || target.role === "member")
     throw Error("Choose a plain Mono as Orchestrator");
@@ -376,7 +385,7 @@ export function addTeamMember(
     workerProfile: manager.workerProfile,
     instructions: `You are the ${specialty.trim()} specialist. Work only on assignments from your Manager, verify the result, and report facts, tests and blockers to your Manager. Never message teammates directly.`,
   };
-  saveRoster([...listMonos(), member]);
+  saveRoster([...listMonos(true), member]);
   return member;
 }
 
@@ -403,7 +412,7 @@ export function nextMonoLook(
 
 /** A new Mono with the next look, starting with the projects given, if any. */
 export function createMono(projects: readonly string[] = []): Mono {
-  const roster = listMonos();
+  const roster = listMonos(true);
   const mono: Mono = {
     id: newMonoId(),
     ...nextMonoLook(roster),
@@ -447,7 +456,7 @@ export function updateMono(
   id: string,
   change: (mono: Mono) => Mono,
 ): Mono | undefined {
-  const roster = listMonos();
+  const roster = listMonos(true);
   const index = roster.findIndex((mono) => mono.id === id);
   if (index < 0) return undefined;
   const next = change(roster[index]);
@@ -461,14 +470,14 @@ export function updateMono(
 
 /** Forgets the Mono and its background. Its folder of files stays on disk. */
 export function removeMono(id: string): void {
-  const next = listMonos().filter((mono) => mono.id !== id);
+  const next = listMonos(true).filter((mono) => mono.id !== id);
   validateMonoOrg(next);
   removeMonoBackground(id);
   saveRoster(next);
 }
 
 export function reorderMonos(ids: readonly string[]): void {
-  const roster = listMonos();
+  const roster = listMonos(true);
   const order = new Map(ids.map((id, index) => [id, index]));
   saveRoster(
     [...roster].sort(
@@ -477,6 +486,13 @@ export function reorderMonos(ids: readonly string[]): void {
         (order.get(b.id) ?? Number.MAX_SAFE_INTEGER),
     ),
   );
+}
+
+/** Save a whole team's visibility in one storage write. */
+export function setMonoArchive(ids: ReadonlySet<string>, archivedAt?: number): void {
+  saveRoster(listMonos(true).map((mono) =>
+    ids.has(mono.id) ? { ...mono, archivedAt } : mono,
+  ), true);
 }
 
 export function saveMonoSessionId(monoId: string, sessionId: string): void {

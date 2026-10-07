@@ -13,6 +13,7 @@ pub struct Worktree {
     pub path: String,
     pub branch: Option<String>,
     pub head: String,
+    pub head_subject: Option<String>,
     pub is_main: bool,
     pub locked: bool,
     pub prunable: bool,
@@ -46,6 +47,13 @@ fn git(root: &Path, args: &[&str]) -> Result<String, String> {
     String::from_utf8(output.stdout).map_err(|_| "Git returned a non-UTF-8 path".into())
 }
 
+fn head_subject(path: &Path) -> Option<String> {
+    git(path, &["log", "-1", "--format=%s"])
+        .ok()
+        .map(|subject| subject.trim().to_string())
+        .filter(|subject| !subject.is_empty())
+}
+
 fn parse_worktrees(text: &str) -> Vec<Worktree> {
     let mut result = Vec::new();
     let mut current = Worktree::default();
@@ -70,7 +78,7 @@ fn parse_worktrees(text: &str) -> Vec<Worktree> {
     result
 }
 
-fn list(root: &Path) -> Result<Vec<Worktree>, String> {
+pub(crate) fn list(root: &Path) -> Result<Vec<Worktree>, String> {
     Ok(parse_worktrees(&git(
         root,
         &["worktree", "list", "--porcelain", "-z"],
@@ -148,6 +156,9 @@ pub fn git_worktrees(cwd: String, store: State<'_, SessionStore>) -> Result<Work
         let path = Path::new(&tree.path);
         tree.missing = !path.is_dir();
         if !tree.missing {
+            if tree.branch.is_none() {
+                tree.head_subject = head_subject(path);
+            }
             tree.dirty = git(path, &["status", "--porcelain", "--untracked-files=normal"])
                 .ok()
                 .map(|status| !status.is_empty());
@@ -1030,6 +1041,7 @@ mod tests {
         )
         .unwrap();
         let worker = create_seeded(folder, "mc/v4-worker").unwrap();
+        assert_eq!(head_subject(folder).as_deref(), Some("v4 only"));
         assert_eq!(worker.head, git(folder, &["rev-parse", "HEAD"]).unwrap().trim());
         assert_ne!(worker.head, git(&root, &["rev-parse", "HEAD"]).unwrap().trim());
         assert_eq!(git(folder, &["branch", "--show-current"]).unwrap().trim(), "v4");

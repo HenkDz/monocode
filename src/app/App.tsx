@@ -5,6 +5,7 @@ import {
   updateMono,
 } from "../features/monos/model/mono";
 import { monoEngineId } from "../features/monos/model/monoEngines";
+import { archiveMonoConversation, archiveProjectMonos, offerProjectMonoRestore, projectMonoTeam } from "../features/monos/model/monoArchive";
 import { loadMonoView, saveMonoView, monoForView, monoViewProject, memberDetailsView, memberTasks, selectedOrgMono } from "../features/monos/model/monoNavigation";
 import { MemberDetails } from "../features/monos/ui/MonoTeamPage";
 import {
@@ -432,6 +433,9 @@ import {
   rememberProjectLocation,
   synchronizeProjectLocation,
 } from "../features/projects/model/projectLocation";
+import { useProjectAddition } from "../features/projects/ui/useProjectAddition";
+import { useProjectFolderDrop } from "../features/projects/ui/useProjectFolderDrop";
+import { sessionForProjectAddition } from "../features/projects/model/projectAddition";
 import {
   archiveProject,
   forgetProject,
@@ -1089,6 +1093,8 @@ function Workspace({
       ? rememberProject(resumed.projectCwd)
       : loadRecents(),
   );
+  const { chooseProjectAddition, projectAdditionDialog } = useProjectAddition();
+  const projectAddRequest = useRef(0);
   const [seed] = useState(() => {
     const cwd = lastProjectPath() ?? "~";
     const session = newDefaultSession(cwd);
@@ -1241,6 +1247,24 @@ function Workspace({
     () => true,
   );
   const monosSnap = useSyncExternalStore(subscribeMonos, monosSnapshot);
+  const restoreOffered = useRef(new Set<string>());
+  useEffect(() => {
+    const present = new Set(recents.map(({ path }) => projectKey(path)));
+    for (const key of restoreOffered.current) {
+      if (!present.has(key)) restoreOffered.current.delete(key);
+    }
+    for (const { path } of recents) {
+      const key = projectKey(path);
+      if (restoreOffered.current.has(key)) continue;
+      restoreOffered.current.add(key);
+      try {
+        offerProjectMonoRestore(path);
+      } catch (error) {
+        console.error("Could not restore archived project team", error);
+        window.alert("The team is still archived because its restoration could not be saved. Please retry from the Manager row.");
+      }
+    }
+  }, [recents]);
   /** A Mono hides the terminal, so reaching for one leaves it. */
   const leaveCoveringMono = useCallback(() => {
     if (monoViewIdRef.current) closeMonoView();
@@ -2445,15 +2469,24 @@ function Workspace({
   ]);
 
   useEffect(() => {
-    if (lastProjectPath()) return;
+    const request = workspaceSessionRequest.current;
     void invoke<string>("default_cwd")
-      .then((cwd) => {
+      .then(async (cwd) => {
         if (!looksLikeProject(cwd)) return;
-        setProjectCwd(cwd);
-        setRecents((prev) => (prev.length > 0 ? prev : rememberProject(cwd)));
+        const addition = await chooseProjectAddition(cwd, projectRailItems(loadRecents(), "").map((item) => item.path), false, false, () => request === workspaceSessionRequest.current);
+        if (!addition) return;
+        if (lastProjectPath() && sameProjectPath(addition.path, addition.project)) return;
+        setProjectCwd(addition.project);
+        setRecents(rememberProject(addition.project));
         setSessions((prev) =>
-          prev.map((s) => (s.cwd === "~" ? { ...s, cwd } : s)),
+          prev.map((s) => (s.cwd === "~" ? {
+            ...s, cwd: addition.project,
+            ...(!sameProjectPath(addition.path, addition.project) ? { worktreeCwd: addition.path, branch: addition.branch ?? undefined } : {}),
+          } : s)),
         );
+        if (!sameProjectPath(addition.path, addition.project) && !sessionsRef.current.some((session) => session.cwd === "~")) {
+          workspaceNavigation.selectWorkspace(addition.project, { path: addition.path, branch: addition.branch });
+        }
       })
       .catch(() => {});
   }, []);
@@ -4751,6 +4784,18 @@ function Workspace({
       let session = await ensureOpenSession(sessionId);
       if (request !== workspaceSessionRequest.current) return;
       if (!session || session.inboxAsk) return;
+      if (!workspace && looksLikeProject(session.cwd)) {
+        const addition = await chooseProjectAddition(session.cwd, projectRailItems(loadRecents(), "").map((item) => item.path), false, false, () => request === workspaceSessionRequest.current);
+        if (request !== workspaceSessionRequest.current || !addition) return;
+        const resolved = sessionForProjectAddition(session, addition);
+        if (resolved !== session) {
+          session = resolved;
+          sessionsRef.current = sessionsRef.current.map((entry) => entry.id === resolved.id ? resolved : entry);
+          setSessions(sessionsRef.current);
+          persistSession(resolved);
+        }
+        setRecents(rememberProject(addition.project));
+      }
       const mono = monoForSession(session.id);
       if (mono) {
         await onOpenMono(mono.id);
@@ -4832,6 +4877,8 @@ function Workspace({
       focusOpenSession,
       replaceBlankPaneWithSession,
       revealLinkedSessionUpdate,
+      chooseProjectAddition,
+      persistSession,
     ],
   );
 
@@ -5731,9 +5778,14 @@ function Workspace({
   );
 
   const onCwdChange = useCallback(
-    (sessionId: string, cwd: string) => {
+    async (sessionId: string, cwd: string) => {
       if (isProjectManager(sessionId)) return;
-      const normalized = normalizeProjectPath(cwd);
+      const registered = projectRailItems(loadRecents(), "").map((item) => item.path);
+      const addition = registered.some((path) => sameProjectPath(path, cwd))
+        ? { path: normalizeProjectPath(cwd), project: normalizeProjectPath(cwd), branch: null }
+        : await chooseProjectAddition(cwd, registered);
+      if (!addition) return;
+      const normalized = addition.project;
       const current = sessionsRef.current.find((s) => s.id === sessionId);
       const previous = current?.cwd;
       // Threads stay bound to their project. Switching from the composer opens a
@@ -5747,13 +5799,13 @@ function Workspace({
       ) {
         setProjectCwd(normalized);
         setRecents(rememberProject(normalized));
-        const session = newSession(
+        const session = sessionForProjectAddition(newSession(
           current.harness,
           normalized,
           current.model,
           current.runtimeMode,
           current.modelSettings,
-        );
+        ), addition);
         const tab = newTab(session.id);
         setSessions((prev) => [...prev, session]);
         appendTab(tab, normalized);
@@ -5778,7 +5830,7 @@ function Workspace({
           const base = isBlankSession(s)
             ? retargetSessionToProject(s, normalized)
             : s;
-          return {
+          return sessionForProjectAddition({
             ...base,
             cwd: normalized,
             branch: undefined,
@@ -5786,7 +5838,7 @@ function Workspace({
             worktreeRemoved: undefined,
             workspaceMode: undefined,
             worktreeBase: undefined,
-          };
+          }, addition);
         }),
       );
       // The session's project just moved in place; a group only holds tabs that
@@ -5809,7 +5861,7 @@ function Workspace({
       });
       notifyReviewChanged(sessionId);
     },
-    [appendTab, projectOfTab],
+    [appendTab, projectOfTab, chooseProjectAddition],
   );
 
   const onBranchChange = useCallback(
@@ -6033,7 +6085,7 @@ function Workspace({
    * Planning per folder from refs would read state React has not rendered yet,
    * so the whole run is planned first and applied here in selection order.
    */
-  const openProjects = useCallback(
+  const openResolvedProjects = useCallback(
     (paths: readonly string[]) => {
       const steps = planProjectOpenRun({
         memory: readProjectReturnMemory(),
@@ -6061,6 +6113,8 @@ function Workspace({
         (step): step is Extract<ProjectOpenStep, { action: "reuse-blank" }> =>
           step.action === "reuse-blank",
       );
+      // Register the resolved identities before retargeting a blank session.
+      for (const step of steps) setRecents(rememberProject(step.path));
       if (blank) onCwdChange(blank.sessionId, blank.path);
 
       const created = steps.filter(
@@ -6101,14 +6155,35 @@ function Workspace({
           // `onCwdChange` already moved to it.
           break;
       }
-      // Every project opened is remembered, the one chosen last most recently.
-      for (const step of steps) setRecents(rememberProject(step.path));
     },
     [activateTab, insertBeside, onCwdChange, readProjectReturnMemory],
   );
 
+  const openProjects = useCallback(async (paths: readonly string[], separate = false) => {
+    const request = ++projectAddRequest.current;
+    const registered = projectRailItems(loadRecents(), "").map((item) => item.path);
+    const additions = [];
+    for (const path of paths) {
+      if (!looksLikeProject(path)) continue;
+      const addition = await chooseProjectAddition(path, registered, separate, true, () => request === projectAddRequest.current);
+      if (request !== projectAddRequest.current) return;
+      if (!addition) continue;
+      additions.push(addition);
+      registered.push(addition.project);
+    }
+    openResolvedProjects(additions.map((addition) => addition.project));
+    const last = additions[additions.length - 1];
+    if (last && !sameProjectPath(last.path, last.project)) {
+      workspaceSessionRequest.current++;
+      closeMonoView();
+      workspaceNavigation.selectWorkspace(last.project, { path: last.path, branch: last.branch });
+    }
+    return last;
+  }, [chooseProjectAddition, openResolvedProjects, closeMonoView, workspaceNavigation.selectWorkspace]);
+  useProjectFolderDrop(openProjects);
+
   const onSelectProject = useCallback(
-    (path: string) => {
+    async (path: string) => {
       const remembered = readProjectReturnMemory().get(pathKey(path));
       const mono = monoForView(remembered);
       if (mono && monoViewProject(remembered) && sameProjectPath(monoViewProject(remembered)!, path)) {
@@ -6119,8 +6194,8 @@ function Workspace({
       workspaceSessionRequest.current++;
       closeMonoView();
       workspaceNavigation.cancel();
-      openProjects([path]);
-      workspaceNavigation.selectProject(path);
+      const addition = await openProjects([path]);
+      if (addition && sameProjectPath(addition.path, addition.project)) workspaceNavigation.selectProject(addition.project);
     },
     [
       openProjects,
@@ -6137,7 +6212,7 @@ function Workspace({
     (project: string, tree: Worktree) => {
       if (tree.missing) return;
       workspaceSessionRequest.current++;
-      openProjects([project]);
+      openResolvedProjects([project]);
       workspaceNavigation.selectWorkspace(
         project,
         sameProjectPath(tree.path, project)
@@ -6145,7 +6220,7 @@ function Workspace({
           : { path: tree.path, branch: tree.branch },
       );
     },
-    [openProjects, workspaceNavigation.selectWorkspace],
+    [openResolvedProjects, workspaceNavigation.selectWorkspace],
   );
 
   const onNewWorktreeSession = useCallback(
@@ -6206,8 +6281,29 @@ function Workspace({
   );
 
   const onRemoveProject = useCallback(
-    (path: string, options: { purgeData: boolean }) => {
+    async (path: string, options: { purgeData: boolean }) => {
       const normalized = normalizeProjectPath(path);
+      try {
+        const team = await archiveProjectMonos(normalized, orchestrator, async (id) => {
+          const session = sessionsRef.current.find((entry) => entry.id === id) ?? await getSession(id);
+          if (!session) return;
+          turnGen.current.set(id, (turnGen.current.get(id) ?? 0) + 1);
+          await Promise.all(sessionChildHarnesses(session).map((child) => cancelHarnessTurn(child, id)));
+          // Pending goal receipts must not restart a restored team without explicit Resume.
+          const stopped = archiveMonoConversation(session);
+          sessionsRef.current = sessionsRef.current.map((entry) => entry.id === id ? stopped : entry);
+          await upsertSession(stopped);
+          persistSession(stopped);
+        });
+        // Removing a managed project is archival, even from the old Delete entry point.
+        if (team.length) options = { purgeData: false };
+        if (team.some((mono) => mono.id === monoViewIdRef.current)) closeMonoView();
+      } catch (error) {
+        console.error("Could not safely archive project team", error);
+        setSessions(sessionsRef.current);
+        window.alert("The project was kept because its team could not be stopped safely. Please retry.");
+        return;
+      }
       const wasCurrent = sameProjectPath(projectCwdRef.current, normalized);
       const remaining = options.purgeData
         ? forgetProject(normalized)
@@ -6325,7 +6421,7 @@ function Workspace({
         }
       }
     },
-    [activeTabId, invalidateLoadedSession, onSelectProject, persistSession],
+    [activeTabId, closeMonoView, invalidateLoadedSession, onSelectProject, persistSession],
   );
 
   const onRestoreProject = useCallback(
@@ -6778,6 +6874,10 @@ function Workspace({
       attachments: Attachment[] = [],
       options?: SubmitOptions,
     ): SubmissionAcceptance => {
+      const owner = monoForSession(sessionId) ?? listMonos(true).find((mono) =>
+        mono.id === (habitRunMono(sessionId) ?? orchestrator.forSession(sessionId)?.ownerMonoId),
+      );
+      if (owner?.archivedAt != null) return false;
       const remote = sessionsRef.current.find(
         (session) => session.id === sessionId,
       );
@@ -10957,7 +11057,8 @@ function Workspace({
     }
     for (const session of sessions.filter(
       (session) =>
-        isProjectManager(session.id) && !remoteProjectFor(session.cwd),
+        isProjectManager(session.id) && !remoteProjectFor(session.cwd) &&
+        monoForSession(session.id)?.archivedAt == null,
     )) {
       if (session.blocks.length || session.providerSessionId) {
         try {
@@ -10990,6 +11091,7 @@ function Workspace({
       for (const { path } of recents) {
         if (cancelled) break;
         if (remoteProjectFor(path)) continue;
+        if (projectMonoTeam(path).some((mono) => mono.archivedAt != null)) continue;
         try {
           const folder = await invoke<string>("project_root", {
             project: path,
@@ -11037,6 +11139,8 @@ function Workspace({
   const ensureProjectManager = useCallback(
     async (project: string) => {
       const folder = await invoke<string>("project_root", { project });
+      if (projectMonoTeam(folder).some((mono) => mono.archivedAt != null) &&
+          !offerProjectMonoRestore(folder)) throw new Error("This project's team is archived. Restore it to open its Manager.");
       const legacyId = await projectManagerId(folder);
       // A promoted Mono keeps its old conversation; a new placeholder must not reuse it.
       const id = monoForSession(legacyId)
@@ -13649,6 +13753,7 @@ function Workspace({
           }`}
         >
           {compactTitleBar ? workspaceTitleBar : null}
+          {projectAdditionDialog}
           <div className="flex min-h-0 min-w-0 flex-1">
             {managerRemoval && (
               <DeleteWorktreeDialog
@@ -13821,6 +13926,7 @@ function Workspace({
                   }
                   onLoadHistory={refreshHistory}
                   onSelectWorktree={onSelectProjectWorktree}
+                  onAddAsSeparateProject={(tree) => { void openProjects([tree.path], true); }}
                   onNewSession={onNewWorktreeSession}
                   onSelectSession={onSelectHistorySession}
                 />

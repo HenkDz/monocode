@@ -200,7 +200,7 @@ export function workerTurnPrompt(
   const scratch = scratchDir
     ? ` Temporary helpers and test output may be written in your private scratch directory: ${JSON.stringify(scratchDir)}. TMPDIR, TMP and TEMP point there. Use this directory for scratch files; do not write elsewhere outside the project. Deliver final changes in your assigned project files.`
     : "";
-  return `${prompt}\n\n<monocode_assignment>\nYou are a worker managed by a MonoCode lead. Work only in the checkout selected for this run. The workspace, scope and Git rules in this assignment envelope override any contradictory wording in the task text above. Your assigned write scope is: ${files.join(", ")}.${scratch} Read other files as needed, but do not edit outside your scope. If another file or shared operation is needed, report the blocker and stop so the lead can expand or create a new assignment. Do not spawn agents, create worktrees, switch branches, stage, commit, push, install dependencies or run broad formatters/generators. A task owning '.' may run explicitly requested project-wide validation or generation, but Git finalization remains the lead's responsibility after integration. Other workers may be working concurrently in separate checkouts; do not rely on their work until the lead has accepted it. Report focused checks, changed files, remaining issues and a concise final result.\n</monocode_assignment>`;
+  return `${prompt}\n\n<monocode_assignment>\nYou are a worker managed by a MonoCode lead. Work only in the checkout selected for this run. The workspace, scope and Git rules in this assignment envelope override any contradictory wording in the task text above. Your assigned write scope is: ${files.join(", ")}.${scratch} Read other files as needed, but do not edit outside your scope. If another file or shared operation is needed, report the blocker and stop so the lead can expand or create a new assignment. Do not spawn agents, create worktrees, switch branches, stage, commit, push, install dependencies or run broad formatters/generators. A task owning '.' may run explicitly requested project-wide validation or generation, but Git finalization remains the lead's responsibility after integration. Other workers may be working concurrently in separate checkouts; do not rely on their work until the lead has accepted it. End your final message with a short plain-language summary: what changed (including changed files), what was verified, and what remains open. Keep raw command output out of that summary; include relevant output before it in a collapsed <details><summary>Command output</summary> block with fenced code inside. Omit that block when there is no command output, and redact secrets.\n</monocode_assignment>`;
 }
 
 /** Task text a person should see: the assignment envelope stays in the send. */
@@ -748,7 +748,7 @@ export class Orchestrator {
       this.hydrating.delete(id);
     }
   }
-  private async hydrateRun(id: string) {
+  private async hydrateRun(id: string, allowRecovery = true) {
     if (this.loaded.has(id) || this.run(id)) return;
     this.loaded.add(id);
     try {
@@ -780,6 +780,7 @@ export class Orchestrator {
           }
         : normalized;
       const recoverManager =
+        allowRecovery &&
         run.projectManager &&
         !run.managerTurnId &&
         (run.status === "active" ||
@@ -2578,7 +2579,11 @@ export class Orchestrator {
     ))
       await this.interruptTask(leadId, task.id, error);
   }
-  async stopRun(leadId: string) {
+  async stopRun(leadId: string, options: { retainWorktrees?: boolean } = {}) {
+    if (options.retainWorktrees) {
+      await this.hydrating.get(leadId);
+      await this.hydrateRun(leadId, false);
+    }
     const run = this.run(leadId);
     if (!run) return;
     let saveError: unknown;
@@ -2628,7 +2633,7 @@ export class Orchestrator {
     await this.commit(stopped).catch((error: unknown) => {
       saveError = error;
     });
-    if (!saveError) {
+    if (!saveError && !options.retainWorktrees) {
       for (const task of stopped.tasks.filter((entry) => !entry.accepted))
         await this.cleanupUnchangedWorker(leadId, task.id);
     }
@@ -2645,6 +2650,7 @@ export class Orchestrator {
     );
     this.emit();
     await this.store.disable(leadId);
+    if (saveError && options.retainWorktrees) throw saveError;
   }
   stopForSession(id: string): Promise<void> | null {
     const run = this.forSession(id);

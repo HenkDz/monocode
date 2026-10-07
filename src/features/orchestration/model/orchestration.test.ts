@@ -335,9 +335,59 @@ describe("worker assignment prompts", () => {
     );
     expect(visibleUserPrompt(sent)).toBe("Review the branch.");
   });
+  it("asks workers for a plain-language ending with collapsed command evidence", () => {
+    const sent = workerTurnPrompt("Implement the change.", ["src/App.tsx"]);
+    expect(sent).toContain("End your final message with a short plain-language summary");
+    expect(sent).toContain("what changed (including changed files), what was verified, and what remains open");
+    expect(sent).toContain("<details><summary>Command output</summary>");
+    expect(sent).toContain("redact secrets");
+    expect(visibleUserPrompt(sent)).toBe("Implement the change.");
+  });
 });
 
 describe("local orchestration", () => {
+  it("stops an archived project's run without removing unchanged worker worktrees", async () => {
+    const f = setup();
+    await f.start();
+    await f.delegate(["brief.py"]);
+    await vi.waitFor(() => expect(f.tasks()[0].status).toBe("running"));
+    const worker = f.tasks()[0];
+    await f.manager.stopRun("lead", { retainWorktrees: true });
+    expect(f.host.stop).toHaveBeenCalledWith(worker.sessionId);
+    expect(f.manager.run("lead")?.status).toBe("stopped");
+    expect(f.tasks()[0].workspace).toEqual(worker.workspace);
+    expect(f.tasks()[0].status).toBe("cancelled");
+    expect(f.host.cleanupWorker).not.toHaveBeenCalled();
+  });
+  it("passively loads a saved Manager run for archival without recovering workers", async () => {
+    const f = setup();
+    await f.start();
+    await f.delegate(["brief.py"]);
+    await vi.waitFor(() => expect(f.saved.get("lead")?.tasks[0].workspace).toBeDefined());
+    f.saved.set("lead", { ...f.saved.get("lead")!, projectManager: true });
+    const restored = new Orchestrator(f.store);
+    restored.bind(f.host);
+    const enableCount = f.store.enable.mock.calls.length;
+    const submitCount = vi.mocked(f.host.submit).mock.calls.length;
+    await restored.stopRun("lead", { retainWorktrees: true });
+    expect(restored.run("lead")?.status).toBe("stopped");
+    expect(restored.run("lead")?.tasks[0].workspace).toEqual(f.tasks()[0].workspace);
+    expect(f.store.enable.mock.calls).toHaveLength(enableCount);
+    expect(vi.mocked(f.host.submit).mock.calls).toHaveLength(submitCount);
+    expect(f.host.cleanupWorker).not.toHaveBeenCalled();
+    expect(f.host.stop).toHaveBeenCalledWith(f.tasks()[0].sessionId);
+  });
+  it("reports failed archival persistence after stopping workers and disabling control", async () => {
+    const f = setup();
+    await f.start();
+    await f.delegate(["brief.py"]);
+    await vi.waitFor(() => expect(f.saved.get("lead")?.tasks[0].workspace).toBeDefined());
+    f.store.save.mockRejectedValue(new Error("Cannot save stopped run"));
+    await expect(f.manager.stopRun("lead", { retainWorktrees: true })).rejects.toThrow("Cannot save stopped run");
+    expect(f.host.stop).toHaveBeenCalledWith(f.tasks()[0].sessionId);
+    expect(f.store.disable).toHaveBeenCalledWith("lead");
+    expect(f.host.cleanupWorker).not.toHaveBeenCalled();
+  });
   it("restores idle managers without pausing, but retains real manager interruptions", async () => {
     const f = setup();
     f.lead.busy = false;

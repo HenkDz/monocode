@@ -277,6 +277,7 @@ pub fn run() {
             control::control_save,
             control::control_load,
             project_root::project_root,
+            project_root::resolve_project_add,
             control::control_scopes,
             control::control_write_path,
             control::control_attach_worker,

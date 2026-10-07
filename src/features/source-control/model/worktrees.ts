@@ -10,6 +10,7 @@ export type Worktree = {
   path: string;
   branch: string | null;
   head: string;
+  headSubject?: string | null;
   isMain: boolean;
   locked: boolean;
   prunable: boolean;

@@ -30,6 +30,78 @@ fn same(a: &str, b: &str) -> bool {
     }
 }
 
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectAddition {
+    pub path: String,
+    pub project: String,
+    pub branch: Option<String>,
+}
+
+/// Resolve Git's registered main checkout, never infer ownership from folder names.
+#[tauri::command(async)]
+pub fn resolve_project_add(
+    path: String,
+    projects: Vec<String>,
+    separate_projects: Option<Vec<String>>,
+) -> Result<ProjectAddition, String> {
+    let path = canonical(&path)?;
+    let registered = projects
+        .iter()
+        .filter_map(|project| {
+            canonical(project)
+                .ok()
+                .map(|canonical| (project, canonical))
+        })
+        .collect::<Vec<_>>();
+    // Intentional separately registered checkouts retain their project identity.
+    if let Some((project, _)) = registered.iter().find(|(_, root)| same(root, &path)) {
+        return Ok(ProjectAddition {
+            path: (*project).clone(),
+            project: (*project).clone(),
+            branch: None,
+        });
+    }
+    // Archived separately registered projects restore their original identity too.
+    for project in separate_projects.unwrap_or_default() {
+        if canonical(&project).is_ok_and(|root| same(&root, &path)) {
+            return Ok(ProjectAddition {
+                path: project.clone(),
+                project,
+                branch: None,
+            });
+        }
+    }
+    let trees = match crate::worktrees::list(Path::new(&path)) {
+        Ok(trees) => Some(trees),
+        Err(error) if Path::new(&path).join(".git").exists() => return Err(error),
+        Err(_) => None,
+    };
+    if let Some(trees) = trees {
+        let linked = trees.iter().find(|tree| {
+            !tree.is_main
+                && !tree.prunable
+                && canonical(&tree.path).is_ok_and(|root| same(&root, &path))
+        });
+        if let (Some(main), Some(linked)) = (trees.first(), linked) {
+            if let Ok(main) = canonical(&main.path) {
+                if let Some((project, _)) = registered.iter().find(|(_, root)| same(root, &main)) {
+                    return Ok(ProjectAddition {
+                        path,
+                        project: (*project).clone(),
+                        branch: linked.branch.clone(),
+                    });
+                }
+            }
+        }
+    }
+    Ok(ProjectAddition {
+        project: path.clone(),
+        path,
+        branch: None,
+    })
+}
+
 #[tauri::command(async)]
 pub fn project_root(project: String) -> Result<String, String> {
     let project = canonical(&project)?;
@@ -99,12 +171,48 @@ mod tests {
             &target
         ));
         assert!(project_root(root.to_str().unwrap().into()).is_err());
+        let addition =
+            resolve_project_add(worker.to_string_lossy().into(), vec![target.clone()], None)
+                .unwrap();
+        assert!(same(
+            &addition.path,
+            &canonical(worker.to_str().unwrap()).unwrap()
+        ));
+        assert_eq!(addition.project, target);
+        assert_eq!(addition.branch.as_deref(), Some("worker"));
+        let separate = resolve_project_add(
+            worker.to_string_lossy().into(),
+            vec![target.clone(), addition.path.clone()],
+            None,
+        )
+        .unwrap();
+        assert_eq!(separate.project, addition.path);
+        let archived = resolve_project_add(
+            worker.to_string_lossy().into(),
+            vec![target.clone()],
+            Some(vec![addition.path.clone()]),
+        )
+        .unwrap();
+        assert_eq!(archived.project, addition.path);
+        let ordinary =
+            resolve_project_add(root.to_string_lossy().into(), vec![target.clone()], None).unwrap();
+        assert_eq!(ordinary.project, ordinary.path);
+        let unregistered =
+            resolve_project_add(worker.to_string_lossy().into(), Vec::new(), None).unwrap();
+        assert_eq!(unregistered.project, unregistered.path);
         if cfg!(windows) {
             let same_target = project_root(worker.to_string_lossy().to_uppercase()).unwrap();
             assert!(same(
                 &same_target,
                 &canonical(worker.to_str().unwrap()).unwrap()
             ));
+            let upper = resolve_project_add(
+                worker.to_string_lossy().to_uppercase(),
+                vec![target.to_uppercase()],
+                None,
+            )
+            .unwrap();
+            assert!(same(&upper.project, &target));
         }
         git(&project, &["worktree", "remove", worker.to_str().unwrap()]);
         assert!(project_root(worker.to_str().unwrap().into()).is_err());

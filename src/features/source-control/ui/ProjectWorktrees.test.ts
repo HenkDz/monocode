@@ -160,7 +160,7 @@ it("groups Manager worktrees by attention, folds merged work, and links PR statu
   const worktrees = [
     tree("/repo", "main", true),
     ...["running", "ready", "blocked", "merged", "closed"].map((id) =>
-      tree(`/queue/${id}`, id),
+      ({ ...tree(`/queue/${id}`, id), unpushed: id === "closed" ? 2 : 0, dirty: id === "closed" }),
     ),
   ];
   const tasks = worktrees.slice(1).map((tree) => ({
@@ -183,6 +183,7 @@ it("groups Manager worktrees by attention, folds merged work, and links PR statu
     { leadId: "manager", cwd: "/repo", projectManager: true, tasks },
   ] as OrchestrationRun[];
   const snapshot = vi.spyOn(orchestrator, "snapshot").mockReturnValue(runs);
+  vi.mocked(useProjectDiffStats).mockReturnValue({ files: 1, additions: 21, deletions: 0 });
   vi.mocked(useProjectWorktrees).mockReturnValue({
     data: { worktrees, defaultRoot: "/queue" },
     refresh,
@@ -228,6 +229,16 @@ it("groups Manager worktrees by attention, folds merged work, and links PR statu
     await act(async () => menuItem("Review in Manager").click());
     expect(openManagerCard).toHaveBeenCalledWith("manager", "ready");
     const done = container.querySelector('[aria-label="Done"]')!;
+    const merged = done.querySelector('[data-worktree="/queue/merged"]')!;
+    const closed = done.querySelector('[data-worktree="/queue/closed"]')!;
+    expect(merged.className).toContain("opacity-60");
+    expect(merged.textContent).not.toContain("+21");
+    expect(merged.querySelector("[data-worktree-metadata]")?.textContent).toBe("");
+    const warning = closed.querySelector("[data-worktree-metadata] [role=img]")!;
+    expect(warning.textContent).toBe("2");
+    expect(warning.getAttribute("title")).toContain("2 unpushed commits");
+    expect(warning.getAttribute("title")).toContain("1 changed file would be lost");
+    expect(warning.getAttribute("title")).toContain("before deleting it");
     expect(done.querySelector('[data-worktree="/queue/closed"]')).not.toBeNull();
     expect(
       done.querySelector('[data-worktree="/queue/merged"]')?.parentElement
@@ -253,7 +264,54 @@ it("groups Manager worktrees by attention, folds merged work, and links PR statu
     expect(localStorage.getItem("monocode.activeWorktrees:/repo")).toBe("1");
   } finally {
     snapshot.mockRestore();
+    vi.mocked(useProjectDiffStats).mockReturnValue(null);
   }
+});
+
+it("names remaining pagination separately from the inactive filter, including dirty worktrees", async () => {
+  const worktrees = Array.from({ length: 8 }, (_, i) => ({ ...tree(`/idle/${i}`, `idle-${i}`), dirty: i === 7 }));
+  vi.mocked(useProjectWorktrees).mockReturnValue({ data: { worktrees, defaultRoot: "/idle" }, refresh });
+  props.history = [];
+  props.openSessions = [];
+  await render();
+  const more = [...container.querySelectorAll<HTMLButtonElement>("button")].find((item) => item.textContent?.includes("Show 3 more"))!;
+  expect(more.textContent).toContain("3 remaining");
+  expect(more.textContent).not.toContain("inactive");
+  expect(more.title).toContain("shown five at a time");
+  expect(more.title).toContain("focused checkout");
+  expect(more.title).toContain("sessions needing attention");
+  await act(async () => more.click());
+  expect(container.querySelectorAll("[data-worktree]")).toHaveLength(8);
+});
+
+it("names detached worktrees from their latest titled session then commit subject, keeping the hash secondary", async () => {
+  const worktrees = [
+    { ...tree("/detached/session", ""), branch: null, headSubject: "Commit fallback" },
+    { ...tree("/detached/commit", ""), branch: null, headSubject: "Fix worktree selection" },
+    { ...tree("/detached/unknown", ""), branch: null },
+  ];
+  vi.mocked(useProjectWorktrees).mockReturnValue({ data: { worktrees, defaultRoot: "/detached" }, refresh });
+  props.openSessions = [];
+  props.history = [
+    { ...session("older", "/detached/session"), title: "Old task", updatedAt: 1 },
+    { ...session("latest", "/detached/session"), title: "Useful latest task", updatedAt: 2 },
+  ];
+  await render();
+  const named = button("Open worktree Useful latest task");
+  expect(named.title).toContain("Detached abc1234");
+  expect(named.textContent).toContain("abc1234");
+  expect(button("Open worktree Fix worktree selection").textContent).toContain("abc1234");
+  expect(button("Open worktree Detached worktree").title).toContain("Detached abc1234");
+});
+
+it("explicitly adds a linked worktree as a separate project from its menu", async () => {
+  props.onAddAsSeparateProject = vi.fn();
+  await render();
+  await act(async () => button("Actions for feature-a").click());
+  await act(async () => menuItem("Add as separate project").click());
+  expect(props.onAddAsSeparateProject).toHaveBeenCalledWith(expect.objectContaining({ path: "/trees/a" }));
+  await act(async () => button("Actions for main").click());
+  expect(document.querySelector('[role="menu"]')?.textContent).not.toContain("Add as separate project");
 });
 
 it("uses each checkout for line counts and guards primary removal", async () => {

@@ -77,6 +77,7 @@ const SESSION_LIMIT = 5;
 const WORKTREE_PAGE = 5;
 
 type Props = {
+  onAddAsSeparateProject?: (tree: Worktree) => void | Promise<void>;
   renderManager?: (expanded: boolean, onToggle: () => void, ownedCount: number) => ReactNode;
   onRemove?: (
     cwd: string,
@@ -117,6 +118,7 @@ type Props = {
 };
 
 export function ProjectWorktrees({
+  onAddAsSeparateProject,
   renderManager,
   onRemove,
   onOpenTerminal,
@@ -418,7 +420,10 @@ export function ProjectWorktrees({
               const label =
                 managerTask?.title ??
                 tree.branch ??
-                `Detached ${tree.head.slice(0, 7)}`;
+                sessions.find((session) => session.title.trim())?.title ??
+                tree.headSubject ??
+                "Detached worktree";
+              const done = section.name === "Done";
               const workerStatus = managerWorktreeStatus(
                 managerRuns,
                 tree.path,
@@ -445,7 +450,7 @@ export function ProjectWorktrees({
                 <div
                   key={key}
                   data-worktree={tree.path}
-                  className={`my-1 rounded-md border border-transparent hover:border-content/15 hover:bg-content/5 focus-within:border-content/15 focus-within:bg-content/5 ${sessions.length === 1 && sessions[0].id === activeSessionId ? "bg-selection" : ""} ${menu?.tree.path === tree.path ? "border-content/15 bg-content/5" : ""}`}
+                  className={`my-1 rounded-md border border-transparent hover:border-content/15 hover:bg-content/5 focus-within:border-content/15 focus-within:bg-content/5 ${done ? "opacity-60" : ""} ${sessions.length === 1 && sessions[0].id === activeSessionId ? "bg-selection" : ""} ${menu?.tree.path === tree.path ? "border-content/15 bg-content/5" : ""}`}
                 >
                   <div
                     className="group/worktree relative flex h-7 items-center gap-1 rounded-md"
@@ -502,7 +507,7 @@ export function ProjectWorktrees({
                       aria-current={selected ? "true" : undefined}
                       aria-label={`Open worktree ${label}`}
                       aria-busy={selected && switchPending}
-                      title={`${label}\n${tree.branch ?? "Detached"}\n${prettyCwd(tree.path)}\n${workerStatus || progress}${tree.dirty ? "\nUncommitted changes" : ""}`}
+                      title={`${label}\n${tree.branch ?? `Detached ${tree.head.slice(0, 7)}`}\n${prettyCwd(tree.path)}\n${workerStatus || progress}${tree.dirty ? "\nUncommitted changes" : ""}`}
                       onClick={() =>
                         sessions.length === 1
                           ? onSelectSession(sessions[0].id, { project, tree })
@@ -517,7 +522,7 @@ export function ProjectWorktrees({
                         {label}
                       </span>
                       <span className="shrink-0 text-[11px] text-content/40">
-                        {tree.isMain ? "primary" : ""}
+                        {tree.isMain ? "primary" : !tree.branch ? tree.head.slice(0, 7) : ""}
                       </span>
                       {!expanded && sessions.length > 1 ? (
                         <span
@@ -529,7 +534,9 @@ export function ProjectWorktrees({
                       ) : null}
                     </button>
                     <div data-worktree-metadata className="ml-auto flex max-w-[45%] shrink-0 items-center gap-1 overflow-hidden pr-1 text-[11px] text-content/50 group-hover/worktree:hidden group-focus-within/worktree:hidden group-data-[actions-open=true]/worktree:hidden [@media(hover:none)]:hidden">
-                      {workerStatus || activeProgress ? (
+                      {done ? (
+                        <WorktreeDoneWarning tree={tree} enabled={enabled && !tree.missing} />
+                      ) : workerStatus || activeProgress ? (
                         <span className={`truncate ${workerStatus === "PR ready" ? "text-emerald-600 dark:text-emerald-400" : ""}`}>{workerStatus || progress}</span>
                       ) : <WorktreeDiffStat path={tree.path} enabled={enabled && !tree.missing} />}
                     </div>
@@ -692,14 +699,15 @@ export function ProjectWorktrees({
           {hiddenTrees > 0 ? (
             <button
               type="button"
+              title="Worktrees are shown five at a time. The focused checkout and worktrees with sessions needing attention or unfinished Manager work stay visible."
               className="rounded-md px-2 py-1 text-left text-[11px] text-content/50 hover:bg-content/5 hover:text-content"
               onClick={() => setWorktreeLimit((limit) => limit + WORKTREE_PAGE)}
             >
               Show {Math.min(WORKTREE_PAGE, hiddenTrees)} more
-              <span className="text-content/35"> · {hiddenTrees} hidden</span>
+              <span className="text-content/35"> · {hiddenTrees} remaining</span>
             </button>
           ) : null}
-          {filteredOut > 0 ? <span className="px-2 py-1 text-[11px] text-content/35">{filteredOut} filtered out</span> : null}
+          {filteredOut > 0 ? <span title="The active-only filter excludes worktrees without a focused checkout, sessions needing attention, dirty branch or unfinished Manager work." className="px-2 py-1 text-[11px] text-content/35">{filteredOut} inactive</span> : null}
           {worktreeLimit > WORKTREE_PAGE ? (
             <button
               type="button"
@@ -734,6 +742,12 @@ export function ProjectWorktrees({
               label: "Open worktree",
               disabled: menu.tree.missing,
             },
+            ...(!menu.tree.isMain && onAddAsSeparateProject ? [{
+              kind: "item" as const,
+              id: "separate-project",
+              label: "Add as separate project",
+              disabled: menu.tree.missing,
+            }] : []),
             {
               kind: "item",
               id: "new",
@@ -823,6 +837,7 @@ export function ProjectWorktrees({
                 const run = managerRuns.find((run) => run.projectManager && sameProjectPath(run.cwd, project) && run.tasks.includes(task!));
                 if (run && task) orchestrationActions?.openManagerCard?.(run.leadId, task.id);
               } else if (id === "open") onSelectWorktree(project, tree);
+              else if (id === "separate-project") await onAddAsSeparateProject?.(tree);
               else if (id.startsWith("new:")) {
                 setCollapsed((current) => {
                   const next = new Set(current);
@@ -1055,6 +1070,25 @@ function WorktreeCreatePr({
         </button>
       </form>
     </Modal>
+  );
+}
+
+function WorktreeDoneWarning({ tree, enabled }: { tree: Worktree; enabled: boolean }) {
+  const stats = useProjectDiffStats(tree.path, enabled && !!tree.dirty);
+  const warnings = [
+    tree.dirty
+      ? `${stats?.files ? `${stats.files} changed file${stats.files === 1 ? "" : "s"}` : "Uncommitted changes"} would be lost if this worktree is removed.`
+      : "",
+    tree.unpushed
+      ? `${tree.unpushed} unpushed commit${tree.unpushed === 1 ? "" : "s"}. Keep or push the branch before deleting it.`
+      : "",
+  ].filter(Boolean).join("\n");
+  if (!warnings) return null;
+  return (
+    <span role="img" aria-label={warnings} title={warnings} className="flex shrink-0 items-center gap-1 text-amber-600 dark:text-amber-400">
+      <CircleAlert className="size-3" />
+      {tree.unpushed || stats?.files || null}
+    </span>
   );
 }
 

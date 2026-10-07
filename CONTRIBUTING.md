@@ -26,6 +26,12 @@ npm install
 npm run tauri dev
 ```
 
+Screenshot/demo previews must use a separate application identifier and launch
+from a newly created empty temporary folder, never a checkout. See the
+[isolated preview launch instructions](README.md#build-from-source). Leave the
+build/frontend server in the checkout and isolate the desktop process's
+working directory so the preview does not register the real repository.
+
 One provider is enough. MonoCode probes for each CLI at startup and disables the ones it can’t find, with a hint about how to install them, so a missing Codex doesn’t stop you from working on anything else.
 
 ## Where things live

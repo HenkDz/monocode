@@ -25,3 +25,5 @@ R5_REVIEWED
 - The PR must explicitly target `nour`, based on `283e61ad28314d06302cae3fabfa359c3c43a9e1`.
 - Manager owns authorized commit, push, and one PR after final independent approval.
 - Merge is human-only; this worker does not publish, merge, or deploy.
+
+R5_ZERO_PROMPT_CHAIN requires a new independent review of the latest implementing dispatch before Manager publication.

@@ -94,9 +94,9 @@ describe("runtimeModeToCodexConfig", () => {
     ).not.toHaveProperty("networkAccess");
   });
 
-  it("allows explicit escalation requests in full-access", () => {
+  it("disables approvals and sandboxing in full-access", () => {
     expect(runtimeModeToCodexConfig("full-access")).toMatchObject({
-      approvalPolicy: "on-request",
+      approvalPolicy: "never",
       approvalsReviewer: "user",
       sandbox: "danger-full-access",
       sandboxPolicy: { type: "dangerFullAccess" },

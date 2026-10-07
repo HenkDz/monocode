@@ -25,11 +25,11 @@ export function memberTasks(runs: readonly OrchestrationRun[], memberId: string)
 }
 
 /** Exactly one org row owns a visible chat/worker/details view. */
-export function selectedOrgMono(sessionId: string | undefined, viewId: string | null, runs: readonly OrchestrationRun[]) {
+export function selectedOrgMono(sessionId: string | undefined, viewId: string | null, _runs: readonly OrchestrationRun[]) {
   const mono = monoForView(viewId) ?? (sessionId ? monoForSession(sessionId) : undefined);
   if (mono) return mono.id;
-  const memberId = runs.flatMap(run => run.tasks).find(task => task.sessionId === sessionId)?.memberId;
-  return memberId && findMono(memberId)?.role === "member" ? memberId : undefined;
+  // A worker is a different pane from the member's durable chat.
+  return undefined;
 }
 
 export function loadMonoView(windowLabel: string): string | null {

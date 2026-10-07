@@ -5,7 +5,8 @@ import {
   type ComponentProps,
   type ReactNode,
 } from "react";
-import type { HarnessId } from "../../sessions/model/session";
+import type { HarnessId, RuntimeMode } from "../../sessions/model/session";
+import { AccessPicker } from "../../sessions/ui/AccessPicker";
 import { ModelPicker, ModelSettingRows } from "../../sessions/ui/ModelPicker";
 import type { MonoLook, MonoState } from "../model/mono";
 import {
@@ -21,7 +22,7 @@ import { HabitPage } from "./HabitPage";
 import { NewHabitPage } from "./NewHabitPage";
 import { MonoProjects } from "./MonoProjects";
 import { MonoSettingsPage } from "./MonoSettingsPage";
-import { MonoTeamPage } from "./MonoTeamPage";
+import { MonoTeamPage, MemberDetails } from "./MonoTeamPage";
 import { findMono } from "../model/mono";
 import { habitActions, HabitsList, useHabits } from "./MonoHabits";
 import { MemoryPage, SoulPage } from "./MonoFilePages";
@@ -41,6 +42,10 @@ type Route =
   | { kind: "habit"; id: string };
 
 type Props = {
+  runtimeMode?: RuntimeMode;
+  onRuntimeModeChange?: (mode: RuntimeMode) => void;
+  teamActivity?: ReactNode;
+  toolActivityOpen?: boolean;
   tab?: MonoPanelTab;
   onTabChange?: (tab: MonoPanelTab) => void;
   activity?: ComponentProps<typeof MonoActivityContent>;
@@ -66,6 +71,10 @@ type Props = {
  * memory open directly as pages that slide over it.
  */
 export function MonoDetails({
+  runtimeMode,
+  onRuntimeModeChange,
+  teamActivity,
+  toolActivityOpen,
   tab = "details",
   onTabChange,
   activity,
@@ -220,12 +229,18 @@ export function MonoDetails({
         aria-labelledby={onTabChange ? `${panelId}-${tab}` : undefined}
         className="flex min-h-0 flex-1 flex-col"
       >
+        {tab === "details" && runtimeMode && onRuntimeModeChange && <dl className="border-b border-stroke px-4 py-2"><Property label="Permissions"><AccessPicker value={runtimeMode} onChange={onRuntimeModeChange} /></Property></dl>}
         <PanelStack pages={tab === "details" ? pages : []}>
           {tab === "activity" ? (
-            <MonoActivityContent
+            <div className="min-h-0 flex-1 overflow-y-auto">
+            {teamActivity}
+            {teamActivity ? <details key={activity?.blocks[0]?.id ?? "tools"} open={toolActivityOpen} className="border-t border-stroke p-3"><summary className="text-xs text-content/60">This agent's tool activity</summary><MonoActivityContent {...(activity ?? { blocks: [], live: false })} /></details> : <MonoActivityContent
               key={activity?.blocks[0]?.id ?? "empty"}
               {...(activity ?? { blocks: [], live: false })}
-            />
+            />}
+            </div>
+          ) : findMono(monoId)?.role === "member" ? (
+            <MemberDetails member={findMono(monoId)!} fallback={{ harness, model, modelSettings }} onBack={onClose} onProfileChange={profile => { onModelChange(profile.harness, profile.model); onModelSettingsChange(profile.modelSettings ?? {}); }} />
           ) : (
             <MonoSettingsPage
               monoId={monoId}

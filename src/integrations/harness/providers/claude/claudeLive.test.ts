@@ -82,11 +82,12 @@ async function startTurn(
     intent?: TurnIntent;
     providerAccountId?: string;
     orgMono?: boolean;
+    orgMonoId?: string;
   } = {},
 ) {
   const events: HarnessEvent[] = [];
-  const send = options.orgMono ? (input: Parameters<typeof sendClaudeTurn>[0]) =>
-    sendHarnessTurn({ ...input, harness: "claude", orgMono: true, monoSession: true }) : sendClaudeTurn;
+  const send = options.orgMono || options.orgMonoId ? (input: Parameters<typeof sendClaudeTurn>[0]) =>
+    sendHarnessTurn({ ...input, harness: "claude", orgMono: true, orgMonoId: options.orgMonoId, monoSession: true }) : sendClaudeTurn;
   const turn = send({
     sessionId,
     cwd: "/repo",
@@ -947,6 +948,29 @@ describe("claude legacy account resume", () => {
 });
 
 describe("claude subagents", () => {
+  it.each(["manager", "member"])("launches %s chats and refreshed/Habit turns with actual bypass permissions", async role => {
+    let saved = JSON.stringify([{ id: "org", role, projects: ["/repo"], mascot: "cat", color: "#abc" }]);
+    vi.stubGlobal("localStorage", { getItem: (key: string) => key === "monocode:mono-roster" ? saved : null, setItem: () => {} });
+    registerHarness({ id: "claude", live: true, sendTurn: sendClaudeTurn, respondApproval: respondClaudeApproval,
+      cancelTurn: cancelClaudeTurn, stopSession: stopClaudeSession, forgetSession: async () => {}, bindSession: () => {}, steerTurn: async () => {} });
+    try {
+      for (const sessionId of ["s1", "rotated-chat", "habit-run"]) {
+        sent.length = 0; spawned.length = 0;
+        const { events, turn } = await startTurn(sessionId, { orgMonoId: "org", runtimeMode: "supervised" });
+        expect(spawned[0]).toEqual(expect.arrayContaining(["--permission-mode", "bypassPermissions"]));
+        emit({ type: "control_request", request_id: "ordinary-write", request: { subtype: "can_use_tool", tool_name: "Write", input: { file_path: "/repo/file", content: "test" } } });
+        await waitFor(() => parse().some(message => (message.response as Record<string, unknown>)?.request_id === "ordinary-write"), "bypass write");
+        expect(events.some(event => event.type === "approval.requested")).toBe(false);
+        emit({ type: "result", subtype: "success", session_id: "sess_1" }); await turn;
+        await stopClaudeSession(sessionId);
+      }
+      saved = JSON.stringify([{ id: "org", role, projects: ["/repo"], mascot: "cat", color: "#abc", runtimeMode: "supervised" }]);
+      sent.length = 0; spawned.length = 0;
+      const { turn } = await startTurn("s1", { orgMonoId: "org", runtimeMode: "full-access" });
+      expect(spawned[0]).toEqual(expect.arrayContaining(["--permission-mode", "default"]));
+      emit({ type: "result", subtype: "success", session_id: "sess_1" }); await turn;
+    } finally { vi.unstubAllGlobals(); resetHarnessIdlePark(); }
+  });
   it("auto-approves an Orchestrator's direct goal assignment before any approval reaches the UI", async () => {
     vi.mocked(isTauri).mockReturnValue(true);
     registerHarness({ id: "claude", live: true, sendTurn: sendClaudeTurn,

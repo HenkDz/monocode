@@ -23,7 +23,7 @@ it("derives a single row from the visible pane, never the hidden workspace sessi
   expect(selectedOrgMono("regular-chat", null, runs)).toBeUndefined();
   expect(selectedOrgMono("regular-chat", "manager-chat", runs)).toBe("manager");
   expect(selectedOrgMono("regular-chat", memberDetailsView("backend"), runs)).toBe("backend");
-  expect(selectedOrgMono("worker-chat", null, runs)).toBe("backend");
+  expect(selectedOrgMono("worker-chat", null, runs)).toBeUndefined();
   expect(selectedOrgMono("worker-chat", "boss-chat", runs)).toBe("boss");
   expect(memberTasks(runs, "backend")[0].sessionId).toBe("worker-chat");
 });

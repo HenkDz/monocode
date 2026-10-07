@@ -7,6 +7,7 @@ mod chat_background;
 mod checkpoint;
 mod control;
 pub mod control_cli;
+mod app_cli_inputs;
 mod cursor_store;
 mod external_editor;
 mod fs;
@@ -233,6 +234,7 @@ pub fn run() {
         .manage(remote::RemoteConnections::default())
         .manage(window_transfer::WindowTransferState::new())
         .setup(|app| {
+            control_cli::init_trusted_launchers();
             harness::reap_orphaned_harness_processes();
             session_store::init(app.handle())?;
             control::init(app.handle())?;
@@ -285,6 +287,8 @@ pub fn run() {
             control::app_cli_path,
             control_cli::app_cli_approval_policy,
             control_cli::app_cli_input_is_temp,
+            control_cli::app_cli_executable_matches,
+            control_cli::app_cli_powershell_is_trusted,
             default_cwd,
             home_dir,
             notifications::notification_permission,

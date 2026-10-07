@@ -511,6 +511,7 @@ pub fn session_delete(
             .map_err(|e| e.to_string())?,
     );
     delete_session(&conn, &session_id).map_err(|e| e.to_string())?;
+    crate::app_cli_inputs::remove(&session_id);
     drop(conn);
     if !image_paths.is_empty() {
         if let Err(error) = crate::fs::delete_generated_images_sync(&app, &image_paths) {

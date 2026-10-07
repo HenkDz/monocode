@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import type { OrchestrationRun } from "../../orchestration/model/orchestrationState";
 import {
   MonoManagerGoals,
   type GoalLedger,
@@ -44,6 +45,22 @@ function setup() {
 }
 const user = { kind: "user" as const, messageId: "user-1" };
 const event = { kind: "event" as const, messageId: "worker-report" };
+
+it("clears a pre-dispatch decision after the Manager resumes", async () => {
+  const f = setup();
+  await f.ledger.handle("mono", user, "new", "goals.assign", { projectId: "/project", goal: "Fix tests" }, f.host);
+  const run = { leadId: "engine", ownerSessionId: "manager-chat", status: "active", tasks: [] } as unknown as OrchestrationRun;
+  await f.ledger.reconcile([run], new Set(["manager-chat"]), new Map());
+  expect(f.ledger.goals()[0].state).toBe("needs-you");
+  await f.ledger.reconcile([run], new Set(), new Map());
+  expect(f.ledger.goals()[0].state).toBe("queued");
+  run.status = "paused";
+  await f.ledger.reconcile([run], new Set(), new Map());
+  expect(f.ledger.goals()[0].state).toBe("blocked");
+  run.status = "active";
+  await f.ledger.reconcile([run], new Set(), new Map());
+  expect(f.ledger.goals()[0].state).toBe("queued");
+});
 
 it("persists before dispatch and replays the same receipt across a restart", async () => {
   const f = setup();

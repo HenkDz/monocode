@@ -75,6 +75,20 @@ function submit() {
     .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
 }
 
+it("renders the regular four-mode AccessPicker chip in the Mono composer", async () => {
+  const change = vi.fn();
+  render({ runtimeMode: "full-access", onRuntimeModeChange: change });
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Full access"]')!.click());
+  const options = [...document.querySelectorAll<HTMLButtonElement>('[role="option"]')];
+  expect(options).toHaveLength(4);
+  for (const label of ["Supervised", "Auto-accept edits", "Auto", "Full access"])
+    expect(options.some(option => option.textContent?.includes(label))).toBe(true);
+  await act(async () => options.find(option => option.textContent?.includes("Supervised"))!.click());
+  expect(change).toHaveBeenCalledWith("supervised");
+  render({ runtimeMode: "supervised", onRuntimeModeChange: change });
+  expect(container.querySelector('[aria-label="Supervised"]')).not.toBeNull();
+});
+
 it("consumes quotes once and adds them to the current draft", () => {
   const consumed = vi.fn();
   render();

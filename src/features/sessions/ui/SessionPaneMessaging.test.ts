@@ -7,6 +7,7 @@ import { clearComposerDraft, setComposerDraft } from "../model/draftCache";
 
 const probes = vi.hoisted(() => ({
   mono: true,
+  member: false,
   pick: vi.fn(),
   transcript: vi.fn(),
   runs: [],
@@ -43,6 +44,7 @@ vi.mock("../../monos/model/mono", async (original) => ({
     probes.mono
       ? {
           id: "mono",
+          role: probes.member ? "member" : undefined,
           sessionId: "chat",
           name: "Captain",
           mascot: "cat",
@@ -55,6 +57,7 @@ let container: HTMLDivElement;
 let root: Root;
 beforeEach(() => {
   probes.mono = true;
+  probes.member = false;
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal(
     "ResizeObserver",
@@ -150,6 +153,16 @@ function field() {
     '[aria-label="Message Captain"]',
   )!;
 }
+
+it("shows the member work log without a full-height greeting hiding it below the fold", () => {
+  probes.member = true;
+  const pane = props();
+  pane.session.blocks = [];
+  render(pane);
+  expect(container.querySelector('[aria-label="Member work log"]')?.textContent).toContain("No assignments yet.");
+  expect(container.querySelector("header")?.classList.contains("min-h-full")).toBe(false);
+  expect(field()).not.toBeNull();
+});
 
 it("keeps the same input, current draft and attachments when a question appears and closes", async () => {
   setComposerDraft("chat", "Initial draft");

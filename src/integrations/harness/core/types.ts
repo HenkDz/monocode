@@ -97,7 +97,10 @@ export type HarnessEvent =
   | {
       type: "approval.requested";
       /** Full provider command, never a display title or permission pattern. */
-      command?: string | string[];
+        command?: string | string[];
+        /** Provider-reported command cwd, when it differs from the session cwd. */
+        cwd?: string;
+      autoApprovalReason?: string;
       requestId: number;
       title: string;
       kind?: string;
@@ -184,6 +187,8 @@ export type SendTurnInput = HarnessSessionInput & {
   monoSession?: boolean;
   /** Trusted app identity, not inferred from the prompt or provider output. */
   orgMono?: boolean;
+  /** Trusted app identity for permission lookup on every launch/turn. */
+  orgMonoId?: string;
   text: string;
   attachments?: Attachment[];
   /** Called once the provider has accepted the user turn. */

@@ -67,6 +67,7 @@ import {
 import { EmptySession } from "./EmptySession";
 import {
   monoForSession,
+  monoRuntimeMode,
   findMono,
   monoLook,
   monosSnapshot,
@@ -76,6 +77,7 @@ import { MonoHeader } from "../../monos/ui/MonoHeader";
 import { MonoComposer } from "../../monos/ui/MonoComposer";
 import { MonoUsageLimitNotice } from "../../monos/ui/MonoUsageLimitNotice";
 import { QuestionForm } from "./QuestionForm";
+import { MemberWorkLog } from "../../monos/ui/MemberWorkLog";
 import {
   monoMessageDeliveries,
   monoPendingTranscriptBlocks,
@@ -902,7 +904,8 @@ const LocalSessionPane = memo(function LocalSessionPane({
             {remoteSessionLoading ? null : isEmpty ? (
               agent ? (
                 <div className="scrollbar-none h-full min-h-0 overflow-y-auto">
-                  <MonoHeader agent={agent} greeting />
+                  <MonoHeader agent={agent} greeting={mono?.role !== "member"} />
+                  {mono?.role === "member" && <MemberWorkLog member={mono} />}
                 </div>
               ) : session.inboxAsk ? (
                 <div className="scrollbar-none h-full min-h-0 overflow-y-auto">
@@ -1060,7 +1063,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
                         : undefined
                     }
                     latestTurnAccessory={
-                      ownedRuns.length ? (
+                      mono?.role === "member" ? <MemberWorkLog member={mono} /> : ownedRuns.length ? (
                         <>
                           {ownedRuns.map((run) => (
                             <ProjectManagerReview key={run.leadId} run={run} />
@@ -1170,6 +1173,8 @@ const LocalSessionPane = memo(function LocalSessionPane({
                   <MonoComposer
                     key={session.id}
                     sessionId={session.id}
+                    runtimeMode={monoRuntimeMode(mono, session.runtimeMode)}
+                    onRuntimeModeChange={mode => onRuntimeModeChange(session.id, mode)}
                     name={agent.name}
                     enabled={visible}
                     quoteRequest={quoteRequest}

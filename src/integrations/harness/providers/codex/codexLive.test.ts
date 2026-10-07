@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { registerHarness, resetHarnessIdlePark, sendHarnessTurn } from "../../core/registry";
 
 const sent: string[] = [];
 let onLine: ((line: string) => void) | undefined;
@@ -100,6 +101,7 @@ async function startTurn(
     beforeThreadReply?: () => Promise<void>;
     onAccepted?: () => void;
     controlsAgents?: boolean;
+    orgMonoId?: string;
   } = {},
 ) {
   const events: HarnessEvent[] = [];
@@ -111,7 +113,8 @@ async function startTurn(
       options.resumeProviderAccountId,
     );
   }
-  const turn = sendCodexTurn({
+  const send = options.orgMonoId ? (input: Parameters<typeof sendCodexTurn>[0]) => sendHarnessTurn({ ...input, harness: "codex", orgMono: true, orgMonoId: options.orgMonoId }) : sendCodexTurn;
+  const turn = send({
     sessionId,
     cwd: "/repo",
     model: "codex:gpt-5.4",
@@ -154,6 +157,27 @@ async function startTurn(
 }
 
 describe("codex live turn sequence", () => {
+  it.each(["manager", "member"])("uses no-approval/full-access launch and turn policies for %s including refreshed/Habit turns", async role => {
+    let saved = JSON.stringify([{ id: "org", role, projects: ["/repo"], mascot: "cat", color: "#abc" }]);
+    vi.stubGlobal("localStorage", { getItem: (key: string) => key === "monocode:mono-roster" ? saved : null, setItem: () => {} });
+    registerHarness({ id: "codex", live: true, sendTurn: sendCodexTurn, respondApproval: respondCodexApproval,
+      cancelTurn: cancelCodexTurn, stopSession: stopCodexSession, forgetSession: async () => {}, bindSession: () => {}, steerTurn: async () => {} });
+    try {
+      for (const sessionId of ["codex-live", "rotated-chat", "habit-run"]) {
+        sent.length = 0;
+        const { turn } = await startTurn(sessionId, { orgMonoId: "org", runtimeMode: "supervised" });
+        expect(parse().find(message => message.method === "thread/start")?.params).toMatchObject({ approvalPolicy: "never", sandbox: "danger-full-access" });
+        expect(parse().find(message => message.method === "turn/start")?.params).toMatchObject({ approvalPolicy: "never", sandboxPolicy: { type: "dangerFullAccess" } });
+        notify("turn/completed", { turn: { id: "turn_1", status: "completed" } }); await turn;
+        await stopCodexSession(sessionId); __codexTestReset();
+      }
+      saved = JSON.stringify([{ id: "org", role, projects: ["/repo"], mascot: "cat", color: "#abc", runtimeMode: "supervised" }]);
+      sent.length = 0;
+      const { turn } = await startTurn("codex-live", { orgMonoId: "org", runtimeMode: "full-access" });
+      expect(parse().find(message => message.method === "turn/start")?.params).toMatchObject({ approvalPolicy: "untrusted", sandboxPolicy: { type: "readOnly" } });
+      notify("turn/completed", { turn: { id: "turn_1", status: "completed" } }); await turn;
+    } finally { vi.unstubAllGlobals(); resetHarnessIdlePark(); }
+  });
   beforeEach(() => {
     sent.length = 0;
     onLine = undefined;
@@ -934,7 +958,7 @@ describe("codex live turn sequence", () => {
         ),
       )) {
         expect(message.params).toMatchObject({
-          approvalPolicy: "on-request",
+          approvalPolicy: "never",
           approvalsReviewer: "user",
         });
       }
@@ -1817,7 +1841,7 @@ describe("codex live turn sequence", () => {
     );
     const next = parse().filter((m) => m.method === "turn/start")[1];
     expect(next.params).toMatchObject({
-      approvalPolicy: "on-request",
+      approvalPolicy: "never",
       approvalsReviewer: "user",
       sandboxPolicy: { type: "dangerFullAccess" },
     });

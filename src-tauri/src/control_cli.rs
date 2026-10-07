@@ -4,6 +4,7 @@ use std::net::{SocketAddr, TcpStream};
 use std::time::Duration;
 
 use serde_json::{json, Value};
+use tauri::Manager;
 
 const USAGE: &str = r#"MonoCode local control — supervise this orchestration run from the lead agent.
 
@@ -23,6 +24,12 @@ Actions, with the JSON object each one takes:
             checkout. "dependsOn" holds taskIds that must be reviewed first.
             Project Managers may pass "checkout":"<path or branch>" to reuse
             a worktree explicitly named by the user; omitted creates one.
+            Org Managers must pass "member":"<direct team member id>";
+            the app supplies that member's model and identity. Include
+            "monoGoalId":"<goalId>" for an assigned goal. Reviewer delegates
+            also pass "reviewTaskId":"<completed implementation taskId>".
+            Org Managers may include "project":"<exact assigned folder>"
+            on every control action (required with multiple projects).
   get       {"taskId":"..."}
             One task, including its latest result.
   wait      {"timeoutSeconds":20}
@@ -90,7 +97,8 @@ const ACTIONS: [&str; 13] = [
     "list", "delegate", "get", "steer", "message", "retry", "reassign", "cancel", "wait", "review", "finish",
     "respond", "answer",
 ];
-const APP_ACTIONS: [&str; 34] = [
+const APP_ACTIONS: [&str; 35] = [
+    "tasks.request",
     "team.answer",
     "reviews.submit",
     "projects.list",
@@ -230,6 +238,7 @@ Actions:
   habits.run     {"id":"..."}  Run one within a minute, to try it out.
   habits.remove  {"id":"..."}
   projects.list  Mono only. List assigned projects and worker-engine summaries.
+  tasks.request  {"title":"...","prompt":"...","files":["src"]} Member chat only, direct user work request. Requires nonempty project-relative file/directory scopes. Creates an isolated task under its Manager; does not bypass review or publishing limits.
   projects.status {projectId,before?} Read a bounded page of project goals.
   goals.assign   Orchestrator only, to a direct Manager. {projectId,goal}; reuse requestId.
   goals.message  {goalId,text} Message an existing goal.
@@ -294,19 +303,161 @@ pub fn app_help() -> String {
 }
 
 #[tauri::command]
-pub fn app_cli_approval_policy() -> Result<Value, String> {
-    Ok(json!({
-        "executable": std::env::current_exe().map_err(|e| e.to_string())?.to_string_lossy(),
-        "tempDir": std::env::temp_dir().to_string_lossy(),
+pub fn app_cli_approval_policy(app: tauri::AppHandle, cwd: Option<String>, session_id: String) -> Result<Value, String> {
+    let input_dir = app.path().app_data_dir().ok()
+        .and_then(|base| crate::app_cli_inputs::folder(&base.join("cli-inputs"), &session_id).ok());
+    Ok(approval_policy(cwd, input_dir.as_deref()))
+}
+
+fn approval_policy(cwd: Option<String>, input_dir: Option<&std::path::Path>) -> Value {
+    let mut shells: Vec<String> = TRUSTED_POWERSHELL.get().into_iter().flatten()
+        .map(|path| path.to_string_lossy().trim_start_matches(r"\\?\").to_string()).collect();
+    if let Some(cwd) = cwd {
+        for name in ["powershell", "powershell.exe", "pwsh", "pwsh.exe"] {
+            if app_cli_powershell_is_trusted(name.into(), cwd.clone()) { shells.push(name.into()); }
+        }
+    }
+    json!({
+        "executable": std::env::current_exe().ok().map(|path| path.to_string_lossy().into_owned()).unwrap_or_default(),
+        "tempDir": input_dir.map(|path| path.to_string_lossy().trim_start_matches(r"\\?\").to_string()).unwrap_or_default(),
         "actions": APP_ACTIONS.as_slice(),
-    }))
+        "trustedRtk": TRUSTED_RTK.get().and_then(|path| path.as_ref()).map(|path| path.to_string_lossy().trim_start_matches(r"\\?\").to_string()),
+        "trustedPowerShell": shells,
+    })
+}
+
+static TRUSTED_RTK: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+static TRUSTED_POWERSHELL: std::sync::OnceLock<Vec<std::path::PathBuf>> = std::sync::OnceLock::new();
+
+pub fn init_trusted_launchers() {
+    init_trusted_rtk();
+    TRUSTED_POWERSHELL.get_or_init(|| {
+        let mut candidates = Vec::new();
+        if cfg!(windows) {
+            if let Some(root) = std::env::var_os("SystemRoot") {
+                let root = std::path::PathBuf::from(root).join("System32/WindowsPowerShell/v1.0");
+                candidates.push((root.join("powershell.exe"), root));
+            }
+            if let Some(programs) = std::env::var_os("ProgramFiles") {
+                let root = std::path::PathBuf::from(programs).join("PowerShell");
+                if let Ok(entries) = std::fs::read_dir(&root) {
+                    for entry in entries.flatten() {
+                        if entry.path().is_dir() { candidates.push((entry.path().join("pwsh.exe"), root.clone())); }
+                    }
+                }
+            }
+        }
+        candidates.into_iter().filter_map(|(path, root)| {
+            let root = root.canonicalize().ok()?;
+            let path = path.canonicalize().ok()?;
+            let temp = std::env::temp_dir().canonicalize().ok()?;
+            (path.is_file() && rtk_install_path_allowed(&path, &[root], &temp)
+                && !path.ancestors().any(|parent| parent.join(".git").exists())).then_some(path)
+        }).collect()
+    });
+}
+
+/// Bare launchers are rechecked for every approval, not cached with the turn.
+/// Do not run the shell or execute a PATH shim in order to discover identity.
+#[tauri::command]
+pub fn app_cli_powershell_is_trusted(path: String, cwd: String) -> bool {
+    let Some(trusted) = TRUSTED_POWERSHELL.get() else { return false; };
+    let paths: Vec<_> = std::env::var_os("PATH").map(|path| std::env::split_paths(&path).collect()).unwrap_or_default();
+    powershell_is_trusted(&path, std::path::Path::new(&cwd), &paths, trusted)
+}
+
+fn powershell_is_trusted(path: &str, cwd: &std::path::Path, search: &[std::path::PathBuf], trusted: &[std::path::PathBuf]) -> bool {
+    let matches = |path: &std::path::Path| path.canonicalize().ok().is_some_and(|canonical|
+        canonical.is_file() && trusted.iter().any(|trusted| canonical.to_string_lossy().eq_ignore_ascii_case(&trusted.to_string_lossy())));
+    if std::path::Path::new(path).is_absolute() { return matches(std::path::Path::new(path)); }
+    let name = path.to_ascii_lowercase();
+    if !["powershell", "powershell.exe", "pwsh", "pwsh.exe"].contains(&name.as_str()) { return false; }
+    if !cwd.is_absolute() || !cwd.is_dir() { return false; }
+    let Ok(entries) = std::fs::read_dir(cwd) else { return false; };
+    for entry in entries {
+        let Ok(entry) = entry else { return false; };
+        let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+        if name == "powershell" || name == "pwsh" || name.starts_with("powershell.") || name.starts_with("pwsh.") { return false; }
+    }
+    let stem = name.trim_end_matches(".exe");
+    if search.iter().any(|dir| !dir.is_absolute()) { return false; }
+    let mut extensions = vec![".exe".to_string(), ".com".into(), ".cmd".into(), ".bat".into(), ".ps1".into()];
+    if let Some(extra) = std::env::var_os("PATHEXT") {
+        extensions.extend(extra.to_string_lossy().split(';').map(str::to_ascii_lowercase));
+    }
+    for dir in search {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => return false,
+        };
+        let mut found = false;
+        for entry in entries {
+            let Ok(entry) = entry else { return false; };
+            let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+            if name == stem || name.strip_prefix(stem).is_some_and(|suffix| extensions.iter().any(|extension| suffix == extension)) {
+                if !matches(&entry.path()) { return false; }
+                found = true;
+            }
+        }
+        if found { return true; }
+    }
+    false
+}
+
+/// Resolve once at app startup, never in the session's cwd. Command shims and
+/// repository-controlled PATH entries are not executable identities.
+pub fn init_trusted_rtk() {
+    TRUSTED_RTK.get_or_init(|| {
+        let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })?;
+        let home = std::path::PathBuf::from(home);
+        let mut roots = vec![home.join(".cargo"), home.join(".local/bin")];
+        if let Some(programs) = std::env::var_os("ProgramFiles") { roots.push(std::path::PathBuf::from(programs).join("rtk")); }
+        if !cfg!(windows) { roots.extend(["/usr/bin", "/usr/local/bin"].map(std::path::PathBuf::from)); }
+        let roots: Vec<_> = roots.into_iter().filter_map(|root| root.canonicalize().ok()).collect();
+        let binary = if cfg!(windows) { "rtk.exe" } else { "rtk" };
+        let mut candidates: Vec<_> = std::env::var_os("PATH").map(|path| std::env::split_paths(&path).filter(|dir| dir.is_absolute()).map(|dir| dir.join(binary)).collect()).unwrap_or_default();
+        candidates.extend([home.join(".cargo/bin").join(binary), home.join(".local/bin").join(binary)]);
+        // Cargo supports versioned --root installs; do not execute or parse rtk.cmd.
+        if let Ok(entries) = std::fs::read_dir(home.join(".cargo")) {
+            let mut installs: Vec<_> = entries.flatten().filter(|entry| entry.file_name().to_string_lossy().starts_with("rtk-")).map(|entry| entry.path().join("bin").join(binary)).collect();
+            installs.sort(); installs.reverse(); candidates.extend(installs);
+        }
+        candidates.into_iter().find_map(|candidate| trusted_rtk_candidate(&candidate, &roots, &std::env::temp_dir()))
+    });
+}
+
+fn trusted_rtk_candidate(path: &std::path::Path, roots: &[std::path::PathBuf], temp: &std::path::Path) -> Option<std::path::PathBuf> {
+    if !path.is_absolute() { return None; }
+    let canonical = path.canonicalize().ok()?;
+    if !canonical.is_file() || !rtk_install_path_allowed(&canonical, roots, &temp.canonicalize().ok()?) { return None; }
+    if canonical.ancestors().any(|parent| parent.join(".git").exists()) { return None; }
+    let expected = if cfg!(windows) { "rtk.exe" } else { "rtk" };
+    if !canonical.file_name()?.to_string_lossy().eq_ignore_ascii_case(expected) { return None; }
+    Some(canonical)
+}
+
+fn rtk_install_path_allowed(path: &std::path::Path, roots: &[std::path::PathBuf], temp: &std::path::Path) -> bool {
+    roots.iter().any(|root| path.starts_with(root)) && !path.starts_with(temp) &&
+        !path.components().any(|part| ["workspaces", "worktrees", "scratch", "temp", "tmp"].contains(&part.as_os_str().to_string_lossy().to_ascii_lowercase().as_str()))
 }
 
 #[tauri::command]
-pub fn app_cli_input_is_temp(path: String) -> bool {
-    temp_input_within(std::path::Path::new(&path), &std::env::temp_dir())
+pub fn app_cli_executable_matches(path: String) -> bool {
+    let candidate = std::path::Path::new(&path);
+    if !candidate.is_absolute() { return false; }
+    let (Ok(candidate), Ok(current)) = (candidate.canonicalize(), std::env::current_exe().and_then(|p| p.canonicalize())) else { return false; };
+    // Windows canonicalization expands 8.3 paths and resolves junctions.
+    if cfg!(windows) { candidate.to_string_lossy().eq_ignore_ascii_case(&current.to_string_lossy()) }
+    else { candidate == current }
 }
 
+#[tauri::command]
+pub fn app_cli_input_is_temp(path: String, session_id: String) -> bool {
+    crate::app_cli_inputs::allows(std::path::Path::new(&path), &session_id)
+}
+
+#[cfg(test)]
 fn temp_input_within(path: &std::path::Path, root: &std::path::Path) -> bool {
     let (Ok(path), Ok(root)) = (path.canonicalize(), root.canonicalize()) else { return false; };
     path != root && path.starts_with(root) && path.is_file()
@@ -593,8 +744,82 @@ mod tests {
     }
 
     #[test]
+    fn powershell_bare_names_reject_cwd_and_path_shadowing() {
+        let root = std::env::temp_dir().join(format!("monocode-shell-trust-{}", uuid::Uuid::new_v4()));
+        let install = root.join("install");
+        let cwd = root.join("project");
+        let earlier = root.join("earlier");
+        for dir in [&root, &install, &cwd, &earlier] { std::fs::create_dir(dir).unwrap(); }
+        let binary = install.join("powershell.exe");
+        std::fs::write(&binary, "fixture, never executed").unwrap();
+        let trusted = vec![binary.canonicalize().unwrap()];
+        let search = vec![earlier.clone(), install.clone()];
+        assert!(powershell_is_trusted("powershell", &cwd, &search, &trusted));
+        assert!(powershell_is_trusted("powershell.exe", &cwd, &search, &trusted));
+        #[cfg(windows)]
+        assert!(powershell_is_trusted(&binary.to_string_lossy().replace('\\', "\\\\"), &cwd, &search, &trusted));
+        assert!(!powershell_is_trusted("powershell", &cwd, &[std::path::PathBuf::from("tools"), install.clone()], &trusted));
+        for name in ["powershell.exe", "powershell.cmd", "pwsh.ps1", "PoWeRsHeLl.anything"] {
+            let shadow = cwd.join(name);
+            std::fs::write(&shadow, "untrusted").unwrap();
+            assert!(!powershell_is_trusted("powershell", &cwd, &search, &trusted));
+            assert!(!powershell_is_trusted(&shadow.to_string_lossy(), &cwd, &search, &trusted));
+            assert!(powershell_is_trusted(&binary.to_string_lossy(), &cwd, &search, &trusted));
+            std::fs::remove_file(shadow).unwrap();
+        }
+        let shadow = earlier.join("powershell.cmd");
+        std::fs::write(&shadow, "untrusted").unwrap();
+        assert!(!powershell_is_trusted("powershell", &cwd, &search, &trusted));
+        assert!(!powershell_is_trusted("powershell", &root.join("missing"), &search, &trusted));
+        std::fs::remove_file(shadow).unwrap();
+        std::fs::remove_file(binary).unwrap();
+        for dir in [&cwd, &earlier, &install, &root] { std::fs::remove_dir(dir).unwrap(); }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn powershell_real_parser_preserves_bounded_input_arguments() {
+        // Parse, never execute, the proposed app command. This exercises the OS
+        // Windows PowerShell 5.1 grammar rather than a POSIX tokenizer.
+        let shell = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap())
+            .join("System32/WindowsPowerShell/v1.0/powershell.exe");
+        let script = r#"
+$ErrorActionPreference = 'Stop'
+$samples = @(
+  "& 'C:/Mono Code/monocode.exe' app projects.list --input 'C:/Temp/with spaces/input.json' --request-id retry-1",
+  "& 'C:/MonoCode/monocode.exe' app projects.list",
+  "'C:/MonoCode/monocode.exe' app projects.list",
+  "& 'C:\\Mono Code\\monocode.exe' app projects.list --input 'C:\\Temp\\with spaces\\input.json'"
+)
+$result = foreach ($sample in $samples) {
+  $tokens = $null; $errors = $null
+  $ast = [System.Management.Automation.Language.Parser]::ParseInput($sample, [ref]$tokens, [ref]$errors)
+  $commands = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] }, $true))
+  $values = @(); if ($commands.Count -eq 1) { $values = @($commands[0].CommandElements | ForEach-Object { $_.Value }) }
+  @{ errors = $errors.Count; commands = $commands.Count; values = $values }
+}
+ConvertTo-Json -InputObject @($result) -Compress -Depth 4
+"#;
+        let output = std::process::Command::new(shell).args(["-NoProfile", "-NonInteractive", "-Command", script]).output().unwrap();
+        assert!(output.status.success(), "PowerShell parser probe failed");
+        let parsed: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(parsed[0]["errors"], 0);
+        assert_eq!(parsed[0]["commands"], 1);
+        assert_eq!(parsed[0]["values"], json!(["C:/Mono Code/monocode.exe", "app", "projects.list", "--input", "C:/Temp/with spaces/input.json", "--request-id", "retry-1"]));
+        assert_eq!(parsed[1]["errors"], 0);
+        assert_eq!(parsed[1]["values"], json!(["C:/MonoCode/monocode.exe", "app", "projects.list"]));
+        assert!(parsed[2]["errors"].as_u64().unwrap() > 0, "A quoted executable needs the call operator");
+        assert_eq!(parsed[3]["errors"], 0);
+        assert_eq!(parsed[3]["values"], json!([r"C:\\Mono Code\\monocode.exe", "app", "projects.list", "--input", r"C:\\Temp\\with spaces\\input.json"]));
+    }
+
+    #[test]
     fn approval_policy_uses_cli_actions_and_real_temp_files() {
-        let policy = app_cli_approval_policy().unwrap();
+        assert!(app_cli_executable_matches(std::env::current_exe().unwrap().to_string_lossy().into_owned()));
+        assert!(!app_cli_executable_matches("monocode.exe".into()));
+        assert!(!app_cli_executable_matches(std::env::temp_dir().to_string_lossy().into_owned()));
+        let policy = approval_policy(None, None);
+        assert_eq!(policy["tempDir"], ""); // No private root means no automatic --input.
         assert_eq!(policy["actions"], json!(APP_ACTIONS.as_slice()));
         let root = std::env::temp_dir().join(format!("monocode-cli-approval-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&root).unwrap();
@@ -612,6 +837,19 @@ mod tests {
         }
         std::fs::remove_file(input).unwrap();
         std::fs::remove_dir(root).unwrap();
+    }
+
+    #[test]
+    fn rtk_trust_is_bounded_to_install_roots_not_names_or_path_search() {
+        let home = std::path::PathBuf::from(if cfg!(windows) { "C:/Users/test" } else { "/home/test" });
+        let root = home.join(".cargo");
+        let temp = home.join("AppData/Local/Temp");
+        let roots = vec![root.clone()];
+        assert!(rtk_install_path_allowed(&root.join("rtk-1/bin/rtk.exe"), &roots, &temp));
+        for path in [home.join("repo/rtk.exe"), temp.join("rtk.exe"), root.join("workspaces/a/rtk.exe"), root.join("scratch/rtk.exe"), root.join("worktrees/a/rtk.exe")] {
+            assert!(!rtk_install_path_allowed(&path, &roots, &temp));
+        }
+        assert!(trusted_rtk_candidate(std::path::Path::new("rtk"), &roots, &temp).is_none());
     }
     #[test]
     fn explains_help_and_malformed_invocations() {

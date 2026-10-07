@@ -5,8 +5,10 @@ import {
   updateMono,
 } from "../features/monos/model/mono";
 import { monoEngineId } from "../features/monos/model/monoEngines";
-import { loadMonoView, saveMonoView, monoForView, monoViewProject, memberDetailsView, memberTasks, selectedOrgMono } from "../features/monos/model/monoNavigation";
-import { MemberDetails } from "../features/monos/ui/MonoTeamPage";
+import { loadMonoView, saveMonoView, monoForView, monoViewProject, memberDetailsView, selectedOrgMono } from "../features/monos/model/monoNavigation";
+import { MonoTeamActivity } from "../features/monos/ui/MonoTeamActivity";
+import { teamDecisions } from "../features/monos/model/monoTeamActivity";
+import { requestMemberWork } from "../features/monos/model/memberWorkRequest";
 import {
   assertDirectReport,
   resolveTeamMember,
@@ -484,6 +486,7 @@ import {
   newSession,
   retargetSessionToProject,
   removeSessionDraft,
+  sendDraftOnce,
   sessionDisplayTitle,
   sessionDraftBlock,
   sessionWorkCwd,
@@ -594,6 +597,7 @@ import {
   isMonoSession,
   listMonos,
   monoForSession,
+  monoRuntimeMode,
   monoLook,
   monosSnapshot,
   monoState,
@@ -2048,26 +2052,19 @@ function Workspace({
       ),
   );
   const managerQuestions = useMemo(
-    () =>
-      managerAttention(
+    () => {
+      const decisions = teamDecisions(listMonos(), sessions, orchestrationRuns);
+      const covered = new Set(decisions.map(item => item.session.id));
+      return [...managerAttention(
         sessions,
         orchestrationRuns,
         unseenFinishedIds,
         managerPrStatuses,
-      ).filter((item) => {
-        const mono = monoForSession(item.id);
-        const session = sessions.find((entry) => entry.id === item.id);
-        return !(
-          item.key === item.id &&
-          session?.pendingQuestion &&
-          !session?.blocks.some(
-            (block) => block.approval && !block.approval.decided,
-          ) &&
-          mono?.role === "manager" &&
-          mono.reportsTo &&
-          findMono(mono.reportsTo)?.sessionId
-        );
-      }),
+      ).filter(item => !(item.kind === "decision" && covered.has(item.id))),
+        ...decisions.map(item => ({ key: item.key, id: item.session.id, project: item.project, kind: "decision" as const,
+          notificationId: item.resume ? `${item.key}:${item.resume.reason}` : item.key, question: `${monoLook(item.owner).name}: ${item.resume?.reason || item.approval?.tool?.title || item.approval?.text || item.session.pendingQuestion?.title || "Needs your decision"}` })),
+      ];
+    },
     [
       sessions,
       orchestrationRuns,
@@ -4838,25 +4835,8 @@ function Workspace({
   const onOpenMember = useCallback(async (memberId: string) => {
     const member = findMono(memberId);
     if (member?.role !== "member") return;
-    const task = memberTasks(orchestrator.snapshot(), memberId)[0];
-    if (task && await ensureOpenSession(task.sessionId)) {
-      await onSelectHistorySession(task.sessionId);
-      return;
-    }
-    workspaceSessionRequest.current++;
-    workspaceNavigation.cancel();
-    monoViewRequest.current++;
-    setSearchViewOpen(false);
-    setInboxViewOpen(false);
-    setNotesViewOpen(false);
-    setAutomationsViewOpen(false);
-    setSettingsOpen(false);
-    setMonoActivity(null);
-    const view = memberDetailsView(memberId);
-    monoViewIdRef.current = view;
-    setMonoViewId(view);
-    setComposerFocused(false);
-  }, [onSelectHistorySession, ensureOpenSession, workspaceNavigation.cancel]);
+    await onOpenMono(memberId);
+  }, [onOpenMono]);
 
   const restoredMonoView = useRef(false);
   useEffect(() => {
@@ -4864,7 +4844,7 @@ function Workspace({
     restoredMonoView.current = true;
     const view = monoViewIdRef.current;
     const mono = monoForView(view);
-    if (mono && !view?.startsWith("mono-member:")) void onOpenMono(mono.id);
+    if (mono) void onOpenMono(mono.id);
   }, [onOpenMono]);
 
   const openReminderSession = useCallback(
@@ -6673,6 +6653,8 @@ function Workspace({
 
   const onRuntimeModeChange = useCallback(
     (sessionId: string, runtimeMode: RuntimeMode) => {
+      const mono = monoForSession(sessionId);
+      if (mono) updateMono(mono.id, current => ({ ...current, runtimeMode }));
       setSessions((prev) =>
         prev.map((s) => (s.id === sessionId ? { ...s, runtimeMode } : s)),
       );
@@ -6791,6 +6773,17 @@ function Workspace({
       // Output already received belongs before the submitted user message.
       // Flush before reading the session too, since pending errors can settle it.
       flushHarnessEvents();
+      if (!options?.queuedMessageId && !options?.managed) {
+        const current = sessionsRef.current.find(session => session.id === sessionId);
+        const accepted = current && sendDraftOnce(current, text, attachments, options?.draftBlockId, options?.appRequestId);
+        if (accepted) {
+          const next = sessionsRef.current.map(session => session.id === sessionId ? accepted : session);
+          sessionsRef.current = next;
+          setSessions(next);
+          return true;
+        }
+        if (options?.draftBlockId) return false;
+      }
       if (isHabitRun(sessionId) && !options?.managerTurnPrepared) {
         const owner = findMono(habitRunMono(sessionId) ?? "");
         if (owner?.role === "manager") return (async () => {
@@ -6892,7 +6885,7 @@ function Workspace({
               },
             );
             if (!accepted) {
-              if (!options?.managed)
+              if (!options?.managed && !options?.queuedMessageId)
                 saveDraftRef.current(sessionId, text, attachments);
               for (const entry of prepared)
                 await orchestrator.endManagerTurn(entry.id, entry.turnId, {
@@ -6903,7 +6896,7 @@ function Workspace({
             }
             return accepted;
           } catch (error) {
-            if (!options?.managed)
+            if (!options?.managed && !options?.queuedMessageId)
               saveDraftRef.current(sessionId, text, attachments);
             for (const entry of prepared)
               await orchestrator.endManagerTurn(entry.id, entry.turnId, {
@@ -7001,6 +6994,7 @@ function Workspace({
       let current = options?.buildTarget
         ? withPlanBuildTarget(draftCleared, options.buildTarget)
         : draftCleared;
+      current = { ...current, runtimeMode: monoRuntimeMode(monoForSession(sessionId) ?? findMono(habitRunMono(sessionId) ?? ""), current.runtimeMode) };
       const editedResend = options?.resendEdited
         ? createEditedResendAttempt(current, options.onResendRejected)
         : undefined;
@@ -7544,6 +7538,7 @@ function Workspace({
             const titled = isFirstTurn ? titleSeed : selected.title;
             let next: Session = {
               ...selected,
+              runtimeMode: current.runtimeMode,
               providerAccountId,
               usageLimit: undefined,
               worktreePreparing: createDraftWorktree
@@ -8059,6 +8054,8 @@ function Workspace({
               runtimeMode: current.runtimeMode,
               intent: intent === "orchestrate" ? "plan" : intent,
               monoSession: isMonoSession(sessionId),
+              orgMonoId: (monoForSession(sessionId) ?? findMono(habitRunMono(sessionId) ?? "") ??
+                findMono(orchestrator.forSession(sessionId)?.tasks.find(task => task.sessionId === sessionId)?.memberId ?? ""))?.id,
               orgMono: ["orchestrator", "manager", "member"].includes(
                 (monoForSession(sessionId) ?? findMono(habitRunMono(sessionId) ?? "") ??
                   findMono(orchestrator.forSession(sessionId)?.tasks.find(task => task.sessionId === sessionId)?.memberId ?? ""))?.role ?? "",
@@ -8067,7 +8064,7 @@ function Workspace({
               // orchestration leads retain their separate control access.
               controlsAgents:
                 operatorAccess ||
-                orchestrator.run(sessionId)?.status === "active",
+                orchestrator.forSession(sessionId)?.status === "active",
               appAccess:
                 operatorAccess ||
                 !!orchestrator
@@ -9080,6 +9077,7 @@ function Workspace({
               head.attachments,
               {
                 queuedMessageId: head.id,
+                appRequestId: head.appRequestId,
                 followUpBehavior: steering ? "steer" : undefined,
                 noteCard: head.noteCard,
                 handoffCard: head.handoffCard,
@@ -9240,6 +9238,7 @@ function Workspace({
       onSubmit(sessionId, message.text, message.attachments, {
         followUpBehavior: "steer",
         queuedMessageId: message.id,
+        appRequestId: message.appRequestId,
         noteCard: message.noteCard,
         handoffCard: message.handoffCard,
         intent: message.intent,
@@ -10249,7 +10248,7 @@ function Workspace({
   );
 
   const onStop = useCallback(
-    (sessionId: string, managed = false) => {
+    (sessionId: string, managed = false, preserveQueue = false) => {
       const remote = sessionsRef.current.find((s) => s.id === sessionId);
       if (remote && remoteProjectFor(remote.cwd)) {
         remoteSessionActions(sessionId)?.stop();
@@ -10278,7 +10277,7 @@ function Workspace({
             ? completeHandoff(stopped, buildDeterministicHandoff(stopped))
             : stopped;
           const ready = { ...completed, worktreePreparing: undefined };
-          return ready.queuedMessages?.length
+          return ready.queuedMessages?.length && !preserveQueue
             ? { ...ready, queueStatus: "paused" }
             : ready;
         }),
@@ -10383,6 +10382,7 @@ function Workspace({
         remoteSessionActions(sessionId)?.approve(requestId, decision);
         return;
       }
+      if (!session.blocks.some(block => block.approval?.requestId === requestId && !block.approval.decided)) return;
       respondHarnessApproval(session.harness, sessionId, requestId, decision);
     },
     [],
@@ -10396,6 +10396,7 @@ function Workspace({
         remoteSessionActions(sessionId)?.answer(requestId, reply);
         return;
       }
+      if (session.pendingQuestion?.requestId !== requestId) return;
       respondHarnessQuestion(session.harness, sessionId, requestId, reply);
     },
     [],
@@ -10439,6 +10440,18 @@ function Workspace({
   useEffect(() => {
     setSessions((prev) => attachOrchestrationWorkers(prev, orchestrationRuns));
   }, [orchestrationRuns]);
+
+  useEffect(() => {
+    for (const id of new Set(orchestrationRuns.flatMap(run => run.tasks.flatMap(task => task.memberId ? [task.memberId] : [])))) {
+      const member = findMono(id);
+      if (member?.role !== "member" || member.sessionId) continue;
+      void ensureMonoSession(id, {
+        home: homeDir, load: ensureOpenSession,
+        create: path => newDefaultSession(path, sessionDefaults?.runtimeMode),
+        add: session => { sessionsRef.current = [...sessionsRef.current, session]; setSessions(sessionsRef.current); },
+      }).catch(error => console.error("Member chat creation retained for retry", error));
+    }
+  }, [orchestrationRuns, monosSnap, ensureOpenSession, sessionDefaults?.runtimeMode]);
 
   useEffect(() => {
     const next = consolidateOrchestrationTabs(
@@ -10858,6 +10871,12 @@ function Workspace({
         notifyReviewChanged(task.sessionId);
         return true;
       },
+      resumeQueue: (id) => {
+        const session = sessionsRef.current.find(entry => entry.id === id);
+        if (!session || session.busy || !session.queuedMessages?.length) return false;
+        onResumeQueue(id);
+        return session.queueStatus === "paused" || session.queueStatus === "active";
+      },
       submit: (id, text, done) => {
         void submitWithSettlement({
           submit: (onSettled) => {
@@ -10918,9 +10937,9 @@ function Workspace({
         if (session)
           respondHarnessQuestion(session.harness, id, requestId, reply);
       },
-      stop: async (id) => {
+      stop: async (id, reason) => {
         const session = sessionsRef.current.find((entry) => entry.id === id);
-        onStop(id, true);
+        onStop(id, true, reason === "refresh");
         try {
           if (session)
             await Promise.all(
@@ -10936,7 +10955,7 @@ function Workspace({
         }
       },
     });
-  }, [checkOpenWorktreeFiles, submitSession, onStop, flushHarnessEvents]);
+  }, [checkOpenWorktreeFiles, submitSession, onStop, onResumeQueue, flushHarnessEvents]);
 
   useEffect(() => {
     // Restored managers must recover even when another project/pane is selected.
@@ -11431,6 +11450,7 @@ function Workspace({
     }>("monocode-control-request", ({ payload }) => {
       const handle = async () => {
         if (payload.namespace === "control") {
+          if (payload.input.origin != null) throw new Error("Task origin is assigned by MonoCode, not by agents");
           const sourceSessionId = payload.sessionId;
           const mono =
             monoForSession(payload.sessionId) ??
@@ -11541,7 +11561,7 @@ function Workspace({
                 (session) => session.id === sourceSessionId,
               )?.busy ||
               !origin ||
-              (origin.kind === "event" && !payload.input.monoGoalId)
+              (origin.kind === "event" && !payload.input.monoGoalId && !payload.input.reviewTaskId)
             )
               throw new Error(
                 "Reports cannot start new work; message an existing goal instead",
@@ -11606,6 +11626,39 @@ function Workspace({
           (orchestrator.run(source.id) && !monoForSession(source.id))
         )
           throw new Error("This session cannot use the MonoCode app CLI");
+        if (payload.action === "tasks.request") {
+          const member = monoForSession(source.id);
+          if (!source.busy || member?.role !== "member") throw new Error("Work requests require an active member chat");
+          return requestMemberWork(listMonos(), member.id, monoGoalOrigins.get(source.id), payload.requestId, payload.input, {
+            delegate: async (manager, requestId, input) => {
+              const target = await ensureMonoSession(manager.id, {
+                home: homeDir, load: ensureOpenSession,
+                create: path => newDefaultSession(path, sessionDefaults?.runtimeMode),
+                add: session => { sessionsRef.current = [...sessionsRef.current, session]; setSessions(sessionsRef.current); },
+              });
+              if (!target) throw new Error("Manager conversation is unavailable");
+              const project = manager.managerProject ?? manager.projects[0];
+              const id = await monoEngineId(manager, project);
+              orchestrator.registerMonoEngine(id, target.id, manager.id, project);
+              await orchestrator.hydrate(id);
+              if (!orchestrator.run(id)) {
+                await probeHarnessAvailability();
+                await orchestrator.start(id, HARNESSES.filter(isHarnessAvailable), 4, undefined, true);
+              }
+              if (orchestrator.run(id)?.status !== "active") throw new Error("Manager needs Continue before new work can start");
+              return orchestrator.handle(id, requestId, "delegate", input);
+            },
+            notify: async (manager, member, receipt, requestId) => {
+              const id = findMono(manager.id)?.sessionId;
+              if (!id) throw new Error("Manager conversation disappeared; retry to deliver the existing task receipt");
+              await queueMonoSessionCompletion(id, completionMessage(`member-work-${member.id}-${requestId}`, [{
+                sessionId: source.id, project: manager.projects[0], title: `From user via ${monoLook(member).name}`,
+                status: "completed", originalPrompt: "The user assigned work directly to this member. Monitor this existing task, review its output with the Reviewer and retain the PR gate. Do not duplicate the task or create a new goal.",
+                result: JSON.stringify(receipt), truncated: false,
+              }]));
+            },
+          });
+        }
         if ((MANAGER_ACTIONS as readonly string[]).includes(payload.action)) {
           const mono =
             monoForSession(source.id) ??
@@ -11845,6 +11898,11 @@ function Workspace({
                 orchestrator.run(id)
               )
                 throw new Error("Session is unavailable in this project");
+              const queued = target.queuedMessages?.find(message => message.appRequestId === requestId);
+              if (queued) {
+                if (queued.text !== prompt) throw new Error("Request ID was already used with another prompt");
+                return { alreadySubmitted: true };
+              }
               const previous = target.blocks.find(
                 (block) => block.appRequestId === requestId,
               );
@@ -11857,9 +11915,11 @@ function Workspace({
                   throw new Error("Request ID belongs to an unsent draft");
                 return { alreadySubmitted: true };
               }
-              if (target.busy)
+              const pendingDraft = sessionDraftBlock(target);
+              const matchingDraft = pendingDraft?.text === prompt && !pendingDraft.attachments?.length;
+              if (target.busy && !matchingDraft)
                 throw new Error("Session is busy; try again when it finishes");
-              if (sessionDraftBlock(target))
+              if (pendingDraft && !matchingDraft)
                 throw new Error(
                   "Session already has a draft; send or remove it first",
                 );
@@ -13489,7 +13549,6 @@ function Workspace({
 
   // Renames, mascot picks and new projects show up on the rail.
   const monoViewMono = monoViewId ? monoForSession(monoViewId) : undefined;
-  const memberDetailsMono = monoViewId?.startsWith("mono-member:") ? monoForView(monoViewId) : undefined;
   const selectedMonoActivity = resolveMonoActivity(
     monoActivity,
     monoViewSession,
@@ -13498,6 +13557,8 @@ function Workspace({
   const monoDetailsPanel =
     monoViewMono && monoViewSession ? (
       <MonoDetails
+        teamActivity={monoViewMono.role === "orchestrator" || monoViewMono.role === "manager" ? <MonoTeamActivity monoId={monoViewMono.id} sessions={sessions} runs={orchestrationRuns} statuses={managerPrStatuses} onApproval={onApproval} onQuestion={onQuestionReply} onQuestionInteraction={onQuestionInteraction} /> : undefined}
+        toolActivityOpen={!!monoActivity}
         teamRequest={monoTeamRequest}
         key={monoViewMono.id}
         open={monoSidebarOpen}
@@ -13515,6 +13576,8 @@ function Workspace({
           onOpenDiff,
         } : undefined}
         monoId={monoViewMono.id}
+        runtimeMode={monoRuntimeMode(monoViewMono, monoViewSession.runtimeMode)}
+        onRuntimeModeChange={mode => onRuntimeModeChange(monoViewSession.id, mode)}
         cwd={monoViewSession.cwd}
         agent={monoLook(monoViewMono)}
         state={monoState(monoViewSession)}
@@ -13543,32 +13606,9 @@ function Workspace({
       if (mono.sessionId && unseenFinishedIds.has(mono.sessionId))
         unseen.add(mono.id);
     }
-    for (const manager of listMonos().filter(
-      (mono) => mono.role === "manager",
-    )) {
-      const blocked = orchestrationRuns.some(
-        (run) =>
-          run.ownerMonoId === manager.id &&
-          run.tasks.some(
-            (task) =>
-              ["blocked", "failed", "interrupted"].includes(task.status) ||
-              sessions.find((session) => session.id === task.sessionId)
-                ?.pendingQuestion,
-          ),
-      );
-      if (blocked)
-        states.set(manager.id, {
-          status: "needs-you",
-          activity: "A team member needs attention",
-        });
-      if (
-        (blocked || states.get(manager.id)?.status === "needs-you") &&
-        manager.reportsTo
-      )
-        states.set(manager.reportsTo, {
-          status: "needs-you",
-          activity: "A Manager needs attention",
-        });
+    for (const mono of listMonos().filter(mono => mono.role)) {
+      const count = teamDecisions(listMonos(), sessions, orchestrationRuns, mono.id).length;
+      if (count) states.set(mono.id, { status: "needs-you", activity: `${count} pending decision${count === 1 ? "" : "s"}` });
     }
     return { states, unseen };
     // The roster is read through its snapshot.
@@ -13592,7 +13632,7 @@ function Workspace({
       tabs={monoCovers ? NO_TITLE_TABS : titleTabs}
       mono={
         monoCovers && monoViewMono && monoViewSession
-          ? { look: monoLook(monoViewMono), state: monoState(monoViewSession) }
+          ? { look: monoLook(monoViewMono), state: monoRail.states.get(monoViewMono.id) ?? monoState(monoViewSession) }
           : undefined
       }
       onShowMonoDetails={
@@ -14076,13 +14116,6 @@ function Workspace({
                                 </div>
                               </div>
                             ))}
-                            {memberDetailsMono && (
-                              <div data-member-details={memberDetailsMono.id} className="absolute inset-0 flex min-h-0 flex-col overflow-y-auto bg-background">
-                                <MemberDetails key={memberDetailsMono.id} member={memberDetailsMono}
-                                  fallback={{ harness: sessionDefaults.harness, model: sessionDefaults.model, modelSettings: sessionDefaults.modelSettings }}
-                                  onBack={() => { const manager = findMono(memberDetailsMono.reportsTo ?? ""); if (manager) void onOpenMono(manager.id); else closeMonoView(); }} />
-                              </div>
-                            )}
                             {sessions
                               .filter((session) => isMonoSession(session.id))
                               .map((session) => {

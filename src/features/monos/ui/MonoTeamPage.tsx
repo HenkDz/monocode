@@ -129,7 +129,7 @@ export function MonoTeamPage({
               try {
                 void monoTeamHost(monoId, true).then(host => handleMonoTeam(monoId, crypto.randomUUID(), "team.hire", {
                   name, specialty, soul: `# ${name}\n\nWork as the ${specialty} for this project. Follow the Manager's task scope, verify your work and report evidence.`,
-                  ...fallback,
+                  ...(specialty.trim().toLowerCase() === "reviewer" ? {} : fallback),
                 }, host)).then(() => { setName(""); setSpecialty(""); setError(undefined); }).catch(error => setError(String(error)));
               } catch (error) {
                 setError(String(error));

@@ -262,9 +262,9 @@ export function listMonos(includeArchived = false): Mono[] {
   });
 }
 
-function saveRoster(roster: readonly Mono[], strict = false): void {
+function saveRoster(roster: readonly Mono[], strict = false, emptyTeamUndoManagerId?: string): void {
   validateMonoOrg(roster);
-  validateMonoOrgTransition(listMonos(true), roster);
+  validateMonoOrgTransition(listMonos(true), roster, emptyTeamUndoManagerId);
   try {
     localStorage.setItem(ROSTER_KEY, JSON.stringify(roster));
   } catch (error) {
@@ -499,8 +499,8 @@ export function updateMono(
 }
 
 /** Team changes must fail visibly if durable storage is unavailable. */
-export function saveMonoTeamRoster(roster: readonly Mono[]): void {
-  saveRoster(roster, true);
+export function saveMonoTeamRoster(roster: readonly Mono[], emptyTeamUndoManagerId?: string): void {
+  saveRoster(roster, true, emptyTeamUndoManagerId);
 }
 
 /** Forgets the Mono and its background. Its folder of files stays on disk. */

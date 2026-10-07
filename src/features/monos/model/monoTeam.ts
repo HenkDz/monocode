@@ -1,7 +1,7 @@
 import { HARNESSES, type HarnessId } from "../../sessions/model/session";
 import { PROJECT_MASCOTS } from "../../projects/model/projectMascots";
 import { listMonos, nextMonoLook, saveMonoTeamRoster, type Mono } from "./mono";
-import { assertDirectReport, validateMonoOrg, isTeamReviewer } from "./monoOrg";
+import { assertDirectReport, validateMonoOrg, validateMonoOrgTransition, isTeamReviewer } from "./monoOrg";
 export { isTeamReviewer } from "./monoOrg";
 import { readAgentFile, writeAgentFile, MonoFileConflict, MEMORY_MAX_BYTES, MEMORY_MAX_LINES, type AgentFilePath } from "./monoFiles";
 import { addMemoryEntry, memoryDate, memoryEntry, memoryLines } from "./monoMemory";
@@ -18,6 +18,8 @@ export type TeamChange = {
   memberId: string;
   memberName: string;
   summary: string;
+  warning?: string;
+  priorMemberIds?: string[];
   at: number;
   state: "pending" | "applied" | "failed";
   error?: string;
@@ -66,6 +68,27 @@ export function validateTeamProfile(profile: Mono["workerProfile"], available: T
   if (profile.modelSettings && (Object.entries(profile.modelSettings).length > 16 || Object.entries(profile.modelSettings).some(([key, value]) => !key || key.length > 100 || typeof value !== "string" || value.length > 1000)))
     throw Error("modelSettings must contain at most 16 short string values");
   return profile;
+}
+
+type WorkerProfile = NonNullable<Mono["workerProfile"]>;
+function modelFamily(profile: WorkerProfile): string {
+  return profile.model.toLowerCase().replace(/^[^:]+:/, "").split(/[-._/]/)[0];
+}
+
+export function defaultReviewerProfile(profile: WorkerProfile, implementers: readonly WorkerProfile[], available: TeamHost["availableProfiles"], lockedFields: readonly string[] = []): WorkerProfile {
+  if (lockedFields.some((field) => ["harness", "model", "modelSettings"].includes(field))) return profile;
+  const distinct = (candidate: WorkerProfile) => implementers.every((builder) => candidate.harness !== builder.harness || modelFamily(candidate) !== modelFamily(builder));
+  const installed = available.some(entry => entry.harness === profile.harness && entry.models.includes(profile.model));
+  if (installed && distinct(profile)) return profile;
+  const choices = available.flatMap((entry) => entry.models.map((model) => ({ harness: entry.harness, model })));
+  return choices.find((candidate) => implementers.every((builder) => candidate.harness !== builder.harness)) ?? choices.find(distinct) ?? (installed ? profile : choices[0] ?? profile);
+}
+
+export function reviewerModelWarning(member: Mono, roster: readonly Mono[]): string | undefined {
+  if (!isTeamReviewer(member) || !member.workerProfile) return;
+  const implementers = roster.filter((mono) => mono.id !== member.id && mono.role === "member" && mono.reportsTo === member.reportsTo && mono.archivedAt == null && !isTeamReviewer(mono));
+  if (implementers.some((builder) => builder.workerProfile && builder.workerProfile.harness === member.workerProfile!.harness && modelFamily(builder.workerProfile) === modelFamily(member.workerProfile!)))
+    return "Reviewer uses the same model as implementers";
 }
 
 export function assertTeamUpdateUnlocked(member: Mono, input: Record<string, unknown>): void {
@@ -253,14 +276,18 @@ export function handleMonoTeam(managerId: string, requestId: string, action: str
     if (action === "team.hire") {
       assertTeamCapacity(roster, manager);
       const soul = validateTeamSoul(input.soul);
-      if (typeof input.harness !== "string" || typeof input.model !== "string") throw Error("team.hire requires harness and model from models.list");
+      const reviewer = input.reviewer === true || typeof input.specialty === "string" && input.specialty.trim().toLowerCase() === "reviewer";
+      if ((input.harness === undefined) !== (input.model === undefined) || !reviewer && (typeof input.harness !== "string" || typeof input.model !== "string")) throw Error("team.hire requires harness and model from models.list");
+      const implementers = roster.filter((mono) => mono.role === "member" && mono.reportsTo === managerId && mono.archivedAt == null && !isTeamReviewer(mono)).flatMap((mono) => mono.workerProfile ? [mono.workerProfile] : []);
+      const fallback = manager.workerProfile ?? host.availableProfiles.flatMap((entry) => entry.models.map((model) => ({ harness: entry.harness, model })))[0];
+      const workerProfile = input.harness === undefined ? validateTeamProfile(fallback && defaultReviewerProfile(fallback, implementers.length ? implementers : [fallback], host.availableProfiles), host.availableProfiles) : updateProfile(manager, input, host);
       const look = nextMonoLook(roster);
       const mascot = input.mascot ?? look.mascot;
       if (typeof mascot !== "string" || !PROJECT_MASCOTS.some((entry) => entry.name === mascot)) throw Error("Choose an existing mascot");
       const color = input.color ?? manager.color;
       if (typeof color !== "string" || color.length > 100 || !/^#[0-9a-fA-F]{3,8}$|^(?:hsl|rgb)a?\([\d\s.,%+-]+\)$/.test(color)) throw Error("Choose a project color");
       if (input.reviewer !== undefined && typeof input.reviewer !== "boolean") throw Error("reviewer must be a boolean");
-      after = { id: crypto.randomUUID(), name: shortText(input.name, "name"), specialty: shortText(input.specialty, "specialty"), role: "member", reportsTo: managerId, projects: [...manager.projects], origin: "manager", reviewer: input.reviewer === true, mascot, color, workerProfile: updateProfile(manager, input, host) };
+      after = { id: crypto.randomUUID(), name: shortText(input.name, "name"), specialty: shortText(input.specialty, "specialty"), role: "member", reportsTo: managerId, projects: [...manager.projects], origin: "manager", reviewer: input.reviewer === true, mascot, color, workerProfile };
       files.soul = { before: "", after: soul };
       if (input.memory !== undefined && !(Array.isArray(input.memory) && input.memory.length === 0)) files.memory = { before: "", after: addTeamMemory("", input.memory) };
     } else {
@@ -283,6 +310,8 @@ export function handleMonoTeam(managerId: string, requestId: string, action: str
       }
     }
     const change: TeamChange = { id: crypto.randomUUID(), requestId, fingerprint, action, memberId: after.id, memberName: after.name ?? after.specialty ?? after.id, summary: action === "team.hire" ? `Hired ${after.name} · ${after.specialty}` : action === "team.retire" ? `Retired ${after.name}: ${input.reason}` : `${action.replace("team.", "")} · ${after.name}`, at: Date.now(), state: "pending", before, after, ...(Object.keys(files).length ? { files } : {}) };
+    change.warning = reviewerModelWarning(after, roster);
+    if (action === "team.hire") change.priorMemberIds = roster.filter((mono) => mono.role === "member" && mono.reportsTo === managerId && mono.archivedAt == null).map((mono) => mono.id);
     saveChange(managerId, change);
     const applied = await finishChange(managerId, change, host);
     return { member: applied.after, changeId: applied.id };
@@ -307,57 +336,200 @@ export function setTeamSizeCap(managerId: string, size: number): void {
   saveMonoTeamRoster(roster.map((mono) => mono.id === managerId ? { ...mono, teamSizeCap: size } : mono));
 }
 
-export function undoMonoTeamChange(managerId: string, changeId: string, host: TeamHost): Promise<void> {
+export function undoMonoTeamChange(
+  managerId: string,
+  changeId: string,
+  host: TeamHost,
+): Promise<void> {
+  return undoMonoTeamChanges(managerId, [changeId], host);
+}
+
+export function undoMonoTeamChanges(
+  managerId: string,
+  changeIds: readonly string[],
+  host: TeamHost,
+): Promise<void> {
   return serialized(managerId, async () => {
     const roster = listMonos(true);
     const manager = assertTeamManager(roster, managerId);
-    const change = manager.teamChanges?.find((entry) => entry.id === changeId);
-    if (!change || change.state !== "applied") throw Error("Choose an applied team change");
-    if (change.undoneAt) return;
-    const member = roster.find((mono) => mono.id === change.memberId && mono.role === "member" && mono.reportsTo === managerId);
-    if (!member) throw Error("This team member is no longer available");
-    let restored: Mono;
-    if (!change.before) {
-      assertTeamRetire(roster, managerId, member.id);
-      await host.cancelMemberTasks(member.id);
-      restored = { ...member, archivedAt: Date.now() };
-    } else {
-      restored = { ...member };
-      for (const key of ["name", "specialty", "workerProfile", "archivedAt"] as const) {
-        if (JSON.stringify(change.before[key]) === JSON.stringify(change.after[key])) continue;
-        if (JSON.stringify(member[key]) !== JSON.stringify(change.after[key])) throw Error("This member changed since that action; Undo would overwrite a newer edit");
-        if ((key === "name" || key === "specialty") && member.userLockedFields?.includes(key) || key === "workerProfile" && (["harness", "model", "modelSettings"] as const).some((field) => JSON.stringify(change.before?.workerProfile?.[field]) !== JSON.stringify(change.after.workerProfile?.[field]) && member.userLockedFields?.includes(field))) throw Error("Undo cannot overwrite a user-locked field");
-        Object.assign(restored, { [key]: change.before[key] });
+    const ids = new Set(changeIds);
+    const selected = (manager.teamChanges ?? []).filter((change) =>
+      ids.has(change.id),
+    );
+    if (
+      !ids.size ||
+      selected.length !== ids.size ||
+      selected.some((change) => change.state !== "applied")
+    )
+      throw Error("Choose an applied team change");
+    const changes = selected.filter((change) => !change.undoneAt).reverse();
+    if (!changes.length) return;
+    let restoredRoster = [...roster];
+    const pending = new Map<
+      string,
+      { memberId: string; path: AgentFilePath; text: string; hash: string }
+    >();
+    for (const change of changes) {
+      const member = restoredRoster.find(
+        (mono) =>
+          mono.id === change.memberId &&
+          mono.role === "member" &&
+          mono.reportsTo === managerId,
+      );
+      if (!member) throw Error("This team member is no longer available");
+      const restored = { ...member };
+      if (!change.before) restored.archivedAt = Date.now();
+      else {
+        for (const key of [
+          "name",
+          "specialty",
+          "workerProfile",
+          "archivedAt",
+        ] as const) {
+          if (
+            JSON.stringify(change.before[key]) ===
+            JSON.stringify(change.after[key])
+          )
+            continue;
+          if (JSON.stringify(member[key]) !== JSON.stringify(change.after[key]))
+            throw Error(
+              "This member changed since that action; Undo would overwrite a newer edit",
+            );
+          if (
+            ((key === "name" || key === "specialty") &&
+              member.userLockedFields?.includes(key)) ||
+            (key === "workerProfile" &&
+              (["harness", "model", "modelSettings"] as const).some(
+                (field) =>
+                  JSON.stringify(change.before?.workerProfile?.[field]) !==
+                    JSON.stringify(change.after.workerProfile?.[field]) &&
+                  member.userLockedFields?.includes(field),
+              ))
+          )
+            throw Error("Undo cannot overwrite a user-locked field");
+          Object.assign(restored, { [key]: change.before[key] });
+        }
       }
-      if (member.archivedAt != null && restored.archivedAt == null) assertTeamCapacity(roster, manager);
-      assertReviewerRetained(roster, member, restored);
+      for (const key of ["soul", "memory"] as const) {
+        const edit = change.files?.[key];
+        if (!edit || !change.before) continue; // Hired members retain their files/history when retired.
+        if (key === "soul" && member.userLockedFields?.includes("soul"))
+          throw Error("Undo cannot overwrite a user-locked soul");
+        const path = key === "soul" ? "SOUL.md" : "MEMORY.md";
+        const fileId = `${member.id}/${path}`;
+        const current =
+          pending.get(fileId) ?? (await readAgentFile(member.id, path));
+        if (
+          (current.text ?? "") !== edit.after &&
+          (current.text ?? "") !== edit.before
+        )
+          throw Error(
+            "Member files changed since that action; Undo would overwrite a newer edit",
+          );
+        pending.set(fileId, {
+          memberId: member.id,
+          path,
+          text: edit.before,
+          hash: current.hash,
+        });
+      }
+      restoredRoster = restoredRoster.map((mono) =>
+        mono.id === member.id ? restored : mono,
+      );
     }
-    const pending: { path: AgentFilePath; text: string; hash: string }[] = [];
-    for (const key of ["soul", "memory"] as const) {
-      const edit = change.files?.[key];
-      if (!edit || !change.before) continue; // Hired members retain their files/history when retired.
-      if (key === "soul" && member.userLockedFields?.includes("soul")) throw Error("Undo cannot overwrite a user-locked soul");
-      const path = key === "soul" ? "SOUL.md" : "MEMORY.md";
-      const current = await readAgentFile(member.id, path);
-      if ((current.text ?? "") !== edit.after && (current.text ?? "") !== edit.before) throw Error("Member files changed since that action; Undo would overwrite a newer edit");
-      pending.push({ path, text: edit.before, hash: current.hash });
-    }
-    for (const edit of pending) await writeAgentFile(member.id, edit.path, edit.text, edit.hash);
+    // Only the whole hire action may return a Manager to its original empty team.
+    const emptyUndo =
+      selected[0].priorMemberIds?.length === 0 &&
+      selected.every((change) => change.action === "team.hire") &&
+      !restoredRoster.some(
+        (mono) =>
+          mono.role === "member" &&
+          mono.reportsTo === managerId &&
+          mono.archivedAt == null,
+      )
+        ? managerId
+        : undefined;
+    validateMonoOrgTransition(roster, restoredRoster, emptyUndo);
+    if (
+      restoredRoster.filter(
+        (mono) =>
+          mono.role === "member" &&
+          mono.reportsTo === managerId &&
+          mono.archivedAt == null,
+      ).length > (manager.teamSizeCap ?? TEAM_DEFAULT_CAP)
+    )
+      throw Error("Undo exceeds the team size cap");
+    for (const change of changes)
+      if (!change.before) await host.cancelMemberTasks(change.memberId);
+    for (const edit of pending.values())
+      await writeAgentFile(edit.memberId, edit.path, edit.text, edit.hash);
     const latestRoster = listMonos(true);
-    const latestMember = latestRoster.find((mono) => mono.id === member.id && mono.role === "member" && mono.reportsTo === managerId);
-    if (!latestMember) throw Error("This team member is no longer available");
-    if (change.files?.soul && latestMember.userLockedFields?.includes("soul")) throw Error("Undo cannot overwrite a user-locked soul");
-    const latestRestored = { ...latestMember };
-    for (const key of ["name", "specialty", "workerProfile", "archivedAt"] as const) {
-      if (JSON.stringify(restored[key]) === JSON.stringify(member[key])) continue;
-      if (JSON.stringify(latestMember[key]) !== JSON.stringify(member[key])) throw Error("This member changed during Undo; a newer edit is retained");
-      if ((key === "name" || key === "specialty") && latestMember.userLockedFields?.includes(key) || key === "workerProfile" && (["harness", "model", "modelSettings"] as const).some((field) => JSON.stringify(restored.workerProfile?.[field]) !== JSON.stringify(member.workerProfile?.[field]) && latestMember.userLockedFields?.includes(field))) throw Error("Undo cannot overwrite a user-locked field");
-      Object.assign(latestRestored, { [key]: restored[key] });
+    for (const memberId of new Set(changes.map((change) => change.memberId))) {
+      const member = roster.find((mono) => mono.id === memberId)!;
+      const restored = restoredRoster.find((mono) => mono.id === memberId)!;
+      const latestMember = latestRoster.find(
+        (mono) =>
+          mono.id === member.id &&
+          mono.role === "member" &&
+          mono.reportsTo === managerId,
+      );
+      if (!latestMember) throw Error("This team member is no longer available");
+      if (
+        changes.some(
+          (change) =>
+            change.memberId === memberId && change.before && change.files?.soul,
+        ) &&
+        latestMember.userLockedFields?.includes("soul")
+      )
+        throw Error("Undo cannot overwrite a user-locked soul");
+      const latestRestored = { ...latestMember };
+      for (const key of [
+        "name",
+        "specialty",
+        "workerProfile",
+        "archivedAt",
+      ] as const) {
+        if (JSON.stringify(restored[key]) === JSON.stringify(member[key]))
+          continue;
+        if (JSON.stringify(latestMember[key]) !== JSON.stringify(member[key]))
+          throw Error(
+            "This member changed during Undo; a newer edit is retained",
+          );
+        if (
+          ((key === "name" || key === "specialty") &&
+            latestMember.userLockedFields?.includes(key)) ||
+          (key === "workerProfile" &&
+            (["harness", "model", "modelSettings"] as const).some(
+              (field) =>
+                JSON.stringify(restored.workerProfile?.[field]) !==
+                  JSON.stringify(member.workerProfile?.[field]) &&
+                latestMember.userLockedFields?.includes(field),
+            ))
+        )
+          throw Error("Undo cannot overwrite a user-locked field");
+        Object.assign(latestRestored, { [key]: restored[key] });
+      }
+      Object.assign(latestMember, latestRestored);
     }
-    if (latestMember.archivedAt != null && latestRestored.archivedAt == null) assertTeamCapacity(latestRoster, assertTeamManager(latestRoster, managerId));
-    assertReviewerRetained(latestRoster, latestMember, latestRestored);
-    const undone = { ...change, undoneAt: Date.now() };
-    saveChange(managerId, undone, latestRestored);
-    await host.postChange(undone);
+    const undone = changes.map((change) => ({
+      ...change,
+      undoneAt: Date.now(),
+    }));
+    const latestManager = assertTeamManager(latestRoster, managerId);
+    latestManager.teamChanges = latestManager.teamChanges?.map(
+      (change) => undone.find((entry) => entry.id === change.id) ?? change,
+    );
+    if (
+      latestRoster.filter(
+        (mono) =>
+          mono.role === "member" &&
+          mono.reportsTo === managerId &&
+          mono.archivedAt == null,
+      ).length > (latestManager.teamSizeCap ?? TEAM_DEFAULT_CAP)
+    )
+      throw Error("Undo exceeds the team size cap");
+    validateMonoOrgTransition(listMonos(true), latestRoster, emptyUndo);
+    saveMonoTeamRoster(latestRoster, emptyUndo);
+    for (const change of undone) await host.postChange(change);
   });
 }

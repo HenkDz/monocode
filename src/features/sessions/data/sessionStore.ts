@@ -51,6 +51,10 @@ import { restoreOrchestrationProposal } from "../../orchestration/model/orchestr
 
 import type { OrchestrationSummary } from "../../orchestration/model/orchestrationSummary";
 
+// Keep managed permissions in the existing durable settings JSON; providers
+// never see this storage marker after hydration.
+const READ_ONLY_SETTING = "__monocodeReadOnly";
+
 export type SessionSummary = {
   orchestrationLeadId?: string;
   orchestration?: OrchestrationSummary;
@@ -156,7 +160,9 @@ function persistableMeta(
     cwd: normalizeProjectPath(session.cwd),
     harness: session.harness,
     model: session.model,
-    modelSettings: session.modelSettings,
+    modelSettings: session.readOnly
+      ? { ...session.modelSettings, [READ_ONLY_SETTING]: "true" }
+      : session.modelSettings,
     runtimeMode: session.runtimeMode,
     title: session.title,
     ...(queuedMessages.length
@@ -947,9 +953,9 @@ function sanitizeBlock(
   const monoSource = sanitizeMonoSource(block.monoSource);
   if (monoSource) next.monoSource = monoSource;
   if (block.role === "assistant" && block.monoTeamChange && typeof block.monoTeamChange === "object") {
-    const { managerId, changeId } = block.monoTeamChange;
+    const { managerId, changeId, changeIds } = block.monoTeamChange;
     if (typeof managerId === "string" && managerId.length <= 256 && isPersistableId(managerId) && typeof changeId === "string" && changeId.length <= 256 && isPersistableId(changeId))
-      next.monoTeamChange = { managerId, changeId };
+      next.monoTeamChange = { managerId, changeId, ...(Array.isArray(changeIds) && changeIds.length <= 24 && changeIds.every(id => typeof id === "string" && id.length <= 256 && isPersistableId(id)) ? { changeIds: [...new Set(changeIds)] } : {}) };
   }
   if (block.monoCard && typeof block.monoCardOwner === "string" && block.monoCardOwner.length <= 256) {
     try { next.monoCard = parseCard(block.monoCard); next.monoCardOwner = block.monoCardOwner; } catch { /* Ignore malformed saved cards. */ }
@@ -1392,6 +1398,8 @@ function normalizeSummary(summary: SessionSummary): SessionSummary {
 }
 
 function recordToSession(record: SessionRecord): Session {
+  const { [READ_ONLY_SETTING]: readOnly, ...modelSettings } =
+    record.modelSettings && typeof record.modelSettings === "object" ? record.modelSettings : {};
   const blocks = Array.isArray(record.blocks)
     ? record.blocks
         .map((block) => sanitizeBlock(block, { hydrate: true }))
@@ -1408,10 +1416,8 @@ function recordToSession(record: SessionRecord): Session {
     cwd: record.cwd,
     harness: asHarness(record.harness),
     model: record.model,
-    modelSettings:
-      record.modelSettings && typeof record.modelSettings === "object"
-        ? record.modelSettings
-        : {},
+    modelSettings,
+    ...(readOnly === "true" ? { readOnly: true } : {}),
     runtimeMode: asRuntimeMode(record.runtimeMode),
     title: record.title,
     blocks,

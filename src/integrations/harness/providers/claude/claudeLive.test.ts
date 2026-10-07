@@ -1938,6 +1938,8 @@ describe("claude plan permissions", () => {
       intent: "plan",
     });
     await updateClaudeRuntimeMode("s1", "full-access");
+    expect(spawned[0]).toContain("--permission-mode");
+    expect(spawned[0][spawned[0].indexOf("--permission-mode") + 1]).toBe("plan");
     expect(parse().some(m => (m.request as Record<string, unknown>)?.subtype === "set_permission_mode")).toBe(false);
 
     emit({
@@ -2027,6 +2029,8 @@ describe("claude plan permissions", () => {
         ),
       "exit plan mode response",
     );
+    expect((parse().find(message =>
+      (message.response as Record<string, unknown>)?.request_id === "exit_1")?.response as Record<string, unknown>)?.response).toMatchObject({ behavior: "deny" });
     emit({ type: "result", subtype: "success", session_id: "sess_1" });
 
     // The turn must end for the session to stop being busy; until it does, the

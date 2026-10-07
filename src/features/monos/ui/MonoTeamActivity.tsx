@@ -22,7 +22,8 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { orchestrator } from "../../orchestration/model/orchestration";
 import { OrchestrationActions } from "../../orchestration/ui/OrchestrationActions";
 import { PixelMascot } from "../../projects/ui/PixelMascot";
-import { pathKey } from "../../../shared/lib/paths";
+import { pathKey, projectName } from "../../../shared/lib/paths";
+import { loadTabGroupLabels, resolveTabGroupLabel } from "../../workspace/model/tabGroups";
 
 type Props = {
   monoId: string;
@@ -203,12 +204,14 @@ export function MonoTeamActivity({
             <span className="truncate">{look.name}</span>
           </span>
           <span
-            className={`rounded px-1.5 py-0.5 ${ready ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" : section === "Needs you" || task.status === "blocked" ? "bg-amber-500/10 text-amber-600" : "bg-content/5 text-content/60"}`}
+            className={`rounded px-1.5 py-0.5 ${ready || task.completionOutcome === "no-changes" && section === "Recently finished" ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" : section === "Needs you" || task.status === "blocked" ? "bg-amber-500/10 text-amber-600" : "bg-content/5 text-content/60"}`}
           >
             {ready
               ? "PR ready"
-              : section === "Needs you"
+                : section === "Needs you"
                 ? "Needs you"
+                : task.completionOutcome === "no-changes" && section === "Recently finished"
+                  ? "Completed (no changes)"
                 : task.status === "completed" && !task.accepted
                   ? "In review"
                   : task.status}
@@ -273,16 +276,18 @@ export function MonoTeamActivity({
     (item) => !attachedDecisions.has(item.key),
   );
   const projects = new Map<string, { cwd: string; name: string }>();
+  const labels = loadTabGroupLabels();
+  const displayName = (cwd: string) => resolveTabGroupLabel(pathKey(cwd), labels, projectName(cwd));
   for (const run of teams)
     projects.set(pathKey(run.cwd), {
       cwd: run.cwd,
-      name: run.projectName ?? run.cwd,
+      name: displayName(run.cwd),
     });
   for (const item of standalone)
     if (!projects.has(pathKey(item.project)))
       projects.set(pathKey(item.project), {
         cwd: item.project,
-        name: item.project,
+        name: displayName(item.project),
       });
 
   return (
@@ -327,7 +332,7 @@ export function MonoTeamActivity({
             data-team-project={projectKey}
             aria-label={project.cwd}
           >
-            <h3 className="mb-2 truncate text-xs font-medium">
+            <h3 title={project.cwd} className="mb-2 truncate text-xs font-medium">
               {project.name}
             </h3>
             {pending.length > 0 && (

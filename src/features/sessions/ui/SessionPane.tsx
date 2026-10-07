@@ -1,11 +1,18 @@
 import { GripVertical, X } from "../../../shared/ui/icons";
 import { isProjectManager } from "../../orchestration/model/projectManager";
 import {
+  focusManagerReview,
+  managerReviewTimeline,
+  managerReviewTurn,
+} from "../../orchestration/model/projectManagerTimeline";
+import { OrchestrationActions } from "../../orchestration/ui/OrchestrationActions";
+import {
   ProjectManagerReview,
   ProjectManagerStatus,
 } from "../../orchestration/ui/ProjectManagerReview";
 import {
   memo,
+  useContext,
   useCallback,
   useEffect,
   useMemo,
@@ -553,6 +560,48 @@ const LocalSessionPane = memo(function LocalSessionPane({
     () => peekTranscriptJump(session.id),
     () => null,
   );
+  const reviewActions = useContext(OrchestrationActions);
+  const handledReview = useRef<number | undefined>(undefined);
+  const reviewVisible = useRef(visible);
+  reviewVisible.current = visible;
+  const reviewTimeline = managerReviewTimeline(
+    ownedRuns,
+    monoTranscript.blocks,
+  );
+  const openReview = useCallback(
+    async (taskId: string) => {
+      const run = orchestrationRuns.find(
+        (run) =>
+          (run.ownerSessionId ?? run.leadId) === session.id &&
+          run.tasks.some((task) => task.id === taskId),
+      );
+      const task = run?.tasks.find((task) => task.id === taskId);
+      if (!run || !task) return;
+      const turnId = managerReviewTurn(run, task, monoTranscript.blocks);
+      if (turnId && (await navigateBlock(turnId)) && reviewVisible.current)
+        focusManagerReview(taskId);
+    },
+    [orchestrationRuns, session.id, monoTranscript.blocks, navigateBlock],
+  );
+  useEffect(() => {
+    if (!visible || !navigatorReady) return;
+    const jump = (event: Event) => {
+      void openReview((event as CustomEvent<{ taskId: string }>).detail.taskId);
+    };
+    window.addEventListener("monocode:manager-review", jump);
+    return () => window.removeEventListener("monocode:manager-review", jump);
+  }, [visible, navigatorReady, openReview]);
+  useEffect(() => {
+    if (!visible || !navigatorReady || !reviewActions?.reviewTarget) return;
+    const taskId = reviewActions.reviewTarget.taskId;
+    const revision = reviewActions.reviewTarget.revision;
+    if (handledReview.current === revision) return;
+    const frame = requestAnimationFrame(() => {
+      handledReview.current = revision;
+      void openReview(taskId);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [visible, navigatorReady, reviewActions?.reviewTarget, openReview]);
   useEffect(() => {
     if (!visible || !navigatorReady || !jumpRequest) return;
     let cancelled = false;
@@ -1052,6 +1101,22 @@ const LocalSessionPane = memo(function LocalSessionPane({
                     onJumpToBottomReady={onJumpToBottomReady}
                     onRevealReady={onRevealReady}
                     onNavigateReady={onNavigateReady}
+                    turnAccessories={
+                      new Map(
+                        [...reviewTimeline].map(([turnId, runs]) => [
+                          turnId,
+                          <>
+                            {runs.map((run) => (
+                              <ProjectManagerReview
+                                key={run.leadId}
+                                run={run}
+                                historical
+                              />
+                            ))}
+                          </>,
+                        ]),
+                      )
+                    }
                     onScrollerChange={setTranscriptScroller}
                     editingLastTurn={editingLastTurn}
                     onEditLastTurn={
@@ -1063,10 +1128,16 @@ const LocalSessionPane = memo(function LocalSessionPane({
                         : undefined
                     }
                     latestTurnAccessory={
-                      mono?.role === "member" ? <MemberWorkLog member={mono} /> : ownedRuns.length ? (
+                      mono?.role === "member" ? (
+                        <MemberWorkLog member={mono} />
+                      ) : ownedRuns.length ? (
                         <>
                           {ownedRuns.map((run) => (
-                            <ProjectManagerReview key={run.leadId} run={run} />
+                            <ProjectManagerReview
+                              key={run.leadId}
+                              run={run}
+                              noticesOnly
+                            />
                           ))}
                         </>
                       ) : remote ||

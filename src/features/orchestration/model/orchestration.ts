@@ -1986,6 +1986,8 @@ export class Orchestrator {
             accepted: true,
             acceptedDispatchId: dispatchId,
             prUrl,
+            prReadyAt: latest.prReadyAt ?? Date.now(),
+            prReadyTurnId: latest.prReadyTurnId ?? this.host!.session(current.ownerSessionId ?? current.leadId)?.blocks.filter(block => block.role === "user").slice(-1)[0]?.id,
             checksSummary: checksSummary ?? latest.checksSummary,
             reviewedBy: reviewer?.name ?? "Manager",
           };

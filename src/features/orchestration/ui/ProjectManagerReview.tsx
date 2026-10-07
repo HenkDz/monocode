@@ -15,6 +15,7 @@ import {
   managerTaskMerged,
   taskPrStatus,
 } from "../model/projectManager";
+import { jumpToManagerReview } from "../model/projectManagerTimeline";
 import { orchestrator } from "../model/orchestration";
 import type {
   OrchestrationRun,
@@ -74,11 +75,7 @@ export function ProjectManagerStatus({
           className="rounded px-2 py-1 hover:bg-content/8 disabled:opacity-40 focus-visible:outline-accent"
           onClick={() => {
             if (label === "ready") {
-              const card = document.getElementById(
-                `manager-review-${tasks[0].id}`,
-              );
-              card?.scrollIntoView({ block: "center" });
-              card?.focus({ preventScroll: true });
+              jumpToManagerReview(tasks[0].id);
             } else actions?.openWorker?.(tasks[0].sessionId);
           }}
         >
@@ -89,7 +86,15 @@ export function ProjectManagerStatus({
   );
 }
 
-export function ProjectManagerReview({ run }: { run: OrchestrationRun }) {
+export function ProjectManagerReview({
+  run,
+  historical = false,
+  noticesOnly = false,
+}: {
+  run: OrchestrationRun;
+  historical?: boolean;
+  noticesOnly?: boolean;
+}) {
   const [continuing, setContinuing] = useState(false);
   const [continueError, setContinueError] = useState<string>();
   const statuses = usePrStatusCache();
@@ -101,9 +106,7 @@ export function ProjectManagerReview({ run }: { run: OrchestrationRun }) {
     const task =
       ready[(ready.findIndex((task) => task.id === id) + 1) % ready.length];
     if (!task) return;
-    const card = document.getElementById(`manager-review-${task.id}`);
-    card?.scrollIntoView({ block: "center" });
-    card?.focus({ preventScroll: true });
+    jumpToManagerReview(task.id);
   };
   useEffect(() => {
     if (actions?.reviewTarget)
@@ -132,12 +135,12 @@ export function ProjectManagerReview({ run }: { run: OrchestrationRun }) {
         }
       }}
     >
-      {run.recoveryNotice && (
+      {!historical && run.recoveryNotice && (
         <p role="status" className="text-xs text-content/60">
           {run.recoveryNotice}
         </p>
       )}
-      {run.status === "paused" && !run.recovering && (
+      {!historical && run.status === "paused" && !run.recovering && (
         <section
           id="manager-continue"
           aria-label="Manager needs your decision"
@@ -169,21 +172,35 @@ export function ProjectManagerReview({ run }: { run: OrchestrationRun }) {
           {continueError && <p role="alert">{continueError}</p>}
         </section>
       )}
-      {run.tasks
-        .filter(
-          (task) =>
-            managerPrReady(task, taskPrStatus(task, statuses)) ||
-            managerTaskMerged(task, taskPrStatus(task, statuses)),
-        )
-        .map((task) => (
-          <ReadyCard
-            key={`${task.id}:${task.acceptedDispatchId}`}
-            run={run}
-            task={task}
-            merged={managerTaskMerged(task, taskPrStatus(task, statuses))}
-            onNext={ready.length ? () => next(task.id) : undefined}
-          />
-        ))}
+      {!noticesOnly &&
+        run.tasks
+          .filter(
+            (task) =>
+              (historical && !!task.prUrl) ||
+              managerPrReady(task, taskPrStatus(task, statuses)) ||
+              managerTaskMerged(task, taskPrStatus(task, statuses)),
+          )
+          .map((task) => {
+            const pr = taskPrStatus(task, statuses);
+            const state =
+              pr && pr.url === task.prUrl && pr.state === "merged"
+                ? "Merged"
+                : pr && pr.url === task.prUrl && pr.state === "closed"
+                  ? "Closed"
+                  : managerPrReady(task, pr)
+                    ? "Ready to merge"
+                    : "Sent back";
+            return (
+              <ReadyCard
+                key={task.id}
+                run={run}
+                task={task}
+                merged={managerTaskMerged(task, taskPrStatus(task, statuses))}
+                state={state}
+                onNext={ready.length ? () => next(task.id) : undefined}
+              />
+            );
+          })}
     </div>
   );
 }
@@ -193,17 +210,20 @@ export function ReadyCard({
   task,
   merged,
   onNext,
+  state,
 }: {
   run: OrchestrationRun;
   task: OrchestrationTask;
   merged: boolean;
   onNext?: () => void;
+  state?: "Ready to merge" | "Merged" | "Closed" | "Sent back";
 }) {
   const [editing, setEditing] = useState(false);
   const actions = useContext(OrchestrationActions);
   const [message, setMessage] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string>();
+  const label = state ?? (merged ? "Merged" : "Ready to merge");
   const target = parseGithubWorkItemUrl(task.prUrl || "");
   const repo = target?.repo || "";
   const number = target?.number || 0;
@@ -268,11 +288,11 @@ export function ReadyCard({
     <section
       id={`manager-review-${task.id}`}
       tabIndex={-1}
-      aria-label={`${merged ? "Merged" : "Ready to merge"}: ${task.title}`}
-      className="rounded-xl border border-content/20 bg-content/5 p-4 font-sans text-xs shadow-sm"
+      aria-label={`${label}: ${task.title}`}
+      className="rounded-xl border border-content/20 bg-content/5 p-4 font-sans text-xs shadow-sm focus:outline-2 focus:outline-offset-2 focus:outline-accent"
     >
       <div
-        className={`mb-2 flex items-center gap-2 font-medium ${merged ? "text-violet-600 dark:text-violet-400" : "text-emerald-600 dark:text-emerald-400"}`}
+        className={`mb-2 flex items-center gap-2 font-medium ${label === "Merged" ? "text-violet-600 dark:text-violet-400" : label === "Ready to merge" ? "text-emerald-600 dark:text-emerald-400" : "text-content/60"}`}
       >
         {task.memberMascot && task.memberColor ? (
           <PixelMascot
@@ -284,10 +304,10 @@ export function ReadyCard({
         ) : (
           <ManagerAvatar
             project={run.cwd}
-            status={merged ? undefined : "ready"}
+            status={label === "Ready to merge" ? "ready" : undefined}
           />
         )}
-        <span>{merged ? "Merged" : "Ready to merge"}</span>
+        <span>{label}</span>
       </div>
       <h3 className="text-sm font-semibold text-content">{task.title}</h3>
       <p className="mt-1 text-content/60">
@@ -403,7 +423,7 @@ export function ReadyCard({
           >
             Remove worktree
           </button>
-        ) : (
+        ) : label === "Ready to merge" ? (
           <button
             type="button"
             className={button}
@@ -413,7 +433,7 @@ export function ReadyCard({
           >
             Send back
           </button>
-        )}
+        ) : null}
         {onNext && (
           <button
             type="button"
@@ -425,7 +445,7 @@ export function ReadyCard({
           </button>
         )}
       </div>
-      {editing && (
+      {editing && label === "Ready to merge" && (
         <form
           className="mt-2"
           onSubmit={(event) => {

@@ -234,6 +234,8 @@ type Props = {
   ) => void;
   /** Session-level output shown after the latest reply and before its action row. */
   latestTurnAccessory?: ReactNode;
+  /** Event output stays with its original turn as newer turns arrive. */
+  turnAccessories?: ReadonlyMap<string, ReactNode>;
   /** False while another tab is in front; local transcript state is retained. */
   visible?: boolean;
   /** Kept mounted after its pane closed. Showing it again counts as a new visit. */
@@ -290,6 +292,7 @@ function AgentTranscriptComponent({
   onRevealReady,
   onNavigateReady,
   latestTurnAccessory,
+  turnAccessories,
 
   visible = true,
   parked = false,
@@ -1306,6 +1309,7 @@ function AgentTranscriptComponent({
                     </div>
                   ))}
               {/* The accessory keeps the pane's props, which go stale once parked. */}
+              {!parked ? turnAccessories?.get(turn[0].id) : null}
               {isLastTurn && latestTurnAccessory && !parked
                 ? latestTurnAccessory
                 : null}

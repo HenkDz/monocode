@@ -9,6 +9,11 @@ import type { OrchestrationRun } from "../../orchestration/model/orchestrationSt
 import type { Mono } from "../model/mono";
 import { monoManagerGoals, type MonoManagerGoal } from "../model/monoManagerGoals";
 import { orchestrator } from "../../orchestration/model/orchestration";
+import { activityTaskTitle, activityTaskEvent, teamActivityTasks } from "../model/monoTeamActivity";
+import { OrchestrationActions } from "../../orchestration/ui/OrchestrationActions";
+import type { OrchestrationTask } from "../../orchestration/model/orchestrationState";
+import type { GitPr } from "../../../platform/tauri/fs";
+import { prStatusKey } from "../../source-control/hooks/usePrStatus";
 const roster: Mono[] = [
   { id: "o", role: "orchestrator", projects: ["/app"], mascot: "cat", color: "#abc" },
   { id: "m", role: "manager", reportsTo: "o", sessionId: "manager-chat", projects: ["/app"], managerProject: "/app", mascot: "cat", color: "#abc" },
@@ -56,4 +61,311 @@ it("groups descendant decisions once and routes inline approval to the worker se
     await act(async () => [...container.querySelectorAll("button")].find(button => button.textContent === "Continue")!.click());
     expect(resume).toHaveBeenCalledExactlyOnceWith("engine");
   } finally { resume.mockRestore(); goals.mockRestore(); await act(async () => root.unmount()); localStorage.removeItem("monocode:mono-roster"); vi.unstubAllGlobals(); }
+});
+
+// A goal remains one group even when its tasks are in different states.
+it("shows one compact task per state, groups mixed-state goals once, expands prompts and opens the ready card", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  localStorage.setItem("monocode:mono-roster", JSON.stringify(roster));
+  const prompt = Array.from(
+    { length: 40 },
+    (_, i) => `Instruction ${i + 1}`,
+  ).join("\n");
+  const base = {
+    id: "ready",
+    sessionId: "ready-worker",
+    memberId: "b",
+    monoGoalId: "shared-goal",
+    title: prompt,
+    prompt,
+    status: "completed",
+    accepted: true,
+    lastDispatchId: "dispatch",
+    acceptedDispatchId: "dispatch",
+    prUrl: "https://github.com/org/repo/pull/6",
+    result: "",
+  } as OrchestrationTask;
+  const ready = {
+    ...newSession("codex", "/app"),
+    id: base.sessionId,
+    blocks: [
+      {
+        id: "tool",
+        role: "tool" as const,
+        text: "Verbose output",
+        tool: { title: "Tests passed" },
+      },
+      { id: "private", role: "reasoning" as const, text: "Private reasoning" },
+      { id: "user", role: "user" as const, text: prompt },
+    ],
+  };
+  const runs = [
+    {
+      leadId: "engine",
+      ownerMonoId: "m",
+      ownerSessionId: "manager-chat",
+      cwd: "/app",
+      projectName: "App",
+      tasks: [
+        base,
+        {
+          ...base,
+          id: "running",
+          sessionId: "running-worker",
+          title: "Build search",
+          prompt: "A".repeat(240),
+          status: "running",
+          accepted: false,
+        },
+        {
+          ...base,
+          id: "cancelled",
+          sessionId: "cancelled-worker",
+          title: "Cancelled work",
+          status: "cancelled",
+        },
+      ],
+      dispatches: [{ id: "dispatch", startedAt: 1000, updatedAt: 11000 }],
+    },
+    {
+      leadId: "another-run",
+      ownerMonoId: "m",
+      cwd: "/app",
+      projectName: "App",
+      tasks: [base],
+      dispatches: [],
+    },
+  ] as unknown as OrchestrationRun[];
+  const goals = vi.spyOn(monoManagerGoals, "goals").mockReturnValue([
+    {
+      id: "shared-goal",
+      managerId: "engine",
+      title: "Polish search experience\n" + prompt,
+      state: "running",
+    },
+  ] as MonoManagerGoal[]);
+  const open = vi.fn();
+  const container = document.createElement("div"),
+    root = createRoot(container);
+  try {
+    await act(async () =>
+      root.render(
+        <OrchestrationActions.Provider
+          value={{
+            update: vi.fn(),
+            confirm: vi.fn(),
+            retry: vi.fn(),
+            open: vi.fn(),
+            openManagerCard: open,
+          }}
+        >
+          <MonoTeamActivity
+            monoId="o"
+            sessions={[ready]}
+            runs={runs}
+            statuses={new Map()}
+            onApproval={vi.fn()}
+            onQuestion={vi.fn()}
+            onQuestionInteraction={vi.fn()}
+          />
+        </OrchestrationActions.Provider>,
+      ),
+    );
+    expect(container.querySelectorAll("[data-team-project]")).toHaveLength(1);
+    expect(
+      container.querySelectorAll('[data-team-goal="shared-goal"]'),
+    ).toHaveLength(1);
+    expect(
+      container
+        .querySelector("[data-team-goal] > h4")
+        ?.classList.contains("line-clamp-2"),
+    ).toBe(true);
+    for (const [id, section] of [
+      ["ready", "Ready to merge"],
+      ["running", "Work in progress"],
+      ["cancelled", "Recently finished"],
+    ]) {
+      expect(
+        container.querySelectorAll(`[data-team-task="${id}"]`),
+      ).toHaveLength(1);
+      expect(
+        container
+          .querySelector(`[data-team-task="${id}"]`)
+          ?.closest("[data-team-section]")
+          ?.getAttribute("data-team-section"),
+      ).toBe(section);
+    }
+    const task = container.querySelector('[data-team-task="ready"]')!;
+    expect(task.querySelector("button")?.textContent).toBe(
+      "Polish search experience",
+    );
+    expect(task.querySelector("[data-task-event]")?.textContent).toBe(
+      "Tests passed",
+    );
+    expect(task.querySelector("svg")).not.toBeNull();
+    expect(task.textContent).toContain("10s");
+    expect(
+      [...container.querySelectorAll('[data-team-task="running"] button')].some(
+        (button) => button.textContent === "Show more",
+      ),
+    ).toBe(true);
+    const details = task.querySelector("details")!;
+    expect(details.open).toBe(false);
+    expect(
+      task
+        .querySelector("[data-task-prompt]")
+        ?.classList.contains("line-clamp-4"),
+    ).toBe(true);
+    await act(async () => details.querySelector("summary")!.click());
+    expect(details.open).toBe(true);
+    const more = [...task.querySelectorAll("button")].find(
+      (button) => button.textContent === "Show more",
+    )!;
+    await act(async () => more.click());
+    expect(more.getAttribute("aria-expanded")).toBe("true");
+    expect(
+      task
+        .querySelector("[data-task-prompt]")
+        ?.classList.contains("line-clamp-4"),
+    ).toBe(false);
+    await act(async () =>
+      [...task.querySelectorAll("button")]
+        .find((button) => button.textContent === "Review in chat")!
+        .click(),
+    );
+    expect(open).toHaveBeenCalledExactlyOnceWith("manager-chat", "ready");
+    await act(async () => more.click());
+    expect(
+      task
+        .querySelector("[data-task-prompt]")
+        ?.classList.contains("line-clamp-4"),
+    ).toBe(true);
+  } finally {
+    goals.mockRestore();
+    await act(async () => root.unmount());
+    localStorage.removeItem("monocode:mono-roster");
+    vi.unstubAllGlobals();
+  }
+});
+
+it("never uses the prompt as a title or latest event", () => {
+  const task = {
+    title: "",
+    prompt: "Entire assignment\nDo this",
+    result: "",
+  } as OrchestrationTask;
+  expect(activityTaskTitle(task, "Goal summary\nLong goal instructions")).toBe(
+    "Goal summary",
+  );
+  expect(
+    activityTaskTitle({ ...task, title: task.prompt }, "Goal summary"),
+  ).toBe("Goal summary");
+  expect(activityTaskTitle({ ...task, title: task.prompt })).toBe(
+    "Untitled task",
+  );
+  expect(
+    activityTaskTitle({ ...task, title: "Task title" }, "Goal summary"),
+  ).toBe("Task title");
+  expect(
+    activityTaskEvent(task, {
+      ...newSession("codex", "/app"),
+      blocks: [
+        { id: "old", role: "assistant", text: "Review complete\nLong report" },
+        { id: "prompt", role: "assistant", text: task.prompt },
+        { id: "reasoning", role: "reasoning", text: "Hidden thoughts" },
+        {
+          id: "internal",
+          role: "assistant",
+          text: "Internal update",
+          internal: true,
+        },
+      ],
+    }),
+  ).toBe("Review complete");
+});
+
+it("classifies pending questions, approvals, review and closed PRs into mutually exclusive sections", () => {
+  const base = {
+    id: "t",
+    title: "Task",
+    prompt: "Instructions",
+    sessionId: "worker",
+    status: "completed",
+    accepted: true,
+    lastDispatchId: "dispatch",
+    acceptedDispatchId: "dispatch",
+    prUrl: "https://github.com/org/repo/pull/6",
+    workspace: { checkoutCwd: "/app/worker", branch: "feature" },
+  } as OrchestrationTask;
+  const session = {
+    ...newSession("codex", "/app"),
+    id: "worker",
+    pendingQuestion: { requestId: 1, questions: [] },
+  };
+  const run = {
+    leadId: "engine",
+    ownerMonoId: "m",
+    cwd: "/app",
+    tasks: [
+      { ...base, memberId: "b" },
+      { ...base, memberId: "b" },
+    ],
+  } as OrchestrationRun;
+  const decisions = teamDecisions(roster, [session], [run], "o");
+  expect(
+    teamActivityTasks([run], new Map(), decisions).map((row) => row.section),
+  ).toEqual(["Needs you"]);
+  const approval = {
+    ...session,
+    pendingQuestion: undefined,
+    blocks: [
+      {
+        id: "a",
+        role: "tool" as const,
+        text: "Permission",
+        approval: { requestId: 2 },
+      },
+    ],
+  };
+  expect(
+    teamActivityTasks(
+      [run],
+      new Map(),
+      teamDecisions(roster, [approval], [run], "o"),
+    )[0].section,
+  ).toBe("Needs you");
+  const statuses = new Map([
+    [
+      prStatusKey("/app/worker", "feature"),
+      { url: base.prUrl, state: "open", isDraft: false } as GitPr,
+    ],
+  ]);
+  expect(teamActivityTasks([run], statuses, [])[0].section).toBe(
+    "Ready to merge",
+  );
+  for (const state of ["merged", "closed"] as const) {
+    statuses.set(prStatusKey("/app/worker", "feature"), {
+      url: base.prUrl,
+      state,
+    } as GitPr);
+    expect(teamActivityTasks([run], statuses, [])[0].section).toBe(
+      "Recently finished",
+    );
+  }
+  for (const status of ["queued", "running", "completed"] as const) {
+    expect(
+      teamActivityTasks(
+        [{ ...run, tasks: [{ ...base, status, accepted: false }] }],
+        new Map(),
+        [],
+      )[0].section,
+    ).toBe("Work in progress");
+  }
+  expect(
+    teamActivityTasks(
+      [{ ...run, tasks: [{ ...base, status: "cancelled" }] }],
+      new Map(),
+      [],
+    )[0].section,
+  ).toBe("Recently finished");
 });

@@ -229,7 +229,6 @@ export function MonoDetails({
         aria-labelledby={onTabChange ? `${panelId}-${tab}` : undefined}
         className="flex min-h-0 flex-1 flex-col"
       >
-        {tab === "details" && runtimeMode && onRuntimeModeChange && <dl className="border-b border-stroke px-4 py-2"><Property label="Permissions"><AccessPicker value={runtimeMode} onChange={onRuntimeModeChange} /></Property></dl>}
         <PanelStack pages={tab === "details" ? pages : []}>
           {tab === "activity" ? (
             <div className="min-h-0 flex-1 overflow-y-auto">
@@ -240,7 +239,16 @@ export function MonoDetails({
             />}
             </div>
           ) : findMono(monoId)?.role === "member" ? (
+            <>
             <MemberDetails member={findMono(monoId)!} fallback={{ harness, model, modelSettings }} onBack={onClose} onProfileChange={profile => { onModelChange(profile.harness, profile.model); onModelSettingsChange(profile.modelSettings ?? {}); }} />
+              {runtimeMode && onRuntimeModeChange && (
+                <dl className="border-t border-stroke px-4 py-3">
+                  <Property label="Permissions">
+                    <AccessPicker value={runtimeMode} onChange={onRuntimeModeChange} />
+                  </Property>
+                </dl>
+              )}
+            </>
           ) : (
             <MonoSettingsPage
               monoId={monoId}
@@ -276,6 +284,14 @@ export function MonoDetails({
                     <Property label={label}>{control}</Property>
                   )}
                 />
+                {runtimeMode && onRuntimeModeChange && (
+                  <Property label="Permissions">
+                    <AccessPicker
+                      value={runtimeMode}
+                      onChange={onRuntimeModeChange}
+                    />
+                  </Property>
+                )}
                 <Property label="Projects">
                   {findMono(monoId)?.role === "manager" ? (
                     <span className="text-xs">{agent.projects[0]?.name}</span>

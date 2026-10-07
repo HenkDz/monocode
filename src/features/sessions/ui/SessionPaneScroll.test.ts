@@ -5,11 +5,12 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { SessionPane, type SessionPaneProps } from "./SessionPane";
 import { TranscriptPool, TranscriptPoolOutlet } from "./TranscriptPool";
 import { getMonoTranscriptPage } from "../data/sessionStore";
+import type { OrchestrationRun } from "../../orchestration/model/orchestrationState";
 
 const probes = vi.hoisted(() => ({
   composer: vi.fn(() => null),
   review: vi.fn(() => null),
-  runs: [],
+  runs: [] as OrchestrationRun[],
 }));
 
 vi.mock("./Composer", () => ({ Composer: () => null }));
@@ -17,6 +18,16 @@ vi.mock("../../monos/ui/MonoComposer", () => ({
   MonoComposer: probes.composer,
 }));
 vi.mock("./SessionReview", () => ({ SessionReview: probes.review }));
+vi.mock("../../inbox/model/githubTasks", () => ({
+  githubPrDiff: vi.fn(async () => ({ additions: 5, deletions: 0, files: [] })),
+}));
+vi.mock("../../inbox/hooks/useGithubPrChecks", () => ({
+  useGithubPrChecks: () => ({
+    loading: false,
+    error: null,
+    checks: { checks: [] },
+  }),
+}));
 vi.mock("../data/sessionStore", async (original) => ({
   ...(await original<typeof import("../data/sessionStore")>()),
   getMonoTranscriptPage: vi.fn(),
@@ -48,6 +59,7 @@ let root: Root;
 let observers: Array<{ targets: Element[]; resize: () => void }>;
 
 beforeEach(() => {
+  probes.runs = [];
   probes.composer.mockClear();
   probes.review.mockClear();
   vi.mocked(getMonoTranscriptPage).mockReset();
@@ -146,6 +158,78 @@ function props(transcriptPool?: TranscriptPool): SessionPaneProps {
     onNewTerminal: noop,
   };
 }
+
+it("reveals the archived ready turn from the status count and keeps its card out of the latest-turn footer", async () => {
+  const pane = props();
+  pane.session.monoTranscript = { before: 20, firstBlockId: "user" };
+  probes.runs = [
+    {
+      leadId: "manager",
+      ownerSessionId: "chat",
+      projectManager: true,
+      cwd: "/repo",
+      status: "active",
+      tasks: [
+        {
+          id: "docs",
+          title: "Docs",
+          sessionId: "worker",
+          harness: "codex",
+          model: "codex:test",
+          status: "completed",
+          accepted: true,
+          lastDispatchId: "dispatch",
+          acceptedDispatchId: "dispatch",
+          prUrl: "https://github.com/example/repo/pull/1",
+          prReadyTurnId: "older-user",
+          prReadyAt: 300,
+          workspace: { checkoutCwd: "/worker", branch: "docs" },
+        },
+      ],
+    },
+  ] as OrchestrationRun[];
+  vi.mocked(getMonoTranscriptPage).mockResolvedValueOnce({
+    blocks: [
+      { id: "older-user", role: "user", text: "Prepare docs", startedAt: 100 },
+      { id: "older-reply", role: "assistant", text: "Docs are ready." },
+    ],
+    before: null,
+    hasNewer: true,
+  });
+  const frames: FrameRequestCallback[] = [];
+  vi.mocked(requestAnimationFrame).mockImplementation((callback) => {
+    frames.push(callback);
+    return frames.length;
+  });
+  const scroll = vi
+    .spyOn(HTMLElement.prototype, "scrollIntoView")
+    .mockImplementation(() => {});
+  act(() => root.render(createElement(SessionPane, pane)));
+  expect(container.querySelector("#manager-review-docs")).toBeNull();
+  frames.length = 0;
+  const count = [
+    ...container.querySelectorAll<HTMLButtonElement>(
+      'nav[aria-label="Manager queue status"] button',
+    ),
+  ].find((button) => button.textContent === "1 ready")!;
+  await act(async () => count.click());
+  expect(getMonoTranscriptPage).toHaveBeenCalledWith("chat", {
+    aroundBlockId: "older-user",
+  });
+  act(() => {
+    for (const callback of frames.splice(0)) callback(0);
+  });
+  await act(async () => {});
+  const card = container.querySelector<HTMLElement>("#manager-review-docs")!;
+  expect(
+    card
+      .closest("[data-transcript-turn]")
+      ?.getAttribute("data-transcript-turn"),
+  ).toBe("older-user");
+  expect(container.querySelectorAll("#manager-review-docs")).toHaveLength(1);
+  expect(document.activeElement).toBe(card);
+  expect(scroll).toHaveBeenCalledWith({ block: "center" });
+});
 
 it("routes a Mono work-summary click to its session and selected turn", () => {
   const pane = props();

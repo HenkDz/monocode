@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { MonoDetails } from "./MonoDetails";
 import { TitleBar } from "../../../app/shell/TitleBar";
 import type { MonoPanelTab } from "./monoPanelParts";
+import { resetHarnessModelOverlays, setHarnessModels } from "../../sessions/model/models";
 
 vi.mock("../model/monoFiles", async (original) => ({
   ...(await original<object>()),
@@ -25,6 +26,13 @@ const agent = { name: "Captain", mascot: "cat", color: "#6ba", projects: [] };
 const noop = () => {};
 
 it("shows and edits the agent's permission mode in Details", async () => {
+  setHarnessModels("codex", [{
+    id: "codex:gpt-5.4", harness: "codex", name: "GPT-5.4",
+    settings: [
+      { id: "reasoningEffort", label: "Reasoning", kind: "select", value: "high", options: [{ value: "high", label: "High" }] },
+      { id: "serviceTier", label: "Service Tier", kind: "select", value: "default", options: [{ value: "default", label: "Standard" }] },
+    ],
+  }]);
   const onRuntimeModeChange = vi.fn();
   await act(async () => root.render(createElement(MonoDetails, {
     open: true, monoId: "permissions", cwd: "/repo", agent,
@@ -34,6 +42,12 @@ it("shows and edits the agent's permission mode in Details", async () => {
   })));
   const picker = container.querySelector<HTMLButtonElement>('button[aria-label="Full access"]')!;
   expect(picker).not.toBeNull();
+  const settings = picker.closest("dl")!;
+  expect([...settings.querySelectorAll("dt")].map(row => row.textContent)).toEqual([
+    "Model", "Reasoning", "Service Tier", "Permissions", "Projects",
+  ]);
+  expect(container.querySelector('[data-mono-settings]')!.contains(settings)).toBe(true);
+  expect(container.querySelectorAll('[data-access-picker-trigger]')).toHaveLength(1);
   await act(async () => picker.click());
   const option = [...document.querySelectorAll<HTMLButtonElement>('[role="option"]')].find(button => button.textContent?.includes("Supervised"))!;
   await act(async () => option.click());
@@ -47,9 +61,12 @@ it("keeps member settings inside Details and org tools collapsed below the team 
   ]));
   const props = { open: true, monoId: "member", cwd: "/repo", agent, state: { status: "idle" as const }, harness: "codex" as const, model: "codex:gpt-5.4", modelSettings: {}, onModelChange: noop, onModelSettingsChange: noop, onClose: noop };
   try {
-    await act(async () => root.render(createElement(MonoDetails, props)));
+    await act(async () => root.render(createElement(MonoDetails, { ...props, runtimeMode: "full-access", onRuntimeModeChange: noop })));
     expect(container.querySelector('[aria-label="Member specialty"]')).not.toBeNull();
     expect(container.textContent).toContain("Recent tasks");
+    const permissions = container.querySelector('[data-access-picker-trigger]')!;
+    const memberSettings = container.querySelector('[data-mono-settings]')!;
+    expect(memberSettings.compareDocumentPosition(permissions) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     await act(async () => root.render(createElement(MonoDetails, { ...props, monoId: "m", tab: "activity", teamActivity: createElement("div", null, "Live team"), activity: { blocks: [], live: false } })));
     expect(container.textContent).toContain("Live team");
     expect(container.querySelector("details")?.open).toBe(false);
@@ -72,6 +89,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   act(() => root.unmount());
+  resetHarnessModelOverlays();
   container.remove();
   vi.unstubAllGlobals();
 });

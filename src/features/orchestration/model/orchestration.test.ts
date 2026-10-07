@@ -667,9 +667,34 @@ describe("local orchestration", () => {
       taskId: task.id,
       checks: "Diff reviewed; focused tests passed",
     };
+    f.lead.blocks = [
+      {
+        id: "ready-turn",
+        role: "user",
+        text: "Implement goal one",
+        startedAt: 100,
+      },
+    ];
     await f.call("review", reviewInput, "review-once");
+    const readyAt = f.tasks()[0].prReadyAt;
+    expect(readyAt).toEqual(expect.any(Number));
+    expect(f.tasks()[0].prReadyTurnId).toBe("ready-turn");
+    f.lead.blocks.push({
+      id: "next-turn",
+      role: "user",
+      text: "Start new work",
+      startedAt: 500,
+    });
     await f.call("review", reviewInput, "review-once");
     await f.call("review", reviewInput);
+    expect(f.tasks()[0]).toMatchObject({
+      prReadyAt: readyAt,
+      prReadyTurnId: "ready-turn",
+    });
+    expect(f.saved.get("lead")?.tasks[0]).toMatchObject({
+      prReadyAt: readyAt,
+      prReadyTurnId: "ready-turn",
+    });
     expect(f.host.notifyReady).toHaveBeenCalledTimes(1);
     expect(f.tasks()[0].checksSummary).toBe(reviewInput.checks);
     expect(f.tasks()[0]).toMatchObject({
@@ -686,6 +711,14 @@ describe("local orchestration", () => {
     });
     await vi.waitFor(() => expect(f.tasks()[0].status).toBe("running"));
     expect(f.tasks()[0].accepted).toBe(false);
+    expect(f.tasks()[0]).toMatchObject({
+      prReadyAt: readyAt,
+      prReadyTurnId: "ready-turn",
+    });
+    expect(f.saved.get("lead")?.tasks[0]).toMatchObject({
+      prReadyAt: readyAt,
+      prReadyTurnId: "ready-turn",
+    });
   });
 
   it("recovers a project manager without replaying workers until explicit resume", async () => {

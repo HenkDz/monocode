@@ -111,6 +111,9 @@ export type OrchestrationTask = {
   activeDispatchId?: string;
   lastDispatchId?: string;
   acceptedDispatchId?: string;
+  /** First PR-ready event, retained when the worker receives corrections. */
+  prReadyAt?: number;
+  prReadyTurnId?: string;
 };
 
 export type OrchestrationRun = {

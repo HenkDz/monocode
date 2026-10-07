@@ -47,8 +47,7 @@ type Props = {
 /**
  * A messaging app's input for the Mono: attach, type, send, whether or not
  * it is mid-reply; Escape stops a reply. Files dropped anywhere on the chat
- * attach here. The model, permissions and checkout
- * live in the details panel instead.
+ * attach here. Permissions sit beside attach in the bottom toolbar.
  */
 export function MonoComposer({
   runtimeMode,
@@ -80,7 +79,10 @@ export function MonoComposer({
     pendingReads === 0 && (text.trim().length > 0 || attachments.length > 0);
   // Attachments sit above the field like a second line of text, so the field
   // moves above the buttons for them too.
-  const stacked = multiline || attachments.length > 0;
+  const stacked =
+    multiline ||
+    attachments.length > 0 ||
+    !!(runtimeMode && onRuntimeModeChange);
 
   useLayoutEffect(() => {
     const el = field.current;
@@ -264,15 +266,6 @@ export function MonoComposer({
               className={`${FIELD_CLASSES} col-start-2 h-0 overflow-hidden`}
             />
           </div>
-          <button
-            type="button"
-            title="Attach files"
-            aria-label="Attach files"
-            onClick={() => readAttachments(pickAttachments)}
-            className={`col-start-1 grid size-6.5 place-items-center rounded-md bg-content/8 text-content/55 hover:bg-content/12 hover:text-content ${stacked ? "row-start-2" : "row-start-1"}`}
-          >
-            <Plus className="size-3.5" strokeWidth={1.75} />
-          </button>
           <textarea
             ref={field}
             rows={1}
@@ -300,17 +293,43 @@ export function MonoComposer({
             }}
             className={`${FIELD_CLASSES} row-start-1 ${stacked ? "col-span-3 col-start-1 px-1.5" : "col-start-2"}`}
           />
-          <button
-            type="submit"
-            aria-label="Send"
-            title={pendingReads ? "Reading attachments…" : "Send"}
-            disabled={!ready}
-            className={`primary-action col-start-3 grid size-6.5 place-items-center rounded-md transition-[background-color,color,transform] duration-150 active:scale-90 disabled:cursor-default ${stacked ? "row-start-2" : "row-start-1"}`}
+          <div
+            data-mono-composer-toolbar
+            className={
+              stacked
+                ? "col-span-3 row-start-2 flex min-w-0 items-center gap-1.5"
+                : "contents"
+            }
           >
-            <ArrowUp className="size-3.5" strokeWidth={2} />
-          </button>
+            <button
+              type="button"
+              title="Attach files"
+              aria-label="Attach files"
+              onClick={() => readAttachments(pickAttachments)}
+              className={`grid size-6.5 shrink-0 place-items-center rounded-md bg-content/8 text-content/55 hover:bg-content/12 hover:text-content ${stacked ? "" : "col-start-1 row-start-1"}`}
+            >
+              <Plus className="size-3.5" strokeWidth={1.75} />
+            </button>
+            {runtimeMode && onRuntimeModeChange && (
+              <div className="flex min-w-0 flex-1 items-center [&>div]:min-w-0 [&_button]:max-w-full">
+                <AccessPicker
+                  value={runtimeMode}
+                  onChange={onRuntimeModeChange}
+                  onClose={() => field.current?.focus()}
+                />
+              </div>
+            )}
+            <button
+              type="submit"
+              aria-label="Send"
+              title={pendingReads ? "Reading attachments…" : "Send"}
+              disabled={!ready}
+              className={`primary-action grid size-6.5 shrink-0 place-items-center rounded-md transition-[background-color,color,transform] duration-150 active:scale-90 disabled:cursor-default ${stacked ? "ml-auto" : "col-start-3 row-start-1"}`}
+            >
+              <ArrowUp className="size-3.5" strokeWidth={2} />
+            </button>
+          </div>
         </div>
-        {runtimeMode && onRuntimeModeChange && <div className="flex px-1 pb-1"><AccessPicker value={runtimeMode} onChange={onRuntimeModeChange} onClose={() => field.current?.focus()} /></div>}
       </div>
     </form>
   );

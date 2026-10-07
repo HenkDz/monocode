@@ -282,9 +282,10 @@ function WebPopover({
     };
   }, [place]);
 
+  const positioned = position !== null;
   useEffect(() => {
-    if (autoFocus) surface.current?.focus();
-  }, [autoFocus]);
+    if (autoFocus && positioned) surface.current?.focus({ preventScroll: true });
+  }, [autoFocus, positioned]);
 
   useEffect(() => {
     if (!onDismiss) return;

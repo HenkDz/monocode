@@ -89,6 +89,74 @@ it("renders the regular four-mode AccessPicker chip in the Mono composer", async
   expect(container.querySelector('[aria-label="Supervised"]')).not.toBeNull();
 });
 
+it("places permissions between attach and Send below the input with a flexible center column", () => {
+  container.style.width = "260px";
+  render({ runtimeMode: "auto-accept-edits", onRuntimeModeChange: vi.fn() });
+  const layout = container.querySelector<HTMLElement>("[data-layout]")!;
+  const attach = container.querySelector('[aria-label="Attach files"]')!;
+  const picker = container.querySelector('[data-access-picker-trigger]')!;
+  const send = container.querySelector('[aria-label="Send"]')!;
+  const toolbar = container.querySelector<HTMLElement>("[data-mono-composer-toolbar]")!;
+  expect(layout.dataset.layout).toBe("multiline");
+  expect(picker.closest("[data-layout]")).toBe(layout);
+  expect(layout.className).toContain("minmax(0,1fr)");
+  expect(field().className).toContain("row-start-1");
+  expect(field().className).toContain("col-span-3");
+  expect(toolbar.className).toContain("row-start-2");
+  expect(toolbar.className).toContain("col-span-3");
+  expect(toolbar.className).toContain("min-w-0");
+  expect([...toolbar.querySelectorAll("button")]).toEqual([attach, picker, send]);
+  expect(field().compareDocumentPosition(toolbar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  const pickerCell = picker.parentElement!.parentElement!;
+  expect(pickerCell.className).toContain("min-w-0");
+  expect(pickerCell.className).toContain("flex-1");
+  expect(pickerCell.className).toContain("[&_button]:max-w-full");
+});
+
+it.each([{}, { runtimeMode: "supervised" as const }, { onRuntimeModeChange: vi.fn() }])(
+  "keeps the compact inline composer when a permissions picker is unavailable: %j",
+  (extra) => {
+    render(extra);
+    expect(container.querySelector<HTMLElement>("[data-layout]")!.dataset.layout).toBe("inline");
+    expect(container.querySelector('[data-access-picker-trigger]')).toBeNull();
+    expect(field().className).toContain("col-start-2");
+  },
+);
+
+it("returns keyboard focus to the input after changing or dismissing permissions without losing the draft", async () => {
+  const change = vi.fn();
+  const onSubmit = vi.fn(() => true);
+  const draft = vi.fn();
+  const settings = { runtimeMode: "full-access" as const, onRuntimeModeChange: change, onSubmit, onDraftChange: draft };
+  render(settings);
+  type("Keep my message");
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Attach files"]')!.click());
+  const input = field();
+  await act(async () => container.querySelector<HTMLButtonElement>('[data-access-picker-trigger]')!.click());
+  const menu = document.querySelector<HTMLElement>('[role="listbox"][aria-label="Access"]')!;
+  expect(document.activeElement).toBe(menu);
+  for (let step = 0; step < 3; step++) {
+    act(() => menu.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true })));
+  }
+  await act(async () => menu.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+  expect(change).toHaveBeenCalledExactlyOnceWith("supervised");
+  expect(document.activeElement).toBe(input);
+  expect(field()).toBe(input);
+  expect(input.value).toBe("Keep my message");
+  expect(container.querySelector('[title="/tmp/note.txt"]')).not.toBeNull();
+  expect(onSubmit).not.toHaveBeenCalled();
+  expect(draft).toHaveBeenCalledExactlyOnceWith("Keep my message");
+  render({ ...settings, runtimeMode: "supervised" });
+  await act(async () => container.querySelector<HTMLButtonElement>('[data-access-picker-trigger]')!.click());
+  await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  expect(document.querySelector('[role="listbox"][aria-label="Access"]')).toBeNull();
+  expect(document.activeElement).toBe(input);
+  expect(input.value).toBe("Keep my message");
+  expect(change).toHaveBeenCalledTimes(1);
+  act(submit);
+  expect(onSubmit).toHaveBeenCalledExactlyOnceWith("Keep my message", [file]);
+});
+
 it("consumes quotes once and adds them to the current draft", () => {
   const consumed = vi.fn();
   render();

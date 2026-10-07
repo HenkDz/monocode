@@ -14,18 +14,22 @@ vi.mock("../model/monoTeamRuntime", () => ({ monoTeamHost: vi.fn(async () => { t
 it("shows hires, opens member Details, keeps failed Undo visible, and unlocks user edits", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const member: Mono = { id: "member", name: "Docs", specialty: "Documentation", mascot: "cat", color: "#abc", projects: ["/repo"], role: "member", reportsTo: "manager", workerProfile: { harness: "codex", model: "codex:test" } };
-  saveMonoTeamRoster([{ id: "manager", name: "Manager", role: "manager", projects: ["/repo"], mascot: "cat", color: "#abc", teamChanges: [{ id: "hire", requestId: "req", fingerprint: "x", action: "team.hire", memberId: member.id, memberName: "Docs", summary: "Hired Docs", state: "applied", at: 1, after: member, files: { soul: { before: "", after: "Verify documentation links" } } }] }, member]);
+  saveMonoTeamRoster([{ id: "manager", name: "Manager", role: "manager", projects: ["/repo"], mascot: "cat", color: "#abc", teamPlanArtifactId: "team-plan-1", teamChanges: [{ id: "hire", requestId: "req", fingerprint: "x", action: "team.hire", memberId: member.id, memberName: "Docs", summary: "Hired Docs", state: "applied", at: 1, after: member, files: { soul: { before: "", after: "Verify documentation links" } } }] }, member]);
   lockMonoField(member.id, "soul");
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
   const opened = vi.fn();
+  const artifactOpened = vi.fn();
   window.addEventListener("monocode:open-team", opened);
+  window.addEventListener("monocode:open-artifact", artifactOpened);
   try {
     await act(async () => root.render(createElement("div", null, createElement(MonoTeamChangeCard, { managerId: "manager", changeId: "hire" }), createElement(MonoFieldLock, { monoId: "member", field: "soul" }))));
     expect(container.textContent).toContain("Team hired");
     expect(container.textContent).toContain("Verify documentation links");
     const button = (label: string) => [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === label)!;
+    await act(async () => button("Team plan").click());
+    expect(artifactOpened.mock.calls[0][0].detail).toEqual({ monoId: "manager", id: "team-plan-1" });
     await act(async () => button("Edit").click());
     expect(opened.mock.calls[0][0].detail).toEqual({ monoId: "member" });
     await act(async () => button("Undo").click());
@@ -35,6 +39,7 @@ it("shows hires, opens member Details, keeps failed Undo visible, and unlocks us
     expect(container.textContent).not.toContain("Set by you");
   } finally {
     act(() => root.unmount()); container.remove(); window.removeEventListener("monocode:open-team", opened); localStorage.clear(); vi.unstubAllGlobals();
+    window.removeEventListener("monocode:open-artifact", artifactOpened);
   }
 });
 

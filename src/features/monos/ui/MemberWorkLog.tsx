@@ -17,6 +17,7 @@ import { formatRelativeTime } from "../../inbox/model/githubTasks";
 import { projectName } from "../../../shared/lib/paths";
 import { cardSession, openCardSession, subscribeCardSessions } from "../model/monoCards";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { OrgArtifactLinks } from "../../artifacts/ui/OrgArtifactLinks";
 
 const expandedCards = new Map<string, boolean>();
 const tones = {
@@ -41,7 +42,7 @@ function taskStatus(
   pr?: GitPr | null,
 ): [string, keyof typeof tones] {
   if (task.status === "cancelled") return ["Cancelled", "muted"];
-  if (managerTaskFinished(task, pr) && task.completionOutcome === "no-changes") return ["Completed", "merged"];
+  if (managerTaskFinished(task, pr) && task.completionOutcome === "no-changes") return ["Completed (no changes)", "merged"];
   if (managerTaskFinished(task, pr))
     return pr?.state === "merged" ? ["Merged", "merged"] : ["Closed", "muted"];
   if (task.status === "running") return ["Running", "running"];
@@ -204,6 +205,11 @@ export function MemberWorkLog({ member }: { member: Mono }) {
                 )}
               </span>
             </button>
+            <OrgArtifactLinks monoId={member.id} links={[
+              { id: task.reportArtifactId, label: "Report" },
+              { id: task.reviewArtifactId ?? task.reviewVerdict?.artifactId, label: "Review" },
+              { id: task.prSummaryArtifactId, label: "PR summary" },
+            ]} />
             {open && (
               <div
                 id={`member-task-${task.id}`}
@@ -223,7 +229,7 @@ export function MemberWorkLog({ member }: { member: Mono }) {
                     {task.prompt}
                   </p>
                 </details>
-                {task.result && (
+                {task.result && !task.reportArtifactId && (
                   <div>
                     <div className="mb-2 text-content/60">Report</div>
                     <AgentMarkdown

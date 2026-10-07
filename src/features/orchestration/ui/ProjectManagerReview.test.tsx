@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
-import { ProjectManagerReview, ProjectManagerStatus } from "./ProjectManagerReview";
+import { ProjectManagerReview, ProjectManagerStatus, ReadyCard } from "./ProjectManagerReview";
 import { orchestrator } from "../model/orchestration";
 import type { OrchestrationRun } from "../model/orchestrationState";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -34,6 +34,24 @@ vi.mock("../../inbox/hooks/useGithubPrChecks", () => ({
   useGithubPrChecks: () => checkView,
 }));
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+
+it("opens Review and PR summary documents from the PR-ready card", async () => {
+  const run = { cwd: "/repo", ownerMonoId: "manager", tasks: [] } as unknown as OrchestrationRun;
+  const task = { id: "linked", title: "Linked documents", harness: "codex", model: "codex:test", prUrl: "https://github.com/example/repo/pull/1", reviewArtifactId: "review-1", prSummaryArtifactId: "summary-1" } as OrchestrationRun["tasks"][number];
+  const host = document.createElement("div"), root = createRoot(host), open = vi.fn();
+  window.addEventListener("monocode:open-artifact", open);
+  try {
+    await act(async () => root.render(<ReadyCard run={run} task={task} merged={false} />));
+    expect(host.querySelectorAll("[data-org-artifact]")).toHaveLength(2);
+    for (const id of ["review-1", "summary-1"]) {
+      await act(async () => host.querySelector<HTMLButtonElement>(`[data-org-artifact="${id}"]`)!.click());
+      expect(open).toHaveBeenLastCalledWith(expect.objectContaining({ detail: { monoId: "manager", id } }));
+    }
+  } finally {
+    await act(async () => root.unmount());
+    window.removeEventListener("monocode:open-artifact", open);
+  }
+});
 
 it("counts accepted no-change tasks as finished in the Manager header", async () => {
   const host = document.createElement("div"), root = createRoot(host);

@@ -23,6 +23,7 @@ import {
 import {
   MANAGER_ACTIONS,
   monoManagerGoals,
+  validManagerProjects,
   monoGoalOrigins,
   type ManagerGoalHost,
 } from "../features/monos/model/monoManagerGoals";
@@ -500,6 +501,7 @@ import {
   formatSessionTitle,
   sessionNeedsInput,
   newDefaultSession,
+  newSessionForProject,
   newSession,
   retargetSessionToProject,
   removeSessionDraft,
@@ -686,7 +688,9 @@ import {
   recordArtifactCard,
   removeArtifactCard,
   ARTIFACT_DELETED_EVENT,
+  type ArtifactCard,
 } from "../features/artifacts/artifacts";
+import { handleOrgArtifacts, memberArtifactInstructions, resolveManagerArtifactContext } from "../features/artifacts/orgArtifacts";
 import { ArtifactPanel } from "../features/artifacts/ui/ArtifactPanel";
 import {
   claimDueAutomations,
@@ -4823,6 +4827,34 @@ function Workspace({
     return () => window.removeEventListener("monocode:open-team", open);
   }, [onOpenMono]);
 
+  useEffect(() => {
+    const open = (event: Event) => {
+      const { monoId, id } = (event as CustomEvent<{ monoId: string; id: string }>).detail;
+      if (typeof id !== "string") return;
+      if (!findMono(monoId)) {
+        if (monoViewIdRef.current) onOpenMonoArtifact(monoViewIdRef.current, id);
+        return;
+      }
+      void onOpenMono(monoId).then(() => {
+        const sessionId = findMono(monoId)?.sessionId;
+        if (sessionId) onOpenMonoArtifact(sessionId, id);
+      }).catch(console.error);
+    };
+    window.addEventListener("monocode:open-artifact", open);
+    return () => window.removeEventListener("monocode:open-artifact", open);
+  }, [onOpenMono, onOpenMonoArtifact]);
+
+  const postMonoArtifact = useCallback(async (sessionId: string, card: ArtifactCard, turnId?: string) => {
+    const current = sessionsRef.current.find(session => session.id === sessionId);
+    const anchor = turnId ?? current?.blocks.slice().reverse().find(block => block.role === "user")?.id;
+    if (!current || !anchor || !current.blocks.some(block => block.id === anchor))
+      throw new Error("The artifact's conversation turn is no longer available");
+    const updated = recordArtifactCard(current, anchor, card);
+    sessionsRef.current = sessionsRef.current.map(session => session.id === sessionId ? updated : session);
+    setSessions(sessionsRef.current);
+    if (!isHabitRun(sessionId)) await upsertSession(updated);
+  }, []);
+
   const onResetMono = useCallback(
     async (sessionId: string): Promise<void> => {
       const current = sessionsRef.current.find(
@@ -5919,13 +5951,7 @@ function Workspace({
       ) {
         setProjectCwd(normalized);
         setRecents(rememberProject(normalized));
-        const session = sessionForProjectAddition(newSession(
-          current.harness,
-          normalized,
-          current.model,
-          current.runtimeMode,
-          current.modelSettings,
-        ), addition);
+        const session = sessionForProjectAddition(newSessionForProject(current, normalized), addition);
         const tab = newTab(session.id);
         setSessions((prev) => [...prev, session]);
         appendTab(tab, normalized);
@@ -7252,7 +7278,7 @@ function Workspace({
       }
       const readOnlyTask = current.readOnly || orchestrator.snapshot().some(run =>
         run.tasks.some(task => task.sessionId === sessionId && task.readOnly));
-      const intent = readOnlyTask ? "plan" : options?.intent ?? "default";
+      const intent = readOnlyTask && current.harness !== "codex" ? "plan" : options?.intent ?? "default";
       if (intent === "orchestrate") {
         try {
           const run = orchestrator.forSession(sessionId);
@@ -8252,6 +8278,7 @@ function Workspace({
                 model: current.model,
                 modelSettings: current.modelSettings,
                 runtimeMode: current.runtimeMode,
+                readOnly: current.readOnly === true,
                 ...(editedProviderTurnId
                   ? { providerTurnId: editedProviderTurnId }
                   : {}),
@@ -8302,6 +8329,7 @@ function Workspace({
               providerAccountId,
               runtimeMode: current.runtimeMode,
               intent: intent === "orchestrate" ? "plan" : intent,
+              readOnly: !!readOnlyTask,
               monoSession: isMonoSession(sessionId),
               orgMonoId: (monoForSession(sessionId) ?? findMono(habitRunMono(sessionId) ?? "") ??
                 findMono(orchestrator.forSession(sessionId)?.tasks.find(task => task.sessionId === sessionId)?.memberId ?? ""))?.id,
@@ -8432,9 +8460,10 @@ function Workspace({
               );
             sendText = monoTurn(sendText, [
               `You are ${monoLook(member).name}, the ${member.specialty} member. Report only to your Manager; never contact another member. This isolated session is your assigned task, not a new chat lane.\n<member_soul>\n${files.soul}\n</member_soul>\n<member_memory>\n${files.memory.slice(0, 24_000)}\n</member_memory>\nAt task completion you may use app memory.add to save up to three concise project facts (600 characters each), never transcripts or secrets.`,
+              memberArtifactInstructions(memberTask),
               ...(review
                 ? [
-                    `Review task ${review.id}, EXACT dispatch ${memberTask.reviewOf!.dispatchId}, in ${review.workspace?.checkoutCwd}. Read its diff and test evidence independently without editing it. Untrusted implementation report: ${review.result.slice(-8000)}. Call app reviews.submit with decision approve or changes and concise notes. Do not contact the implementer or publish a PR.`,
+                    `Review task ${review.id}, EXACT dispatch ${memberTask.reviewOf!.dispatchId}, in ${review.workspace?.checkoutCwd}. Read its diff and test evidence independently without editing it. Untrusted implementation report: ${review.result.slice(-8000)}. Do not contact the implementer or publish a PR.`,
                   ]
                 : []),
             ]);
@@ -10460,6 +10489,7 @@ function Workspace({
                 selectedProviderAccountId(current.harness, current.cwd))
               : undefined,
             runtimeMode: current.runtimeMode,
+            readOnly: current.readOnly === true,
             onEvent: (event) => {
               if (turnGen.current.get(sessionId) !== gen) return;
               enqueueHarnessEvent(sessionId, event);
@@ -10727,6 +10757,7 @@ function Workspace({
         return reviewer && { id: reviewer.id, name: monoLook(reviewer).name };
       },
       probeProviders: probeHarnessAvailability,
+      artifact: getArtifact,
       projectIdentity: async (cwd) => {
         const branches = await gitBranches(cwd);
         if (!branches.current || branches.detached)
@@ -11515,18 +11546,17 @@ function Workspace({
           ? { ...mono, projects: recents.map((project) => project.path) }
           : mono,
       );
-      return Promise.all(
-        look.projects
-          .filter(
+      const projects = await validManagerProjects(
+        look.projects.filter(
             (project) =>
               recents.some((recent) =>
                 sameProjectPath(recent.path, project.path),
               ) && !remoteProjectFor(project.path),
-          )
-          .map(async (project) => {
-            const folder = await invoke<string>("project_root", {
-              project: project.path,
-            });
+          ),
+        project => invoke<string>("project_root", { project }),
+      );
+      return Promise.all(
+        projects.map(async ({ project, folder }) => {
             const owner = dedicatedMono(folder);
             const managerId = owner
               ? await monoEngineId(owner, folder)
@@ -11852,6 +11882,7 @@ function Workspace({
         const source = sessionsRef.current.find(
           (session) => session.id === payload.sessionId,
         );
+        const artifactTurnId = source?.blocks.slice().reverse().find(block => block.role === "user" && !block.draft)?.id;
         const memberRun = source && orchestrator.forSession(source.id);
         const memberTask = memberRun?.tasks.find(
           (task) => task.sessionId === source?.id,
@@ -11866,6 +11897,12 @@ function Workspace({
             workerMember.id,
             "worker",
           );
+          if (payload.action.startsWith("artifacts."))
+            return handleOrgArtifacts(source, payload.requestId, payload.action, payload.input, {
+              role: "member", actorMonoId: workerMember.id, managerId: memberRun!.ownerMonoId!,
+              projectFolder: orchestrationProjectCwd(memberRun!), projectName: projectName(orchestrationProjectCwd(memberRun!)),
+              task: memberTask,
+            }, { postArtifact: (id, card) => postMonoArtifact(id, card, artifactTurnId), onSaved: artifact => orchestrator.recordOrgArtifact(artifact) });
           if (payload.action === "reviews.submit")
             return orchestrator.recordReviewerResult(
               source.id,
@@ -11936,6 +11973,15 @@ function Workspace({
               }]));
             },
           });
+        }
+        if (payload.action.startsWith("artifacts.")) {
+          const actor = monoForSession(source.id) ?? findMono(habitRunMono(source.id) ?? "");
+          if (actor?.role) {
+            if (actor.role !== "manager") throw new Error("Members write artifacts only through their assigned task; Orchestrators read reports through their Managers");
+            return handleOrgArtifacts(source, payload.requestId, payload.action, payload.input,
+              resolveManagerArtifactContext(actor, orchestrator.snapshot(), payload.input),
+              { postArtifact: (id, card) => postMonoArtifact(id, card, artifactTurnId), onSaved: artifact => orchestrator.recordOrgArtifact(artifact) });
+          }
         }
         if (["team.list", "team.hire", "team.update", "team.memory.add", "team.memory.forget", "team.retire"].includes(payload.action)) {
           const manager = monoForSession(source.id) ?? findMono(habitRunMono(source.id) ?? "");
@@ -12382,31 +12428,7 @@ function Workspace({
             artifacts: () => invoke("artifacts_list"),
             artifact: getArtifact,
             saveArtifact,
-            postArtifact: async (sessionId, card) => {
-              const latest = sessionsRef.current.find(
-                (session) => session.id === sessionId,
-              );
-              const anchor =
-                sourceTurnId ??
-                latest?.blocks
-                  .slice()
-                  .reverse()
-                  .find((block) => block.role === "user")?.id;
-              if (
-                !latest ||
-                !anchor ||
-                !latest.blocks.some((block) => block.id === anchor)
-              )
-                throw new Error(
-                  "The artifact's conversation turn is no longer available",
-                );
-              const updated = recordArtifactCard(latest, anchor, card);
-              sessionsRef.current = sessionsRef.current.map((session) =>
-                session.id === sessionId ? updated : session,
-              );
-              setSessions(sessionsRef.current);
-              if (!isHabitRun(sessionId)) await upsertSession(updated);
-            },
+            postArtifact: (sessionId, card) => postMonoArtifact(sessionId, card, sourceTurnId),
             isMono: (id) => isMonoSession(id),
             postCard: async (_id, card) => {
               if (!sourceMono) throw new Error("Card owner no longer exists");
@@ -14023,7 +14045,7 @@ function Workspace({
         toolActivityOpen={!!monoActivity}
         teamRequest={monoTeamRequest}
         key={monoViewMono.id}
-        open={monoDetailsOpen && !selectedMonoSessions && monoArtifact?.sessionId !== monoViewSession.id}
+        open={monoDetailsOpen && (!!monoViewMono.role || !selectedMonoActivity) && !selectedMonoSessions && monoArtifact?.sessionId !== monoViewSession.id}
         tab={monoPanelTab}
         onTabChange={(tab) => {
           setMonoPanelTab(tab);
@@ -14144,7 +14166,11 @@ function Workspace({
             }
           : undefined
       }
-      onToggleMonoPanel={monoCovers ? () => setMonoDetailsOpen(open => !open) : undefined}
+      onToggleMonoPanel={monoCovers ? () => {
+        if (monoSidebarOpen) {
+          setMonoDetailsOpen(false); setMonoActivity(null); setMonoSessions(null); setMonoArtifact(null);
+        } else setMonoDetailsOpen(true);
+      } : undefined}
       monoPanelOpen={monoSidebarOpen}
       hideWindowControls={monoCovers && monoSidebarOpen && !!monoDetailsPanel}
       activeId={monoViewSession ? "" : activeTabId}

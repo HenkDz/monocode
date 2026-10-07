@@ -216,6 +216,20 @@ describe("buildThreadStartParams / buildTurnStartParams", () => {
     },
   );
 
+  it.each(["supervised", "auto-accept-edits", "auto", "full-access"] as const)(
+    "keeps trusted read-only tasks in default conversation mode with a non-escalating sandbox despite %s",
+    runtimeMode => {
+      expect(buildThreadStartParams({ cwd: "/repo", runtimeMode, readOnly: true, controlsAgents: true })).toMatchObject({
+        approvalPolicy: "never", sandbox: "read-only", sandboxPolicy: { type: "readOnly", networkAccess: true },
+      });
+      expect(buildTurnStartParams({ threadId: "review", model: "gpt-6-sol", runtimeMode, readOnly: true,
+        controlsAgents: true, prompt: "Save the scoped review evidence" })).toMatchObject({
+        approvalPolicy: "never", sandboxPolicy: { type: "readOnly", networkAccess: true },
+        collaborationMode: { mode: "default", settings: { model: "gpt-6-sol" } },
+      });
+    },
+  );
+
   it("builds steer input with expected turn id", () => {
     const steer = buildTurnSteerParams({
       threadId: "thr_1",

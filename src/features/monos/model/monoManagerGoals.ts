@@ -4,6 +4,13 @@ import type { OrchestrationRun } from "../../orchestration/model/orchestration";
 import { managerTaskFinished } from "../../orchestration/model/projectManager";
 import { prStatusKey } from "../../source-control/hooks/usePrStatus";
 import type { GitPr } from "../../../platform/tauri/fs";
+import type { MonoProject } from "./mono";
+
+/** Non-repository recents must not hide the projects that can own a Manager. */
+export async function validManagerProjects(projects: readonly MonoProject[], resolve: (path: string) => Promise<string>): Promise<{ project: MonoProject; folder: string }[]> {
+  const roots = await Promise.allSettled(projects.map(async project => ({ project, folder: await resolve(project.path) })));
+  return roots.flatMap(result => result.status === "fulfilled" ? [result.value] : []);
+}
 
 export const MANAGER_ACTIONS = [
   "projects.list",

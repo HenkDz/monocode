@@ -140,6 +140,7 @@ export type AgentAppHost = {
   artifacts?(): Promise<Artifact[]>;
   artifact?(id: string): Promise<Artifact | null>;
   saveArtifact?(artifact: ArtifactUpsert): Promise<Artifact>;
+  authorizeArtifactWrite?(artifact: Artifact | null): void | Promise<void>;
   postArtifact?(sourceSessionId: string, card: ArtifactCard): void | Promise<void>;
   /** Whether the session is a Mono's own conversation, which owns memory. */
   isMono(sessionId: string): boolean;
@@ -838,13 +839,14 @@ function artifactKind(value: unknown): ArtifactKind {
   throw new Error('Unsupported artifact kind; only "document" is supported');
 }
 
-async function handleArtifacts(
+export async function handleArtifacts(
   source: Session,
   requestId: string,
   action: string,
   input: Record<string, unknown>,
-  host: AgentAppHost,
+  host: Pick<AgentAppHost, "isMono" | "isHabitRun" | "artifacts" | "artifact" | "saveArtifact" | "postArtifact" | "authorizeArtifactWrite">,
 ): Promise<unknown> {
+  fields(action, input);
   if (!(host.isMono(source.id) || host.isHabitRun?.(source.id)))
     throw new Error("Only a Mono can create or read artifacts");
   if (!host.artifact) throw new Error("Artifacts are unavailable");
@@ -904,6 +906,8 @@ async function handleArtifacts(
       throw new Error("Supply title or body to update an artifact");
     const current = await host.artifact(id);
     if (!current) throw new Error("Artifact was not found");
+    if (host.authorizeArtifactWrite) await host.authorizeArtifactWrite(current);
+    else if (current.scope) throw new Error("Org artifacts require their team's authority");
     if (current.kind !== kind)
       throw new Error("An artifact's kind cannot be changed");
     artifact = await host.saveArtifact({
@@ -919,6 +923,8 @@ async function handleArtifacts(
       throw new Error("Invalid request ID");
     const createdId = `artifact-${source.id}-${requestId}`;
     const existing = await host.artifact(createdId);
+    if (host.authorizeArtifactWrite) await host.authorizeArtifactWrite(existing);
+    else if (existing?.scope) throw new Error("Org artifacts require their team's authority");
     if (
       existing &&
       (existing.kind !== kind ||

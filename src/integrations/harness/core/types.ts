@@ -170,6 +170,8 @@ export type HarnessSessionInput = {
   modelSettings?: Record<string, string>;
   providerAccountId?: string;
   runtimeMode: RuntimeMode;
+  /** Trusted task constraint; filesystem read-only does not imply a planning conversation. */
+  readOnly?: boolean;
   intent?: TurnIntent;
   /**
    * This session drives MonoCode's control CLI, which reaches the app over

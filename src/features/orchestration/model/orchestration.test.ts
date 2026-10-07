@@ -14,8 +14,11 @@ import { newSession } from "../../sessions/model/session";
 import type { OrchestrationProposal } from "./orchestrationPlan";
 import { normalizeOrchestrationRun } from "./orchestrationState";
 import { previewFromToolPart } from "../../../integrations/harness/providers/opencode/opencodeProtocol";
+import type { Artifact, OrgArtifactPurpose } from "../../artifacts/artifacts";
+import type { OrchestrationTask } from "./orchestrationState";
 
 function setup() {
+  const documents = new Map<string, Artifact>();
   const saved = new Map<string, OrchestrationRun>();
   const store = {
     save: vi.fn(async (run: OrchestrationRun) => {
@@ -37,6 +40,7 @@ function setup() {
   const sessions = [lead];
   const completions = new Map<string, (outcome: ControlOutcome) => void>();
   const host: OrchestrationHost = {
+    artifact: async id => documents.get(id) ?? null,
     session: (id) => sessions.find((session) => session.id === id),
     sessions: () => sessions,
     choices: () => [
@@ -110,11 +114,43 @@ function setup() {
     delegate,
     tasks,
     completions,
+    documents,
   };
+}
+
+async function saveTaskDocument(f: ReturnType<typeof setup>, task: OrchestrationTask, purpose: OrgArtifactPurpose, owner = "manager-mono") {
+  const artifact: Artifact = { id: `${purpose}-${task.id}`, kind: "document", title: `${purpose}: ${task.title}`,
+    body: "Verdict, findings and verification evidence", sourceSessionId: task.sessionId, sourceCwd: "/repo", createdAt: 1, updatedAt: 1,
+    scope: { projectId: "/repo", managerId: "manager-mono", ownerMonoId: owner, taskId: task.id,
+      dispatchId: task.activeDispatchId ?? task.lastDispatchId, purpose } };
+  f.documents.set(artifact.id, artifact);
+  await f.manager.recordOrgArtifact(artifact);
+  return artifact;
 }
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+it("detects a lost Team plan link and recovers the durable reference on the same artifact retry", async () => {
+  const f = setup();
+  const roster = await import("../../monos/model/mono");
+  let manager = { id: "manager-mono", role: "manager" as const, projects: ["/repo"] } as import("../../monos/model/mono").Mono;
+  let durable = false;
+  const find = vi.spyOn(roster, "findMono").mockImplementation(() => manager);
+  const update = vi.spyOn(roster, "updateMono").mockImplementation((_id, change) => {
+    const next = change(manager);
+    if (durable) manager = next;
+    return next;
+  });
+  const artifact: Artifact = { id: "plan", kind: "document", title: "Team plan: repo", body: "Plan",
+    createdAt: 1, updatedAt: 1, scope: { projectId: "/repo", managerId: manager.id, ownerMonoId: manager.id, purpose: "team-plan" } };
+  try {
+    await expect(f.manager.recordOrgArtifact(artifact)).rejects.toThrow("durable card link");
+    durable = true;
+    await f.manager.recordOrgArtifact(artifact);
+    expect(manager.teamPlanArtifactId).toBe(artifact.id);
+  } finally { find.mockRestore(); update.mockRestore(); }
 });
 
 function reportTaskFixture() {
@@ -220,8 +256,11 @@ it("lets a Manager run an investigation without hiring a Reviewer while retainin
   await expect(f.delegate(["."])).rejects.toThrow("Hire an independent Reviewer");
   await f.delegate(["."], { readOnly: true });
   await f.finish();
+  await expect(f.call("review", { taskId: f.tasks()[0].id, outcome: "accept-no-changes" })).rejects.toThrow("Save a report artifact");
+  const report = await saveTaskDocument(f, f.tasks()[0], "report");
   await f.call("review", { taskId: f.tasks()[0].id, outcome: "accept-no-changes" });
   expect(f.tasks()[0].accepted).toBe(true);
+  expect(f.tasks()[0].reportArtifactId).toBe(report.id);
 });
 
 it("keeps the original read-only baseline through retries instead of accepting a changed checkout", async () => {
@@ -466,6 +505,7 @@ describe("worker assignment prompts", () => {
       async () => "https://github.com/example/app/pull/1",
     );
     f.lead.busy = false;
+    f.manager.registerMonoEngine("lead", "lead", "manager-mono", "/repo");
     await f.manager.start("lead", ["codex"], 2, undefined, true);
     f.lead.busy = true;
     await f.delegate(["src"], {
@@ -537,10 +577,22 @@ describe("worker assignment prompts", () => {
         notes: "Self approved",
       }),
     ).rejects.toThrow("Only this team's assigned Reviewer");
-    await f.manager.recordReviewerResult(review.sessionId, "verdict", {
+    const reviewDocument = await saveTaskDocument(f, review, "review", "reviewer");
+    await expect(f.manager.recordReviewerResult(review.sessionId, "missing", { decision: "approve", notes: "Reviewed" })).rejects.toThrow("artifactId");
+    const originalScope = reviewDocument.scope!;
+    for (const corrupt of [{ ownerMonoId: "manager-mono" }, { dispatchId: "old" }, { taskId: impl.id }, { projectId: "/elsewhere" }]) {
+      f.documents.set(reviewDocument.id, { ...reviewDocument, scope: { ...originalScope, ...corrupt } });
+      await expect(f.manager.recordReviewerResult(review.sessionId, "wrong", { decision: "approve", notes: "Reviewed", artifactId: reviewDocument.id })).rejects.toThrow("exact assigned review dispatch");
+    }
+    f.documents.set(reviewDocument.id, reviewDocument);
+    const verdict = {
       decision: "approve",
       notes: "Exact diff and tests reviewed",
-    });
+      artifactId: reviewDocument.id,
+    };
+    await f.manager.recordReviewerResult(review.sessionId, "verdict", verdict);
+    await f.manager.recordReviewerResult(review.sessionId, "verdict", verdict);
+    expect(f.tasks()[0].reviewArtifactId).toBe(reviewDocument.id);
     await expect(f.call("review", { taskId: impl.id })).rejects.toThrow(
       "Reviewer must approve",
     );
@@ -549,6 +601,11 @@ describe("worker assignment prompts", () => {
       text: "Approved",
     });
     await vi.waitFor(() => expect(f.tasks()[1].status).toBe("completed"));
+    f.documents.delete(reviewDocument.id);
+    await expect(f.call("review", { taskId: impl.id })).rejects.toThrow("Save a review artifact");
+    f.documents.set(reviewDocument.id, reviewDocument);
+    await expect(f.call("review", { taskId: impl.id })).rejects.toThrow("Save a pr-summary artifact");
+    const summary = await saveTaskDocument(f, f.tasks()[0], "pr-summary");
     await expect(f.call("review", { taskId: impl.id })).resolves.toMatchObject({
       accepted: true,
     });
@@ -559,6 +616,10 @@ describe("worker assignment prompts", () => {
       text: "Make one more correction",
     });
     await vi.waitFor(() => expect(f.tasks()[0].status).toBe("running"));
+    expect(f.tasks()[0].reviewArtifactId).toBeUndefined();
+    expect(f.tasks()[0].prSummaryArtifactId).toBeUndefined();
+    expect(f.documents.has(reviewDocument.id)).toBe(true);
+    expect(f.documents.has(summary.id)).toBe(true);
     await vi.waitFor(() =>
       expect(f.completions.get(impl.sessionId)).not.toBe(priorCompletion),
     );

@@ -5,6 +5,7 @@ import {
   getMonoTranscriptPage,
   upsertSession,
   persistFingerprint,
+  shouldPersistSession,
 } from "./sessionStore";
 import type { Session } from "../model/session";
 import {
@@ -52,6 +53,29 @@ function saved(session: Session) {
 }
 
 describe("Mono database pagination and writes", () => {
+  it("saves a configured empty Mono header and restores its chosen provider, model and permissions", async () => {
+    const blank = { ...record(), harness: "claude", model: "claude:sonnet-4-6",
+      modelSettings: { effort: "high" }, runtimeMode: "supervised", blocks: [] } as unknown as Session;
+    delete blank.monoTranscript;
+    expect(shouldPersistSession(blank)).toBe(true);
+    call.mockResolvedValueOnce(saved(blank));
+    await upsertSession(blank);
+    const [command, args] = call.mock.calls.at(-1)!;
+    expect(command).toBe("mono_session_upsert");
+    const payload = (args as { session: Session }).session;
+    expect(payload).toMatchObject({ harness: "claude", model: "claude:sonnet-4-6", runtimeMode: "supervised",
+      modelSettings: blank.modelSettings, blocks: [] });
+    call.mockResolvedValueOnce(saved(payload));
+    const restored = await getSession(blank.id);
+    expect(restored).toMatchObject({ harness: "claude", model: "claude:sonnet-4-6", runtimeMode: "supervised", modelSettings: blank.modelSettings });
+    const ordinary = { ...blank, id: `normal-empty-${++id}` };
+    expect(shouldPersistSession(ordinary)).toBe(false);
+    const writes = call.mock.calls.length;
+    await expect(upsertSession(ordinary)).resolves.toBeNull();
+    expect(call.mock.calls).toHaveLength(writes);
+    expect(shouldPersistSession({ ...ordinary, monoTranscript: { before: null, firstBlockId: null } })).toBe(true);
+  });
+
   it("keeps document references on the source turn after saving and reopening", async () => {
     let session = await load();
     const card = {

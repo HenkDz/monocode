@@ -1266,6 +1266,21 @@ describe("agent app commands", () => {
     expect(host.saveNote).not.toHaveBeenCalled();
   });
 
+  it("denies plain CLI edits or retry collisions with org evidence without team authority", async () => {
+    const { source, host } = fixture();
+    host.isMono = () => true;
+    host.artifact = vi.fn(async id => ({ ...artifact, id, scope: {
+      projectId: "/repo", managerId: "manager", ownerMonoId: "reviewer", taskId: "review",
+      dispatchId: "dispatch", purpose: "review",
+    } }));
+    host.saveArtifact = vi.fn(async input => ({ ...artifact, ...input }));
+    host.postArtifact = vi.fn();
+    for (const input of [{ id: "review-doc", body: "Self approved" }, { body: "Retry collision" }])
+      await expect(handleAgentApp(source, "edit", "artifacts.write", input, host)).rejects.toThrow("team's authority");
+    expect(host.saveArtifact).not.toHaveBeenCalled();
+    expect(host.postArtifact).not.toHaveBeenCalled();
+  });
+
   it("allows habit artifacts and recovers an attachment failure without saving twice", async () => {
     const { source, host } = fixture();
     host.isHabitRun = () => true;

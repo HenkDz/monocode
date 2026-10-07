@@ -42,6 +42,8 @@ export type Mono = {
   reportsTo?: string;
   specialty?: string;
   teamInitialized?: boolean;
+  /** Project study and current team rationale, stored in the artifact system. */
+  teamPlanArtifactId?: string;
   origin?: "starter" | "manager";
   reviewer?: boolean;
   userLockedFields?: TeamLockedField[];
@@ -213,6 +215,7 @@ function parseMono(value: unknown): Mono | undefined {
     ...(text("reportsTo") ? { reportsTo: text("reportsTo") } : {}),
     ...(text("specialty") ? { specialty: text("specialty") } : {}),
     ...(entry.teamInitialized === true ? { teamInitialized: true } : {}),
+    ...(text("teamPlanArtifactId") ? { teamPlanArtifactId: text("teamPlanArtifactId") } : {}),
     ...(entry.origin === "manager" || entry.origin === "starter"
       ? { origin: entry.origin }
       : entry.role === "member" ? { origin: "starter" as const } : {}),

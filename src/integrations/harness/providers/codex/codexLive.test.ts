@@ -103,6 +103,7 @@ async function startTurn(
     onAccepted?: () => void;
     controlsAgents?: boolean;
     orgMonoId?: string;
+    readOnly?: boolean;
   } = {},
 ) {
   const events: HarnessEvent[] = [];
@@ -124,6 +125,7 @@ async function startTurn(
     runtimeMode: options.runtimeMode ?? "supervised",
     controlsAgents: options.controlsAgents,
     intent: options.intent,
+    readOnly: options.readOnly,
     text: "summarize the changelog",
     attachments: [],
     onAccepted: options.onAccepted,
@@ -1977,6 +1979,53 @@ describe("codex live turn sequence", () => {
       turn: { id: "turn_1", status: "completed" },
     });
     await turn;
+  });
+
+  it("enforces read-only task capabilities without imposing Plan conversations or allowing runtime upgrades", async () => {
+    const { events, turn } = await startTurn("codex-live", { runtimeMode: "full-access", readOnly: true, controlsAgents: true });
+    expect(parse().find(message => message.method === "thread/start")?.params).toMatchObject({
+      approvalPolicy: "never", sandbox: "read-only", sandboxPolicy: { type: "readOnly", networkAccess: true },
+    });
+    expect(parse().find(message => message.method === "turn/start")?.params).toMatchObject({
+      approvalPolicy: "never", sandboxPolicy: { type: "readOnly", networkAccess: true }, collaborationMode: { mode: "default" },
+    });
+    updateCodexRuntimeMode("codex-live", "full-access");
+    for (const [id, method, params] of [
+      [91, "item/fileChange/requestApproval", { itemId: "edit", reason: "Edit source" }],
+      [92, "item/permissions/requestApproval", { itemId: "permissions", permissions: { fileSystem: { write: ["/repo"] } } }],
+      [93, "mcpServer/elicitation/request", { message: "Confirm external action" }],
+    ] as const) onLine!(JSON.stringify({ id, method, params }));
+    await waitFor(() => parse().some(message => message.id === 93), "read-only denials");
+    expect(parse().find(message => message.id === 91)?.result).toEqual({ decision: "decline" });
+    expect(parse().find(message => message.id === 92)?.result).toEqual({ permissions: {} });
+    expect(parse().find(message => message.id === 93)?.result).toEqual({ action: "cancel", content: null, _meta: null });
+    expect(events.some(event => event.type === "approval.requested")).toBe(false);
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+  });
+
+  it("retains read-only restrictions through compaction, stopped-session binding and provider resume", async () => {
+    const { turn } = await startTurn("codex-live", { runtimeMode: "full-access", readOnly: true, controlsAgents: true });
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+    sent.length = 0;
+    const compact = compactCodexContext({ sessionId: "codex-live", cwd: "/repo", model: "codex:gpt-5.4",
+      runtimeMode: "full-access", controlsAgents: true, onEvent: () => {} });
+    await waitFor(() => parse().some(message => message.method === "thread/compact/start"), "read-only compact");
+    reply(parse().find(message => message.method === "thread/compact/start")!.id as number, {});
+    notify("turn/completed", { turn: { id: "compact", status: "completed" } });
+    await compact;
+    await stopCodexSession("codex-live");
+    sent.length = 0;
+    const resumed = await startTurn("codex-live", { resume: true, runtimeMode: "full-access", controlsAgents: true });
+    expect(parse().find(message => message.method === "thread/resume")?.params).toMatchObject({
+      approvalPolicy: "never", sandbox: "read-only", sandboxPolicy: { type: "readOnly", networkAccess: true },
+    });
+    expect(parse().find(message => message.method === "turn/start")?.params).toMatchObject({
+      approvalPolicy: "never", sandboxPolicy: { type: "readOnly", networkAccess: true }, collaborationMode: { mode: "default" },
+    });
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await resumed.turn;
   });
 
   it("uses thread/compact/start and waits for its turn to complete", async () => {

@@ -122,6 +122,14 @@ pub fn ensure_notes_table(conn: &Connection) -> rusqlite::Result<()> {
     if artifact_kind_present == 0 {
         conn.execute("ALTER TABLE notes ADD COLUMN artifact_kind TEXT", [])?;
     }
+    let scope_present: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('notes') WHERE name = 'artifact_scope_json'",
+        [],
+        |row| row.get(0),
+    )?;
+    if scope_present == 0 {
+        conn.execute("ALTER TABLE notes ADD COLUMN artifact_scope_json TEXT", [])?;
+    }
     Ok(())
 }
 
@@ -149,6 +157,12 @@ pub(crate) fn save_content(
     kind: &str,
     artifact_kind: Option<&str>,
 ) -> Result<Note, String> {
+    validate_content(&note, kind)?;
+    let conn = store.lock_conn()?;
+    upsert_content(&conn, &note, kind, artifact_kind).map_err(|e| e.to_string())
+}
+
+pub(crate) fn validate_content(note: &NoteUpsert, kind: &str) -> Result<(), String> {
     validate_id(&note.id, kind)?;
     if let Some(session_id) = note.source_session_id.as_deref() {
         if !session_id.is_empty() {
@@ -158,8 +172,7 @@ pub(crate) fn save_content(
     if note.body.len() > BODY_MAX {
         return Err("Content is too large".into());
     }
-    let conn = store.lock_conn()?;
-    upsert_content(&conn, &note, kind, artifact_kind).map_err(|e| e.to_string())
+    Ok(())
 }
 
 #[tauri::command(async)]

@@ -160,6 +160,8 @@ it("starts a new Mono's conversation with Auto permissions in the home folder, o
   };
   const agent = (await ensureMonoSession(monoId, host))!;
   expect(agent.cwd).toBe("/home");
+  expect(agent.harness).toBe("codex");
+  expect(agent.model).toBe("codex:gpt-5.6-sol");
   expect(agent.runtimeMode).toBe("auto");
   expect(sessionOf(monoId)).toBe(agent.id);
   expect(host.add).toHaveBeenCalledExactlyOnceWith(agent);

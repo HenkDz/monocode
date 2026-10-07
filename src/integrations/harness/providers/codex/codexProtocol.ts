@@ -96,17 +96,18 @@ export function buildThreadStartParams(input: {
   cwd: string;
   runtimeMode: RuntimeMode;
   intent?: TurnIntent;
+  readOnly?: boolean;
   controlsAgents?: boolean;
   model?: string;
   serviceTier?: string;
 }): Record<string, unknown> {
   const config = runtimeModeToCodexConfig(
-    input.intent === "plan" ? "supervised" : input.runtimeMode,
+    input.intent === "plan" || input.readOnly ? "supervised" : input.runtimeMode,
     input.controlsAgents,
   );
   return {
     cwd: input.cwd,
-    approvalPolicy: input.intent === "plan" ? "never" : config.approvalPolicy,
+    approvalPolicy: input.intent === "plan" || input.readOnly ? "never" : config.approvalPolicy,
     sandbox: config.sandbox,
     sandboxPolicy: config.sandboxPolicy,
     approvalsReviewer: config.approvalsReviewer,
@@ -140,13 +141,14 @@ export function buildTurnStartParams(input: {
   effort?: string;
   serviceTier?: string;
   intent?: TurnIntent;
+  readOnly?: boolean;
 }): Record<string, unknown> {
   const runtimeConfig = runtimeModeToCodexConfig(
     input.runtimeMode,
     input.controlsAgents,
   );
   const config: CodexThreadConfig =
-    input.intent === "plan"
+    input.intent === "plan" || input.readOnly
       ? withNetwork(
           {
             approvalPolicy: "never",

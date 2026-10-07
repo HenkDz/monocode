@@ -79,7 +79,11 @@ export type OrchestrationTask = {
     decision: "approve" | "changes";
     notes: string;
     dispatchId: string;
+    artifactId?: string;
   };
+  reviewArtifactId?: string;
+  reportArtifactId?: string;
+  prSummaryArtifactId?: string;
   reviewedBy?: string;
   assignmentId?: string;
   sessionId: string;

@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { approvedMemberReview } from "./memberReview";
+import type { Artifact } from "../../artifacts/artifacts";
 import { usageLimitFromError } from "../../sessions/model/usageLimit";
 import {
   HARNESSES,
@@ -65,6 +66,7 @@ export type CheckoutSnapshot = {
 export const supportsReadOnlyTasks = (harness: HarnessId) =>
   harness === "codex" || harness === "claude";
 export type OrchestrationHost = {
+  artifact?(id: string): Promise<Artifact | null>;
   checkoutSnapshot?(cwd: string, base?: string): Promise<CheckoutSnapshot>;
   habitOwnerMono?(sessionId: string): string | undefined;
   reviewerFor?(run: OrchestrationRun): { id: string; name: string } | undefined;
@@ -402,6 +404,52 @@ export class Orchestrator {
         "This Mono owns retained worker history. Keep its conversation until its worktrees and review records have been retired.",
       );
   }
+  /** Link app-authenticated documents without turning their content into authority. */
+  recordOrgArtifact(artifact: Artifact): Promise<void> {
+    const result = this.actions.catch(() => undefined).then(async () => {
+      const scope = artifact.scope;
+      if (!scope) throw new Error("Org artifact provenance is required");
+      if (scope.purpose === "team-plan") {
+        const { findMono, updateMono } = await import("../../monos/model/mono");
+        const manager = findMono(scope.managerId);
+        if (!manager || manager.role !== "manager" || manager.archivedAt != null ||
+            scope.ownerMonoId !== manager.id || !manager.projects.some(folder => pathKey(folder) === scope.projectId))
+          throw new Error("Team plan is outside this Manager's authority");
+        updateMono(manager.id, mono => ({ ...mono, teamPlanArtifactId: artifact.id }));
+        if (findMono(manager.id)?.teamPlanArtifactId !== artifact.id)
+          throw new Error("Team plan was saved, but its durable card link could not be saved; retry the same request");
+        return;
+      }
+      const run = this.runs.find(run => run.ownerMonoId === scope.managerId &&
+        pathKey(orchestrationWorkspace(run).projectCwd) === scope.projectId &&
+        run.tasks.some(task => task.id === scope.taskId));
+      const task = run?.tasks.find(task => task.id === scope.taskId);
+      if (!run || !task || !scope.dispatchId ||
+          scope.dispatchId !== (task.activeDispatchId ?? task.lastDispatchId) ||
+          scope.ownerMonoId !== run.ownerMonoId && scope.ownerMonoId !== task.memberId)
+        throw new Error("Artifact does not belong to this task's current dispatch");
+      if (scope.purpose === "review") return; // Only reviews.submit attaches independent verdict evidence.
+      if (scope.purpose === "pr-summary" && scope.ownerMonoId !== run.ownerMonoId)
+        throw new Error("Only the Manager may publish a PR summary");
+      const key = scope.purpose === "pr-summary" ? "prSummaryArtifactId" : "reportArtifactId";
+      if (task[key] === artifact.id) return;
+      await this.commit({ ...run, tasks: run.tasks.map(entry => entry.id === task.id ? { ...entry, [key]: artifact.id } : entry) });
+    });
+    this.actions = result.then(() => undefined, () => undefined);
+    return result;
+  }
+
+  private async requireTaskArtifact(run: OrchestrationRun, task: OrchestrationTask, purpose: "report" | "review" | "pr-summary", id?: string): Promise<void> {
+    const artifact = id ? await this.host?.artifact?.(id) : undefined;
+    const scope = artifact?.scope;
+    if (!artifact?.body.trim() || !scope || scope.purpose !== purpose ||
+        scope.managerId !== run.ownerMonoId || scope.projectId !== pathKey(orchestrationWorkspace(run).projectCwd) ||
+        scope.taskId !== task.id || scope.dispatchId !== task.lastDispatchId ||
+        (purpose === "pr-summary" ? scope.ownerMonoId !== run.ownerMonoId : purpose === "review" ? scope.ownerMonoId !== task.memberId :
+          scope.ownerMonoId !== run.ownerMonoId && scope.ownerMonoId !== task.memberId))
+      throw new Error(`Save a ${purpose} artifact for this task's exact dispatch before acceptance`);
+  }
+
   recordReviewerResult(
     sessionId: string,
     requestId: string,
@@ -412,7 +460,7 @@ export class Orchestrator {
       .then(async () => {
         if (
           Object.keys(input).some(
-            (key) => !["decision", "notes"].includes(key),
+            (key) => !["decision", "notes", "artifactId"].includes(key),
           ) ||
           !["approve", "changes"].includes(String(input.decision))
         )
@@ -452,11 +500,20 @@ export class Orchestrator {
           );
         if (target.memberId === task.memberId)
           throw new Error("An independent Reviewer must review another member's implementation");
+        const artifactId = text(input.artifactId, "artifactId", 256);
+        const artifact = await this.host?.artifact?.(artifactId);
+        if (!artifact?.body.trim() || artifact.sourceSessionId !== sessionId ||
+            artifact.scope?.purpose !== "review" || artifact.scope.managerId !== run.ownerMonoId ||
+            artifact.scope.projectId !== pathKey(orchestrationWorkspace(run).projectCwd) ||
+            artifact.scope.ownerMonoId !== task.memberId || artifact.scope.taskId !== task.id ||
+            artifact.scope.dispatchId !== task.activeDispatchId)
+          throw new Error("Reviewer artifact must belong to this exact assigned review dispatch");
         const response = {
           recorded: true,
           decision: input.decision,
           taskId: target.id,
           dispatchId: target.lastDispatchId,
+          artifactId,
         };
         await this.commit({
           ...run,
@@ -468,9 +525,10 @@ export class Orchestrator {
                     decision: input.decision as "approve" | "changes",
                     notes,
                     dispatchId: task.activeDispatchId!,
+                    artifactId,
                   },
                 }
-              : entry,
+              : entry.id === target.id ? { ...entry, reviewArtifactId: artifactId } : entry,
           ),
           requests: { ...run.requests, [key]: { signature, result: response } },
         });
@@ -1996,6 +2054,9 @@ export class Orchestrator {
         if (input.outcome != null && input.outcome !== "accept-no-changes")
           throw new Error("Unknown review outcome; use accept-no-changes for report-only work");
         if (input.outcome === "accept-no-changes") {
+          if (run.ownerMonoId)
+            await this.requireTaskArtifact(run, target, target.reviewOf ? "review" : "report",
+              target.reviewOf ? target.reviewVerdict?.artifactId : target.reportArtifactId);
           if (!target.workspace || !this.host?.checkoutSnapshot)
             throw new Error("Worker checkout is unavailable for no-change verification");
           const snapshot = await this.host.checkoutSnapshot(
@@ -2024,10 +2085,15 @@ export class Orchestrator {
           const reviewer = this.host?.reviewerFor?.(run);
           if (run.ownerMonoId && !reviewer)
             throw new Error("Hire an independent Reviewer before the PR gate; a Manager cannot self-approve");
-          if (reviewer && !approvedMemberReview(run, target, reviewer.id))
+          const approvedReview = reviewer && approvedMemberReview(run, target, reviewer.id);
+          if (reviewer && !approvedReview)
             throw new Error(
               "The Reviewer must approve this task's latest dispatch before the PR gate",
             );
+          if (run.ownerMonoId) {
+            await this.requireTaskArtifact(run, approvedReview!, "review", approvedReview?.reviewVerdict?.artifactId);
+            await this.requireTaskArtifact(run, target, "pr-summary", target.prSummaryArtifactId);
+          }
           const checksSummary =
             input.checks == null
               ? undefined
@@ -2333,6 +2399,9 @@ export class Orchestrator {
                     status: "running",
                     activeDispatchId: dispatchId,
                     acceptedDispatchId: undefined,
+                    reviewArtifactId: undefined,
+                    reportArtifactId: undefined,
+                    prSummaryArtifactId: undefined,
                   }
                 : entry,
             ),

@@ -312,8 +312,15 @@ Actions:
   team.retire    {memberId,reason} Cancels active tasks, retains worktrees/history.
                   The last Reviewer cannot retire. Team changes post Undo cards.
                   All team actions reuse --request-id on retries; no role/project override.
-  reviews.submit Reviewer worker only. {decision:"approve"|"changes",notes:"..."}.
+  reviews.submit Reviewer worker only. {decision:"approve"|"changes",notes:"...",artifactId:"..."}.
                   Reviews the exact implementing dispatch assigned by the Manager.
+                  Save Review: <task> with artifacts.write purpose:"review" first.
+  Org artifacts  artifacts.write also accepts purpose:"team-plan"|"review"|"pr-summary"|"report".
+                  Managers write Team plan: <project> before hiring and PR summary: <task>
+                  with taskId before the PR gate. Use artifacts.read body as gh --body-file source.
+                  Investigation workers save Report: <task> before no-change acceptance.
+                  Workers' task/project/author provenance is inferred by the app; never supply scope.
+                  Managers may select an assigned project with project; ambiguous teams must select.
                   Member workers may also memory.add {fact:"..."}: three short,
                   redacted project facts per task, not transcripts.
   chat.card      Mono or habit only. Post a card to the Mono's chat:

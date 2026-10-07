@@ -311,6 +311,31 @@ describe("harness registry", () => {
     } finally { owner.mockRestore(); }
   });
 
+  it.each([
+    ["member", true, false, false, true],
+    ["member", false, false, false, false],
+    ["member", true, true, false, false],
+    ["member", true, false, true, false],
+    ["orchestrator", true, false, false, false],
+  ] as const)("passes org worker identity only for active member task access: %s %s %s %s", async (role, appAccess, monoSession, archived, authorized) => {
+    vi.mocked(isTauri).mockReturnValue(true);
+    vi.mocked(invoke).mockResolvedValue(undefined);
+    const owner = vi.spyOn(monoModel, "findMono").mockReturnValue({
+      id: "assigned-member", role, mascot: "bear", color: "blue", projects: ["/repo"],
+      ...(archived ? { archivedAt: 1 } : {}),
+    });
+    registerHarness(stub("codex", { sendTurn: async () => {} }));
+    try {
+      await sendHarnessTurn({ harness: "codex", sessionId: "worker", cwd: "/repo-worker",
+        model: "codex:installed", runtimeMode: "full-access", text: "Assigned task", orgMonoId: "assigned-member",
+        appAccess, monoSession, onEvent: () => {}, });
+      expect(invoke).toHaveBeenCalledWith("control_authorize_turn", {
+        sessionId: "worker", cwd: "/repo-worker", appAccess, monoSession,
+        ...(authorized ? { monoMemberId: "assigned-member" } : {}),
+      });
+    } finally { owner.mockRestore(); }
+  });
+
   it("announces readiness when the provider accepts, while preserving the caller's acceptance callback", async () => {
     let accepted!: () => void;
     let finish!: () => void;

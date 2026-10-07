@@ -2084,6 +2084,29 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
 
     #[test]
+    fn deleting_worker_and_task_retains_org_artifact_provenance() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let conn = store.lock_conn().unwrap();
+        upsert_session(&conn, &sample("worker", "/repo", "Worker")).unwrap();
+        let scope = json!({ "projectId":"/repo", "managerId":"manager", "ownerMonoId":"member",
+            "taskId":"task", "dispatchId":"dispatch", "purpose":"report" });
+        crate::notes::upsert_content(&conn, &crate::notes::NoteUpsert {
+            id: "report-doc".into(), title: "Report: Task".into(), body: "Findings".into(),
+            tags: vec![], source_session_id: Some("worker".into()), source_cwd: Some("/repo".into()),
+            finalize_slug: false,
+        }, "artifact", Some("document")).unwrap();
+        conn.execute("UPDATE notes SET artifact_scope_json = ?1 WHERE id = 'report-doc'", [scope.to_string()]).unwrap();
+        delete_session(&conn, "worker").unwrap();
+        let (body, source, retained): (String, String, String) = conn.query_row(
+            "SELECT body, source_session_id, artifact_scope_json FROM notes WHERE id = 'report-doc'",
+            [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ).unwrap();
+        assert_eq!(body, "Findings");
+        assert_eq!(source, "worker");
+        assert_eq!(serde_json::from_str::<Value>(&retained).unwrap(), scope);
+    }
+
+    #[test]
     fn search_keeps_older_mono_messages_available_after_conversion() {
         let store = SessionStore::open_in_memory().unwrap();
         let conn = store.lock_conn().unwrap();

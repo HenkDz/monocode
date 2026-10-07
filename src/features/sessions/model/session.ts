@@ -437,7 +437,7 @@ export const RUNTIME_MODE_HINT: Record<RuntimeMode, string> = {
 export type WorkspaceMode = "current" | "worktree";
 
 export type Session = {
-  /** Managed investigations always use the harness's non-escalating plan mode. */
+  /** Managed investigations enforce non-escalating read-only filesystem permissions. */
   readOnly?: boolean;
   /** Durable receipts: a saved draft can be accepted only once. */
   consumedDraftIds?: string[];
@@ -572,13 +572,13 @@ export function harnessSupportsAttachments(id: HarnessId): boolean {
 }
 
 export function newSession(
-  harness: HarnessId = "claude",
+  harness: HarnessId = "codex",
   cwd = "~",
   model?: string,
   runtimeMode: RuntimeMode = DEFAULT_RUNTIME_MODE,
   modelSettings?: Record<string, string>,
 ): Session {
-  const resolved = resolveModel(harness, model ?? preferredModelId(harness));
+  const resolved = resolveModel(harness, model ?? (harness === "codex" ? defaultSessionChoice().model : preferredModelId(harness)));
   return {
     id: crypto.randomUUID(),
     harness,
@@ -591,7 +591,7 @@ export function newSession(
   };
 }
 
-/** New conversation using the Providers defaults. */
+/** New conversation using the stable default or an explicit project override. */
 export function newDefaultSession(
   cwd = "~",
   runtimeMode: RuntimeMode = DEFAULT_RUNTIME_MODE,
@@ -626,15 +626,14 @@ function projectSessionChoice(
 }
 
 /**
- * New conversation for a project. The project's default provider and model win
- * over the seed's; a provider the project has hidden is swapped for its first
- * enabled one.
+ * Fresh project conversations use the shared default or explicit project
+ * settings. An unrelated conversation does not choose their provider/model.
  */
 export function newSessionForProject(
   seed: Session | undefined,
   cwd: string,
 ): Session {
-  const { harness, model } = projectSessionChoice(seed, cwd);
+  const { harness, model } = defaultSessionChoice(cwd);
   const carriesSeed =
     model != null && model === seed?.model && harness === seed?.harness;
   return newSession(

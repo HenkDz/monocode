@@ -25,6 +25,7 @@ import type {
   OrchestrationRun,
   OrchestrationTask,
 } from "../model/orchestrationState";
+import { OrgArtifactLinks } from "../../artifacts/ui/OrgArtifactLinks";
 
 export function ProjectManagerStatus({
   run,
@@ -379,6 +380,10 @@ export function ReadyCard({
               : overall.description}
         </span>
       </div>
+      <OrgArtifactLinks monoId={run.ownerMonoId} links={[
+        { id: task.reviewArtifactId, label: "Review" },
+        { id: task.prSummaryArtifactId, label: "PR summary" },
+      ]} />
       <details className="text-content/75">
         <summary className="cursor-pointer rounded py-1 focus-visible:outline-accent">
           Manager's review

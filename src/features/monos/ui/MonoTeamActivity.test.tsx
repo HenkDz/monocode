@@ -63,6 +63,23 @@ it("groups descendant decisions once and routes inline approval to the worker se
   } finally { resume.mockRestore(); goals.mockRestore(); await act(async () => root.unmount()); localStorage.removeItem("monocode:mono-roster"); vi.unstubAllGlobals(); }
 });
 
+it("uses sidebar display names with path tooltips and places no-change completion under Finished", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  localStorage.setItem("monocode:mono-roster", JSON.stringify(roster));
+  localStorage.setItem("monocode:tab-group:labels", JSON.stringify({ "/app": "Friendly App" }));
+  const task = { id: "report", title: "Investigate", memberId: "b", sessionId: "report-worker", status: "completed", accepted: true, lastDispatchId: "report-dispatch", acceptedDispatchId: "report-dispatch", completionOutcome: "no-changes", prompt: "", result: "Findings" } as OrchestrationTask;
+  const runs = [{ leadId: "engine", ownerMonoId: "m", cwd: "/app", projectName: "/app", tasks: [task], dispatches: [] }, { leadId: "other", ownerMonoId: "m", cwd: "C:/Projects/Other", tasks: [], dispatches: [] }] as unknown as OrchestrationRun[];
+  const host = document.createElement("div"), root = createRoot(host);
+  try {
+    await act(async () => root.render(<MonoTeamActivity monoId="o" sessions={[]} runs={runs} statuses={new Map()} onApproval={vi.fn()} onQuestion={vi.fn()} onQuestionInteraction={vi.fn()} />));
+    expect(host.querySelector('h3[title="/app"]')?.textContent).toBe("Friendly App");
+    expect(host.querySelector('h3[title="C:/Projects/Other"]')?.textContent).toBe("Other");
+    expect(host.querySelector('[data-team-section="Recently finished"] [data-team-task="report"]')).not.toBeNull();
+    expect(host.textContent).toContain("Completed (no changes)");
+    expect(host.querySelector('[data-team-section="Work in progress"]')).toBeNull();
+  } finally { await act(async () => root.unmount()); localStorage.clear(); vi.unstubAllGlobals(); }
+});
+
 // A goal remains one group even when its tasks are in different states.
 it("shows one compact task per state, groups mixed-state goals once, expands prompts and opens the ready card", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);

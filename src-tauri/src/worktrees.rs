@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tauri::State;
 
 use crate::fs::{expand_home, git_checked, git_diff_files_for, path_to_js, resolve_repo_path};
@@ -45,6 +46,62 @@ fn git(root: &Path, args: &[&str]) -> Result<String, String> {
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
     }
     String::from_utf8(output.stdout).map_err(|_| "Git returned a non-UTF-8 path".into())
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskSnapshot {
+    head: String,
+    fingerprint: String,
+    clean: bool,
+    commits_ahead: u64,
+    base_diff: bool,
+}
+
+fn task_snapshot(root: &Path, base: Option<&str>) -> Result<TaskSnapshot, String> {
+    let root = PathBuf::from(git(root, &["rev-parse", "--show-toplevel"])?.trim());
+    let head = git(&root, &["rev-parse", "--verify", "HEAD"])?.trim().to_string();
+    let status = git(&root, &["status", "--porcelain=v1", "-z", "--untracked-files=all"])?;
+    let mut fingerprint = Sha256::new();
+    for part in [
+        head.clone(), status.clone(),
+        git(&root, &["diff", "--no-ext-diff", "--no-textconv", "--binary"] )?,
+        git(&root, &["diff", "--cached", "--no-ext-diff", "--no-textconv", "--binary"] )?,
+    ] {
+        fingerprint.update((part.len() as u64).to_le_bytes());
+        fingerprint.update(part.as_bytes());
+    }
+    for relative in git(&root, &["ls-files", "--others", "--exclude-standard", "-z"])?
+        .split('\0').filter(|path| !path.is_empty()) {
+        let path = root.join(relative);
+        let metadata = std::fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
+        let bytes = if metadata.file_type().is_symlink() {
+            std::fs::read_link(&path).map_err(|e| e.to_string())?.to_string_lossy().as_bytes().to_vec()
+        } else { std::fs::read(&path).map_err(|e| e.to_string())? };
+        fingerprint.update((relative.len() as u64).to_le_bytes());
+        fingerprint.update(relative.as_bytes());
+        fingerprint.update((bytes.len() as u64).to_le_bytes());
+        fingerprint.update(bytes);
+    }
+    let (commits_ahead, base_diff) = if let Some(base) = base {
+        if base.is_empty() || base.starts_with('-') || base.chars().any(char::is_control) {
+            return Err("Invalid assignment base".into());
+        }
+        let base = git(&root, &["rev-parse", "--verify", &format!("{base}^{{commit}}")])?.trim().to_string();
+        let ahead = git(&root, &["rev-list", "--count", &format!("{base}..HEAD")])?
+            .trim().parse().map_err(|_| "Invalid commit count")?;
+        let changed = !git(&root, &["diff", "--no-ext-diff", "--no-textconv", "--name-only", &base, "HEAD", "--"])?.is_empty();
+        (ahead, changed)
+    } else { (0, false) };
+    Ok(TaskSnapshot {
+        head, fingerprint: format!("{:x}", fingerprint.finalize()),
+        clean: status.is_empty(), commits_ahead, base_diff,
+    })
+}
+
+#[tauri::command(async)]
+pub async fn git_task_snapshot(cwd: String, base: Option<String>) -> Result<TaskSnapshot, String> {
+    task_snapshot(&expand_home(&cwd), base.as_deref())
 }
 
 fn head_subject(path: &Path) -> Option<String> {
@@ -918,6 +975,44 @@ mod tests {
         )
         .unwrap();
         Repo(dir)
+    }
+
+    #[test]
+    fn task_snapshot_verifies_changes_and_commits_even_when_diff_is_empty() {
+        let fixture = repo();
+        let root = fixture.0.join("repo");
+        let initial = task_snapshot(&root, Some("HEAD")).unwrap();
+        assert!(initial.clean && !initial.base_diff && initial.commits_ahead == 0);
+        std::fs::write(root.join("notes.txt"), "first").unwrap();
+        let dirty = task_snapshot(&root, Some(&initial.head)).unwrap();
+        assert!(!dirty.clean);
+        std::fs::write(root.join("notes.txt"), "second").unwrap();
+        let changed = task_snapshot(&root, Some(&initial.head)).unwrap();
+        assert_ne!(dirty.fingerprint, changed.fingerprint);
+        std::fs::remove_file(root.join("notes.txt")).unwrap();
+        assert_eq!(initial.fingerprint, task_snapshot(&root, None).unwrap().fingerprint);
+        git(&root, &["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "empty worker commit"]).unwrap();
+        let committed = task_snapshot(&root, Some(&initial.head)).unwrap();
+        assert!(committed.clean && !committed.base_diff);
+        assert_eq!(committed.commits_ahead, 1);
+        assert!(task_snapshot(&root, Some("--all")).is_err());
+        assert!(task_snapshot(&root, Some("missing-ref")).is_err());
+    }
+
+    #[test]
+    fn task_snapshot_hashes_tracked_and_staged_content_at_the_same_dirty_paths() {
+        let fixture = repo();
+        let root = fixture.0.join("repo");
+        std::fs::write(root.join("file.txt"), "initial").unwrap();
+        git(&root, &["add", "file.txt"]).unwrap();
+        git(&root, &["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "file"]).unwrap();
+        std::fs::write(root.join("file.txt"), "first").unwrap();
+        let first = task_snapshot(&root, None).unwrap();
+        std::fs::write(root.join("file.txt"), "second").unwrap();
+        let second = task_snapshot(&root, None).unwrap();
+        assert_ne!(first.fingerprint, second.fingerprint);
+        git(&root, &["add", "file.txt"]).unwrap();
+        assert_ne!(second.fingerprint, task_snapshot(&root, None).unwrap().fingerprint);
     }
 
     #[test]

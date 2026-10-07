@@ -383,7 +383,7 @@ export type Block = {
   /** Set by the app, never accepted from card CLI input. */
   monoCardOwner?: string;
   /** Persisted team-change receipt, rendered in its Manager's timeline. */
-  monoTeamChange?: { managerId: string; changeId: string };
+  monoTeamChange?: { managerId: string; changeId: string; changeIds?: string[] };
 };
 
 export type RuntimeMode =
@@ -424,6 +424,8 @@ export const RUNTIME_MODE_HINT: Record<RuntimeMode, string> = {
 export type WorkspaceMode = "current" | "worktree";
 
 export type Session = {
+  /** Managed investigations always use the harness's non-escalating plan mode. */
+  readOnly?: boolean;
   /** Durable receipts: a saved draft can be accepted only once. */
   consumedDraftIds?: string[];
   /** Receipt for an acknowledged floating-composer handoff. */

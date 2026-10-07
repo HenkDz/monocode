@@ -28,6 +28,9 @@ Actions, with the JSON object each one takes:
             the app supplies that member's model and identity. Include
             "monoGoalId":"<goalId>" for an assigned goal. Reviewer delegates
             also pass "reviewTaskId":"<completed implementation taskId>".
+            For investigation/report tasks pass "readOnly":true: use the project
+            checkout with enforced read-only runtime, or a worktree fallback
+            when unsupported. Never modify files or commit on read-only tasks.
             Org Managers may include "project":"<exact assigned folder>"
             on every control action (required with multiple projects).
   get       {"taskId":"..."}
@@ -60,6 +63,9 @@ Actions, with the JSON object each one takes:
             Cancel a task, whether it is running or still queued.
   review    {"taskId":"...","checks":"Short summary of diff review and tests"}
             Accept a completed task's result.
+            Report-only tasks: {"taskId":"...","outcome":"accept-no-changes"}.
+            This verifies no changed files or commits ahead of the task's base;
+            changes still require the independent Reviewer and PR gate.
             Project Managers: inspect diff and tests, open a non-draft PR,
             then review. The worktree is retained; the user reviews and merges.
   finish    {}
@@ -255,8 +261,11 @@ Actions:
                   Never allow beyond the user's existing authority.
   team.list      Manager only, own team. {} Members, profiles, soul summary,
                   memory count, tasks and user-locked fields.
-  team.hire      {name,specialty,soul,harness,model,modelSettings?,mascot?,color?,memory?:[facts],reviewer?}
+  team.hire      {name,specialty,soul,harness?,model?,modelSettings?,mascot?,color?,memory?:[facts],reviewer?}
                   Study the codebase first. Pick installed models from models.list.
+                  Reviewer defaults to a different installed harness/model family;
+                  omit both harness and model to use that default. Explicit choices
+                  are allowed; matching implementers posts a soft warning.
                   Creates a direct member in your single project. Soul: at most 8 KiB.
   team.update    {memberId,name?,specialty?,soul?,harness?,model?,modelSettings?}
                   User-locked fields are rejected; suggest those changes in chat.
@@ -528,7 +537,7 @@ pub(crate) fn validate_team_input(action: &str, input: &Value) -> Result<(), Str
         if !fields.contains(&key.as_str()) { return Err(format!("Unknown field: {key}")); }
     }
     let required: &[&str] = match action {
-        "team.hire" => &["name", "specialty", "soul", "harness", "model"],
+        "team.hire" => &["name", "specialty", "soul"],
         "team.update" => &["memberId"],
         "team.memory.add" => &["memberId", "facts"],
         "team.memory.forget" => &["memberId", "factIds"],
@@ -537,6 +546,15 @@ pub(crate) fn validate_team_input(action: &str, input: &Value) -> Result<(), Str
     };
     for field in required {
         if !object.contains_key(*field) { return Err(format!("{field} is required")); }
+    }
+    if action == "team.hire" {
+        let reviewer = object.get("reviewer").and_then(Value::as_bool) == Some(true)
+            || object.get("specialty").and_then(Value::as_str).is_some_and(|value| value.trim().eq_ignore_ascii_case("reviewer"));
+        let harness = object.contains_key("harness");
+        let model = object.contains_key("model");
+        if harness != model || (!reviewer && !harness) {
+            return Err("team.hire requires harness and model; Reviewer may omit both for an independent default".into());
+        }
     }
     if action == "team.update" && object.len() == 1 { return Err("Supply a field to update".into()); }
     for (key, value) in object {
@@ -888,6 +906,8 @@ mod tests {
         for (action, input) in [
             ("team.list", json!({})),
             ("team.hire", json!({"name":"Backend", "specialty":"Backend", "soul":"Use cargo test", "harness":"codex", "model":"codex:installed", "memory":["Rust project"]})),
+            ("team.hire", json!({"name":"Reviewer", "specialty":"Reviewer", "soul":"Review independently"})),
+            ("team.hire", json!({"name":"Audit", "specialty":"Audit", "reviewer":true, "soul":"Review independently"})),
             ("team.update", json!({"memberId":"member", "soul":"New instructions"})),
             ("team.memory.add", json!({"memberId":"member", "facts":["Rust project"]})),
             ("team.memory.forget", json!({"memberId":"member", "factIds":["fact-1"]})),

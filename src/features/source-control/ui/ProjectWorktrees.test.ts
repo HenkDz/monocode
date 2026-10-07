@@ -156,6 +156,24 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
+it("keeps a read-only shared linked checkout in Your worktrees and its enforced fallback in Task worktrees", async () => {
+  const tasks = [
+    { id: "report", sessionId: "report-worker", status: "running", readOnly: true, workspacePolicy: "shared", workspace: { kind: "worktree", checkoutCwd: "/trees/a", branch: "feature-a" } },
+    { id: "fallback", sessionId: "fallback-worker", status: "running", readOnly: true, readOnlyFallback: "Harness cannot enforce read-only", workspacePolicy: "isolated-child", workspace: { kind: "worktree", checkoutCwd: "/trees/b", branch: "feature-b" } },
+  ];
+  const snapshot = vi.spyOn(orchestrator, "snapshot").mockReturnValue([{ leadId: "manager", cwd: "/repo", projectManager: true, tasks }] as unknown as OrchestrationRun[]);
+  props.renderManager = () => createElement("span", null, "Manager");
+  try {
+    await render();
+    const your = container.querySelector('[role="group"][aria-label="Your worktrees"]')!;
+    const queue = container.querySelector('[role="group"][aria-label="Task worktrees"]')!;
+    expect(your.querySelector('[data-worktree="/trees/a"]')).not.toBeNull();
+    expect(queue.querySelector('[data-worktree="/trees/a"]')).toBeNull();
+    expect(queue.querySelector('[data-worktree="/trees/b"]')).not.toBeNull();
+    expect(button("Toggle Task worktrees").textContent).toContain("Task worktrees · 1");
+  } finally { snapshot.mockRestore(); }
+});
+
 it("labels peer user worktrees, scopes the guide to collapsed task worktrees, and shows Finished outcomes", async () => {
   const worktrees = [
     tree("/repo", "main", true),

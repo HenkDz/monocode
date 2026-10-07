@@ -31,9 +31,9 @@ export function managerTaskFinished(
     task.accepted &&
     task.lastDispatchId &&
     task.acceptedDispatchId === task.lastDispatchId &&
-    task.prUrl &&
+    (task.completionOutcome === "no-changes" || (task.prUrl &&
     pr?.url === task.prUrl &&
-    (pr.state === "merged" || pr.state === "closed")
+    (pr.state === "merged" || pr.state === "closed")))
   );
 }
 
@@ -50,7 +50,7 @@ export function managerQueueRank(
 export function managerTaskOutcome(task: OrchestrationTask, pr?: GitPr | null) {
   if (task.status === "cancelled") return "Cancelled";
   if (managerTaskFinished(task, pr))
-    return pr?.state === "merged" ? "Merged" : "Closed (not merged)";
+    return task.completionOutcome === "no-changes" ? "Completed (no changes)" : pr?.state === "merged" ? "Merged" : "Closed (not merged)";
 }
 
 export function managerPrReady(
@@ -160,6 +160,7 @@ export function managerWorktreeStatus(
     .flatMap((run) => run.tasks)
     .filter(
       (task) =>
+        task.workspacePolicy !== "shared" &&
         task.workspace &&
         orchestrationPathKey(task.workspace.checkoutCwd) ===
           orchestrationPathKey(checkout),

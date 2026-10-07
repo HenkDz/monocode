@@ -79,6 +79,15 @@ it("retains existing teams and leaves new Managers empty", () => {
   ).not.toThrow();
 });
 
+it("instructs Managers to close reports, use read-only workers and select independent reviewer models", () => {
+  const context = orgTurnContext(tree(), "app")!;
+  expect(context).toContain("readOnly:true");
+  expect(context).toContain("accept-no-changes");
+  expect(context).toContain("different installed harness or model family");
+  expect(context).toContain("User-locked choices always win");
+  expect(context).toContain("Do not emit chat.card dispatch");
+});
+
 it("rejects sideways and skipped-level messages", () => {
   const roster = tree();
   expect(resolveTeamMember(roster, "app", "Backend").id).toBe("app-backend");

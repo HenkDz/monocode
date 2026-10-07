@@ -117,6 +117,177 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+function reportTaskFixture() {
+  const f = setup();
+  const snapshot = { head: "assignment-head", fingerprint: "baseline", clean: true, commitsAhead: 0, baseDiff: false };
+  f.host.checkoutSnapshot = vi.fn(async () => ({ ...snapshot }));
+  const create = f.host.createWorker;
+  f.host.createWorker = vi.fn(async (run, task) => {
+    const prepared = await create(run, task);
+    return task.workspacePolicy === "shared" ? {
+      ...prepared, workspace: { id: "checkout:/repo", projectCwd: "/repo", checkoutCwd: "/repo", kind: "main" as const },
+    } : prepared;
+  });
+  f.manager.bind(f.host);
+  const finish = async () => {
+    await vi.waitFor(() => expect(f.completions.has(f.tasks()[0].sessionId)).toBe(true));
+    f.completions.get(f.tasks()[0].sessionId)!({ status: "completed", text: "Investigation findings" });
+    await vi.waitFor(() => expect(f.tasks()[0].status).not.toBe("running"));
+  };
+  return { ...f, snapshot, finish };
+}
+
+it("accepts a report-only task after checkout verification without a PR or Reviewer", async () => {
+  const f = reportTaskFixture();
+  f.lead.busy = false;
+  await f.manager.start("lead", ["codex"], 2, undefined, true);
+  await f.delegate(["."]);
+  await f.finish();
+  expect(f.tasks()[0].accepted).toBe(false);
+  await expect(f.call("review", { taskId: f.tasks()[0].id, outcome: "accept-no-changes" })).resolves.toMatchObject({ accepted: true, completionOutcome: "no-changes" });
+  expect(f.tasks()[0]).toMatchObject({ status: "completed", accepted: true, completionOutcome: "no-changes", acceptedDispatchId: f.tasks()[0].lastDispatchId });
+  expect(f.host.integrateWorker).not.toHaveBeenCalled();
+  expect(f.host.cleanupWorker).not.toHaveBeenCalled();
+});
+
+it.each([
+  { clean: false, commitsAhead: 0, baseDiff: false },
+  { clean: true, commitsAhead: 1, baseDiff: false },
+  { clean: true, commitsAhead: 0, baseDiff: true },
+])("rejects no-change completion for dirty files or commits (including empty/reverted commits): %j", async changed => {
+  const f = reportTaskFixture();
+  await f.start();
+  await f.delegate(["."]);
+  await f.finish();
+  Object.assign(f.snapshot, changed);
+  await expect(f.call("review", { taskId: f.tasks()[0].id, outcome: "accept-no-changes" })).rejects.toThrow("changes or commits");
+  expect(f.tasks()[0].accepted).toBe(false);
+});
+
+it("runs read-only work in the project checkout and accepts an unchanged dirty baseline", async () => {
+  const f = reportTaskFixture();
+  f.snapshot.clean = false;
+  await f.start();
+  await f.delegate(["."], { readOnly: true });
+  await f.finish();
+  expect(f.tasks()[0]).toMatchObject({ readOnly: true, workspacePolicy: "shared", workspace: { checkoutCwd: "/repo", kind: "main" }, readOnlyBaseline: { fingerprint: "baseline" } });
+  expect(f.host.submit).toHaveBeenCalledWith(f.tasks()[0].sessionId, expect.stringContaining("read-only investigation"), expect.any(Function));
+  await f.call("review", { taskId: f.tasks()[0].id, outcome: "accept-no-changes" });
+  expect(f.tasks()[0].completionOutcome).toBe("no-changes");
+});
+
+it("flags read-only content changes as blocked even when dirty status was already present", async () => {
+  const f = reportTaskFixture();
+  f.snapshot.clean = false;
+  await f.start();
+  await f.delegate(["."], { readOnly: true });
+  await vi.waitFor(() => expect(f.completions.has(f.tasks()[0].sessionId)).toBe(true));
+  f.snapshot.fingerprint = "new-content-at-existing-dirty-path";
+  await f.finish();
+  expect(f.tasks()[0]).toMatchObject({ status: "blocked", accepted: false });
+  expect(f.tasks()[0].error).toContain("read-only task modified files");
+  await expect(f.call("review", { taskId: f.tasks()[0].id, outcome: "accept-no-changes" })).rejects.toThrow("Only a completed result");
+});
+
+it("uses an explicit worktree fallback for a harness without enforced read-only permissions", async () => {
+  const f = reportTaskFixture();
+  f.host.choices = () => [{ harness: "pi", models: [{ id: "pi:test", name: "Pi" }] }];
+  f.manager.bind(f.host);
+  f.lead.busy = false;
+  await f.manager.start("lead", ["pi"], 2);
+  await f.call("delegate", { title: "Read-only", prompt: "Inspect", files: ["."], harness: "pi", readOnly: true });
+  await f.finish();
+  expect(f.tasks()[0]).toMatchObject({ readOnly: true, workspacePolicy: "isolated-child", workspace: { kind: "worktree" } });
+  expect(f.tasks()[0].readOnlyFallback).toContain("cannot enforce read-only");
+});
+
+it("validates read-only mode and documents report closure in the Manager prompt", async () => {
+  const f = reportTaskFixture();
+  f.lead.busy = false;
+  await f.manager.start("lead", ["codex"], 2, undefined, true);
+  await expect(f.delegate(["."], { readOnly: "true" })).rejects.toThrow("boolean");
+  await expect(f.delegate(["."], { readOnly: true, checkout: "worktree" })).rejects.toThrow("project checkout");
+  expect(f.manager.prompt("lead", "Goal")).toContain("readOnly:true");
+  expect(f.manager.prompt("lead", "Goal")).toContain("accept-no-changes");
+  expect(workerTurnPrompt("Inspect", ["."], undefined, true)).toContain("omit tooling chatter");
+});
+
+it("lets a Manager run an investigation without hiring a Reviewer while retaining the code gate", async () => {
+  const f = reportTaskFixture();
+  f.lead.busy = false;
+  f.manager.registerMonoEngine("lead", "lead", "manager-mono", "/repo");
+  await f.manager.start("lead", ["codex"], 2, undefined, true);
+  await expect(f.delegate(["."])).rejects.toThrow("Hire an independent Reviewer");
+  await f.delegate(["."], { readOnly: true });
+  await f.finish();
+  await f.call("review", { taskId: f.tasks()[0].id, outcome: "accept-no-changes" });
+  expect(f.tasks()[0].accepted).toBe(true);
+});
+
+it("keeps the original read-only baseline through retries instead of accepting a changed checkout", async () => {
+  const f = reportTaskFixture();
+  await f.start();
+  await f.delegate(["."], { readOnly: true });
+  await f.finish();
+  f.snapshot.fingerprint = "changed-after-report";
+  await f.call("message", { taskId: f.tasks()[0].id, text: "Continue investigation" });
+  await vi.waitFor(() => expect(f.tasks()[0].status).toBe("blocked"));
+  expect(f.tasks()[0].readOnlyBaseline?.fingerprint).toBe("baseline");
+  expect(f.tasks()[0].error).toContain("read-only task modified files");
+});
+
+it("does not resurrect a cancelled task when read-only checkout verification returns late", async () => {
+  const f = reportTaskFixture();
+  await f.start();
+  await f.delegate(["."], { readOnly: true });
+  await vi.waitFor(() => expect(f.completions.has(f.tasks()[0].sessionId)).toBe(true));
+  let resolveSnapshot!: (value: typeof f.snapshot) => void;
+  const pending = vi.fn(() => new Promise<typeof f.snapshot>(resolve => { resolveSnapshot = resolve; }));
+  f.host.checkoutSnapshot = pending;
+  f.completions.get(f.tasks()[0].sessionId)!({ status: "completed", text: "Report" });
+  await vi.waitFor(() => expect(pending).toHaveBeenCalledOnce());
+  await f.call("cancel", { taskId: f.tasks()[0].id });
+  resolveSnapshot({ ...f.snapshot });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(f.tasks()[0].status).toBe("cancelled");
+  expect(f.tasks()[0].accepted).toBe(false);
+});
+
+it("does not treat pending Write metadata or Claude's external plan file as a project modification", async () => {
+  const f = reportTaskFixture();
+  await f.start();
+  await f.delegate(["."], { readOnly: true });
+  await vi.waitFor(() => expect(f.completions.has(f.tasks()[0].sessionId)).toBe(true));
+  f.manager.observe(f.tasks()[0].sessionId, { type: "tool.started", callId: "write", title: "Write", status: "pending", preview: { kind: "write", title: "Write" } });
+  f.manager.observe(f.tasks()[0].sessionId, { type: "tool.updated", callId: "write", status: "completed", preview: { kind: "write", title: "Write", path: "/home/user/.claude/plans/review.md" } });
+  await f.finish();
+  expect(f.tasks()[0].status).toBe("completed");
+  expect(f.host.stop).not.toHaveBeenCalledWith(f.tasks()[0].sessionId);
+});
+
+it("blocks actual read-only checkout modifications when a Write event arrives", async () => {
+  const f = reportTaskFixture();
+  await f.start();
+  await f.delegate(["."], { readOnly: true });
+  await vi.waitFor(() => expect(f.completions.has(f.tasks()[0].sessionId)).toBe(true));
+  f.snapshot.fingerprint = "actual-project-write";
+  f.manager.observe(f.tasks()[0].sessionId, { type: "tool.updated", callId: "write", status: "completed", preview: { kind: "write", title: "Write", path: "/repo/README.md" } });
+  await vi.waitFor(() => expect(f.tasks()[0].status).toBe("blocked"));
+  expect(f.tasks()[0].error).toContain("read-only task modified files");
+  expect(f.host.stop).toHaveBeenCalledWith(f.tasks()[0].sessionId);
+});
+
+it("fails closed when a read-only Write event cannot verify its checkout", async () => {
+  const f = reportTaskFixture();
+  await f.start();
+  await f.delegate(["."], { readOnly: true });
+  await vi.waitFor(() => expect(f.completions.has(f.tasks()[0].sessionId)).toBe(true));
+  f.host.checkoutSnapshot = vi.fn(async () => { throw Error("Git unavailable"); });
+  f.manager.observe(f.tasks()[0].sessionId, { type: "tool.started", callId: "write", title: "Write", preview: { kind: "write", title: "Write" } });
+  await vi.waitFor(() => expect(f.tasks()[0].status).toBe("blocked"));
+  expect(f.tasks()[0].error).toContain("Read-only verification failed: Git unavailable");
+});
+
 it("refreshes an idle Manager harness without requesting a user stop of its queued goal", async () => {
   const f = setup();
   f.lead.busy = false;

@@ -251,7 +251,7 @@ export function ProjectWorktrees({
     managerRuns
       .filter((run) => run.projectManager && sameProjectPath(run.cwd, project))
       .flatMap((run) => run.tasks)
-      .filter((task) => task.workspace)
+      .filter((task) => task.workspace && task.workspacePolicy !== "shared")
       .map((task) => [pathKey(task.workspace!.checkoutCwd), task]),
   );
   const rank = (tree: Worktree) => {

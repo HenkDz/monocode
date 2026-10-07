@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
-import { ProjectManagerReview } from "./ProjectManagerReview";
+import { ProjectManagerReview, ProjectManagerStatus } from "./ProjectManagerReview";
 import { orchestrator } from "../model/orchestration";
 import type { OrchestrationRun } from "../model/orchestrationState";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -34,6 +34,17 @@ vi.mock("../../inbox/hooks/useGithubPrChecks", () => ({
   useGithubPrChecks: () => checkView,
 }));
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+
+it("counts accepted no-change tasks as finished in the Manager header", async () => {
+  const host = document.createElement("div"), root = createRoot(host);
+  const run = { tasks: [{ id: "report", status: "completed", accepted: true, lastDispatchId: "dispatch", acceptedDispatchId: "dispatch", completionOutcome: "no-changes" }] } as unknown as OrchestrationRun;
+  try {
+    await act(async () => root.render(<ProjectManagerStatus run={run} />));
+    expect(host.textContent).toContain("0 running");
+    expect(host.textContent).toContain("0 ready");
+    expect(host.textContent).toContain("1 finished");
+  } finally { await act(async () => root.unmount()); }
+});
 
 it("explains a real blocker in chat and continues explicitly, without a Resume link", async () => {
   const continueManager = vi.spyOn(orchestrator, "continueManager").mockResolvedValue();

@@ -1,4 +1,4 @@
-import { useContext, useState, useSyncExternalStore } from "react";
+import { useContext, useEffect, useState, useSyncExternalStore } from "react";
 import { findMono, monoLook, type Mono } from "../model/mono";
 import { memberTasks } from "../model/monoNavigation";
 import { orchestrator } from "../../orchestration/model/orchestration";
@@ -15,7 +15,7 @@ import { PixelMascot } from "../../projects/ui/PixelMascot";
 import { AgentMarkdown } from "../../sessions/ui/AgentMarkdown";
 import { formatRelativeTime } from "../../inbox/model/githubTasks";
 import { projectName } from "../../../shared/lib/paths";
-import { openCardSession } from "../model/monoCards";
+import { cardSession, openCardSession, subscribeCardSessions } from "../model/monoCards";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 const expandedCards = new Map<string, boolean>();
@@ -41,6 +41,7 @@ function taskStatus(
   pr?: GitPr | null,
 ): [string, keyof typeof tones] {
   if (task.status === "cancelled") return ["Cancelled", "muted"];
+  if (managerTaskFinished(task, pr) && task.completionOutcome === "no-changes") return ["Completed", "merged"];
   if (managerTaskFinished(task, pr))
     return pr?.state === "merged" ? ["Merged", "merged"] : ["Closed", "muted"];
   if (task.status === "running") return ["Running", "running"];
@@ -81,6 +82,8 @@ export function MemberWorkLog({ member }: { member: Mono }) {
   const statuses = usePrStatusCache();
   const actions = useContext(OrchestrationActions);
   const [expanded, setExpanded] = useState(() => new Map(expandedCards));
+  const [, refresh] = useState(0);
+  useEffect(() => subscribeCardSessions(() => refresh(value => value + 1)), []);
   const tasks = memberTasks(runs, member.id);
   const manager = findMono(member.reportsTo ?? ""),
     look = manager && monoLook(manager);
@@ -99,8 +102,9 @@ export function MemberWorkLog({ member }: { member: Mono }) {
       )}
       {tasks.map((task) => {
         const key = `${member.id}:${task.id}`,
-          open = expanded.get(key) ?? false;
-        const [label, tone] = taskStatus(task, taskPrStatus(task, statuses));
+          needsYou = !!cardSession(task.sessionId)?.needsInput,
+          open = expanded.get(key) ?? needsYou;
+        const [label, tone] = needsYou ? ["Needs you", "review"] as const : taskStatus(task, taskPrStatus(task, statuses));
         const dispatch = runs
           .flatMap((run) => run.dispatches ?? [])
           .find(
@@ -210,6 +214,7 @@ export function MemberWorkLog({ member }: { member: Mono }) {
                     {task.workspace?.branch || projectName(cwd)}
                   </p>
                 )}
+                {task.readOnly && <p className="text-content/60">Read-only task{task.readOnlyFallback ? ` · ${task.readOnlyFallback}` : ""}</p>}
                 <details>
                   <summary className="w-fit cursor-pointer rounded text-content/60 focus-visible:outline-accent">
                     Assignment
@@ -237,7 +242,7 @@ export function MemberWorkLog({ member }: { member: Mono }) {
                   >
                     Open worker session
                   </button>
-                  {cwd && (
+                  {cwd && (!task.readOnly || task.readOnlyFallback) && (
                     <button
                       type="button"
                       className={button}

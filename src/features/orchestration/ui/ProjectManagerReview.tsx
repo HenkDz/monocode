@@ -13,6 +13,7 @@ import { usePrStatusCache } from "../../source-control/hooks/usePrStatus";
 import {
   managerPrReady,
   managerTaskMerged,
+  managerTaskFinished,
   taskPrStatus,
 } from "../model/projectManager";
 import {
@@ -49,6 +50,7 @@ export function ProjectManagerStatus({
         managerPrReady(task, taskPrStatus(task, statuses)),
       ),
     },
+    { label: "finished", tasks: run.tasks.filter(task => task.status === "cancelled" || managerTaskFinished(task, taskPrStatus(task, statuses))) },
   ];
   return (
     <nav

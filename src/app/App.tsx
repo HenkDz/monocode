@@ -140,6 +140,7 @@ import { WindowControls } from "./shell/WindowControls";
 import { MonoDetails } from "../features/monos/ui/MonoDetails";
 import { handleMonoTeam, isTeamReviewer } from "../features/monos/model/monoTeam";
 import { monoTeamHost, registerTeamCards } from "../features/monos/model/monoTeamRuntime";
+import { appendTeamChangeCard } from "../features/monos/model/monoTeamCards";
 import type { MonoPanelTab } from "../features/monos/ui/monoPanelParts";
 import {
   resolveMonoActivity,
@@ -7110,7 +7111,9 @@ function Workspace({
       if (editedResend) {
         current = { ...current, blocks: editedResend.blocks };
       }
-      const intent = options?.intent ?? "default";
+      const readOnlyTask = current.readOnly || orchestrator.snapshot().some(run =>
+        run.tasks.some(task => task.sessionId === sessionId && task.readOnly));
+      const intent = readOnlyTask ? "plan" : options?.intent ?? "default";
       if (intent === "orchestrate") {
         try {
           const run = orchestrator.forSession(sessionId);
@@ -10572,6 +10575,7 @@ function Workspace({
 
   useLayoutEffect(() => {
     orchestrator.bind({
+      checkoutSnapshot: (cwd, base) => invoke("git_task_snapshot", { cwd, base }),
       habitOwnerMono: habitRunMono,
       reviewerFor: (run) => {
         const reviewer = listMonos().find(
@@ -10658,7 +10662,7 @@ function Workspace({
                 );
               })
             : undefined;
-        const workerMode = run.projectManager
+        const workerMode = task.readOnly ? "supervised" : run.projectManager
           ? "full-access"
           : lead.runtimeMode;
         if (
@@ -10714,6 +10718,7 @@ function Workspace({
           sessionsRef.current.some(
             (session) =>
               session.id !== task.sessionId &&
+              !(task.readOnly && (session.id === run.leadId || session.id === run.ownerSessionId)) &&
               session.busy &&
               sameProjectPath(sessionWorkCwd(session), checkoutCwd),
           )
@@ -10751,6 +10756,7 @@ function Workspace({
             branch: workspace.branch,
             worktreeRemoved: false,
             runtimeMode: workerMode,
+            readOnly: task.readOnly,
             orchestrationLeadId: run.leadId,
           };
           await upsertSession(synced);
@@ -10804,7 +10810,7 @@ function Workspace({
                 ? `${task.memberName} · ${task.title}`
                 : task.title,
             };
-        const worker = { ...base, orchestrationLeadId: run.leadId };
+        const worker = { ...base, readOnly: task.readOnly, orchestrationLeadId: run.leadId };
         if (worker.providerSessionId)
           bindHarnessSession(
             worker.harness,
@@ -10875,7 +10881,7 @@ function Workspace({
       },
       cleanupWorker: async (run, task, onlyIfUnchanged) => {
         const workspace = task.workspace;
-        if (!workspace || workspace.kind !== "worktree") return true;
+        if (!workspace || workspace.kind !== "worktree" || task.workspacePolicy === "shared") return true;
         const path = workspace.checkoutCwd;
         await flushSessionCheckpoint(task.sessionId);
         const listed = await listWorktrees(orchestrationCheckoutCwd(run));
@@ -11554,9 +11560,7 @@ function Workspace({
     const stopCards = registerTeamCards(async (managerId, changeId) => {
       const target = sessionsRef.current.find(session => session.id === findMono(managerId)?.sessionId);
       if (!target) throw new Error("Manager chat is unavailable");
-      const id = `mono-team-${changeId}`;
-      const block: Block = { id, role: "assistant", text: "", monoTeamChange: { managerId, changeId } };
-      const next = target.blocks.some(block => block.id === id) ? target : { ...target, blocks: [...target.blocks, block] };
+      const next = appendTeamChangeCard(target, managerId, changeId, findMono(managerId)?.teamChanges ?? []);
       sessionsRef.current = sessionsRef.current.map(session => session.id === target.id ? next : session);
       flushSync(() => setSessions(sessionsRef.current));
       await upsertSession(next);
@@ -12123,6 +12127,8 @@ function Workspace({
             isMono: (id) => isMonoSession(id),
             postCard: async (_id, card) => {
               if (!sourceMono) throw new Error("Card owner no longer exists");
+              if (card.type === "dispatch" && sourceMono.role !== "orchestrator") throw new Error("Only an Orchestrator may post delegated Manager goals");
+              if (card.type === "dispatch" && !monoManagerGoals.goals(sourceMono.id).some(goal => !goal.archived && (!card.goalIds || card.goalIds.includes(goal.id)))) throw new Error("A delegated goals card requires delegated goals");
               if (
                 (card.type === "dispatch" ||
                   card.type === "status" ||

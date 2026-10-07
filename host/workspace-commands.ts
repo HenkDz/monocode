@@ -3,6 +3,7 @@ import {
   lstat,
   mkdir,
   readFile,
+  readlink,
   realpath,
   rename,
   rm,
@@ -12,6 +13,7 @@ import {
 import { basename, dirname, extname, isAbsolute, relative, resolve } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { createHash } from "node:crypto";
 import type { FileMtime, FsEntry, GitPr, ProjectFile } from "../src/platform/tauri/fs";
 import { hostWorktrees } from "./git-worktrees";
 import { createHostBranch, hostBranches, switchHostBranch } from "./git-branches";
@@ -48,6 +50,7 @@ export const WORKSPACE_COMMANDS = [
   "copy_path",
   "move_path",
   "git_diff_index",
+  "git_task_snapshot",
   "git_diff_files",
   "git_diff_stats",
   "git_file_diff",
@@ -144,6 +147,8 @@ export class WorkspaceCommands {
       case "git_diff_index":
       case "git_diff_files":
         return this.gitIndex(input.cwd);
+      case "git_task_snapshot":
+        return this.gitTaskSnapshot(input.cwd, input.base);
       case "git_diff_stats":
         return this.gitIndex(input.cwd).then((index) => ({
           files: index.files.length,
@@ -466,6 +471,40 @@ export class WorkspaceCommands {
 
   private async gitIndex(input: unknown) {
     return hostGitIndex(await this.gitRoot(input));
+  }
+
+  private async gitTaskSnapshot(cwd: unknown, base: unknown) {
+    const root = await this.gitRoot((await this.gitCommand(cwd, ["rev-parse", "--show-toplevel"])).trim());
+    const head = (await this.gitCommand(root, ["rev-parse", "--verify", "HEAD"])).trim();
+    const status = await this.gitCommand(root, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
+    const hash = createHash("sha256");
+    const hashPart = (value: string | Buffer) => {
+      const bytes = typeof value === "string" ? Buffer.from(value) : value;
+      const size = Buffer.alloc(8);
+      size.writeBigUInt64LE(BigInt(bytes.length));
+      hash.update(size).update(bytes);
+    };
+    hashPart(head);
+    hashPart(status);
+    hashPart(await this.gitCommand(root, ["diff", "--binary", "--no-ext-diff", "--no-textconv"]));
+    hashPart(await this.gitCommand(root, ["diff", "--cached", "--binary", "--no-ext-diff", "--no-textconv"]));
+    const untracked = await this.gitCommand(root, ["ls-files", "--others", "--exclude-standard", "-z"]);
+    for (const name of untracked.split("\0").filter(Boolean)) {
+      const path = workspacePath(root, name);
+      const info = await lstat(path);
+      hashPart(name);
+      hashPart(info.isSymbolicLink() ? await readlink(path) : await readFile(await existingPath(root, name)));
+    }
+    let commitsAhead = 0;
+    let baseDiff = false;
+    if (base != null) {
+      if (typeof base !== "string" || !base || base.length > 256 || base.startsWith("-") || /[\0\r\n]/.test(base))
+        throw new Error("Invalid task base");
+      const resolved = (await this.gitCommand(root, ["rev-parse", "--verify", "--end-of-options", `${base}^{commit}`])).trim();
+      commitsAhead = Number((await this.gitCommand(root, ["rev-list", "--count", `${resolved}..${head}`])).trim());
+      baseDiff = Boolean((await this.gitCommand(root, ["diff", "--no-ext-diff", "--no-textconv", "--name-only", resolved, head, "--"])).trim());
+    }
+    return { head, fingerprint: hash.digest("hex"), clean: !status, commitsAhead, baseDiff };
   }
 
   private async gitFileDiff(cwd: unknown, relative: unknown, staged: unknown) {

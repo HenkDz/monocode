@@ -1941,6 +1941,9 @@ describe("codex live turn sequence", () => {
       (message) => message.method === "turn/start",
     );
     updateCodexRuntimeMode("codex-live", "full-access");
+    expect(parse().find(message => message.method === "thread/start")?.params).toMatchObject({
+      approvalPolicy: "never", sandbox: "read-only", sandboxPolicy: { type: "readOnly" },
+    });
     expect(turnStart?.params).toMatchObject({
       approvalPolicy: "never",
       sandboxPolicy: { type: "readOnly" },
@@ -1965,6 +1968,11 @@ describe("codex live turn sequence", () => {
     expect(parse().find((message) => message.id === 91)?.result).toEqual({
       decision: "decline",
     });
+    onLine!(JSON.stringify({ id: 92, method: "item/permissions/requestApproval", params: {
+      itemId: "permission_1", permissions: { fileSystem: { write: ["/repo"] } },
+    } }));
+    await waitFor(() => parse().some(message => message.id === 92), "read-only permission denial");
+    expect(parse().find(message => message.id === 92)?.result).toEqual({ permissions: {} });
 
     notify("turn/completed", {
       turn: { id: "turn_1", status: "completed" },

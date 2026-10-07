@@ -15,7 +15,7 @@ import {
   usePrStatusCache,
 } from "../../source-control/hooks/usePrStatus";
 import { OrchestrationActions } from "../../orchestration/ui/OrchestrationActions";
-import { openCardSession } from "../model/monoCards";
+import { openCardSession, cardSession } from "../model/monoCards";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 vi.mock("../../source-control/hooks/usePrStatus", async (original) => ({
@@ -24,7 +24,7 @@ vi.mock("../../source-control/hooks/usePrStatus", async (original) => ({
   >()),
   usePrStatusCache: vi.fn(() => new Map()),
 }));
-vi.mock("../model/monoCards", () => ({ openCardSession: vi.fn() }));
+vi.mock("../model/monoCards", () => ({ openCardSession: vi.fn(), cardSession: vi.fn(), subscribeCardSessions: () => () => {} }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
 
 const manager: Mono = {
@@ -210,6 +210,7 @@ it("maps lifecycle and verified PR outcomes to light/dark status colors without 
     { ...base, id: "cancelled", status: "cancelled" },
     { ...base, id: "failed", status: "failed" },
     { ...base, id: "blocked", status: "blocked" },
+    { ...base, id: "no-changes", prUrl: undefined, completionOutcome: "no-changes", accepted: true, acceptedDispatchId: "dispatch" },
   ] as OrchestrationTask[];
   vi.mocked(usePrStatusCache).mockReturnValue(
     new Map(
@@ -242,6 +243,7 @@ it("maps lifecycle and verified PR outcomes to light/dark status colors without 
       ["cancelled", "Cancelled", "border-l-content/20"],
       ["failed", "Failed", "border-l-red-500"],
       ["blocked", "Blocked", "border-l-red-500"],
+      ["no-changes", "Completed", "border-l-emerald-500/40"],
     ]) {
       const card = container.querySelector(`[data-member-task="${id}"]`)!;
       expect(card.querySelector("[data-task-status]")?.textContent).toBe(label);
@@ -259,4 +261,22 @@ it("maps lifecycle and verified PR outcomes to light/dark status colors without 
   } finally {
     await act(async () => root.unmount());
   }
+});
+
+it("opens only a task awaiting the user and remembers a manual collapse", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.mocked(cardSession).mockReturnValue({ id: "attention", needsInput: true } as ReturnType<typeof cardSession>);
+  vi.spyOn(orchestrator, "snapshot").mockReturnValue([{ tasks: [{ ...base, id: "attention" }], dispatches: [] }] as unknown as OrchestrationRun[]);
+  vi.spyOn(orchestrator, "subscribe").mockReturnValue(() => {});
+  const host = document.createElement("div"), root = createRoot(host);
+  try {
+    await act(async () => root.render(<MemberWorkLog member={member} />));
+    const header = () => host.querySelector<HTMLButtonElement>("[aria-expanded]")!;
+    expect(header().getAttribute("aria-expanded")).toBe("true");
+    expect(host.querySelector("[data-task-status]")?.textContent).toBe("Needs you");
+    await act(async () => header().click());
+    await act(async () => root.render(null));
+    await act(async () => root.render(<MemberWorkLog member={member} />));
+    expect(header().getAttribute("aria-expanded")).toBe("false");
+  } finally { await act(async () => root.unmount()); vi.mocked(cardSession).mockReset(); }
 });

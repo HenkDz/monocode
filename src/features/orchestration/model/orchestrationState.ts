@@ -61,6 +61,12 @@ export type OrchestrationDispatch = {
 };
 
 export type OrchestrationTask = {
+  readOnly?: boolean;
+  readOnlyFallback?: string;
+  /** Immutable assignment base; never compare against a moving branch alone. */
+  baseHead?: string;
+  readOnlyBaseline?: { head: string; fingerprint: string };
+  completionOutcome?: "no-changes";
   origin?: "user" | "manager";
   id: string;
   monoGoalId?: string;

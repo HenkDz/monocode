@@ -30,6 +30,43 @@ afterEach(() => {
     rmSync(root, { recursive: true, force: true });
 });
 
+it("task snapshots detect dirty content, untracked edits and commits with no diff", async () => {
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "monocode-task-snapshot-")));
+  roots.push(root);
+  const git = (...args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
+  git("init", "-qb", "main");
+  git("config", "user.name", "Test");
+  git("config", "user.email", "test@example.test");
+  git("config", "commit.gpgsign", "false");
+  writeFileSync(join(root, "tracked.txt"), "base\n");
+  git("add", ".");
+  git("commit", "-qm", "base");
+  const base = git("rev-parse", "HEAD");
+  const store = new HostStore(":memory:");
+  store.addProject(root, "Snapshot");
+  const commands = new WorkspaceCommands(store, async (_id, action) => action());
+  const snapshot = () => commands.run("git_task_snapshot", { cwd: root, base }) as Promise<{ fingerprint: string; clean: boolean; commitsAhead: number; baseDiff: boolean }>;
+  try {
+    expect(await snapshot()).toMatchObject({ clean: true, commitsAhead: 0, baseDiff: false });
+    writeFileSync(join(root, "tracked.txt"), "dirty baseline\n");
+    const dirty = await snapshot();
+    writeFileSync(join(root, "tracked.txt"), "changed dirty baseline\n");
+    expect((await snapshot()).fingerprint).not.toBe(dirty.fingerprint);
+    git("restore", "tracked.txt");
+    writeFileSync(join(root, "new.txt"), "one");
+    const untracked = await snapshot();
+    writeFileSync(join(root, "new.txt"), "two");
+    expect((await snapshot()).fingerprint).not.toBe(untracked.fingerprint);
+    rmSync(join(root, "new.txt"));
+    git("commit", "--allow-empty", "-qm", "empty change");
+    expect(await snapshot()).toMatchObject({ clean: true, commitsAhead: 1, baseDiff: false });
+    await expect(commands.run("git_task_snapshot", { cwd: root, base: "--help" })).rejects.toThrow("Invalid task base");
+    await expect(commands.run("git_task_snapshot", { cwd: tmpdir(), base })).rejects.toThrow("outside");
+  } finally {
+    store.close();
+  }
+});
+
 it("fetch distinguishes remote existence from upstream and sync sets tracking safely", async () => {
   const root = realpathSync.native(mkdtempSync(join(tmpdir(), "monocode-publication-")));
   const remote = realpathSync.native(mkdtempSync(join(tmpdir(), "monocode-publication-remote-")));

@@ -95,17 +95,18 @@ function baseCodexConfig(mode: RuntimeMode): CodexThreadConfig {
 export function buildThreadStartParams(input: {
   cwd: string;
   runtimeMode: RuntimeMode;
+  intent?: TurnIntent;
   controlsAgents?: boolean;
   model?: string;
   serviceTier?: string;
 }): Record<string, unknown> {
   const config = runtimeModeToCodexConfig(
-    input.runtimeMode,
+    input.intent === "plan" ? "supervised" : input.runtimeMode,
     input.controlsAgents,
   );
   return {
     cwd: input.cwd,
-    approvalPolicy: config.approvalPolicy,
+    approvalPolicy: input.intent === "plan" ? "never" : config.approvalPolicy,
     sandbox: config.sandbox,
     sandboxPolicy: config.sandboxPolicy,
     approvalsReviewer: config.approvalsReviewer,

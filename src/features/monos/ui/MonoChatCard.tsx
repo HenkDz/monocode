@@ -22,6 +22,7 @@ export function MonoChatCard({ card, monoId, blockId }: { card: MonoCard; monoId
   const projects = mono ? monoLook(mono).projects : [];
   const goals = monoManagerGoals.goals(monoId).filter(goal => !goal.archived && projects.some(project => pathKey(project.path) === goal.projectId) && (!("goalIds" in card) || !card.goalIds || card.goalIds.includes(goal.id)));
   const reply = (text: string) => window.dispatchEvent(new CustomEvent("monocode:mono-card-reply", { detail: { monoId, text } }));
+  if (card.type === "dispatch" && (mono?.role !== "orchestrator" || !goals.length)) return null;
   if (card.type === "ready") {
     const ready = goals.flatMap(goal => {
       const run = orchestrator.run(goal.managerId);

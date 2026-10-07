@@ -639,6 +639,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
             ...buildThreadStartParams({
               cwd: input.cwd,
               runtimeMode: input.runtimeMode,
+              intent: input.intent,
               controlsAgents: input.controlsAgents,
               model,
               serviceTier,
@@ -659,6 +660,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
         buildThreadStartParams({
           cwd: input.cwd,
           runtimeMode: input.runtimeMode,
+          intent: input.intent,
           controlsAgents: input.controlsAgents,
           model,
           serviceTier,

@@ -1,6 +1,6 @@
 import { projectKey, projectName } from "../../../shared/lib/paths";
 import { validateMonoOrg, withDefaultTeam } from "./monoOrg";
-import { HARNESSES, type HarnessId } from "../../sessions/model/session";
+import { HARNESSES, RUNTIME_MODES, type RuntimeMode, type HarnessId } from "../../sessions/model/session";
 import {
   loadTabGroupColors,
   loadTabGroupCustomColors,
@@ -34,6 +34,7 @@ export const MONO_COLORS = [
  * them; it lives on the rail beside the projects and can be given more.
  */
 export type Mono = {
+  runtimeMode?: RuntimeMode;
   id: string;
   /** Project removal hides the team without discarding identity or history. */
   archivedAt?: number;
@@ -49,6 +50,8 @@ export type Mono = {
   lastUsedAt?: number;
   /** Original Manager folder; its existing engine key is retained after migration. */
   managerProject?: string;
+  /** Stable across lazy chat creation and chat resets; preserves migrated engines. */
+  managerEngineId?: string;
   /** Retained engine folders, including folders removed from active assignments. */
   workerProjects?: string[];
   /** Its conversation; absent until it is first opened. */
@@ -195,6 +198,7 @@ function parseMono(value: unknown): Mono | undefined {
     ...(typeof entry.archivedAt === "number" && Number.isFinite(entry.archivedAt)
       ? { archivedAt: entry.archivedAt }
       : {}),
+    ...(RUNTIME_MODES.includes(entry.runtimeMode as RuntimeMode) ? { runtimeMode: entry.runtimeMode as RuntimeMode } : {}),
     ...(["orchestrator", "manager", "member"].includes(String(entry.role))
       ? { role: entry.role as Mono["role"] }
       : {}),
@@ -208,6 +212,9 @@ function parseMono(value: unknown): Mono | undefined {
       : {}),
     ...(text("managerProject")
       ? { managerProject: text("managerProject") }
+      : {}),
+    ...(text("managerEngineId") || (text("managerProject") && text("sessionId"))
+      ? { managerEngineId: text("managerEngineId") ?? text("sessionId") }
       : {}),
     ...(Array.isArray(entry.workerProjects)
       ? {
@@ -254,6 +261,10 @@ function saveRoster(roster: readonly Mono[], strict = false): void {
 
 export function findMono(id: string): Mono | undefined {
   return listMonos().find((mono) => mono.id === id);
+}
+
+export function monoRuntimeMode(mono: Mono | undefined, fallback: RuntimeMode): RuntimeMode {
+  return mono?.runtimeMode ?? (mono?.role === "manager" || mono?.role === "member" ? "full-access" : mono?.role === "orchestrator" ? "supervised" : fallback);
 }
 
 /** The Mono whose conversation this is. */
@@ -306,6 +317,7 @@ export function adoptManagerMono(
     id: existing?.id ?? sessionId,
     sessionId,
     managerProject: project,
+    managerEngineId: existing?.managerEngineId ?? sessionId,
     projects: [project],
     lastUsedAt: at,
     role: "manager",

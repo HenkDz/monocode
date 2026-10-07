@@ -178,10 +178,12 @@ export function MemberDetails({
   member,
   fallback,
   onBack,
+  onProfileChange,
 }: {
   member: Mono;
   fallback: NonNullable<Mono["workerProfile"]>;
   onBack(): void;
+  onProfileChange?: (profile: NonNullable<Mono["workerProfile"]>) => void;
 }) {
   const [page, setPage] = useState("details");
   const runs = useSyncExternalStore(orchestrator.subscribe, orchestrator.snapshot, orchestrator.snapshot);
@@ -237,18 +239,20 @@ export function MemberDetails({
             project={member.projects[0]}
             side="bottom"
             variant="plain"
-            onChange={(harness, model) =>
+            onChange={(harness, model) => {
+              onProfileChange?.({ harness, model });
               updateMono(member.id, (value) => ({
                 ...value,
                 workerProfile: { harness, model },
-              }))
-            }
-            onSettingsChange={(modelSettings) =>
+              }));
+            }}
+            onSettingsChange={(modelSettings) => {
+              onProfileChange?.({ ...profile, modelSettings });
               updateMono(member.id, (value) => ({
                 ...value,
                 workerProfile: { ...profile, modelSettings },
-              }))
-            }
+              }));
+            }}
           />
         </Property>
       </dl>

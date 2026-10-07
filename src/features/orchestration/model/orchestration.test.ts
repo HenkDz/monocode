@@ -26,6 +26,7 @@ function setup() {
       async () => "/Applications/MonoCode.app/Contents/MacOS/monocode",
     ),
     disable: vi.fn(async () => {}),
+    attachOwner: vi.fn(async () => {}),
     scopes: vi.fn(async (cwd: string, files: string[]) =>
       files.map((file) => (file === "." ? cwd : `${cwd}/${file}`)),
     ),
@@ -116,6 +117,29 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+it("refreshes an idle Manager harness without requesting a user stop of its queued goal", async () => {
+  const f = setup();
+  f.lead.busy = false;
+  f.lead.queuedMessages = [{ id: "goal", text: "Implement the assigned goal", attachments: [] }];
+  f.lead.queueStatus = "active";
+  f.host.stop = vi.fn(async (_id, reason) => {
+    if (reason !== "refresh") f.lead.queueStatus = "paused";
+  });
+  f.manager.bind(f.host);
+  await f.manager.start("lead", ["codex"], 2, undefined, true);
+  expect(f.host.stop).toHaveBeenCalledWith("lead", "refresh");
+  expect(f.lead.queueStatus).toBe("active");
+  expect(f.lead.queuedMessages[0].id).toBe("goal");
+  await f.manager.pause("lead", "Delivery interrupted");
+  f.lead.queueStatus = "paused";
+  f.host.resumeQueue = vi.fn(() => { f.lead.queueStatus = "active"; return true; });
+  f.manager.bind(f.host);
+  await f.manager.continueManager("lead");
+  expect(f.host.resumeQueue).toHaveBeenCalledWith("lead");
+  expect(f.host.submit).not.toHaveBeenCalled();
+  expect(f.lead.queuedMessages).toHaveLength(1);
+});
+
 it("owns separate project engines from one Mono conversation and restores their owner", async () => {
   const f = setup();
   f.lead.busy = false;
@@ -134,8 +158,11 @@ it("owns separate project engines from one Mono conversation and restores their 
     ownerSessionId: "lead",
     tasks: [],
   });
-  expect(f.host.stop).toHaveBeenCalledWith("lead");
+  expect(f.host.stop).toHaveBeenCalledWith("lead", "refresh");
   expect(f.manager.submissionError("lead")).toBeNull();
+  const turn = await f.manager.beginManagerTurn("engine-a", true);
+  expect(f.store.attachOwner).toHaveBeenCalledWith("engine-a", "lead");
+  await f.manager.endManagerTurn("engine-a", turn, { status: "completed", text: "" });
   const restored = new Orchestrator(f.store);
   restored.bind(f.host);
   await restored.hydrate("engine-a");
@@ -144,6 +171,17 @@ it("owns separate project engines from one Mono conversation and restores their 
   expect(() =>
     restored.registerMonoEngine("engine-a", "other", "other", "/repo/a"),
   ).toThrow("already belongs");
+});
+
+it("fails the Manager turn closed when its owner connection cannot attach", async () => {
+  const f = setup();
+  f.lead.busy = false;
+  f.manager.registerMonoEngine("engine", f.lead.id, "mono", "/repo");
+  await f.manager.start("engine", ["codex"], 2, undefined, true);
+  f.store.attachOwner.mockRejectedValueOnce(Error("Lead connection is inactive"));
+  await expect(f.manager.beginManagerTurn("engine", true)).rejects.toThrow("Lead connection is inactive");
+  expect(f.manager.run("engine")?.status).toBe("paused");
+  expect(f.host.submit).not.toHaveBeenCalled();
 });
 
 it("allows an owning Mono's habit without acquiring or ending its Manager turn", async () => {

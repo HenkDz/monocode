@@ -11,6 +11,7 @@ import {
   findMono,
   isMonoSession,
   monoForSession,
+  monoRuntimeMode,
   saveMonoSessionId,
 } from "./mono";
 import { forgetAgentContext } from "./monoFiles";
@@ -48,12 +49,23 @@ async function loadMonoSession(
   if (!mono) return undefined;
   if (mono.sessionId) {
     const existing = await host.load(mono.sessionId);
-    if (existing) return existing;
+    if (existing) {
+      const current = findMono(monoId);
+      if (!current) return undefined;
+      const runtimeMode = monoRuntimeMode(current, existing.runtimeMode);
+      return runtimeMode === existing.runtimeMode ? existing : { ...existing, runtimeMode };
+    }
   }
   const home = await host.home();
   // Removed while the home folder was looked up.
-  if (!findMono(monoId)) return undefined;
-  const session = host.create(home);
+  const current = findMono(monoId);
+  if (!current) return undefined;
+  const defaults = host.create(home);
+  const profile = current.workerProfile;
+  // All first-open paths, including a goal arriving before the chat is opened,
+  // must use the Mono's profile. Existing chats above keep the user's choice.
+  const runtimeMode = monoRuntimeMode(current, defaults.runtimeMode);
+  const session = profile ? { ...newSession(profile.harness, home, profile.model, runtimeMode, profile.modelSettings), id: defaults.id } : { ...defaults, runtimeMode };
   saveMonoSessionId(monoId, session.id);
   host.add(session);
   return session;

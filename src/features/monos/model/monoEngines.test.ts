@@ -7,6 +7,9 @@ import {
   listMonos,
   railMonos,
   createMono,
+  findMono,
+  updateMono,
+  saveMonoSessionId,
 } from "./mono";
 import { monoEngineId } from "./monoEngines";
 
@@ -51,6 +54,25 @@ it("isolates new engine identity by Mono and folder while ignoring name changes"
   );
   expect(await monoEngineId(a, a.projects[1])).not.toBe(id);
   expect(await monoEngineId(b, b.projects[0])).not.toBe(id);
+});
+
+it("keeps a cold Manager's engine identity through first chat creation and reset", async () => {
+  const seed = createMono(["C:/code/app"]);
+  updateMono(seed.id, mono => ({ ...mono, role: "manager", managerProject: "C:/code/app" }));
+  const beforeChat = findMono(seed.id)!;
+  const engine = await monoEngineId(beforeChat, "C:/code/app");
+  saveMonoSessionId(seed.id, "first-chat");
+  expect(await monoEngineId(findMono(seed.id)!, "C:/code/app")).toBe(engine);
+  // A stale caller must see the same persisted identity too.
+  expect(await monoEngineId(beforeChat, "C:/code/app")).toBe(engine);
+  saveMonoSessionId(seed.id, "reset-chat");
+  expect(await monoEngineId(findMono(seed.id)!, "C:/code/app")).toBe(engine);
+});
+
+it("migrates a legacy Manager key before a chat reset can replace it", async () => {
+  localStorage.setItem("monocode:mono-roster", JSON.stringify([{ id: "old-mono", role: "manager", projects: ["C:/code/app"], managerProject: "C:/code/app", sessionId: "original-engine", mascot: "cat", color: "#aaa" }]));
+  saveMonoSessionId("old-mono", "fresh-chat");
+  expect(await monoEngineId(findMono("old-mono")!, "C:/code/app")).toBe("original-engine");
 });
 
 it("does not claim migration succeeded when roster storage fails", () => {

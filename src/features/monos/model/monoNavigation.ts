@@ -6,9 +6,10 @@ export function monoForView(id: string | null | undefined) {
   if (!id) return undefined;
   if (id.startsWith("mono-member:")) {
     const mono = findMono(id.slice("mono-member:".length));
-    return mono?.role === "member" ? mono : undefined;
+    return mono?.role === "member" && mono.archivedAt == null ? mono : undefined;
   }
-  return monoForSession(id);
+  const mono = monoForSession(id);
+  return mono?.archivedAt == null ? mono : undefined;
 }
 
 /** Standalone views participate in the same project-return memory as panes. */
@@ -25,11 +26,11 @@ export function memberTasks(runs: readonly OrchestrationRun[], memberId: string)
 }
 
 /** Exactly one org row owns a visible chat/worker/details view. */
-export function selectedOrgMono(sessionId: string | undefined, viewId: string | null, runs: readonly OrchestrationRun[]) {
-  const mono = monoForView(viewId) ?? (sessionId ? monoForSession(sessionId) : undefined);
+export function selectedOrgMono(sessionId: string | undefined, viewId: string | null, _runs: readonly OrchestrationRun[]) {
+  const mono = monoForView(viewId) ?? monoForView(sessionId);
   if (mono) return mono.id;
-  const memberId = runs.flatMap(run => run.tasks).find(task => task.sessionId === sessionId)?.memberId;
-  return memberId && findMono(memberId)?.role === "member" ? memberId : undefined;
+  // A worker is a different pane from the member's durable chat.
+  return undefined;
 }
 
 export function loadMonoView(windowLabel: string): string | null {

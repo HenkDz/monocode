@@ -46,6 +46,14 @@ it("hands each role only its direct reports and leaves plain Mono context unchan
   expect(orgTurnContext(roster, "leader")).toContain('"role":"orchestrator"');
   expect(orgTurnContext(roster, "leader")).not.toContain('"id":"app-backend"');
   expect(orgTurnContext(roster, "app")).toContain('"id":"app-backend"');
+  for (const id of ["leader", "app", "app-backend"]) {
+    expect(orgTurnContext(roster, id)).toContain("login:false");
+    expect(orgTurnContext(roster, id)).toContain("Claude's Bash tool");
+    expect(orgTurnContext(roster, id)).toContain("NO leading &");
+    expect(orgTurnContext(roster, id)).toContain("NEVER pass --json inline");
+    expect(orgTurnContext(roster, id)).toContain("--input option remains available when needed, not required");
+    expect(orgTurnContext(roster, id)).toContain("never an external MCP/node_repl process");
+  }
   expect(
     orgTurnContext([...roster, node("plain", undefined, ["/app"])], "plain"),
   ).toBeUndefined();

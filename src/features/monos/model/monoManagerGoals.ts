@@ -448,7 +448,9 @@ export class MonoManagerGoals {
                     ? "ready"
                     : tasks.length
                       ? "running"
-                      : goal.state;
+                      : run?.status === "active"
+                        ? "queued"
+                        : goal.state;
           if (
             goal.state === state &&
             JSON.stringify(goal.prUrls) === JSON.stringify(prUrls)

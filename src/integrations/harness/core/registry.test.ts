@@ -49,6 +49,48 @@ function stub(
 }
 
 describe("harness registry", () => {
+  it.each([true, false])("rechecks PowerShell identity and the actual command cwd before approval (trusted: %s)", async trusted => {
+    vi.mocked(isTauri).mockReturnValue(true);
+    const executable = "C:/preview/app.exe";
+    vi.mocked(invoke).mockImplementation(async command => command === "app_cli_approval_policy" ? {
+      executable, tempDir: "C:/Temp", actions: ["projects.list"], trustedPowerShell: ["powershell"],
+    } : command === "app_cli_powershell_is_trusted" ? trusted : undefined);
+    let settle!: () => void;
+    const onEvent = vi.fn(() => settle()), respondApproval = vi.fn(() => settle());
+    registerHarness(stub("codex", { respondApproval, async sendTurn(input) {
+      const wait = new Promise<void>(resolve => { settle = resolve; });
+      input.onEvent({ type: "approval.requested", requestId: 9, title: "Read projects", cwd: "C:/other-worktree",
+        command: ["powershell", "-NoProfile", "-Command", `& '${executable}' app projects.list`] });
+      await wait;
+    } }));
+    await sendHarnessTurn({ harness: "codex", sessionId: "shell-trust", cwd: "C:/Users/nooro", model: "test",
+      runtimeMode: "supervised", orgMono: true, text: "Read projects", onEvent });
+    expect(invoke).toHaveBeenCalledWith("app_cli_powershell_is_trusted", { path: "powershell", cwd: "C:/other-worktree" });
+    expect(respondApproval).toHaveBeenCalledTimes(trusted ? 1 : 0);
+    expect(onEvent).toHaveBeenCalledTimes(trusted ? 0 : 1);
+  });
+  it("keeps a manual decision available if automatic approval delivery throws", async () => {
+    vi.mocked(isTauri).mockReturnValue(true);
+    vi.mocked(invoke).mockImplementation(async command => command === "app_cli_approval_policy" ? {
+      executable: "C:/preview/app.exe", tempDir: "C:/Temp", actions: ["projects.list"],
+    } : undefined);
+    let settle!: () => void;
+    const onEvent = vi.fn(() => settle());
+    registerHarness(stub("codex", {
+      respondApproval() { throw new Error("transport closed"); },
+      async sendTurn(input) {
+        const wait = new Promise<void>(resolve => { settle = resolve; });
+        input.onEvent({ type: "approval.requested", requestId: 7, title: "Read projects",
+          command: ["C:/preview/app.exe", "app", "projects.list"] });
+        await wait;
+      },
+    }));
+    await sendHarnessTurn({ harness: "codex", sessionId: "delivery-failed", cwd: "C:/Users/nooro", model: "test",
+      runtimeMode: "supervised", monoSession: true, orgMono: true, text: "Read projects", onEvent });
+    expect(onEvent).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ type: "approval.requested", requestId: 7,
+      autoApprovalReason: "Automatic approval could not be delivered. Retry the decision manually." }));
+  });
+
   it.each([false, true])("checks temp input's real location before deciding (inside: %s)", async inside => {
     vi.mocked(isTauri).mockReturnValue(true);
     vi.mocked(invoke).mockImplementation(async command => command === "app_cli_approval_policy" ? {
@@ -73,7 +115,7 @@ describe("harness registry", () => {
       vi.mocked(isTauri).mockReturnValue(true);
       const executable = "C:/preview/monocode-org.exe";
       vi.mocked(invoke).mockImplementation(async command => command === "app_cli_approval_policy" ? {
-        executable, tempDir: "C:/Temp", actions: ["goals.assign", "projects.list"],
+        executable, tempDir: "C:/Temp", actions: ["goals.assign", "projects.list"], trustedRtk: "C:/Trusted/rtk.exe",
       } : undefined);
       const onEvent = vi.fn();
       let accept!: () => void;
@@ -84,7 +126,7 @@ describe("harness registry", () => {
           expect(input.runtimeMode).toBe("supervised");
           // ACP adapters install their resolver after emitting the request.
           input.onEvent({ type: "approval.requested", requestId: 1, title: "Run app CLI",
-            command: `"${executable}" app goals.assign --json '{"projectId":"nou","goal":"Test"}'` });
+            command: `${harness === "codex" ? "C:/Trusted/rtk.exe proxy " : ""}"${executable}" app goals.assign --json '{"projectId":"nou","goal":"Test"}'` });
           await new Promise<void>(resolve => { accept = resolve; });
           input.onEvent({ type: "approval.resolved", requestId: 1, decision: "allow" });
         },
@@ -113,6 +155,9 @@ describe("harness registry", () => {
       runtimeMode: "supervised", monoSession: true, orgMono, text: "Hello", onEvent });
     expect(respondApproval).not.toHaveBeenCalled();
     expect(onEvent).toHaveBeenCalledTimes(orgMono ? 3 : 1);
+    if (orgMono) expect(onEvent).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      autoApprovalReason: "Not an app CLI command; this tool request follows the Mono's permission mode.",
+    }));
   });
   afterEach(() => {
     vi.mocked(isTauri).mockReturnValue(false);

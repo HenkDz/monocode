@@ -1,6 +1,8 @@
 // @vitest-environment happy-dom
-import { beforeEach, expect, it, vi } from "vitest";
-import { loadMonoView, saveMonoView, memberDetailsView, memberTasks, selectedOrgMono } from "./monoNavigation";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { Storage } from "happy-dom";
+import { loadMonoView, saveMonoView, monoForView, memberDetailsView, memberTasks, selectedOrgMono } from "./monoNavigation";
+import { monoForSession } from "./mono";
 import { reconcileProjectReturn } from "../../projects/model/projectReturn";
 import { newTab } from "../../workspace/model/layout";
 import type { OrchestrationRun } from "../../orchestration/model/orchestrationState";
@@ -10,10 +12,20 @@ vi.mock("./mono", () => {
     { id: "manager", role: "manager", sessionId: "manager-chat", projects: ["/app"] },
     { id: "backend", role: "member", projects: ["/app"] },
     { id: "boss", role: "orchestrator", sessionId: "boss-chat", projects: ["/app"] },
+    { id: "archived-member", role: "member", sessionId: "archived-chat", projects: ["/app"], archivedAt: 1 },
   ];
   return { findMono: (id: string) => roster.find(m => m.id === id), monoForSession: (id: string) => roster.find(m => m.sessionId === id) };
 });
-beforeEach(() => localStorage.clear());
+beforeEach(() => vi.stubGlobal("localStorage", new Storage()));
+afterEach(() => vi.unstubAllGlobals());
+it("does not restore or select archived member chats, while retaining their history lookup", () => {
+  localStorage.setItem("monocode:mono-view:main", "archived-chat");
+  expect(loadMonoView("main")).toBeNull();
+  expect(monoForView("archived-chat")).toBeUndefined();
+  expect(monoForView(memberDetailsView("archived-member"))).toBeUndefined();
+  expect(selectedOrgMono("archived-chat", null, [])).toBeUndefined();
+  expect(monoForSession("archived-chat")?.id).toBe("archived-member");
+});
 const runs = [{ tasks: [
   { id: "old", memberId: "backend", sessionId: "old-chat" },
   { id: "new", memberId: "backend", sessionId: "worker-chat" },
@@ -23,7 +35,7 @@ it("derives a single row from the visible pane, never the hidden workspace sessi
   expect(selectedOrgMono("regular-chat", null, runs)).toBeUndefined();
   expect(selectedOrgMono("regular-chat", "manager-chat", runs)).toBe("manager");
   expect(selectedOrgMono("regular-chat", memberDetailsView("backend"), runs)).toBe("backend");
-  expect(selectedOrgMono("worker-chat", null, runs)).toBe("backend");
+  expect(selectedOrgMono("worker-chat", null, runs)).toBeUndefined();
   expect(selectedOrgMono("worker-chat", "boss-chat", runs)).toBe("boss");
   expect(memberTasks(runs, "backend")[0].sessionId).toBe("worker-chat");
 });

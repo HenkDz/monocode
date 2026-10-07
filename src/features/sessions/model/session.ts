@@ -260,6 +260,7 @@ export type MonoSessionCompletion = {
 };
 
 export type QueuedMessage = {
+  appRequestId?: string;
   monoSource?: { id: string; name: string; mascot: string; color: string; goalId: string };
   id: string;
   /** User bubble already shown optimistically in a Mono's conversation. */
@@ -342,6 +343,7 @@ export type Block = {
   };
   approval?: {
     requestId: number;
+    autoApprovalReason?: string;
     decided?: "allow" | "deny" | "cancelled";
   };
   /** Inner activity of a delegated run. Present on Agent/Task tool blocks. */
@@ -420,6 +422,8 @@ export const RUNTIME_MODE_HINT: Record<RuntimeMode, string> = {
 export type WorkspaceMode = "current" | "worktree";
 
 export type Session = {
+  /** Durable receipts: a saved draft can be accepted only once. */
+  consumedDraftIds?: string[];
   /** Receipt for an acknowledged floating-composer handoff. */
   quickLaunchAccepted?: boolean;
   /** Internal worker: displayed in its lead's panel rather than a workspace tab. */
@@ -726,6 +730,27 @@ export function sessionDraftBlock(
   session: Pick<Session, "blocks">,
 ): Block | undefined {
   return session.blocks.find((block) => block.role === "user" && block.draft);
+}
+
+/** Consume and enqueue together, before asynchronous Manager/provider setup. */
+export function sendDraftOnce(session: Session, text: string, attachments: Attachment[], draftId?: string, appRequestId?: string): Session | undefined {
+  const draft = session.blocks.find(block => block.role === "user" && block.draft &&
+    (draftId ? block.id === draftId : block.text === text && JSON.stringify(block.attachments ?? []) === JSON.stringify(attachments)));
+  const id = draftId ?? draft?.id;
+  if (!id) return;
+  const blocks = session.blocks.filter(block => !(block.id === id && block.draft));
+  if (session.consumedDraftIds?.includes(id)) return { ...session, blocks };
+  if (!draft) return;
+  return {
+    ...session,
+    blocks,
+    consumedDraftIds: [...(session.consumedDraftIds ?? []), id],
+    queuedMessages: [...(session.queuedMessages ?? []), {
+      id: `draft-${id}`, text, attachments, appRequestId: appRequestId ?? draft.appRequestId,
+      intent: draft.intent,
+    }],
+    queueStatus: session.queueStatus === "paused" ? "paused" : "active",
+  };
 }
 
 /** Remove one saved draft without disturbing the conversation before it. */

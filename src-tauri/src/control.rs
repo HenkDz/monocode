@@ -513,6 +513,7 @@ pub fn window_closed(app: &AppHandle, label: &str) {
     };
     for id in &ids {
         let _ = crate::harness::harness_kill(app.state(), id.clone());
+        crate::app_cli_inputs::remove(id);
     }
     if let Ok(mut inner) = host.inner.lock() {
         inner.close_window(label);

@@ -84,9 +84,7 @@ function baseCodexConfig(mode: RuntimeMode): CodexThreadConfig {
       };
     case "full-access":
       return {
-        // Explicit escalations still need an approval round-trip. "never"
-        // rejects them before the client's full-access handler can allow them.
-        approvalPolicy: "on-request",
+        approvalPolicy: "never",
         sandbox: "danger-full-access",
         approvalsReviewer: "user",
         sandboxPolicy: { type: "dangerFullAccess" },
@@ -1341,6 +1339,7 @@ export function mapApprovalRequest(
         type: "approval.requested",
         command: typeof rec.command === "string" ? rec.command :
           Array.isArray(rec.command) && rec.command.every(part => typeof part === "string") ? rec.command : undefined,
+        cwd: stringField(rec, "cwd"),
         requestId,
         title: readable
           ? presentation.title

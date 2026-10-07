@@ -884,7 +884,7 @@ function attachApproval(
               ...(preview ? { preview } : {}),
             }
           : prev.tool,
-      approval: { requestId: event.requestId },
+      approval: { requestId: event.requestId, autoApprovalReason: event.autoApprovalReason },
     };
     return { ...session, blocks };
   }
@@ -902,7 +902,7 @@ function attachApproval(
       kind: event.kind,
       ...(preview ? { preview } : {}),
     },
-    approval: { requestId: event.requestId },
+    approval: { requestId: event.requestId, autoApprovalReason: event.autoApprovalReason },
   });
 }
 

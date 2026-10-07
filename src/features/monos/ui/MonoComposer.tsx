@@ -1,7 +1,8 @@
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { ArrowUp, Plus } from "../../../shared/ui/icons";
 import { AttachmentChip } from "../../sessions/ui/AttachmentChip";
-import type { Attachment } from "../../sessions/model/session";
+import type { Attachment, RuntimeMode } from "../../sessions/model/session";
+import { AccessPicker } from "../../sessions/ui/AccessPicker";
 import {
   attachmentsFromFiles,
   filesFromClipboard,
@@ -29,6 +30,8 @@ const FIELD_CLASSES =
   "scrollbar-none block min-w-0 w-full resize-none bg-transparent py-1 text-[13px] leading-4.5 text-content outline-none placeholder:text-content/35";
 
 type Props = {
+  runtimeMode?: RuntimeMode;
+  onRuntimeModeChange?: (mode: RuntimeMode) => void;
   sessionId: string;
   name: string;
   enabled?: boolean;
@@ -48,6 +51,8 @@ type Props = {
  * live in the details panel instead.
  */
 export function MonoComposer({
+  runtimeMode,
+  onRuntimeModeChange,
   sessionId,
   name,
   enabled = true,
@@ -305,6 +310,7 @@ export function MonoComposer({
             <ArrowUp className="size-3.5" strokeWidth={2} />
           </button>
         </div>
+        {runtimeMode && onRuntimeModeChange && <div className="flex px-1 pb-1"><AccessPicker value={runtimeMode} onChange={onRuntimeModeChange} onClose={() => field.current?.focus()} /></div>}
       </div>
     </form>
   );

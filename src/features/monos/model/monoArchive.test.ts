@@ -13,12 +13,14 @@ import {
   monoForSession,
   reorderMonos,
   updateMono,
+  monoRuntimeMode,
   type Mono,
 } from "./mono";
 import { monoEngineId } from "./monoEngines";
 import type { OrchestrationRun } from "../../orchestration/model/orchestration";
 import { newSession, type Session } from "../../sessions/model/session";
 import { canDispatchQueuedHead } from "../../sessions/model/messageQueue";
+import { ensureMonoSession } from "./monoWorkspace";
 
 const project = "C:/Code/App";
 const roster: Mono[] = [
@@ -28,11 +30,13 @@ const roster: Mono[] = [
     name: "App Manager",
     projects: [project],
     managerProject: project,
+    managerEngineId: "manager-engine",
     workerProjects: ["C:/Code/App-old"],
     sessionId: "manager-chat",
     mascot: "crab",
     color: "red",
     teamInitialized: true,
+    runtimeMode: "supervised",
   },
   {
     id: "backend",
@@ -42,6 +46,7 @@ const roster: Mono[] = [
     name: "Backend",
     projects: [project],
     sessionId: "backend-chat",
+    runtimeMode: "full-access",
     mascot: "cat",
     color: "red",
   },
@@ -128,7 +133,7 @@ it("archives only the matching Manager and members, retaining stored identities 
   const expectedEngines = new Set([
     "saved-owned-engine",
     "saved-session-engine",
-    "manager-chat",
+    "manager-engine",
     await monoEngineId(roster[0], "C:/Code/App-old"),
     await monoEngineId(roster[1], project),
     await monoEngineId(roster[2], project),
@@ -191,6 +196,7 @@ it("preserves archived transcripts and queued goals across restore until explici
   });
   expect(stored.busy).toBe(false);
   expect(stored.turnReady).toBe(false);
+  expect(stored.runtimeMode).toBe(conversation.runtimeMode);
   expect(stored.blocks.map(({ id, text }) => ({ id, text }))).toEqual(
     conversation.blocks.map(({ id, text }) => ({ id, text })),
   );
@@ -203,6 +209,44 @@ it("preserves archived transcripts and queued goals across restore until explici
   expect(canDispatchQueuedHead({ ...restored, queueStatus: "active" })).toBe(
     true,
   );
+});
+
+it("retains independent Manager/member permission modes and stable engine identity through archive and chat reset", async () => {
+  const runs = engine();
+  const engineId = await monoEngineId(listMonos(true)[0], project);
+  await archiveProjectMonos(project, runs, async () => {});
+  const archivedManager = listMonos(true).find((mono) => mono.id === "manager")!;
+  const archivedMember = listMonos(true).find((mono) => mono.id === "backend")!;
+  expect(archivedManager.archivedAt).toEqual(expect.any(Number));
+  expect(monoRuntimeMode(archivedManager, "full-access")).toBe("supervised");
+  expect(monoRuntimeMode(archivedMember, "supervised")).toBe("full-access");
+  expect(await monoEngineId(archivedManager, project)).toBe(engineId);
+  expect(runs.stopRun).toHaveBeenCalledWith(engineId, { retainWorktrees: true });
+  expect(offerProjectMonoRestore(project, () => true)).toBe(true);
+  updateMono("manager", (mono) => ({ ...mono, sessionId: "reset-manager-chat" }));
+  const restored = listMonos();
+  expect(restored.find((mono) => mono.id === "backend")?.sessionId).toBe("backend-chat");
+  expect(await monoEngineId(restored.find((mono) => mono.id === "manager")!, project)).toBe(engineId);
+  expect(restored.find((mono) => mono.id === "manager")?.runtimeMode).toBe("supervised");
+  expect(restored.find((mono) => mono.id === "backend")?.runtimeMode).toBe("full-access");
+});
+
+it("does not reopen a member chat whose project is archived while its saved conversation loads", async () => {
+  let resolve!: (session: Session) => void;
+  const host = {
+    home: vi.fn(async () => "/home"),
+    load: vi.fn(() => new Promise<Session>((ready) => { resolve = ready; })),
+    create: vi.fn((cwd: string) => newSession("codex", cwd)),
+    add: vi.fn(),
+  };
+  const opening = ensureMonoSession("backend", host);
+  await archiveProjectMonos(project, engine(), async () => {});
+  resolve({ ...newSession("codex", "/home"), id: "backend-chat" });
+  expect(await opening).toBeUndefined();
+  expect(host.create).not.toHaveBeenCalled();
+  expect(host.add).not.toHaveBeenCalled();
+  expect(await ensureMonoSession("backend", host)).toBeUndefined();
+  expect(host.load).toHaveBeenCalledTimes(1);
 });
 
 it("keeps archived entries through visible edits, reorder and new Mono creation", async () => {

@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { newSession } from "../../sessions/model/session";
 import { leafIds, newTab, splitPane } from "../../workspace/model/layout";
 import { planWorkspaceTabClose } from "../../workspace/model/workspaceTabGroups";
-import { createMono, findMono, saveMonoName, saveMonoSessionId } from "./mono";
+import { createMono, findMono, saveMonoName, saveMonoSessionId, monoRuntimeMode, updateMono } from "./mono";
 import { planAgentContext, recordAgentContext } from "./monoFiles";
 import {
   loadMonoBaseline,
@@ -26,6 +26,41 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
+it("defaults Managers and members to full access, keeps the Orchestrator supervised, and honors per-agent choices", () => {
+  const plain = { id: "plain", projects: [], mascot: "cat", color: "#abc" };
+  expect(monoRuntimeMode(plain, "auto-accept-edits")).toBe("auto-accept-edits");
+  for (const role of ["manager", "member", "orchestrator"] as const) {
+    const mono = { id: role, role, projects: [], mascot: "cat", color: "#abc" };
+    expect(monoRuntimeMode(mono, "full-access")).toBe(role === "orchestrator" ? "supervised" : "full-access");
+    expect(monoRuntimeMode({ ...mono, runtimeMode: "supervised" }, "full-access")).toBe("supervised");
+  }
+});
+
+it("persists all four access choices on the Mono and restores them into the next chat", async () => {
+  const mono = createMono(["/project"]);
+  const host = { home: async () => "/home", load: vi.fn(), create: () => newSession("codex", "/home", undefined, "supervised"), add: vi.fn() };
+  for (const runtimeMode of ["supervised", "auto-accept-edits", "auto", "full-access"] as const) {
+    updateMono(mono.id, current => ({ ...current, runtimeMode }));
+    expect(findMono(mono.id)?.runtimeMode).toBe(runtimeMode);
+    expect((await ensureMonoSession(mono.id, host))?.runtimeMode).toBe(runtimeMode);
+  }
+});
+
+it("uses the Mono profile on cold goal delivery without changing restored chat choices", async () => {
+  localStorage.setItem("monocode:mono-roster", JSON.stringify([
+    { id: "manager", role: "manager", projects: ["/project"], mascot: "cat", color: "#abc", workerProfile: { harness: "claude", model: "claude:sonnet-5" } },
+  ]));
+  const host = { home: async () => "/home", load: vi.fn(), create: () => newSession("codex", "/home", undefined, "supervised"), add: vi.fn() };
+  const created = await ensureMonoSession("manager", host);
+  expect(created?.harness).toBe("claude");
+  expect(created?.runtimeMode).toBe("full-access");
+  const changedByUser = { ...created!, harness: "codex" as const };
+  host.load.mockResolvedValue(changedByUser);
+  expect(await ensureMonoSession("manager", host)).toBe(changedByUser);
+  host.load.mockResolvedValue({ ...changedByUser, runtimeMode: "supervised" });
+  expect((await ensureMonoSession("manager", host))?.runtimeMode).toBe("full-access");
+});
+
 const chat = (id: string, cwd = "/project") => ({
   ...newSession("codex", cwd),
   id,
@@ -39,6 +74,21 @@ function monoFor(cwd: string, sessionId: string): string {
   return mono.id;
 }
 const sessionOf = (monoId: string) => findMono(monoId)?.sessionId;
+
+it("lazily gives a member its own durable chat, separate from task worker sessions", async () => {
+  localStorage.setItem("monocode:mono-roster", JSON.stringify([
+    { id: "manager", role: "manager", projects: ["/project"], mascot: "cat", color: "#abc" },
+    { id: "backend", role: "member", reportsTo: "manager", specialty: "Backend", projects: ["/project"], mascot: "cat", color: "#abc" },
+  ]));
+  const host = { home: async () => "/home", load: vi.fn(), create: vi.fn(() => chat("member-chat", "/home")), add: vi.fn() };
+  const session = await ensureMonoSession("backend", host);
+  expect(session?.id).toBe("member-chat");
+  expect(session?.id).not.toBe("task-worker");
+  expect(sessionOf("backend")).toBe("member-chat");
+  host.load.mockResolvedValue(session);
+  expect(await ensureMonoSession("backend", host)).toBe(session);
+  expect(host.create).toHaveBeenCalledOnce();
+});
 
 it("loads an existing resident conversation without creating a session", async () => {
   const agent = chat("resident");

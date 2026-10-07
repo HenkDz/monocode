@@ -23,6 +23,40 @@ let root: Root;
 let container: HTMLDivElement;
 const agent = { name: "Captain", mascot: "cat", color: "#6ba", projects: [] };
 const noop = () => {};
+
+it("shows and edits the agent's permission mode in Details", async () => {
+  const onRuntimeModeChange = vi.fn();
+  await act(async () => root.render(createElement(MonoDetails, {
+    open: true, monoId: "permissions", cwd: "/repo", agent,
+    state: { status: "idle" }, harness: "codex", model: "codex:gpt-5.4", modelSettings: {},
+    onModelChange: noop, onModelSettingsChange: noop, onClose: noop,
+    runtimeMode: "full-access", onRuntimeModeChange,
+  })));
+  const picker = container.querySelector<HTMLButtonElement>('button[aria-label="Full access"]')!;
+  expect(picker).not.toBeNull();
+  await act(async () => picker.click());
+  const option = [...document.querySelectorAll<HTMLButtonElement>('[role="option"]')].find(button => button.textContent?.includes("Supervised"))!;
+  await act(async () => option.click());
+  expect(onRuntimeModeChange).toHaveBeenCalledWith("supervised");
+});
+
+it("keeps member settings inside Details and org tools collapsed below the team view", async () => {
+  localStorage.setItem("monocode:mono-roster", JSON.stringify([
+    { id: "m", role: "manager", projects: ["/repo"], mascot: "cat", color: "#6ba" },
+    { id: "member", role: "member", reportsTo: "m", specialty: "Backend", projects: ["/repo"], mascot: "cat", color: "#6ba" },
+  ]));
+  const props = { open: true, monoId: "member", cwd: "/repo", agent, state: { status: "idle" as const }, harness: "codex" as const, model: "codex:gpt-5.4", modelSettings: {}, onModelChange: noop, onModelSettingsChange: noop, onClose: noop };
+  try {
+    await act(async () => root.render(createElement(MonoDetails, props)));
+    expect(container.querySelector('[aria-label="Member specialty"]')).not.toBeNull();
+    expect(container.textContent).toContain("Recent tasks");
+    await act(async () => root.render(createElement(MonoDetails, { ...props, monoId: "m", tab: "activity", teamActivity: createElement("div", null, "Live team"), activity: { blocks: [], live: false } })));
+    expect(container.textContent).toContain("Live team");
+    expect(container.querySelector("details")?.open).toBe(false);
+    await act(async () => root.render(createElement(MonoDetails, { ...props, monoId: "m", tab: "activity", teamActivity: createElement("div", null, "Live team"), toolActivityOpen: true, activity: { blocks: [], live: false } })));
+    expect(container.querySelector("details")?.open).toBe(true);
+  } finally { localStorage.removeItem("monocode:mono-roster"); }
+});
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal(

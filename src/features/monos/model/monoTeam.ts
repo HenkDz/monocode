@@ -97,14 +97,8 @@ export function assertTeamUpdateUnlocked(member: Mono, input: Record<string, unk
       throw Error(`${field} is set by the user and locked; suggest the change in chat`);
 }
 
-function assertReviewerRetained(roster: readonly Mono[], before: Mono, after: Mono): void {
-  if (isTeamReviewer(before) && (after.archivedAt != null || !isTeamReviewer(after)) && !roster.some((mono) => mono.id !== before.id && mono.role === "member" && mono.reportsTo === before.reportsTo && mono.archivedAt == null && isTeamReviewer(mono)))
-    throw Error("The last Reviewer cannot be retired or lose its reviewer role");
-}
-
 export function assertTeamRetire(roster: readonly Mono[], managerId: string, memberId: string): Mono {
   const member = assertTeamMember(roster, managerId, memberId);
-  assertReviewerRetained(roster, member, { ...member, archivedAt: Date.now() });
   return member;
 }
 
@@ -223,7 +217,6 @@ function reconcileMember(roster: readonly Mono[], managerId: string, change: Tea
     if (JSON.stringify(current[key]) !== JSON.stringify(before[key]) && JSON.stringify(current[key]) !== JSON.stringify(change.after[key])) throw new TeamEditConflict("The member changed while the team action was saving");
     Object.assign(after, { [key]: change.after[key] });
   }
-  assertReviewerRetained(roster, current, after);
   return after;
 }
 
@@ -299,7 +292,6 @@ export function handleMonoTeam(managerId: string, requestId: string, action: str
         if (input.specialty !== undefined) after.specialty = shortText(input.specialty, "specialty");
         if (["harness", "model", "modelSettings"].some((key) => Object.prototype.hasOwnProperty.call(input, key))) after.workerProfile = updateProfile(before, input, host);
         if (input.soul !== undefined) files.soul = { before: (await readAgentFile(before.id, "SOUL.md")).text ?? "", after: validateTeamSoul(input.soul) };
-        assertReviewerRetained(roster, before, after);
       } else if (action.startsWith("team.memory.")) {
         const memory = (await readAgentFile(before.id, "MEMORY.md")).text ?? "";
         files.memory = { before: memory, after: action === "team.memory.add" ? addTeamMemory(memory, input.facts) : forgetTeamMemory(memory, input.factIds) };

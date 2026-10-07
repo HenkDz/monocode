@@ -61,6 +61,10 @@ export type OrchestrationDispatch = {
 };
 
 export type OrchestrationTask = {
+  trivial?: boolean;
+  reviewedHead?: string;
+  delivery?: { head: string; ci: "pass" | "fail" | "pending" | "unknown"; conflicts: boolean; mergeable?: boolean; state: "watching" | "fixing-ci" | "resolving-conflicts" | "review-outdated" | "ready"; repairKey?: string };
+  handoffNote?: string;
   readOnly?: boolean;
   readOnlyFallback?: string;
   /** Immutable assignment base; never compare against a moving branch alone. */
@@ -76,6 +80,7 @@ export type OrchestrationTask = {
   memberColor?: string;
   reviewOf?: { taskId: string; dispatchId: string };
   reviewVerdict?: {
+    headOid?: string;
     decision: "approve" | "changes";
     notes: string;
     dispatchId: string;

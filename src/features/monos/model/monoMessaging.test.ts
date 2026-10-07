@@ -18,6 +18,13 @@ function message(id: string): QueuedMessage {
 }
 
 describe("optimistic Mono messages", () => {
+  it("preserves teammate event provenance across busy delivery and retry", () => {
+    const event = { ...message("teammate"), appRequestId: "worker:question" };
+    const queued = enqueueMonoMessage({ ...newSession("codex", "/tmp"), busy: true }, event);
+    expect(queued.queuedMessages![0].appRequestId).toBe("worker:question");
+    const failed = rejectMessageSend(queued, queued.queuedMessages![0], "not ready");
+    expect(failed.queuedMessages![0].appRequestId).toBe("worker:question");
+  });
   it("keeps rejected internal events out of the user outbox and transcript", () => {
     const session = newSession("claude", "/tmp");
     const event = { ...message("event"), blockId: "receipt", monoSessionCompletion: {

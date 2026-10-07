@@ -24,6 +24,7 @@ import { OrchestrationActions } from "../../orchestration/ui/OrchestrationAction
 import { PixelMascot } from "../../projects/ui/PixelMascot";
 import { pathKey, projectName } from "../../../shared/lib/paths";
 import { loadTabGroupLabels, resolveTabGroupLabel } from "../../workspace/model/tabGroups";
+import { MonoOrgActivity } from "./MonoOrgActivity";
 
 type Props = {
   monoId: string;
@@ -75,9 +76,9 @@ export function MonoTeamActivity({
     ids = orgDescendants(roster, monoId);
   const decisions = teamDecisions(roster, sessions, runs, monoId);
   const teams = runs.filter(
-    (run) => run.ownerMonoId && ids.has(run.ownerMonoId),
+    (run) => (run.ownerMonoId && ids.has(run.ownerMonoId)) || run.tasks.some(task => task.memberId === monoId),
   );
-  const tasks = teamActivityTasks(teams, statuses, decisions);
+  const tasks = teamActivityTasks(teams, statuses, decisions).filter(entry => roster.find(m => m.id === monoId)?.role !== "member" || entry.task.memberId === monoId);
   const goals = monoManagerGoals.goals();
   const [now, setNow] = useState(Date.now);
   const [continuing, setContinuing] = useState<string>();
@@ -292,6 +293,7 @@ export function MonoTeamActivity({
 
   return (
     <div data-team-activity className="space-y-4 p-3">
+      <MonoOrgActivity rootId={monoId} roster={roster} runs={teams} sessions={sessions} now={now} />
       <h3 className="text-xs font-medium">
         Needs you <span data-team-needs-count>{decisions.length}</span>
       </h3>

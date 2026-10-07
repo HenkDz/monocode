@@ -89,12 +89,12 @@ it("uses independent defaults for Reviewer hires and accepts an explicit matchin
   expect(listMonos().find((mono) => mono.id === "manager")!.teamChanges!.at(-1)!.warning).toBe("Reviewer uses the same model as implementers");
 });
 
-it("undoes the whole hiring action into an empty team, rejects a partial last-reviewer undo and cancels every hired member", async () => {
+it("undoes the whole hiring action into an empty team, permits a partial last-reviewer undo and cancels every hired member", async () => {
   localStorage.setItem("monocode:mono-roster", JSON.stringify([node("manager", "manager")]));
   const bridge = host();
   const builder = await handleMonoTeam("manager", "builder", "team.hire", hire, bridge) as { member: Mono; changeId: string };
   const reviewer = await handleMonoTeam("manager", "reviewer", "team.hire", { ...hire, specialty: "Reviewer" }, bridge) as { member: Mono; changeId: string };
-  await expect(undoMonoTeamChange("manager", reviewer.changeId, bridge)).rejects.toThrow("last Reviewer");
+  await undoMonoTeamChange("manager", reviewer.changeId, bridge);
   await undoMonoTeamChanges("manager", [builder.changeId, reviewer.changeId], bridge);
   expect(listMonos().filter((mono) => mono.reportsTo === "manager")).toHaveLength(0);
   expect(bridge.cancelMemberTasks).toHaveBeenCalledWith(builder.member.id);
@@ -121,15 +121,15 @@ it("allows Undo of a Reviewer-only initial hire back to the original empty team"
   expect(listMonos().filter((mono) => mono.reportsTo === "manager")).toHaveLength(0);
 });
 
-it("rejects size caps, unavailable models, oversized souls and last-reviewer removal/rename", async () => {
+it("rejects malformed profiles but permits last-reviewer removal and rename", async () => {
   const bridge = host();
   setTeamSizeCap("manager", 1);
   await expect(handleMonoTeam("manager", "cap", "team.hire", hire, bridge)).rejects.toThrow("size cap");
   setTeamSizeCap("manager", 6);
   await expect(handleMonoTeam("manager", "bad-model", "team.hire", { ...hire, model: "missing" }, bridge)).rejects.toThrow("available model");
   expect(() => validateTeamSoul("猫".repeat(3000))).toThrow("8 KB");
-  await expect(handleMonoTeam("manager", "retire", "team.retire", { memberId: "reviewer", reason: "done" }, bridge)).rejects.toThrow("last Reviewer");
-  await expect(handleMonoTeam("manager", "rename", "team.update", { memberId: "reviewer", specialty: "Builder" }, bridge)).rejects.toThrow("last Reviewer");
+  await expect(handleMonoTeam("manager", "rename", "team.update", { memberId: "reviewer", specialty: "Builder" }, bridge)).resolves.toBeDefined();
+  await expect(handleMonoTeam("manager", "retire", "team.retire", { memberId: "reviewer", reason: "done" }, bridge)).resolves.toBeDefined();
 });
 
 it("preserves user locks across storage reads and rejects manager changes and Undo", async () => {
@@ -197,13 +197,13 @@ it("retains starter origins and persists custom reviewer flags", async () => {
   const added = await handleMonoTeam("manager", "custom-reviewer", "team.hire", { ...hire, specialty: "Audit", reviewer: true }, bridge) as { member: Mono };
   expect(listMonos().find((mono) => mono.id === added.member.id)?.reviewer).toBe(true);
   await handleMonoTeam("manager", "retire-original", "team.retire", { memberId: "reviewer", reason: "Replacement hired" }, bridge);
-  await expect(undoMonoTeamChange("manager", listMonos().find((mono) => mono.id === "manager")!.teamChanges![0].id, bridge)).rejects.toThrow("last Reviewer");
+  await undoMonoTeamChange("manager", listMonos().find((mono) => mono.id === "manager")!.teamChanges![0].id, bridge);
 });
 
-it("enforces the last Reviewer invariant through user roster edits while permitting whole-project archival", () => {
-  expect(() => updateMono("reviewer", (mono) => ({ ...mono, specialty: "Builder" }))).toThrow("last Reviewer");
-  expect(() => updateMono("reviewer", (mono) => ({ ...mono, archivedAt: Date.now() }))).toThrow("last Reviewer");
-  expect(listMonos().find((mono) => mono.id === "reviewer")?.specialty).toBe("Reviewer");
+it("allows last Reviewer changes through user roster edits", () => {
+  expect(() => updateMono("reviewer", (mono) => ({ ...mono, specialty: "Builder" }))).not.toThrow();
+  expect(() => updateMono("reviewer", (mono) => ({ ...mono, archivedAt: Date.now() }))).not.toThrow();
+  expect(listMonos().find((mono) => mono.id === "reviewer")?.specialty).toBeUndefined();
 });
 
 it("preserves concurrent user fields and attached sessions during a memory Undo", async () => {

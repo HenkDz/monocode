@@ -13,6 +13,25 @@ import {
 } from "./codexProtocol";
 import { parseCodexModelList } from "./codexCatalog";
 
+it("shows code-mode custom tools using raw scoped call identity without parsing chat", () => {
+  expect(buildThreadStartParams({ cwd: "/repo", runtimeMode: "auto" })).toHaveProperty("experimentalRawEvents", true);
+  const context = { threadId: "thread", turnId: "turn" };
+  const started = mapCodexNotification("rawResponseItem/completed", { ...context,
+    item: { type: "custom_tool_call", call_id: "call-1", name: "exec", input: "text(await tools.exec_command({cmd:'git status'}))" } });
+  expect(started.events[0]).toMatchObject({ type: "tool.started", callId: "raw:thread:turn:call-1", title: "Run tools", kind: "execute", status: "in_progress" });
+  const completed = mapCodexNotification("rawResponseItem/completed", { ...context,
+    item: { type: "custom_tool_call_output", call_id: "call-1", output: [{ type: "input_text", text: "Script completed" }] } });
+  expect(completed.events[0]).toMatchObject({ type: "tool.updated", callId: "raw:thread:turn:call-1", status: "completed", detail: "Script completed" });
+  expect(mapCodexNotification("rawResponseItem/completed", { ...context, item: { type: "message", text: "Calling tools" } }).events).toEqual([]);
+  expect(mapCodexNotification("rawResponseItem/completed", { item: { type: "custom_tool_call", call_id: "call-1" } }).events).toEqual([]);
+});
+
+it("maps the installed app-server dynamic tool lifecycle and failed output", () => {
+  const item = { id: "dynamic", type: "dynamicToolCall", namespace: "project", tool: "status", arguments: {}, status: "inProgress" };
+  expect(mapCodexNotification("item/started", { item }).events[0]).toMatchObject({ type: "tool.started", title: "project:status", status: "in_progress" });
+  expect(mapCodexNotification("item/completed", { item: { ...item, status: "completed", success: false } }).events[0]).toMatchObject({ type: "tool.updated", callId: "dynamic", status: "failed" });
+});
+
 describe("runtimeModeToCodexConfig", () => {
   it("maps supervised to untrusted read-only", () => {
     expect(runtimeModeToCodexConfig("supervised")).toEqual({

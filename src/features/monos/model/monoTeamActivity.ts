@@ -55,7 +55,7 @@ export function activityTaskEvent(
   for (const block of [...(session?.blocks ?? [])].reverse()) {
     if (block.internal) continue;
     const text =
-      block.tool?.title ||
+      (block.tool?.title && activityToolTitle(block.tool.title)) ||
       (block.role === "assistant" || block.notice ? block.text : "");
     if (text.trim() && !sameText(text, task.prompt ?? "")) return oneLine(text);
   }
@@ -63,6 +63,22 @@ export function activityTaskEvent(
   return result.trim() && !sameText(result, task.prompt ?? "")
     ? oneLine(result)
     : "Waiting for the next step";
+}
+
+/** Keep app command arguments out of the compact live status; the transcript retains them. */
+export function activityToolTitle(title: string): string {
+  const action = title.match(/\b(?:app|control)\s+([a-z.]+)/)?.[1];
+  const labels: Record<string, string> = {
+    "team.message": "Asking a teammate",
+    "team.list": "Checking the team",
+    "projects.list": "Checking assigned projects",
+    "projects.status": "Checking project progress",
+    "reviews.submit": "Sharing the review",
+    "artifacts.read": "Reading project notes",
+    "artifacts.write": "Saving project notes",
+    delegate: "Assigning a task", review: "Reviewing the change",
+  };
+  return (action && labels[action]) || title;
 }
 
 /** Classify once, then render that single task identity in its section. */

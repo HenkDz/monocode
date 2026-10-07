@@ -3,6 +3,15 @@ import type { SessionSummary } from "../../sessions/data/sessionStore";
 import type { Worktree } from "./worktrees";
 import { worktreeProgress, worktreeSessionGroups } from "./worktreeSessions";
 import { pathKey } from "../../../shared/lib/paths";
+import type { OrchestrationRun } from "../../orchestration/model/orchestrationState";
+
+it("keeps team workers and earlier dispatch sessions out of user worktrees and badges", () => {
+  const runs = [{ ownerMonoId: "manager", tasks: [{ sessionId: "reviewer" }], dispatches: [{ sessionId: "old-reviewer" }] }] as OrchestrationRun[];
+  const grouped = worktreeSessionGroups("C:/repo", [tree("C:/repo")], [session("reviewer"), session("old-reviewer"), session("user")], [], runs);
+  const rows = grouped.get(pathKey("C:/repo"))!;
+  expect(rows.map(row => row.id)).toEqual(["user"]);
+  expect(worktreeProgress(rows, new Set(["reviewer", "old-reviewer"]), new Set(), new Set())).toBe("1 session");
+});
 
 const tree = (path: string): Worktree => ({
   path,

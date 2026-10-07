@@ -107,6 +107,8 @@ export function buildThreadStartParams(input: {
   );
   return {
     cwd: input.cwd,
+    // Code-mode custom calls have no commandExecution item in app-server v2.
+    experimentalRawEvents: true,
     approvalPolicy: input.intent === "plan" || input.readOnly ? "never" : config.approvalPolicy,
     sandbox: config.sandbox,
     sandboxPolicy: config.sandboxPolicy,
@@ -368,6 +370,26 @@ export function mapCodexNotification(
 ): MappedCodexNotification {
   const rec = asRecord(params);
   if (!rec) return { events: [] };
+
+  if (method === "rawResponseItem/completed") {
+    const item = asRecord(rec.item);
+    const type = item && stringField(item, "type");
+    if (!item || (type !== "custom_tool_call" && type !== "custom_tool_call_output")) return { events: [] };
+    const id = stringField(item, "call_id");
+    const thread = stringField(rec, "threadId");
+    const turn = stringField(rec, "turnId");
+    if (!id || !thread || !turn) return { events: [] };
+    const callId = `raw:${thread}:${turn}:${id}`;
+    if (type === "custom_tool_call") {
+      const name = stringField(item, "name") ?? "Tool";
+      return { events: [{ type: "tool.started", callId,
+        title: name === "exec" || name === "functions.exec" ? "Run tools" : name,
+        kind: "execute", status: "in_progress" }] };
+    }
+    const output = typeof item.output === "string" ? item.output : Array.isArray(item.output)
+      ? item.output.map(part => stringField(asRecord(part) ?? {}, "text") ?? "").filter(Boolean).join("\n") : undefined;
+    return { events: [{ type: "tool.updated", callId, kind: "execute", status: "completed", ...(output ? { detail: output } : {}) }] };
+  }
 
   if (method === "item/agentMessage/delta") {
     const delta = streamTextDelta(rec.delta);
@@ -826,6 +848,16 @@ function mapToolItem(
       kind: "other",
       status,
       preview,
+    };
+  }
+
+  if (itemType === "dynamicToolCall") {
+    const tool = stringField(item, "tool") ?? "Tool";
+    const namespace = stringField(item, "namespace");
+    return {
+      type: completed ? "tool.updated" : "tool.started", callId,
+      title: namespace ? `${namespace}:${tool}` : tool, kind: "other",
+      status: item.success === false ? "failed" : mapItemStatus(stringField(item, "status"), completed),
     };
   }
 

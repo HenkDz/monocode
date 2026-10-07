@@ -6,8 +6,12 @@ import {
   withDefaultTeam,
   orgTurnContext,
   teamPermissionDecision,
+  teamMessageRoute,
+  teamReviewerWarning,
+  teamMessageWorker,
 } from "./monoOrg";
 import type { Mono } from "./mono";
+import type { OrchestrationRun } from "../../orchestration/model/orchestrationState";
 
 it("never grants native permissions from reports or unverified operation text", () => {
   for (const kind of ["event", "habit", "user"] as const) {
@@ -88,7 +92,7 @@ it("instructs Managers to close reports, use read-only workers and select indepe
   expect(context).toContain("Do not emit chat.card dispatch");
 });
 
-it("rejects sideways and skipped-level messages", () => {
+it("keeps worker and goal ownership tied to the real reporting identity", () => {
   const roster = tree();
   expect(resolveTeamMember(roster, "app", "Backend").id).toBe("app-backend");
   expect(assertDirectReport(roster, "leader", "app", "goal").id).toBe("app");
@@ -100,6 +104,28 @@ it("rejects sideways and skipped-level messages", () => {
     expect(() => assertDirectReport(roster, boss, report, "worker")).toThrow(
       "direct report",
     );
+});
+
+it("allows teammate questions, nudges repeated exchanges and routes cross-team messages", () => {
+  const roster = tree();
+  expect(teamMessageRoute(roster, "app-backend", "app-ui").target.id).toBe("app-ui");
+  expect(teamMessageRoute(roster, "app-ui", "app-backend", 3).hint).toContain("Manager");
+  expect(teamMessageRoute(roster, "app-backend", "site").target.id).toBe("site");
+  expect(teamMessageRoute(roster, "app-backend", "site").hint).toContain("Routed");
+  expect(teamReviewerWarning(roster.filter(mono => mono.id !== "app-reviewer"), "app")).toContain("No Reviewer");
+  expect(teamReviewerWarning(roster, "app")).toBeUndefined();
+  expect(() => teamMessageRoute(roster, "app-ui", "missing")).toThrow("active");
+});
+
+it("delivers teammate replies to the recipient's active worker instead of its idle chat", () => {
+  const run = { leadId: "manager-engine", status: "active", tasks: [
+    { id: "older", memberId: "backend", sessionId: "old-worker", status: "completed" },
+    { id: "work", memberId: "backend", sessionId: "working-backend", status: "running" },
+    { id: "other", memberId: "ui", sessionId: "working-ui", status: "running" },
+  ] } as OrchestrationRun;
+  expect(teamMessageWorker([run], "backend")).toEqual({ leadId: "manager-engine", taskId: "work", sessionId: "working-backend" });
+  expect(teamMessageWorker([{ ...run, status: "paused" }], "backend")).toBeUndefined();
+  expect(teamMessageWorker([run], "reviewer")).toBeUndefined();
 });
 
 it("rejects cycles, multiple leaders, duplicate Managers and cross-project members", () => {

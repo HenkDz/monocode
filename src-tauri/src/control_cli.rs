@@ -28,6 +28,7 @@ Actions, with the JSON object each one takes:
             the app supplies that member's model and identity. Include
             "monoGoalId":"<goalId>" for an assigned goal. Reviewer delegates
             also pass "reviewTaskId":"<completed implementation taskId>".
+            Mark small docs, typo or config changes with "trivial":true to skip review.
             For investigation/report tasks pass "readOnly":true: use the project
             checkout with enforced read-only runtime, or a worktree fallback
             when unsupported. Never modify files or commit on read-only tasks.
@@ -61,11 +62,11 @@ Actions, with the JSON object each one takes:
             scopes. Use this only when the additional files are required.
   cancel    {"taskId":"..."}
             Cancel a task, whether it is running or still queued.
-  review    {"taskId":"...","checks":"Short summary of diff review and tests"}
+  review    {"taskId":"...","checks":"Short summary of diff review and tests","trivial":true?}
             Accept a completed task's result.
             Report-only tasks: {"taskId":"...","outcome":"accept-no-changes"}.
             This verifies no changed files or commits ahead of the task's base;
-            changes still require the independent Reviewer and PR gate.
+            changes normally use the independent Reviewer and PR gate; trivial changes may skip review.
             Project Managers: inspect diff and tests, open a non-draft PR,
             then review. The worktree is retained; the user reviews and merges.
   finish    {}
@@ -103,10 +104,11 @@ const ACTIONS: [&str; 13] = [
     "list", "delegate", "get", "steer", "message", "retry", "reassign", "cancel", "wait", "review", "finish",
     "respond", "answer",
 ];
-const APP_ACTIONS: [&str; 47] = [
+const APP_ACTIONS: [&str; 48] = [
     "tasks.request",
     "team.answer",
     "team.list",
+    "team.message",
     "team.hire",
     "team.update",
     "team.memory.add",
@@ -297,6 +299,8 @@ Actions:
   team.answer    Direct boss only. {monoId,requestId,answers} or {monoId,requestId,skip:true}.
                   For a permission: {monoId,requestId,decision:"allow"|"deny"}.
                   Never allow beyond the user's existing authority.
+  team.message   {memberId,text,topic?} Ask a teammate; cross-team questions route through Managers.
+                  After a few exchanges, a hint suggests involving your Manager.
   team.list      Manager only, own team. {} Members, profiles, soul summary,
                   memory count, tasks and user-locked fields.
   team.hire      {name,specialty,soul,harness?,model?,modelSettings?,mascot?,color?,memory?:[facts],reviewer?}
@@ -310,7 +314,7 @@ Actions:
   team.memory.add {memberId,facts:["short project fact"]} Redacted and deduplicated.
   team.memory.forget {memberId,factIds:["id from team.list"]}
   team.retire    {memberId,reason} Cancels active tasks, retains worktrees/history.
-                  The last Reviewer cannot retire. Team changes post Undo cards.
+                  Retiring the last Reviewer shows a team warning. Team changes post Undo cards.
                   All team actions reuse --request-id on retries; no role/project override.
   reviews.submit Reviewer worker only. {decision:"approve"|"changes",notes:"...",artifactId:"..."}.
                   Reviews the exact implementing dispatch assigned by the Manager.
@@ -569,6 +573,7 @@ pub(crate) fn validate_app_request(action: &str, input: &Value, request_id: &str
 pub(crate) fn validate_team_input(action: &str, input: &Value) -> Result<(), String> {
     let fields: &[&str] = match action {
         "team.list" => &[],
+        "team.message" => &["memberId", "text", "topic"],
         "team.hire" => &["name", "specialty", "soul", "harness", "model", "modelSettings", "mascot", "color", "memory", "reviewer"],
         "team.update" => &["memberId", "name", "specialty", "soul", "harness", "model", "modelSettings"],
         "team.memory.add" => &["memberId", "facts"],
@@ -584,6 +589,7 @@ pub(crate) fn validate_team_input(action: &str, input: &Value) -> Result<(), Str
     let required: &[&str] = match action {
         "team.hire" => &["name", "specialty", "soul"],
         "team.update" => &["memberId"],
+        "team.message" => &["memberId", "text"],
         "team.memory.add" => &["memberId", "facts"],
         "team.memory.forget" => &["memberId", "factIds"],
         "team.retire" => &["memberId", "reason"],
@@ -629,7 +635,7 @@ pub(crate) fn validate_team_input(action: &str, input: &Value) -> Result<(), Str
             "reviewer" => { if !value.is_boolean() { return Err("reviewer must be a boolean".into()); } }
             _ => {
                 let text = value.as_str().ok_or_else(|| format!("{key} must be a string"))?;
-                let max = match key.as_str() { "soul" => 8192, "name" | "specialty" => 80, "memberId" | "model" => 256, "reason" => 500, "color" => 100, _ => 128 };
+                let max = match key.as_str() { "soul" => 8192, "name" | "specialty" => 80, "memberId" | "model" => 256, "reason" => 500, "text" => 6000, "topic" => 120, "color" => 100, _ => 128 };
                 let length = if key == "soul" { text.len() } else { text.chars().count() };
                 if length > max || text.trim().is_empty() {
                     return Err(format!("{key} must contain at most {max} {}", if key == "soul" { "bytes" } else { "characters" }));

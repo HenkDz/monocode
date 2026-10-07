@@ -1150,6 +1150,10 @@ pub struct GitPr {
     pub state: String,
     #[serde(default)]
     pub is_draft: bool,
+    #[serde(default)]
+    pub head_oid: Option<String>,
+    #[serde(default)]
+    pub mergeable: Option<String>,
 }
 
 /// Latest pull request for the current branch, if `gh` can see one.
@@ -2682,7 +2686,7 @@ fn git_pr_status_for(root: &Path) -> Option<GitPr> {
             "--head",
             &branch,
             "--json",
-            "number,title,url,state,isDraft,headRepositoryOwner,baseRefName",
+            "number,title,url,state,isDraft,headRepositoryOwner,baseRefName,headRefOid,mergeable",
             "--limit",
             "20",
             "--state",
@@ -4060,6 +4064,10 @@ fn parse_gh_pr_list(json: &str, owner: &str) -> Option<GitPr> {
         is_draft: bool,
         #[serde(default, rename = "headRepositoryOwner")]
         head_owner: Option<Owner>,
+        #[serde(default, rename = "headRefOid")]
+        head_oid: Option<String>,
+        #[serde(default)]
+        mergeable: Option<String>,
     }
     let rows: Vec<Row> = serde_json::from_str(json).ok()?;
     let mut best: Option<GitPr> = None;
@@ -4078,6 +4086,8 @@ fn parse_gh_pr_list(json: &str, owner: &str) -> Option<GitPr> {
             url: row.url,
             state: row.state.to_lowercase(),
             is_draft: row.is_draft,
+            head_oid: row.head_oid,
+            mergeable: row.mergeable,
         };
         if pr.state == "open" {
             return Some(pr);
@@ -7944,6 +7954,16 @@ mod tests {
         )
         .unwrap();
         assert_eq!(pr.base_ref_name.as_deref(), Some("v4"));
+    }
+
+    #[test]
+    fn pr_status_exposes_commit_and_conflicts_for_delivery() {
+        let pr = parse_gh_pr_list(
+            r#"[{"number":4,"title":"Fix","url":"https://example.invalid/4","state":"OPEN","headRefOid":"abc123","mergeable":"CONFLICTING","headRepositoryOwner":{"login":"owner"}}]"#,
+            "owner",
+        ).unwrap();
+        assert_eq!(pr.head_oid.as_deref(), Some("abc123"));
+        assert_eq!(pr.mergeable.as_deref(), Some("CONFLICTING"));
     }
 
     #[test]

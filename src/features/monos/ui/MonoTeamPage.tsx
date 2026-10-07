@@ -20,6 +20,7 @@ import { memberTasks } from "../model/monoNavigation";
 import { assertTeamRetire, handleMonoTeam, lockMonoField } from "../model/monoTeam";
 import { monoTeamHost } from "../model/monoTeamRuntime";
 import { MonoFieldLock } from "./MonoFieldLock";
+import { teamReviewerWarning } from "../model/monoOrg";
 
 export function MonoTeamPage({
   monoId,
@@ -81,6 +82,7 @@ export function MonoTeamPage({
         onBack={onBack}
       />
       <div className="overflow-y-auto p-3">
+        {owner?.role === "manager" && teamReviewerWarning(listMonos(), monoId) && <p role="status" className="mb-2 text-xs text-amber-700 dark:text-amber-400">{teamReviewerWarning(listMonos(), monoId)}</p>}
         {members.map((member) => {
           const look = monoLook(member);
           return (

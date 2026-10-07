@@ -1,4 +1,6 @@
-import { findMono, monoForSession, type MonoStatus } from "./mono";
+import { findMono, monoForSession, type MonoStatus, type MonoState } from "./mono";
+import type { Session } from "../../sessions/model/session";
+import { activityTaskEvent } from "./monoTeamActivity";
 import type { OrchestrationRun } from "../../orchestration/model/orchestrationState";
 
 export const memberDetailsView = (id: string) => `mono-member:${id}`;
@@ -41,6 +43,15 @@ export function memberAvailability(
     busy.has(task.sessionId) || ["running", "cancelling"].includes(task.status),
   )) return "working";
   return "idle";
+}
+
+export function memberMonoState(runs: readonly OrchestrationRun[], memberId: string, sessions: readonly Session[], memberSessionId?: string): MonoState {
+  const tasks = memberTasks(runs, memberId);
+  const attention = new Set(sessions.filter(s => s.pendingQuestion || s.blocks.some(b => b.approval && !b.approval.decided)).map(s => s.id));
+  const busy = new Set(sessions.filter(s => s.busy).map(s => s.id));
+  const status = memberAvailability(tasks, attention, busy, memberSessionId);
+  const task = tasks.find(t => ["queued", "running", "cancelling"].includes(t.status)) ?? tasks[0];
+  return { status, ...(status !== "idle" && task ? { activity: activityTaskEvent(task, sessions.find(s => s.id === task.sessionId)) } : {}) };
 }
 
 /** Exactly one org row owns a visible chat/worker/details view. */

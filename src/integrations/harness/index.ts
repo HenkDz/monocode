@@ -1,4 +1,5 @@
 export { startHarnessBridge, killAllChildren } from "./core/child";
+export { updateHarnessRuntimeMode } from "./core/registry";
 export {
   harnessLoginArgs,
   isHarnessAuthError,

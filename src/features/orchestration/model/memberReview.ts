@@ -8,6 +8,7 @@ export function approvedMemberReview(
 ): OrchestrationTask | undefined {
   return run.tasks.find(
     (review) =>
+      task.memberId !== reviewerId &&
       review.memberId === reviewerId &&
       review.reviewOf?.taskId === task.id &&
       review.reviewOf.dispatchId === task.lastDispatchId &&

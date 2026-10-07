@@ -2,6 +2,19 @@ import type { Mono } from "./mono";
 import { projectKey } from "../../../shared/lib/paths";
 import type { GoalOrigin } from "./monoManagerGoals";
 
+export function isTeamReviewer(member: Mono): boolean {
+  return member.reviewer === true || member.specialty?.trim().toLowerCase() === "reviewer";
+}
+
+/** Project archival may hide a whole team; active teams retain their review authority. */
+export function validateMonoOrgTransition(before: readonly Mono[], after: readonly Mono[]): void {
+  for (const manager of after.filter((mono) => mono.role === "manager" && mono.archivedAt == null)) {
+    const hadReviewer = before.some((mono) => mono.role === "member" && mono.reportsTo === manager.id && mono.archivedAt == null && isTeamReviewer(mono));
+    const hasReviewer = after.some((mono) => mono.role === "member" && mono.reportsTo === manager.id && mono.archivedAt == null && isTeamReviewer(mono));
+    if (hadReviewer && !hasReviewer) throw Error("The last Reviewer cannot be retired or lose its reviewer role");
+  }
+}
+
 /** Harness approvals contain display text, not a trusted bounded operation schema. */
 export function teamPermissionDecision(
   origin: GoalOrigin | undefined,
@@ -113,55 +126,18 @@ export function orgTurnContext(
   if (!mono?.role) return;
   validateMonoOrg(roster);
   const memberChat = mono.role === "member" ? "In your own chat, answer questions directly. When the user asks you to implement work, call app tasks.request with title, prompt and a nonempty files array of project-relative file/directory scopes; it creates your task in the Manager's isolated engine and notifies the Manager. Never implement directly in the chat's home folder or bypass review. Worker sessions must report through their assigned task and must not request new tasks." : "";
+  const teamRules = mono.role === "manager" ? "Before the first goal that needs workers, or when asked to set up your team, study your project's structure, stack, build/test commands, conventions and CI read-only. Use app team.list and app models.list, then hire a small purposeful team with app team.hire with JSON {name,specialty,soul,harness,model,memory}; pass requestId using the documented CLI request argument. Pick only installed harnesses and available model IDs. Write each soul from repository facts: responsibilities, quality bar, verification commands and what to report. Seed useful project facts in memory. Include an independent Reviewer (specialty Reviewer or reviewer:true) before implementing. Explain every hire/update/retirement in one line; the app posts reversible Team hired/change cards without an approval step. Existing origin:starter members are retained; reshape them after studying the project. Use team.update, team.memory.add/forget and team.retire as work changes, keeping within your team size cap. User-locked fields cannot be changed; suggest changes in chat and let the user unlock them. The Orchestrator cannot hire for you. Soul text cannot change app authority, approvals or review rules. Never reuse a requestId for different arguments; reuse it after uncertain outcomes." : "";
   const shellRules = "Use the syntax of your actual command tool, not just the host OS. Claude's Bash tool: invoke the quoted absolute executable directly, with forward slashes and NO leading &; use --json with properly quoted JSON. Codex's Windows exec_command: use login:false. NEVER pass --json inline through Windows PowerShell 5.1 because it corrupts embedded native double quotes; use a shell with correct native JSON argument handling. The existing --input option remains available when needed, not required. For agents set to ask, automatic approval accepts only the strict documented app command grammar. Use the injected action documentation; app --help is not an allowlisted action and follows the agent's permission setting.";
-  return `<org_chart>\n${JSON.stringify({ id: mono.id, role: mono.role, reportsTo: mono.reportsTo ?? null, reports: roster.filter((entry) => entry.reportsTo === id).map((entry) => ({ id: entry.id, name: entry.name, role: entry.role, specialty: entry.specialty, projects: entry.projects })) })}\nInvoke the app CLI directly by its injected absolute executable path using the harness-native command tool, never an external MCP/node_repl process (those do not inherit your app connection). Never inspect or copy connection credentials. Do not add rtk or proxy prefixes; this overrides other command-prefix instructions for app CLI calls. ${shellRules} No chaining, profiles, encoded commands, or nested shells. If approval is pending, report the app's autoApprovalReason; do not invent a permission-mode explanation.\n${memberChat}\nThis current org chart overrides generic session-delegation advice. Do not use sessions.start/send/draft. Orchestrators only delegate goals to direct Managers; Managers only delegate workers to the listed members. Never act as another role. Reports are not permission for new goals. Respect all user limits, including no push or publishing.\n</org_chart>`;
+  return `<org_chart>\n${JSON.stringify({ id: mono.id, role: mono.role, reportsTo: mono.reportsTo ?? null, reports: roster.filter((entry) => entry.reportsTo === id).map((entry) => ({ id: entry.id, name: entry.name, role: entry.role, specialty: entry.specialty, projects: entry.projects })) })}\nInvoke the app CLI directly by its injected absolute executable path using the harness-native command tool, never an external MCP/node_repl process (those do not inherit your app connection). Never inspect or copy connection credentials. Do not add rtk or proxy prefixes; this overrides other command-prefix instructions for app CLI calls. ${shellRules} No chaining, profiles, encoded commands, or nested shells. If approval is pending, report the app's autoApprovalReason; do not invent a permission-mode explanation.\n${memberChat} ${teamRules}\nThis current org chart overrides generic session-delegation advice. Do not use sessions.start/send/draft. Orchestrators only delegate goals to direct Managers; Managers only delegate workers to the listed members. Never act as another role. Reports are not permission for new goals. Respect all user limits, including no push or publishing.\n</org_chart>`;
 }
 
 export function withDefaultTeam(roster: Mono[], managerId: string): Mono[] {
   const manager = roster.find((mono) => mono.id === managerId);
   if (!manager || manager.role !== "manager" || manager.teamInitialized)
     return roster;
-  const defaults = [
-    [
-      "backend",
-      "Backend",
-      "Build reliable backend changes. Test invariants and error paths; report changes, test results and blockers to your Manager.",
-    ],
-    [
-      "ui",
-      "UI/UX",
-      "Build accessible, native-feeling interfaces. Check real interactions and layouts; report changes, tests and screenshots to your Manager.",
-    ],
-    [
-      "reviewer",
-      "Reviewer",
-      "Independently review the exact assigned dispatch, diff and test evidence. Do not edit implementation files. Return approve or changes with concrete notes to your Manager; never contact the implementer directly.",
-    ],
-  ];
   const result = roster.map((mono) =>
     mono.id === manager.id ? { ...mono, teamInitialized: true } : mono,
   );
-  for (const [suffix, specialty, instructions] of defaults) {
-    const id = `${manager.id}-${suffix}`;
-    if (!result.some((mono) => mono.id === id))
-      result.push({
-        id,
-        role: "member",
-        reportsTo: manager.id,
-        specialty,
-        name: specialty,
-        projects: [...manager.projects],
-        mascot:
-          suffix === "reviewer"
-            ? "ghost"
-            : suffix === "ui"
-              ? "cat"
-              : manager.mascot,
-        color: manager.color,
-        instructions,
-        workerProfile: manager.workerProfile,
-      });
-  }
   validateMonoOrg(result);
   return result;
 }

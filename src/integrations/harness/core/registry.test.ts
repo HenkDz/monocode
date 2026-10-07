@@ -24,10 +24,12 @@ import {
   registerHarness,
   resetHarnessIdlePark,
   sendHarnessTurn,
+  updateHarnessRuntimeMode,
   TurnAuthorizationError,
   type HarnessAdapter,
 } from "./registry";
 import type { SendTurnInput, SteerTurnInput } from "./types";
+import * as monoModel from "../../../features/monos/model/mono";
 import { registerBuiltinHarnesses } from "./register";
 
 function stub(
@@ -49,6 +51,83 @@ function stub(
 }
 
 describe("harness registry", () => {
+  it("never emits a late approval after a mode change resolves its held native identity check", async () => {
+    vi.mocked(isTauri).mockReturnValue(true);
+    let finishCheck!: (allowed: boolean) => void, release!: () => void;
+    let events!: SendTurnInput["onEvent"];
+    const check = new Promise<boolean>(resolve => { finishCheck = resolve; });
+    vi.mocked(invoke).mockImplementation(async command => command === "app_cli_approval_policy" ? {
+      executable: "C:/preview/current.exe", tempDir: "C:/Temp", actions: ["projects.list"],
+    } : command === "app_cli_executable_matches" ? check : undefined);
+    const onEvent = vi.fn(), respondApproval = vi.fn();
+    registerHarness(stub("codex", {
+      respondApproval,
+      updateRuntimeMode() { events({ type: "approval.resolved", requestId: 7, decision: "allow" }); },
+      async sendTurn(input) {
+        events = input.onEvent;
+        input.onEvent({ type: "approval.requested", requestId: 7, title: "Read projects", command: ["C:/preview/older-copy.exe", "app", "projects.list"] });
+        await new Promise<void>(resolve => { release = resolve; });
+      },
+    }));
+    const turn = sendHarnessTurn({ harness: "codex", sessionId: "mode-race", cwd: "/tmp", model: "test", runtimeMode: "supervised", orgMono: true, text: "Read projects", onEvent });
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith("app_cli_executable_matches", { path: "C:/preview/older-copy.exe" }));
+    await updateHarnessRuntimeMode("codex", "mode-race", "full-access");
+    finishCheck(false);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(onEvent).not.toHaveBeenCalled();
+    expect(respondApproval).not.toHaveBeenCalled();
+    release();
+    await turn;
+  });
+  it("updates a running turn's policy immediately while its operation queue is blocked", async () => {
+    let release!: () => void;
+    const updateRuntimeMode = vi.fn();
+    registerHarness(stub("codex", { updateRuntimeMode, async sendTurn() { await new Promise<void>(resolve => { release = resolve; }); } }));
+    const sending = sendHarnessTurn({ harness: "codex", sessionId: "policy", cwd: "/tmp", model: "test", runtimeMode: "supervised", text: "Work", onEvent: () => {} });
+    await vi.waitFor(() => expect(release).toBeDefined());
+    await updateHarnessRuntimeMode("codex", "policy", "full-access");
+    expect(updateRuntimeMode).toHaveBeenCalledExactlyOnceWith("policy", "full-access");
+    release();
+    await sending;
+  });
+
+  it("refreshes the current executable for every provider turn after a renamed preview restart", async () => {
+    vi.mocked(isTauri).mockReturnValue(true);
+    let executable = "C:/preview/old.exe";
+    vi.mocked(invoke).mockImplementation(async command => command === "app_cli_approval_policy" ? { executable, tempDir: "C:/Temp", actions: ["projects.list"] } : undefined);
+    const texts: string[] = [];
+    registerHarness(stub("codex", { async sendTurn(input) { texts.push(input.text); } }));
+    const input = { harness: "codex" as const, sessionId: "renamed", cwd: "/tmp", model: "test", runtimeMode: "supervised" as const, orgMono: true, text: "Run CLI", onEvent: () => {} };
+    await sendHarnessTurn(input);
+    executable = "C:/preview/current.exe";
+    await sendHarnessTurn(input);
+    expect(texts[0]).toContain("current running MonoCode executable is C:/preview/old.exe");
+    expect(texts[1]).toContain("current running MonoCode executable is C:/preview/current.exe");
+    expect(texts[1]).toContain("overrides executable paths from earlier turns");
+    expect(texts[1]).not.toContain("old.exe");
+  });
+  it.each(["argv", "string"])("auto-approves Codex's live bare-path PowerShell transport (%s)", async shape => {
+    vi.mocked(isTauri).mockReturnValue(true);
+    const executable = "C:/Users/nooro/orca/workspaces/monocode/team-building/target/r5-acceptance/monocode-r5-cards.exe";
+    const pwsh = "C:/Program Files/PowerShell/7/pwsh.exe";
+    vi.mocked(invoke).mockImplementation(async command => command === "app_cli_approval_policy" ? {
+      executable, tempDir: "C:/Temp", actions: ["projects.list"], trustedPowerShell: [pwsh],
+    } : command === "app_cli_powershell_is_trusted" ? true : undefined);
+    let settle!: () => void;
+    const onEvent = vi.fn(), respondApproval = vi.fn(() => settle());
+    registerHarness(stub("codex", { respondApproval, async sendTurn(input) {
+      const wait = new Promise<void>(resolve => { settle = resolve; });
+      const script = `${executable} app projects.list`;
+      input.onEvent({ type: "approval.requested", requestId: 1, title: "Read projects",
+        command: shape === "argv" ? [pwsh, "-NoProfile", "-Command", script] : `"${pwsh}" -NoProfile -Command '${script}'` });
+      await wait;
+    } }));
+    await sendHarnessTurn({ harness: "codex", sessionId: "live-bare-path", cwd: "C:/Users/nooro", model: "test",
+      runtimeMode: "supervised", orgMono: true, text: "Read projects", onEvent });
+    expect(respondApproval).toHaveBeenCalledExactlyOnceWith("live-bare-path", 1, "allow");
+    expect(onEvent).not.toHaveBeenCalled();
+    expect(invoke).toHaveBeenCalledWith("app_cli_powershell_is_trusted", { path: pwsh, cwd: "C:/Users/nooro" });
+  });
   it.each([true, false])("rechecks PowerShell identity and the actual command cwd before approval (trusted: %s)", async trusted => {
     vi.mocked(isTauri).mockReturnValue(true);
     const executable = "C:/preview/app.exe";
@@ -210,6 +289,26 @@ describe("harness registry", () => {
       appAccess: false,
       monoSession,
     });
+  });
+
+  it.each(["manager", "member", "orchestrator"] as const)("passes team authority only for the owning Manager (%s)", async (role) => {
+    vi.mocked(isTauri).mockReturnValue(true);
+    vi.mocked(invoke).mockResolvedValue(undefined);
+    const owner = vi.spyOn(monoModel, "findMono").mockReturnValue({
+      id: "owner", role, mascot: "bear", color: "blue", projects: ["/tmp"],
+    });
+    registerHarness(stub("codex", { sendTurn: async () => {} }));
+    try {
+      await sendHarnessTurn({
+        harness: "codex", sessionId: "owned", cwd: "/tmp", model: "codex:installed",
+        runtimeMode: "supervised", text: "Hello", orgMonoId: "owner", monoSession: true,
+        onEvent: () => {},
+      });
+      expect(invoke).toHaveBeenCalledWith("control_authorize_turn", {
+        sessionId: "owned", cwd: "/tmp", appAccess: false, monoSession: true,
+        ...(role === "manager" ? { monoManagerId: "owner" } : {}),
+      });
+    } finally { owner.mockRestore(); }
   });
 
   it("announces readiness when the provider accepts, while preserving the caller's acceptance callback", async () => {

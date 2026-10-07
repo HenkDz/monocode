@@ -138,6 +138,8 @@ import { ProviderSignInDialog } from "../features/sessions/ui/ProviderSignInDial
 import { TitleBar, type Tab as TitleTab } from "./shell/TitleBar";
 import { WindowControls } from "./shell/WindowControls";
 import { MonoDetails } from "../features/monos/ui/MonoDetails";
+import { handleMonoTeam, isTeamReviewer } from "../features/monos/model/monoTeam";
+import { monoTeamHost, registerTeamCards } from "../features/monos/model/monoTeamRuntime";
 import type { MonoPanelTab } from "../features/monos/ui/monoPanelParts";
 import {
   resolveMonoActivity,
@@ -331,6 +333,7 @@ import {
   registerBuiltinHarnesses,
   promoteLastAssistantToPlan,
   respondHarnessApproval,
+  updateHarnessRuntimeMode,
   respondHarnessQuestion,
   keepHarnessQuestionOpen,
   runHarnessTextPrompt,
@@ -4690,7 +4693,7 @@ function Workspace({
       void onOpenMono(monoId).then(() => {
         setMonoPanelTab("details");
         setMonoDetailsOpen(true);
-        setMonoTeamRequest(Date.now());
+        setMonoTeamRequest(findMono(monoId)?.role === "member" ? 0 : Date.now());
       });
     };
     window.addEventListener("monocode:open-team", open);
@@ -6752,11 +6755,12 @@ function Workspace({
 
   const onRuntimeModeChange = useCallback(
     (sessionId: string, runtimeMode: RuntimeMode) => {
+      const session = sessionsRef.current.find(session => session.id === sessionId);
       const mono = monoForSession(sessionId);
       if (mono) updateMono(mono.id, current => ({ ...current, runtimeMode }));
-      setSessions((prev) =>
-        prev.map((s) => (s.id === sessionId ? { ...s, runtimeMode } : s)),
-      );
+      sessionsRef.current = sessionsRef.current.map(s => s.id === sessionId ? { ...s, runtimeMode } : s);
+      setSessions(sessionsRef.current);
+      if (session) void updateHarnessRuntimeMode(session.harness, sessionId, runtimeMode).catch(console.error);
     },
     [],
   );
@@ -10574,7 +10578,7 @@ function Workspace({
           (mono) =>
             mono.role === "member" &&
             mono.reportsTo === run.ownerMonoId &&
-            mono.specialty?.toLowerCase() === "reviewer",
+            isTeamReviewer(mono),
         );
         return reviewer && { id: reviewer.id, name: monoLook(reviewer).name };
       },
@@ -11547,6 +11551,16 @@ function Workspace({
   };
 
   useEffect(() => {
+    const stopCards = registerTeamCards(async (managerId, changeId) => {
+      const target = sessionsRef.current.find(session => session.id === findMono(managerId)?.sessionId);
+      if (!target) throw new Error("Manager chat is unavailable");
+      const id = `mono-team-${changeId}`;
+      const block: Block = { id, role: "assistant", text: "", monoTeamChange: { managerId, changeId } };
+      const next = target.blocks.some(block => block.id === id) ? target : { ...target, blocks: [...target.blocks, block] };
+      sessionsRef.current = sessionsRef.current.map(session => session.id === target.id ? next : session);
+      flushSync(() => setSessions(sessionsRef.current));
+      await upsertSession(next);
+    });
     const listening = listen<{
       id: string;
       namespace: string;
@@ -11770,6 +11784,12 @@ function Workspace({
               }]));
             },
           });
+        }
+        if (["team.list", "team.hire", "team.update", "team.memory.add", "team.memory.forget", "team.retire"].includes(payload.action)) {
+          const manager = monoForSession(source.id) ?? findMono(habitRunMono(source.id) ?? "");
+          if (manager?.role !== "manager" || !source.busy) throw new Error("Team actions require an active Manager turn");
+          const needsProfile = payload.action === "team.hire" || payload.action === "team.update" && ["harness", "model", "modelSettings"].some(field => field in payload.input);
+          return handleMonoTeam(manager.id, payload.requestId, payload.action, payload.input, await monoTeamHost(manager.id, needsProfile));
         }
         if ((MANAGER_ACTIONS as readonly string[]).includes(payload.action)) {
           const mono =
@@ -12198,6 +12218,7 @@ function Workspace({
         .catch(console.error);
     });
     return () => {
+      stopCards();
       void listening.then((unlisten) => unlisten());
     };
   }, []);

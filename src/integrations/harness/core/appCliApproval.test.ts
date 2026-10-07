@@ -7,6 +7,30 @@ const native = readFileSync("src-tauri/src/control_cli.rs", "utf8");
 const actions = [...native.match(/const APP_ACTIONS[^=]*= \[([\s\S]*?)\];/)![1].matchAll(/"([^"]+)"/g)].map(match => match[1]);
 const policy = { tempDir: "C:/Users/nooro/AppData/Local/Temp", actions, trustedRtk: "C:/Trusted/rtk.exe" };
 describe("exact app CLI approval", () => {
+  it("uses the current renamed preview identity instead of another copy or a previous process", () => {
+    const previews = ["C:/previews/monocode-r5-old.exe", "C:/previews/monocode-r5-renamed.exe"];
+    const pwsh = "C:/Program Files/PowerShell/7/pwsh.exe";
+    const shellPolicy = { ...policy, trustedPowerShell: [pwsh] };
+    for (const running of previews) {
+      for (const invoked of previews) {
+        expect(isDirectAppCliCommand([invoked, "app", "projects.list"], running, shellPolicy)).toBe(invoked === running);
+        expect(isDirectAppCliCommand([pwsh, "-NoProfile", "-Command", `${invoked} app projects.list`], running, shellPolicy)).toBe(invoked === running);
+      }
+      expect(isDirectAppCliCommand([running.toUpperCase().replace(/\//g, "\\"), "app", "projects.list"], running, shellPolicy)).toBe(true);
+      expect(isDirectAppCliCommand(["monocode.exe", "app", "projects.list"], running, shellPolicy)).toBe(false);
+    }
+  });
+  it("approves team actions only through the existing exact executable and private-input rules", () => {
+    for (const action of ["team.list", "team.hire", "team.update", "team.memory.add", "team.memory.forget", "team.retire"]) {
+      expect(actions).toContain(action);
+      const args = [exe, "app", action, "--input", policy.tempDir + "/input.json", "--request-id", "retry-1"];
+      expect(isDirectAppCliCommand(args, exe, policy)).toBe(true);
+      expect(isDirectAppCliCommand(["other.exe", ...args.slice(1)], exe, policy)).toBe(false);
+      expect(isDirectAppCliCommand([...args.slice(0, 4), "C:/outside.json", ...args.slice(5)], exe, policy)).toBe(false);
+      expect(isDirectAppCliCommand([...args, "--role", "manager"], exe, policy)).toBe(false);
+    }
+    expect(isDirectAppCliCommand([exe, "app", "team.unknown"], exe, policy)).toBe(false);
+  });
   it("accepts one trusted PowerShell transport, optionally preceded by trusted RTK", () => {
     const ps = "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe";
     const shellPolicy = { ...policy, trustedPowerShell: [ps, "C:/Program Files/PowerShell/7/pwsh.exe", "powershell"] };
@@ -79,6 +103,18 @@ describe("exact app CLI approval", () => {
     const command = String.raw`"C:\\Program Files\\PowerShell\\7\\pwsh.exe" -NoProfile -Command "${script}"`;
     expect(isDirectAppCliCommand(command, nativeExe, { ...policy, trustedPowerShell: [pwsh] })).toBe(true);
     expect(powerShellAppTokens(script)?.[0]).toBe(nativeExe.replace(/\\/g, "\\\\"));
+  });
+  it("accepts Codex's bare absolute Windows executable through trusted PowerShell", () => {
+    const nativeExe = "C:/Users/nooro/orca/workspaces/monocode/team-building/target/r5-acceptance/monocode-r5-cards.exe";
+    const pwsh = "C:/Program Files/PowerShell/7/pwsh.exe";
+    const script = `${nativeExe} app projects.list`;
+    const shellPolicy = { ...policy, trustedPowerShell: [pwsh] };
+    expect(powerShellAppTokens(script)).toEqual([nativeExe, "app", "projects.list"]);
+    expect(isDirectAppCliCommand([pwsh, "-NoProfile", "-Command", script], nativeExe, shellPolicy)).toBe(true);
+    expect(isDirectAppCliCommand(`"${pwsh}" -NoProfile -Command '${script}'`, nativeExe, shellPolicy)).toBe(true);
+    for (const bad of [`'${nativeExe}' app projects.list`, "monocode.exe app projects.list", "./monocode.exe app projects.list", `${script}; whoami`, `${script} | whoami`, `${script} $env:FOO`]) {
+      expect(powerShellAppTokens(bad)).toBeUndefined();
+    }
   });
   it("reports untrusted RTK wrapping PowerShell without approving either transport", () => {
     const ps = "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe";

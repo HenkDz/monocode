@@ -37,6 +37,9 @@ const tree = () =>
       node("leader", "orchestrator", ["/app", "/site"]),
       node("app", "manager", ["/app"], "leader"),
       node("site", "manager", ["/site"], "leader"),
+      { ...node("app-backend", "member", ["/app"], "app"), specialty: "Backend", origin: "starter" },
+      { ...node("app-ui", "member", ["/app"], "app"), specialty: "UI/UX", origin: "starter" },
+      { ...node("app-reviewer", "member", ["/app"], "app"), specialty: "Reviewer", origin: "starter" },
     ],
     "app",
   );
@@ -59,7 +62,7 @@ it("hands each role only its direct reports and leaves plain Mono context unchan
   ).toBeUndefined();
 });
 
-it("creates a default team once and keeps plain Monos outside the tree", () => {
+it("retains existing teams and leaves new Managers empty", () => {
   const roster = tree();
   expect(
     roster
@@ -67,6 +70,10 @@ it("creates a default team once and keeps plain Monos outside the tree", () => {
       .map((mono) => mono.specialty),
   ).toEqual(["Backend", "UI/UX", "Reviewer"]);
   expect(withDefaultTeam(roster, "app")).toBe(roster);
+  const fresh = withDefaultTeam([node("fresh", "manager", ["/fresh"])], "fresh");
+  expect(fresh).toHaveLength(1);
+  expect(fresh[0].teamInitialized).toBe(true);
+  expect(orgTurnContext(fresh, "fresh")).toContain("study your project's structure");
   expect(() =>
     validateMonoOrg([...roster, node("plain", undefined, ["/app"])]),
   ).not.toThrow();

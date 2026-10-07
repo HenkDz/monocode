@@ -40,6 +40,7 @@ const roster: Mono[] = [
   },
   {
     id: "backend",
+    origin: "starter",
     role: "member",
     reportsTo: "manager",
     specialty: "Backend",
@@ -52,6 +53,7 @@ const roster: Mono[] = [
   },
   {
     id: "reviewer",
+    origin: "starter",
     role: "member",
     reportsTo: "manager",
     specialty: "Reviewer",

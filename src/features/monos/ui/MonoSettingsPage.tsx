@@ -13,6 +13,8 @@ import {
   type MonoLook,
 } from "../model/mono";
 import { ConfirmReset } from "./ConfirmReset";
+import { lockMonoField, setTeamSizeCap } from "../model/monoTeam";
+import { MonoFieldLock } from "./MonoFieldLock";
 import { ColorPicker, MascotPicker, PageHeader } from "./monoPanelParts";
 
 export type SettingsPage = "habits" | "soul" | "memory" | "team";
@@ -57,6 +59,7 @@ export function MonoSettingsPage({
             className="size-14 shrink-0"
           />
           <NameField key={monoId} monoId={monoId} fallback={agent.mascot} />
+          <MonoFieldLock monoId={monoId} field="name" />
         </div>
 
         <div className="flex flex-col gap-3 px-3 pb-4">
@@ -74,6 +77,13 @@ export function MonoSettingsPage({
         </div>
 
         {children}
+        {mono?.role === "manager" && <label className="flex items-center justify-between gap-2 border-t border-stroke px-4 py-3 text-xs">
+          Team size cap
+          <input aria-label="Team size cap" type="number" min={1} max={24} value={mono.teamSizeCap ?? 6} className="w-12 rounded bg-transparent text-right" onChange={event => {
+            try { setTeamSizeCap(monoId, Number(event.target.value)); setRoleError(undefined); }
+            catch (error) { setRoleError(String(error)); }
+          }} />
+        </label>}
         {(!mono?.role || mono.role === "orchestrator") && (
           <label className="flex items-center gap-2 px-4 py-3 text-xs">
             <input
@@ -213,7 +223,7 @@ function NameField({ monoId, fallback }: { monoId: string; fallback: string }) {
   const placeholder = defaultMonoName(fallback);
   const save = () => {
     const name = draft.trim().slice(0, 40);
-    if (name !== saved()) saveMonoName(monoId, name);
+    if (name !== saved()) { saveMonoName(monoId, name); lockMonoField(monoId, "name"); }
     setDraft(name);
   };
   return (

@@ -52,6 +52,7 @@ const {
   restoreClaudeTaskLists,
   sendClaudeTurn,
   stopClaudeSession,
+  updateClaudeRuntimeMode,
   __claudeTestReset,
 } = await import("./claude");
 import type { HarnessEvent } from "../../core/types";
@@ -280,6 +281,53 @@ beforeEach(() => {
 afterEach(async () => {
   await stopClaudeSession("s1");
   __claudeTestReset();
+});
+
+describe("claude runtime mode changes", () => {
+  it("never grants MCP tools edit authority from a misleading display kind", async () => {
+    const { events, turn } = await startTurn("s1");
+    emit({ type: "control_request", request_id: "mcp-write", request: { subtype: "can_use_tool", tool_name: "mcp__finance__write", input: {} } });
+    await waitFor(() => events.some(e => e.type === "approval.requested"), "MCP permission");
+    await updateClaudeRuntimeMode("s1", "auto-accept-edits");
+    expect(parse().some(m => (m.response as Record<string, unknown>)?.request_id === "mcp-write")).toBe(false);
+    const request = events.find(e => e.type === "approval.requested");
+    if (request?.type !== "approval.requested") throw Error("Missing MCP approval");
+    expect(request.kind).toBe("edit"); // Presentation alone grants no authority.
+    respondClaudeApproval("s1", request.requestId, "deny");
+    await waitFor(() => parse().some(m => (m.response as Record<string, unknown>)?.request_id === "mcp-write"), "MCP denial");
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+  });
+  it.each(["full-access", "auto-accept-edits"] as const)("resolves eligible pending approvals and updates the same process: %s", async runtimeMode => {
+    const { events, turn } = await startTurn("s1");
+    for (const [id, tool] of [["shell", "Bash"], ["edit", "Edit"]] as const) {
+      emit({ type: "control_request", request_id: id, request: { subtype: "can_use_tool", tool_name: tool,
+        input: tool === "Bash" ? { command: "echo Edit is just a misleading title" } : { file_path: "/repo/file", old_string: "old", new_string: "new" } } });
+    }
+    await waitFor(() => events.filter(e => e.type === "approval.requested").length === 2, "pending edit and shell");
+    await updateClaudeRuntimeMode("s1", runtimeMode);
+    expect(parse().filter(m => m.type === "user")).toHaveLength(1);
+    const response = (id: string) => parse().find(m => (m.response as Record<string, unknown>)?.request_id === id);
+    await waitFor(() => !!response("edit"), "automatic pending edit");
+    expect(response("edit")).toMatchObject({ response: { response: { behavior: "allow" } } });
+    expect(parse()).toContainEqual(expect.objectContaining({ type: "control_request", request: { subtype: "set_permission_mode", mode: runtimeMode === "full-access" ? "bypassPermissions" : "default" } }));
+    if (runtimeMode === "full-access") {
+      await waitFor(() => !!response("shell"), "automatic pending shell");
+      expect(response("shell")).toMatchObject({ response: { response: { behavior: "allow" } } });
+    } else {
+      expect(response("shell")).toBeUndefined();
+      const request = events.find(e => e.type === "approval.requested" && e.kind === "execute");
+      if (request?.type !== "approval.requested") throw Error("Missing shell approval");
+      respondClaudeApproval("s1", request.requestId, "deny");
+      await waitFor(() => !!response("shell"), "manual shell denial");
+    }
+    const count = events.filter(e => e.type === "approval.requested").length;
+    emit({ type: "control_request", request_id: "next-edit", request: { subtype: "can_use_tool", tool_name: "Edit", input: { file_path: "/repo/file" } } });
+    await waitFor(() => !!response("next-edit"), "later edit in same turn");
+    expect(events.filter(e => e.type === "approval.requested")).toHaveLength(count);
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+  });
 });
 
 describe("claude streamed tool inputs", () => {
@@ -1889,6 +1937,8 @@ describe("claude plan permissions", () => {
       runtimeMode: "auto",
       intent: "plan",
     });
+    await updateClaudeRuntimeMode("s1", "full-access");
+    expect(parse().some(m => (m.request as Record<string, unknown>)?.subtype === "set_permission_mode")).toBe(false);
 
     emit({
       type: "control_request",

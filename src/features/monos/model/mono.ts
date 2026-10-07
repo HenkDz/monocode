@@ -1,5 +1,5 @@
 import { projectKey, projectName } from "../../../shared/lib/paths";
-import { validateMonoOrg, withDefaultTeam } from "./monoOrg";
+import { validateMonoOrg, validateMonoOrgTransition, withDefaultTeam } from "./monoOrg";
 import { HARNESSES, RUNTIME_MODES, type RuntimeMode, type HarnessId } from "../../sessions/model/session";
 import {
   loadTabGroupColors,
@@ -21,6 +21,7 @@ import {
   projectMascot,
 } from "../../projects/model/projectMascots";
 import { removeMonoBackground } from "./monoBackground";
+import type { TeamChange, TeamLockedField } from "./monoTeam";
 
 /** The project palette's colors, plus indigo for a Mono's ninth preset. */
 export const MONO_COLORS = [
@@ -42,6 +43,12 @@ export type Mono = {
   reportsTo?: string;
   specialty?: string;
   teamInitialized?: boolean;
+  origin?: "starter" | "manager";
+  reviewer?: boolean;
+  userLockedFields?: TeamLockedField[];
+  teamSizeCap?: number;
+  /** Durable receipts and reversible team history, owned by this Manager. */
+  teamChanges?: TeamChange[];
   workerProfile?: {
     harness: HarnessId;
     model: string;
@@ -205,6 +212,13 @@ function parseMono(value: unknown): Mono | undefined {
     ...(text("reportsTo") ? { reportsTo: text("reportsTo") } : {}),
     ...(text("specialty") ? { specialty: text("specialty") } : {}),
     ...(entry.teamInitialized === true ? { teamInitialized: true } : {}),
+    ...(entry.origin === "manager" || entry.origin === "starter"
+      ? { origin: entry.origin }
+      : entry.role === "member" ? { origin: "starter" as const } : {}),
+    ...(entry.reviewer === true ? { reviewer: true } : {}),
+    ...(Array.isArray(entry.userLockedFields) ? { userLockedFields: entry.userLockedFields.filter((field): field is TeamLockedField => ["name", "specialty", "soul", "harness", "model", "modelSettings"].includes(String(field))) } : {}),
+    ...(Number.isInteger(entry.teamSizeCap) && Number(entry.teamSizeCap) >= 1 && Number(entry.teamSizeCap) <= 24 ? { teamSizeCap: Number(entry.teamSizeCap) } : {}),
+    ...(Array.isArray(entry.teamChanges) ? { teamChanges: entry.teamChanges as TeamChange[] } : {}),
     ...(workerProfile ? { workerProfile } : {}),
     ...(typeof entry.lastUsedAt === "number" &&
     Number.isFinite(entry.lastUsedAt)
@@ -250,6 +264,7 @@ export function listMonos(includeArchived = false): Mono[] {
 
 function saveRoster(roster: readonly Mono[], strict = false): void {
   validateMonoOrg(roster);
+  validateMonoOrgTransition(listMonos(true), roster);
   try {
     localStorage.setItem(ROSTER_KEY, JSON.stringify(roster));
   } catch (error) {
@@ -378,6 +393,8 @@ export function addTeamMember(
 ): Mono {
   const manager = findMono(managerId);
   if (manager?.role !== "manager") throw Error("Only a Manager owns a team");
+  if (listMonos().filter((mono) => mono.reportsTo === managerId && mono.role === "member").length >= (manager.teamSizeCap ?? 6))
+    throw Error("The team's size cap has been reached");
   if (
     !name.trim() ||
     name.length > 80 ||
@@ -391,6 +408,7 @@ export function addTeamMember(
     reportsTo: managerId,
     name: name.trim(),
     specialty: specialty.trim(),
+    origin: "manager",
     projects: [...manager.projects],
     ...nextMonoLook(),
     color: manager.color,
@@ -478,6 +496,11 @@ export function updateMono(
   roster[index] = next;
   saveRoster(roster);
   return next;
+}
+
+/** Team changes must fail visibly if durable storage is unavailable. */
+export function saveMonoTeamRoster(roster: readonly Mono[]): void {
+  saveRoster(roster, true);
 }
 
 /** Forgets the Mono and its background. Its folder of files stays on disk. */

@@ -1,5 +1,6 @@
 import { ManagerAvatar } from "../../orchestration/ui/ManagerAvatar";
 import { MonoChatCard } from "../../monos/ui/MonoChatCard";
+import { MonoTeamChangeCard } from "../../monos/ui/MonoTeamChangeCard";
 import {
   ArrowUp,
   Check,
@@ -1945,6 +1946,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
     );
   }
 
+  if (block.monoTeamChange) return <MonoTeamChangeCard {...block.monoTeamChange} />;
   if (block.monoCard && block.monoCardOwner) return <MonoChatCard card={block.monoCard} monoId={block.monoCardOwner} blockId={block.id} />;
 
   if (block.role === "image") {
@@ -4410,9 +4412,11 @@ function ApprovalControls({
   onApproval?: (requestId: number, decision: ApprovalDecision) => void;
 }) {
   const approval = block.approval;
-  if (!approval || approval.decided || !onApproval) return null;
+  if (!approval || approval.decided) return null;
   return (
-    <div className="mt-1.5 flex gap-2">
+    <div className="mt-1.5">
+      {approval.autoApprovalReason && <p className="mb-1.5 break-words text-[11px] text-content/60" aria-label="Automatic approval status">{approval.autoApprovalReason}</p>}
+      {onApproval && <div className="flex gap-2">
       <button
         type="button"
         className="rounded-md bg-content px-2.5 py-0.5 text-[11px] hover:bg-content/80     text-background-base"
@@ -4427,6 +4431,7 @@ function ApprovalControls({
       >
         Deny
       </button>
+      </div>}
     </div>
   );
 }

@@ -156,10 +156,10 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-it("groups Manager worktrees by attention, folds merged work, and links PR status back to its card", async () => {
+it("labels peer user worktrees, scopes the guide to collapsed task worktrees, and shows Finished outcomes", async () => {
   const worktrees = [
     tree("/repo", "main", true),
-    ...["running", "ready", "blocked", "merged", "closed"].map((id) =>
+    ...["running", "ready", "blocked", "merged", "closed", "cancelled"].map((id) =>
       ({ ...tree(`/queue/${id}`, id), unpushed: id === "closed" ? 2 : 0, dirty: id === "closed" }),
     ),
   ];
@@ -168,7 +168,7 @@ it("groups Manager worktrees by attention, folds merged work, and links PR statu
     title: tree.branch,
     sessionId: `s-${tree.branch}`,
     status:
-      tree.branch === "running"
+      tree.branch === "cancelled" ? "cancelled" : tree.branch === "running"
         ? "running"
         : tree.branch === "blocked"
           ? "failed"
@@ -219,21 +219,31 @@ it("groups Manager worktrees by attention, folds merged work, and links PR statu
         ),
       ),
     );
-    const queue = container.querySelector('[aria-label="Manager queue"]')!;
+    const your = container.querySelector('[role="group"][aria-label="Your worktrees"]')!;
+    const queue = container.querySelector('[role="group"][aria-label="Task worktrees"]')!;
+    expect(your.querySelector('[data-worktree="/repo"]')).not.toBeNull();
+    expect(your.querySelector('[class*="border-l"]')).toBeNull();
+    expect(your.parentElement).toBe(queue.parentElement);
+    expect(queue.querySelector('[class*="border-l"]')).not.toBeNull();
+    expect(button("Toggle Task worktrees").getAttribute("aria-expanded")).toBe("false");
+    expect(queue.querySelector<HTMLDivElement>('[class*="border-l"]')?.hidden).toBe(true);
+    await act(async () => button("Toggle Task worktrees").click());
     expect(
-      [...queue.querySelectorAll("[data-worktree]")].map((row) =>
+      [...queue.querySelectorAll("[data-worktree]")].filter(row => !row.closest('[aria-label="Finished"]')).map((row) =>
         row.getAttribute("data-worktree"),
       ),
     ).toEqual(["/queue/blocked", "/queue/ready", "/queue/running"]);
     await act(async () => button("Actions for ready").click());
     await act(async () => menuItem("Review in Manager").click());
     expect(openManagerCard).toHaveBeenCalledWith("manager", "ready");
-    const done = container.querySelector('[aria-label="Done"]')!;
+    const done = queue.querySelector('[aria-label="Finished"]')!;
     const merged = done.querySelector('[data-worktree="/queue/merged"]')!;
     const closed = done.querySelector('[data-worktree="/queue/closed"]')!;
     expect(merged.className).toContain("opacity-60");
     expect(merged.textContent).not.toContain("+21");
-    expect(merged.querySelector("[data-worktree-metadata]")?.textContent).toBe("");
+    expect(merged.querySelector("[data-worktree-metadata]")?.textContent).toBe("Merged");
+    expect(closed.querySelector("[data-worktree-metadata]")?.textContent).toContain("Closed (not merged)");
+    expect(done.querySelector('[data-worktree="/queue/cancelled"] [data-worktree-metadata]')?.textContent).toBe("Cancelled");
     const warning = closed.querySelector("[data-worktree-metadata] [role=img]")!;
     expect(warning.textContent).toBe("2");
     expect(warning.getAttribute("title")).toContain("2 unpushed commits");
@@ -266,6 +276,26 @@ it("groups Manager worktrees by attention, folds merged work, and links PR statu
     snapshot.mockRestore();
     vi.mocked(useProjectDiffStats).mockReturnValue(null);
   }
+});
+
+it("remembers Task worktrees expansion per project across remounts, independently of the Manager team", async () => {
+  props.renderManager = (expanded, toggle) => createElement("button", { onClick: toggle, "aria-label": "Toggle team", "aria-expanded": expanded }, "Manager");
+  await render();
+  expect(button("Toggle Task worktrees").getAttribute("aria-expanded")).toBe("false");
+  await act(async () => button("Toggle Task worktrees").click());
+  expect(localStorage.getItem("monocode:task-worktrees-expanded:/repo")).toBe("1");
+  await act(async () => button("Toggle team").click());
+  expect(button("Toggle team").getAttribute("aria-expanded")).toBe("false");
+  expect(button("Toggle Task worktrees").getAttribute("aria-expanded")).toBe("true");
+  await act(async () => root.render(null));
+  await render();
+  expect(button("Toggle Task worktrees").getAttribute("aria-expanded")).toBe("true");
+  props.project = "/another";
+  await render();
+  expect(button("Toggle Task worktrees").getAttribute("aria-expanded")).toBe("false");
+  props.project = "/repo";
+  await render();
+  expect(button("Toggle Task worktrees").getAttribute("aria-expanded")).toBe("true");
 });
 
 it("names remaining pagination separately from the inactive filter, including dirty worktrees", async () => {
@@ -560,14 +590,13 @@ it("renders collapsible worktrees under pinned, grouped, and ordinary projects w
   ).not.toBeNull();
 });
 
-it("only offers Manager collapse when it owns worktrees and counts collapsed items", async () => {
+it("keeps Manager team collapse separate from the task worktree count", async () => {
   const manager = { project: "/repo", onOpen: vi.fn(), onToggle: vi.fn(), expanded: false };
   await act(async () => root.render(createElement(ProjectManagerRow, manager)));
-  expect(container.querySelector('[aria-label="Toggle Manager queue"]')).toBeNull();
+  expect(container.querySelector('[aria-label="Toggle Manager team"]')).toBeNull();
   await act(async () => root.render(createElement(ProjectManagerRow, { ...manager, ownedCount: 2 })));
-  expect(container.textContent).toContain("Manager · 2");
-  await act(async () => button("Toggle Manager queue").click());
-  expect(manager.onToggle).toHaveBeenCalledOnce();
+  expect(container.textContent).toBe("Manager");
+  expect(container.querySelector('[aria-label="Toggle Manager team"]')).toBeNull();
 });
 
 it("keeps metadata in the title row, prioritizes status, and omits zero counts", async () => {

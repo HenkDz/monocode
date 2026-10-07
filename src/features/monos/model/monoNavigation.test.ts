@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { Storage } from "happy-dom";
-import { loadMonoView, saveMonoView, monoForView, memberDetailsView, memberTasks, selectedOrgMono } from "./monoNavigation";
+import { loadMonoView, saveMonoView, monoForView, memberDetailsView, memberTasks, memberAvailability, selectedOrgMono } from "./monoNavigation";
 import { monoForSession } from "./mono";
 import { reconcileProjectReturn } from "../../projects/model/projectReturn";
 import { newTab } from "../../workspace/model/layout";
@@ -30,6 +30,23 @@ const runs = [{ tasks: [
   { id: "old", memberId: "backend", sessionId: "old-chat" },
   { id: "new", memberId: "backend", sessionId: "worker-chat" },
 ], dispatches: [{ taskId: "old", startedAt: 10 }, { taskId: "new", startedAt: 20 }] }] as OrchestrationRun[];
+
+it("shows current member availability without historical task outcomes dominating", () => {
+  const task = (status: OrchestrationRun["tasks"][number]["status"], sessionId = "worker") => ({ status, sessionId }) as OrchestrationRun["tasks"][number];
+  expect(memberAvailability([])).toBe("idle");
+  for (const status of ["queued", "completed", "cancelled"] as const)
+    expect(memberAvailability([task(status)])).toBe("idle");
+  for (const status of ["running", "cancelling"] as const)
+    expect(memberAvailability([task(status)])).toBe("working");
+  for (const status of ["blocked", "failed", "interrupted"] as const)
+    expect(memberAvailability([task(status)])).toBe("needs-you");
+  expect(memberAvailability([task("running")], new Set(["worker"]))).toBe("needs-you");
+  expect(memberAvailability([task("completed")], new Set(), new Set(["worker"]))).toBe("working");
+  expect(memberAvailability([task("completed"), task("failed", "old")])).toBe("idle");
+  expect(memberAvailability([task("running"), task("blocked", "old")], new Set(["old"]))).toBe("working");
+  expect(memberAvailability([], new Set(["chat"]), new Set(["chat"]), "chat")).toBe("needs-you");
+  expect(memberAvailability([], new Set(), new Set(["chat"]), "chat")).toBe("working");
+});
 
 it("derives a single row from the visible pane, never the hidden workspace session", () => {
   expect(selectedOrgMono("regular-chat", null, runs)).toBeUndefined();

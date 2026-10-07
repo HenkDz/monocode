@@ -159,9 +159,38 @@ it("shows the member work log without a full-height greeting hiding it below the
   const pane = props();
   pane.session.blocks = [];
   render(pane);
-  expect(container.querySelector('[aria-label="Member work log"]')?.textContent).toContain("No assignments yet.");
-  expect(container.querySelector("header")?.classList.contains("min-h-full")).toBe(false);
+  expect(
+    container.querySelector('[aria-label="Member work log"]')?.textContent,
+  ).toContain("No assignments yet.");
+  expect(
+    container.querySelector("header")?.classList.contains("min-h-full"),
+  ).toBe(false);
   expect(field()).not.toBeNull();
+});
+
+it("updates the member header from live session and roster state", () => {
+  probes.member = true;
+  const pane = props();
+  pane.session.blocks = [];
+  pane.session.busy = true;
+  render(pane);
+  expect(
+    container.querySelector('header [data-mono-status="working"]')?.textContent,
+  ).toContain("Working");
+
+  render({
+    ...pane,
+    monoState: { status: "needs-you", activity: "Review decision" },
+  });
+  expect(
+    container.querySelector('header [data-mono-status="needs-you"]')
+      ?.textContent,
+  ).toContain("Review decision");
+
+  render({ ...pane, session: { ...pane.session, busy: false } });
+  expect(
+    container.querySelector('header [data-mono-status="idle"]')?.textContent,
+  ).toContain("Idle");
 });
 
 it("keeps the same input, current draft and attachments when a question appears and closes", async () => {
@@ -295,7 +324,9 @@ it("keeps internal notifications out of the Mono's composer and user outbox", ()
   };
   render(pane);
   expect(container.querySelector("[data-message-queue]")).toBeNull();
-  expect(container.textContent).not.toContain("Hidden completion review prompt");
+  expect(container.textContent).not.toContain(
+    "Hidden completion review prompt",
+  );
   expect(container.textContent).not.toContain("Session completed: API fix");
   expect(field()).not.toBeNull();
 });

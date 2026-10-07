@@ -4,9 +4,10 @@ import {
   listMonos,
   monoLook,
   monosSnapshot,
+  MONO_STATUS_LABEL,
   subscribeMonos,
 } from "../../monos/model/mono";
-import { memberTasks } from "../../monos/model/monoNavigation";
+import { memberAvailability, memberTasks } from "../../monos/model/monoNavigation";
 import { PixelMascot } from "../../projects/ui/PixelMascot";
 import { ChevronDown, ChevronRight } from "../../../shared/ui/icons";
 import { ManagerAvatar } from "./ManagerAvatar";
@@ -23,7 +24,8 @@ export function ProjectManagerRow({
   selected = false,
   expanded,
   onToggle,
-  ownedCount = 0,
+  approvalSessionIds,
+  busySessionIds,
   selectedMemberId,
   onOpenMember,
 }: {
@@ -36,6 +38,8 @@ export function ProjectManagerRow({
   expanded?: boolean;
   onToggle?: () => void;
   ownedCount?: number;
+  approvalSessionIds?: ReadonlySet<string>;
+  busySessionIds?: ReadonlySet<string>;
   selectedMemberId?: string;
   onOpenMember?: (memberId: string) => Promise<void>;
 }) {
@@ -86,10 +90,10 @@ export function ProjectManagerRow({
           : undefined;
   return (
     <div className="relative mb-0.5">
-      {onToggle && (ownedCount > 0 || members.length > 0) && (
+      {onToggle && members.length > 0 && (
         <button
           type="button"
-          aria-label="Toggle Manager queue"
+          aria-label="Toggle Manager team"
           aria-expanded={expanded}
           onClick={onToggle}
           className="absolute left-1 top-2 z-10 grid size-4 place-items-center rounded text-content/50 hover:text-content focus-visible:outline-accent"
@@ -158,7 +162,6 @@ export function ProjectManagerRow({
         )}
         <span className="truncate">
           {look?.name ?? "Manager"}
-          {expanded === false && ownedCount > 0 ? ` · ${ownedCount}` : ""}
         </span>
         {label && (
           <span
@@ -175,19 +178,19 @@ export function ProjectManagerRow({
         members.map((member) => {
           const look = monoLook(member);
           const tasks = memberTasks(runs, member.id);
-          const task = tasks[0];
-          const memberRunning = tasks.some(task => task.status === "running");
+          const task = tasks.find(task => ["queued", "running", "cancelling"].includes(task.status)) ?? tasks[0];
+          const availability = memberAvailability(tasks, approvalSessionIds, busySessionIds, member.sessionId);
           const memberSelected = member.id === selectedMemberId;
           return (
             <button
               type="button"
               key={member.id}
               aria-current={memberSelected ? "page" : undefined}
-              aria-label={`Open ${look.name}${memberRunning ? ", running" : ""}`}
+              aria-label={`Open ${look.name}`}
               className={`flex h-7 w-full min-w-0 items-center gap-1.5 rounded-md pl-9 pr-2 text-left text-xs focus-visible:outline-accent ${memberSelected ? "bg-selection text-content" : "text-content/60 hover:bg-content/5"}`}
               title={
                 task
-                  ? `${look.name} · ${task.title} · ${task.status}`
+                  ? task.title
                   : look.name
               }
               onClick={() => { setError(undefined); void onOpenMember?.(member.id).catch(reason => setError(String(reason))); }}
@@ -197,21 +200,12 @@ export function ProjectManagerRow({
                 color={look.color}
                 still
                 className="size-4 shrink-0"
-                status={memberRunning ? "working" : task?.status === "blocked" ? "needs-you" : "idle"}
+                status={availability}
               />
-              <span className="shrink-0">{look.name}</span>
-              {task && (
-                <>
-                  <span className="truncate text-content/40">
-                    · {task.title}
-                  </span>
-                  <span
-                    className={`ml-auto shrink-0 text-[10px] ${task.status === "blocked" ? "text-amber-500" : "text-content/40"}`}
-                  >
-                    {task.status}
-                  </span>
-                </>
-              )}
+              <span className="min-w-0 truncate">{look.name}</span>
+              <span role="status" className={`ml-auto shrink-0 text-[10px] ${availability === "needs-you" ? "text-amber-700 dark:text-amber-400" : availability === "working" ? "text-accent" : "text-content/40"}`}>
+                {MONO_STATUS_LABEL[availability]}
+              </span>
             </button>
           );
         })}

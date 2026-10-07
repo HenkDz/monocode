@@ -47,6 +47,12 @@ export function managerQueueRank(
   return 2;
 }
 
+export function managerTaskOutcome(task: OrchestrationTask, pr?: GitPr | null) {
+  if (task.status === "cancelled") return "Cancelled";
+  if (managerTaskFinished(task, pr))
+    return pr?.state === "merged" ? "Merged" : "Closed (not merged)";
+}
+
 export function managerPrReady(
   task: OrchestrationTask,
   pr?: GitPr | null,

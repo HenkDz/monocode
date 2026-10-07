@@ -36,6 +36,7 @@ import {
   isProjectManager,
   managerWorktreeStatus,
   managerQueueRank,
+  managerTaskOutcome,
   taskPrStatus,
 } from "../../orchestration/model/projectManager";
 import type { SessionSummary } from "../../sessions/data/sessionStore";
@@ -75,6 +76,12 @@ import type { Worktree, WorktreeSessionOptions } from "../model/worktrees";
 const SESSION_LIMIT = 5;
 /** Worktrees page in this many at a time; the focused or busy ones always show. */
 const WORKTREE_PAGE = 5;
+
+const taskWorktreesKey = (project: string) => `monocode:task-worktrees-expanded:${pathKey(project)}`;
+const taskWorktreesExpanded = (project: string) => {
+  try { return localStorage.getItem(taskWorktreesKey(project)) === "1"; }
+  catch { return false; }
+};
 
 type Props = {
   onAddAsSeparateProject?: (tree: Worktree) => void | Promise<void>;
@@ -168,9 +175,11 @@ export function ProjectWorktrees({
   const [goal, setGoal] = useState("");
   const [givingBusy, setGivingBusy] = useState(false);
   const [creatingPr, setCreatingPr] = useState<Worktree>();
-  const [queueExpanded, setQueueExpanded] = useState(true);
+  const [teamExpanded, setTeamExpanded] = useState(true);
+  const [taskExpanded, setTaskExpanded] = useState(() => taskWorktreesExpanded(project));
   const [doneExpanded, setDoneExpanded] = useState(false);
   const [activeOnly] = useActiveWorktrees(project);
+  useEffect(() => setTaskExpanded(taskWorktreesExpanded(project)), [project]);
   useEffect(() => {
     if (!menu) return;
     let disposed = false;
@@ -283,30 +292,20 @@ export function ProjectWorktrees({
   const sections = renderManager
     ? [
         {
-          name: "Manager queue",
-          trees: listedTrees
-            .filter(
-              (tree) => taskByPath.has(pathKey(tree.path)) && rank(tree) !== 3,
-            )
-            .sort((a, b) => rank(a) - rank(b)),
-          expanded: queueExpanded,
-        },
-        {
-          name: "Done",
-          trees: listedTrees.filter(
-            (tree) => taskByPath.has(pathKey(tree.path)) && rank(tree) === 3,
-          ),
-          expanded: doneExpanded,
-        },
-        {
-          name: "Worktrees",
-          trees: listedTrees.filter(
-            (tree) => !taskByPath.has(pathKey(tree.path)),
-          ),
+          name: "Your worktrees",
+          groups: [{ name: "Your worktrees", trees: listedTrees.filter(tree => !taskByPath.has(pathKey(tree.path))), expanded: true }],
           expanded: true,
         },
+        {
+          name: "Task worktrees",
+          groups: [
+            { name: "Active task worktrees", trees: listedTrees.filter(tree => taskByPath.has(pathKey(tree.path)) && rank(tree) !== 3).sort((a, b) => rank(a) - rank(b)), expanded: true },
+            { name: "Finished", trees: listedTrees.filter(tree => taskByPath.has(pathKey(tree.path)) && rank(tree) === 3), expanded: doneExpanded },
+          ],
+          expanded: taskExpanded,
+        },
       ]
-    : [{ name: "Worktrees", trees: listedTrees, expanded: true }];
+    : [{ name: "Your worktrees", groups: [{ name: "Your worktrees", trees: listedTrees, expanded: true }], expanded: true }];
   const toggle = (path: string) =>
     setCollapsed((current) => {
       const next = new Set(current);
@@ -359,41 +358,54 @@ export function ProjectWorktrees({
           </button>
         </p>
       ) : null}
+      {renderManager?.(teamExpanded, () => setTeamExpanded(!teamExpanded),
+        trees.filter(tree => taskByPath.has(pathKey(tree.path))).length,
+      )}
       {sections.map((section) => (
         <div
           key={section.name}
           role="group"
           aria-label={section.name}
-          hidden={section.name === "Done" && !queueExpanded}
         >
-          {section.name === "Manager queue" &&
-            renderManager?.(queueExpanded, () => setQueueExpanded(!queueExpanded),
-              trees.filter(tree => taskByPath.has(pathKey(tree.path))).length,
-            )}
-          {section.name === "Done" && section.trees.length > 0 && (
+          {section.name === "Task worktrees" ? (
             <button
               type="button"
-              aria-expanded={doneExpanded}
-              onClick={() => setDoneExpanded(!doneExpanded)}
-              className="ml-7 flex h-7 items-center gap-1 rounded px-2 text-[11px] text-content/50 hover:text-content"
+              aria-label="Toggle Task worktrees"
+              aria-expanded={taskExpanded}
+              onClick={() => {
+                const expanded = !taskExpanded;
+                setTaskExpanded(expanded);
+                try { localStorage.setItem(taskWorktreesKey(project), expanded ? "1" : "0"); }
+                catch { /* The section still toggles when storage is unavailable. */ }
+              }}
+              className="mt-1 flex h-7 w-full items-center gap-1 rounded px-2 text-left text-[11px] text-content/50 hover:bg-content/5 hover:text-content focus-visible:outline-accent"
             >
-              {doneExpanded ? (
+              {taskExpanded ? (
                 <ChevronDown className="size-3" />
               ) : (
                 <ChevronRight className="size-3" />
               )}
-              Done · {section.trees.length}
+              Task worktrees · {section.groups.reduce((count, group) => count + group.trees.length, 0)}
             </button>
-          )}
+          ) : <p className="mt-1 flex h-7 items-center px-5 text-[11px] text-content/50">Your worktrees</p>}
           <div
             hidden={!section.expanded}
             className={
-              section.name === "Worktrees"
+              section.name === "Your worktrees"
                 ? ""
                 : "ml-7 border-l border-content/10 pl-1"
             }
           >
-            {section.trees.map((tree) => {
+            {section.groups.map(group => (
+              <div key={group.name} role={group.name === "Finished" ? "group" : undefined} aria-label={group.name === "Finished" ? "Finished" : undefined}>
+                {group.name === "Finished" && group.trees.length > 0 && (
+                  <button type="button" aria-label="Toggle Finished worktrees" aria-expanded={doneExpanded} onClick={() => setDoneExpanded(!doneExpanded)} className="flex h-7 items-center gap-1 rounded px-2 text-[11px] text-content/50 hover:text-content focus-visible:outline-accent">
+                    {doneExpanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
+                    Finished · {group.trees.length}
+                  </button>
+                )}
+                <div hidden={!group.expanded}>
+            {group.trees.map((tree) => {
               const key = pathKey(tree.path);
               const sessions = groups.get(key) ?? [];
               const expanded = sessions.length > 1 && !collapsed.has(key);
@@ -408,22 +420,15 @@ export function ProjectWorktrees({
                 !!focusedPath &&
                 !(expanded && sessions.some(session => session.id === activeSessionId)) &&
                 sameProjectPath(focus?.path ?? project, tree.path);
-              const managerTask = [...managerRuns]
-                .reverse()
-                .filter((run) => run.projectManager)
-                .flatMap((run) => [...run.tasks].reverse())
-                .find(
-                  (task) =>
-                    task.workspace &&
-                    pathKey(task.workspace.checkoutCwd) === key,
-                );
+              const managerTask = taskByPath.get(key);
               const label =
                 managerTask?.title ??
                 tree.branch ??
                 sessions.find((session) => session.title.trim())?.title ??
                 tree.headSubject ??
                 "Detached worktree";
-              const done = section.name === "Done";
+              const done = group.name === "Finished";
+              const outcome = managerTask && managerTaskOutcome(managerTask, taskPrStatus(managerTask, prStatuses));
               const workerStatus = managerWorktreeStatus(
                 managerRuns,
                 tree.path,
@@ -507,7 +512,7 @@ export function ProjectWorktrees({
                       aria-current={selected ? "true" : undefined}
                       aria-label={`Open worktree ${label}`}
                       aria-busy={selected && switchPending}
-                      title={`${label}\n${tree.branch ?? `Detached ${tree.head.slice(0, 7)}`}\n${prettyCwd(tree.path)}\n${workerStatus || progress}${tree.dirty ? "\nUncommitted changes" : ""}`}
+                      title={`${label}\n${tree.branch ?? `Detached ${tree.head.slice(0, 7)}`}\n${prettyCwd(tree.path)}\n${outcome || workerStatus || progress}${tree.dirty ? "\nUncommitted changes" : ""}`}
                       onClick={() =>
                         sessions.length === 1
                           ? onSelectSession(sessions[0].id, { project, tree })
@@ -535,7 +540,10 @@ export function ProjectWorktrees({
                     </button>
                     <div data-worktree-metadata className="ml-auto flex max-w-[45%] shrink-0 items-center gap-1 overflow-hidden pr-1 text-[11px] text-content/50 group-hover/worktree:hidden group-focus-within/worktree:hidden group-data-[actions-open=true]/worktree:hidden [@media(hover:none)]:hidden">
                       {done ? (
+                        <>
+                        <span className={`truncate ${outcome === "Merged" ? "text-emerald-700 dark:text-emerald-400" : ""}`}>{outcome}</span>
                         <WorktreeDoneWarning tree={tree} enabled={enabled && !tree.missing} />
+                        </>
                       ) : workerStatus || activeProgress ? (
                         <span className={`truncate ${workerStatus === "PR ready" ? "text-emerald-600 dark:text-emerald-400" : ""}`}>{workerStatus || progress}</span>
                       ) : <WorktreeDiffStat path={tree.path} enabled={enabled && !tree.missing} />}
@@ -691,6 +699,9 @@ export function ProjectWorktrees({
                 </div>
               );
             })}
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       ))}

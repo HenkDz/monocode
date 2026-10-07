@@ -1,9 +1,11 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { newSession } from "../../sessions/model/session";
+import type { OrchestrationTask } from "../../orchestration/model/orchestrationState";
+import { markHabitRun, clearHabitRun } from "./monoHabits";
 import { leafIds, newTab, splitPane } from "../../workspace/model/layout";
 import { planWorkspaceTabClose } from "../../workspace/model/workspaceTabGroups";
-import { createMono, findMono, saveMonoName, saveMonoSessionId, monoRuntimeMode, updateMono } from "./mono";
+import { createMono, findMono, saveMonoName, saveMonoSessionId, monoRuntimeMode, monoDefaultRuntimeMode, legacyMonoRuntimeMode, saveMonoRuntimeMode } from "./mono";
 import { planAgentContext, recordAgentContext } from "./monoFiles";
 import {
   loadMonoBaseline,
@@ -15,6 +17,7 @@ import {
   detachMonoTabs,
   ensureMonoSession,
   resetMonoSession,
+  monoPermissionSessionIds,
 } from "./monoWorkspace";
 
 beforeEach(() => {
@@ -26,24 +29,51 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-it("defaults Managers and members to full access, keeps the Orchestrator supervised, and honors per-agent choices", () => {
+it("defaults new Managers and members to full access and plain Monos to Auto, preserving saved session choices", () => {
   const plain = { id: "plain", projects: [], mascot: "cat", color: "#abc" };
+  expect(monoDefaultRuntimeMode(plain)).toBe("auto");
   expect(monoRuntimeMode(plain, "auto-accept-edits")).toBe("auto-accept-edits");
   for (const role of ["manager", "member", "orchestrator"] as const) {
     const mono = { id: role, role, projects: [], mascot: "cat", color: "#abc" };
-    expect(monoRuntimeMode(mono, "full-access")).toBe(role === "orchestrator" ? "supervised" : "full-access");
-    expect(monoRuntimeMode({ ...mono, runtimeMode: "supervised" }, "full-access")).toBe("supervised");
+    expect(monoDefaultRuntimeMode(mono)).toBe(role === "orchestrator" ? "auto" : "full-access");
+    expect(monoRuntimeMode(mono, "supervised")).toBe("supervised");
   }
 });
 
-it("persists all four access choices on the Mono and restores them into the next chat", async () => {
-  const mono = createMono(["/project"]);
-  const host = { home: async () => "/home", load: vi.fn(), create: () => newSession("codex", "/home", undefined, "supervised"), add: vi.fn() };
+it("migrates each legacy permission once into the existing session and then honors later user choices", async () => {
+  const host = { home: async () => "/home", load: vi.fn(), create: () => newSession("codex", "/home", undefined, "supervised"), add: vi.fn(), save: vi.fn(async () => {}) };
   for (const runtimeMode of ["supervised", "auto-accept-edits", "auto", "full-access"] as const) {
-    updateMono(mono.id, current => ({ ...current, runtimeMode }));
-    expect(findMono(mono.id)?.runtimeMode).toBe(runtimeMode);
-    expect((await ensureMonoSession(mono.id, host))?.runtimeMode).toBe(runtimeMode);
+    localStorage.setItem("monocode:mono-roster", JSON.stringify([{ id: "legacy", sessionId: "chat", runtimeMode, projects: [], mascot: "cat", color: "#abc" }]));
+    host.load.mockResolvedValue(newSession("codex", "/home", undefined, "auto"));
+    expect((await ensureMonoSession("legacy", host))?.runtimeMode).toBe(runtimeMode);
+    expect(host.save).toHaveBeenLastCalledWith(expect.objectContaining({ runtimeMode }));
+    expect(findMono("legacy")).not.toHaveProperty("runtimeMode");
+    expect(legacyMonoRuntimeMode("legacy")).toBeUndefined();
+    const changed = newSession("codex", "/home", undefined, "auto-accept-edits");
+    host.load.mockResolvedValue(changed);
+    expect(await ensureMonoSession("legacy", host)).toBe(changed);
   }
+});
+
+it("keeps the migration choice when session persistence fails and retries it", async () => {
+  localStorage.setItem("monocode:mono-roster", JSON.stringify([{ id: "legacy", runtimeMode: "supervised", projects: [], mascot: "cat", color: "#abc" }]));
+  const host = { home: async () => "/home", load: vi.fn(), create: () => newSession("codex", "/home"), add: vi.fn(), save: vi.fn().mockRejectedValueOnce(Error("Disk full")).mockResolvedValue(undefined) };
+  await expect(ensureMonoSession("legacy", host)).rejects.toThrow("Disk full");
+  expect(legacyMonoRuntimeMode("legacy")).toBe("supervised");
+  expect(findMono("legacy")?.sessionId).toBeUndefined();
+  expect(host.add).not.toHaveBeenCalled();
+  expect((await ensureMonoSession("legacy", host))?.runtimeMode).toBe("supervised");
+  expect(legacyMonoRuntimeMode("legacy")).toBeUndefined();
+});
+
+it("retains legacy permissions while the empty Mono chat is not yet persisted", async () => {
+  localStorage.setItem("monocode:mono-roster", JSON.stringify([{ id: "legacy", runtimeMode: "supervised", projects: [], mascot: "cat", color: "#abc" }]));
+  const host = { home: async () => "/home", load: vi.fn(), create: () => newSession("codex", "/home"), add: vi.fn(), save: vi.fn(async () => null) };
+  expect((await ensureMonoSession("legacy", host))?.runtimeMode).toBe("supervised");
+  expect(legacyMonoRuntimeMode("legacy")).toBe("supervised");
+  saveMonoRuntimeMode("legacy", "full-access");
+  expect(monoRuntimeMode(findMono("legacy"), "supervised")).toBe("full-access");
+  saveMonoRuntimeMode("legacy", "supervised");
 });
 
 it("uses the Mono profile on cold goal delivery without changing restored chat choices", async () => {
@@ -58,7 +88,7 @@ it("uses the Mono profile on cold goal delivery without changing restored chat c
   host.load.mockResolvedValue(changedByUser);
   expect(await ensureMonoSession("manager", host)).toBe(changedByUser);
   host.load.mockResolvedValue({ ...changedByUser, runtimeMode: "supervised" });
-  expect((await ensureMonoSession("manager", host))?.runtimeMode).toBe("full-access");
+  expect((await ensureMonoSession("manager", host))?.runtimeMode).toBe("supervised");
 });
 
 const chat = (id: string, cwd = "/project") => ({
@@ -66,6 +96,21 @@ const chat = (id: string, cwd = "/project") => ({
   id,
 });
 const createSession = (cwd: string) => newSession("codex", cwd);
+
+it("applies a choice to the resident chat, owned running tasks and habits without changing read-only work or teammates", () => {
+  const sessions = ["resident", "worker", "idle-worker", "read-only", "teammate", "habit"].map(id => ({ ...chat(id), busy: id !== "idle-worker", ...(id === "read-only" ? { readOnly: true } : {}) }));
+  const tasks = [
+    { memberId: "member", sessionId: "worker" },
+    { memberId: "member", sessionId: "idle-worker" },
+    { memberId: "member", sessionId: "read-only", readOnly: true },
+    { memberId: "other", sessionId: "teammate" },
+  ] as OrchestrationTask[];
+  markHabitRun("habit", "member");
+  try {
+    expect(monoPermissionSessionIds("member", "resident", sessions, [{ tasks }])).toEqual(["resident", "worker", "habit"]);
+    expect(monoPermissionSessionIds("manager", "resident", sessions, [{ tasks }])).toEqual(["resident"]);
+  } finally { clearHabitRun("habit"); }
+});
 
 /** A Mono that works on `cwd`, with `sessionId` as its chat. */
 function monoFor(cwd: string, sessionId: string): string {
@@ -91,7 +136,7 @@ it("lazily gives a member its own durable chat, separate from task worker sessio
 });
 
 it("loads an existing resident conversation without creating a session", async () => {
-  const agent = chat("resident");
+  const agent = { ...chat("resident"), runtimeMode: "full-access" as const };
   const monoId = monoFor(agent.cwd, agent.id);
   const host = {
     home: vi.fn().mockResolvedValue("/home"),
@@ -105,7 +150,7 @@ it("loads an existing resident conversation without creating a session", async (
   expect(host.add).not.toHaveBeenCalled();
 });
 
-it("starts a new Mono's conversation in the home folder, once", async () => {
+it("starts a new Mono's conversation with Auto permissions in the home folder, once", async () => {
   const monoId = createMono(["/project"]).id;
   const host = {
     home: vi.fn().mockResolvedValue("/home"),
@@ -115,6 +160,7 @@ it("starts a new Mono's conversation in the home folder, once", async () => {
   };
   const agent = (await ensureMonoSession(monoId, host))!;
   expect(agent.cwd).toBe("/home");
+  expect(agent.runtimeMode).toBe("auto");
   expect(sessionOf(monoId)).toBe(agent.id);
   expect(host.add).toHaveBeenCalledExactlyOnceWith(agent);
   host.load.mockResolvedValue(agent);
@@ -176,6 +222,7 @@ it("allows retrying an open after the home lookup fails", async () => {
 it("deletes the Mono's chat before replacing it with an empty provider session", async () => {
   const current = {
     ...chat("resident"),
+    runtimeMode: "auto-accept-edits" as const,
     busy: true,
     providerSessionId: "old-provider",
     providerAccountId: "old-account",

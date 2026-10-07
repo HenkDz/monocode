@@ -59,7 +59,7 @@ it("keeps member settings inside Details and org tools collapsed below the team 
     { id: "m", role: "manager", projects: ["/repo"], mascot: "cat", color: "#6ba" },
     { id: "member", role: "member", reportsTo: "m", specialty: "Backend", projects: ["/repo"], mascot: "cat", color: "#6ba" },
   ]));
-  const props = { open: true, monoId: "member", cwd: "/repo", agent, state: { status: "idle" as const }, harness: "codex" as const, model: "codex:gpt-5.4", modelSettings: {}, onModelChange: noop, onModelSettingsChange: noop, onClose: noop };
+  const props = { open: true, monoId: "member", cwd: "/repo", agent, state: { status: "idle" as const }, harness: "codex" as const, model: "codex:gpt-5.4", modelSettings: {}, runtimeMode: "full-access" as const, onRuntimeModeChange: noop, onModelChange: noop, onModelSettingsChange: noop, onClose: noop };
   try {
     await act(async () => root.render(createElement(MonoDetails, { ...props, runtimeMode: "full-access", onRuntimeModeChange: noop })));
     expect(container.querySelector('[aria-label="Member specialty"]')).not.toBeNull();
@@ -131,6 +131,8 @@ function Panel({ live = true }: { live?: boolean }) {
         harness="codex"
         model="codex:gpt-5.4"
         modelSettings={{}}
+        runtimeMode="auto"
+        onRuntimeModeChange={noop}
         onModelChange={noop}
         onModelSettingsChange={noop}
         onClose={() => setOpen(false)}

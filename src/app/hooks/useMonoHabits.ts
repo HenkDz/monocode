@@ -13,6 +13,10 @@ import {
 } from "../../features/monos/model/mono";
 import { loadMonoFiles } from "../../features/monos/model/monoFiles";
 import {
+  artifactCards,
+  type ArtifactCard,
+} from "../../features/artifacts/artifacts";
+import {
   afterRun,
   claimHabit,
   clearHabitRun,
@@ -57,6 +61,7 @@ export type MonoHabitHost = {
     text: string,
     title: string,
     cards?: MonoCard[],
+    artifacts?: ArtifactCard[],
   ): void;
   /** Puts an approval the run is waiting on to the user, in the Mono's chat. */
   askApproval(
@@ -171,13 +176,13 @@ export function useMonoHabits(host: MonoHabitHost, enabled = true) {
       if (!habit || stopped || !record) return;
       const look = monoLook(record);
       const run: Session = {
-        // Nobody is watching a habit's run, so it cannot stop to ask before
-        // each step. Anything the harness still asks goes to the user below.
+        // Org habits retain the user's saved permissions; plain habits keep
+        // upstream's unattended default. Remaining approvals are relayed below.
         ...newSession(
           mono.harness,
           mono.cwd,
           mono.model,
-          "full-access",
+          record.role ? mono.runtimeMode : "full-access",
           mono.modelSettings,
         ),
         title: `${look.name} · ${habit.name}`,
@@ -203,6 +208,9 @@ export function useMonoHabits(host: MonoHabitHost, enabled = true) {
       const reply =
         finalReply(host.sessions().find((s) => s.id === run.id)) ||
         outcome.text;
+      const artifacts = artifactCards(
+        host.sessions().find((s) => s.id === run.id)?.blocks ?? [],
+      );
       host.endApprovals(run.id);
       await host.remove(run.id).catch(() => undefined);
       clearHabitRun(run.id);
@@ -211,7 +219,7 @@ export function useMonoHabits(host: MonoHabitHost, enabled = true) {
       const report =
         outcome.status === "completed" ? habitReport(reply) : undefined;
       const cards = takeRunCards(run.id);
-      if (report) host.post(monoSessionId, habit, report, look.name, cards);
+      if (report) host.post(monoSessionId, habit, report, look.name, cards, artifacts);
       await updateHabits(monoId, (habits) => ({
         habits: habits.map((entry) =>
           entry.id === habit.id

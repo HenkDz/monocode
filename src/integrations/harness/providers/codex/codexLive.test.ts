@@ -158,23 +158,22 @@ async function startTurn(
 }
 
 describe("codex live turn sequence", () => {
-  it.each(["manager", "member"])("uses no-approval/full-access launch and turn policies for %s including refreshed/Habit turns", async role => {
-    let saved = JSON.stringify([{ id: "org", role, projects: ["/repo"], mascot: "cat", color: "#abc" }]);
+  it.each(["manager", "member"])("preserves saved launch and turn permissions for %s including refreshed/Habit turns", async role => {
+    const saved = JSON.stringify([{ id: "org", role, projects: ["/repo"], mascot: "cat", color: "#abc" }]);
     vi.stubGlobal("localStorage", { getItem: (key: string) => key === "monocode:mono-roster" ? saved : null, setItem: () => {} });
     registerHarness({ id: "codex", live: true, sendTurn: sendCodexTurn, respondApproval: respondCodexApproval,
       cancelTurn: cancelCodexTurn, stopSession: stopCodexSession, forgetSession: async () => {}, bindSession: () => {}, steerTurn: async () => {} });
     try {
       for (const sessionId of ["codex-live", "rotated-chat", "habit-run"]) {
         sent.length = 0;
-        const { turn } = await startTurn(sessionId, { orgMonoId: "org", runtimeMode: "supervised" });
+        const { turn } = await startTurn(sessionId, { orgMonoId: "org", runtimeMode: "full-access" });
         expect(parse().find(message => message.method === "thread/start")?.params).toMatchObject({ approvalPolicy: "never", sandbox: "danger-full-access" });
         expect(parse().find(message => message.method === "turn/start")?.params).toMatchObject({ approvalPolicy: "never", sandboxPolicy: { type: "dangerFullAccess" } });
         notify("turn/completed", { turn: { id: "turn_1", status: "completed" } }); await turn;
         await stopCodexSession(sessionId); __codexTestReset();
       }
-      saved = JSON.stringify([{ id: "org", role, projects: ["/repo"], mascot: "cat", color: "#abc", runtimeMode: "supervised" }]);
       sent.length = 0;
-      const { turn } = await startTurn("codex-live", { orgMonoId: "org", runtimeMode: "full-access" });
+      const { turn } = await startTurn("codex-live", { orgMonoId: "org", runtimeMode: "supervised" });
       expect(parse().find(message => message.method === "turn/start")?.params).toMatchObject({ approvalPolicy: "untrusted", sandboxPolicy: { type: "readOnly" } });
       notify("turn/completed", { turn: { id: "turn_1", status: "completed" } }); await turn;
     } finally { vi.unstubAllGlobals(); resetHarnessIdlePark(); }

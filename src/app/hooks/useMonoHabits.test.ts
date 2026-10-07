@@ -13,6 +13,7 @@ const MONO = {
   mascot: "skull",
   color: "#fff",
   projects: ["/code/app"],
+  role: undefined as "manager" | "member" | "orchestrator" | undefined,
 };
 
 vi.mock("../../features/monos/model/mono", async (original) => ({
@@ -67,6 +68,7 @@ let root: Root;
 let extraRoots: Root[] = [];
 const originalWindow = window;
 beforeEach(() => {
+  MONO.role = undefined;
   fileVersion = 0;
   extraRoots = [];
   vi.clearAllMocks();
@@ -119,6 +121,7 @@ function makeHost(reply: string, approve?: { wait: Promise<void> }) {
     cwd: "/code/app",
     harness: "claude",
     model: "claude:x",
+    runtimeMode: "supervised",
     blocks: [],
   } as unknown as Session;
   const sessions: Session[] = [mono];
@@ -256,6 +259,17 @@ it("posts nothing when the run has nothing to say", async () => {
   expect(host.post).not.toHaveBeenCalled();
   expect(host.remove).toHaveBeenCalled();
 });
+
+it.each(["manager", "member", "orchestrator"] as const)(
+  "preserves the %s's saved permissions in a habit run",
+  async role => {
+    MONO.role = role;
+    const host = setup("NOTHING_TO_REPORT");
+    await vi.waitFor(() => expect(host.add).toHaveBeenCalled());
+    expect(host.add.mock.calls[0][0].runtimeMode).toBe("supervised");
+    await vi.waitFor(() => expect(stored[0].lastOutcome).toBe("quiet"));
+  },
+);
 
 it(
   "puts an approval the run still asks for to the user, once",

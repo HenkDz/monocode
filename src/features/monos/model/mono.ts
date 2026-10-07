@@ -35,7 +35,6 @@ export const MONO_COLORS = [
  * them; it lives on the rail beside the projects and can be given more.
  */
 export type Mono = {
-  runtimeMode?: RuntimeMode;
   id: string;
   /** Project removal hides the team without discarding identity or history. */
   archivedAt?: number;
@@ -69,6 +68,8 @@ export type Mono = {
   color: string;
   /** Project folders it works on, in the order they were added. */
   projects: string[];
+  /** New sessions appear in the project sidebar unless explicitly disabled. */
+  showStartedSessionsInSidebar?: boolean;
   /** Superseded by SOUL.md; only read once, to seed it. */
   instructions?: string;
   /**
@@ -79,6 +80,7 @@ export type Mono = {
 };
 
 const ROSTER_KEY = "monocode:mono-roster";
+const LEGACY_PERMISSIONS_KEY = "monocode:mono-permissions-migration";
 const MONOS_CHANGED = "monocode:monos-changed";
 export const HANDED_KEY = "monocode:mono-handed";
 
@@ -205,7 +207,6 @@ function parseMono(value: unknown): Mono | undefined {
     ...(typeof entry.archivedAt === "number" && Number.isFinite(entry.archivedAt)
       ? { archivedAt: entry.archivedAt }
       : {}),
-    ...(RUNTIME_MODES.includes(entry.runtimeMode as RuntimeMode) ? { runtimeMode: entry.runtimeMode as RuntimeMode } : {}),
     ...(["orchestrator", "manager", "member"].includes(String(entry.role))
       ? { role: entry.role as Mono["role"] }
       : {}),
@@ -246,6 +247,9 @@ function parseMono(value: unknown): Mono | undefined {
           (path): path is string => typeof path === "string" && !!path,
         )
       : [],
+    ...(typeof entry.showStartedSessionsInSidebar === "boolean"
+      ? { showStartedSessionsInSidebar: entry.showStartedSessionsInSidebar }
+      : {}),
     ...(instructions ? { instructions } : {}),
     ...(legacyProject ? { legacyProject } : {}),
   };
@@ -254,8 +258,26 @@ function parseMono(value: unknown): Mono | undefined {
 /** Every Mono, in the order the rail shows them. */
 export function listMonos(includeArchived = false): Mono[] {
   migrateLegacyMonoStorage();
-  const parsed = readJson(ROSTER_KEY);
-  if (!Array.isArray(parsed)) return [];
+  const stored = readJson(ROSTER_KEY);
+  if (!Array.isArray(stored)) return [];
+  let parsed: unknown[] = stored;
+  const pending = record(readJson(LEGACY_PERMISSIONS_KEY));
+  if (parsed.some((value) => Object.prototype.hasOwnProperty.call(record(value), "runtimeMode"))) {
+    const clean = parsed.map((value) => {
+      const { runtimeMode, ...entry } = record(value);
+      if (typeof entry.id === "string" && RUNTIME_MODES.includes(runtimeMode as RuntimeMode) && !Object.prototype.hasOwnProperty.call(pending, entry.id))
+        pending[entry.id] = runtimeMode;
+      return entry;
+    });
+    try {
+      // Keep the migration input durable until its session has been saved.
+      localStorage.setItem(LEGACY_PERMISSIONS_KEY, JSON.stringify(pending));
+      localStorage.setItem(ROSTER_KEY, JSON.stringify(clean));
+      parsed = clean;
+    } catch {
+      // Retry when storage is available; never discard an unsaved choice.
+    }
+  }
   return parsed.flatMap((entry) => {
     const mono = parseMono(entry);
     return mono && (includeArchived || mono.archivedAt == null) ? [mono] : [];
@@ -279,7 +301,30 @@ export function findMono(id: string): Mono | undefined {
 }
 
 export function monoRuntimeMode(mono: Mono | undefined, fallback: RuntimeMode): RuntimeMode {
-  return mono?.runtimeMode ?? (mono?.role === "manager" || mono?.role === "member" ? "full-access" : mono?.role === "orchestrator" ? "supervised" : fallback);
+  return (mono && legacyMonoRuntimeMode(mono.id)) ?? fallback;
+}
+
+export function monoDefaultRuntimeMode(mono: Mono): RuntimeMode {
+  return monoRuntimeMode(mono, mono.role === "manager" || mono.role === "member" ? "full-access" : "auto");
+}
+
+export function legacyMonoRuntimeMode(monoId: string): RuntimeMode | undefined {
+  const value = record(readJson(LEGACY_PERMISSIONS_KEY))[monoId];
+  return RUNTIME_MODES.includes(value as RuntimeMode) ? value as RuntimeMode : undefined;
+}
+
+export function finishMonoPermissionsMigration(monoId: string): void {
+  const pending = record(readJson(LEGACY_PERMISSIONS_KEY));
+  delete pending[monoId];
+  localStorage.setItem(LEGACY_PERMISSIONS_KEY, JSON.stringify(pending));
+}
+
+/** A user choice supersedes a pending legacy value before the chat is saved. */
+export function saveMonoRuntimeMode(monoId: string, runtimeMode: RuntimeMode): void {
+  if (!legacyMonoRuntimeMode(monoId)) return;
+  const pending = record(readJson(LEGACY_PERMISSIONS_KEY));
+  pending[monoId] = runtimeMode;
+  localStorage.setItem(LEGACY_PERMISSIONS_KEY, JSON.stringify(pending));
 }
 
 /** The Mono whose conversation this is. */

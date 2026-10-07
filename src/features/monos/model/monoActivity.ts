@@ -1,5 +1,5 @@
 import type { Block, Session } from "../../sessions/model/session";
-import { groupMonoTurns } from "../../sessions/model/transcriptActivity";
+import { groupMonoChatTurns } from "../../sessions/model/transcriptActivity";
 
 export type MonoActivitySelection = {
   sessionId: string;
@@ -14,7 +14,7 @@ export function resolveMonoActivity(
 ) {
   if (!session || (selection && selection.sessionId !== session.id))
     return null;
-  const turns = groupMonoTurns(session.blocks);
+  const turns = groupMonoChatTurns(session.blocks);
   if (!selection) {
     const latest = turns[turns.length - 1];
     return latest

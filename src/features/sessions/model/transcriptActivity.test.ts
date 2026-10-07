@@ -276,6 +276,14 @@ describe("groupTurnItems", () => {
     expect(items[0].blocks.map((block) => block.id)).toEqual(["a", "b", "c"]);
   });
 
+  it("keeps empty-text team cards visible in normal and Mono timelines", () => {
+    const card: Block = { id: "hire", role: "assistant", text: "", monoTeamChange: { managerId: "manager", changeId: "hire" } };
+    for (const group of [groupTurnItems, groupMonoTurnItems]) {
+      const items = group([shell("scan"), card, shell("next")]);
+      expect(items).toContainEqual({ type: "block", block: card });
+    }
+  });
+
   it("hides provider todo calls in favor of the shared tasks block", () => {
     const tasks: Block = {
       id: "tasks",

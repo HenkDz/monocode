@@ -33,7 +33,7 @@ it("adopts a Manager once without replacing its conversation or engine key", asy
   expect(adoptManagerMono(original.sessionId!, "C:/code/app", 200)).toEqual(
     original,
   );
-  expect(listMonos()).toHaveLength(4);
+  expect(listMonos()).toHaveLength(1);
   expect(await monoEngineId(original, "c:/code/app/")).toBe(original.sessionId);
   expect(original.role).toBe("manager");
 });

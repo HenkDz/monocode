@@ -1,11 +1,9 @@
 import { useState, useSyncExternalStore } from "react";
 import {
-  addTeamMember,
   findMono,
   listMonos,
   monoLook,
   monosSnapshot,
-  removeMono,
   subscribeMonos,
   updateMono,
   type Mono,
@@ -19,6 +17,9 @@ import { useMonoFiles } from "./MonoDetails";
 import { orchestrator } from "../../orchestration/model/orchestration";
 import { openCardSession } from "../model/monoCards";
 import { memberTasks } from "../model/monoNavigation";
+import { assertTeamRetire, handleMonoTeam, lockMonoField } from "../model/monoTeam";
+import { monoTeamHost } from "../model/monoTeamRuntime";
+import { MonoFieldLock } from "./MonoFieldLock";
 
 export function MonoTeamPage({
   monoId,
@@ -68,9 +69,7 @@ export function MonoTeamPage({
     )
       return;
     try {
-      for (const { run, task } of tasks)
-        await orchestrator.cancelTask(run.leadId, task.id);
-      removeMono(member.id);
+      await handleMonoTeam(monoId, crypto.randomUUID(), "team.retire", { memberId: member.id, reason: "Retired by you in Team" }, await monoTeamHost(monoId));
     } catch (error) {
       setError(String(error));
     }
@@ -128,13 +127,10 @@ export function MonoTeamPage({
             onSubmit={(event) => {
               event.preventDefault();
               try {
-                const member = addTeamMember(monoId, name, specialty);
-                updateMono(member.id, (value) => ({
-                  ...value,
-                  workerProfile: value.workerProfile ?? fallback,
-                }));
-                setName("");
-                setSpecialty("");
+                void monoTeamHost(monoId, true).then(host => handleMonoTeam(monoId, crypto.randomUUID(), "team.hire", {
+                  name, specialty, soul: `# ${name}\n\nWork as the ${specialty} for this project. Follow the Manager's task scope, verify your work and report evidence.`,
+                  ...fallback,
+                }, host)).then(() => { setName(""); setSpecialty(""); setError(undefined); }).catch(error => setError(String(error)));
               } catch (error) {
                 setError(String(error));
               }
@@ -186,6 +182,7 @@ export function MemberDetails({
   onProfileChange?: (profile: NonNullable<Mono["workerProfile"]>) => void;
 }) {
   const [page, setPage] = useState("details");
+  const [error, setError] = useState<string>();
   const runs = useSyncExternalStore(orchestrator.subscribe, orchestrator.snapshot, orchestrator.snapshot);
   const tasks = memberTasks(runs, member.id).slice(0, 8);
   const files = useMonoFiles(member.id, "idle");
@@ -222,14 +219,20 @@ export function MemberDetails({
             value={member.specialty ?? ""}
             maxLength={80}
             onChange={(event) => {
-              if (event.target.value.trim())
+              try { if (event.target.value.trim()) {
+                if (member.specialty?.toLowerCase() === "reviewer" && event.target.value.trim().toLowerCase() !== "reviewer" && !member.reviewer)
+                  assertTeamRetire(listMonos(), member.reportsTo!, member.id);
                 updateMono(member.id, (value) => ({
                   ...value,
                   specialty: event.target.value,
                 }));
+                lockMonoField(member.id, "specialty");
+                setError(undefined);
+              } } catch (error) { setError(String(error)); }
             }}
             className="min-w-0 rounded bg-transparent text-xs"
           />
+          <MonoFieldLock monoId={member.id} field="specialty" />
         </Property>
         <Property label="Model">
           <ModelPicker
@@ -245,6 +248,8 @@ export function MemberDetails({
                 ...value,
                 workerProfile: { harness, model },
               }));
+              lockMonoField(member.id, "harness");
+              lockMonoField(member.id, "model");
             }}
             onSettingsChange={(modelSettings) => {
               onProfileChange?.({ ...profile, modelSettings });
@@ -252,10 +257,15 @@ export function MemberDetails({
                 ...value,
                 workerProfile: { ...profile, modelSettings },
               }));
+              lockMonoField(member.id, "modelSettings");
             }}
           />
+          <MonoFieldLock monoId={member.id} field="harness" />
+          <MonoFieldLock monoId={member.id} field="model" />
+          <MonoFieldLock monoId={member.id} field="modelSettings" />
         </Property>
       </dl>
+      {error && <p role="alert" className="px-4 text-xs text-red-500">{error}</p>}
       <section className="border-t border-stroke px-4 py-3" aria-label="Member tasks">
         <h3 className="mb-2 text-xs text-content/60">Recent tasks</h3>
         {tasks.length ? tasks.map(task => (

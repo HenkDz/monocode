@@ -946,6 +946,11 @@ function sanitizeBlock(
   const completion = sanitizeMonoSessionCompletion(block.monoSessionCompletion);
   const monoSource = sanitizeMonoSource(block.monoSource);
   if (monoSource) next.monoSource = monoSource;
+  if (block.role === "assistant" && block.monoTeamChange && typeof block.monoTeamChange === "object") {
+    const { managerId, changeId } = block.monoTeamChange;
+    if (typeof managerId === "string" && managerId.length <= 256 && isPersistableId(managerId) && typeof changeId === "string" && changeId.length <= 256 && isPersistableId(changeId))
+      next.monoTeamChange = { managerId, changeId };
+  }
   if (block.monoCard && typeof block.monoCardOwner === "string" && block.monoCardOwner.length <= 256) {
     try { next.monoCard = parseCard(block.monoCard); next.monoCardOwner = block.monoCardOwner; } catch { /* Ignore malformed saved cards. */ }
   }

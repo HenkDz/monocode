@@ -8,7 +8,7 @@ import {
 import { ChevronLeft } from "../../../shared/ui/icons";
 import { IconButton } from "../../../app/shell/TitleBar";
 import { PROJECT_MASCOTS } from "../../projects/model/projectMascots";
-import { MONO_COLORS } from "../model/mono";
+import { findMono, MONO_COLORS } from "../model/mono";
 import {
   ColorPickerPopover,
   ColorSwatchRow,
@@ -17,6 +17,7 @@ import { normalizeHex } from "../../../shared/lib/colorUtils";
 import { Popover } from "../../../shared/ui/Popover";
 import { PixelMascot } from "../../projects/ui/PixelMascot";
 import { MarkdownSourceEditor } from "../../sessions/ui/MarkdownSourceEditor";
+import { lockMonoField, validateTeamSoul } from "../model/monoTeam";
 import {
   MEMORY_MAX_BYTES,
   MEMORY_MAX_LINES,
@@ -313,6 +314,7 @@ export function FileField({
 }) {
   const [draft, setDraft] = useState(value);
   const [conflict, setConflict] = useState(false);
+  const [saveError, setSaveError] = useState<string>();
   // The version the draft started from; a newer one replaces a clean draft.
   const base = useRef({ value, hash });
   if (base.current.hash !== hash && draft === base.current.value) {
@@ -322,6 +324,7 @@ export function FileField({
   const save = async (overwrite = false) => {
     const text = draft;
     try {
+      if (file === "soul" && findMono(monoId)?.role === "member") validateTeamSoul(text);
       const next = await saveMonoFile(
         monoId,
         file,
@@ -329,14 +332,17 @@ export function FileField({
         overwrite ? undefined : base.current.hash,
       );
       base.current = { value: text, hash: next };
+      if (file === "soul") lockMonoField(monoId, "soul");
       setConflict(false);
+      setSaveError(undefined);
     } catch (error) {
       if (error instanceof MonoFileConflict) setConflict(true);
-      else console.warn(`Could not save ${label}`, error);
+      else setSaveError(error instanceof Error ? error.message : String(error));
     }
   };
   return (
     <>
+      {saveError && <p role="alert" className="px-3 py-2 text-xs text-red-500">{saveError}</p>}
       <MarkdownSourceEditor
         lineNumbers={false}
         className="min-h-full"

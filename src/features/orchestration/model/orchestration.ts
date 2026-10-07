@@ -438,6 +438,8 @@ export class Orchestrator {
           throw new Error(
             "Review evidence is stale; review the latest completed dispatch",
           );
+        if (target.memberId === task.memberId)
+          throw new Error("An independent Reviewer must review another member's implementation");
         const response = {
           recorded: true,
           decision: input.decision,
@@ -1572,6 +1574,8 @@ export class Orchestrator {
       }
       case "reassign":
       case "delegate": {
+        if (run.ownerMonoId && !this.host?.reviewerFor?.(run))
+          throw new Error("Hire an independent Reviewer before delegating work");
         const previous = action === "reassign" ? task() : undefined;
         if (previous) {
           if (!run.projectManager)
@@ -1728,6 +1732,7 @@ export class Orchestrator {
           (!reviewTarget ||
             reviewTarget.status !== "completed" ||
             !reviewTarget.lastDispatchId ||
+            reviewTarget.memberId === input.member ||
             input.member !== this.host?.reviewerFor?.(run)?.id)
         )
           throw new Error(
@@ -1958,6 +1963,8 @@ export class Orchestrator {
           throw new Error("This task has no completed dispatch to review");
         if (run.projectManager) {
           const reviewer = this.host?.reviewerFor?.(run);
+          if (run.ownerMonoId && !reviewer)
+            throw new Error("Hire an independent Reviewer before the PR gate; a Manager cannot self-approve");
           if (reviewer && !approvedMemberReview(run, target, reviewer.id))
             throw new Error(
               "The Reviewer must approve this task's latest dispatch before the PR gate",
@@ -1979,7 +1986,10 @@ export class Orchestrator {
             throw new Error(
               "The worker changed during review; inspect the latest result",
             );
-          if (reviewer && !approvedMemberReview(current, latest, reviewer.id))
+          const currentReviewer = this.host?.reviewerFor?.(current);
+          if (current.ownerMonoId && (!currentReviewer || currentReviewer.id !== reviewer?.id))
+            throw new Error("Reviewer identity changed during PR verification");
+          if (currentReviewer && !approvedMemberReview(current, latest, currentReviewer.id))
             throw new Error("Reviewer evidence changed during PR verification");
           const accepted = {
             ...latest,

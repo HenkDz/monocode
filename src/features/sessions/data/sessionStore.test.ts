@@ -30,6 +30,17 @@ it("persists internal events without adding them to the user outbox", () => {
   expect(pending.queuedMessages).toBeUndefined();
 });
 
+it("preserves bounded team card references through persistence and reload", () => {
+  const session = newSession("codex", "/tmp");
+  session.blocks = [{ id: "team-card", role: "assistant", text: "", monoTeamChange: { managerId: "manager-1", changeId: "change-1" } }];
+  const saved = sanitizeSessionForPersist(session);
+  expect(saved.blocks[0].monoTeamChange).toEqual({ managerId: "manager-1", changeId: "change-1" });
+  expect(sanitizeSessionForPersist(JSON.parse(JSON.stringify(saved))).blocks[0].monoTeamChange).toEqual(saved.blocks[0].monoTeamChange);
+  expect(persistFingerprint(session)).not.toBe(persistFingerprint({ ...session, blocks: [{ ...session.blocks[0], monoTeamChange: undefined }] }));
+  session.blocks[0].monoTeamChange = { managerId: "x".repeat(1000), changeId: "change-1" };
+  expect(sanitizeSessionForPersist(session).blocks[0].monoTeamChange).toBeUndefined();
+});
+
 it("fingerprints queued message edits, ordering, errors and pause state", () => {
   const session = newSession("codex", "/tmp");
   const first = { id: "first", text: "One", attachments: [] };

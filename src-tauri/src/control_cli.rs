@@ -97,9 +97,15 @@ const ACTIONS: [&str; 13] = [
     "list", "delegate", "get", "steer", "message", "retry", "reassign", "cancel", "wait", "review", "finish",
     "respond", "answer",
 ];
-const APP_ACTIONS: [&str; 35] = [
+const APP_ACTIONS: [&str; 41] = [
     "tasks.request",
     "team.answer",
+    "team.list",
+    "team.hire",
+    "team.update",
+    "team.memory.add",
+    "team.memory.forget",
+    "team.retire",
     "reviews.submit",
     "projects.list",
     "projects.status",
@@ -247,6 +253,18 @@ Actions:
   team.answer    Direct boss only. {monoId,requestId,answers} or {monoId,requestId,skip:true}.
                   For a permission: {monoId,requestId,decision:"allow"|"deny"}.
                   Never allow beyond the user's existing authority.
+  team.list      Manager only, own team. {} Members, profiles, soul summary,
+                  memory count, tasks and user-locked fields.
+  team.hire      {name,specialty,soul,harness,model,modelSettings?,mascot?,color?,memory?:[facts],reviewer?}
+                  Study the codebase first. Pick installed models from models.list.
+                  Creates a direct member in your single project. Soul: at most 8 KiB.
+  team.update    {memberId,name?,specialty?,soul?,harness?,model?,modelSettings?}
+                  User-locked fields are rejected; suggest those changes in chat.
+  team.memory.add {memberId,facts:["short project fact"]} Redacted and deduplicated.
+  team.memory.forget {memberId,factIds:["id from team.list"]}
+  team.retire    {memberId,reason} Cancels active tasks, retains worktrees/history.
+                  The last Reviewer cannot retire. Team changes post Undo cards.
+                  All team actions reuse --request-id on retries; no role/project override.
   reviews.submit Reviewer worker only. {decision:"approve"|"changes",notes:"..."}.
                   Reviews the exact implementing dispatch assigned by the Manager.
                   Member workers may also memory.add {fact:"..."}: three short,
@@ -288,16 +306,28 @@ fn quoted(value: &str) -> String {
     }
 }
 
+/// Resolve on each call: restarted/renamed previews must never inherit another
+/// process's executable identity. Drop Windows device prefixes for shell argv.
+pub(crate) fn running_executable() -> Result<String, String> {
+    let path = std::env::current_exe().and_then(|path| path.canonicalize())
+        .map_err(|error| error.to_string())?;
+    let text = path.to_string_lossy();
+    Ok(if cfg!(windows) {
+        if let Some(unc) = text.strip_prefix(r"\\?\UNC\") { format!(r"\\{unc}") }
+        else { text.trim_start_matches(r"\\?\").to_owned() }
+    } else { text.into_owned() })
+}
+
 pub fn help() -> String {
-    let exe = std::env::current_exe()
-        .map(|path| quoted(&path.to_string_lossy()))
+    let exe = running_executable()
+        .map(|path| quoted(&path))
         .unwrap_or_else(|_| "monocode".into());
     USAGE.replace("{exe}", &exe)
 }
 
 pub fn app_help() -> String {
-    let exe = std::env::current_exe()
-        .map(|path| quoted(&path.to_string_lossy()))
+    let exe = running_executable()
+        .map(|path| quoted(&path))
         .unwrap_or_else(|_| "monocode".into());
     APP_USAGE.replace("{exe}", &exe)
 }
@@ -318,7 +348,7 @@ fn approval_policy(cwd: Option<String>, input_dir: Option<&std::path::Path>) -> 
         }
     }
     json!({
-        "executable": std::env::current_exe().ok().map(|path| path.to_string_lossy().into_owned()).unwrap_or_default(),
+        "executable": running_executable().unwrap_or_default(),
         "tempDir": input_dir.map(|path| path.to_string_lossy().trim_start_matches(r"\\?\").to_string()).unwrap_or_default(),
         "actions": APP_ACTIONS.as_slice(),
         "trustedRtk": TRUSTED_RTK.get().and_then(|path| path.as_ref()).map(|path| path.to_string_lossy().trim_start_matches(r"\\?\").to_string()),
@@ -466,6 +496,106 @@ fn temp_input_within(path: &std::path::Path, root: &std::path::Path) -> bool {
 enum Parsed {
     Help,
     Call(String, Value, String),
+}
+
+pub(crate) fn validate_app_request(action: &str, input: &Value, request_id: &str) -> Result<(), String> {
+    if !APP_ACTIONS.contains(&action) { return Err(format!("Unknown app action: {action}")); }
+    if request_id.is_empty() || request_id.len() > 128 || !request_id.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')) {
+        return Err("App request IDs may contain only letters, digits, - and _".into());
+    }
+    if action.starts_with("team.") && action != "team.answer" {
+        if request_id.len() > 120 { return Err("Team request ID exceeds 120 characters".into()); }
+        validate_team_input(action, input)?;
+    }
+    Ok(())
+}
+
+/// Shared by the CLI parser and authenticated transport; JSON is data, never
+/// authority. The app checks fresh team membership, locks and model availability.
+pub(crate) fn validate_team_input(action: &str, input: &Value) -> Result<(), String> {
+    let fields: &[&str] = match action {
+        "team.list" => &[],
+        "team.hire" => &["name", "specialty", "soul", "harness", "model", "modelSettings", "mascot", "color", "memory", "reviewer"],
+        "team.update" => &["memberId", "name", "specialty", "soul", "harness", "model", "modelSettings"],
+        "team.memory.add" => &["memberId", "facts"],
+        "team.memory.forget" => &["memberId", "factIds"],
+        "team.retire" => &["memberId", "reason"],
+        _ => return Err("Unknown team action".into()),
+    };
+    let object = input.as_object().ok_or("Input must be a JSON object")?;
+    if input.to_string().len() > 64 * 1024 { return Err("Team input exceeds 64 KiB".into()); }
+    for key in object.keys() {
+        if !fields.contains(&key.as_str()) { return Err(format!("Unknown field: {key}")); }
+    }
+    let required: &[&str] = match action {
+        "team.hire" => &["name", "specialty", "soul", "harness", "model"],
+        "team.update" => &["memberId"],
+        "team.memory.add" => &["memberId", "facts"],
+        "team.memory.forget" => &["memberId", "factIds"],
+        "team.retire" => &["memberId", "reason"],
+        _ => &[],
+    };
+    for field in required {
+        if !object.contains_key(*field) { return Err(format!("{field} is required")); }
+    }
+    if action == "team.update" && object.len() == 1 { return Err("Supply a field to update".into()); }
+    for (key, value) in object {
+        match key.as_str() {
+            "memory" | "facts" | "factIds" => {
+                let list = value.as_array().ok_or_else(|| format!("{key} must be an array"))?;
+                if list.len() > 50 || list.is_empty() { return Err(format!("{key} must contain 1-50 entries")); }
+                let mut bytes = 0;
+                for entry in list {
+                    let fact = entry.as_str().ok_or_else(|| format!("{key} entries must be strings"))?;
+                    if fact.trim().is_empty() || fact.chars().count() > if key == "factIds" { 256 } else { 1000 } {
+                        return Err(format!("Invalid {key} entry"));
+                    }
+                    bytes += fact.len();
+                }
+                if bytes > 24 * 1024 { return Err(format!("{key} exceeds 24 KiB")); }
+            }
+            "modelSettings" => {
+                let settings = value.as_object().ok_or("modelSettings must be an object")?;
+                if settings.len() > 16 { return Err("Too many model settings".into()); }
+                for (setting, value) in settings {
+                    if setting.is_empty() || setting.chars().count() > 100 || value.as_str().is_none_or(|v| v.chars().count() > 1000) {
+                        return Err("modelSettings must contain bounded string values".into());
+                    }
+                }
+            }
+            "reviewer" => { if !value.is_boolean() { return Err("reviewer must be a boolean".into()); } }
+            _ => {
+                let text = value.as_str().ok_or_else(|| format!("{key} must be a string"))?;
+                let max = match key.as_str() { "soul" => 8192, "name" | "specialty" => 80, "memberId" | "model" => 256, "reason" => 500, "color" => 100, _ => 128 };
+                let length = if key == "soul" { text.len() } else { text.chars().count() };
+                if length > max || text.trim().is_empty() {
+                    return Err(format!("{key} must contain at most {max} {}", if key == "soul" { "bytes" } else { "characters" }));
+                }
+                if key == "harness" && !["claude", "codex", "cursor", "grok", "opencode", "pi", "omp", "fx", "hermes", "antigravity"].contains(&text) {
+                    return Err("Unknown harness; run models.list".into());
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Handle CLI probes before desktop initialization, so --help cannot launch a
+/// second renderer that recovers another process's live sessions.
+pub fn maybe_run(args: Vec<String>) -> Option<i32> {
+    match args.first().map(String::as_str) {
+        Some("control") => Some(run(args.into_iter().skip(1).collect())),
+        Some("app") => Some(run_app(args.into_iter().skip(1).collect())),
+        Some("--help" | "-h") => {
+            println!("{}\n{}", help(), app_help());
+            Some(0)
+        }
+        Some("--version" | "-V") => {
+            println!("MonoCode {}", env!("CARGO_PKG_VERSION"));
+            Some(0)
+        }
+        _ => None,
+    }
 }
 
 pub fn run(args: Vec<String>) -> i32 {
@@ -707,11 +837,9 @@ fn parse_args_for(args: &[String], app_mode: bool) -> Result<Parsed, String> {
     {
         return Err("App request IDs may contain only letters, digits, - and _".into());
     }
-    Ok(Parsed::Call(
-        action,
-        input.unwrap_or_else(|| json!({})),
-        request_id,
-    ))
+    let input = input.unwrap_or_else(|| json!({}));
+    if app_mode { validate_app_request(&action, &input, &request_id)?; }
+    Ok(Parsed::Call(action, input, request_id))
 }
 
 #[cfg(test)]
@@ -727,6 +855,18 @@ mod tests {
         }
     }
     #[test]
+    fn cli_probes_exit_before_desktop_startup() {
+        assert_eq!(maybe_run(args(&[])), None);
+        for probe in ["--help", "-h", "--version", "-V"] {
+            assert_eq!(maybe_run(args(&[probe])), Some(0));
+        }
+        for namespace in ["app", "control"] {
+            assert_eq!(maybe_run(args(&[namespace, "--help"])), Some(0));
+            assert_eq!(maybe_run(args(&[namespace, "unknown"])), Some(1));
+        }
+    }
+
+    #[test]
     fn validates_inputs_without_invoking_a_shell() {
         let (_, input, id) = call(&[
             "delegate",
@@ -741,6 +881,39 @@ mod tests {
         assert!(call(&["delegate", "--json", "[]"]).is_err());
         assert!(call(&["delegate", "--json", "{}", "--json", "{}"]).is_err());
         assert!(call(&["unknown"]).is_err());
+    }
+
+    #[test]
+    fn team_actions_share_strict_bounded_validation_and_approval_allowlist() {
+        for (action, input) in [
+            ("team.list", json!({})),
+            ("team.hire", json!({"name":"Backend", "specialty":"Backend", "soul":"Use cargo test", "harness":"codex", "model":"codex:installed", "memory":["Rust project"]})),
+            ("team.update", json!({"memberId":"member", "soul":"New instructions"})),
+            ("team.memory.add", json!({"memberId":"member", "facts":["Rust project"]})),
+            ("team.memory.forget", json!({"memberId":"member", "factIds":["fact-1"]})),
+            ("team.retire", json!({"memberId":"member", "reason":"Task completed"})),
+        ] {
+            assert!(APP_ACTIONS.contains(&action));
+            assert!(app_help().contains(action));
+            assert!(validate_app_request(action, &input, "retry-1").is_ok());
+            assert!(matches!(parse_args_for(&args(&[action, "--json", &input.to_string(), "--request-id", "retry-1"]), true), Ok(Parsed::Call(_, _, id)) if id == "retry-1"));
+            let mut injected = input.clone();
+            injected["project"] = json!("another project");
+            assert!(validate_app_request(action, &injected, "retry-1").is_err());
+            injected.as_object_mut().unwrap().remove("project");
+            injected["role"] = json!("manager");
+            assert!(validate_app_request(action, &injected, "retry-1").is_err());
+            assert!(parse_args_for(&args(&[action]), false).is_err());
+        }
+        for input in [json!({}), json!({"memberId":"member"}), json!({"memberId":"member", "name":null}), json!({"memberId":"member", "modelSettings":{"effort":3}})] {
+            assert!(validate_team_input("team.update", &input).is_err());
+        }
+        assert!(validate_team_input("team.update", &json!({"memberId":"member", "soul":"é".repeat(4097)})).is_err());
+        assert!(validate_team_input("team.memory.add", &json!({"memberId":"member", "facts":[]})).is_err());
+        assert!(validate_team_input("team.memory.add", &json!({"memberId":"member", "facts":vec!["x"; 51]})).is_err());
+        assert!(validate_team_input("team.memory.add", &json!({"memberId":"member", "facts":vec!["x".repeat(1000); 25]})).is_err());
+        assert!(validate_app_request("team.hire", &json!({}), "bad/id").is_err());
+        assert!(validate_app_request("team.unknown", &json!({}), "retry-1").is_err());
     }
 
     #[test]
@@ -811,6 +984,36 @@ ConvertTo-Json -InputObject @($result) -Compress -Depth 4
         assert!(parsed[2]["errors"].as_u64().unwrap() > 0, "A quoted executable needs the call operator");
         assert_eq!(parsed[3]["errors"], 0);
         assert_eq!(parsed[3]["values"], json!([r"C:\\Mono Code\\monocode.exe", "app", "projects.list", "--input", r"C:\\Temp\\with spaces\\input.json"]));
+    }
+
+    #[test]
+    fn renamed_preview_reports_its_own_running_executable() {
+        const CHILD_PATH: &str = "MONOCODE_TEST_RENAMED_EXECUTABLE";
+        if let Some(expected) = std::env::var_os(CHILD_PATH) {
+            let injected = crate::control::app_cli_path().unwrap();
+            assert_eq!(std::path::Path::new(&injected).canonicalize().unwrap(), std::path::PathBuf::from(expected).canonicalize().unwrap());
+            assert_eq!(approval_policy(None, None)["executable"], injected);
+            assert!(app_help().contains(&quoted(&injected)));
+            assert!(help().contains(&quoted(&injected)));
+            assert!(app_cli_executable_matches(injected.clone()));
+            assert!(!app_cli_executable_matches(std::path::Path::new(&injected).with_file_name("original.exe").to_string_lossy().into_owned()));
+            assert!(!app_cli_executable_matches("monocode.exe".into()));
+            #[cfg(windows)] assert!(!injected.starts_with(r"\\?\"));
+            return;
+        }
+        let root = std::env::temp_dir().join(format!("monocode-renamed-preview-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let original = root.join("original.exe");
+        let renamed = root.join("monocode-r5-renamed-preview.exe");
+        std::fs::copy(std::env::current_exe().unwrap(), &original).unwrap();
+        std::fs::copy(&original, &renamed).unwrap();
+        let output = std::process::Command::new(&renamed).args(["--exact", "control_cli::tests::renamed_preview_reports_its_own_running_executable", "--nocapture"])
+            .env(CHILD_PATH, &renamed).output().unwrap();
+        std::fs::remove_file(renamed).unwrap();
+        std::fs::remove_file(original).unwrap();
+        std::fs::remove_dir(root).unwrap();
+        assert!(output.status.success(), "renamed preview identity failed: {}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
     }
 
     #[test]

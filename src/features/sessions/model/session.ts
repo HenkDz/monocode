@@ -382,6 +382,8 @@ export type Block = {
   monoCard?: import("../../monos/model/monoCards").MonoCard;
   /** Set by the app, never accepted from card CLI input. */
   monoCardOwner?: string;
+  /** Persisted team-change receipt, rendered in its Manager's timeline. */
+  monoTeamChange?: { managerId: string; changeId: string };
 };
 
 export type RuntimeMode =

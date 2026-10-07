@@ -30,11 +30,13 @@ export function appCliInvocation(command: string | string[] | undefined, policy:
  * different quoting and native-argv rules. Use session-private input instead of JSON. */
 export function powerShellAppTokens(script: string): string[] | undefined {
   if (/[\x00-\x1f\x7f\u2018-\u201f\u2013-\u2015\u00ab\u00bb`$"|<>;%!^()*?\[\]#]/.test(script) || script.includes("''")) return;
-  // The real PS 5.1 parser rejects a quoted executable without its call operator.
-  if (!script.startsWith("& ")) return;
-  const inner = script.slice(2);
+  // Quoted executables need &, while a no-space absolute Windows path is
+  // already a valid command name (Codex emits this form through pwsh).
+  const inner = script.startsWith("& ") ? script.slice(2) : script;
   if (inner.includes("&")) return;
-  const head = /^'([^']+)' +app +([a-z][a-zA-Z0-9]*(?:\.[a-zA-Z0-9]+)+)(?= |$)/.exec(inner);
+  const head = (script.startsWith("& ")
+    ? /^'([^']+)' +app +([a-z][a-zA-Z0-9]*(?:\.[a-zA-Z0-9]+)+)(?= |$)/
+    : /^([A-Za-z]:[/\\][A-Za-z0-9._:/\\-]+) +app +([a-z][a-zA-Z0-9]*(?:\.[a-zA-Z0-9]+)+)(?= |$)/).exec(inner);
   if (!head) return;
   const tokens = [head[1], "app", head[2]];
   let rest = inner.slice(head[0].length);

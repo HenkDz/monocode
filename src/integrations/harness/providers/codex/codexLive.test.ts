@@ -41,6 +41,7 @@ const {
   rewindCodexLastTurn,
   sendCodexTurn,
   stopCodexSession,
+  updateCodexRuntimeMode,
   __codexTestReset,
 } = await import("./codex");
 import type { HarnessEvent } from "../../core/types";
@@ -1008,6 +1009,34 @@ describe("codex live turn sequence", () => {
     await turn;
   });
 
+  it.each(["full-access", "auto-accept-edits"] as const)("changes a waiting turn's policy immediately: %s", async runtimeMode => {
+    const { events, turn } = await startTurn("codex-live");
+    for (const [id, method] of [[91, "item/commandExecution/requestApproval"], [92, "item/fileChange/requestApproval"]] as const) {
+      onLine!(JSON.stringify({ id, method, params: { itemId: `item-${id}`, command: "Write is only a misleading command title" } }));
+    }
+    await waitFor(() => events.filter(e => e.type === "approval.requested").length === 2, "pending edit and command");
+    updateCodexRuntimeMode("codex-live", runtimeMode);
+    expect(parse().filter(m => m.method === "turn/start")).toHaveLength(1);
+    await waitFor(() => parse().some(m => m.id === 92), "automatic pending edit");
+    expect(parse().find(m => m.id === 92)?.result).toEqual({ decision: "accept" });
+    if (runtimeMode === "full-access") {
+      await waitFor(() => parse().some(m => m.id === 91), "automatic pending command");
+      expect(parse().find(m => m.id === 91)?.result).toEqual({ decision: "accept" });
+    } else {
+      expect(parse().some(m => m.id === 91)).toBe(false);
+      const request = events.find(e => e.type === "approval.requested" && e.kind === "execute");
+      if (request?.type !== "approval.requested") throw Error("Missing command approval");
+      respondCodexApproval("codex-live", request.requestId, "deny");
+      await waitFor(() => parse().some(m => m.id === 91), "manual command denial");
+    }
+    const count = events.filter(e => e.type === "approval.requested").length;
+    onLine!(JSON.stringify({ id: 93, method: "item/fileChange/requestApproval", params: { itemId: "next-edit" } }));
+    await waitFor(() => parse().some(m => m.id === 93), "later edit in same turn");
+    expect(events.filter(e => e.type === "approval.requested")).toHaveLength(count);
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+  });
+
   it.each(["allow", "deny"] as const)(
     "keeps a child approval answerable after a sibling completes: %s",
     async (decision) => {
@@ -1911,6 +1940,7 @@ describe("codex live turn sequence", () => {
     const turnStart = parse().find(
       (message) => message.method === "turn/start",
     );
+    updateCodexRuntimeMode("codex-live", "full-access");
     expect(turnStart?.params).toMatchObject({
       approvalPolicy: "never",
       sandboxPolicy: { type: "readOnly" },

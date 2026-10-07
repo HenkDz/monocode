@@ -1,6 +1,7 @@
 import type {
   Block,
   HarnessId,
+  RuntimeMode,
   TaskListMeta,
   TurnIntent,
 } from "../../../features/sessions/model/session";
@@ -67,6 +68,8 @@ export type HarnessAdapter = {
     requestId: number,
     decision: ApprovalDecision,
   ): void;
+  /** Change a running turn's permission policy without waiting for it to end. */
+  updateRuntimeMode?(sessionId: string, runtimeMode: RuntimeMode): void | Promise<void>;
   respondQuestion?(
     sessionId: string,
     requestId: number,
@@ -212,6 +215,11 @@ export function listHarnesses(): HarnessAdapter[] {
   return [...adapters.values()];
 }
 
+export async function updateHarnessRuntimeMode(harness: HarnessId, sessionId: string, runtimeMode: RuntimeMode): Promise<void> {
+  // A turn may be waiting for approval: queuing behind it would deadlock.
+  await getHarness(harness)?.updateRuntimeMode?.(sessionId, runtimeMode);
+}
+
 /** A local send rejection, before the provider has received the turn. */
 export class TurnAuthorizationError extends Error {}
 
@@ -233,6 +241,7 @@ export function sendHarnessTurn(input: SendTurnInput & { harness: HarnessId }) {
           cwd: input.cwd,
           appAccess: input.appAccess === true,
           monoSession: input.monoSession === true,
+          ...(owner?.role === "manager" && !owner.archivedAt ? { monoManagerId: owner.id } : {}),
         });
       } catch (error) {
         throw new TurnAuthorizationError(
@@ -248,7 +257,7 @@ export function sendHarnessTurn(input: SendTurnInput & { harness: HarnessId }) {
     try {
       await adapter.sendTurn({
         ...input,
-        ...(appCli ? { text: `${input.text}\n\n<monocode_cli_input>${appCli.tempDir ? `If you choose --input, the only auto-approved input location is this session's private folder: ${appCli.tempDir}.` : "Private input scoping is unavailable; --input will not be auto-approved."} Temporary input files are optional, not required. Never use another session's folder.</monocode_cli_input>` } : {}),
+        ...(appCli ? { text: `${input.text}\n\n<monocode_cli_input>The current running MonoCode executable is ${appCli.executable}. Use this exact executable for app CLI calls; it overrides executable paths from earlier turns. ${appCli.tempDir ? `If you choose --input, the only auto-approved input location is this session's private folder: ${appCli.tempDir}.` : "Private input scoping is unavailable; --input will not be auto-approved."} Temporary input files are optional, not required. Never use another session's folder.</monocode_cli_input>` } : {}),
         onEvent: (event) => {
           const invocation = event.type === "approval.requested" ? appCliInvocation(event.command, appCli) : undefined;
           const candidate = invocation?.tokens;

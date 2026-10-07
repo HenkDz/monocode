@@ -249,6 +249,45 @@ it("preflights independent launches in retained worker checkouts and nested fold
 });
 
 describe("worker assignment prompts", () => {
+  it("rejects self-review both at assignment and verdict boundaries", async () => {
+    const f = setup();
+    f.host.reviewerFor = () => ({ id: "reviewer", name: "Reviewer" });
+    f.lead.busy = false;
+    await f.manager.start("lead", ["codex"], 2, undefined, true);
+    f.lead.busy = true;
+    const labels = { memberName: "Reviewer", memberMascot: "ghost", memberColor: "#aaaaaa" };
+    await f.delegate(["src"], { ...labels, member: "reviewer" });
+    const target = f.tasks()[0];
+    await vi.waitFor(() => expect(f.completions.has(target.sessionId)).toBe(true));
+    f.completions.get(target.sessionId)!({ status: "completed", text: "Implemented" });
+    await vi.waitFor(() => expect(f.tasks()[0].status).toBe("completed"));
+    await expect(f.delegate(["."], { ...labels, member: "reviewer", reviewTaskId: target.id })).rejects.toThrow("exact completed task");
+    // Simulate older persisted review evidence crossing the verdict trust boundary.
+    f.manager.run("lead")!.tasks[0].memberId = "backend";
+    await f.delegate(["."], { ...labels, member: "reviewer", reviewTaskId: target.id });
+    const review = f.tasks()[1];
+    await vi.waitFor(() => expect(f.completions.has(review.sessionId)).toBe(true));
+    f.manager.run("lead")!.tasks[0].memberId = "reviewer";
+    await expect(f.manager.recordReviewerResult(review.sessionId, "self", { decision: "approve", notes: "Self-approved" })).rejects.toThrow("independent Reviewer");
+  });
+  it("requires a Reviewer on Mono teams before delegate and PR acceptance", async () => {
+    const f = setup();
+    f.lead.busy = false;
+    f.manager.registerMonoEngine("lead", "lead", "manager-mono", "/repo");
+    await f.manager.start("lead", ["codex"], 2, undefined, true);
+    f.lead.busy = true;
+    await expect(f.delegate(["src"])).rejects.toThrow("Hire an independent Reviewer");
+    expect(f.tasks()).toHaveLength(0);
+    f.host.reviewerFor = () => ({ id: "reviewer", name: "Reviewer" });
+    await f.delegate(["src"]);
+    await vi.waitFor(() => expect(f.completions.has(f.tasks()[0].sessionId)).toBe(true));
+    f.completions.get(f.tasks()[0].sessionId)!({ status: "completed", text: "Implemented" });
+    await vi.waitFor(() => expect(f.tasks()[0].status).toBe("completed"));
+    f.host.reviewerFor = () => undefined;
+    f.host.reviewedPullRequest = vi.fn(async () => "https://github.com/example/app/pull/1");
+    await expect(f.call("review", { taskId: f.tasks()[0].id })).rejects.toThrow("cannot self-approve");
+    expect(f.host.reviewedPullRequest).not.toHaveBeenCalled();
+  });
   it("requires an authenticated Reviewer verdict on the latest dispatch before the PR gate", async () => {
     const f = setup();
     f.host.reviewerFor = () => ({ id: "reviewer", name: "Reviewer" });

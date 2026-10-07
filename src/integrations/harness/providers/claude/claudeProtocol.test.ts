@@ -45,7 +45,7 @@ import {
 describe("runtimeModeToPermission", () => {
   it("maps runtime modes onto Claude permission flags", () => {
     expect(runtimeModeToPermission("supervised")).toBe("default");
-    expect(runtimeModeToPermission("auto-accept-edits")).toBe("acceptEdits");
+    expect(runtimeModeToPermission("auto-accept-edits")).toBe("default");
     expect(runtimeModeToPermission("auto")).toBe("auto");
     expect(runtimeModeToPermission("full-access")).toBe("bypassPermissions");
   });
@@ -170,6 +170,12 @@ describe("buildClaudeSpawnArgs", () => {
       permissionMode: "bypassPermissions",
     });
     expect(args).toContain("--allow-dangerously-skip-permissions");
+  });
+  it("permits interactive live mode changes while keeping the starting policy supervised", () => {
+    const args = buildClaudeSpawnArgs({ permissionMode: runtimeModeToPermission("supervised") });
+    expect(args).toContain("--allow-dangerously-skip-permissions");
+    expect(args).toEqual(expect.arrayContaining(["--permission-mode", "default"]));
+    expect(buildClaudeSpawnArgs({ isolated: true, permissionMode: "plan" })).not.toContain("--allow-dangerously-skip-permissions");
   });
 });
 

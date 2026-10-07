@@ -29,6 +29,7 @@ it("requires the team's Reviewer, exact implementation dispatch and completed re
     ),
   ).toBeUndefined();
   expect(approvedMemberReview(run, target, "other-reviewer")).toBeUndefined();
+  expect(approvedMemberReview(run, { ...target, memberId: "reviewer" }, "reviewer")).toBeUndefined();
   for (const stale of [
     { ...review, status: "running" as const },
     { ...review, lastDispatchId: "review-2" },

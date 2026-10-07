@@ -73,6 +73,22 @@ function settleTicker() {
   act(() => vi.advanceTimersByTime(340));
 }
 
+it.each(["C:/preview/monocode.exe app projects.list", "C:/preview/monocode-r5-cards.exe app projects.list"])("shows automatic approval reason in the inline chat card for %s", command => {
+  const onApproval = vi.fn();
+  const reason = "Not auto-approved: executable does not resolve to the running MonoCode app.";
+  const block: Block = { id: "pending", role: "tool", text: command, tool: { kind: "shell", title: command, status: "pending" }, approval: { requestId: 42, autoApprovalReason: reason } };
+  render([{ id: "user", role: "user", text: "Read project status" }, block], { busy: true, onApproval });
+  expect(container.querySelector('[aria-label="Automatic approval status"]')?.textContent).toBe(reason);
+  const allow = [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Allow")!;
+  act(() => allow.click());
+  expect(onApproval).toHaveBeenCalledWith(42, "allow");
+  render([block], { busy: true });
+  expect(container.querySelector('[aria-label="Automatic approval status"]')?.textContent).toBe(reason);
+  expect(container.textContent).not.toContain("Allow");
+  render([{ ...block, approval: { ...block.approval!, decided: "allow" } }]);
+  expect(container.querySelector('[aria-label="Automatic approval status"]')).toBeNull();
+});
+
 it.each([true, false])(
   "renders a rejected turn as Not sent, not assistant work (Mono: %s)",
   (mono) => {

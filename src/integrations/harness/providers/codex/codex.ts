@@ -306,6 +306,17 @@ export function respondCodexApproval(
   pending.resolve(decision);
 }
 
+export function updateCodexRuntimeMode(sessionId: string, runtimeMode: RuntimeMode): void {
+  const live = liveByThread.get(sessionId);
+  if (!live) return;
+  live.runtimeMode = runtimeMode;
+  if (live.planning || live.cancelled || live.muteUpdates) return;
+  for (const pending of live.approvals.values()) {
+    const decision = autoApproval(runtimeMode, pending.kind);
+    if (decision) pending.resolve(decision);
+  }
+}
+
 export function respondCodexQuestion(
   sessionId: string,
   requestId: number,

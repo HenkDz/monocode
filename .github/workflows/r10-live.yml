@@ -1,0 +1,23 @@
+name: R10 live acceptance
+
+on:
+  pull_request:
+    paths:
+      - work/r10-live/team-status.mjs
+      - work/r10-live/check.mjs
+      - .github/workflows/r10-live.yml
+  push:
+    paths:
+      - work/r10-live/team-status.mjs
+      - work/r10-live/check.mjs
+      - .github/workflows/r10-live.yml
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: node work/r10-live/check.mjs

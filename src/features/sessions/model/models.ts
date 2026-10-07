@@ -820,7 +820,7 @@ export function defaultSessionChoice(cwd?: string): LastModelChoice {
   const model =
     project.models?.[harness] ??
     (project.defaultHarness === harness ? project.defaultModel : undefined) ??
-    (harness === "codex" ? "codex:gpt-5.6-sol" : defaultModelId(harness));
+    (harness === "codex" ? "codex:gpt-6.1-sol" : defaultModelId(harness));
   return { harness, model };
 }
 

@@ -77,11 +77,8 @@ function modelFamily(profile: WorkerProfile): string {
 
 export function defaultReviewerProfile(profile: WorkerProfile, implementers: readonly WorkerProfile[], available: TeamHost["availableProfiles"], lockedFields: readonly string[] = []): WorkerProfile {
   if (lockedFields.some((field) => ["harness", "model", "modelSettings"].includes(field))) return profile;
-  const distinct = (candidate: WorkerProfile) => implementers.every((builder) => candidate.harness !== builder.harness || modelFamily(candidate) !== modelFamily(builder));
-  const installed = available.some(entry => entry.harness === profile.harness && entry.models.includes(profile.model));
-  if (installed && distinct(profile)) return profile;
-  const choices = available.flatMap((entry) => entry.models.map((model) => ({ harness: entry.harness, model })));
-  return choices.find((candidate) => implementers.every((builder) => candidate.harness !== builder.harness)) ?? choices.find(distinct) ?? (installed ? profile : choices[0] ?? profile);
+  void implementers; void available;
+  return { harness: "codex", model: "codex:gpt-6.1-sol", ...(profile.harness === "codex" && profile.modelSettings ? { modelSettings: profile.modelSettings } : {}) };
 }
 
 export function reviewerModelWarning(member: Mono, roster: readonly Mono[]): string | undefined {

@@ -316,7 +316,7 @@ export function ReadyCard({
       <h3 className="text-sm font-semibold text-content">{task.title}</h3>
       <p className="mt-1 text-content/60">
         {task.memberName ? `${task.memberName} · ` : ""}
-        {task.trivial ? "Not reviewed (trivial)" : task.delivery?.state === "review-outdated" ? "Approval outdated · re-review requested" : task.reviewedBy?.startsWith("Not reviewed") ? task.reviewedBy : `Reviewed by ${task.reviewedBy ?? "Manager"}`}
+        {task.trivial ? "Not reviewed (trivial)" : task.delivery?.state === "review-outdated" ? "Approval outdated · re-review requested" : task.delivery && !task.reviewedBy ? "Awaiting review" : task.reviewedBy?.startsWith("Not reviewed") ? task.reviewedBy : `Reviewed by ${task.reviewedBy ?? "Manager"}`}
       </p>
       <p className="mt-2 text-[11px] text-content/60" aria-label="Delivery timeline">
         Opened → CI {task.delivery?.ci === "pass" ? "✓" : task.delivery?.ci === "fail" ? "failed" : "pending"} → {task.trivial ? "Review skipped (trivial)" : task.delivery?.state === "review-outdated" ? "Review outdated" : task.reviewedBy && !task.reviewedBy.startsWith("Not reviewed") ? "Reviewed ✓" : "Review pending"} → {managerPrReady(task) ? "Ready" : "In progress"}
@@ -394,7 +394,7 @@ export function ReadyCard({
         </summary>
         <p className="mt-2 whitespace-pre-wrap leading-relaxed">
           {task.checksSummary ||
-            "Manager accepted this result. See the conversation for review and checks."}
+            (task.accepted ? "Manager accepted this result. See the conversation for review and checks." : "Delivery is being checked. Review and checks are available in the team conversation.")}
         </p>
       </details>
       <div className="mt-2 flex flex-wrap gap-1">

@@ -305,7 +305,7 @@ Actions:
                   memory count, tasks and user-locked fields.
   team.hire      {name,specialty,soul,harness?,model?,modelSettings?,mascot?,color?,memory?:[facts],reviewer?}
                   Study the codebase first. Pick installed models from models.list.
-                  Reviewer defaults to a different installed harness/model family;
+                  Reviewer defaults to Codex GPT-6.1-Sol;
                   omit both harness and model to use that default. Explicit choices
                   are allowed; matching implementers posts a soft warning.
                   Creates a direct member in your single project. Soul: at most 8 KiB.
@@ -604,7 +604,7 @@ pub(crate) fn validate_team_input(action: &str, input: &Value) -> Result<(), Str
         let harness = object.contains_key("harness");
         let model = object.contains_key("model");
         if harness != model || (!reviewer && !harness) {
-            return Err("team.hire requires harness and model; Reviewer may omit both for an independent default".into());
+            return Err("team.hire requires harness and model; Reviewer may omit both for the Codex GPT-6.1-Sol default".into());
         }
     }
     if action == "team.update" && object.len() == 1 { return Err("Supply a field to update".into()); }

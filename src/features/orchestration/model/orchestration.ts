@@ -2355,6 +2355,26 @@ export class Orchestrator {
     }
     return this.view(this.run(leadId)!);
   }
+  /** Opening a PR is observable before acceptance; discovery grants no approval. */
+  discoverDeliveryPr(leadId: string, taskId: string, pr: {
+    url: string; state: string; isDraft?: boolean; baseRefName?: string; headRefName?: string; headOid?: string;
+  }, currentBranch: string): Promise<boolean> {
+    const action = this.actions.catch(() => undefined).then(async () => {
+      const run = this.run(leadId);
+      const task = run?.tasks.find(entry => entry.id === taskId);
+      if (!run?.projectManager || !task?.workspace || task.readOnly || task.reviewOf ||
+          task.status !== "completed" || task.prUrl || !task.workspace.branch ||
+          currentBranch !== task.workspace.branch || pr.headRefName !== task.workspace.branch || pr.state !== "open" || pr.isDraft ||
+          !/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+$/.test(pr.url) ||
+          task.baseBranch && pr.baseRefName !== task.baseBranch) return false;
+      await this.commit({ ...run, tasks: run.tasks.map(entry => entry.id === task.id ? {
+        ...entry, prUrl: pr.url, delivery: { head: pr.headOid ?? "", ci: "unknown", conflicts: false, state: "watching" },
+      } : entry) });
+      return true;
+    });
+    this.actions = action.then(() => undefined, () => undefined);
+    return action;
+  }
   /** Background observations never merge, restart a paused run, or interrupt the user. */
   maintainDelivery(leadId: string, taskId: string, observation: {
     head: string; ci: "pass" | "fail" | "pending" | "unknown"; conflicts: boolean; mergeable?: boolean;

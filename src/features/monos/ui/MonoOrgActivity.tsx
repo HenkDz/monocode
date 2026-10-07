@@ -121,6 +121,24 @@ export function MonoOrgActivity({
       .map((s) => s.id),
   );
   const busy = new Set(sessions.filter((s) => s.busy).map((s) => s.id));
+  const availability = (mono: Mono) => {
+    const scope = orgDescendants(roster, mono.id);
+    const chats = roster
+      .filter((m) => scope.has(m.id) && !m.archivedAt)
+      .flatMap((m) => (m.sessionId ? [m.sessionId] : []));
+    return memberAvailability(
+      mono.role === "member"
+        ? memberTasks(runs, mono.id)
+        : runs
+            .flatMap((run) => run.tasks)
+            .filter((task) => task.memberId && scope.has(task.memberId)),
+      attention,
+      busy,
+      chats.find((id) => attention.has(id)) ??
+        chats.find((id) => busy.has(id)) ??
+        mono.sessionId,
+    );
+  };
   const node = (mono: Mono) => {
     const tasks = [
       ...new Map(
@@ -131,21 +149,7 @@ export function MonoOrgActivity({
       ["running", "queued", "cancelling"].includes(t.status),
     );
     const session = sessions.find((s) => s.id === current?.sessionId);
-    const descendants = orgDescendants(roster, mono.id);
-    const rolledUp = [
-      ...new Map(
-        runs
-          .flatMap((run) => run.tasks)
-          .filter((task) => task.memberId && descendants.has(task.memberId))
-          .map((task) => [task.id, task]),
-      ).values(),
-    ];
-    const status = memberAvailability(
-      mono.role === "member" ? tasks : rolledUp,
-      attention,
-      busy,
-      mono.sessionId,
-    );
+    const status = availability(mono);
     const look = monoLook(mono);
     const children = roster.filter(
       (m) => m.reportsTo === mono.id && !m.archivedAt,
@@ -178,7 +182,7 @@ export function MonoOrgActivity({
               {current
                 ? activityTaskTitle(current)
                 : children.length
-                  ? `${children.length} teammates · ${rolledUp.filter((t) => t.status === "running").length} working`
+                  ? `${children.length} teammates · ${children.filter((child) => availability(child) === "working").length} working`
                   : status === "working"
                     ? "Coordinating project work"
                     : "Ready for the next task"}

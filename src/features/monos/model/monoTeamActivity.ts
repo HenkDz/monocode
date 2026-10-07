@@ -67,6 +67,11 @@ export function activityTaskEvent(
 
 /** Keep app command arguments out of the compact live status; the transcript retains them. */
 export function activityToolTitle(title: string): string {
+  if (/\brg(?:\.exe)?\s/.test(title)) return "Searching project files";
+  if (/\bGet-ChildItem\b/i.test(title)) return "Listing project files";
+  const git = title.match(/\bgit(?:\.exe)?\s+(diff|status|fetch|log|show)\b/)?.[1];
+  if (git) return git === "fetch" ? "Refreshing repository refs" : git === "status" ? "Checking the worktree" : "Inspecting repository changes";
+  if (/\bnode(?:\.exe)?\s/.test(title)) return "Running a Node command";
   const action = title.match(/\b(?:app|control)\s+([a-z.]+)/)?.[1];
   const labels: Record<string, string> = {
     "team.message": "Asking a teammate",

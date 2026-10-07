@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildThreadStartParams,
+  codexAppServerArgs,
   buildTurnStartParams,
   buildTurnSteerParams,
   codexCommandText,
@@ -12,6 +13,14 @@ import {
   toCodexApprovalDecision,
 } from "./codexProtocol";
 import { parseCodexModelList } from "./codexCatalog";
+
+it("uses the restricted-token fallback only for Windows read-only worker processes", () => {
+  expect(codexAppServerArgs(true, true)).toEqual(["-c", 'windows.sandbox="unelevated"', "app-server"]);
+  expect(buildThreadStartParams({ cwd: "/repo", readOnly: true, runtimeMode: "full-access" })).toMatchObject({ sandbox: "read-only", approvalPolicy: "never" });
+  expect(codexAppServerArgs(false, true)).toEqual(["app-server"]);
+  expect(codexAppServerArgs(true, false)).toEqual(["app-server"]);
+  expect(codexAppServerArgs(false, false)).toEqual(["app-server"]);
+});
 
 it("shows code-mode custom tools using raw scoped call identity without parsing chat", () => {
   expect(buildThreadStartParams({ cwd: "/repo", runtimeMode: "auto" })).toHaveProperty("experimentalRawEvents", true);

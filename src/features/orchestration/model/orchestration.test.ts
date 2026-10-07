@@ -155,7 +155,7 @@ describe("delivery maintenance", () => {
     expect(f.tasks()[0].status).toBe("completed");
     expect(f.tasks()[0].accepted).toBe(false);
   });
-  async function readyTask(trivial = false) {
+  async function readyTask(trivial = false, accept = true) {
     const f = setup();
     f.lead.busy = false;
     await f.manager.start("lead", ["codex"], 2, undefined, true);
@@ -165,9 +165,26 @@ describe("delivery maintenance", () => {
     await vi.waitFor(() => expect(f.completions.has(f.tasks()[0].sessionId)).toBe(true));
     f.completions.get(f.tasks()[0].sessionId)!({ status: "completed", text: "Implemented routing\nChecks passed\nPR opened" });
     await vi.waitFor(() => expect(f.tasks()[0].status).toBe("completed"));
-    await f.call("review", { taskId: f.tasks()[0].id });
+    if (accept) await f.call("review", { taskId: f.tasks()[0].id });
     return f;
   }
+  it("discovers an opened PR before review without approving or notifying", async () => {
+    const f = await readyTask(false, false);
+    f.host.notifyReady = vi.fn();
+    const task = f.tasks()[0];
+    task.baseBranch = "nour";
+    const pr = { url: "https://github.com/example/app/pull/1", state: "open", baseRefName: "nour", headRefName: task.workspace!.branch!, headOid: "opened" };
+    expect(await f.manager.discoverDeliveryPr("lead", task.id, { ...pr, baseRefName: "other" }, task.workspace!.branch!)).toBe(false);
+    expect(await f.manager.discoverDeliveryPr("lead", task.id, pr, "foreign-branch")).toBe(false);
+    expect(await f.manager.discoverDeliveryPr("lead", task.id, { ...pr, headRefName: "foreign-branch" }, task.workspace!.branch!)).toBe(false);
+    expect(await f.manager.discoverDeliveryPr("lead", task.id, pr, task.workspace!.branch!)).toBe(true);
+    expect(f.tasks()[0].prUrl).toBe(pr.url);
+    expect(f.tasks()[0].delivery?.state).toBe("watching");
+    expect(f.tasks()[0].accepted).toBe(false);
+    expect(f.host.notifyReady).not.toHaveBeenCalled();
+    await f.manager.maintainDelivery("lead", task.id, { head: "opened", ci: "fail", conflicts: false });
+    expect(f.tasks()[0].delivery?.state).toBe("fixing-ci");
+  });
   it("queues CI repair to the original member once per failed head", async () => {
     const f = await readyTask(true);
     f.host.handoff = vi.fn(async () => {});

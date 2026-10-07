@@ -9,6 +9,79 @@ import { newSession } from "../../sessions/model/session";
 import { crewMessages, recordCrewDecision } from "../model/monoCrewEvents";
 import { activityToolTitle } from "../model/monoTeamActivity";
 
+it("rolls descendant chat work and decisions through the org even without worker tasks", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const roster = [
+    {
+      id: "orchestrator",
+      role: "orchestrator",
+      name: "Orchestrator",
+      projects: ["/app"],
+      mascot: "cat",
+      color: "#abc",
+    },
+    {
+      id: "manager",
+      role: "manager",
+      name: "Manager",
+      reportsTo: "orchestrator",
+      sessionId: "manager-chat",
+      projects: ["/app"],
+      mascot: "cat",
+      color: "#abc",
+    },
+  ] as Mono[];
+  const session = {
+    ...newSession("codex", "/app"),
+    id: "manager-chat",
+    busy: true,
+  };
+  const container = document.createElement("div"),
+    root = createRoot(container);
+  try {
+    await act(async () =>
+      root.render(
+        <MonoOrgActivity
+          rootId="orchestrator"
+          roster={roster}
+          runs={[]}
+          sessions={[session]}
+          now={1}
+        />,
+      ),
+    );
+    const row = () =>
+      container.querySelector('[data-org-member="orchestrator"]')!
+        .firstElementChild!.textContent;
+    expect(row()).toContain("Working");
+    expect(row()).toContain("1 working");
+    await act(async () =>
+      root.render(
+        <MonoOrgActivity
+          rootId="orchestrator"
+          roster={roster}
+          runs={[]}
+          sessions={[
+            {
+              ...session,
+              pendingQuestion: {
+                requestId: 1,
+                title: "Decision",
+                questions: [],
+              },
+            },
+          ]}
+          now={2}
+        />,
+      ),
+    );
+    expect(row()).toContain("Needs you");
+  } finally {
+    await act(async () => root.unmount());
+    vi.unstubAllGlobals();
+  }
+});
+
 it("summarizes native teammate tool steps without showing command arguments", () => {
   expect(
     activityToolTitle(
@@ -17,6 +90,15 @@ it("summarizes native teammate tool steps without showing command arguments", ()
   ).toBe("Asking a teammate");
   expect(activityToolTitle("Reading routing source")).toBe(
     "Reading routing source",
+  );
+  expect(activityToolTitle("rtk rg --files src")).toBe(
+    "Searching project files",
+  );
+  expect(activityToolTitle("git diff --stat")).toBe(
+    "Inspecting repository changes",
+  );
+  expect(activityToolTitle("node work/r10-live/check.mjs")).toBe(
+    "Running a Node command",
   );
 });
 

@@ -205,6 +205,7 @@ fn request_action_grant(host: &Inner, namespace: &str, token: &str, action: &str
     }
     let member_artifact = org_member && matches!(action, "artifacts.list" | "artifacts.read" | "artifacts.write");
     let member_message = org_member && action == "team.message";
+    let member_metadata = org_member && matches!(action, "projects.status" | "models.list");
     if namespace == "control" && host.habit_grants.contains_key(&grant.session)
         && (host.workers.get(&grant.session).is_none_or(|owner| host.grants.get(owner).is_none_or(|parent| parent.window != grant.window))
             || host.active.get(&grant.session).is_none_or(|turn| turn.window != grant.window || !turn.app_allowed)) {
@@ -213,7 +214,7 @@ fn request_action_grant(host: &Inner, namespace: &str, token: &str, action: &str
     if namespace == "app"
         && ((host.grants.contains_key(&grant.session) && !host.mono_sessions.contains(&grant.session))
             || (host.workers.contains_key(&grant.session) && !host.habit_grants.contains_key(&grant.session)
-                && !matches!(action, "reviews.submit" | "memory.add") && !member_artifact && !member_message)
+                && !matches!(action, "reviews.submit" | "memory.add") && !member_artifact && !member_message && !member_metadata)
             || !host
                 .active
                 .get(&grant.session)
@@ -799,11 +800,11 @@ mod tests {
         for action in ["reviews.submit", "memory.add"] {
             assert!(request_action_grant(&inner, "app", &worker_token, action).is_ok());
         }
-        for action in ["artifacts.list", "artifacts.read", "artifacts.write", "sessions.start", "team.answer", "team.message", "goals.assign", "soul.update", "memory.read", "chat.card", ""] {
+        for action in ["artifacts.list", "artifacts.read", "artifacts.write", "sessions.start", "team.answer", "team.message", "projects.status", "models.list", "goals.assign", "soul.update", "memory.read", "chat.card", ""] {
             assert!(request_action_grant(&inner, "app", &worker_token, action).is_err());
         }
         inner.active.get_mut("worker").unwrap().org_member = true;
-        for action in ["artifacts.list", "artifacts.read", "artifacts.write", "reviews.submit", "memory.add", "team.message"] {
+        for action in ["artifacts.list", "artifacts.read", "artifacts.write", "reviews.submit", "memory.add", "team.message", "projects.status", "models.list"] {
             assert!(request_action_grant(&inner, "app", &worker_token, action).is_ok());
         }
         for action in ["sessions.stop", "sessions.delete", "goals.assign", "team.hire", "delegate", "artifacts.delete"] {

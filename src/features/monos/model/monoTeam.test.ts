@@ -21,22 +21,18 @@ vi.mock("./monoFiles", () => ({
 }));
 
 const node = (id: string, role: Mono["role"], project = "/app", reportsTo?: string): Mono => ({ id, role, reportsTo, projects: [project], mascot: "cat", color: "#abcdef", specialty: role === "member" ? "Reviewer" : undefined, name: id, workerProfile: { harness: "codex", model: "installed" } });
-const host = (): TeamHost => ({ availableProfiles: [{ harness: "codex", models: ["installed", "second"] }], cancelMemberTasks: vi.fn(async () => {}), postChange: vi.fn(async () => {}) });
+const host = (): TeamHost => ({ availableProfiles: [{ harness: "codex", models: ["installed", "second", "codex:gpt-6.1-sol"] }], cancelMemberTasks: vi.fn(async () => {}), postChange: vi.fn(async () => {}) });
 const hire = { name: "Database specialist", specialty: "Backend", soul: "Use the repository tests; report evidence.", harness: "codex", model: "installed", memory: ["Build with npm run build", "token=super-secret-value", "Build with npm run build"] };
 
-it("defaults reviewer models across harnesses or families, falls back and honors user locks", () => {
+it("defaults reviewers to Codex 6.1 Sol and honors user locks", () => {
   const builder = { harness: "codex" as const, model: "codex:gpt-6.1-sol", modelSettings: { effort: "high" } };
   const available: TeamHost["availableProfiles"] = [{ harness: "codex", models: [builder.model, "codex:deepseek-r1"] }, { harness: "claude", models: ["claude:claude-opus-4"] }];
-  expect(defaultReviewerProfile(builder, [builder], available)).toEqual({ harness: "claude", model: "claude:claude-opus-4" });
-  expect(defaultReviewerProfile(builder, [builder], available.slice(0, 1))).toEqual({ harness: "codex", model: "codex:deepseek-r1" });
-  expect(defaultReviewerProfile(builder, [builder], [{ harness: "codex", models: [builder.model, "codex:gpt-6-sol"] }])).toBe(builder);
-  for (const lock of ["harness", "model", "modelSettings"]) expect(defaultReviewerProfile(builder, [builder], available, [lock])).toBe(builder);
-  const unavailable = { harness: "claude", model: "claude:uninstalled" } as const;
-  expect(defaultReviewerProfile(unavailable, [builder], available)).toEqual({ harness: "claude", model: "claude:claude-opus-4" });
-  expect(defaultReviewerProfile(unavailable, [], available.slice(0, 1))).toEqual({ harness: "codex", model: available[0].models[0] });
-  expect(defaultReviewerProfile(unavailable, [builder], [{ harness: "codex", models: [builder.model] }])).toEqual({ harness: builder.harness, model: builder.model });
-  expect(defaultReviewerProfile(unavailable, [builder], available, ["model"])).toBe(unavailable);
+  expect(defaultReviewerProfile(builder, [builder], available)).toEqual(builder);
+  const explicit = { harness: "claude" as const, model: "claude:claude-opus-4" };
+  expect(defaultReviewerProfile(explicit, [builder], available)).toEqual({ harness: "codex", model: "codex:gpt-6.1-sol" });
+  for (const lock of ["harness", "model", "modelSettings"]) expect(defaultReviewerProfile(explicit, [builder], available, [lock])).toBe(explicit);
 });
+
 beforeEach(() => {
   localStorage.clear();
   disk.clear();
@@ -74,19 +70,19 @@ it("hires a tailored Mono with durable idempotent receipt, seeded redacted memor
   expect(bridge.cancelMemberTasks).toHaveBeenCalledWith(member.id);
 });
 
-it("uses independent defaults for Reviewer hires and accepts an explicit matching model with a card warning", async () => {
+it("uses Codex 6.1 Sol defaults for Reviewer hires and accepts an explicit matching model with a card warning", async () => {
   const bridge = host();
-  bridge.availableProfiles = [{ harness: "codex", models: ["installed"] }, { harness: "claude", models: ["claude:claude-opus-4"] }];
+  bridge.availableProfiles = [{ harness: "codex", models: ["installed", "codex:gpt-6.1-sol"] }, { harness: "claude", models: ["claude:claude-opus-4"] }];
   await handleMonoTeam("manager", "builder", "team.hire", hire, bridge);
   const reviewerInput = { name: "Review expert", specialty: "Reviewer", soul: "Verify independently" };
   const result = await handleMonoTeam("manager", "independent", "team.hire", reviewerInput, bridge) as { member: Mono };
-  expect(result.member.workerProfile).toEqual({ harness: "claude", model: "claude:claude-opus-4" });
+  expect(result.member.workerProfile).toMatchObject({ harness: "codex", model: "codex:gpt-6.1-sol" });
   await handleMonoTeam("manager", "matching", "team.hire", { ...reviewerInput, harness: "codex", model: "installed" }, bridge);
   expect(listMonos().find((mono) => mono.id === "manager")!.teamChanges!.at(-1)!.warning).toBe("Reviewer uses the same model as implementers");
-  bridge.availableProfiles = [{ harness: "codex", models: ["installed"] }];
+  bridge.availableProfiles = [{ harness: "codex", models: ["installed", "codex:gpt-6.1-sol"] }];
   const fallback = await handleMonoTeam("manager", "fallback", "team.hire", reviewerInput, bridge) as { member: Mono };
-  expect(fallback.member.workerProfile).toMatchObject({ harness: "codex", model: "installed" });
-  expect(listMonos().find((mono) => mono.id === "manager")!.teamChanges!.at(-1)!.warning).toBe("Reviewer uses the same model as implementers");
+  expect(fallback.member.workerProfile).toMatchObject({ harness: "codex", model: "codex:gpt-6.1-sol" });
+  expect(listMonos().find((mono) => mono.id === "manager")!.teamChanges!.at(-1)!.warning).toBeUndefined();
 });
 
 it("undoes the whole hiring action into an empty team, permits a partial last-reviewer undo and cancels every hired member", async () => {

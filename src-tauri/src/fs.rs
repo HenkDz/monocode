@@ -1143,6 +1143,8 @@ pub async fn git_range_context(cwd: String) -> Result<GitRangeContext, String> {
 #[serde(rename_all = "camelCase")]
 pub struct GitPr {
     #[serde(default)]
+    pub head_ref_name: Option<String>,
+    #[serde(default)]
     pub base_ref_name: Option<String>,
     pub number: i64,
     pub title: String,
@@ -2686,7 +2688,7 @@ fn git_pr_status_for(root: &Path) -> Option<GitPr> {
             "--head",
             &branch,
             "--json",
-            "number,title,url,state,isDraft,headRepositoryOwner,baseRefName,headRefOid,mergeable",
+            "number,title,url,state,isDraft,headRepositoryOwner,baseRefName,headRefName,headRefOid,mergeable",
             "--limit",
             "20",
             "--state",
@@ -4057,6 +4059,8 @@ fn parse_gh_pr_list(json: &str, owner: &str) -> Option<GitPr> {
         number: i64,
         #[serde(default, rename = "baseRefName")]
         base_ref_name: Option<String>,
+        #[serde(default, rename = "headRefName")]
+        head_ref_name: Option<String>,
         title: String,
         url: String,
         state: String,
@@ -4080,6 +4084,7 @@ fn parse_gh_pr_list(json: &str, owner: &str) -> Option<GitPr> {
             continue;
         }
         let pr = GitPr {
+            head_ref_name: row.head_ref_name,
             base_ref_name: row.base_ref_name,
             number: row.number,
             title: row.title,
@@ -7959,10 +7964,11 @@ mod tests {
     #[test]
     fn pr_status_exposes_commit_and_conflicts_for_delivery() {
         let pr = parse_gh_pr_list(
-            r#"[{"number":4,"title":"Fix","url":"https://example.invalid/4","state":"OPEN","headRefOid":"abc123","mergeable":"CONFLICTING","headRepositoryOwner":{"login":"owner"}}]"#,
+            r#"[{"number":4,"title":"Fix","url":"https://example.invalid/4","state":"OPEN","headRefName":"work","headRefOid":"abc123","mergeable":"CONFLICTING","headRepositoryOwner":{"login":"owner"}}]"#,
             "owner",
         ).unwrap();
         assert_eq!(pr.head_oid.as_deref(), Some("abc123"));
+        assert_eq!(pr.head_ref_name.as_deref(), Some("work"));
         assert_eq!(pr.mergeable.as_deref(), Some("CONFLICTING"));
     }
 

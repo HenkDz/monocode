@@ -5,11 +5,11 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useDeliveryWatch } from "./useDeliveryWatch";
 import type { OrchestrationRun } from "./orchestrationState";
 
-const { gitPrStatus, fetchGithubPrChecks, maintainDelivery } = vi.hoisted(() => ({
-  gitPrStatus: vi.fn(), fetchGithubPrChecks: vi.fn(), maintainDelivery: vi.fn(async () => {}),
+const { gitPrStatus, gitBranches, fetchGithubPrChecks, maintainDelivery, discoverDeliveryPr } = vi.hoisted(() => ({
+  gitPrStatus: vi.fn(), gitBranches: vi.fn(), fetchGithubPrChecks: vi.fn(), maintainDelivery: vi.fn(async () => {}), discoverDeliveryPr: vi.fn(async () => true),
 }));
-vi.mock("../../../platform/tauri/fs", () => ({ gitPrStatus }));
-vi.mock("./orchestration", () => ({ orchestrator: { maintainDelivery } }));
+vi.mock("../../../platform/tauri/fs", () => ({ gitPrStatus, gitBranches }));
+vi.mock("./orchestration", () => ({ orchestrator: { maintainDelivery, discoverDeliveryPr } }));
 vi.mock("../../inbox/model/githubPrChecks", async importOriginal => ({
   ...await importOriginal<object>(), fetchGithubPrChecks,
 }));
@@ -38,4 +38,19 @@ it("watches a PR outside Activity, ignores mixed heads, and stops after unmount"
   roots.push(second);
   await act(async () => second.render(createElement(Consumer)));
   expect(maintainDelivery).not.toHaveBeenCalled();
+});
+
+it("discovers the completed worker's open PR before Manager review", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const run = { leadId: "manager", projectManager: true, tasks: [{ id: "task", status: "completed", accepted: false, workspace: { checkoutCwd: "/worker", branch: "work" } }] } as OrchestrationRun;
+  const pr = { url: "https://github.com/acme/app/pull/7", state: "open", headOid: "head", mergeable: "MERGEABLE" };
+  gitPrStatus.mockResolvedValue(pr);
+  gitBranches.mockResolvedValue({ current: "work", detached: false });
+  fetchGithubPrChecks.mockResolvedValue({ headOid: "head", checks: [{ state: "pass" }] });
+  function Consumer() { useDeliveryWatch([run]); return null; }
+  const root = createRoot(document.createElement("div"));
+  roots.push(root);
+  await act(async () => root.render(createElement(Consumer)));
+  expect(discoverDeliveryPr).toHaveBeenCalledWith("manager", "task", pr, "work");
+  expect(maintainDelivery).toHaveBeenCalledWith("manager", "task", { head: "head", ci: "pass", conflicts: false, mergeable: true });
 });

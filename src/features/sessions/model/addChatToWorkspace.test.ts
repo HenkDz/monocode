@@ -78,7 +78,7 @@ describe("applyAddToChatRequest: zero-tab fallback", () => {
     });
 
     expect(newChat(result!).harness).toBe("codex");
-    expect(newChat(result!).model).toBe("codex:gpt-5.6-sol");
+    expect(newChat(result!).model).toBe("codex:gpt-6.1-sol");
     expect(newChat(result!).runtimeMode).toBe("auto");
   });
 
@@ -113,11 +113,11 @@ describe("applyAddToChatRequest: zero-tab fallback", () => {
     });
 
     expect(newChat(result!).harness).toBe("codex");
-    expect(newChat(result!).model).toBe("codex:gpt-5.6-sol");
+    expect(newChat(result!).model).toBe("codex:gpt-6.1-sol");
     expect(newChat(result!).runtimeMode).toBe("auto");
   });
 
-  it("starts an empty workspace with Codex 5.6 Sol", () => {
+  it("starts an empty workspace with Codex 6.1 Sol", () => {
     const result = applyAddToChatRequest({
       sessions: [],
       tabs: [],
@@ -126,7 +126,7 @@ describe("applyAddToChatRequest: zero-tab fallback", () => {
     });
 
     expect(newChat(result!).harness).toBe("codex");
-    expect(newChat(result!).model).toBe("codex:gpt-5.6-sol");
+    expect(newChat(result!).model).toBe("codex:gpt-6.1-sol");
     expect(newChat(result!).cwd).toBe("/current/project");
   });
 

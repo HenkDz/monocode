@@ -14,6 +14,7 @@ import {
   promptText,
 } from "../../../../features/sessions/model/attachments";
 import { displayPath } from "../../../../shared/lib/paths";
+
 import { normalizeTaskListStatus } from "../../../../features/sessions/model/taskList";
 import {
   composeToolTitle,
@@ -23,6 +24,13 @@ import {
 import { formatShellIntent, inferShellIntent } from "../../core/shellIntent";
 import { streamTextDelta } from "../../core/streamText";
 import type { HarnessEvent } from "../../core/types";
+
+export function codexAppServerArgs(readOnly: boolean, windows: boolean): string[] {
+  // Windows read-only workers retain filesystem denial with the restricted-token
+  // fallback when elevated setup is unavailable; network isolation is weaker.
+  // https://learn.chatgpt.com/docs/windows/windows-sandbox
+  return windows && readOnly ? ["-c", 'windows.sandbox="unelevated"', "app-server"] : ["app-server"];
+}
 
 /** Codex approval / sandbox settings for thread/start and turn/start. */
 export type CodexThreadConfig = {

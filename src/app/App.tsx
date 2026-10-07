@@ -13944,6 +13944,8 @@ function Workspace({
                       onOpenMember={onOpenMember}
                       onOpen={onOpenProjectManager}
                       attention={managerQuestions}
+                      approvalSessionIds={approvalSessionIds}
+                      busySessionIds={busySessionIds}
                       running={sessions.some(
                         (s) =>
                           (s.id === dedicatedMono(project)?.sessionId ||
@@ -14283,6 +14285,9 @@ function Workspace({
                                       }
                                       composerFocusToken={composerFocusToken}
                                       onShowMonoActivity={onShowMonoActivity}
+                                      monoState={monoRail.states.get(
+                                        monoForSession(session.id)?.id ?? "",
+                                      )}
                                       monoActivityTurnId={
                                         monoSidebarOpen && monoPanelTab === "activity" ? selectedMonoActivity?.turnId : undefined
                                       }

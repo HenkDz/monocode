@@ -77,6 +77,8 @@ import {
   monoRuntimeMode,
   findMono,
   monoLook,
+  monoState as sessionMonoState,
+  type MonoState,
   monosSnapshot,
   subscribeMonos,
 } from "../../monos/model/mono";
@@ -148,6 +150,7 @@ export type SessionPaneProps = {
     blocks: Block[],
   ) => void;
   monoActivityTurnId?: string;
+  monoState?: MonoState;
   recents: RecentProject[];
   hideProjectPicker?: boolean;
   onFocus: (sessionId: string) => void;
@@ -346,6 +349,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
   onOpenDiff,
   onShowMonoActivity,
   monoActivityTurnId,
+  monoState,
   onOpenPlan,
   onBuildPlan,
   onSecondOpinion,
@@ -953,7 +957,11 @@ const LocalSessionPane = memo(function LocalSessionPane({
             {remoteSessionLoading ? null : isEmpty ? (
               agent ? (
                 <div className="scrollbar-none h-full min-h-0 overflow-y-auto">
-                  <MonoHeader agent={agent} greeting={mono?.role !== "member"} />
+                  <MonoHeader
+                    agent={agent}
+                    state={monoState ?? sessionMonoState(session)}
+                    greeting={mono?.role !== "member"}
+                  />
                   {mono?.role === "member" && <MemberWorkLog member={mono} />}
                 </div>
               ) : session.inboxAsk ? (
@@ -1245,7 +1253,9 @@ const LocalSessionPane = memo(function LocalSessionPane({
                     key={session.id}
                     sessionId={session.id}
                     runtimeMode={monoRuntimeMode(mono, session.runtimeMode)}
-                    onRuntimeModeChange={mode => onRuntimeModeChange(session.id, mode)}
+                    onRuntimeModeChange={(mode) =>
+                      onRuntimeModeChange(session.id, mode)
+                    }
                     name={agent.name}
                     enabled={visible}
                     quoteRequest={quoteRequest}

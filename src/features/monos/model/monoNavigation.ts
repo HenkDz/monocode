@@ -1,4 +1,4 @@
-import { findMono, monoForSession } from "./mono";
+import { findMono, monoForSession, type MonoStatus } from "./mono";
 import type { OrchestrationRun } from "../../orchestration/model/orchestrationState";
 
 export const memberDetailsView = (id: string) => `mono-member:${id}`;
@@ -23,6 +23,24 @@ export function memberTasks(runs: readonly OrchestrationRun[], memberId: string)
   return runs.flatMap(run => run.tasks.filter(task => task.memberId === memberId).map((task, index) => ({
     task, order: index, started: Math.max(0, ...(run.dispatches ?? []).filter(dispatch => dispatch.taskId === task.id).map(dispatch => dispatch.startedAt)),
   }))).sort((a, b) => b.started - a.started || b.order - a.order).map(entry => entry.task);
+}
+
+/** Current work wins over historical failures; completed work is no longer busy. */
+export function memberAvailability(
+  tasks: ReturnType<typeof memberTasks>,
+  attention: ReadonlySet<string> = new Set(),
+  busy: ReadonlySet<string> = new Set(),
+  memberSessionId?: string,
+): MonoStatus {
+  const active = tasks.filter(task => ["queued", "running", "cancelling"].includes(task.status));
+  const current = active.length ? active : tasks.slice(0, 1);
+  if ((memberSessionId && attention.has(memberSessionId)) || current.some(task =>
+    attention.has(task.sessionId) || ["blocked", "failed", "interrupted"].includes(task.status),
+  )) return "needs-you";
+  if ((memberSessionId && busy.has(memberSessionId)) || current.some(task =>
+    busy.has(task.sessionId) || ["running", "cancelling"].includes(task.status),
+  )) return "working";
+  return "idle";
 }
 
 /** Exactly one org row owns a visible chat/worker/details view. */

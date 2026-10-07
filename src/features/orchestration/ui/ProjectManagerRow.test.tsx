@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
 import { ProjectManagerRow } from "./ProjectManagerRow";
+import { orchestrator, type OrchestrationRun } from "../model/orchestration";
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
 it("selects members with native keyboard-focusable buttons and only one current row", async () => {
@@ -28,6 +29,42 @@ it("selects members with native keyboard-focusable buttons and only one current 
   } finally {
     await act(async () => root.unmount());
     host.remove();
+    localStorage.removeItem("monocode:mono-roster");
+  }
+});
+
+it("shows member availability and a task tooltip without repeating its title or raw outcome", async () => {
+  localStorage.setItem("monocode:mono-roster", JSON.stringify([
+    { id: "m", role: "manager", managerProject: "/repo", projects: ["/repo"], mascot: "cat", color: "#aaaaaa" },
+    { id: "b", role: "member", reportsTo: "m", name: "Backend", sessionId: "member-chat", projects: ["/repo"], mascot: "cat", color: "#aaaaaa" },
+  ]));
+  const task = { id: "new", memberId: "b", sessionId: "worker", title: "Fix sidebar hierarchy", status: "completed" };
+  const runs = [{ tasks: [task], dispatches: [] }] as unknown as OrchestrationRun[];
+  const snapshot = vi.spyOn(orchestrator, "snapshot").mockReturnValue(runs);
+  const host = document.createElement("div");
+  const root = createRoot(host);
+  const render = (attention = new Set<string>(), busy = new Set<string>()) => act(async () => root.render(
+    <ProjectManagerRow project="/repo" onOpen={vi.fn()} expanded onToggle={vi.fn()} approvalSessionIds={attention} busySessionIds={busy} />,
+  ));
+  const member = () => host.querySelector<HTMLButtonElement>('[aria-label="Open Backend"]')!;
+  try {
+    await render();
+    expect(member().textContent).toBe("BackendIdle");
+    expect(member().title).toBe(task.title);
+    expect(host.textContent).not.toContain(task.title);
+    expect(host.textContent).not.toContain("completed");
+    expect(host.querySelector('[aria-label="Toggle Manager team"]')).not.toBeNull();
+    task.status = "running";
+    await render();
+    expect(member().textContent).toBe("BackendWorking");
+    await render(new Set(["worker"]));
+    expect(member().textContent).toBe("BackendNeeds you");
+    task.status = "completed";
+    await render(new Set(), new Set(["member-chat"]));
+    expect(member().textContent).toBe("BackendWorking");
+  } finally {
+    await act(async () => root.unmount());
+    snapshot.mockRestore();
     localStorage.removeItem("monocode:mono-roster");
   }
 });

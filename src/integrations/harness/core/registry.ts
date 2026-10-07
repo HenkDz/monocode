@@ -242,6 +242,8 @@ export function sendHarnessTurn(input: SendTurnInput & { harness: HarnessId }) {
           appAccess: input.appAccess === true,
           monoSession: input.monoSession === true,
           ...(owner?.role === "manager" && !owner.archivedAt ? { monoManagerId: owner.id } : {}),
+          ...(owner?.role === "member" && !owner.archivedAt && input.appAccess === true && input.monoSession !== true
+            ? { monoMemberId: owner.id } : {}),
         });
       } catch (error) {
         throw new TurnAuthorizationError(

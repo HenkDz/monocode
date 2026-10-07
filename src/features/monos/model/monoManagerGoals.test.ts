@@ -2,9 +2,29 @@ import { expect, it, vi } from "vitest";
 import type { OrchestrationRun } from "../../orchestration/model/orchestrationState";
 import {
   MonoManagerGoals,
+  validManagerProjects,
   type GoalLedger,
   type ManagerGoalHost,
 } from "./monoManagerGoals";
+
+it("keeps valid project names and order when recents include a non-repository folder and a missing path", async () => {
+  const projects = [
+    { path: "/valid-a/subfolder", name: "First project" },
+    { path: "/empty-launch", name: "Preview launch folder" },
+    { path: "/missing", name: "Deleted project" },
+    { path: "/valid-b", name: "Second project" },
+  ];
+  const resolve = vi.fn(async (path: string) => {
+    if (path === "/empty-launch") throw Error("Not a Git repository");
+    if (path === "/missing") throw Error("Path does not exist");
+    return path === "/valid-a/subfolder" ? "/valid-a" : path;
+  });
+  expect(await validManagerProjects(projects, resolve)).toEqual([
+    { project: projects[0], folder: "/valid-a" },
+    { project: projects[3], folder: "/valid-b" },
+  ]);
+  expect(resolve.mock.calls.map(([path]) => path)).toEqual(projects.map(project => project.path));
+});
 
 function setup() {
   const saved = new Map<string, GoalLedger>();

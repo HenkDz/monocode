@@ -64,7 +64,7 @@ describe("applyAddToChatRequest: zero-tab fallback", () => {
     expect(newChat(result!).composerSeed).toMatch(/^>/);
   });
 
-  it("keeps the donor session's harness, model and runtime mode", () => {
+  it("uses the stable provider/model default while retaining the donor's runtime mode", () => {
     const donor = session("s1", "/other/project", {
       harness: "claude",
       model: "claude:opus-5",
@@ -77,8 +77,8 @@ describe("applyAddToChatRequest: zero-tab fallback", () => {
       text: "selected code",
     });
 
-    expect(newChat(result!).harness).toBe("claude");
-    expect(newChat(result!).model).toBe("claude:opus-5");
+    expect(newChat(result!).harness).toBe("codex");
+    expect(newChat(result!).model).toBe("codex:gpt-5.6-sol");
     expect(newChat(result!).runtimeMode).toBe("auto");
   });
 
@@ -94,7 +94,7 @@ describe("applyAddToChatRequest: zero-tab fallback", () => {
     expect(newChat(result!).cwd).toBe("/current/project");
   });
 
-  it("donates settings from the last known session, not the first", () => {
+  it("donates runtime from the last known session without inheriting its Claude model", () => {
     const first = session("s1", "/other/project", {
       harness: "codex",
       model: "codex:gpt-5",
@@ -112,12 +112,12 @@ describe("applyAddToChatRequest: zero-tab fallback", () => {
       text: "selected code",
     });
 
-    expect(newChat(result!).harness).toBe("claude");
-    expect(newChat(result!).model).toBe("claude:opus-5");
+    expect(newChat(result!).harness).toBe("codex");
+    expect(newChat(result!).model).toBe("codex:gpt-5.6-sol");
     expect(newChat(result!).runtimeMode).toBe("auto");
   });
 
-  it("falls back to Claude defaults with an empty workspace", () => {
+  it("starts an empty workspace with Codex 5.6 Sol", () => {
     const result = applyAddToChatRequest({
       sessions: [],
       tabs: [],
@@ -125,7 +125,8 @@ describe("applyAddToChatRequest: zero-tab fallback", () => {
       text: "selected code",
     });
 
-    expect(newChat(result!).harness).toBe("claude");
+    expect(newChat(result!).harness).toBe("codex");
+    expect(newChat(result!).model).toBe("codex:gpt-5.6-sol");
     expect(newChat(result!).cwd).toBe("/current/project");
   });
 

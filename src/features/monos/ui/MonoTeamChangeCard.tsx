@@ -3,6 +3,7 @@ import { findMono, listMonos, monoLook, monosSnapshot, subscribeMonos } from "..
 import { reviewerModelWarning, undoMonoTeamChanges } from "../model/monoTeam";
 import { monoTeamHost } from "../model/monoTeamRuntime";
 import { PixelMascot } from "../../projects/ui/PixelMascot";
+import { OrgArtifactLinks } from "../../artifacts/ui/OrgArtifactLinks";
 
 const plainSoul = (text: string) => text.replace(/^\s*#{1,6}\s+.*$/gm, "").replace(/\[([^\]]+)\]\([^)]*\)/g, "$1").replace(/[`*_]/g, "").replace(/^\s*(?:>|[-+])\s*/gm, "").replace(/\s+/g, " ").trim();
 
@@ -10,7 +11,8 @@ export function MonoTeamChangeCard({ managerId, changeId, changeIds }: { manager
   useSyncExternalStore(subscribeMonos, monosSnapshot);
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
-  const receipts = findMono(managerId)?.teamChanges ?? [];
+  const manager = listMonos(true).find(mono => mono.id === managerId);
+  const receipts = manager?.teamChanges ?? [];
   const changes = (changeIds ?? [changeId]).flatMap(id => receipts.find(change => change.id === id) ?? []);
   if (!changes.length) return null;
   const title = changes.every(change => change.action === "team.hire") ? "Team hired" : "Team updated";
@@ -27,6 +29,7 @@ export function MonoTeamChangeCard({ managerId, changeId, changeIds }: { manager
         finally { setBusy(false); }
       }}>{undone ? "Undone" : busy ? "Undoing…" : "Undo"}</button>
     </div>
+    <OrgArtifactLinks monoId={managerId} links={[{ id: manager?.teamPlanArtifactId, label: "Team plan" }]} />
     {rows.map(change => {
       const member = findMono(change.memberId) ?? change.after ?? change.before;
       const look = monoLook(member);

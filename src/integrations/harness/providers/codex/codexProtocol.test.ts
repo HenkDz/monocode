@@ -157,6 +157,28 @@ describe("buildThreadStartParams / buildTurnStartParams", () => {
     });
   });
 
+  it("leaves the model to Codex before one has been selected", () => {
+    const params = buildTurnStartParams({
+      threadId: "t",
+      runtimeMode: "auto",
+      model: "",
+    });
+    expect(params).not.toHaveProperty("model");
+    expect(params).not.toHaveProperty("collaborationMode");
+  });
+
+  it("does not send a null collaboration model for a plan turn either", () => {
+    const params = buildTurnStartParams({
+      threadId: "t",
+      runtimeMode: "auto",
+      model: "",
+      intent: "plan",
+    });
+    expect(params).not.toHaveProperty("collaborationMode");
+    expect(params.sandboxPolicy).toEqual({ type: "readOnly" });
+    expect(params.approvalPolicy).toBe("never");
+  });
+
   it("uses native plan mode with a non-escalating read-only sandbox", () => {
     const turn = buildTurnStartParams({
       threadId: "thr_1",
@@ -190,6 +212,20 @@ describe("buildThreadStartParams / buildTurnStartParams", () => {
         approvalPolicy: "never",
         approvalsReviewer: runtimeMode === "auto" ? "auto_review" : "user",
         sandboxPolicy: { type: "readOnly" },
+      });
+    },
+  );
+
+  it.each(["supervised", "auto-accept-edits", "auto", "full-access"] as const)(
+    "keeps trusted read-only tasks in default conversation mode with a non-escalating sandbox despite %s",
+    runtimeMode => {
+      expect(buildThreadStartParams({ cwd: "/repo", runtimeMode, readOnly: true, controlsAgents: true })).toMatchObject({
+        approvalPolicy: "never", sandbox: "read-only", sandboxPolicy: { type: "readOnly", networkAccess: true },
+      });
+      expect(buildTurnStartParams({ threadId: "review", model: "gpt-6-sol", runtimeMode, readOnly: true,
+        controlsAgents: true, prompt: "Save the scoped review evidence" })).toMatchObject({
+        approvalPolicy: "never", sandboxPolicy: { type: "readOnly", networkAccess: true },
+        collaborationMode: { mode: "default", settings: { model: "gpt-6-sol" } },
       });
     },
   );

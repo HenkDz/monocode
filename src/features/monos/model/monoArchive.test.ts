@@ -23,7 +23,7 @@ import { canDispatchQueuedHead } from "../../sessions/model/messageQueue";
 import { ensureMonoSession } from "./monoWorkspace";
 
 const project = "C:/Code/App";
-const roster: Mono[] = [
+const roster: (Mono & { runtimeMode?: Session["runtimeMode"] })[] = [
   {
     id: "manager",
     role: "manager",
@@ -70,6 +70,7 @@ const roster: Mono[] = [
     color: "blue",
   },
 ];
+const identities = roster.map(({ runtimeMode: _legacyMode, ...mono }) => mono);
 const engine = () => ({
   snapshot: vi.fn(
     () =>
@@ -94,6 +95,7 @@ beforeEach(() => {
   });
   vi.stubGlobal("crypto", webcrypto);
   localStorage.setItem("monocode:mono-roster", JSON.stringify(roster));
+  listMonos(true);
   localStorage.setItem("test:transcripts", "retained history");
 });
 afterEach(() => vi.unstubAllGlobals());
@@ -122,7 +124,8 @@ it("archives only the matching Manager and members, retaining stored identities 
   );
   for (const original of roster) {
     const stored = listMonos(true).find((mono) => mono.id === original.id)!;
-    expect(stored).toMatchObject(original);
+    const { runtimeMode: _legacyMode, ...identity } = original;
+    expect(stored).toMatchObject(identity);
     if (original.id !== "other")
       expect(stored.archivedAt).toEqual(expect.any(Number));
     else expect(stored.archivedAt).toBeUndefined();
@@ -165,7 +168,7 @@ it("offers restore on re-add, honors cancellation and restores identity without 
   expect(approve).toHaveBeenCalledWith(
     expect.stringContaining("2 team members"),
   );
-  expect(listMonos()).toEqual(roster);
+  expect(listMonos()).toEqual(identities);
   expect(runs.start).not.toHaveBeenCalled();
   approve.mockClear();
   expect(offerProjectMonoRestore(project, approve)).toBe(false);
@@ -229,8 +232,8 @@ it("retains independent Manager/member permission modes and stable engine identi
   const restored = listMonos();
   expect(restored.find((mono) => mono.id === "backend")?.sessionId).toBe("backend-chat");
   expect(await monoEngineId(restored.find((mono) => mono.id === "manager")!, project)).toBe(engineId);
-  expect(restored.find((mono) => mono.id === "manager")?.runtimeMode).toBe("supervised");
-  expect(restored.find((mono) => mono.id === "backend")?.runtimeMode).toBe("full-access");
+  expect(monoRuntimeMode(restored.find((mono) => mono.id === "manager"), "auto")).toBe("supervised");
+  expect(monoRuntimeMode(restored.find((mono) => mono.id === "backend"), "auto")).toBe("full-access");
 });
 
 it("does not reopen a member chat whose project is archived while its saved conversation loads", async () => {
@@ -318,7 +321,7 @@ it("fails closed without stopping workers when archive storage cannot be written
   await expect(
     archiveProjectMonos(project, runs, stopConversation),
   ).rejects.toThrow("Storage full");
-  expect(listMonos()).toEqual(roster);
+  expect(listMonos()).toEqual(identities);
   expect(runs.stopRun).not.toHaveBeenCalled();
   expect(stopConversation).not.toHaveBeenCalled();
 });
@@ -348,5 +351,5 @@ it("leaves non-managed projects and unrelated teams unchanged", async () => {
   expect(runs.stopRun).not.toHaveBeenCalled();
   expect(stopConversation).not.toHaveBeenCalled();
   expect(confirm).not.toHaveBeenCalled();
-  expect(listMonos()).toEqual(roster);
+  expect(listMonos()).toEqual(identities);
 });

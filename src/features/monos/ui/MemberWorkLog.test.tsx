@@ -68,6 +68,31 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+it("links task reports, reviews and PR summaries while keeping artifact reports out of the inline transcript", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  localStorage.setItem("monocode:mono-roster", JSON.stringify([manager, member]));
+  const task = { ...base, id: "artifact-task", readOnly: true, accepted: true, acceptedDispatchId: "dispatch", completionOutcome: "no-changes", prUrl: undefined, reportArtifactId: "report-1", reviewArtifactId: "review-1", prSummaryArtifactId: "summary-1" } as OrchestrationTask;
+  const runs = [{ tasks: [task] }] as OrchestrationRun[];
+  vi.spyOn(orchestrator, "snapshot").mockReturnValue(runs);
+  vi.spyOn(orchestrator, "subscribe").mockReturnValue(() => {});
+  const container = document.createElement("div"), root = createRoot(container), opened = vi.fn();
+  window.addEventListener("monocode:open-artifact", opened);
+  try {
+    await act(async () => root.render(<MemberWorkLog member={member} />));
+    expect(container.textContent).toContain("Completed (no changes)");
+    expect(container.querySelectorAll("[data-org-artifact]")).toHaveLength(3);
+    for (const id of ["report-1", "review-1", "summary-1"]) {
+      await act(async () => container.querySelector<HTMLButtonElement>(`[data-org-artifact="${id}"]`)!.click());
+      expect(opened).toHaveBeenLastCalledWith(expect.objectContaining({ detail: { monoId: member.id, id } }));
+    }
+    await act(async () => container.querySelector<HTMLButtonElement>("[aria-expanded]")!.click());
+    expect(container.querySelector(".mono-run-report")).toBeNull();
+  } finally {
+    await act(async () => root.unmount());
+    window.removeEventListener("monocode:open-artifact", opened);
+  }
+});
+
 it("starts collapsed, renders sanitized Markdown and a path tooltip on expand, routes actions and remembers expansion", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   localStorage.setItem(
@@ -243,7 +268,7 @@ it("maps lifecycle and verified PR outcomes to light/dark status colors without 
       ["cancelled", "Cancelled", "border-l-content/20"],
       ["failed", "Failed", "border-l-red-500"],
       ["blocked", "Blocked", "border-l-red-500"],
-      ["no-changes", "Completed", "border-l-emerald-500/40"],
+      ["no-changes", "Completed (no changes)", "border-l-emerald-500/40"],
     ]) {
       const card = container.querySelector(`[data-member-task="${id}"]`)!;
       expect(card.querySelector("[data-task-status]")?.textContent).toBe(label);

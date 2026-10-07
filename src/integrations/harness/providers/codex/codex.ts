@@ -90,6 +90,7 @@ type Live = {
   controlsAgents: boolean;
   runtimeMode: RuntimeMode;
   planning: boolean;
+  readOnly: boolean;
   onEvent: (event: HarnessEvent) => void;
   approvals: Map<number, PendingApproval>;
   questions: Map<number, PendingQuestion>;
@@ -134,6 +135,7 @@ type Resume = {
   threadId: string;
   cwd: string;
   providerAccountId?: string;
+  readOnly?: boolean;
 };
 
 const liveByThread = new Map<string, Live>();
@@ -310,7 +312,7 @@ export function updateCodexRuntimeMode(sessionId: string, runtimeMode: RuntimeMo
   const live = liveByThread.get(sessionId);
   if (!live) return;
   live.runtimeMode = runtimeMode;
-  if (live.planning || live.cancelled || live.muteUpdates) return;
+  if (live.planning || live.readOnly || live.cancelled || live.muteUpdates) return;
   for (const pending of live.approvals.values()) {
     const decision = autoApproval(runtimeMode, pending.kind);
     if (decision) pending.resolve(decision);
@@ -465,12 +467,14 @@ export function bindCodexSession(
     threadId: providerThreadId,
     cwd,
     providerAccountId,
+    readOnly: resumeByThread.get(threadId)?.readOnly,
   });
 }
 
 async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   const existing = liveByThread.get(input.sessionId);
   const controlsAgents = input.controlsAgents === true;
+  const readOnly = input.readOnly === true || existing?.readOnly === true || resumeByThread.get(input.sessionId)?.readOnly === true;
   if (
     existing &&
     existing.cwd === input.cwd &&
@@ -478,7 +482,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       existing.providerAccountId,
       input.providerAccountId,
     ) &&
-    existing.controlsAgents === controlsAgents
+    existing.controlsAgents === controlsAgents && existing.readOnly === readOnly
   ) {
     existing.onEvent = input.onEvent;
     return existing;
@@ -640,6 +644,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
               cwd: input.cwd,
               runtimeMode: input.runtimeMode,
               intent: input.intent,
+              readOnly,
               controlsAgents: input.controlsAgents,
               model,
               serviceTier,
@@ -661,6 +666,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
           cwd: input.cwd,
           runtimeMode: input.runtimeMode,
           intent: input.intent,
+          readOnly,
           controlsAgents: input.controlsAgents,
           model,
           serviceTier,
@@ -682,6 +688,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       controlsAgents,
       runtimeMode: input.runtimeMode,
       planning: input.intent === "plan",
+      readOnly,
       onEvent: input.onEvent,
       approvals: new Map(),
       questions: new Map(),
@@ -712,6 +719,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       threadId,
       cwd: input.cwd,
       providerAccountId: input.providerAccountId,
+      readOnly,
     });
     live.onEvent({
       type: "session.providerBound",
@@ -741,6 +749,7 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
     effort,
     serviceTier,
     intent: input.intent,
+    readOnly: live.readOnly,
   });
 
   if (Array.isArray(params.input) && params.input.length === 0) {
@@ -1350,6 +1359,10 @@ async function handleServerRequest(
   }
 
   if (method === "mcpServer/elicitation/request") {
+    if (live.readOnly) {
+      await live.rpc.respond(id, { action: "cancel", content: null, _meta: null });
+      return;
+    }
     const confirmation = codexMcpConfirmation(params);
     if (!confirmation || live.cancelled || live.muteUpdates) {
       if (!live.cancelled && !live.muteUpdates)
@@ -1407,7 +1420,7 @@ async function handleServerRequest(
     return;
   }
 
-  if (live.planning || live.cancelled || live.muteUpdates) {
+  if (live.planning || live.readOnly || live.cancelled || live.muteUpdates) {
     // Plan turns run in a non-escalating read-only sandbox. If an older
     // app-server still asks for broader access, deny it silently instead of
     // leaking a Supervised approval prompt into the user's selected mode.

@@ -249,31 +249,32 @@ describe("provider defaults", () => {
     expect(preferredModelId("claude")).toBe(defaultModelId("claude"));
   });
 
-  it("uses the saved default provider and its model for new sessions", () => {
+  it("defaults new sessions to Codex 5.6 Sol independently of the last selected provider", () => {
     saveLastModelChoice("claude", "claude:opus-5");
     expect(defaultSessionChoice()).toEqual({
-      harness: "claude",
-      model: "claude:opus-5",
+      harness: "codex",
+      model: "codex:gpt-5.6-sol",
     });
   });
 
-  it("keeps catalog defaults when nothing is saved", () => {
+  it("keeps the exact new-session default before catalogs arrive", () => {
     expect(defaultSessionChoice()).toEqual({
-      harness: "cursor",
-      model: defaultModelId("cursor"),
+      harness: "codex",
+      model: "codex:gpt-5.6-sol",
     });
   });
 
-  it("swaps a hidden default provider for the first enabled one", () => {
+  it("does not silently switch the new-session default when a provider is hidden", () => {
     saveLastModelChoice("claude", "claude:opus-5");
     setProjectProviderHidden("/repo/a", "claude", true);
+    setProjectProviderHidden("/repo/a", "codex", true);
     expect(defaultSessionChoice("/repo/a")).toEqual({
       harness: "codex",
-      model: defaultModelId("codex"),
+      model: "codex:gpt-5.6-sol",
     });
     expect(defaultSessionChoice("/repo/b")).toEqual({
-      harness: "claude",
-      model: "claude:opus-5",
+      harness: "codex",
+      model: "codex:gpt-5.6-sol",
     });
   });
 
@@ -285,8 +286,8 @@ describe("provider defaults", () => {
       model: "cursor:composer-2.5",
     });
     expect(defaultSessionChoice("/repo/b")).toEqual({
-      harness: "claude",
-      model: "claude:opus-5",
+      harness: "codex",
+      model: "codex:gpt-5.6-sol",
     });
   });
 
@@ -382,6 +383,13 @@ describe("picker provider visibility", () => {
 describe("live catalog overlays", () => {
   afterEach(() => {
     resetHarnessModelOverlays();
+  });
+
+  it("does not substitute a late catalog model for an explicit Codex version", () => {
+    setHarnessModels("codex", [{ id: "codex:gpt-6.1-sol", harness: "codex", name: "GPT 6.1 Sol", nativeId: "gpt-6.1-sol" }]);
+    expect(resolveModel("codex", "codex:gpt-5.6-sol")).toMatchObject({ id: "codex:gpt-5.6-sol", harness: "codex", nativeId: "gpt-5.6-sol" });
+    setHarnessModels("codex", [{ id: "codex:gpt", harness: "codex", name: "Moving GPT alias", nativeId: "gpt" }]);
+    expect(resolveModel("codex", "codex:gpt-5.6-sol").id).toBe("codex:gpt-5.6-sol");
   });
 
   it("retains a saved Codex model and settings before its catalog loads", () => {

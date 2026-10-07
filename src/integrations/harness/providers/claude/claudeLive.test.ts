@@ -996,15 +996,15 @@ describe("claude legacy account resume", () => {
 });
 
 describe("claude subagents", () => {
-  it.each(["manager", "member"])("launches %s chats and refreshed/Habit turns with actual bypass permissions", async role => {
-    let saved = JSON.stringify([{ id: "org", role, projects: ["/repo"], mascot: "cat", color: "#abc" }]);
+  it.each(["manager", "member"])("preserves saved permissions for %s chats and refreshed/Habit turns", async role => {
+    const saved = JSON.stringify([{ id: "org", role, projects: ["/repo"], mascot: "cat", color: "#abc" }]);
     vi.stubGlobal("localStorage", { getItem: (key: string) => key === "monocode:mono-roster" ? saved : null, setItem: () => {} });
     registerHarness({ id: "claude", live: true, sendTurn: sendClaudeTurn, respondApproval: respondClaudeApproval,
       cancelTurn: cancelClaudeTurn, stopSession: stopClaudeSession, forgetSession: async () => {}, bindSession: () => {}, steerTurn: async () => {} });
     try {
       for (const sessionId of ["s1", "rotated-chat", "habit-run"]) {
         sent.length = 0; spawned.length = 0;
-        const { events, turn } = await startTurn(sessionId, { orgMonoId: "org", runtimeMode: "supervised" });
+        const { events, turn } = await startTurn(sessionId, { orgMonoId: "org", runtimeMode: "full-access" });
         expect(spawned[0]).toEqual(expect.arrayContaining(["--permission-mode", "bypassPermissions"]));
         emit({ type: "control_request", request_id: "ordinary-write", request: { subtype: "can_use_tool", tool_name: "Write", input: { file_path: "/repo/file", content: "test" } } });
         await waitFor(() => parse().some(message => (message.response as Record<string, unknown>)?.request_id === "ordinary-write"), "bypass write");
@@ -1012,9 +1012,8 @@ describe("claude subagents", () => {
         emit({ type: "result", subtype: "success", session_id: "sess_1" }); await turn;
         await stopClaudeSession(sessionId);
       }
-      saved = JSON.stringify([{ id: "org", role, projects: ["/repo"], mascot: "cat", color: "#abc", runtimeMode: "supervised" }]);
       sent.length = 0; spawned.length = 0;
-      const { turn } = await startTurn("s1", { orgMonoId: "org", runtimeMode: "full-access" });
+      const { turn } = await startTurn("s1", { orgMonoId: "org", runtimeMode: "supervised" });
       expect(spawned[0]).toEqual(expect.arrayContaining(["--permission-mode", "default"]));
       emit({ type: "result", subtype: "success", session_id: "sess_1" }); await turn;
     } finally { vi.unstubAllGlobals(); resetHarnessIdlePark(); }

@@ -151,6 +151,12 @@ export type SessionPaneProps = {
   ) => void;
   monoActivityTurnId?: string;
   monoState?: MonoState;
+  onShowMonoSessions?: (
+    sessionId: string,
+    turnId: string,
+    blocks: Block[],
+  ) => void;
+  monoSessionsTurnId?: string;
   recents: RecentProject[];
   hideProjectPicker?: boolean;
   onFocus: (sessionId: string) => void;
@@ -206,6 +212,7 @@ export type SessionPaneProps = {
   onInboxCardDismiss?: (sessionId: string) => void;
   onLinkedWorkItemUpdateCardDismiss?: (sessionId: string) => void;
   onNoteCardDismiss?: (sessionId: string) => void;
+  onOpenArtifact?: (sessionId: string, id: string) => void;
   onHandoffCardDismiss?: (sessionId: string) => void;
   onOpenLinkedWorkItem?: (item: LinkedWorkItem, sessionId: string) => void;
   onArchiveSession?: (sessionId: string, archived: boolean) => Promise<boolean>;
@@ -338,6 +345,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
   onInboxCardDismiss,
   onLinkedWorkItemUpdateCardDismiss,
   onNoteCardDismiss,
+  onOpenArtifact,
   onHandoffCardDismiss,
   onOpenLinkedWorkItem,
   onArchiveSession,
@@ -350,6 +358,8 @@ const LocalSessionPane = memo(function LocalSessionPane({
   onShowMonoActivity,
   monoActivityTurnId,
   monoState,
+  onShowMonoSessions,
+  monoSessionsTurnId,
   onOpenPlan,
   onBuildPlan,
   onSecondOpinion,
@@ -1035,6 +1045,11 @@ const LocalSessionPane = memo(function LocalSessionPane({
                           }
                         : undefined)
                     }
+                    onOpenArtifact={
+                      onOpenArtifact
+                        ? (id) => onOpenArtifact(session.id, id)
+                        : undefined
+                    }
                     bottomAligned={!!agent}
                     inlineWork={!!agent}
                     messageDeliveries={messageDeliveries}
@@ -1046,6 +1061,13 @@ const LocalSessionPane = memo(function LocalSessionPane({
                         : undefined
                     }
                     activeWorkTurnId={monoActivityTurnId}
+                    onShowSessions={
+                      agent && onShowMonoSessions
+                        ? (turnId, blocks) =>
+                            onShowMonoSessions(session.id, turnId, blocks)
+                        : undefined
+                    }
+                    activeSessionsTurnId={monoSessionsTurnId}
                     // A Mono's turn keeps copy, save as note and the time.
                     daySeparators={!!agent}
                     hideTurnMetrics={!!agent}

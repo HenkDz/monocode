@@ -52,6 +52,15 @@ export type BlockRole =
   | "system"
   | "handoff";
 
+/** A session created by a Mono during this conversation turn. */
+export type MonoSpawnedSession = {
+  sessionId: string;
+  cwd: string;
+  title: string;
+  harness: HarnessId;
+  model: string;
+};
+
 export type TaskListItemStatus =
   "pending" | "in_progress" | "completed" | "cancelled";
 
@@ -361,11 +370,15 @@ export type Block = {
   internal?: boolean;
   /** Hidden app prompt that starts a separate completion report in a Mono chat. */
   monoSessionCompletion?: MonoSessionCompletion;
+  /** Accepted session launches, kept on the originating user turn. */
+  monoSpawnedSessions?: MonoSpawnedSession[];
   handoff?: HandoffMeta;
   secondOpinion?: SecondOpinionMeta;
   /** Independent read-only side conversations anchored to this user turn. */
   btwThreads?: BtwThread[];
   noteCard?: NoteCardMeta;
+  /** Saved artifacts attached to this turn; their bodies live outside chat. */
+  artifactCards?: import("../../artifacts/artifacts").ArtifactCard[];
   /** Exact CI repair instructions and evidence supplied with this user turn. */
   ciContext?: string;
   /** Mid-turn interjection chrome; system blocks only. Body lives in text. */
@@ -424,10 +437,12 @@ export const RUNTIME_MODE_HINT: Record<RuntimeMode, string> = {
 export type WorkspaceMode = "current" | "worktree";
 
 export type Session = {
-  /** Managed investigations always use the harness's non-escalating plan mode. */
+  /** Managed investigations enforce non-escalating read-only filesystem permissions. */
   readOnly?: boolean;
   /** Durable receipts: a saved draft can be accepted only once. */
   consumedDraftIds?: string[];
+  /** Saved and accessible by id, but omitted from the normal session sidebar. */
+  sidebarHidden?: boolean;
   /** Receipt for an acknowledged floating-composer handoff. */
   quickLaunchAccepted?: boolean;
   /** Internal worker: displayed in its lead's panel rather than a workspace tab. */
@@ -557,13 +572,13 @@ export function harnessSupportsAttachments(id: HarnessId): boolean {
 }
 
 export function newSession(
-  harness: HarnessId = "claude",
+  harness: HarnessId = "codex",
   cwd = "~",
   model?: string,
   runtimeMode: RuntimeMode = DEFAULT_RUNTIME_MODE,
   modelSettings?: Record<string, string>,
 ): Session {
-  const resolved = resolveModel(harness, model ?? preferredModelId(harness));
+  const resolved = resolveModel(harness, model ?? (harness === "codex" ? defaultSessionChoice().model : preferredModelId(harness)));
   return {
     id: crypto.randomUUID(),
     harness,
@@ -576,7 +591,7 @@ export function newSession(
   };
 }
 
-/** New conversation using the Providers defaults. */
+/** New conversation using the stable default or an explicit project override. */
 export function newDefaultSession(
   cwd = "~",
   runtimeMode: RuntimeMode = DEFAULT_RUNTIME_MODE,
@@ -611,15 +626,14 @@ function projectSessionChoice(
 }
 
 /**
- * New conversation for a project. The project's default provider and model win
- * over the seed's; a provider the project has hidden is swapped for its first
- * enabled one.
+ * Fresh project conversations use the shared default or explicit project
+ * settings. An unrelated conversation does not choose their provider/model.
  */
 export function newSessionForProject(
   seed: Session | undefined,
   cwd: string,
 ): Session {
-  const { harness, model } = projectSessionChoice(seed, cwd);
+  const { harness, model } = defaultSessionChoice(cwd);
   const carriesSeed =
     model != null && model === seed?.model && harness === seed?.harness;
   return newSession(

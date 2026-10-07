@@ -42,8 +42,6 @@ type Route =
   | { kind: "habit"; id: string };
 
 type Props = {
-  runtimeMode?: RuntimeMode;
-  onRuntimeModeChange?: (mode: RuntimeMode) => void;
   teamActivity?: ReactNode;
   toolActivityOpen?: boolean;
   tab?: MonoPanelTab;
@@ -59,20 +57,21 @@ type Props = {
   harness: HarnessId;
   model: string;
   modelSettings: Record<string, string>;
+  runtimeMode: RuntimeMode;
+  busy?: boolean;
   onModelChange: (harness: HarnessId, model: string) => void;
   onModelSettingsChange: (settings: Record<string, string>) => void;
+  onRuntimeModeChange: (mode: RuntimeMode) => void;
   onClose: () => void;
   onReset?: () => Promise<void>;
   windowControls?: ReactNode;
 };
 
 /**
- * The Mono's profile, model and projects in one panel. Its habits, soul and
- * memory open directly as pages that slide over it.
+ * The Mono's profile, model, permissions and projects in one panel. Its habits,
+ * soul and memory open directly as pages that slide over it.
  */
 export function MonoDetails({
-  runtimeMode,
-  onRuntimeModeChange,
   teamActivity,
   toolActivityOpen,
   tab = "details",
@@ -87,8 +86,10 @@ export function MonoDetails({
   harness,
   model,
   modelSettings,
+  runtimeMode,
   onModelChange,
   onModelSettingsChange,
+  onRuntimeModeChange,
   onClose,
   onReset,
   windowControls,
@@ -244,7 +245,7 @@ export function MonoDetails({
               {runtimeMode && onRuntimeModeChange && (
                 <dl className="border-t border-stroke px-4 py-3">
                   <Property label="Permissions">
-                    <AccessPicker value={runtimeMode} onChange={onRuntimeModeChange} />
+                    <AccessPicker value={runtimeMode} onChange={onRuntimeModeChange} side="bottom" variant="plain" />
                   </Property>
                 </dl>
               )}
@@ -289,6 +290,8 @@ export function MonoDetails({
                     <AccessPicker
                       value={runtimeMode}
                       onChange={onRuntimeModeChange}
+                      side="bottom"
+                      variant="plain"
                     />
                   </Property>
                 )}

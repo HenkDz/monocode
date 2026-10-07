@@ -1,10 +1,66 @@
-import { expect, it } from "vitest";
+// @vitest-environment happy-dom
+import { expect, it, vi } from "vitest";
 import type { Block } from "../../sessions/model/session";
 import type { OrchestrationRun, OrchestrationTask } from "./orchestrationState";
 import {
+  focusManagerReview,
   managerReviewTimeline,
   managerReviewTurn,
 } from "./projectManagerTimeline";
+
+it.each([1, 0.75, 1.25])(
+  "centers only the owning transcript at scale %s",
+  (scale) => {
+    const shell = document.createElement("div");
+    const scroller = document.createElement("div");
+    scroller.className = "agent-transcript";
+    const card = document.createElement("section");
+    card.id = "manager-review-scroll";
+    card.tabIndex = -1;
+    shell.append(scroller);
+    scroller.append(card);
+    document.body.append(shell);
+    Object.defineProperties(scroller, {
+      offsetHeight: { value: 504 },
+      clientHeight: { value: 500 },
+      clientTop: { value: 2 },
+    });
+    scroller.scrollTop = 40;
+    vi.spyOn(scroller, "getBoundingClientRect").mockReturnValue({
+      top: 100 * scale,
+      height: 504 * scale,
+    } as DOMRect);
+    vi.spyOn(card, "getBoundingClientRect").mockImplementation(
+      () =>
+        ({
+          top: (100 + 2 + 800 - scroller.scrollTop) * scale,
+          height: 200 * scale,
+        }) as DOMRect,
+    );
+    const scroll = vi
+      .spyOn(HTMLElement.prototype, "scrollIntoView")
+      .mockImplementation(() => {});
+    try {
+      focusManagerReview("scroll");
+      expect(scroller.scrollTop).toBeCloseTo(650);
+      expect(document.activeElement).toBe(card);
+      focusManagerReview("scroll");
+      expect(scroller.scrollTop).toBeCloseTo(650);
+      expect(scroll).not.toHaveBeenCalled();
+      expect(shell.scrollTop).toBe(0);
+      expect(document.body.scrollTop).toBe(0);
+      expect(document.documentElement.scrollTop).toBe(0);
+      shell.append(card);
+      focusManagerReview("scroll");
+      focusManagerReview("missing");
+      expect(shell.scrollTop).toBe(0);
+      expect(scroll).not.toHaveBeenCalled();
+    } finally {
+      shell.remove();
+      vi.restoreAllMocks();
+    }
+  },
+);
 
 const blocks: Block[] = [
   { id: "first", role: "user", text: "First assignment", startedAt: 100 },

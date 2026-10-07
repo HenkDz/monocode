@@ -228,7 +228,7 @@ it("reveals the archived ready turn from the status count and keeps its card out
   ).toBe("older-user");
   expect(container.querySelectorAll("#manager-review-docs")).toHaveLength(1);
   expect(document.activeElement).toBe(card);
-  expect(scroll).toHaveBeenCalledWith({ block: "center" });
+  expect(scroll).not.toHaveBeenCalled();
 });
 
 it("routes a Mono work-summary click to its session and selected turn", () => {

@@ -137,7 +137,7 @@ it("keeps the same ready card before a new turn and jumps from the ready count w
     ...host.querySelectorAll<HTMLButtonElement>("nav button"),
   ].find((button) => button.textContent === "1 ready")!;
   await act(async () => count.click());
-  expect(scroll).toHaveBeenCalledWith({ block: "center" });
+  expect(scroll).not.toHaveBeenCalled();
   expect(document.activeElement).toBe(card);
   expect(card.className).toContain("focus:outline-accent");
 });

@@ -119,6 +119,16 @@ it("navigates to workers, cycles ready cards and offers removal only after match
       ),
     );
     expect(document.activeElement?.id).toBe("manager-review-one");
+    run.tasks = [tasks[0]] as OrchestrationRun["tasks"];
+    await render();
+    await act(async () =>
+      [...host.querySelectorAll("button")]
+        .find((button) => button.textContent === "Next")!
+        .click(),
+    );
+    expect(document.activeElement?.id).toBe("manager-review-one");
+    expect(scroll).not.toHaveBeenCalled();
+    run.tasks = tasks as OrchestrationRun["tasks"];
     statusView.statuses = new Map([
       [prStatusKey("/one", "one"), { url: tasks[0].prUrl, state: "merged" }],
     ]);

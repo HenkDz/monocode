@@ -15,7 +15,10 @@ import {
   managerTaskMerged,
   taskPrStatus,
 } from "../model/projectManager";
-import { jumpToManagerReview } from "../model/projectManagerTimeline";
+import {
+  focusManagerReview,
+  jumpToManagerReview,
+} from "../model/projectManagerTimeline";
 import { orchestrator } from "../model/orchestration";
 import type {
   OrchestrationRun,
@@ -109,10 +112,7 @@ export function ProjectManagerReview({
     jumpToManagerReview(task.id);
   };
   useEffect(() => {
-    if (actions?.reviewTarget)
-      document
-        .getElementById(`manager-review-${actions.reviewTarget.taskId}`)
-        ?.scrollIntoView({ block: "center" });
+    if (actions?.reviewTarget) focusManagerReview(actions.reviewTarget.taskId);
   }, [actions?.reviewTarget]);
   return (
     <div

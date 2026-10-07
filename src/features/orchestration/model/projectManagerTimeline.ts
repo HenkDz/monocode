@@ -49,8 +49,20 @@ export function managerReviewTimeline(
 
 export function focusManagerReview(taskId: string): void {
   const card = document.getElementById(`manager-review-${taskId}`);
-  card?.scrollIntoView({ block: "center" });
   card?.focus({ preventScroll: true });
+  const scroller = card?.closest<HTMLElement>(".agent-transcript");
+  if (!card || !scroller) return;
+  const bounds = scroller.getBoundingClientRect();
+  const scaleY = scroller.offsetHeight
+    ? bounds.height / scroller.offsetHeight
+    : 1;
+  const cardBounds = card.getBoundingClientRect();
+  // scrollIntoView also scrolls hidden ancestors, including the desktop shell.
+  // Center only inside the transcript, including scaled browser previews.
+  scroller.scrollTop +=
+    (cardBounds.top - bounds.top) / (scaleY || 1) -
+    scroller.clientTop -
+    (scroller.clientHeight - cardBounds.height / (scaleY || 1)) / 2;
 }
 
 export function jumpToManagerReview(taskId: string): void {

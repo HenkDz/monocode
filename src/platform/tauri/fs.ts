@@ -366,6 +366,9 @@ export function gitRangeContext(cwd: string): Promise<GitRangeContext> {
 }
 
 export type GitPr = {
+  headRefName?: string;
+  headOid?: string;
+  mergeable?: string;
   baseRefName?: string;
   number: number;
   title: string;

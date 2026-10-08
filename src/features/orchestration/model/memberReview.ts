@@ -15,6 +15,7 @@ export function approvedMemberReview(
       review.status === "completed" &&
       !!review.lastDispatchId &&
       review.reviewVerdict?.dispatchId === review.lastDispatchId &&
+      (!task.delivery?.head || review.reviewVerdict.headOid === task.delivery.head) &&
       review.reviewVerdict.decision === "approve",
   );
 }

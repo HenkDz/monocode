@@ -29,11 +29,11 @@ describe("newSessionForProject", () => {
     vi.unstubAllGlobals();
   });
 
-  it("uses Codex 5.6 Sol for a fresh project instead of an unrelated Claude seed", () => {
+  it("uses Codex 6.1 Sol for a fresh project instead of an unrelated Claude seed", () => {
     const seed = newSession("claude", "/repo/a", "claude:opus-5");
     const session = newSessionForProject(seed, "/repo/a");
     expect(session.harness).toBe("codex");
-    expect(session.model).toBe("codex:gpt-5.6-sol");
+    expect(session.model).toBe("codex:gpt-6.1-sol");
     expect(seed.harness).toBe("claude");
     expect(seed.model).toBe("claude:opus-5");
   });
@@ -73,13 +73,13 @@ describe("newSessionForProject", () => {
   it("ignores stale global Claude defaults for new chats and retains the exact Codex model through late catalogs", () => {
     saveLastModelChoice("claude", "claude:sonnet-5");
     resetHarnessModelOverlays();
-    expect(newDefaultSession("/repo/new")).toMatchObject({ harness: "codex", model: "codex:gpt-5.6-sol" });
-    expect(newSession()).toMatchObject({ harness: "codex", model: "codex:gpt-5.6-sol" });
-    saveLastModelChoice("codex", "codex:gpt-6.1-sol");
-    expect(newSession()).toMatchObject({ harness: "codex", model: "codex:gpt-5.6-sol" });
+    expect(newDefaultSession("/repo/new")).toMatchObject({ harness: "codex", model: "codex:gpt-6.1-sol" });
+    expect(newSession()).toMatchObject({ harness: "codex", model: "codex:gpt-6.1-sol" });
+    saveLastModelChoice("codex", "codex:gpt-5.6-sol");
+    expect(newSession()).toMatchObject({ harness: "codex", model: "codex:gpt-6.1-sol" });
     setHarnessModels("codex", [{ id: "codex:gpt-6.1-sol", harness: "codex", name: "GPT 6.1 Sol" }]);
-    expect(newDefaultSession("/repo/new")).toMatchObject({ harness: "codex", model: "codex:gpt-5.6-sol" });
-    expect(newSession("codex", "/repo/new", "codex:gpt-6.1-sol")).toMatchObject({ harness: "codex", model: "codex:gpt-6.1-sol" });
+    expect(newDefaultSession("/repo/new")).toMatchObject({ harness: "codex", model: "codex:gpt-6.1-sol" });
+    expect(newSession("codex", "/repo/new", "codex:gpt-5.6-sol")).toMatchObject({ harness: "codex", model: "codex:gpt-5.6-sol" });
     expect(newSession("claude", "/repo/new", "claude:sonnet-5")).toMatchObject({ harness: "claude", model: "claude:sonnet-5" });
   });
 });

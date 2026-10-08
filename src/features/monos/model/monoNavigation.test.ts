@@ -5,6 +5,8 @@ import { loadMonoView, saveMonoView, monoForView, memberDetailsView, memberTasks
 import { monoForSession } from "./mono";
 import { reconcileProjectReturn } from "../../projects/model/projectReturn";
 import { newTab } from "../../workspace/model/layout";
+import { memberMonoState } from "./monoNavigation";
+import { newSession } from "../../sessions/model/session";
 import type { OrchestrationRun } from "../../orchestration/model/orchestrationState";
 
 vi.mock("./mono", () => {
@@ -30,6 +32,13 @@ const runs = [{ tasks: [
   { id: "old", memberId: "backend", sessionId: "old-chat" },
   { id: "new", memberId: "backend", sessionId: "worker-chat" },
 ], dispatches: [{ taskId: "old", startedAt: 10 }, { taskId: "new", startedAt: 20 }] }] as OrchestrationRun[];
+
+it("uses worker availability and tool activity while the durable member chat is idle", () => {
+  const worker = { ...newSession("codex", "/app"), id: "worker-chat", busy: true, blocks: [{ id: "step", role: "tool" as const, text: "", tool: { title: "Checking routing" } }] } as ReturnType<typeof newSession>;
+  const working = [{ ...runs[0], tasks: [{ ...runs[0].tasks[1], status: "running", prompt: "Routing", title: "Routing" }] }] as OrchestrationRun[];
+  expect(memberMonoState(working, "backend", [worker], "idle-chat")).toEqual({ status: "working", activity: "Checking routing" });
+  expect(memberMonoState(working, "backend", [{ ...worker, blocks: [{ ...worker.blocks[0], approval: { requestId: 1 } }] }])).toMatchObject({ status: "needs-you" });
+});
 
 it("shows current member availability without historical task outcomes dominating", () => {
   const task = (status: OrchestrationRun["tasks"][number]["status"], sessionId = "worker") => ({ status, sessionId }) as OrchestrationRun["tasks"][number];

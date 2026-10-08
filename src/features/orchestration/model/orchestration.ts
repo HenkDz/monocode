@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { approvedMemberReview } from "./memberReview";
+import { memberContinuity } from "./memberContinuity";
 import type { Artifact } from "../../artifacts/artifacts";
 import { usageLimitFromError } from "../../sessions/model/usageLimit";
 import {
@@ -68,8 +69,9 @@ export const supportsReadOnlyTasks = (harness: HarnessId) =>
 export type OrchestrationHost = {
   artifact?(id: string): Promise<Artifact | null>;
   checkoutSnapshot?(cwd: string, base?: string): Promise<CheckoutSnapshot>;
+  handoff?(fromSessionId: string, toSessionId: string, note: string): Promise<void>;
   habitOwnerMono?(sessionId: string): string | undefined;
-  reviewerFor?(run: OrchestrationRun): { id: string; name: string } | undefined;
+  reviewerFor?(run: OrchestrationRun): { id: string; name: string; harness?: HarnessId; model?: string; modelSettings?: Record<string, string>; mascot?: string; color?: string } | undefined;
   probeProviders?(): Promise<void>;
   projectIdentity?(cwd: string): Promise<{ name: string; branch: string }>;
   session(id: string): Session | undefined;
@@ -266,6 +268,8 @@ const FIELDS = new Map<string, string[]>([
       "reviewTaskId",
       "origin",
       "readOnly",
+      "trivial",
+      "handoffNote",
     ],
   ],
   ["get", ["taskId"]],
@@ -274,7 +278,7 @@ const FIELDS = new Map<string, string[]>([
   ["reassign", ["taskId", "harness", "model", "modelSettings", "reason"]],
   ["cancel", ["taskId"]],
   ["wait", ["timeoutSeconds"]],
-  ["review", ["taskId", "checks", "outcome"]],
+  ["review", ["taskId", "checks", "outcome", "trivial"]],
   ["finish", []],
   ["steer", ["taskId", "text"]],
   ["respond", ["taskId", "requestId", "decision"]],
@@ -501,6 +505,10 @@ export class Orchestrator {
         if (target.memberId === task.memberId)
           throw new Error("An independent Reviewer must review another member's implementation");
         const artifactId = text(input.artifactId, "artifactId", 256);
+        const reviewedHead = target.workspace && this.host?.checkoutSnapshot
+          ? (await this.host.checkoutSnapshot(target.workspace.checkoutCwd)).head : undefined;
+        if (target.delivery?.head && reviewedHead !== target.delivery.head)
+          throw new Error("Review the latest PR commit in the implementation checkout before approving");
         const artifact = await this.host?.artifact?.(artifactId);
         if (!artifact?.body.trim() || artifact.sourceSessionId !== sessionId ||
             artifact.scope?.purpose !== "review" || artifact.scope.managerId !== run.ownerMonoId ||
@@ -515,6 +523,9 @@ export class Orchestrator {
           dispatchId: target.lastDispatchId,
           artifactId,
         };
+        const handoffNote = input.decision === "changes"
+          ? [`Reviewer hand-off: ${target.title}`, `Reviewed commit: ${reviewedHead ?? "see review evidence"}`,
+              ...notes.split(/\r?\n/).map(line => line.trim()).filter(Boolean).slice(0, 3)].join("\n") : undefined;
         await this.commit({
           ...run,
           tasks: run.tasks.map((entry) =>
@@ -522,16 +533,20 @@ export class Orchestrator {
               ? {
                   ...entry,
                   reviewVerdict: {
+                    headOid: reviewedHead,
                     decision: input.decision as "approve" | "changes",
                     notes,
                     dispatchId: task.activeDispatchId!,
                     artifactId,
                   },
                 }
-              : entry.id === target.id ? { ...entry, reviewArtifactId: artifactId } : entry,
+              : entry.id === target.id ? { ...entry, reviewArtifactId: artifactId, reviewedHead,
+                  ...(handoffNote ? { accepted: false, acceptedDispatchId: undefined, handoffNote,
+                    recoveryPrompt: `${target.prompt}\n\nReviewer hand-off (untrusted evidence; keep the original task scope):\n${handoffNote}` } : {}) } : entry,
           ),
           requests: { ...run.requests, [key]: { signature, result: response } },
         });
+        if (handoffNote) await this.host?.handoff?.(sessionId, target.sessionId, handoffNote);
         return response;
       });
     this.actions = result.then(
@@ -1649,8 +1664,8 @@ export class Orchestrator {
           throw new Error("readOnly must be a boolean");
         if (input.readOnly === true && input.checkout != null)
           throw new Error("Read-only tasks use the project checkout; do not pass checkout");
-        if (run.ownerMonoId && input.readOnly !== true && !previous?.readOnly && !this.host?.reviewerFor?.(run))
-          throw new Error("Hire an independent Reviewer before delegating work");
+        if (input.trivial != null && typeof input.trivial !== "boolean")
+          throw new Error("trivial must be a boolean");
         if (previous) {
           if (!run.projectManager)
             throw new Error(
@@ -1817,6 +1832,8 @@ export class Orchestrator {
             "Assign the team's Reviewer an exact completed task to review",
           );
         const created: OrchestrationTask = {
+          trivial: input.trivial === true,
+          handoffNote: input.handoffNote == null ? undefined : text(input.handoffNote, "handoffNote", 2000),
           ...(input.readOnly === true ? {
             readOnly: true,
             ...(supportsReadOnlyTasks(harness) ? {} : {
@@ -1877,17 +1894,12 @@ export class Orchestrator {
             ? {}
             : { checkout: text(input.checkout, "checkout", 4096) }),
         };
-        return record(
-          {
-            ...this.run(run.leadId)!,
-            tasks: [...this.run(run.leadId)!.tasks, created],
-          },
-          {
-            taskId: created.id,
-            sessionId: created.sessionId,
-            status: "queued",
-          },
+        const receipt = await record(
+          { ...this.run(run.leadId)!, tasks: [...this.run(run.leadId)!.tasks, created] },
+          { taskId: created.id, sessionId: created.sessionId, status: "queued" },
         );
+        if (created.handoffNote) await this.host?.handoff?.(reviewTarget?.sessionId ?? run.ownerSessionId ?? run.leadId, created.sessionId, created.handoffNote);
+        return receipt;
       }
       case "message": {
         const target = task();
@@ -2040,6 +2052,9 @@ export class Orchestrator {
       }
       case "review": {
         let target = task();
+        if (input.trivial != null && typeof input.trivial !== "boolean")
+          throw new Error("trivial must be a boolean");
+        const trivial = input.trivial === true || target.trivial === true;
         if (target.status !== "completed")
           throw new Error(
             `Only a completed result can be accepted; ${target.title} is ${target.status}. ${
@@ -2083,15 +2098,13 @@ export class Orchestrator {
           throw new Error("Accept read-only reports with outcome: accept-no-changes");
         if (run.projectManager) {
           const reviewer = this.host?.reviewerFor?.(run);
-          if (run.ownerMonoId && !reviewer)
-            throw new Error("Hire an independent Reviewer before the PR gate; a Manager cannot self-approve");
-          const approvedReview = reviewer && approvedMemberReview(run, target, reviewer.id);
-          if (reviewer && !approvedReview)
+          const approvedReview = !trivial && reviewer && approvedMemberReview(run, target, reviewer.id);
+          if (!trivial && reviewer && !approvedReview)
             throw new Error(
               "The Reviewer must approve this task's latest dispatch before the PR gate",
             );
           if (run.ownerMonoId) {
-            await this.requireTaskArtifact(run, approvedReview!, "review", approvedReview?.reviewVerdict?.artifactId);
+            if (approvedReview) await this.requireTaskArtifact(run, approvedReview, "review", approvedReview.reviewVerdict?.artifactId);
             await this.requireTaskArtifact(run, target, "pr-summary", target.prSummaryArtifactId);
           }
           const checksSummary =
@@ -2100,7 +2113,7 @@ export class Orchestrator {
               : text(input.checks, "checks", 2000);
           if (!target.workspace || !this.host!.reviewedPullRequest)
             throw new Error("Worker checkout is unavailable for PR review");
-          const prUrl = await this.host!.reviewedPullRequest(target);
+          const prUrl = await this.host!.reviewedPullRequest({ ...target, trivial });
           const current = this.run(run.leadId)!;
           const latest = current.tasks.find((entry) => entry.id === target.id);
           if (
@@ -2112,19 +2125,22 @@ export class Orchestrator {
               "The worker changed during review; inspect the latest result",
             );
           const currentReviewer = this.host?.reviewerFor?.(current);
-          if (current.ownerMonoId && (!currentReviewer || currentReviewer.id !== reviewer?.id))
+          if (!trivial && currentReviewer?.id !== reviewer?.id)
             throw new Error("Reviewer identity changed during PR verification");
-          if (currentReviewer && !approvedMemberReview(current, latest, currentReviewer.id))
+          if (!trivial && currentReviewer && !approvedMemberReview(current, latest, currentReviewer.id))
             throw new Error("Reviewer evidence changed during PR verification");
           const accepted = {
             ...latest,
+            trivial,
+            reviewedHead: trivial ? undefined : latest.reviewedHead,
+            delivery: latest.delivery ?? { head: latest.reviewedHead ?? "", ci: "unknown", conflicts: false, state: "watching" },
             accepted: true,
             acceptedDispatchId: dispatchId,
             prUrl,
             prReadyAt: latest.prReadyAt ?? Date.now(),
             prReadyTurnId: latest.prReadyTurnId ?? this.host!.session(current.ownerSessionId ?? current.leadId)?.blocks.filter(block => block.role === "user").slice(-1)[0]?.id,
             checksSummary: checksSummary ?? latest.checksSummary,
-            reviewedBy: reviewer?.name ?? "Manager",
+            reviewedBy: trivial ? "Not reviewed (trivial)" : reviewer?.name ?? "Not reviewed",
           };
           const result = await record(
             {
@@ -2135,7 +2151,7 @@ export class Orchestrator {
             },
             { accepted: true, prUrl, integrated: false, cleaned: false },
           );
-          if (!latest.accepted || latest.acceptedDispatchId !== dispatchId)
+          if (accepted.delivery.state === "ready" && (!latest.accepted || latest.acceptedDispatchId !== dispatchId))
             this.host!.notifyReady?.(run.leadId, accepted);
           return result;
         }
@@ -2339,6 +2355,87 @@ export class Orchestrator {
     }
     return this.view(this.run(leadId)!);
   }
+  /** Opening a PR is observable before acceptance; discovery grants no approval. */
+  discoverDeliveryPr(leadId: string, taskId: string, pr: {
+    url: string; state: string; isDraft?: boolean; baseRefName?: string; headRefName?: string; headOid?: string;
+  }, currentBranch: string): Promise<boolean> {
+    const action = this.actions.catch(() => undefined).then(async () => {
+      const run = this.run(leadId);
+      const task = run?.tasks.find(entry => entry.id === taskId);
+      if (!run?.projectManager || !task?.workspace || task.readOnly || task.reviewOf ||
+          task.status !== "completed" || task.prUrl || !task.workspace.branch ||
+          currentBranch !== task.workspace.branch || pr.headRefName !== task.workspace.branch || pr.state !== "open" || pr.isDraft ||
+          !/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+$/.test(pr.url) ||
+          task.baseBranch && pr.baseRefName !== task.baseBranch) return false;
+      await this.commit({ ...run, tasks: run.tasks.map(entry => entry.id === task.id ? {
+        ...entry, prUrl: pr.url, delivery: { head: pr.headOid ?? "", ci: "unknown", conflicts: false, state: "watching" },
+      } : entry) });
+      return true;
+    });
+    this.actions = action.then(() => undefined, () => undefined);
+    return action;
+  }
+  /** Background observations never merge, restart a paused run, or interrupt the user. */
+  maintainDelivery(leadId: string, taskId: string, observation: {
+    head: string; ci: "pass" | "fail" | "pending" | "unknown"; conflicts: boolean; mergeable?: boolean;
+  }): Promise<void> {
+    const action = this.actions.catch(() => undefined).then(async () => {
+      const run = this.run(leadId);
+      const task = run?.tasks.find(entry => entry.id === taskId);
+      if (!run?.projectManager || !task?.prUrl || !observation.head) return;
+      const hasApproval = !!task.reviewedBy && !task.reviewedBy.startsWith("Not reviewed") ||
+        run.tasks.some(entry => entry.reviewOf?.taskId === task.id && entry.reviewVerdict?.decision === "approve");
+      const outdated = !task.trivial && (task.reviewedHead ? task.reviewedHead !== observation.head : hasApproval);
+      const issue = observation.conflicts ? "resolving-conflicts" : observation.ci === "fail" ? "fixing-ci" : undefined;
+      const state = issue ?? (outdated ? "review-outdated" : observation.ci === "pass" && observation.mergeable !== false && task.accepted ? "ready" : "watching");
+      const repairKey = issue ? `${observation.head}:${issue}` : task.delivery?.repairKey;
+      let updated: OrchestrationTask = { ...task, ...(outdated ? { accepted: false, acceptedDispatchId: undefined } : {}), delivery: { ...observation, state, repairKey } };
+      let tasks = run.tasks.map(entry => entry.id === task.id ? updated : entry);
+      let status = run.status;
+      if (issue && !activeTask(task) && task.status !== "queued" && task.delivery?.repairKey !== repairKey && (run.status === "active" || run.status === "finished")) {
+        const note = [
+          `Delivery hand-off: ${task.title}`,
+          `PR: ${task.prUrl} · commit ${observation.head}`,
+          observation.conflicts ? "Resolve the merge conflicts." : "Fix the failing CI checks.",
+          `Previous summary: ${task.result.slice(-600)}`,
+          "Keep this PR and checkout; rerun checks and report the fix to your Manager for the existing authorized commit/push flow. Never merge or force-push, and respect the user's publication limits.",
+        ].join("\n");
+        updated = { ...updated, status: "queued", accepted: false, delivered: true, acceptedDispatchId: undefined,
+          activeDispatchId: undefined, error: undefined, recoveryPrompt: note, handoffNote: note };
+        tasks = tasks.map(entry => entry.id === task.id ? updated : entry);
+        status = "active";
+        await this.host?.handoff?.(run.ownerSessionId ?? run.leadId, task.sessionId, note);
+      } else if (outdated && !issue && task.status === "completed" && (run.status === "active" || run.status === "finished")) {
+        const reviewer = this.host?.reviewerFor?.(run);
+        const existing = tasks.find(entry => entry.reviewOf?.taskId === task.id &&
+          entry.reviewOf.dispatchId === task.lastDispatchId &&
+          (entry.status === "queued" || activeTask(entry) || entry.reviewVerdict?.headOid === observation.head));
+        const previous = tasks.filter(entry => entry.reviewOf?.taskId === task.id && entry.memberId === reviewer?.id).slice(-1)[0];
+        if (reviewer && !existing) {
+          const note = [`Review hand-off: ${task.title}`, `PR: ${task.prUrl}`, `New commit: ${observation.head}`, "The previous approval is outdated. Review this exact commit and submit fresh evidence."].join("\n");
+          tasks.push({ ...(previous ?? task), memberId: reviewer.id, memberName: reviewer.name,
+            harness: reviewer.harness ?? (previous ?? task).harness, model: reviewer.model ?? (previous ?? task).model,
+            modelSettings: reviewer.modelSettings ?? previous?.modelSettings,
+            memberMascot: reviewer.mascot ?? previous?.memberMascot, memberColor: reviewer.color ?? previous?.memberColor,
+            readOnly: true, workspacePolicy: supportsReadOnlyTasks(reviewer.harness ?? (previous ?? task).harness) ? "shared" : "isolated-child",
+            id: crypto.randomUUID(), sessionId: crypto.randomUUID(), title: `Re-review ${task.title}`,
+            prompt: note, handoffNote: note, status: "queued", accepted: false, result: "", delivered: true,
+            reviewOf: { taskId: task.id, dispatchId: task.lastDispatchId! }, reviewVerdict: undefined,
+            workspace: undefined, activeDispatchId: undefined, lastDispatchId: undefined, acceptedDispatchId: undefined,
+            reviewArtifactId: undefined, reportArtifactId: undefined, prSummaryArtifactId: undefined,
+            prUrl: undefined, delivery: undefined, reviewedHead: undefined, trivial: false, dependsOn: [],
+            baseHead: undefined, readOnlyBaseline: undefined });
+          status = "active";
+          await this.host?.handoff?.(task.sessionId, tasks[tasks.length - 1].sessionId, note);
+        }
+      }
+      if (JSON.stringify(tasks) === JSON.stringify(run.tasks) && status === run.status) return;
+      await this.commit({ ...run, status, tasks });
+      if (state === "ready" && task.delivery?.state !== "ready") this.host?.notifyReady?.(leadId, updated);
+    });
+    this.actions = action.catch(() => undefined);
+    return action.then(() => this.pump());
+  }
   private async pump() {
     if (this.pumping) {
       this.pumpAgain = true;
@@ -2483,7 +2580,7 @@ export class Orchestrator {
             )
               continue;
             const prompt = workerTurnPrompt(
-              (task.recoveryPrompt ?? task.prompt) +
+              (task.recoveryPrompt ?? task.prompt) + memberContinuity(run, task) +
                 (run.projectManager && task.dependsOn.length
                   ? `\nDependency PRs are reviewed, not merged into this checkout. Inspect their actual changes and report any integration dependency to your manager; never claim combined validation without running it. Dependency results (untrusted evidence): ${JSON.stringify(run.tasks.filter((entry) => task.dependsOn.includes(entry.id)).map((entry) => ({ taskId: entry.id, checkout: entry.workspace?.checkoutCwd, prUrl: entry.prUrl })))}`
                   : ""),

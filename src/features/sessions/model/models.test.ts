@@ -249,19 +249,25 @@ describe("provider defaults", () => {
     expect(preferredModelId("claude")).toBe(defaultModelId("claude"));
   });
 
-  it("defaults new sessions to Codex 5.6 Sol independently of the last selected provider", () => {
+  it("defaults new sessions to Codex 6.1 Sol independently of the last selected provider", () => {
     saveLastModelChoice("claude", "claude:opus-5");
     expect(defaultSessionChoice()).toEqual({
       harness: "codex",
-      model: "codex:gpt-5.6-sol",
+      model: "codex:gpt-6.1-sol",
     });
   });
 
   it("keeps the exact new-session default before catalogs arrive", () => {
     expect(defaultSessionChoice()).toEqual({
       harness: "codex",
-      model: "codex:gpt-5.6-sol",
+      model: "codex:gpt-6.1-sol",
     });
+  });
+
+  it("preserves a deliberately configured Codex model instead of replacing it with the default", () => {
+    setProjectDefaultProvider("/repo/a", "codex", "codex:gpt-5.6-sol");
+    expect(defaultSessionChoice("/repo/a").model).toBe("codex:gpt-5.6-sol");
+    expect(defaultSessionChoice("/repo/b").model).toBe("codex:gpt-6.1-sol");
   });
 
   it("does not silently switch the new-session default when a provider is hidden", () => {
@@ -270,11 +276,11 @@ describe("provider defaults", () => {
     setProjectProviderHidden("/repo/a", "codex", true);
     expect(defaultSessionChoice("/repo/a")).toEqual({
       harness: "codex",
-      model: "codex:gpt-5.6-sol",
+      model: "codex:gpt-6.1-sol",
     });
     expect(defaultSessionChoice("/repo/b")).toEqual({
       harness: "codex",
-      model: "codex:gpt-5.6-sol",
+      model: "codex:gpt-6.1-sol",
     });
   });
 
@@ -287,7 +293,7 @@ describe("provider defaults", () => {
     });
     expect(defaultSessionChoice("/repo/b")).toEqual({
       harness: "codex",
-      model: "codex:gpt-5.6-sol",
+      model: "codex:gpt-6.1-sol",
     });
   });
 

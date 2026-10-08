@@ -12,6 +12,8 @@ export function reviewedManagerPullRequest(task: OrchestrationTask, pr: GitPr | 
     throw new Error("Could not confirm an open non-draft PR for this worker branch. If it already exists, report the lookup failure; do not republish it or inspect credentials.");
   if (task.baseBranch && pr.baseRefName !== task.baseBranch)
     throw new Error(`This PR must target the project's assignment branch: ${task.baseBranch}.`);
+  if (!task.trivial && task.reviewedHead && pr.headOid && task.reviewedHead !== pr.headOid)
+    throw new Error("The PR commit changed after review; request a review of the current head");
   return pr.url;
 }
 
@@ -63,6 +65,7 @@ export function managerPrReady(
     task.prUrl &&
     task.lastDispatchId &&
     task.acceptedDispatchId === task.lastDispatchId &&
+    (!task.delivery || task.delivery.state === "ready") &&
     // Unknown is not closed. A different PR on the reused branch is not this review.
     (!pr || (pr.url === task.prUrl && pr.state === "open" && !pr.isDraft))
   );

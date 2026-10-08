@@ -128,6 +128,118 @@ async function saveTaskDocument(f: ReturnType<typeof setup>, task: Orchestration
   return artifact;
 }
 
+describe("delivery maintenance", () => {
+  it("hands the Reviewer's change summary to the implementer without starting a retry", async () => {
+    const f = setup();
+    f.host.reviewerFor = () => ({ id: "reviewer", name: "Reviewer" });
+    f.host.handoff = vi.fn(async () => {});
+    f.lead.busy = false;
+    f.manager.registerMonoEngine("lead", "lead", "manager-mono", "/repo");
+    await f.manager.start("lead", ["codex"], 2, undefined, true);
+    f.lead.busy = true;
+    await f.delegate(["src"], { member: "backend", memberName: "Backend", memberMascot: "ghost", memberColor: "#fff" });
+    await vi.waitFor(() => expect(f.completions.has(f.tasks()[0].sessionId)).toBe(true));
+    const implementer = f.tasks()[0];
+    f.completions.get(implementer.sessionId)!({ status: "completed", text: "Ready for review" });
+    await vi.waitFor(() => expect(f.tasks()[0].status).toBe("completed"));
+    await f.delegate(["."], { member: "reviewer", memberName: "Reviewer", memberMascot: "owl", memberColor: "#aaa", reviewTaskId: implementer.id });
+    await vi.waitFor(() => expect(f.completions.has(f.tasks()[1].sessionId)).toBe(true));
+    const reviewer = f.tasks()[1];
+    const artifact = await saveTaskDocument(f, reviewer, "review", "reviewer");
+    const verdict = { decision: "changes", notes: "Routing drops the query.\nPreserve repeated parameters.\nAdd the regression check.", artifactId: artifact.id };
+    await f.manager.recordReviewerResult(reviewer.sessionId, "changes", verdict);
+    await f.manager.recordReviewerResult(reviewer.sessionId, "changes", verdict);
+    expect(f.tasks()[0].handoffNote?.split("\n")).toHaveLength(5);
+    expect(f.tasks()[0].recoveryPrompt).toContain(verdict.notes);
+    expect(f.host.handoff).toHaveBeenCalledExactlyOnceWith(reviewer.sessionId, implementer.sessionId, f.tasks()[0].handoffNote);
+    expect(f.tasks()[0].status).toBe("completed");
+    expect(f.tasks()[0].accepted).toBe(false);
+  });
+  async function readyTask(trivial = false, accept = true) {
+    const f = setup();
+    f.lead.busy = false;
+    await f.manager.start("lead", ["codex"], 2, undefined, true);
+    f.lead.busy = true;
+    f.host.reviewedPullRequest = vi.fn(async () => "https://github.com/example/app/pull/1");
+    await f.delegate(["src"], { member: "backend", memberName: "Backend", memberMascot: "ghost", memberColor: "#fff", trivial });
+    await vi.waitFor(() => expect(f.completions.has(f.tasks()[0].sessionId)).toBe(true));
+    f.completions.get(f.tasks()[0].sessionId)!({ status: "completed", text: "Implemented routing\nChecks passed\nPR opened" });
+    await vi.waitFor(() => expect(f.tasks()[0].status).toBe("completed"));
+    if (accept) await f.call("review", { taskId: f.tasks()[0].id });
+    return f;
+  }
+  it("discovers an opened PR before review without approving or notifying", async () => {
+    const f = await readyTask(false, false);
+    f.host.notifyReady = vi.fn();
+    const task = f.tasks()[0];
+    task.baseBranch = "nour";
+    const pr = { url: "https://github.com/example/app/pull/1", state: "open", baseRefName: "nour", headRefName: task.workspace!.branch!, headOid: "opened" };
+    expect(await f.manager.discoverDeliveryPr("lead", task.id, { ...pr, baseRefName: "other" }, task.workspace!.branch!)).toBe(false);
+    expect(await f.manager.discoverDeliveryPr("lead", task.id, pr, "foreign-branch")).toBe(false);
+    expect(await f.manager.discoverDeliveryPr("lead", task.id, { ...pr, headRefName: "foreign-branch" }, task.workspace!.branch!)).toBe(false);
+    expect(await f.manager.discoverDeliveryPr("lead", task.id, pr, task.workspace!.branch!)).toBe(true);
+    expect(f.tasks()[0].prUrl).toBe(pr.url);
+    expect(f.tasks()[0].delivery?.state).toBe("watching");
+    expect(f.tasks()[0].accepted).toBe(false);
+    expect(f.host.notifyReady).not.toHaveBeenCalled();
+    await f.manager.maintainDelivery("lead", task.id, { head: "opened", ci: "fail", conflicts: false });
+    expect(f.tasks()[0].delivery?.state).toBe("fixing-ci");
+  });
+  it("queues CI repair to the original member once per failed head", async () => {
+    const f = await readyTask(true);
+    f.host.handoff = vi.fn(async () => {});
+    const id = f.tasks()[0].id;
+    const observation = { head: "a", ci: "fail" as const, conflicts: false };
+    await f.manager.maintainDelivery("lead", id, observation);
+    await f.manager.maintainDelivery("lead", id, observation);
+    expect(f.tasks()).toHaveLength(1);
+    expect(f.tasks()[0].memberId).toBe("backend");
+    expect(f.tasks()[0].delivery?.state).toBe("fixing-ci");
+    expect(f.tasks()[0].accepted).toBe(false);
+    expect(f.tasks()[0].handoffNote).toContain("Implemented routing");
+    expect(f.host.handoff).toHaveBeenCalledTimes(1);
+  });
+  it("marks an approval outdated and assigns an exact-head re-review once", async () => {
+    const f = await readyTask();
+    f.tasks()[0].reviewedHead = "old";
+    f.host.reviewerFor = () => ({ id: "reviewer", name: "Reviewer", harness: "codex", model: "codex:reviewer", mascot: "owl", color: "#123456" });
+    f.host.choices = () => [{ harness: "codex", models: [{ id: "codex:test", name: "Test" }, { id: "codex:reviewer", name: "Reviewer" }] }];
+    f.host.checkoutSnapshot = vi.fn(async () => ({ head: "base", fingerprint: "baseline", clean: true, commitsAhead: 0, baseDiff: false }));
+    const observation = { head: "new", ci: "pass" as const, conflicts: false };
+    await f.manager.maintainDelivery("lead", f.tasks()[0].id, observation);
+    await f.manager.maintainDelivery("lead", f.tasks()[0].id, observation);
+    expect(f.tasks()[0].accepted).toBe(false);
+    expect(f.tasks()[0].delivery?.state).toBe("review-outdated");
+    expect(f.tasks()).toHaveLength(2);
+    expect(f.tasks()[1].memberId).toBe("reviewer");
+    expect(f.tasks()[1].model).toBe("codex:reviewer");
+    expect(f.tasks()[1].memberMascot).toBe("owl");
+    expect(f.tasks()[1].readOnly).toBe(true);
+    expect(f.tasks()[1].prompt).toContain("new");
+  });
+  it("skips trivial reviews and keeps unknown mergeability out of ready", async () => {
+    const f = await readyTask(true);
+    expect(f.tasks()[0].reviewedBy).toBe("Not reviewed (trivial)");
+    await f.manager.maintainDelivery("lead", f.tasks()[0].id, { head: "new", ci: "pass", conflicts: false, mergeable: false });
+    expect(f.tasks()[0].delivery?.state).toBe("watching");
+    await f.manager.maintainDelivery("lead", f.tasks()[0].id, { head: "new", ci: "pass", conflicts: false, mergeable: true });
+    expect(f.tasks()[0].delivery?.state).toBe("ready");
+    expect(f.tasks()).toHaveLength(1);
+  });
+  it("treats legacy approvals without a reviewed commit as outdated on first observation", async () => {
+    const f = await readyTask();
+    f.tasks()[0].reviewedBy = "Reviewer";
+    f.tasks()[0].reviewedHead = undefined;
+    f.host.reviewerFor = () => ({ id: "reviewer", name: "Reviewer" });
+    f.host.checkoutSnapshot = vi.fn(async () => ({ head: "base", fingerprint: "baseline", clean: true, commitsAhead: 0, baseDiff: false }));
+    await f.manager.maintainDelivery("lead", f.tasks()[0].id, { head: "current", ci: "pass", conflicts: false, mergeable: true });
+    expect(f.tasks()[0].delivery?.state).toBe("review-outdated");
+    expect(f.tasks()[0].accepted).toBe(false);
+    expect(f.tasks()[0].acceptedDispatchId).toBeUndefined();
+    expect(f.tasks()[1].memberId).toBe("reviewer");
+  });
+});
+
 afterEach(() => {
   vi.useRealTimers();
 });
@@ -248,19 +360,23 @@ it("validates read-only mode and documents report closure in the Manager prompt"
   expect(workerTurnPrompt("Inspect", ["."], undefined, true)).toContain("omit tooling chatter");
 });
 
-it("lets a Manager run an investigation without hiring a Reviewer while retaining the code gate", async () => {
+it("lets a Manager run investigations and code work without hiring a Reviewer", async () => {
   const f = reportTaskFixture();
   f.lead.busy = false;
   f.manager.registerMonoEngine("lead", "lead", "manager-mono", "/repo");
   await f.manager.start("lead", ["codex"], 2, undefined, true);
-  await expect(f.delegate(["."])).rejects.toThrow("Hire an independent Reviewer");
+  await f.delegate(["."]);
+  await f.call("cancel", { taskId: f.tasks()[0].id });
   await f.delegate(["."], { readOnly: true });
-  await f.finish();
-  await expect(f.call("review", { taskId: f.tasks()[0].id, outcome: "accept-no-changes" })).rejects.toThrow("Save a report artifact");
-  const report = await saveTaskDocument(f, f.tasks()[0], "report");
-  await f.call("review", { taskId: f.tasks()[0].id, outcome: "accept-no-changes" });
-  expect(f.tasks()[0].accepted).toBe(true);
-  expect(f.tasks()[0].reportArtifactId).toBe(report.id);
+  await vi.waitFor(() => expect(f.completions.has(f.tasks()[1].sessionId)).toBe(true));
+  f.completions.get(f.tasks()[1].sessionId)!({ status: "completed", text: "Investigation findings" });
+  await vi.waitFor(() => expect(f.tasks()[1].status).toBe("completed"));
+  const task = f.tasks()[1];
+  await expect(f.call("review", { taskId: task.id, outcome: "accept-no-changes" })).rejects.toThrow("Save a report artifact");
+  const report = await saveTaskDocument(f, task, "report");
+  await f.call("review", { taskId: task.id, outcome: "accept-no-changes" });
+  expect(f.tasks()[1].accepted).toBe(true);
+  expect(f.tasks()[1].reportArtifactId).toBe(report.id);
 });
 
 it("keeps the original read-only baseline through retries instead of accepting a changed checkout", async () => {
@@ -480,23 +596,21 @@ describe("worker assignment prompts", () => {
     f.manager.run("lead")!.tasks[0].memberId = "reviewer";
     await expect(f.manager.recordReviewerResult(review.sessionId, "self", { decision: "approve", notes: "Self-approved" })).rejects.toThrow("independent Reviewer");
   });
-  it("requires a Reviewer on Mono teams before delegate and PR acceptance", async () => {
+  it("labels unreviewed work when a team has no Reviewer", async () => {
     const f = setup();
     f.lead.busy = false;
     f.manager.registerMonoEngine("lead", "lead", "manager-mono", "/repo");
     await f.manager.start("lead", ["codex"], 2, undefined, true);
     f.lead.busy = true;
-    await expect(f.delegate(["src"])).rejects.toThrow("Hire an independent Reviewer");
-    expect(f.tasks()).toHaveLength(0);
-    f.host.reviewerFor = () => ({ id: "reviewer", name: "Reviewer" });
     await f.delegate(["src"]);
     await vi.waitFor(() => expect(f.completions.has(f.tasks()[0].sessionId)).toBe(true));
     f.completions.get(f.tasks()[0].sessionId)!({ status: "completed", text: "Implemented" });
     await vi.waitFor(() => expect(f.tasks()[0].status).toBe("completed"));
     f.host.reviewerFor = () => undefined;
     f.host.reviewedPullRequest = vi.fn(async () => "https://github.com/example/app/pull/1");
-    await expect(f.call("review", { taskId: f.tasks()[0].id })).rejects.toThrow("cannot self-approve");
-    expect(f.host.reviewedPullRequest).not.toHaveBeenCalled();
+    await saveTaskDocument(f, f.tasks()[0], "pr-summary");
+    await f.call("review", { taskId: f.tasks()[0].id });
+    expect(f.tasks()[0].reviewedBy).toBe("Not reviewed");
   });
   it("requires an authenticated Reviewer verdict on the latest dispatch before the PR gate", async () => {
     const f = setup();
@@ -966,6 +1080,9 @@ describe("local orchestration", () => {
       prReadyAt: readyAt,
       prReadyTurnId: "ready-turn",
     });
+    expect(f.host.notifyReady).not.toHaveBeenCalled();
+    await f.manager.maintainDelivery("lead", task.id, { head: "ready-head", ci: "pass", conflicts: false, mergeable: true });
+    await f.manager.maintainDelivery("lead", task.id, { head: "ready-head", ci: "pass", conflicts: false, mergeable: true });
     expect(f.host.notifyReady).toHaveBeenCalledTimes(1);
     expect(f.tasks()[0].checksSummary).toBe(reviewInput.checks);
     expect(f.tasks()[0]).toMatchObject({

@@ -225,8 +225,9 @@ export function ProjectWorktrees({
         data?.worktrees ?? [],
         history,
         openSessions,
+        managerRuns,
       ),
-    [project, data, history, openSessions],
+    [project, data, history, openSessions, managerRuns],
   );
   const agents = new Map(liveAgents.map((agent) => [agent.id, agent]));
   const trees = data?.worktrees ?? [];

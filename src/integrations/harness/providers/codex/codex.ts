@@ -1,4 +1,5 @@
 import { TurnNotReadyError } from "../../core/types";
+import { IS_WIN } from "../../../../platform/tauri/platform";
 import { nativeModelId } from "../../../../features/sessions/model/models";
 import { sameProviderAccountId } from "../../../../features/providers/model/providerAccounts";
 import {
@@ -19,6 +20,7 @@ import {
 } from "../../core/child";
 import {
   asRecord,
+  codexAppServerArgs,
   buildThreadStartParams,
   buildTurnStartParams,
   buildTurnSteerParams,
@@ -603,7 +605,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   await spawnChild(
     input.sessionId,
     path,
-    ["app-server"],
+    codexAppServerArgs(readOnly, IS_WIN),
     input.cwd,
     {
       provider: "codex",

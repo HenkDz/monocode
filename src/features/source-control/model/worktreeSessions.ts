@@ -4,6 +4,7 @@ import { sameProjectPath } from "../../projects/model/recents";
 import { isEqualOrInside, pathKey } from "../../../shared/lib/paths";
 import type { Worktree } from "./worktrees";
 import { isProjectManager } from "../../orchestration/model/projectManager";
+import type { OrchestrationRun } from "../../orchestration/model/orchestrationState";
 
 /** Live rows override saved checkout bindings, including unsaved blank tabs. */
 export function worktreeSessionGroups(
@@ -11,7 +12,9 @@ export function worktreeSessionGroups(
   trees: readonly Worktree[],
   history: readonly SessionSummary[],
   openSessions: readonly SessionSummary[],
+  teamRuns: readonly OrchestrationRun[] = [],
 ) {
+  const teamWorkers = new Set(teamRuns.filter(run => run.ownerMonoId).flatMap(run => [...run.tasks.map(task => task.sessionId), ...(run.dispatches ?? []).map(dispatch => dispatch.sessionId)]));
   const rows = new Map(history.map((session) => [session.id, session]));
   for (const session of openSessions) {
     const saved = rows.get(session.id);
@@ -31,6 +34,7 @@ export function worktreeSessionGroups(
     if (
       !sameProjectPath(session.cwd, project) ||
       session.archived ||
+      teamWorkers.has(session.id) ||
       isProjectManager(session.id) ||
       (session.orchestrationLeadId && !isProjectManager(session.orchestrationLeadId)) ||
       session.worktreeRemoved

@@ -23,6 +23,8 @@ it("accepts only an open non-draft PR targeting the assignment's captured projec
   expect(() => reviewedManagerPullRequest(task, { ...pr, isDraft: true })).toThrow("non-draft");
   expect(() => reviewedManagerPullRequest(task, { ...pr, state: "closed" })).toThrow("open");
   expect(() => reviewedManagerPullRequest(task, null)).toThrow("lookup failure");
+  expect(() => reviewedManagerPullRequest({ ...task, reviewedHead: "old" }, { ...pr, headOid: "new" })).toThrow("commit changed");
+  expect(reviewedManagerPullRequest({ ...task, reviewedHead: "old", trivial: true }, { ...pr, headOid: "new" })).toBe(pr.url);
 });
 
 it("does not hide a new correction dispatch just because its previous PR merged", () => {

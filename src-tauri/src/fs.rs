@@ -1143,6 +1143,8 @@ pub async fn git_range_context(cwd: String) -> Result<GitRangeContext, String> {
 #[serde(rename_all = "camelCase")]
 pub struct GitPr {
     #[serde(default)]
+    pub head_ref_name: Option<String>,
+    #[serde(default)]
     pub base_ref_name: Option<String>,
     pub number: i64,
     pub title: String,
@@ -1150,6 +1152,10 @@ pub struct GitPr {
     pub state: String,
     #[serde(default)]
     pub is_draft: bool,
+    #[serde(default)]
+    pub head_oid: Option<String>,
+    #[serde(default)]
+    pub mergeable: Option<String>,
 }
 
 /// Latest pull request for the current branch, if `gh` can see one.
@@ -2682,7 +2688,7 @@ fn git_pr_status_for(root: &Path) -> Option<GitPr> {
             "--head",
             &branch,
             "--json",
-            "number,title,url,state,isDraft,headRepositoryOwner,baseRefName",
+            "number,title,url,state,isDraft,headRepositoryOwner,baseRefName,headRefName,headRefOid,mergeable",
             "--limit",
             "20",
             "--state",
@@ -4053,6 +4059,8 @@ fn parse_gh_pr_list(json: &str, owner: &str) -> Option<GitPr> {
         number: i64,
         #[serde(default, rename = "baseRefName")]
         base_ref_name: Option<String>,
+        #[serde(default, rename = "headRefName")]
+        head_ref_name: Option<String>,
         title: String,
         url: String,
         state: String,
@@ -4060,6 +4068,10 @@ fn parse_gh_pr_list(json: &str, owner: &str) -> Option<GitPr> {
         is_draft: bool,
         #[serde(default, rename = "headRepositoryOwner")]
         head_owner: Option<Owner>,
+        #[serde(default, rename = "headRefOid")]
+        head_oid: Option<String>,
+        #[serde(default)]
+        mergeable: Option<String>,
     }
     let rows: Vec<Row> = serde_json::from_str(json).ok()?;
     let mut best: Option<GitPr> = None;
@@ -4072,12 +4084,15 @@ fn parse_gh_pr_list(json: &str, owner: &str) -> Option<GitPr> {
             continue;
         }
         let pr = GitPr {
+            head_ref_name: row.head_ref_name,
             base_ref_name: row.base_ref_name,
             number: row.number,
             title: row.title,
             url: row.url,
             state: row.state.to_lowercase(),
             is_draft: row.is_draft,
+            head_oid: row.head_oid,
+            mergeable: row.mergeable,
         };
         if pr.state == "open" {
             return Some(pr);
@@ -7944,6 +7959,17 @@ mod tests {
         )
         .unwrap();
         assert_eq!(pr.base_ref_name.as_deref(), Some("v4"));
+    }
+
+    #[test]
+    fn pr_status_exposes_commit_and_conflicts_for_delivery() {
+        let pr = parse_gh_pr_list(
+            r#"[{"number":4,"title":"Fix","url":"https://example.invalid/4","state":"OPEN","headRefName":"work","headRefOid":"abc123","mergeable":"CONFLICTING","headRepositoryOwner":{"login":"owner"}}]"#,
+            "owner",
+        ).unwrap();
+        assert_eq!(pr.head_oid.as_deref(), Some("abc123"));
+        assert_eq!(pr.head_ref_name.as_deref(), Some("work"));
+        assert_eq!(pr.mergeable.as_deref(), Some("CONFLICTING"));
     }
 
     #[test]

@@ -3,6 +3,7 @@ import { act, createElement, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { MonoDetails } from "./MonoDetails";
+import { MonoActivityContent } from "./MonoActivityPanel";
 import { TitleBar } from "../../../app/shell/TitleBar";
 import type { MonoPanelTab } from "./monoPanelParts";
 import { resetHarnessModelOverlays, setHarnessModels } from "../../sessions/model/models";
@@ -54,7 +55,7 @@ it("shows and edits the agent's permission mode in Details", async () => {
   expect(onRuntimeModeChange).toHaveBeenCalledWith("supervised");
 });
 
-it("keeps member settings inside Details and org tools collapsed below the team view", async () => {
+it("keeps member settings inside Details and opens org tools as a subpage", async () => {
   setHarnessModels("codex", [{ id: "codex:gpt-5.4", harness: "codex", name: "GPT-5.4", settings: [
     { id: "reasoningEffort", label: "Reasoning", kind: "select", value: "high", options: [{ value: "high", label: "High" }] },
     { id: "serviceTier", label: "Service Tier", kind: "select", value: "default", options: [{ value: "default", label: "Standard" }] },
@@ -77,12 +78,79 @@ it("keeps member settings inside Details and org tools collapsed below the team 
     expect(specialty.classList.contains("truncate")).toBe(true);
     await act(async () => root.render(createElement(MonoDetails, { ...props, monoId: "m", tab: "activity", teamActivity: createElement("div", null, "Live team"), activity: { blocks: [], live: false } })));
     expect(container.textContent).toContain("Live team");
-    expect(container.querySelector("details")?.open).toBe(false);
+    expect(container.querySelector("details")).toBeNull();
+    expect(container.querySelector("[data-mono-work]")).toBeNull();
+    const showWork = [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Show work")!;
+    await act(async () => showWork.click());
+    expect(container.querySelector("[data-mono-work]")).not.toBeNull();
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-mono-work] [aria-label="Back"]')!.click());
+    expect(container.querySelector('[data-mono-work]')!.closest('[inert]')).not.toBeNull();
     await act(async () => root.render(createElement(MonoDetails, { ...props, monoId: "m", tab: "activity", teamActivity: createElement("div", null, "Live team"), toolActivityOpen: true, activity: { blocks: [], live: false } })));
-    expect(container.querySelector("details")?.open).toBe(true);
+    expect(container.querySelector('[data-mono-work]')!.closest('[inert]')).toBeNull();
   } finally { localStorage.removeItem("monocode:mono-roster"); }
 });
+
+it("opens Soul, Memory, Habits and Team as pages with a back action", async () => {
+  localStorage.setItem("monocode:mono-roster", JSON.stringify([
+    { id: "manager", role: "manager", projects: ["/repo"], mascot: "cat", color: "#6ba" },
+  ]));
+  try {
+    await act(async () => root.render(createElement(MonoDetails, {
+      open: true, monoId: "manager", cwd: "/repo", agent, state: { status: "idle" },
+      harness: "codex", model: "codex:gpt-5.4", modelSettings: {}, runtimeMode: "full-access",
+      onRuntimeModeChange: noop, onModelChange: noop, onModelSettingsChange: noop, onClose: noop,
+    })));
+    const navigation = container.querySelector("nav")!;
+    expect([...navigation.querySelectorAll("button")].map(button => button.getAttribute("aria-label"))).toEqual(["Soul", "Memory", "Habits", "Team"]);
+    expect(container.querySelector("details")).toBeNull();
+    for (const page of ["soul", "memory", "habits", "team"]) {
+      await act(async () => navigation.querySelector<HTMLButtonElement>(`[aria-label="${page[0].toUpperCase() + page.slice(1)}"]`)!.click());
+      const opened = container.querySelector(`[data-mono-${page}]`)!;
+      expect(opened).not.toBeNull();
+      expect(navigation.closest("[inert]")).not.toBeNull();
+      await act(async () => opened.querySelector<HTMLButtonElement>('[aria-label="Back"]')!.click());
+      expect(navigation.closest("[inert]")).toBeNull();
+    }
+  } finally { localStorage.removeItem("monocode:mono-roster"); }
+});
+
+it("opens full command output in one reader without inline error disclosures", async () => {
+  await act(async () => root.render(createElement(MonoActivityContent, {
+    blocks: [
+      { id: "failed", role: "tool", text: "npm run dev", tool: { kind: "shell", status: "failed", detail: "Error: listen EPERM\n    at Server.setupListenHandle", preview: { kind: "shell", output: "Error: listen EPERM\n    at Server.setupListenHandle" } } },
+      { id: "success", role: "tool", text: "git status", tool: { kind: "shell", status: "completed", detail: "git status --short", preview: { kind: "shell", output: "On branch main\nWorking tree clean" } } },
+    ], live: false,
+  })));
+  expect(container.textContent).not.toContain("Server.setupListenHandle");
+  await act(async () => container.querySelector<HTMLButtonElement>("button")!.click());
+  const reader = document.querySelector('[role="dialog"]')!;
+  expect(reader.textContent).toContain("Server.setupListenHandle");
+  expect(reader.querySelector('[data-mono-activity-block="failed"] pre')?.textContent).toBe("Error: listen EPERM\n    at Server.setupListenHandle");
+  expect(reader.textContent).toContain("On branch main");
+  expect(reader.querySelector('[data-mono-activity-block="success"] pre')?.textContent).toBe("git status --short\n\nOn branch main\nWorking tree clean");
+  expect(reader.querySelector('[aria-expanded]')).toBeNull();
+  expect(container.querySelectorAll("button")).toHaveLength(1);
+});
+
+it("keeps pending approvals actionable before opening the work reader", async () => {
+  const onApproval = vi.fn();
+  await act(async () => root.render(createElement(MonoActivityContent, {
+    blocks: [{ id: "pending", role: "tool", text: "npm run dev", tool: { kind: "shell", status: "pending" }, approval: { requestId: 42 } }],
+    live: true, onApproval,
+  })));
+  expect(document.querySelector('[role="dialog"]')).toBeNull();
+  const allow = [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Allow")!;
+  expect(allow).not.toBeNull();
+  await act(async () => allow.click());
+  expect(onApproval).toHaveBeenCalledWith(42, "allow");
+});
 beforeEach(() => {
+  const stored = new Map<string, string>();
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => stored.get(key) ?? null,
+    setItem: (key: string, value: string) => stored.set(key, value),
+    removeItem: (key: string) => stored.delete(key),
+  });
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal(
     "ResizeObserver",
@@ -177,8 +245,10 @@ it("switches Details and Activity in one sidebar and reopens the last-used tab",
   expect(tabButton("Details").getAttribute("aria-selected")).toBe("true");
   act(() => tabButton("Activity").click());
   expect(container.textContent).toContain("Working");
+  expect(container.querySelector('[data-mono-activity-block="call"]')).toBeNull();
+  act(() => [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Show work")!.click());
   expect(
-    container.querySelector('[data-mono-activity-block="call"]'),
+    document.querySelector('[role="dialog"] [data-mono-activity-block="call"]'),
   ).not.toBeNull();
   act(() =>
     container
@@ -221,8 +291,9 @@ it("keeps the last activity readable after the turn ends and supports keyboard t
   await render(false);
   expect(tabButton("Activity").getAttribute("aria-selected")).toBe("true");
   expect(container.textContent).toContain("Finished");
+  act(() => [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Show work")!.click());
   expect(
-    container.querySelector('[data-mono-activity-block="call"]'),
+    document.querySelector('[role="dialog"] [data-mono-activity-block="call"]'),
   ).not.toBeNull();
   expect(
     container

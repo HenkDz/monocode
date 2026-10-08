@@ -19,6 +19,7 @@ vi.mock("../../monos/ui/MonoComposer", () => ({
 }));
 vi.mock("./SessionReview", () => ({ SessionReview: probes.review }));
 vi.mock("../../inbox/model/githubTasks", () => ({
+  formatRelativeTime: vi.fn(() => "Just now"),
   githubPrDiff: vi.fn(async () => ({ additions: 5, deletions: 0, files: [] })),
 }));
 vi.mock("../../inbox/hooks/useGithubPrChecks", () => ({
@@ -235,15 +236,44 @@ it("routes a Mono footer activity click to its session and selected turn", () =>
   const pane = props();
   pane.session.blocks = [
     { id: "user", role: "user", text: "Inspect", durationMs: 23000 },
-    { id: "call", role: "tool", text: "ls", tool: { kind: "shell", status: "completed" } },
+    {
+      id: "call",
+      role: "tool",
+      text: "ls",
+      tool: { kind: "shell", status: "completed" },
+    },
     { id: "reply", role: "assistant", text: "Done" },
   ];
   const onShowMonoActivity = vi.fn();
-  act(() => root.render(createElement(SessionPane, { ...pane, onShowMonoActivity })));
-  act(() => container.querySelector<HTMLButtonElement>('[data-turn-actions] [aria-label="Show activity"]')!.click());
-  expect(onShowMonoActivity).toHaveBeenCalledWith("chat", "user", pane.session.blocks);
-  act(() => root.render(createElement(SessionPane, { ...pane, onShowMonoActivity, monoActivityTurnId: "user" })));
-  expect(container.querySelector('[data-turn-actions] [aria-label="Hide activity"]')?.getAttribute("aria-expanded")).toBe("true");
+  act(() =>
+    root.render(createElement(SessionPane, { ...pane, onShowMonoActivity })),
+  );
+  act(() =>
+    container
+      .querySelector<HTMLButtonElement>(
+        '[data-turn-actions] [aria-label="Show activity"]',
+      )!
+      .click(),
+  );
+  expect(onShowMonoActivity).toHaveBeenCalledWith(
+    "chat",
+    "user",
+    pane.session.blocks,
+  );
+  act(() =>
+    root.render(
+      createElement(SessionPane, {
+        ...pane,
+        onShowMonoActivity,
+        monoActivityTurnId: "user",
+      }),
+    ),
+  );
+  expect(
+    container
+      .querySelector('[data-turn-actions] [aria-label="Hide activity"]')
+      ?.getAttribute("aria-expanded"),
+  ).toBe("true");
 });
 
 it("routes launched sessions from a Mono footer to its session and turn", () => {
@@ -304,7 +334,8 @@ it("renders older replies immediately when scrolling up loads a Mono page", asyn
     hasNewer: true,
   });
   act(() => root.render(createElement(SessionPane, pane)));
-  const scroller = container.querySelector<HTMLDivElement>(".agent-transcript")!;
+  const scroller =
+    container.querySelector<HTMLDivElement>(".agent-transcript")!;
   await act(async () => {
     scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
   });

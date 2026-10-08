@@ -12,11 +12,15 @@ import { PixelMascot } from "../../projects/ui/PixelMascot";
 import { AgentMarkdown } from "../../sessions/ui/AgentMarkdown";
 import { formatRelativeTime } from "../../inbox/model/githubTasks";
 import { projectName } from "../../../shared/lib/paths";
-import { cardSession, openCardSession, subscribeCardSessions } from "../model/monoCards";
+import {
+  cardSession,
+  openCardSession,
+  subscribeCardSessions,
+} from "../model/monoCards";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { OrgArtifactLinks } from "../../artifacts/ui/OrgArtifactLinks";
+import { Modal } from "../../../shared/ui/Modal";
 
-const expandedCards = new Map<string, boolean>();
 const tones = {
   running:
     "border-l-accent [&_[data-task-status]]:bg-accent/10 [&_[data-task-status]]:text-accent",
@@ -43,9 +47,12 @@ export function MemberWorkLog({ member }: { member: Mono }) {
   );
   const statuses = usePrStatusCache();
   const actions = useContext(OrchestrationActions);
-  const [expanded, setExpanded] = useState(() => new Map(expandedCards));
+  const [openedTask, setOpenedTask] = useState<string>();
   const [, refresh] = useState(0);
-  useEffect(() => subscribeCardSessions(() => refresh(value => value + 1)), []);
+  useEffect(
+    () => subscribeCardSessions(() => refresh((value) => value + 1)),
+    [],
+  );
   const tasks = memberTasks(runs, member.id);
   const manager = findMono(member.reportsTo ?? ""),
     look = manager && monoLook(manager);
@@ -63,10 +70,12 @@ export function MemberWorkLog({ member }: { member: Mono }) {
         </p>
       )}
       {tasks.map((task) => {
-        const key = `${member.id}:${task.id}`,
-          needsYou = !!cardSession(task.sessionId)?.needsInput,
-          open = expanded.get(key) ?? needsYou;
-        const [label, tone] = managerTaskLifecycle(task, taskPrStatus(task, statuses), needsYou);
+        const needsYou = !!cardSession(task.sessionId)?.needsInput;
+        const [label, tone] = managerTaskLifecycle(
+          task,
+          taskPrStatus(task, statuses),
+          needsYou,
+        );
         const dispatch = runs
           .flatMap((run) => run.dispatches ?? [])
           .find(
@@ -76,6 +85,14 @@ export function MemberWorkLog({ member }: { member: Mono }) {
         const at = dispatch?.updatedAt ?? dispatch?.startedAt ?? task.prReadyAt;
         const cwd = task.workspace?.checkoutCwd;
         const prNumber = task.prUrl?.match(/\/pull\/(\d+)/)?.[1];
+        const links = [
+          { id: task.reportArtifactId, label: "Report" },
+          {
+            id: task.reviewArtifactId ?? task.reviewVerdict?.artifactId,
+            label: "Review",
+          },
+          { id: task.prSummaryArtifactId, label: "PR summary" },
+        ];
         const verdict =
           task.status === "completed" &&
           task.reviewVerdict?.dispatchId ===
@@ -88,21 +105,8 @@ export function MemberWorkLog({ member }: { member: Mono }) {
             data-member-task={task.id}
             className={`min-w-0 overflow-hidden rounded-xl border border-content/20 border-l-2 bg-content/5 font-sans text-xs shadow-sm ${tones[tone]}`}
           >
-            <button
-              type="button"
-              aria-expanded={open}
-              aria-controls={`member-task-${task.id}`}
-              className="flex w-full min-w-0 flex-wrap items-center gap-x-3 gap-y-2 p-3 text-left focus-visible:outline-accent"
-              onClick={() => {
-                const next = !open;
-                expandedCards.set(key, next);
-                setExpanded((current) => new Map(current).set(key, next));
-              }}
-            >
+            <div className="flex w-full min-w-0 flex-wrap items-center gap-x-3 gap-y-2 p-3 text-left focus-visible:outline-accent">
               <span className="flex min-w-0 flex-1 basis-52 items-center gap-2">
-                <span aria-hidden="true" className="shrink-0 text-content/50">
-                  {open ? "▾" : "▸"}
-                </span>
                 <strong
                   className="min-w-0 flex-1 truncate text-sm font-medium"
                   title={task.title}
@@ -165,72 +169,112 @@ export function MemberWorkLog({ member }: { member: Mono }) {
                   </time>
                 )}
               </span>
-            </button>
-            <OrgArtifactLinks monoId={member.id} links={[
-              { id: task.reportArtifactId, label: "Report" },
-              { id: task.reviewArtifactId ?? task.reviewVerdict?.artifactId, label: "Review" },
-              { id: task.prSummaryArtifactId, label: "PR summary" },
-            ]} />
-            {open && (
-              <div
-                id={`member-task-${task.id}`}
-                className="space-y-3 border-t border-content/10 p-3"
+              <button
+                type="button"
+                aria-haspopup="dialog"
+                className={`${button} shrink-0 bg-content/8 font-medium`}
+                onClick={() => setOpenedTask(task.id)}
               >
-                {cwd && (
-                  <p title={cwd} className="truncate font-mono text-content/60">
-                    {task.workspace?.branch || projectName(cwd)}
-                  </p>
-                )}
-                {!!task.checkoutBaseline?.inheritedChangedPaths?.length && <p className="text-content/60">Started with {task.checkoutBaseline.inheritedChangedPaths.length} inherited changes</p>}
-                {task.readOnly && <p className="text-content/60">Read-only task{task.readOnlyFallback ? ` · ${task.readOnlyFallback}` : ""}</p>}
-                <details>
-                  <summary className="w-fit cursor-pointer rounded text-content/60 focus-visible:outline-accent">
-                    Assignment
-                  </summary>
-                  <p className="mt-2 whitespace-pre-wrap break-words">
-                    {task.prompt}
-                  </p>
-                </details>
-                {task.result && !task.reportArtifactId && (
+                Open
+              </button>
+            </div>
+            <div className="px-3 pb-2">
+              <OrgArtifactLinks monoId={member.id} links={links} />
+            </div>
+            {openedTask === task.id && (
+              <Modal
+                title={task.title}
+                fitViewport
+                onClose={() => setOpenedTask(undefined)}
+              >
+                <div
+                  id={`member-task-${task.id}`}
+                  className="space-y-3 p-4 text-xs"
+                  onClickCapture={(event) => {
+                    if (
+                      event.target instanceof Element &&
+                      event.target.closest("[data-org-artifact]")
+                    )
+                      setOpenedTask(undefined);
+                  }}
+                >
+                  <OrgArtifactLinks monoId={member.id} links={links} />
+                  {cwd && (
+                    <p
+                      title={cwd}
+                      className="truncate font-mono text-content/60"
+                    >
+                      {task.workspace?.branch || projectName(cwd)}
+                    </p>
+                  )}
+                  {!!task.checkoutBaseline?.inheritedChangedPaths?.length && (
+                    <p className="text-content/60">
+                      Started with{" "}
+                      {task.checkoutBaseline.inheritedChangedPaths.length}{" "}
+                      inherited changes
+                    </p>
+                  )}
+                  {task.readOnly && (
+                    <p className="text-content/60">
+                      Read-only task
+                      {task.readOnlyFallback
+                        ? ` · ${task.readOnlyFallback}`
+                        : ""}
+                    </p>
+                  )}
                   <div>
-                    <div className="mb-2 text-content/60">Report</div>
-                    <AgentMarkdown
-                      className="agent-chat-bubble-md mono-run-report"
-                      text={task.result}
-                      streaming={false}
-                      cwd={cwd}
-                    />
+                    <h3 className="font-medium text-content/60">Assignment</h3>
+                    <p className="mt-2 whitespace-pre-wrap break-words">
+                      {task.prompt}
+                    </p>
                   </div>
-                )}
-                <div className="flex flex-wrap gap-1 border-t border-content/10 pt-2">
-                  <button
-                    type="button"
-                    className={button}
-                    onClick={() => openCardSession(task.sessionId)}
-                  >
-                    Open worker session
-                  </button>
-                  {cwd && (!task.readOnly || task.readOnlyFallback) && (
+                  {task.result && !task.reportArtifactId && (
+                    <div>
+                      <div className="mb-2 text-content/60">Report</div>
+                      <AgentMarkdown
+                        className="agent-chat-bubble-md mono-run-report"
+                        text={task.result}
+                        streaming={false}
+                        cwd={cwd}
+                      />
+                    </div>
+                  )}
+                  <div className="flex flex-wrap gap-1 border-t border-content/10 pt-2">
                     <button
                       type="button"
                       className={button}
-                      disabled={!actions?.openWorker}
-                      onClick={() => actions?.openWorker?.(task.sessionId)}
+                      onClick={() => {
+                        setOpenedTask(undefined);
+                        openCardSession(task.sessionId);
+                      }}
                     >
-                      Open worktree
+                      Open worker session
                     </button>
-                  )}
-                  {task.prUrl && (
-                    <button
-                      type="button"
-                      className={button}
-                      onClick={() => void openUrl(task.prUrl!)}
-                    >
-                      Open PR
-                    </button>
-                  )}
+                    {cwd && (!task.readOnly || task.readOnlyFallback) && (
+                      <button
+                        type="button"
+                        className={button}
+                        disabled={!actions?.openWorker}
+                        onClick={() => {
+                          setOpenedTask(undefined);
+                          actions?.openWorker?.(task.sessionId);
+                        }}
+                      >
+                        Open worktree
+                      </button>
+                    )}
+                    {task.prUrl && (
+                      <button
+                        type="button"
+                        className={button}
+                        onClick={() => void openUrl(task.prUrl!)}
+                      >
+                        Open PR
+                      </button>
+                    )}
+                  </div>
                 </div>
-              </div>
+              </Modal>
             )}
           </article>
         );

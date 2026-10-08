@@ -5,7 +5,11 @@ import { HARNESS_TITLE } from "../../sessions/model/session";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ManagerAvatar } from "./ManagerAvatar";
 import { PixelMascot } from "../../projects/ui/PixelMascot";
-import { githubPrDiff, type GithubPrDiff } from "../../inbox/model/githubTasks";
+import {
+  formatRelativeTime,
+  githubPrDiff,
+  type GithubPrDiff,
+} from "../../inbox/model/githubTasks";
 import { useGithubPrChecks } from "../../inbox/hooks/useGithubPrChecks";
 import { summarizePrChecks } from "../../inbox/model/githubPrChecks";
 import { parseGithubWorkItemUrl } from "../../sessions/model/sessionWorkItem";
@@ -26,6 +30,7 @@ import type {
   OrchestrationTask,
 } from "../model/orchestrationState";
 import { OrgArtifactLinks } from "../../artifacts/ui/OrgArtifactLinks";
+import { Modal } from "../../../shared/ui/Modal";
 
 export function ProjectManagerStatus({
   run,
@@ -51,7 +56,14 @@ export function ProjectManagerStatus({
         managerPrReady(task, taskPrStatus(task, statuses)),
       ),
     },
-    { label: "finished", tasks: run.tasks.filter(task => task.status === "cancelled" || managerTaskFinished(task, taskPrStatus(task, statuses))) },
+    {
+      label: "finished",
+      tasks: run.tasks.filter(
+        (task) =>
+          task.status === "cancelled" ||
+          managerTaskFinished(task, taskPrStatus(task, statuses)),
+      ),
+    },
   ];
   return (
     <nav
@@ -223,11 +235,25 @@ export function ReadyCard({
   state?: "Ready to merge" | "Merged" | "Closed" | "Sent back";
 }) {
   const [editing, setEditing] = useState(false);
+  const [open, setOpen] = useState(false);
   const actions = useContext(OrchestrationActions);
   const [message, setMessage] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string>();
-  const label = merged || state === "Closed" ? state ?? "Merged" : task.delivery?.state === "fixing-ci" ? "Fixing CI…" : task.delivery?.state === "resolving-conflicts" ? "Resolving conflicts…" : task.delivery?.state === "review-outdated" ? "Review outdated" : task.delivery?.state === "watching" ? task.delivery.ci === "pending" ? "Awaiting CI…" : "Checking delivery…" : state ?? (merged ? "Merged" : "Ready to merge");
+  const label =
+    merged || state === "Closed"
+      ? (state ?? "Merged")
+      : task.delivery?.state === "fixing-ci"
+        ? "Fixing CI…"
+        : task.delivery?.state === "resolving-conflicts"
+          ? "Resolving conflicts…"
+          : task.delivery?.state === "review-outdated"
+            ? "Review outdated"
+            : task.delivery?.state === "watching"
+              ? task.delivery.ci === "pending"
+                ? "Awaiting CI…"
+                : "Checking delivery…"
+              : (state ?? (merged ? "Merged" : "Ready to merge"));
   const target = parseGithubWorkItemUrl(task.prUrl || "");
   const repo = target?.repo || "";
   const number = target?.number || 0;
@@ -293,10 +319,10 @@ export function ReadyCard({
       id={`manager-review-${task.id}`}
       tabIndex={-1}
       aria-label={`${label}: ${task.title}`}
-      className="rounded-xl border border-content/20 bg-content/5 p-4 font-sans text-xs shadow-sm focus:outline-2 focus:outline-offset-2 focus:outline-accent"
+      className="min-w-0 rounded-xl border border-content/20 bg-content/5 p-3 font-sans text-xs focus:outline-2 focus:outline-offset-2 focus:outline-accent"
     >
       <div
-        className={`mb-2 flex items-center gap-2 font-medium ${label === "Merged" ? "text-violet-600 dark:text-violet-400" : label === "Ready to merge" ? "text-emerald-600 dark:text-emerald-400" : "text-content/60"}`}
+        className={`flex min-w-0 items-center gap-2 font-medium ${label === "Merged" ? "text-violet-600 dark:text-violet-400" : label === "Ready to merge" ? "text-emerald-600 dark:text-emerald-400" : "text-content/60"}`}
       >
         {task.memberMascot && task.memberColor ? (
           <PixelMascot
@@ -311,41 +337,25 @@ export function ReadyCard({
             status={label === "Ready to merge" ? "ready" : undefined}
           />
         )}
-        <span>{label}</span>
-      </div>
-      <h3 className="text-sm font-semibold text-content">{task.title}</h3>
-      <p className="mt-1 text-content/60">
-        {task.memberName ? `${task.memberName} · ` : ""}
-        {task.trivial ? "Not reviewed (trivial)" : task.delivery?.state === "review-outdated" ? "Approval outdated · re-review requested" : task.delivery && !task.reviewedBy ? "Awaiting review" : task.reviewedBy?.startsWith("Not reviewed") ? task.reviewedBy : `Reviewed by ${task.reviewedBy ?? "Manager"}`}
-      </p>
-      <p className="mt-2 text-[11px] text-content/60" aria-label="Delivery timeline">
-        Opened → CI {task.delivery?.ci === "pass" ? "✓" : task.delivery?.ci === "fail" ? "failed" : "pending"} → {task.trivial ? "Review skipped (trivial)" : task.delivery?.state === "review-outdated" ? "Review outdated" : task.reviewedBy && !task.reviewedBy.startsWith("Not reviewed") ? "Reviewed ✓" : "Review pending"} → {managerPrReady(task) ? "Ready" : "In progress"}
-      </p>
-      <div className="mt-1 flex min-w-0 items-center gap-1">
+        <span className="shrink-0 rounded-md bg-content/5 px-1.5 py-0.5">
+          {label}
+        </span>
+        <h3
+          className="min-w-0 flex-1 truncate text-sm font-medium text-content"
+          title={task.title}
+        >
+          {task.title}
+        </h3>
         <button
           type="button"
-          disabled={!actions?.openWorker}
-          onClick={() => actions?.openWorker?.(task.sessionId)}
-          title={task.workspace?.checkoutCwd}
-          className="truncate rounded font-mono text-[11px] text-content/60 hover:underline focus-visible:outline-accent"
+          aria-haspopup="dialog"
+          className={`${button} shrink-0 bg-content/8 font-medium text-content`}
+          onClick={() => setOpen(true)}
         >
-          {task.workspace?.branch}
-        </button>
-        <button
-          type="button"
-          aria-label="Go to worktree"
-          title="Go to worktree"
-          disabled={!actions?.openWorker}
-          onClick={() => actions?.openWorker?.(task.sessionId)}
-          className="rounded p-1 hover:bg-content/10 focus-visible:outline-accent"
-        >
-          <ArrowUpRight className="size-3.5" />
+          Open
         </button>
       </div>
-      <p className="mt-1 text-[11px] text-content/50">
-        {HARNESS_TITLE[task.harness]} · {task.model}
-      </p>
-      <div className="my-3 flex flex-wrap gap-2 text-content/80 [&>span]:rounded-md [&>span]:border [&>span]:border-content/10 [&>span]:px-2 [&>span]:py-1">
+      <div className="mt-2 flex min-w-0 flex-wrap items-center gap-2 text-content/80 [&>span]:rounded-md [&>span]:bg-content/5 [&>span]:px-1.5 [&>span]:py-0.5">
         <span>PR #{number || "?"}</span>
         <span>
           {diff ? (
@@ -383,111 +393,207 @@ export function ReadyCard({
               ? `✗ ${overall.failed} failed`
               : overall.description}
         </span>
+        {task.prReadyAt !== undefined && (
+          <time
+            dateTime={new Date(task.prReadyAt).toISOString()}
+            className="text-content/50"
+          >
+            {formatRelativeTime(new Date(task.prReadyAt).toISOString())}
+          </time>
+        )}
       </div>
-      <OrgArtifactLinks monoId={run.ownerMonoId} links={[
-        { id: task.reviewArtifactId, label: "Review" },
-        { id: task.prSummaryArtifactId, label: "PR summary" },
-      ]} />
-      <details className="text-content/75">
-        <summary className="cursor-pointer rounded py-1 focus-visible:outline-accent">
-          Manager's review
-        </summary>
-        <p className="mt-2 whitespace-pre-wrap leading-relaxed">
-          {task.checksSummary ||
-            (task.accepted ? "Manager accepted this result. See the conversation for review and checks." : "Delivery is being checked. Review and checks are available in the team conversation.")}
-        </p>
-      </details>
-      <div className="mt-2 flex flex-wrap gap-1">
-        <button
-          type="button"
-          className={`${button} bg-content font-medium text-background-base hover:bg-content/85`}
-          onClick={() =>
-            void openUrl(task.prUrl!).catch((reason) =>
-              setError(String(reason)),
-            )
-          }
-        >
-          Open PR
-        </button>
+      <OrgArtifactLinks
+        monoId={run.ownerMonoId}
+        links={[
+          { id: task.reviewArtifactId, label: "Review" },
+          { id: task.prSummaryArtifactId, label: "PR summary" },
+        ]}
+      />
+      {onNext && (
         <button
           type="button"
           className={button}
-          onClick={() =>
-            void openUrl(`${task.prUrl}/files`).catch((reason) =>
-              setError(String(reason)),
-            )
-          }
+          title="Next PR (Alt+Shift+N while reviewing cards)"
+          onClick={onNext}
         >
-          Open diff
+          Next
         </button>
-        {merged ? (
-          <button
-            type="button"
-            className={button}
-            disabled={!actions?.removeManagerWorktree || !task.workspace}
-            onClick={() => {
-              if (task.workspace)
-                void actions
-                  ?.removeManagerWorktree?.(run.cwd, task.workspace.checkoutCwd)
-                  .catch((reason) => setError(String(reason)));
+      )}
+      {open && (
+        <Modal title={task.title} fitViewport onClose={() => setOpen(false)}>
+          <div
+            className="space-y-3 p-4 text-xs"
+            onClickCapture={(event) => {
+              if (
+                event.target instanceof Element &&
+                event.target.closest("[data-org-artifact]")
+              )
+                setOpen(false);
             }}
           >
-            Remove worktree
-          </button>
-        ) : label === "Ready to merge" ? (
-          <button
-            type="button"
-            className={button}
-            disabled={pending}
-            aria-expanded={editing}
-            onClick={() => setEditing(!editing)}
-          >
-            Send back
-          </button>
-        ) : null}
-        {onNext && (
-          <button
-            type="button"
-            className={button}
-            title="Next PR (Alt+Shift+N while reviewing cards)"
-            onClick={onNext}
-          >
-            Next
-          </button>
-        )}
-      </div>
-      {editing && label === "Ready to merge" && (
-        <form
-          className="mt-2"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void sendBack();
-          }}
-        >
-          <label className="block text-content/60">
-            Changes to request
-            <textarea
-              autoFocus
-              rows={2}
-              value={message}
-              disabled={pending}
-              onChange={(event) => setMessage(event.target.value)}
-              className="mt-1 w-full resize-y rounded-md border border-stroke bg-transparent p-2 text-content focus-visible:outline-accent"
+            <p className="text-content/60">
+              {task.memberName ? `${task.memberName} · ` : ""}
+              {task.trivial
+                ? "Not reviewed (trivial)"
+                : task.delivery?.state === "review-outdated"
+                  ? "Approval outdated · re-review requested"
+                  : task.delivery && !task.reviewedBy
+                    ? "Awaiting review"
+                    : task.reviewedBy?.startsWith("Not reviewed")
+                      ? task.reviewedBy
+                      : `Reviewed by ${task.reviewedBy ?? "Manager"}`}
+            </p>
+            <p className="text-content/60" aria-label="Delivery timeline">
+              Opened → CI{" "}
+              {task.delivery?.ci === "pass"
+                ? "✓"
+                : task.delivery?.ci === "fail"
+                  ? "failed"
+                  : "pending"}{" "}
+              →{" "}
+              {task.trivial
+                ? "Review skipped (trivial)"
+                : task.delivery?.state === "review-outdated"
+                  ? "Review outdated"
+                  : task.reviewedBy &&
+                      !task.reviewedBy.startsWith("Not reviewed")
+                    ? "Reviewed ✓"
+                    : "Review pending"}{" "}
+              → {managerPrReady(task) ? "Ready" : "In progress"}
+            </p>
+            <div className="flex min-w-0 items-center gap-1">
+              <button
+                type="button"
+                disabled={!actions?.openWorker}
+                onClick={() => {
+                  setOpen(false);
+                  actions?.openWorker?.(task.sessionId);
+                }}
+                title={task.workspace?.checkoutCwd}
+                className="truncate rounded font-mono text-content/60 hover:underline focus-visible:outline-accent"
+              >
+                {task.workspace?.branch}
+              </button>
+              <button
+                type="button"
+                aria-label="Go to worktree"
+                title="Go to worktree"
+                disabled={!actions?.openWorker}
+                onClick={() => {
+                  setOpen(false);
+                  actions?.openWorker?.(task.sessionId);
+                }}
+                className="rounded p-1 hover:bg-content/10 focus-visible:outline-accent"
+              >
+                <ArrowUpRight className="size-3.5" />
+              </button>
+            </div>
+            <p className="text-content/50">
+              {HARNESS_TITLE[task.harness]} · {task.model}
+            </p>
+            <OrgArtifactLinks
+              monoId={run.ownerMonoId}
+              links={[
+                { id: task.reviewArtifactId, label: "Review" },
+                { id: task.prSummaryArtifactId, label: "PR summary" },
+              ]}
             />
-          </label>
-          <button
-            type="submit"
-            className={button}
-            disabled={pending || !message.trim()}
-          >
-            {pending ? "Sending…" : "Send to worker"}
-          </button>
-        </form>
-      )}
-      {error && (
-        <p role="alert" className="mt-2 text-red-400">
-          {error}
-        </p>
+            <div className="text-content/75">
+              <h3 className="font-medium">Manager's review</h3>
+              <p className="mt-2 whitespace-pre-wrap leading-relaxed">
+                {task.checksSummary ||
+                  (task.accepted
+                    ? "Manager accepted this result. See the conversation for review and checks."
+                    : "Delivery is being checked. Review and checks are available in the team conversation.")}
+              </p>
+            </div>
+            <div className="mt-2 flex flex-wrap gap-1">
+              <button
+                type="button"
+                className={`${button} bg-content font-medium text-background-base hover:bg-content/85`}
+                onClick={() =>
+                  void openUrl(task.prUrl!).catch((reason) =>
+                    setError(String(reason)),
+                  )
+                }
+              >
+                Open PR
+              </button>
+              <button
+                type="button"
+                className={button}
+                onClick={() =>
+                  void openUrl(`${task.prUrl}/files`).catch((reason) =>
+                    setError(String(reason)),
+                  )
+                }
+              >
+                Open diff
+              </button>
+              {merged ? (
+                <button
+                  type="button"
+                  className={button}
+                  disabled={!actions?.removeManagerWorktree || !task.workspace}
+                  onClick={() => {
+                    if (task.workspace)
+                      void actions
+                        ?.removeManagerWorktree?.(
+                          run.cwd,
+                          task.workspace.checkoutCwd,
+                        )
+                        .catch((reason) => setError(String(reason)));
+                  }}
+                >
+                  Remove worktree
+                </button>
+              ) : label === "Ready to merge" ? (
+                <button
+                  type="button"
+                  className={button}
+                  disabled={pending}
+                  aria-expanded={editing}
+                  onClick={() => setEditing(!editing)}
+                >
+                  Send back
+                </button>
+              ) : null}
+            </div>
+            {editing && label === "Ready to merge" && (
+              <form
+                className="mt-2"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void sendBack();
+                }}
+              >
+                <label className="block text-content/60">
+                  Changes to request
+                  <textarea
+                    autoFocus
+                    rows={2}
+                    value={message}
+                    disabled={pending}
+                    onChange={(event) => setMessage(event.target.value)}
+                    className="mt-1 w-full resize-y rounded-md border border-stroke bg-transparent p-2 text-content focus-visible:outline-accent"
+                  />
+                </label>
+                <button
+                  type="submit"
+                  className={button}
+                  disabled={pending || !message.trim()}
+                >
+                  {pending ? "Sending…" : "Send to worker"}
+                </button>
+              </form>
+            )}
+            {error && (
+              <p role="alert" className="mt-2 text-red-400">
+                {error}
+              </p>
+            )}
+          </div>
+        </Modal>
       )}
     </section>
   );

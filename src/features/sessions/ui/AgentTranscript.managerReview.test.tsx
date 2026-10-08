@@ -18,6 +18,7 @@ vi.mock("../../source-control/hooks/usePrStatus", async (original) => ({
   usePrStatusCache: () => view.statuses,
 }));
 vi.mock("../../inbox/model/githubTasks", () => ({
+  formatRelativeTime: vi.fn(() => "Just now"),
   githubPrDiff: vi.fn(async () => ({
     additions: 5,
     deletions: 1,

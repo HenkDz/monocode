@@ -267,6 +267,7 @@ function FactRow({
       <FactIcon dim={struck} />
       <span className="flex min-w-0 flex-1 flex-col">
         <span
+          title={text}
           className={`truncate text-[12px] leading-5 ${
             struck ? "text-content/35 line-through" : "text-content/85"
           }`}

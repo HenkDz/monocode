@@ -1,5 +1,6 @@
-import type { ComponentProps, ReactNode } from "react";
-import { workSummaryLine } from "../../sessions/model/transcriptActivity";
+import { useState, type ComponentProps, type ReactNode } from "react";
+import { needsApproval, workSummaryLine } from "../../sessions/model/transcriptActivity";
+import { Modal } from "../../../shared/ui/Modal";
 import { MonoActivityTrail } from "../../sessions/ui/AgentTranscript";
 import type { MonoLook } from "../model/mono";
 import { MonoSidebar, MonoSidebarHeader } from "./MonoSidebar";
@@ -32,8 +33,9 @@ export function MonoActivityPanel({
 
 /** The existing trail, reusable inside the tabbed Details panel. */
 export function MonoActivityContent(
-  trail: ComponentProps<typeof MonoActivityTrail>,
+  { readOutput = false, ...trail }: ComponentProps<typeof MonoActivityTrail>,
 ) {
+  const [showWork, setShowWork] = useState(false);
   // A settled turn sums up its work; a live one's steps speak for themselves.
   const summary = trail.live ? "" : workSummaryLine(trail.blocks);
   if (!trail.blocks.length) return <Empty>No activity yet.</Empty>;
@@ -56,7 +58,15 @@ export function MonoActivityContent(
         </p>
       </div>
       <div className="px-3 pb-4">
-        <MonoActivityTrail {...trail} />
+        {readOutput ? <MonoActivityTrail {...trail} readOutput /> : <>
+          {trail.blocks.some(needsApproval) && <MonoActivityTrail {...trail} blocks={trail.blocks.filter(needsApproval)} />}
+          <button type="button" onClick={() => setShowWork(true)} className="rounded-md px-2 py-1.5 text-xs text-content/60 hover:bg-content/5 hover:text-content focus-visible:outline-accent">Show work</button>
+          {showWork && <Modal title="This agent's work" onClose={() => setShowWork(false)} fitViewport>
+            <div className="p-4" onClickCapture={event => {
+              if (event.target instanceof Element && event.target.closest("[data-org-artifact]")) setShowWork(false);
+            }}><MonoActivityTrail {...trail} readOutput /></div>
+          </Modal>}
+        </>}
       </div>
     </div>
   );

@@ -26,9 +26,15 @@ export function MonoSidebar({
   const resize = useDragResize({
     min: kind === "artifact" ? 360 : MIN_WIDTH,
     max: () =>
-      kind === "artifact"
-        ? Math.min(840, Math.round(window.innerWidth * 0.58))
-        : Math.min(440, Math.round(window.innerWidth * 0.4)),
+      Math.min(
+        window.innerWidth - 24,
+        kind === "artifact"
+          ? Math.min(840, Math.max(360, Math.round(window.innerWidth * 0.58)))
+          : Math.min(
+              440,
+              Math.max(MIN_WIDTH, Math.round(window.innerWidth * 0.4)),
+            ),
+      ),
     defaultWidth: kind === "artifact" ? 560 : MIN_WIDTH,
     initial: kind === "artifact" ? rememberedArtifactWidth : rememberedWidth,
     direction: "left",

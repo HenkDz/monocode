@@ -399,17 +399,18 @@ export function ProjectWorktrees({
             </button>
           ) : <p className="mt-1 flex h-7 items-center px-5 text-[11px] text-content/50">Your worktrees</p>}
           <div
+            data-worktree-group-list
             hidden={!section.expanded}
             className={
               section.name === "Your worktrees"
                 ? ""
-                : "ml-7 border-l border-content/10 pl-1"
+                : "ml-3 pl-1"
             }
           >
             {section.groups.map(group => (
               <div key={group.name} role={group.name === "Finished" ? "group" : undefined} aria-label={group.name === "Finished" ? "Finished" : undefined}>
                 {group.name === "Finished" && group.trees.length > 0 && (
-                  <button type="button" aria-label="Toggle Finished worktrees" aria-expanded={doneExpanded} onClick={() => setDoneExpanded(!doneExpanded)} className="flex h-7 items-center gap-1 rounded px-2 text-[11px] text-content/50 hover:text-content focus-visible:outline-accent">
+                  <button type="button" aria-label="Toggle Finished worktrees" aria-expanded={doneExpanded} onClick={() => setDoneExpanded(!doneExpanded)} className="flex h-7 w-full items-center gap-1 rounded px-2 text-left text-[11px] text-content/50 hover:bg-content/5 hover:text-content focus-visible:outline-accent">
                     {doneExpanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
                     Finished · {group.trees.length}
                   </button>

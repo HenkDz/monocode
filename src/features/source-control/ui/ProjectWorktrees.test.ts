@@ -369,9 +369,9 @@ it("labels peer user worktrees, scopes the guide to collapsed task worktrees, an
     expect(your.querySelector('[data-worktree="/repo"]')).not.toBeNull();
     expect(your.querySelector('[class*="border-l"]')).toBeNull();
     expect(your.parentElement).toBe(queue.parentElement);
-    expect(queue.querySelector('[class*="border-l"]')).not.toBeNull();
+    expect(queue.querySelector('[class*="border-l"]')).toBeNull();
     expect(button("Toggle Task worktrees").getAttribute("aria-expanded")).toBe("false");
-    expect(queue.querySelector<HTMLDivElement>('[class*="border-l"]')?.hidden).toBe(true);
+    expect(queue.querySelector<HTMLDivElement>('[data-worktree-group-list]')?.hidden).toBe(true);
     await act(async () => button("Toggle Task worktrees").click());
     expect(
       [...queue.querySelectorAll("[data-worktree]")].filter(row => !row.closest('[aria-label="Finished"]')).map((row) =>

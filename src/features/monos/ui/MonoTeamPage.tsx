@@ -110,8 +110,8 @@ export function MonoTeamPage({
                     : select(member.id)
                 }
               >
-                <span className="block truncate">{look.name}</span>
-                <span className="block truncate text-xs text-content/50">
+                <span className="block truncate" title={look.name}>{look.name}</span>
+                <span className="block truncate text-xs text-content/50" title={`${member.specialty ?? "Manager"} · ${member.workerProfile?.model ?? fallback.model}`}>
                   {member.specialty ?? "Manager"} ·{" "}
                   {member.workerProfile?.model ?? fallback.model}
                 </span>
@@ -119,6 +119,7 @@ export function MonoTeamPage({
               {owner?.role === "manager" && (
                 <button
                   type="button"
+                  aria-label={`Remove ${look.name}`}
                   className="rounded px-2 py-1 text-xs text-content/50 hover:text-red-400"
                   onClick={() => void remove(member)}
                 >
@@ -283,7 +284,7 @@ export function MemberDetails({
         {tasks.length ? tasks.map(task => (
           <button key={task.id} type="button" onClick={() => openCardSession(task.sessionId)}
             className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-content/5 focus-visible:outline-accent">
-            <span className="min-w-0 flex-1 truncate">{task.title}</span><span className="text-content/50">{managerTaskLifecycle(task, taskPrStatus(task, statuses), sessions.get(task.sessionId)?.needsInput)[0]}</span>
+            <span className="min-w-0 flex-1 truncate" title={task.title}>{task.title}</span><span className="shrink-0 text-content/50">{managerTaskLifecycle(task, taskPrStatus(task, statuses), sessions.get(task.sessionId)?.needsInput)[0]}</span>
           </button>
         )) : <p className="text-xs text-content/50">No tasks yet. Your Manager assigns work here.</p>}
       </section>

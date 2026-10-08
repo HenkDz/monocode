@@ -1,5 +1,6 @@
 import { createPortal } from "react-dom";
 import { TeamMapNav } from "../../features/teamMap/navigation";
+import { openPullRequests } from "../../features/pullRequests/model/pullRequestView";
 import { NO_BRANCH_LABEL } from "../../features/source-control/model/worktrees";
 import {
   type WorktreeFocus,
@@ -328,6 +329,7 @@ type Props = {
   onGoToFile?: () => void;
   searchActive?: boolean;
   inboxActive?: boolean;
+  pullRequestsActive?: boolean;
   notesActive?: boolean;
   automationsActive?: boolean;
   notesEnabled?: boolean;
@@ -429,6 +431,7 @@ function SidebarComponent({
   onGoToFile,
   searchActive = false,
   inboxActive = false,
+  pullRequestsActive = false,
   notesActive = false,
   automationsActive = false,
   notesEnabled = true,
@@ -815,6 +818,7 @@ function SidebarComponent({
   const otherViewActive =
     searchActive ||
     inboxActive ||
+    pullRequestsActive ||
     notesActive ||
     automationsActive ||
     settingsOpen;
@@ -1766,6 +1770,7 @@ function SidebarComponent({
               onOpenTeamMap={onOpenTeamMap}
               searchActive={searchActive}
               inboxActive={inboxActive}
+          pullRequestsActive={pullRequestsActive}
               notesActive={notesActive}
               automationsActive={automationsActive}
               inboxUnseen={inboxUnseen}
@@ -2282,6 +2287,7 @@ function SidebarComponent({
           searchActive={searchActive}
           onOpenInbox={onOpenInbox}
           inboxActive={inboxActive}
+          pullRequestsActive={pullRequestsActive}
           onOpenNotificationSettings={onOpenNotificationSettings}
           onOpenNotes={notesEnabled ? onOpenNotes : undefined}
           notesActive={notesActive}
@@ -2300,6 +2306,7 @@ function SidebarComponent({
         <div className={railVisible ? "flex min-h-0 flex-col [&>nav]:min-h-0 [&>nav]:flex-1" : "hidden"}>
         {onOpenTeamMap && <TeamMapNav onOpen={onOpenTeamMap} />}
         <ProjectRail
+          sessions={sessions}
           visible={railVisible}
           cwd={cwd}
           recents={recents}
@@ -2316,6 +2323,7 @@ function SidebarComponent({
           searchActive={searchActive}
           onOpenInbox={onOpenInbox}
           inboxActive={inboxActive}
+          pullRequestsActive={pullRequestsActive}
           notesEnabled={notesEnabled}
           onOpenNotes={onOpenNotes}
           notesActive={notesActive}
@@ -2408,6 +2416,7 @@ function SidebarProjectPicker({
   onOpenTeamMap,
   searchActive = false,
   inboxActive = false,
+  pullRequestsActive = false,
   notesActive = false,
   automationsActive = false,
   inboxUnseen = false,
@@ -2427,6 +2436,7 @@ function SidebarProjectPicker({
   onOpenTeamMap?: () => void;
   searchActive?: boolean;
   inboxActive?: boolean;
+  pullRequestsActive?: boolean;
   notesActive?: boolean;
   automationsActive?: boolean;
   inboxUnseen?: boolean;
@@ -2489,6 +2499,7 @@ function SidebarProjectPicker({
             </span>
           </IconButton>
         ) : null}
+        <IconButton label="Pull requests" active={pullRequestsActive} onClick={() => openPullRequests()}><GitPullRequest className="size-3.5" strokeWidth={1.75} /></IconButton>
         {onOpenNotes ? (
           <IconButton label="Notes" active={notesActive} onClick={onOpenNotes}>
             <StickyNote className="size-3.5" strokeWidth={1.75} />
@@ -2538,6 +2549,7 @@ function CompactProjectRail({
   searchActive,
   onOpenInbox,
   inboxActive,
+  pullRequestsActive = false,
   onOpenNotificationSettings,
   onOpenNotes,
   notesActive,
@@ -2568,6 +2580,7 @@ function CompactProjectRail({
   searchActive: boolean;
   onOpenInbox?: () => void;
   inboxActive: boolean;
+  pullRequestsActive?: boolean;
   onOpenNotificationSettings?: (projectPath?: string) => void;
   onOpenNotes?: () => void;
   notesActive: boolean;
@@ -2607,6 +2620,7 @@ function CompactProjectRail({
   const workspaceActive =
     !searchActive &&
     !inboxActive &&
+    !pullRequestsActive &&
     !notesActive &&
     !automationsActive &&
     !monoViewActive;
@@ -2695,6 +2709,7 @@ function CompactProjectRail({
             setInboxMenu({ x, y });
           }}
         />
+        <CompactRailAction label="Pull requests" icon={GitPullRequest} active={pullRequestsActive} onClick={() => openPullRequests()} />
         {onOpenNotes ? (
           <CompactRailAction
             label="Notes"

@@ -56,9 +56,7 @@ import {
   CircleAlert,
   Check,
   GitBranch,
-  GitMerge,
   GitPullRequest,
-  GitPullRequestClosed,
   GitPullRequestDraft,
   Loader,
   MoreHorizontal,
@@ -66,7 +64,7 @@ import {
 } from "../../../shared/ui/icons";
 import { useProjectWorktrees } from "../hooks/useProjectWorktrees";
 import { usePrStatus, usePrStatusCache } from "../hooks/usePrStatus";
-import { usePullRequests, worktreePullRequests } from "../model/pullRequests";
+import { pullRequestLabel, usePullRequests, worktreePullRequests } from "../model/pullRequests";
 import { useWorktreeFocus } from "../model/worktreeFocus";
 import {
   worktreeProgress,
@@ -867,11 +865,17 @@ export function ProjectWorktrees({
               disabled: menu.tree.missing || !menu.tree.branch,
               description: menu.tree.missing ? "Worktree folder is missing" : !menu.tree.branch ? "No branch: this worktree is on a detached commit" : undefined,
             },
-            ...worktreePullRequests(menu.tree.path, prRecords).map(pr => ({
+            ...worktreePullRequests(menu.tree.path, prRecords).filter(pr => pr.state === "open").map(pr => ({
               kind: "item" as const,
               id: `pr-url:${pr.url}`,
               label: `${pr.state === "open" ? pr.isDraft ? "Draft" : "Open" : pr.state === "merged" ? "Merged" : "Closed"} PR #${pr.number}: ${pr.title}`,
             })),
+            ...(worktreePullRequests(menu.tree.path, prRecords).some(pr => pr.state !== "open") ? [{
+              kind: "item" as const,
+              id: "settled-prs",
+              label: "Merged / closed PRs",
+              submenu: worktreePullRequests(menu.tree.path, prRecords).filter(pr => pr.state !== "open").map(pr => ({ kind: "item" as const, id: `pr-url:${pr.url}`, label: `${pr.state === "merged" ? "Merged" : "Closed"} PR #${pr.number}: ${pr.title}` })),
+            }] : []),
             { kind: "item", id: "copy-path", label: "Copy path" },
             {
               kind: "item",
@@ -1208,39 +1212,14 @@ function WorktreePrIcon({
   tree: Worktree;
   enabled: boolean;
 }) {
-  const { pr, prs } = usePrStatus(tree.path, tree.branch, enabled && !tree.missing);
-  const mark =
-    pr?.state === "merged"
-      ? { Icon: GitMerge, color: "text-violet-400/90", label: "Merged" }
-      : pr?.state === "closed"
-        ? {
-            Icon: GitPullRequestClosed,
-            color: "text-rose-400/90",
-            label: "Closed",
-          }
-        : pr?.state === "open"
-          ? pr.isDraft
-            ? {
-                Icon: GitPullRequestDraft,
-                color: "text-content/50",
-                label: "Draft",
-              }
-            : {
-                Icon: GitPullRequest,
-                color: "text-emerald-400/90",
-                label: "Open",
-              }
-          : {
-              Icon: GitBranch,
-              color: "text-content/45",
-              label: "No PR status available",
-            };
-  const label = pr ? `${mark.label} PR #${pr.number}: ${pr.title}` : mark.label;
-  const allPrs = prs.map(item => `${item.state === "open" ? item.isDraft ? "Draft" : "Open" : item.state === "merged" ? "Merged" : "Closed"} PR #${item.number}: ${item.title}`).join("\n");
-  return (
-    <span className="flex shrink-0 items-center gap-1" role="img" aria-label={prs.length > 1 ? `${label} · ${prs.length} PRs` : label} title={allPrs || label}>
-      <mark.Icon className={`size-3 ${mark.color}`} />
-      {prs.length > 1 && <span className="text-[10px] text-content/50">{prs.length} PRs</span>}
-    </span>
-  );
+  const { prs } = usePrStatus(tree.path, tree.branch, enabled && !tree.missing);
+  const open = prs.filter(pr => pr.state === "open");
+  const pr = open[0];
+  const labels = open.map(pr => pullRequestLabel({ cwd: tree.path, pr, links: [], verifiedAt: 0 }));
+  const label = !pr ? "No open PR" : labels.includes("Checks failed") ? "checks failing" : labels.includes("Conflicts") ? "merge conflicts" : labels.every(label => label === "Ready to merge") ? "PR ready" : `${open.length} open ${open.length === 1 ? "PR" : "PRs"}`;
+  const Icon = pr ? pr.isDraft ? GitPullRequestDraft : GitPullRequest : GitBranch;
+  return <span className="flex shrink-0 items-center gap-1" role="img" aria-label={label} title={open.map(pr => `Open PR #${pr.number}: ${pr.title}`).join("\n") || label}>
+    <Icon className={`size-3 ${pr ? "text-emerald-400/90" : "text-content/45"}`} />
+    {pr && <span className="text-[10px] text-content/50">{label}</span>}
+  </span>;
 }

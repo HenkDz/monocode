@@ -63,6 +63,27 @@ it("shows a manager escalation without an external Inbox connection and opens it
   expect(open).toHaveBeenCalledExactlyOnceWith("project-manager-test");
 });
 
+it("opens a ready PR in the shared Pull requests view", async () => {
+  listInboxItems.mockResolvedValue({ items: [], errors: {} });
+  const open = vi.fn();
+  const request = vi.fn();
+  const urls = ["https://github.com/acme/app/pull/23"];
+  window.addEventListener("monocode:open-pull-requests", request);
+  try {
+    await act(async () => root.render(createElement(InboxView, {
+      cwd: "/tmp/app", recents: [], onAsk: async () => "", onAskRestart: async () => "",
+      onAskMount: () => {}, onOpenIntegrations: () => {}, onOpenSession: open,
+      managerQuestions: [{ id: "manager", project: "/tmp/app", question: "PR #23: Fix", kind: "ready", urls }],
+    })));
+    act(() => container.querySelector<HTMLButtonElement>('[aria-label="Manager questions"] button')!.click());
+    expect(request).toHaveBeenCalledOnce();
+    expect((request.mock.calls[0][0] as CustomEvent).detail).toEqual({ urls });
+    expect(open).not.toHaveBeenCalled();
+  } finally {
+    window.removeEventListener("monocode:open-pull-requests", request);
+  }
+});
+
 it("reports a failed mark-all write in Inbox and clears the error after retry", async () => {
   const item: InboxItem = {
     provider: "github", kind: "issue", repo: "acme/app", number: 42,

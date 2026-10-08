@@ -1,5 +1,4 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   cardSession,
   openCardSession,
@@ -32,7 +31,6 @@ export function MonoChatCard({
   useSyncExternalStore(monoManagerGoals.subscribe, monoManagerGoals.snapshot);
   useSyncExternalStore(orchestrator.subscribe, orchestrator.snapshot);
   const statuses = usePrStatusCache();
-  const [index, setIndex] = useState(0);
   const [, refresh] = useState(0);
   useEffect(
     () => subscribeCardSessions(() => refresh((value) => value + 1)),
@@ -75,19 +73,14 @@ export function MonoChatCard({
             .map((task) => ({ run, task }))
         : [];
     });
-    const item = ready[index % Math.max(1, ready.length)];
+    const item = ready[0];
     return item ? (
       <ReadyCard
         run={item.run}
         task={item.task}
         merged={false}
-        onNext={() => setIndex((value) => (value + 1) % ready.length)}
       />
-    ) : (
-      <div className="rounded-xl border border-content/15 p-3 text-xs text-content/60">
-        No PRs ready to review.
-      </div>
-    );
+    ) : null;
   }
   if (card.type === "dispatch" || card.type === "status")
     return (
@@ -168,22 +161,8 @@ export function MonoChatCard({
       </button>
     );
   }
-  if (card.type === "pr")
-    return (
-      <button
-        type="button"
-        className={`${button} border border-content/15 p-3`}
-        disabled={!card.repo}
-        onClick={() =>
-          void openUrl(
-            `https://github.com/${card.repo}/pull/${card.number}`,
-          ).catch(console.error)
-        }
-      >
-        PR #{card.number}
-        {card.note ? ` · ${card.note}` : ""}
-      </button>
-    );
+  // PR blocks join their turn's one derived reference summary.
+  if (card.type === "pr") return null;
   if (card.type === "choices")
     return (
       <div className="flex flex-wrap gap-2">

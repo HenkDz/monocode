@@ -30,8 +30,11 @@ import {
 import { DiscussionEmpty } from "./DiscussionEmpty";
 import { LinkedWorkItemUpdateNotice } from "../../inbox/ui/LinkedWorkItemUpdateNotice";
 import { SessionReview } from "./SessionReview";
-import { usePullRequests, prIdentity } from "../../source-control/model/pullRequests";
-import { PullRequestCard } from "../../source-control/ui/PullRequestCard";
+import { usePullRequests } from "../../source-control/model/pullRequests";
+import { buildPullRequestRows } from "../../pullRequests/model/pullRequestView";
+import { listMonos } from "../../monos/model/mono";
+import { SessionPrSummary } from "./SessionPrSummary";
+import { chatPrTurns } from "../model/chatPullRequests";
 import { PromptOutline } from "./PromptOutline";
 import {
   canCompactHarnessContext,
@@ -134,6 +137,7 @@ import { markLinkedSessionUpdateSeen } from "../../inbox/model/linkedSessionSeen
 import { RemoteSession } from "../../connections/ui/RemoteSession";
 import { isRemoteProjectPath } from "../../projects/model/recents";
 import type { HostSession } from "../../connections/model/protocol";
+import { SessionRightPanel } from "./SessionRightPanel";
 
 export type SessionPaneProps = {
   session: Session;
@@ -483,6 +487,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
   const quoteRequestId = useRef(0);
   const jumpVisibility = useTranscriptJumpVisibility();
   const [editingLastTurn, setEditingLastTurn] = useState(false);
+  const [sessionPanelOpen, setSessionPanelOpen] = useState(false);
   useEffect(() => {
     setEditingLastTurn(false);
   }, [session.id, editLastTurnSupported]);
@@ -584,8 +589,9 @@ const LocalSessionPane = memo(function LocalSessionPane({
     ownedRuns,
     monoTranscript.blocks,
   );
-  const sessionPrEntries = [...new Map(usePullRequests().filter(entry => entry.links.some(link => link.sessionId === session.id)).map(entry => [prIdentity(entry.pr.url), entry])).values()];
-  const prTurnIds = sessionPrEntries.flatMap(entry => entry.links.filter(link => link.sessionId === session.id).map(link => link.turnId));
+  const sessionPrEntries = buildPullRequestRows(usePullRequests(), { sessions: [session], runs: orchestrationRuns, roster: listMonos() }).filter(row => row.sessionIds.includes(session.id)).map(row => row.entry);
+  const prTurns = chatPrTurns(monoTranscript.blocks, sessionPrEntries.filter(entry => !ownedRuns.some(run => run.tasks.some(task => task.prUrl === entry.pr.url))), session.linkedWorkItem?.repo);
+  const prTurnIds = [...prTurns.keys()];
   const openReview = useCallback(
     async (taskId: string) => {
       const run = orchestrationRuns.find(
@@ -917,6 +923,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
       ) : null}
       <div className="flex min-h-0 min-w-0 flex-1">
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+          {!agent && !session.inboxAsk && <button type="button" aria-label="Show session PRs" aria-expanded={sessionPanelOpen} onClick={() => setSessionPanelOpen(value => !value)} className="absolute right-3 top-2 z-10 rounded px-2 py-1 text-xs text-content/50 hover:bg-content/8 hover:text-content focus-visible:outline-accent">PRs</button>}
           {ownedRuns.map((run) => (
             <ProjectManagerStatus
               key={run.leadId}
@@ -1151,10 +1158,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
                                 historical
                               />
                             ))}
-                            {sessionPrEntries.filter(entry => entry.links.some(link => link.sessionId === session.id && link.turnId === turnId) &&
-                              !ownedRuns.some(run => run.tasks.some(task => task.prUrl === entry.pr.url))).map(entry => (
-                              <div key={entry.pr.url} className="px-4 py-2"><PullRequestCard entry={entry} sessionId={session.id} /></div>
-                            ))}
+                            {prTurns.has(turnId) && <div className="px-4 py-1"><SessionPrSummary turn={prTurns.get(turnId)!} /></div>}
                           </>,
                         ]),
                       )
@@ -1327,6 +1331,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
             onOpenDiff={onOpenDiff}
           />
         </div>
+        {!agent && sessionPanelOpen && <SessionRightPanel key={session.id} session={session} onClose={() => setSessionPanelOpen(false)} />}
       </div>
     </div>
   );

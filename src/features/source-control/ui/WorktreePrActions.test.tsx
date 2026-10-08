@@ -228,6 +228,22 @@ it("reports merge queued when the returned forge state stays open", async () => 
   }
 });
 
+it("refuses a merge when another linked task loses its review during confirmation", async () => {
+  const initial = entry({}, true);
+  const view = await mount(initial);
+  try {
+    await view.click("Merge pull request");
+    await view.act(async () => view.model.recordPullRequest("/other-worktree", initial.pr, {
+      ...initial.links[0], sessionId: "other-worker", taskId: "other-task", acceptedHead: null,
+    }));
+    await view.click("Merge pull request", view.dialog());
+    expect(mocks.action).not.toHaveBeenCalled();
+    expect(view.dialog().textContent).toContain("Checks or review changed");
+  } finally {
+    await view.unmount();
+  }
+});
+
 it.each(["checks", "team"])(
   "refuses a merge after %s changes during confirmation",
   async (change) => {

@@ -712,6 +712,19 @@ describe("Checks tab user behavior", () => {
     openUrl.mockReset();
   });
 
+  it.each(["MERGED", "CLOSED"])("keeps %s neutral even when saved checks failed on an open PR", async state => {
+    invoke.mockImplementation(async command => {
+      if (command === "git_github_pr_checks") return { headOid: "abc123", state: "open", checks: [check({ state: "fail" })] };
+      throw new Error("No native bridge");
+    });
+    render(createElement(InboxDetail, {
+      item: { ...prItem, state, projectPath: "/tmp/web", provider: "github" },
+      cwd: "/tmp/web", projects: [], revision: 0, relatedSessions: [],
+    }));
+    await flush();
+    expect(container.querySelector(`button[role="tab"][aria-label="Checks: PR ${state.toLowerCase()}"]`)).not.toBeNull();
+  });
+
   it("loads checks on open in the inbox even while Summary is active", async () => {
     mockBackend();
     const checksCalls = () =>

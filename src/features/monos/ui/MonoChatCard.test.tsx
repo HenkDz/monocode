@@ -21,6 +21,19 @@ vi.mock("../../orchestration/ui/ProjectManagerReview", () => ({
   ReadyCard: () => null,
 }));
 
+it("leaves explicit PR blocks to the turn summary and hides empty ready cards", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const hydrate = vi.spyOn(monoManagerGoals, "hydrate").mockResolvedValue({ version: 1, goals: [], receipts: {} });
+  const goals = vi.spyOn(monoManagerGoals, "goals").mockReturnValue([]);
+  const host = document.createElement("div"), root = createRoot(host);
+  try {
+    await act(async () => root.render(<MonoChatCard monoId="empty-ready" blockId="old-pr" card={{ type: "pr", number: 1, repo: "example/repo" }} />));
+    expect(host.textContent).toBe("");
+    await act(async () => root.render(<MonoChatCard monoId="empty-ready" blockId="ready" card={{ type: "ready" }} />));
+    expect(host.querySelector("section, button")).toBeNull();
+  } finally { act(() => root.unmount()); hydrate.mockRestore(); goals.mockRestore(); vi.unstubAllGlobals(); }
+});
+
 it("shows delegated goals only for an Orchestrator with visible delegated goals", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const hydrate = vi

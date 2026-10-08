@@ -23,7 +23,8 @@ import { NewHabitPage } from "./NewHabitPage";
 import { MonoProjects } from "./MonoProjects";
 import { MonoSettingsPage } from "./MonoSettingsPage";
 import { MonoTeamPage, MemberDetails } from "./MonoTeamPage";
-import { findMono } from "../model/mono";
+import { findMono, listMonos } from "../model/mono";
+import { orgDescendants } from "../model/monoTeamActivity";
 import { habitActions, HabitsList, useHabits } from "./MonoHabits";
 import { MemoryPage, SoulPage } from "./MonoFilePages";
 import {
@@ -36,6 +37,8 @@ import { MonoActivityContent } from "./MonoActivityPanel";
 import { PanelStack, type StackPage } from "./PanelStack";
 import { MonoSidebar, MonoSidebarHeader } from "./MonoSidebar";
 import { ArchivedManagerConversation, ArchivedManagerConversations } from "./ArchivedManagerConversations";
+import { PullRequestsList } from "../../pullRequests/ui/PullRequestsList";
+import type { PullRequestContext } from "../../pullRequests/model/pullRequestView";
 
 /** A page opened directly from Details, or one habit inside its list. */
 type Route =
@@ -43,6 +46,8 @@ type Route =
   | { kind: "habit" | "archive"; id: string };
 
 type Props = {
+  sessions?: PullRequestContext["sessions"];
+  runs?: PullRequestContext["runs"];
   teamActivity?: ReactNode;
   toolActivityOpen?: boolean;
   tab?: MonoPanelTab;
@@ -51,6 +56,7 @@ type Props = {
   teamRequest?: number;
   open: boolean;
   monoId: string;
+  sessionId?: string;
   /** Its conversation's folder, which the model picker reads settings from. */
   cwd: string;
   agent: MonoLook;
@@ -73,6 +79,8 @@ type Props = {
  * soul and memory open directly as pages that slide over it.
  */
 export function MonoDetails({
+  sessions,
+  runs,
   teamActivity,
   toolActivityOpen,
   tab = "details",
@@ -81,6 +89,7 @@ export function MonoDetails({
   teamRequest,
   open,
   monoId,
+  sessionId,
   cwd,
   agent,
   state,
@@ -96,6 +105,11 @@ export function MonoDetails({
   windowControls,
 }: Props) {
   const panelId = useId();
+  const mono = findMono(monoId);
+  const roster = listMonos();
+  const orgIds = orgDescendants(roster, monoId);
+  const orgProjects = [...new Set(roster.filter(entry => orgIds.has(entry.id))
+    .flatMap(entry => [...entry.projects, ...(entry.managerProject ? [entry.managerProject] : [])]))];
   const files = useMonoFiles(monoId, state.status);
   const habits = useHabits(monoId, state.status);
   const actions = habitActions(monoId);
@@ -219,7 +233,7 @@ export function MonoDetails({
       windowControls={windowControls}
     >
       <MonoSidebarHeader
-        title={tab === "details" ? "Details" : "Activity"}
+        title={tab === "details" ? "Details" : tab === "activity" ? "Activity" : "PRs"}
         onClose={onClose}
       >
         {onTabChange ? (
@@ -236,7 +250,7 @@ export function MonoDetails({
         aria-labelledby={onTabChange ? `${panelId}-${tab}` : undefined}
         className="flex min-h-0 flex-1 flex-col"
       >
-        <PanelStack pages={tab === "details" ? pages : showWork && teamActivity ? [{
+        <PanelStack pages={tab === "details" ? pages : tab === "activity" && showWork && teamActivity ? [{
           key: "work",
           node: <div className="flex min-h-0 flex-1 flex-col" data-mono-work>
             <PageHeader title="This agent's work" onBack={() => setShowWork(false)} />
@@ -245,7 +259,15 @@ export function MonoDetails({
             </div>
           </div>,
         }] : []}>
-          {tab === "activity" ? (
+          {tab === "prs" ? (
+            <PullRequestsList compact sessions={sessions} runs={runs} scope={mono?.role === "manager"
+              ? { project: mono.managerProject ?? mono.projects[0] ?? cwd }
+              : mono?.role === "orchestrator"
+                ? { projects: orgProjects }
+                : mono?.role === "member"
+                  ? { monoId }
+                  : sessionId ? { sessionId } : { cwd }} />
+          ) : tab === "activity" ? (
             <div className="min-h-0 flex-1 overflow-y-auto">
             {teamActivity}
             {teamActivity ? <div className="border-t border-stroke p-3">

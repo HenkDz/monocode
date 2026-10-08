@@ -36,6 +36,7 @@ import {
   useRef,
   useState,
   type MouseEvent as ReactMouseEvent,
+  type ReactNode,
 } from "react";
 import { InboxFiltersMenu, INBOX_FILTER_MENU_WIDTH } from "./InboxFiltersMenu";
 import { InboxConnectMenu } from "./InboxConnectMenu";
@@ -387,7 +388,7 @@ type Props = {
   onRepairChecks?: CiRepairProps["onRepairChecks"];
   onRepairNotNeeded?: CiRepairProps["onRepairNotNeeded"];
   sessions?: readonly SessionSummary[];
-  managerQuestions?: readonly { id: string; key?: string; project: string; question: string; sourceLabel?: string; kind?: "decision" | "reply" | "ready" }[];
+  managerQuestions?: readonly { id: string; key?: string; project: string; question: string; sourceLabel?: string; kind?: "decision" | "reply" | "ready"; urls?: readonly string[] }[];
   onOpenSession?: (sessionId: string) => void | Promise<void>;
   /** Session-card destination to reveal after the Inbox list loads. */
   target?: LinkedWorkItem | null;
@@ -921,7 +922,9 @@ export function InboxView({
         {(["decision", "ready", "reply"] as const).map(kind => <div key={kind}>
         {managerQuestions.some(item => (item.kind ?? "decision") === kind) && <h2 className="px-2 py-1 text-xs font-medium text-content/60">{kind === "ready" ? "Ready to merge" : kind === "reply" ? "New replies" : "Needs your decision"}</h2>}
         {managerQuestions.filter(item => (item.kind ?? "decision") === kind).map(item => <button key={item.key ?? item.id} type="button"
-          onClick={() => void onOpenSession?.(item.id)}
+          onClick={() => item.kind === "ready" && item.urls
+            ? window.dispatchEvent(new CustomEvent("monocode:open-pull-requests", { detail: { urls: item.urls } }))
+            : void onOpenSession?.(item.id)}
           className="flex w-full flex-col gap-1 rounded-md p-2 text-left text-xs hover:bg-content/5 focus-visible:outline-accent">
           <span className="text-content/50">{item.sourceLabel ?? `${projectName(item.project)} · Manager`}</span><span className="line-clamp-2">{item.question}</span>
         </button>)}
@@ -1667,6 +1670,7 @@ export function InboxDetail({
   onRepairNotNeeded,
   onOpenSession,
   onItemChange,
+  prActions,
 }: {
   item: InboxItem;
   cwd: string;
@@ -1682,6 +1686,7 @@ export function InboxDetail({
   onRepairNotNeeded?: CiRepairProps["onRepairNotNeeded"];
   onOpenSession?: (sessionId: string) => void | Promise<void>;
   onItemChange?: (item: InboxItem) => void;
+  prActions?: ReactNode;
 }) {
   const detailLock = useLockOverscroll<HTMLDivElement>();
   const panel = mode === "panel";
@@ -1832,18 +1837,19 @@ export function InboxDetail({
   // Checks load as soon as a GitHub PR is open, whatever tab is active. The
   // panel passes revision 0, so its loads ride on mount and the identity key.
   const prChecksEnabled = githubKind === "pr";
+  const prState = item.state.trim().toLowerCase();
   const prChecksView = useGithubPrChecks({
     cwd: item.projectPath || cwd,
     repo: item.repo,
     number: item.number,
     enabled: prChecksEnabled,
-    open: isPr && item.state.trim().toLowerCase() === "open",
+    open: isPr && prState === "open",
     poll: visible && tab === "checks",
     revision,
   });
   const prChecksOverall = prChecksEnabled
     ? summarizePrChecks({
-        state: item.state === "merged" || item.state === "closed" ? item.state : prChecksView.checks?.state ?? item.state as "open" | undefined,
+        state: prState === "merged" || prState === "closed" ? prState : prChecksView.checks?.state ?? prState as "open" | undefined,
         loading: prChecksView.loading,
         error: prChecksView.error,
         checks: prChecksView.checks?.checks ?? null,
@@ -2498,14 +2504,14 @@ export function InboxDetail({
                     ) : null}
                   </>
                 ) : null}
-                {githubKind === "pr" ? (
+                {githubKind === "pr" ? (prActions ?? (
                   <GithubPrActions
                     item={item}
                     baseRef={baseRef}
                     headRef={headRef}
                     onChange={onItemChange}
                   />
-                ) : null}
+                )) : null}
                 {onDiscuss ? (
                   <button
                     type="button"

@@ -11,7 +11,8 @@ import { managerReviewTimeline } from "../../orchestration/model/projectManagerT
 import type { OrchestrationRun } from "../../orchestration/model/orchestrationState";
 import type { Block } from "../model/session";
 import { prStatusKey } from "../../source-control/hooks/usePrStatus";
-import { PullRequestCard } from "../../source-control/ui/PullRequestCard";
+import { SessionPrSummary } from "./SessionPrSummary";
+import { chatPrTurns } from "../model/chatPullRequests";
 import type { WorktreePr } from "../../source-control/model/pullRequests";
 
 const view = vi.hoisted(() => ({ statuses: new Map() }));
@@ -89,67 +90,17 @@ const initial: Block[] = [
   { id: "reply", role: "assistant", text: "The PR is ready." },
 ];
 
-it("keeps ordinary-session PR cards at their first turn while live status updates", async () => {
-  const entry: WorktreePr = {
-    cwd: "/repo-worktrees/ordinary",
-    verifiedAt: 1000,
-    pr: {
-      number: 910,
-      title: "Regular session fix",
-      url: "https://github.com/example/repo/pull/910",
-      state: "open",
-      checksStatus: "pending",
-    },
-    links: [
-      {
-        sessionId: "ordinary",
-        sessionTitle: "My session",
-        turnId: "first",
-        blockId: "reply",
-        at: 1000,
-      },
-    ],
-  };
-  const show = async (blocks: Block[], current: WorktreePr) => {
-    await act(async () =>
-      root.render(
-        <AgentTranscript
-          blocks={blocks}
-          inlineWork
-          turnAccessories={
-            new Map([
-              [
-                "first",
-                <PullRequestCard entry={current} sessionId="ordinary" />,
-              ],
-            ])
-          }
-        />,
-      ),
-    );
-  };
-  await show(initial, entry);
-  const card = host.querySelector<HTMLElement>("#session-pr-ordinary-910")!;
-  expect(
-    card
-      .closest("[data-transcript-turn]")
-      ?.getAttribute("data-transcript-turn"),
-  ).toBe("first");
-  const newer: Block[] = [
-    ...initial,
-    { id: "next", role: "user", text: "Another task", startedAt: 5000 },
-  ];
-  await show(newer, {
-    ...entry,
-    pr: { ...entry.pr, state: "merged", checksStatus: "success" },
-  });
-  expect(host.querySelector("#session-pr-ordinary-910")).toBe(card);
-  expect(card.textContent).toContain("Merged");
-  const next = host.querySelector('[data-transcript-turn="next"]')!;
-  expect(
-    card.compareDocumentPosition(next) & Node.DOCUMENT_POSITION_FOLLOWING,
-  ).toBeTruthy();
+it("renders existing ordinary transcripts as one chip per referencing turn without PR cards", async () => {
+  const entries: WorktreePr[] = [1, 2].map(number => ({ cwd: "/repo", links: [], verifiedAt: 1, pr: { number, title: "History", url: `https://github.com/example/repo/pull/${number}`, state: "merged" } }));
+  const blocks: Block[] = [{ id: "first", role: "user", text: "Cleanup report", startedAt: 100 }, { id: "report", role: "assistant", text: "PR #1 merged. PR #2 merged." }, { id: "next", role: "user", text: "yes", startedAt: 500 }, { id: "answer", role: "assistant", text: "Done." }];
+  await act(async () => root.render(<AgentTranscript blocks={blocks} inlineWork turnAccessories={new Map([...chatPrTurns(blocks, entries)].map(([id, turn]) => [id, <SessionPrSummary key={id} turn={turn} />]))} />));
+  const first = host.querySelector('[data-transcript-turn="first"]')!;
+  expect(first.textContent).toContain("2 PRs referenced · all merged");
+  expect(host.querySelector('[data-transcript-turn="next"]')!.textContent).not.toContain("PRs referenced");
+  expect(host.textContent).not.toContain("Open diff");
+  expect(host.querySelector("[id^=session-pr-]")).toBeNull();
 });
+
 async function render(blocks: Block[], current = run) {
   const accessories = new Map(
     [...managerReviewTimeline([current], blocks)].map(([id, runs]) => [
@@ -204,7 +155,7 @@ it("keeps the same ready card before a new turn and jumps from the ready count w
   await act(async () => count.click());
   expect(scroll).not.toHaveBeenCalled();
   expect(document.activeElement).toBe(card);
-  expect(card.className).toContain("focus:outline-accent");
+  expect(card.className).toContain("focus-visible:outline-accent");
 });
 
 it("updates merged, closed and sent-back state in the same historical card", async () => {
@@ -237,4 +188,15 @@ it("updates merged, closed and sent-back state in the same historical card", asy
       .find((button) => button.textContent === "0 ready")
       ?.getAttribute("disabled"),
   ).not.toBeNull();
+});
+
+it("cycles slim team PR lines from the focused task with Alt Shift N", async () => {
+  await render(initial, { ...run, tasks: [run.tasks[0], { ...run.tasks[0], id: "second", prUrl: "https://github.com/example/repo/pull/2" }] });
+  const first = host.querySelector<HTMLButtonElement>("#manager-review-docs")!;
+  const second = host.querySelector<HTMLButtonElement>("#manager-review-second")!;
+  first.focus();
+  await act(async () => first.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "n", altKey: true, shiftKey: true })));
+  expect(document.activeElement).toBe(second);
+  await act(async () => second.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "n", altKey: true, shiftKey: true })));
+  expect(document.activeElement).toBe(first);
 });

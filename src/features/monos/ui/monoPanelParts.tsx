@@ -27,7 +27,7 @@ import {
   type MonoFile,
 } from "../model/monoFiles";
 
-export type MonoPanelTab = "details" | "activity";
+export type MonoPanelTab = "details" | "activity" | "prs";
 
 export function MonoPanelTabs({
   active,
@@ -38,7 +38,7 @@ export function MonoPanelTabs({
   onChange: (tab: MonoPanelTab) => void;
   panelId: string;
 }) {
-  const tabs = ["details", "activity"] as const;
+  const tabs = ["details", "activity", "prs"] as const;
   return (
     <div
       role="tablist"
@@ -63,16 +63,14 @@ export function MonoPanelTabs({
               event.key === "Home"
                 ? "details"
                 : event.key === "End"
-                  ? "activity"
-                  : tab === "details"
-                    ? "activity"
-                    : "details";
+                  ? "prs"
+                  : tabs[(tabs.indexOf(tab) + (event.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length];
             onChange(next);
             document.getElementById(`${panelId}-${next}`)?.focus();
           }}
           className={`border-b-2 text-[13px] font-medium hover:text-content focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent ${active === tab ? "border-[var(--mono-color)] text-content" : "border-transparent text-content/60"}`}
         >
-          {tab === "details" ? "Details" : "Activity"}
+          {tab === "details" ? "Details" : tab === "activity" ? "Activity" : "PRs"}
         </button>
       ))}
     </div>

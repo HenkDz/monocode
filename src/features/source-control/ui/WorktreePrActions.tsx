@@ -36,6 +36,7 @@ export function WorktreePrActions({
     pullRequestReady(entry) &&
     !!pr.headOid &&
     !!pr.baseRefName &&
+    entry.links.every(link => !link.taskId || link.acceptedHead === pr.headOid) &&
     (!reviewTask ||
       (link?.taskId === reviewTask && link.acceptedHead === pr.headOid));
   const run = async (
@@ -54,6 +55,8 @@ export function WorktreePrActions({
       );
       if (
         !pullRequestReady(current) ||
+        pullRequests().some(item => prIdentity(item.pr.url) === prIdentity(pr.url) &&
+          item.links.some(link => link.taskId && link.acceptedHead !== confirmed.headOid)) ||
         (reviewTask &&
           (currentLink?.taskId !== reviewTask ||
             currentLink.acceptedHead !== confirmed.headOid))

@@ -147,6 +147,9 @@ export class MonoManagerGoals {
       ? (this.ledgers.get(id)?.goals ?? [])
       : [...this.ledgers.values()].flatMap((ledger) => ledger.goals);
   }
+  isCancelling(goalId: string): boolean {
+    return [...this.ledgers.values()].some(ledger => Object.values(ledger.receipts).some(receipt => receipt.pending?.cancel && receipt.pending.goalId === goalId));
+  }
   private serial<T>(fn: () => Promise<T>): Promise<T> {
     const next = this.tail.then(fn);
     this.tail = next.catch(() => undefined);

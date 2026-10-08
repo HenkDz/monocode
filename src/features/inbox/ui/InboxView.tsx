@@ -112,6 +112,8 @@ import {
   type LinkedWorkItem,
 } from "../../sessions/model/session";
 import type { SessionSummary } from "../../sessions/data/sessionStore";
+import { dedicatedMono, monoLook } from "../../monos/model/mono";
+import type { CheckRepair } from "./CheckRepairForm";
 import {
   inboxItemMatchesLinkedWorkItem,
   linkedWorkItemInboxKey,
@@ -360,11 +362,13 @@ function InboxDetailTab({
 }
 
 type CiRepairProps = {
+  onRepairNotNeeded?: CheckRepair["onNotNeeded"];
   repairSessions?: readonly SessionSummary[];
   onRepairChecks?: (
     item: InboxItem,
     request: CiRepairRequest,
     sessionId?: string,
+    managerMonoId?: string,
   ) => Promise<void>;
 };
 
@@ -381,6 +385,7 @@ type Props = {
   onStart?: (item: InboxItem, body?: string) => void | Promise<void>;
   repairSessions?: CiRepairProps["repairSessions"];
   onRepairChecks?: CiRepairProps["onRepairChecks"];
+  onRepairNotNeeded?: CiRepairProps["onRepairNotNeeded"];
   sessions?: readonly SessionSummary[];
   managerQuestions?: readonly { id: string; key?: string; project: string; question: string; sourceLabel?: string; kind?: "decision" | "reply" | "ready" }[];
   onOpenSession?: (sessionId: string) => void | Promise<void>;
@@ -403,6 +408,7 @@ export function InboxView({
   onStart,
   repairSessions,
   onRepairChecks,
+  onRepairNotNeeded,
   sessions = [],
   managerQuestions = [],
   onOpenSession,
@@ -1190,6 +1196,7 @@ export function InboxView({
               onStart={onStart}
               repairSessions={repairSessions}
               onRepairChecks={onRepairChecks}
+              onRepairNotNeeded={onRepairNotNeeded}
               onOpenSession={onOpenSession}
               onItemChange={updateInboxItem}
             />
@@ -1215,6 +1222,7 @@ export function InboxView({
 export function LinkedWorkItemPanel({
   repairSessions,
   onRepairChecks,
+  onRepairNotNeeded,
   onOpenSession,
   target,
   cwd,
@@ -1224,6 +1232,7 @@ export function LinkedWorkItemPanel({
 }: {
   repairSessions?: CiRepairProps["repairSessions"];
   onRepairChecks?: CiRepairProps["onRepairChecks"];
+  onRepairNotNeeded?: CiRepairProps["onRepairNotNeeded"];
   onOpenSession?: (sessionId: string) => void | Promise<void>;
   target: LinkedWorkItem;
   cwd: string;
@@ -1387,6 +1396,7 @@ export function LinkedWorkItemPanel({
               visible={visible}
               repairSessions={repairSessions}
               onRepairChecks={onRepairChecks}
+              onRepairNotNeeded={onRepairNotNeeded}
               onOpenSession={onOpenSession}
               onItemChange={setItem}
             />
@@ -1429,6 +1439,7 @@ function InboxDetailBody({
   onStart,
   repairSessions,
   onRepairChecks,
+  onRepairNotNeeded,
   onOpenSession,
   onItemChange,
 }: {
@@ -1441,6 +1452,7 @@ function InboxDetailBody({
   onStart?: (item: InboxItem, body?: string) => void | Promise<void>;
   repairSessions?: CiRepairProps["repairSessions"];
   onRepairChecks?: CiRepairProps["onRepairChecks"];
+  onRepairNotNeeded?: CiRepairProps["onRepairNotNeeded"];
   onOpenSession?: (sessionId: string) => void | Promise<void>;
   onItemChange?: (item: InboxItem) => void;
 }) {
@@ -1464,6 +1476,7 @@ function InboxDetailBody({
       onStart={onStart}
       repairSessions={repairSessions}
       onRepairChecks={onRepairChecks}
+      onRepairNotNeeded={onRepairNotNeeded}
       onOpenSession={onOpenSession}
       onItemChange={onItemChange}
     />
@@ -1651,6 +1664,7 @@ export function InboxDetail({
   onStart,
   repairSessions,
   onRepairChecks,
+  onRepairNotNeeded,
   onOpenSession,
   onItemChange,
 }: {
@@ -1665,6 +1679,7 @@ export function InboxDetail({
   onStart?: (item: InboxItem, body?: string) => void | Promise<void>;
   repairSessions?: CiRepairProps["repairSessions"];
   onRepairChecks?: CiRepairProps["onRepairChecks"];
+  onRepairNotNeeded?: CiRepairProps["onRepairNotNeeded"];
   onOpenSession?: (sessionId: string) => void | Promise<void>;
   onItemChange?: (item: InboxItem) => void;
 }) {
@@ -1828,6 +1843,7 @@ export function InboxDetail({
   });
   const prChecksOverall = prChecksEnabled
     ? summarizePrChecks({
+        state: item.state === "merged" || item.state === "closed" ? item.state : prChecksView.checks?.state ?? item.state as "open" | undefined,
         loading: prChecksView.loading,
         error: prChecksView.error,
         checks: prChecksView.checks?.checks ?? null,
@@ -2637,15 +2653,21 @@ export function InboxDetail({
                   item.projectPath
                     ? {
                         number: item.number,
+                        state: item.state?.toLocaleLowerCase() as "open" | "merged" | "closed" | undefined,
+                        onNotNeeded: onRepairNotNeeded,
                         onOpenSession,
+                        manager: (() => {
+                          const manager = dedicatedMono(item.projectPath);
+                          return manager ? { id: manager.id, ...monoLook(manager), role: "manager" as const } : undefined;
+                        })(),
                         sessions: (repairSessions ?? []).filter(
                           (session) =>
                             !session.archived &&
                             !session.orchestrationLeadId &&
                             sameProjectPath(session.cwd, item.projectPath),
                         ),
-                        onStart: (request, sessionId) =>
-                          onRepairChecks(item, request, sessionId),
+                        onStart: (request, sessionId, managerMonoId) =>
+                          onRepairChecks(item, request, sessionId, managerMonoId),
                       }
                     : undefined
                 }

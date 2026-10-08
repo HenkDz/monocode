@@ -34,6 +34,9 @@ import {
   githubActionsJobId,
   isHttpUrl,
   sortChecks,
+  groupPrChecks,
+  latestPrChecks,
+  githubCheckIdentity,
   type GithubPrCheck,
   type GithubPrChecksOverall,
   type GithubPrCheckState,
@@ -137,7 +140,7 @@ function selectedChecksStillFailed(
   const failures = new Map<string, number>();
   const identity = (check: GithubPrCheck) =>
     JSON.stringify([check.workflow, check.name, check.url]);
-  for (const check of current) {
+  for (const check of latestPrChecks(current)) {
     if (check.state !== "fail") continue;
     const key = identity(check);
     failures.set(key, (failures.get(key) ?? 0) + 1);
@@ -164,8 +167,10 @@ function PrCheckRow({
   repairItem,
   wideStatus,
   revealToken,
+  earlier = [],
 }: {
   check: GithubPrCheck;
+  earlier?: GithubPrCheck[];
   cwd: string;
   repo: string;
   headOid: string;
@@ -397,6 +402,34 @@ function PrCheckRow({
           <span className="size-6 shrink-0" aria-hidden="true" />
         )}
       </div>
+      {earlier.length ? (
+        <details className="ml-10 py-1 text-[11px] text-content/40">
+          <summary className="cursor-pointer">
+            Earlier attempts ({earlier.length})
+          </summary>
+          <ul
+            className="mt-1 space-y-1"
+            aria-label={`${check.name} earlier attempts`}
+          >
+            {earlier.map((attempt, index) => (
+              <li key={index} className="flex items-center gap-3">
+                <span>{checkStateLabel(attempt.state)}</span>
+                <span>{attempt.completedAt ?? attempt.startedAt}</span>
+                {isHttpUrl(attempt.url) ? (
+                  <button
+                    type="button"
+                    onClick={() => void openUrl(attempt.url!)}
+                    className="hover:text-content"
+                    aria-label={`View earlier ${check.name} attempt ${index + 1} on GitHub`}
+                  >
+                    View log
+                  </button>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
       {expanded ? (
         <div
           id={detailsId}
@@ -516,7 +549,9 @@ export function InboxPrChecks({
   repair?: CheckRepair;
 }) {
   const { checks, loading, refreshing, error, stale } = view;
-  const repairGroups = useCheckRepairs(cwd, repo, repair?.number, view);
+  const prState = repair?.state === "merged" || repair?.state === "closed" ? repair.state : checks?.state ?? repair?.state;
+  const terminal = prState === "merged" || prState === "closed";
+  const repairGroups = useCheckRepairs(cwd, repo, repair?.number, view, prState);
   const revealScope = JSON.stringify([
     cwd,
     repo,
@@ -539,6 +574,7 @@ export function InboxPrChecks({
   } | null>(null);
   const selectionValid = Boolean(
     selection &&
+      !terminal &&
       checks &&
       selection.scope === revealScope &&
       selectedChecksStillFailed(selection.checks, checks.checks),
@@ -572,10 +608,11 @@ export function InboxPrChecks({
       </div>
     );
   }
-  const rows = checks ? sortChecks(checks.checks) : [];
+  const attemptGroups = checks ? groupPrChecks(checks.checks) : [];
+  const rows = sortChecks(attemptGroups.map(group => group.latest));
   const counts = countChecks(rows);
   const attention =
-    counts.fail + counts.pending + counts.cancel + counts.unknown;
+    terminal ? 0 : counts.fail + counts.pending + counts.cancel + counts.unknown;
   const activeFilter = attention ? filter : "all";
   const groups = CHECK_STATES.map((state) => ({
     state,
@@ -585,7 +622,7 @@ export function InboxPrChecks({
       !showOthers &&
       (state === "pass" || state === "skipping"),
   }));
-  const headline = counts.fail
+  const headline = terminal ? `PR ${prState}` : counts.fail
     ? `${counts.fail} ${counts.fail === 1 ? "check needs" : "checks need"} a fix`
     : counts.pending
       ? `${counts.pending} ${counts.pending === 1 ? "check is" : "checks are"} running`
@@ -618,7 +655,7 @@ export function InboxPrChecks({
           ) : null}
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          {repair && rows.some((row) => row.state === "fail") ? (
+          {repair && !terminal && rows.some((row) => row.state === "fail") ? (
             <button
               ref={allFixRef}
               type="button"
@@ -710,7 +747,7 @@ export function InboxPrChecks({
           >
             {(
               [
-                ["attention", "Needs attention", attention],
+                ...(!terminal ? [["attention", "Needs attention", attention] as const] : []),
                 ["all", "All checks", rows.length],
               ] as const
             ).map(([value, label, count]) => (
@@ -733,7 +770,7 @@ export function InboxPrChecks({
             ))}
           </div>
           <span className="text-[10px] text-content/40 @max-[420px]/checks:hidden">
-            {counts.fail ? "Failures first" : ""}
+            {!terminal && counts.fail ? "Failures first" : ""}
           </span>
         </div>
       ) : null}
@@ -775,6 +812,7 @@ export function InboxPrChecks({
                           ).length,
                       ])}
                       check={check}
+                      earlier={attemptGroups.find(group => githubCheckIdentity(group.latest) === githubCheckIdentity(check))?.earlier}
                       wideStatus={repairGroups.length > 0}
                       revealToken={
                         revealed?.scope === revealScope &&
@@ -790,6 +828,7 @@ export function InboxPrChecks({
                       }
                       onFix={
                         repair &&
+                        !terminal &&
                         check.state === "fail"
                           ? (anchor) =>
                               setSelection({
@@ -806,6 +845,7 @@ export function InboxPrChecks({
                       headOid={checks?.headOid ?? ""}
                       autoExpand={
                         repairGroups.length === 0 &&
+                        !terminal &&
                         check === rows.find((row) => row.state === "fail")
                       }
                       refreshToken={checks}

@@ -1,4 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
+import {
+  groupGithubChecks,
+  githubActionsSuiteId,
+} from "../../../shared/model/githubChecks";
+export { githubCheckIdentity } from "../../../shared/model/githubChecks";
 
 export type GithubPrCheckState =
   "pass" | "fail" | "pending" | "skipping" | "cancel" | "unknown";
@@ -10,12 +15,29 @@ export type GithubPrCheck = {
   url: string | null;
   startedAt: string | null;
   completedAt: string | null;
+  kind?: string;
+  app?: string;
+  context?: string;
+  runAttempt?: number | null;
+  suiteId?: number | null;
 };
 
 export type GithubPrChecks = {
   headOid: string;
+  state?: "open" | "merged" | "closed";
   checks: GithubPrCheck[];
 };
+
+export function groupPrChecks(checks: readonly GithubPrCheck[]) {
+  return groupGithubChecks(checks.map(check => ({
+    ...check,
+    suiteId: check.suiteId ?? githubActionsSuiteId(check.url),
+  })));
+}
+
+export function latestPrChecks(checks: readonly GithubPrCheck[]): GithubPrCheck[] {
+  return groupPrChecks(checks).map(group => group.latest);
+}
 
 export type GithubCheckDetails = {
   steps: {
@@ -108,7 +130,10 @@ export function countChecks(
     cancel: 0,
     unknown: 0,
   };
-  for (const check of checks) counts[check.state] += 1;
+  const rows = checks.every(check => "name" in check && "workflow" in check)
+    ? latestPrChecks(checks as readonly GithubPrCheck[])
+    : checks;
+  for (const check of rows) counts[check.state] += 1;
   return counts;
 }
 
@@ -140,7 +165,11 @@ export function summarizePrChecks(input: {
   loading: boolean;
   error: string | null;
   checks: readonly GithubPrCheck[] | null;
+  state?: string;
 }): GithubPrChecksOverall {
+  if (input.state === "merged" || input.state === "closed") {
+    return { kind: "neutral", description: `PR ${input.state}` };
+  }
   if (input.loading) {
     return { kind: "loading", description: "Loading checks" };
   }

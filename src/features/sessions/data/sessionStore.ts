@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { forgetSessionPullRequests } from "../../source-control/model/pullRequests";
 import { parseCard } from "../../monos/model/monoCards";
 import { isMonoSession } from "../../monos/model/mono";
+import { archiveLegacyManagerSessions, isLegacyManagerSession } from "../../monos/model/legacyManagerSessions";
 import { sanitizeMonoSpawnedSessions } from "../../monos/model/monoSpawnedSessions";
 import {
   isWeakToolTitle,
@@ -503,7 +504,7 @@ export async function listSessionsByProject(
   const rows = await invoke<SessionSummary[]>("session_list_by_project", {
     cwd: normalizeProjectPath(cwd),
   });
-  return rows.map(normalizeSummary);
+  return (await archiveLegacyManagerSessions(rows, id => setSessionArchived(id, true))).map(normalizeSummary);
 }
 
 export function rebaseProjectSessions(
@@ -518,7 +519,15 @@ export function rebaseProjectSessions(
 
 export async function listLinkedSessions(): Promise<SessionSummary[]> {
   const rows = await invoke<SessionSummary[]>("session_list_linked");
-  return rows.map(normalizeSummary);
+  return (await archiveLegacyManagerSessions(rows, id => setSessionArchived(id, true))).map(normalizeSummary);
+}
+
+export async function migrateLegacyManagerConversations(folders: readonly string[], home?: string): Promise<SessionSummary[]> {
+  const migrated = await Promise.all([...new Set(["~", ...(home ? [home] : []), ...folders])].map(async cwd => {
+    const rows = await invoke<SessionSummary[]>("session_list_by_project", { cwd });
+    return archiveLegacyManagerSessions(rows, id => setSessionArchived(id, true), home);
+  }));
+  return migrated.flat().filter(session => isLegacyManagerSession(session, undefined, home)).map(normalizeSummary);
 }
 
 export type SessionSearchHit = {
@@ -1422,7 +1431,7 @@ function normalizeSummary(summary: SessionSummary): SessionSummary {
     ...(summary.repo ? { repo: summary.repo } : {}),
     additions: summary.additions ?? 0,
     deletions: summary.deletions ?? 0,
-    archived: summary.archived || undefined,
+    archived: summary.archived || isLegacyManagerSession(summary) || undefined,
     pinned: summary.pinned || undefined,
     draft: summary.draft || undefined,
     sidebarHidden: summary.sidebarHidden === true || undefined,

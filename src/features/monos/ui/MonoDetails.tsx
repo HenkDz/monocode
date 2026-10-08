@@ -35,11 +35,12 @@ import {
 import { MonoActivityContent } from "./MonoActivityPanel";
 import { PanelStack, type StackPage } from "./PanelStack";
 import { MonoSidebar, MonoSidebarHeader } from "./MonoSidebar";
+import { ArchivedManagerConversation, ArchivedManagerConversations } from "./ArchivedManagerConversations";
 
 /** A page opened directly from Details, or one habit inside its list. */
 type Route =
   | { kind: "habits" | "soul" | "memory" | "new-habit" | "team" }
-  | { kind: "habit"; id: string };
+  | { kind: "habit" | "archive"; id: string };
 
 type Props = {
   teamActivity?: ReactNode;
@@ -112,6 +113,7 @@ export function MonoDetails({
   const back = () => setRoutes((current) => current.slice(0, -1));
 
   const pages: StackPage[] = routes.flatMap((route, depth): StackPage[] => {
+    if (route.kind === "archive") return [{ key: `archive:${route.id}`, node: <ArchivedManagerConversation id={route.id} onBack={back} /> }];
     if (route.kind === "team")
       return [
         {
@@ -308,6 +310,7 @@ export function MonoDetails({
                   )}
                 </Property>
               </dl>
+              {findMono(monoId)?.role === "manager" && <ArchivedManagerConversations project={agent.projects[0]?.path ?? cwd} onOpen={id => push({ kind: "archive", id })} />}
             </MonoSettingsPage>
           )}
         </PanelStack>

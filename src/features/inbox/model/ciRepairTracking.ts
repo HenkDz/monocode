@@ -8,7 +8,11 @@ export type TrackedCiRepair = CiRepairRequest["target"] & {
   sessionId: string;
   startedAt: number;
   sequence?: number;
-  phase: "running" | CiRepairOutcome | "interrupted";
+  goalId?: string;
+  managerId?: string;
+  goalOwnerId?: string;
+  phase: "running" | CiRepairOutcome | "interrupted" | "not-needed";
+  notNeeded?: "merged" | "closed";
 };
 
 const KEY = "monocode.ciRepairs.v1";
@@ -17,6 +21,7 @@ const listeners = new Set<() => void>();
 let repairs: readonly TrackedCiRepair[] | undefined;
 const interrupted = new Set<string>();
 const pendingWrites = new Map<string, TrackedCiRepair | null>();
+const stopping = new Map<string, Promise<void>>();
 
 function newestFirst(a: TrackedCiRepair, b: TrackedCiRepair): number {
   return b.startedAt - a.startedAt || (b.sequence ?? 0) - (a.sequence ?? 0);
@@ -63,7 +68,14 @@ function loadStored(): TrackedCiRepair[] {
             "failed",
             "cancelled",
             "interrupted",
+            "not-needed",
           ].includes(item.phase) &&
+          (item.notNeeded === undefined ||
+            ["merged", "closed"].includes(String(item.notNeeded))) &&
+          [item.goalId, item.managerId, item.goalOwnerId].every(
+            (id) =>
+              id === undefined || (typeof id === "string" && id.length > 0),
+          ) &&
           Array.isArray(item.checks) &&
           item.checks.length > 0 &&
           item.checks.every((check: unknown) => {
@@ -172,13 +184,18 @@ export function trackCiRepair(
   cwd: string,
   request: CiRepairRequest,
   sessionId: string,
-  submit: (settle: (outcome: CiRepairOutcome) => void) => boolean,
-): void {
+  submit: (
+    settle: (outcome: CiRepairOutcome) => void,
+    repairId: string,
+  ) => boolean,
+  goal?: { goalId: string; managerId: string; goalOwnerId?: string },
+): string {
   const repair: TrackedCiRepair = {
     ...request.target,
     id: crypto.randomUUID(),
     cwd,
     sessionId,
+    ...goal,
     startedAt: Date.now(),
     sequence:
       Math.max(
@@ -191,9 +208,8 @@ export function trackCiRepair(
   save(repair);
   try {
     const accepted = submit((phase) => {
-      const current = getCiRepairs().find((item) => item.id === repair.id) ?? repair;
-      save({ ...current, phase });
-    });
+      settleCiRepair(repair.id, phase);
+    }, repair.id);
     if (!accepted)
       throw new Error(
         "Could not start this fix. Choose another chat and try again.",
@@ -202,6 +218,58 @@ export function trackCiRepair(
     save(repair, true);
     throw error;
   }
+  return repair.id;
+}
+
+export function settleCiRepair(id: string, phase: CiRepairOutcome): void {
+  const current = getCiRepairs().find((item) => item.id === id);
+  if (!current || current.phase === "not-needed" || current.phase === phase)
+    return;
+  save({ ...current, phase });
+}
+
+/** Stop only the work attached to this PR; retain its conversation and files. */
+export async function stopCiRepairs(
+  cwd: string,
+  repo: string,
+  number: number,
+  state: "merged" | "closed",
+  stop: (repair: TrackedCiRepair, message: string) => void | Promise<void>,
+): Promise<void> {
+  const matches = getCiRepairs().filter(
+    (repair) =>
+      sameProjectPath(repair.cwd, cwd) &&
+      repair.repo.toLowerCase() === repo.toLowerCase() &&
+      repair.number === number &&
+      repair.phase !== "not-needed",
+  );
+  await Promise.all(
+    matches.map((repair) => {
+      const pending = stopping.get(repair.id);
+      if (pending) return pending;
+      const work = Promise.resolve()
+        .then(async () => {
+          const active =
+            getCiRepairs().find((item) => item.id === repair.id) ?? repair;
+          if (active.phase === "not-needed") return;
+          if (
+            active.phase === "running" ||
+            active.phase === "interrupted" ||
+            active.goalId
+          )
+            await stop(
+              active,
+              `This PR is already ${state}. This CI repair is no longer needed. Stop only this repair's work; retain all conversations, worktrees and files.`,
+            );
+          const current =
+            getCiRepairs().find((item) => item.id === repair.id) ?? repair;
+          save({ ...current, phase: "not-needed", notNeeded: state });
+        })
+        .finally(() => stopping.delete(repair.id));
+      stopping.set(repair.id, work);
+      return work;
+    }),
+  );
 }
 
 export function rebaseCiRepairs(from: string, to: string): void {

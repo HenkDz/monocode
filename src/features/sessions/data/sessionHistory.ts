@@ -10,6 +10,7 @@ import {
   type Session,
 } from "../model/session";
 import { shouldPersistSession, type SessionSummary } from "./sessionStore";
+import { isLegacyManagerSession } from "../../monos/model/legacyManagerSessions";
 
 export type SessionGitHint = {
   repo?: string;
@@ -106,6 +107,7 @@ export function summaryFromSession(
 ): SessionSummary {
   return {
     id: session.id,
+    archived: isLegacyManagerSession(session) || undefined,
     orchestrationLeadId: session.orchestrationLeadId,
     sidebarHidden: session.sidebarHidden,
     cwd: session.cwd,

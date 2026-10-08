@@ -9,6 +9,7 @@ import {
 } from "./ProjectManagerReview";
 import { orchestrator } from "../model/orchestration";
 import type { OrchestrationRun } from "../model/orchestrationState";
+import type { GithubPrChecks } from "../../inbox/model/githubPrChecks";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { OrchestrationActions } from "./OrchestrationActions";
 import { prStatusKey } from "../../source-control/hooks/usePrStatus";
@@ -26,7 +27,10 @@ vi.mock("../../source-control/hooks/usePrStatus", async (importOriginal) => ({
 const checkView = vi.hoisted(() => ({
   loading: false,
   error: null as string | null,
-  checks: { checks: [{ state: "pass" }, { state: "pass" }] },
+  checks: { headOid: "head", checks: [
+    { name: "build", workflow: "CI", state: "pass", url: null, startedAt: null, completedAt: null },
+    { name: "test", workflow: "CI", state: "pass", url: null, startedAt: null, completedAt: null },
+  ] } as GithubPrChecks,
 }));
 vi.mock("@tauri-apps/plugin-opener", () => ({
   openUrl: vi.fn(async () => {}),
@@ -45,6 +49,13 @@ vi.mock("../../inbox/hooks/useGithubPrChecks", () => ({
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
 it("updates the task card immediately from closed or merged store state while parent readiness is stale", async () => {
+  const previousChecks = checkView.checks;
+  const check = { name: "build", workflow: "CI", state: "pass" as const, url: null, startedAt: null, completedAt: null };
+  checkView.checks = { headOid: "accepted-head", checks: [
+    { ...check, state: "fail", suiteId: 1 },
+    { ...check, suiteId: 2 },
+    { ...check, name: "test", suiteId: 2 },
+  ] };
   const task = {
     id: "fresh-state-r19",
     title: "Immediate forge state",
@@ -102,6 +113,8 @@ it("updates the task card immediately from closed or merged store state while pa
     expect(card.getAttribute("aria-label")).toBe(
       "Ready to merge: Immediate forge state",
     );
+    expect(card.textContent).toContain("✓ 2 checks");
+    checkView.checks = { headOid: "accepted-head", checks: [{ ...check, state: "fail" }] };
     for (const state of ["closed", "merged"] as const) {
       await act(async () => recordPullRequest("/fresh-r19", { ...pr, state }));
       expect(host.querySelector("section")).toBe(card);
@@ -109,12 +122,15 @@ it("updates the task card immediately from closed or merged store state while pa
         `${state === "closed" ? "Closed" : "Merged"}: Immediate forge state`,
       );
       expect(card.textContent).not.toContain("Ready to merge");
+      expect(card.textContent).not.toContain("failed");
+      expect(card.textContent).toContain(`PR ${state}`);
       expect(
         statusView.statuses.get(prStatusKey("/fresh-r19", task.prUrl))?.state,
       ).toBe("open");
     }
   } finally {
     await act(async () => root.unmount());
+    checkView.checks = previousChecks;
     statusView.statuses = new Map();
   }
 });
@@ -529,7 +545,7 @@ it("opens the PR and worker diff and resumes to send corrections without losing 
       checkView.loading = state === "loading";
       checkView.error = state === "error" ? "Unavailable" : null;
       checkView.checks.checks = [
-        { state: ["error", "loading"].includes(state) ? "pass" : state },
+        { name: "build", workflow: "CI", url: null, startedAt: null, completedAt: null, state: (["error", "loading"].includes(state) ? "pass" : state) as GithubPrChecks["checks"][number]["state"] },
       ];
       if (state === "empty") checkView.checks.checks = [];
       await act(async () => root.render(<ProjectManagerReview run={run} />));
@@ -594,7 +610,10 @@ it("opens the PR and worker diff and resumes to send corrections without losing 
     Object.assign(checkView, {
       loading: false,
       error: null,
-      checks: { checks: [{ state: "pass" }, { state: "pass" }] },
+      checks: { headOid: "head", checks: [
+        { name: "build", workflow: "CI", state: "pass", url: null, startedAt: null, completedAt: null },
+        { name: "test", workflow: "CI", state: "pass", url: null, startedAt: null, completedAt: null },
+      ] },
     });
     await act(async () => root.unmount());
     current.mockRestore();

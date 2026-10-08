@@ -131,6 +131,132 @@ it("verifies a newer external CI result even when its dashboard URL stays the sa
   expect(host.textContent).toContain("CI passed");
 });
 
+it("matches a repaired check by app and matrix context across a rerun", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  roots.push(root);
+  const check = {
+    name: "tests",
+    workflow: "CI",
+    app: "actions",
+    context: "linux",
+    state: "fail" as const,
+    url: "https://github.com/acme/web/actions/runs/1/job/2",
+    startedAt: null,
+    completedAt: null,
+  };
+  trackCiRepair(
+    "/matrix-repair",
+    buildCiRepairRequest({
+      repo: "acme/web",
+      number: 42,
+      headOid: "abc",
+      evidence: [check],
+    }),
+    "chat",
+    (settle) => {
+      settle("completed");
+      return true;
+    },
+  );
+  await act(async () =>
+    root.render(
+      createElement(CheckRepairProgress, {
+        cwd: "/matrix-repair",
+        repo: "acme/web",
+        repair: { number: 42, sessions: [], onStart() {} },
+        view: {
+          checks: {
+            headOid: "abc",
+            checks: [
+              {
+                ...check,
+                state: "pass",
+                url: "https://github.com/acme/web/actions/runs/3/job/4",
+                startedAt: new Date(Date.now() + 1000).toISOString(),
+              },
+              { ...check, app: "other", state: "fail" },
+              { ...check, context: "windows", state: "fail" },
+            ],
+          },
+          loading: false,
+          refreshing: false,
+          stale: false,
+          error: null,
+          refresh() {},
+        },
+      }),
+    ),
+  );
+  expect(host.textContent).toContain("CI passed");
+  expect(host.textContent).not.toContain("Awaiting new GitHub checks");
+});
+
+it.each([1, 2])(
+  "only verifies newly known external app metadata when %i provider is unambiguous",
+  async (providers) => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    roots.push(root);
+    const check = {
+      name: "tests",
+      workflow: "",
+      state: "fail" as const,
+      url: "https://ci.example/old",
+      startedAt: null,
+      completedAt: null,
+    };
+    trackCiRepair(
+      `/external-app-${providers}`,
+      buildCiRepairRequest({
+        repo: "acme/web",
+        number: 42,
+        headOid: "abc",
+        evidence: [check],
+      }),
+      "chat",
+      (settle) => {
+        settle("completed");
+        return true;
+      },
+    );
+    await act(async () =>
+      root.render(
+        createElement(CheckRepairProgress, {
+          cwd: `/external-app-${providers}`,
+          repo: "acme/web",
+          repair: { number: 42, sessions: [], onStart() {} },
+          view: {
+            checks: {
+              headOid: "abc",
+              checks: Array.from({ length: providers }, (_, index) => ({
+                ...check,
+                app: `provider-${index}`,
+                state: "pass",
+                url: `https://ci.example/new-${index}`,
+                startedAt: new Date(Date.now() + 1000).toISOString(),
+              })),
+            },
+            loading: false,
+            refreshing: false,
+            stale: false,
+            error: null,
+            refresh() {},
+          },
+        }),
+      ),
+    );
+    expect(host.textContent).toContain(
+      providers === 1 ? "CI passed" : "Awaiting new GitHub checks",
+    );
+    if (providers > 1) expect(host.textContent).not.toContain("CI passed");
+  },
+);
+
 it("does not use one newer result to verify two different jobs with the same name", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const host = document.createElement("div");
@@ -579,7 +705,7 @@ it("reports fresh checks for a later PR commit without confirming old or stale r
     );
   };
   await render("original");
-  expect(host.textContent).toContain("Awaiting new GitHub checks");
+  expect(host.textContent).toContain("CI passed");
   await render("new-commit", [
     { ...passed, url: check.url, startedAt: "2000-01-01T00:00:00Z" },
   ]);
@@ -603,7 +729,132 @@ it("reports fresh checks for a later PR commit without confirming old or stale r
   await render("another-commit", []);
   expect(host.textContent).toContain("Awaiting new GitHub checks");
   await render("another-commit", [passed, passed]);
-  expect(host.textContent).toContain("Awaiting new GitHub checks");
+  expect(host.textContent).toContain("CI passed");
+});
+
+it("automatically stops a repair when the latest PR result becomes merged", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  roots.push(root);
+  const check = {
+    name: "tests",
+    workflow: "CI",
+    state: "fail" as const,
+    url: null,
+    startedAt: null,
+    completedAt: null,
+  };
+  trackCiRepair(
+    "/merged-repair",
+    buildCiRepairRequest({
+      repo: "acme/web",
+      number: 42,
+      headOid: "abc",
+      evidence: [check],
+    }),
+    "repair-chat",
+    () => true,
+  );
+  const stop = vi.fn();
+  const props = {
+    cwd: "/merged-repair",
+    repo: "acme/web",
+    onRefresh() {},
+    repair: {
+      number: 42,
+      state: "open" as const,
+      sessions: [],
+      onStart() {},
+      onNotNeeded: stop,
+    },
+    view: {
+      checks: { headOid: "abc", state: "open" as const, checks: [check] },
+      loading: false,
+      refreshing: false,
+      stale: false,
+      error: null,
+      refresh() {},
+    },
+  };
+  await act(async () => root.render(createElement(InboxPrChecks, props)));
+  expect(host.textContent).toContain("Repair in progress");
+  await act(async () =>
+    root.render(
+      createElement(InboxPrChecks, {
+        ...props,
+        view: {
+          ...props.view,
+          checks: { ...props.view.checks, state: "merged" as const },
+        },
+      }),
+    ),
+  );
+  expect(stop).toHaveBeenCalledTimes(1);
+  expect(stop).toHaveBeenCalledWith(
+    expect.objectContaining({ sessionId: "repair-chat" }),
+    "merged",
+  );
+  expect(host.textContent).toContain("Not needed: PR merged");
+  expect(host.textContent).not.toContain("Repair in progress");
+  expect(host.textContent).not.toContain("needs a fix");
+  expect(host.querySelector('[aria-label="Fix all failed"]')).toBeNull();
+});
+
+it("stops a repair tracked after the merged view was already mounted", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  roots.push(root);
+  const check = {
+    name: "tests",
+    workflow: "CI",
+    state: "fail" as const,
+    url: null,
+    startedAt: null,
+    completedAt: null,
+  };
+  const stop = vi.fn();
+  await act(async () =>
+    root.render(
+      createElement(CheckRepairProgress, {
+        cwd: "/late-repair",
+        repo: "acme/web",
+        repair: {
+          number: 42,
+          state: "merged",
+          sessions: [],
+          onStart() {},
+          onNotNeeded: stop,
+        },
+        view: {
+          checks: { headOid: "abc", state: "open", checks: [check] },
+          loading: false,
+          refreshing: false,
+          stale: false,
+          error: null,
+          refresh() {},
+        },
+      }),
+    ),
+  );
+  await act(async () => {
+    trackCiRepair(
+      "/late-repair",
+      buildCiRepairRequest({
+        repo: "acme/web",
+        number: 42,
+        headOid: "abc",
+        evidence: [check],
+      }),
+      "late-chat",
+      () => true,
+    );
+  });
+  expect(stop).toHaveBeenCalledTimes(1);
+  expect(host.textContent).toContain("Not needed: PR merged");
 });
 afterEach(() => {
   act(() => roots.splice(0).forEach((root) => root.unmount()));
@@ -929,7 +1180,11 @@ it.each(["refreshing", "failed"] as const)(
     };
     await act(async () => root.render(createElement(InboxPrChecks, props)));
     await act(async () =>
-      host.querySelector<HTMLButtonElement>('button[aria-label="Fix lint with AI"]')!.click(),
+      host
+        .querySelector<HTMLButtonElement>(
+          'button[aria-label="Fix lint with AI"]',
+        )!
+        .click(),
     );
     await act(async () =>
       [...document.querySelectorAll("button")]
@@ -950,7 +1205,9 @@ it.each(["refreshing", "failed"] as const)(
       ),
     );
     expect(
-      document.querySelector('[role="dialog"][aria-label="Fix checks with AI"]'),
+      document.querySelector(
+        '[role="dialog"][aria-label="Fix checks with AI"]',
+      ),
     ).not.toBeNull();
     await act(async () =>
       resolveDetails({ steps: [], annotations: [], notice: null }),
@@ -990,7 +1247,11 @@ it("keeps the selected failed job when another check changes", async () => {
   };
   await act(async () => root.render(createElement(InboxPrChecks, props)));
   await act(async () =>
-    host.querySelector<HTMLButtonElement>('button[aria-label="Fix lint with AI"]')!.click(),
+    host
+      .querySelector<HTMLButtonElement>(
+        'button[aria-label="Fix lint with AI"]',
+      )!
+      .click(),
   );
   await act(async () =>
     root.render(

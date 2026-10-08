@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import type { HostStore } from "./store";
 import { WorkspaceCommands, WORKSPACE_COMMANDS } from "./workspace-commands";
-import { checkoutPrBranches, parsePrs, PR_STATUS_FIELDS, prCardActionArgs, prRepositories, trustedPrTarget } from "./git-prs";
+import { checkoutPrBranches, enrichPrCheckApps, parsePrs, PR_STATUS_FIELDS, prCardActionArgs, prRepositories, trustedPrTarget } from "./git-prs";
 
 afterEach(() => vi.restoreAllMocks());
 const row = (number: number, state = "OPEN", extra = {}) => ({ number, title: `PR ${number}`, url: `https://github.com/owner/repo/pull/${number}`, state, headRepositoryOwner: { login: "owner" }, ...extra });
@@ -60,6 +60,39 @@ it("uses newest check reruns regardless of response ordering and preserves newer
   }
 });
 
+it("shares suite/attempt ordering with detailed checks and keeps app/context identity", () => {
+  const check = (extra: object) => ({ name: "CI Required", workflowName: "CI", status: "COMPLETED", ...extra });
+  const failed = check({ conclusion: "FAILURE", suiteId: 1, runAttempt: 9 });
+  const passed = check({ conclusion: "SUCCESS", suiteId: 2, runAttempt: 1 });
+  const summary = (statusCheckRollup: object[]) => parsePrs(JSON.stringify([row(1, "OPEN", { statusCheckRollup })]))[0].checksStatus;
+  expect(summary([passed, failed])).toBe("success");
+  expect(summary([passed, { ...failed, app: "external" }])).toBe("failure");
+  expect(summary([passed, { ...failed, matrixKey: "windows" }])).toBe("failure");
+  for (const slug of [undefined, "same-vendor"]) {
+    expect(summary([{ ...passed, app: { id: 1, slug } }, { ...failed, app: { id: 2, slug } }])).toBe("failure");
+  }
+  expect(summary([check({ conclusion: "FAILURE", detailsUrl: "https://github.com/acme/web/actions/runs/1/job/10" }), check({ conclusion: "SUCCESS", detailsUrl: "https://github.com/acme/web/actions/runs/2/job/20" })])).toBe("success");
+});
+
+it("enriches same-name external apps once per head before cards and actions see their checks", async () => {
+  const checks = [
+    { name: "scan", workflowName: "", status: "COMPLETED", conclusion: "FAILURE", detailsUrl: "https://vendor.example/check", startedAt: "2026-10-08T10:00:00Z" },
+    { name: "scan", workflowName: "", status: "COMPLETED", conclusion: "SUCCESS", detailsUrl: "https://vendor.example/check", startedAt: "2026-10-08T11:00:00Z" },
+  ];
+  const gh = vi.fn(async () => JSON.stringify([{ check_runs: checks.map((check, index) => ({ name: check.name, details_url: check.detailsUrl, started_at: check.startedAt, app: { id: index + 1, slug: `app-${index}` }, check_suite: { id: index + 1 } })) }]));
+  const pr = row(1, "OPEN", { headRefOid: "a".repeat(40), statusCheckRollup: checks });
+  const json = await enrichPrCheckApps(JSON.stringify([pr, { ...pr, number: 2, url: "https://github.com/owner/repo/pull/2" }]), gh);
+  expect(gh).toHaveBeenCalledTimes(1);
+  expect(gh).toHaveBeenCalledWith(["api", "--hostname", "github.com", `repos/owner/repo/commits/${"a".repeat(40)}/check-runs?filter=all&per_page=100`, "--paginate", "--slurp"]);
+  expect(parsePrs(json).map(pr => pr.checksStatus)).toEqual(["failure", "failure"]);
+  const rerun = await enrichPrCheckApps(JSON.stringify([pr]), async () => JSON.stringify(checks.map((check, index) => ({ check_runs: [{ name: check.name, details_url: check.detailsUrl, started_at: check.startedAt, app: { id: 1 }, check_suite: { id: index + 1 } }] }))));
+  expect(parsePrs(rerun)[0].checksStatus).toBe("success");
+  const failed = await enrichPrCheckApps(JSON.stringify([pr]), async () => { throw new Error("offline"); });
+  expect(parsePrs(failed)[0].checksStatus).toBe("failure");
+  const unidentified = await enrichPrCheckApps(JSON.stringify([{ ...pr, statusCheckRollup: checks.map(check => ({ ...check, conclusion: "SUCCESS" })) }]), async () => "[]");
+  expect(parsePrs(unidentified)[0].checksStatus).toBe("unknown");
+});
+
 it("preserves distinct matrix jobs, workflows, types and nameless unknown checks", () => {
   const check = (name: string, workflowName = "CI", conclusion = "SUCCESS") => ({ __typename: "CheckRun", name, workflowName, status: "COMPLETED", conclusion });
   const summary = (statusCheckRollup: object[]) => parsePrs(JSON.stringify([row(1, "OPEN", { statusCheckRollup })]))[0].checksStatus;
@@ -76,6 +109,20 @@ function fixture() {
   const backend = commands as unknown as { ghCommand(cwd: unknown, args: string[]): Promise<string>; gitCommand(cwd: unknown, args: string[]): Promise<string> };
   return { commands, gh: vi.spyOn(backend, "ghCommand"), git: vi.spyOn(backend, "gitCommand") };
 }
+
+it("enriches external identity in remote current/by-URL/list paths once per head", async () => {
+  const { commands, gh, git } = fixture();
+  const checks = ["10", "11"].map((hour, index) => ({ name: "scan", workflowName: "", status: "COMPLETED", conclusion: index ? "SUCCESS" : "FAILURE", startedAt: `2026-10-08T${hour}:00:00Z`, detailsUrl: null }));
+  const pr = row(42, "OPEN", { headRefOid: "a".repeat(40), statusCheckRollup: checks });
+  git.mockImplementation(async (_cwd, args) => args[0] === "symbolic-ref" ? "new" : "checkout: moving from old to new");
+  gh.mockImplementation(async (_cwd, args) => args[0] === "repo" ? '{"url":"https://github.com/owner/repo","parent":null}' : args[0] === "api" ? JSON.stringify([{ check_runs: checks.map((check, index) => ({ name: check.name, started_at: check.startedAt, app: { id: index + 1 } })) }]) : args[1] === "list" ? JSON.stringify([pr]) : JSON.stringify(pr));
+  for (const command of ["git_pr_list", "git_pr_status", "git_pr_status_by_url"]) {
+    gh.mockClear();
+    const value = await commands.run(command, { cwd: "/repo", url: pr.url });
+    expect(Array.isArray(value) ? value[0] : value).toMatchObject({ checksStatus: "failure" });
+    expect(gh.mock.calls.filter(([, args]) => args[0] === "api")).toHaveLength(1);
+  }
+});
 
 it("dispatches trusted remote URL lookup by numeric PR and rejects unrelated URLs", async () => {
   const { commands, gh } = fixture();

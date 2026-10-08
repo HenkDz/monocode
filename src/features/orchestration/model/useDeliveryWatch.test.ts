@@ -54,3 +54,17 @@ it("discovers the completed worker's open PR before Manager review", async () =>
   expect(discoverDeliveryPr).toHaveBeenCalledWith("manager", "task", pr, "work");
   expect(maintainDelivery).toHaveBeenCalledWith("manager", "task", { head: "head", ci: "pass", conflicts: false, mergeable: true });
 });
+
+it("ignores terminal check responses when the parallel PR fetch still reports open", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const run = { leadId: "manager", projectManager: true, tasks: [{ id: "task", prUrl: "https://github.com/acme/app/pull/7", workspace: { checkoutCwd: "/worker" } }] } as OrchestrationRun;
+  gitPrStatus.mockResolvedValue({ url: run.tasks[0].prUrl, state: "open", headOid: "head" });
+  for (const state of ["merged", "closed"]) {
+    fetchGithubPrChecks.mockResolvedValue({ state, headOid: "head", checks: [{ state: "fail" }] });
+    function Consumer() { useDeliveryWatch([run]); return null; }
+    const root = createRoot(document.createElement("div"));
+    await act(async () => root.render(createElement(Consumer)));
+    expect(maintainDelivery).not.toHaveBeenCalled();
+    act(() => root.unmount());
+  }
+});

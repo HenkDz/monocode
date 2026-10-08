@@ -161,3 +161,83 @@ it("keeps a completed repair in memory when storage fills up", async () => {
     write.mockRestore();
   }
 });
+
+it("stops only a merged PR's repair and ignores a late agent settlement", async () => {
+  const store = await import("./ciRepairTracking");
+  let finish!: (outcome: "completed") => void;
+  store.trackCiRepair(
+    "/web",
+    request,
+    "repair-chat",
+    (settle) => {
+      finish = settle;
+      return true;
+    },
+    { goalId: "goal1", managerId: "manager1" },
+  );
+  store.trackCiRepair("/other", request, "other-chat", () => true);
+  const stop = vi.fn();
+  await Promise.all([
+    store.stopCiRepairs("/web", "ACME/WEB", 42, "merged", stop),
+    store.stopCiRepairs("/web", "acme/web", 42, "merged", stop),
+  ]);
+  expect(stop).toHaveBeenCalledTimes(1);
+  expect(stop).toHaveBeenCalledWith(
+    expect.objectContaining({ goalId: "goal1", managerId: "manager1" }),
+    expect.stringContaining("already merged"),
+  );
+  finish("completed");
+  expect(
+    store.getCiRepairs().find((item) => item.sessionId === "repair-chat"),
+  ).toMatchObject({ phase: "not-needed", notNeeded: "merged" });
+  expect(
+    store.getCiRepairs().find((item) => item.sessionId === "other-chat")?.phase,
+  ).toBe("running");
+  vi.resetModules();
+  const restored = await import("./ciRepairTracking");
+  expect(
+    restored.getCiRepairs().find((item) => item.sessionId === "repair-chat"),
+  ).toMatchObject({ phase: "not-needed", notNeeded: "merged" });
+});
+
+it("keeps a repair retryable if stopping its worker fails", async () => {
+  const store = await import("./ciRepairTracking");
+  store.trackCiRepair("/web", request, "repair-chat", () => true);
+  await expect(
+    store.stopCiRepairs("/web", "acme/web", 42, "closed", () => {
+      throw new Error("Stop failed");
+    }),
+  ).rejects.toThrow("Stop failed");
+  expect(store.getCiRepairs()[0].phase).toBe("running");
+  const stop = vi.fn();
+  await store.stopCiRepairs("/web", "acme/web", 42, "closed", stop);
+  await store.stopCiRepairs("/web", "acme/web", 42, "closed", stop);
+  expect(stop).toHaveBeenCalledTimes(1);
+  expect(store.getCiRepairs()[0]).toMatchObject({
+    phase: "not-needed",
+    notNeeded: "closed",
+  });
+});
+
+it("marks finished repairs as unnecessary without stopping unrelated later chat work", async () => {
+  const store = await import("./ciRepairTracking");
+  store.trackCiRepair("/web", request, "finished-chat", (settle) => {
+    settle("completed");
+    return true;
+  });
+  const stop = vi.fn();
+  await store.stopCiRepairs("/web", "acme/web", 42, "merged", stop);
+  expect(stop).not.toHaveBeenCalled();
+  expect(store.getCiRepairs()[0]).toMatchObject({
+    phase: "not-needed",
+    notNeeded: "merged",
+  });
+});
+
+it("gives the submission a repair ID so cancellation can identify its own turn", async () => {
+  const store = await import("./ciRepairTracking");
+  const submit = vi.fn(() => true);
+  const id = store.trackCiRepair("/web", request, "chat", submit);
+  expect(submit).toHaveBeenCalledWith(expect.any(Function), id);
+  expect(store.getCiRepairs()[0].id).toBe(id);
+});

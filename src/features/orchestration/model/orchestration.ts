@@ -75,6 +75,7 @@ function currentDispatchBaseline(run: OrchestrationRun, taskId: string) {
     .sort((a, b) => a.startedAt - b.startedAt)[0]?.checkoutBaseline;
 }
 export type OrchestrationHost = {
+  goalCancelled?(goalId: string): boolean;
   artifact?(id: string): Promise<Artifact | null>;
   checkoutSnapshot?(cwd: string, base?: string): Promise<CheckoutSnapshot>;
   handoff?(fromSessionId: string, toSessionId: string, note: string): Promise<void>;
@@ -1592,6 +1593,9 @@ export class Orchestrator {
       result: unknown,
     ) => {
       const current = this.run(run.leadId)!;
+      const goalId = current.tasks.find(task => task.id === id)?.monoGoalId;
+      if (patch.status === "queued" && goalId && this.host?.goalCancelled?.(goalId))
+        throw new Error("This goal was cancelled; retain its worktrees and files.");
       return record(
         {
           ...current,
@@ -1889,6 +1893,8 @@ export class Orchestrator {
             ? {}
             : { checkout: text(input.checkout, "checkout", 4096) }),
         };
+        if (created.monoGoalId && this.host?.goalCancelled?.(created.monoGoalId))
+          throw new Error("This goal was cancelled; retain its worktrees and files.");
         const receipt = await record(
           { ...this.run(run.leadId)!, tasks: [...this.run(run.leadId)!.tasks, created] },
           { taskId: created.id, sessionId: created.sessionId, status: "queued" },
@@ -2388,6 +2394,7 @@ export class Orchestrator {
       const run = this.run(leadId);
       const task = run?.tasks.find(entry => entry.id === taskId);
       if (!run?.projectManager || !task?.prUrl || !observation.head) return;
+      if (task.monoGoalId && this.host?.goalCancelled?.(task.monoGoalId)) return;
       const hasApproval = !!task.reviewedBy && !task.reviewedBy.startsWith("Not reviewed") ||
         run.tasks.some(entry => entry.reviewOf?.taskId === task.id && entry.reviewVerdict?.decision === "approve");
       const outdated = !task.trivial && (task.reviewedHead ? task.reviewedHead !== observation.head : hasApproval);

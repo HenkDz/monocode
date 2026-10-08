@@ -597,7 +597,7 @@ export class WorkspaceCommands {
   }
 
   private async gitPrStatus(cwd: unknown) {
-    const output = await this.ghCommand(cwd, ["pr", "view", "--json", "number,title,url,state,isDraft"])
+    const output = await this.ghCommand(cwd, ["pr", "view", "--json", "number,title,url,state,isDraft,closedAt"])
       .catch(() => "");
     if (!output) return null;
     const pr = JSON.parse(output) as GitPr;

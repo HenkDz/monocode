@@ -1,4 +1,4 @@
-export type CrewMessage = { id: string; managerId: string; senderId: string; recipientId: string; topic: string; text: string; at: number; summary?: string };
+export type CrewMessage = { id: string; managerId: string; senderId: string; recipientId: string; topic: string; text: string; at: number; summary?: string; requiresReply?: boolean };
 const key = "monocode:crew-messages";
 const listeners = new Set<() => void>();
 export function crewMessages(): CrewMessage[] {
@@ -9,6 +9,15 @@ export function recordCrewMessage(event: CrewMessage): void {
   if (events.some(entry => entry.id === event.id)) return;
   localStorage.setItem(key, JSON.stringify([...events, event].slice(-500)));
   listeners.forEach(listener => listener());
+}
+export function teamMessageRequiresReply(value: unknown): boolean {
+  if (value !== undefined && typeof value !== "boolean") throw Error("requiresReply must be a boolean");
+  return value !== false;
+}
+/** Informational messages reach the feed without waking a recipient or steering its work. */
+export async function deliverCrewMessage(event: CrewMessage, deliver: () => Promise<void>): Promise<void> {
+  if (teamMessageRequiresReply(event.requiresReply)) await deliver();
+  recordCrewMessage(event);
 }
 export function subscribeCrewMessages(listener: () => void): () => void {
   listeners.add(listener); return () => { listeners.delete(listener); };

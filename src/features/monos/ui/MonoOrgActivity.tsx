@@ -15,6 +15,7 @@ import type { Session } from "../../sessions/model/session";
 import { formatLiveElapsed } from "../../sessions/model/liveAgents";
 import { PixelMascot } from "../../projects/ui/PixelMascot";
 import {
+  managerTaskFinished,
   managerTaskLifecycle,
   taskPrStatus,
 } from "../../orchestration/model/projectManager";
@@ -40,6 +41,11 @@ export function crewFeed(
       const dispatches = (run.dispatches ?? []).filter(
         (d) => d.taskId === task.id,
       );
+      const pr = taskPrStatus(task, statuses);
+      const finished = managerTaskFinished(task, pr);
+      const closedAt = pr && pr.url === task.prUrl && ["closed", "merged"].includes(pr.state)
+        ? Date.parse(pr.closedAt ?? "")
+        : NaN;
       return dispatches
         .flatMap((d) => [
           {
@@ -95,6 +101,15 @@ export function crewFeed(
                   text: `PR ready · ${title}`,
                 },
               ]
+            : [],
+          finished && dispatches.length
+            ? [{
+                id: `${task.id}:finished`,
+                // ponytail: legacy snapshots without lifecycle times use dispatch evidence; upgrade when all providers retain timestamps.
+                at: Number.isFinite(closedAt) ? closedAt : task.acceptedAt ?? Math.max(...dispatches.map((d) => d.updatedAt)),
+                memberId: task.memberId,
+                text: `${name} · ${task.completionOutcome?.startsWith("no-changes") ? "Accepted (no changes)" : managerTaskLifecycle(task, taskPrStatus(task, statuses))[0]} · ${title}`,
+              }]
             : [],
         );
     }),

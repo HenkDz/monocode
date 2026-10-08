@@ -236,6 +236,7 @@ describe("delivery maintenance", () => {
     expect(f.tasks()[0].delivery?.state).toBe("review-outdated");
     expect(f.tasks()[0].accepted).toBe(false);
     expect(f.tasks()[0].acceptedDispatchId).toBeUndefined();
+    expect(f.tasks()[0].acceptedAt).toBeUndefined();
     expect(f.tasks()[1].memberId).toBe("reviewer");
   });
 });
@@ -293,8 +294,13 @@ it("accepts a report-only task after checkout verification without a PR or Revie
   await f.delegate(["."]);
   await f.finish();
   expect(f.tasks()[0].accepted).toBe(false);
+  const acceptedAfter = Date.now();
   await expect(f.call("review", { taskId: f.tasks()[0].id, outcome: "accept-no-changes" })).resolves.toMatchObject({ accepted: true, completionOutcome: "no-changes" });
   expect(f.tasks()[0]).toMatchObject({ status: "completed", accepted: true, completionOutcome: "no-changes", acceptedDispatchId: f.tasks()[0].lastDispatchId });
+  expect(f.tasks()[0].acceptedAt).toBeGreaterThanOrEqual(acceptedAfter);
+  const acceptedAt = f.tasks()[0].acceptedAt;
+  await f.call("review", { taskId: f.tasks()[0].id, outcome: "accept-no-changes" });
+  expect(f.tasks()[0].acceptedAt).toBe(acceptedAt);
   expect(f.host.integrateWorker).not.toHaveBeenCalled();
   expect(f.host.cleanupWorker).not.toHaveBeenCalled();
 });
@@ -1595,6 +1601,7 @@ describe("local orchestration", () => {
     });
     await f.call("review", { taskId: task.id });
     expect(f.tasks()[0].acceptedDispatchId).toBe(dispatchId);
+    expect(f.tasks()[0].acceptedAt).toEqual(expect.any(Number));
     expect(f.host.integrateWorker).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ id: task.id }),

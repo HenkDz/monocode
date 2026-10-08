@@ -123,6 +123,8 @@ it("says how to keep memory and update the soul only at the user's request", () 
   };
   const full = monoContext(look, files(), { soul: true, memory: true });
   expect(full).toContain("Member reports contain only task findings and verification evidence");
+  expect(full).toContain("requiresReply:false");
+  expect(full).toContain("Do not reply to a pure acknowledgement");
   expect(full).toContain("Only the Orchestrator uses chat.card dispatch");
   expect(full).toContain("readOnly:true");
   expect(full).toContain("accept-no-changes");

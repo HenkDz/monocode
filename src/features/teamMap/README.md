@@ -1,4 +1,6 @@
-# Team map (R14)
+# Team map
+
+The [R15 polish report](../../../docs/r15-polish.md) covers the full main-area view, readable fit, scoped filter, grouped newest-first feed, direction hints and acknowledgement delivery. R14 implementation and native evidence follow.
 
 The map reads the existing Mono roster, R12 availability, orchestration task lifecycle, Manager goals and crew feed. It offers a top-down hierarchy, collapsed project teams, project and Needs you filters, chat navigation, tooltips, keyboard exploration and a recent-event strip. Narrow windows use the same hierarchy as a vertical list.
 

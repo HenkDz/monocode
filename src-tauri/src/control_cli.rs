@@ -299,7 +299,7 @@ Actions:
   team.answer    Direct boss only. {monoId,requestId,answers} or {monoId,requestId,skip:true}.
                   For a permission: {monoId,requestId,decision:"allow"|"deny"}.
                   Never allow beyond the user's existing authority.
-  team.message   {memberId,text,topic?} Ask a teammate; cross-team questions route through Managers.
+  team.message   {memberId,text,topic?,requiresReply?} Ask a teammate; use requiresReply:false for informational feed messages without a recipient turn.
                   After a few exchanges, a hint suggests involving your Manager.
   team.list      Manager only, own team. {} Members, profiles, soul summary,
                   memory count, tasks and user-locked fields.
@@ -573,7 +573,7 @@ pub(crate) fn validate_app_request(action: &str, input: &Value, request_id: &str
 pub(crate) fn validate_team_input(action: &str, input: &Value) -> Result<(), String> {
     let fields: &[&str] = match action {
         "team.list" => &[],
-        "team.message" => &["memberId", "text", "topic"],
+        "team.message" => &["memberId", "text", "topic", "requiresReply"],
         "team.hire" => &["name", "specialty", "soul", "harness", "model", "modelSettings", "mascot", "color", "memory", "reviewer"],
         "team.update" => &["memberId", "name", "specialty", "soul", "harness", "model", "modelSettings"],
         "team.memory.add" => &["memberId", "facts"],
@@ -632,7 +632,7 @@ pub(crate) fn validate_team_input(action: &str, input: &Value) -> Result<(), Str
                     }
                 }
             }
-            "reviewer" => { if !value.is_boolean() { return Err("reviewer must be a boolean".into()); } }
+            "reviewer" | "requiresReply" => { if !value.is_boolean() { return Err(format!("{key} must be a boolean")); } }
             _ => {
                 let text = value.as_str().ok_or_else(|| format!("{key} must be a string"))?;
                 let max = match key.as_str() { "soul" => 8192, "name" | "specialty" => 80, "memberId" | "model" => 256, "reason" => 500, "text" => 6000, "topic" => 120, "color" => 100, _ => 128 };
@@ -956,6 +956,9 @@ mod tests {
     fn team_actions_share_strict_bounded_validation_and_approval_allowlist() {
         for (action, input) in [
             ("team.list", json!({})),
+            ("team.message", json!({"memberId":"member", "text":"Which scope?"})),
+            ("team.message", json!({"memberId":"member", "text":"Please decide", "requiresReply":true})),
+            ("team.message", json!({"memberId":"member", "text":"Closure complete", "requiresReply":false})),
             ("team.hire", json!({"name":"Backend", "specialty":"Backend", "soul":"Use cargo test", "harness":"codex", "model":"codex:installed", "memory":["Rust project"]})),
             ("team.hire", json!({"name":"Reviewer", "specialty":"Reviewer", "soul":"Review independently"})),
             ("team.hire", json!({"name":"Audit", "specialty":"Audit", "reviewer":true, "soul":"Review independently"})),
@@ -983,6 +986,9 @@ mod tests {
         assert!(validate_team_input("team.memory.add", &json!({"memberId":"member", "facts":[]})).is_err());
         assert!(validate_team_input("team.memory.add", &json!({"memberId":"member", "facts":vec!["x"; 51]})).is_err());
         assert!(validate_team_input("team.memory.add", &json!({"memberId":"member", "facts":vec!["x".repeat(1000); 25]})).is_err());
+        for requires_reply in [json!(null), json!("false"), json!(0), json!({})] {
+            assert!(validate_team_input("team.message", &json!({"memberId":"member", "text":"Closure complete", "requiresReply":requires_reply})).is_err());
+        }
         assert!(validate_app_request("team.hire", &json!({}), "bad/id").is_err());
         assert!(validate_app_request("team.unknown", &json!({}), "retry-1").is_err());
     }

@@ -91,6 +91,7 @@ type Props = {
     keepSessions: boolean,
   ) => Promise<void>;
   onOpenTerminal?: (path: string) => void;
+  onOpenChanges?: (path: string) => void;
   onGiveToManager?: (
     project: string,
     tree: Worktree,
@@ -127,6 +128,7 @@ export function ProjectWorktrees({
   renderManager,
   onRemove,
   onOpenTerminal,
+  onOpenChanges,
   onGiveToManager,
   project,
   currentProject,
@@ -595,7 +597,8 @@ export function ProjectWorktrees({
                         </>
                       ) : workerStatus || activeProgress ? (
                         <span className={`truncate ${workerStatus === "PR ready" ? "text-emerald-600 dark:text-emerald-400" : ""}`}>{workerStatus || progress}</span>
-                      ) : <WorktreeDiffStat path={tree.path} enabled={enabled && !tree.missing} />}
+                      ) : null}
+                      <WorktreeDiffStat path={tree.path} enabled={enabled && !tree.missing} showLines={!done && !workerStatus && !activeProgress} />
                     </div>
                     <button
                       type="button"
@@ -798,24 +801,28 @@ export function ProjectWorktrees({
               id: "review-manager",
               label: "Review in Manager",
               disabled: !orchestrationActions?.openManagerCard,
+              description: !orchestrationActions?.openManagerCard ? "Manager review is unavailable" : undefined,
             }] : []),
             {
               kind: "item",
               id: "open",
               label: "Open worktree",
               disabled: menu.tree.missing,
+              description: menu.tree.missing ? "Worktree folder is missing" : undefined,
             },
             ...(!menu.tree.isMain && onAddAsSeparateProject ? [{
               kind: "item" as const,
               id: "separate-project",
               label: "Add as separate project",
               disabled: menu.tree.missing,
+              description: menu.tree.missing ? "Worktree folder is missing" : undefined,
             }] : []),
             {
               kind: "item",
               id: "new",
               label: "New session",
               disabled: menu.tree.missing,
+              description: menu.tree.missing ? "Worktree folder is missing" : undefined,
               submenu: HARNESSES.filter(isHarnessAvailable).map((harness) => ({
                 kind: "item",
                 id: `new:${harness}`,
@@ -827,6 +834,7 @@ export function ProjectWorktrees({
               id: "open-in",
               label: "Open in",
               disabled: menu.tree.missing,
+              description: menu.tree.missing ? "Worktree folder is missing" : undefined,
               submenu: [
                 { kind: "item", id: "reveal", label: "Explorer" },
                 ...editors.map((editor) => ({
@@ -839,6 +847,7 @@ export function ProjectWorktrees({
                   id: "terminal",
                   label: "Terminal",
                   disabled: !onOpenTerminal,
+                  description: !onOpenTerminal ? "Terminal is unavailable" : undefined,
                 },
               ],
             },
@@ -848,6 +857,7 @@ export function ProjectWorktrees({
               label: "Give to Manager…",
               disabled:
                 menu.tree.isMain || menu.tree.missing || !onGiveToManager,
+              description: menu.tree.isMain ? "Primary checkout can't be given to Manager" : menu.tree.missing ? "Worktree folder is missing" : !onGiveToManager ? "Manager is unavailable" : undefined,
             },
             { kind: "sep" },
             {
@@ -855,6 +865,7 @@ export function ProjectWorktrees({
               id: "pr",
               label: "Create PR",
               disabled: menu.tree.missing || !menu.tree.branch,
+              description: menu.tree.missing ? "Worktree folder is missing" : !menu.tree.branch ? "No branch: this worktree is on a detached commit" : undefined,
             },
             ...worktreePullRequests(menu.tree.path, prRecords).map(pr => ({
               kind: "item" as const,
@@ -867,6 +878,7 @@ export function ProjectWorktrees({
               id: "copy-name",
               label: "Copy branch",
               disabled: !menu.tree.branch,
+              description: !menu.tree.branch ? "No branch: this worktree is on a detached commit" : undefined,
             },
             { kind: "sep" },
             {
@@ -886,8 +898,8 @@ export function ProjectWorktrees({
               disabled:
                 menu.tree.isMain ||
                 menu.tree.locked ||
-                !menu.tree.branch ||
                 !onRemove,
+              description: menu.tree.isMain ? "Primary checkout can't be removed" : menu.tree.locked ? "Worktree is locked" : !onRemove ? "Worktree removal is unavailable" : undefined,
             },
           ]}
           onClose={closeMenu}
@@ -938,6 +950,7 @@ export function ProjectWorktrees({
           tree={deleting}
           sessionCount={(groups.get(pathKey(deleting.path)) ?? []).length}
           allowDeleteSessions={false}
+          onOpenChanges={onOpenChanges ? () => onOpenChanges(deleting.path) : undefined}
           onRemove={(cwd, path, force) => onRemove(cwd, path, force, true)}
           onDeleteBranch={(force) =>
             invoke<void>("git_worktree_branch_remove", {
@@ -1160,20 +1173,31 @@ function WorktreeDoneWarning({ tree, enabled }: { tree: Worktree; enabled: boole
 function WorktreeDiffStat({
   path,
   enabled,
+  showLines = true,
 }: {
   path: string;
   enabled: boolean;
+  showLines?: boolean;
 }) {
   const stats = useProjectDiffStats(path, enabled);
-  if (!stats || (!stats.additions && !stats.deletions)) return null;
+  if (!stats) return null;
   return (
-    <span
-      aria-label={`${stats.additions} additions, ${stats.deletions} deletions`}
-      className="flex shrink-0 gap-1 text-[11px] tabular-nums"
-    >
-      {!!stats.additions && <span className="text-diff-add-fg">+{stats.additions}</span>}
-      {!!stats.deletions && <span className="text-diff-del-fg">−{stats.deletions}</span>}
-    </span>
+    <>
+      {!!stats.untracked && stats.untracked === stats.files && (
+        <span aria-label={`${stats.untracked} untracked file${stats.untracked === 1 ? "" : "s"}`} title={`${stats.untracked} untracked file${stats.untracked === 1 ? "" : "s"}`} className="shrink-0 text-[11px] text-amber-600 dark:text-amber-400">
+          untracked
+        </span>
+      )}
+      {showLines && (!!stats.additions || !!stats.deletions) && (
+        <span
+          aria-label={`${stats.additions} additions, ${stats.deletions} deletions`}
+          className="flex shrink-0 gap-1 text-[11px] tabular-nums"
+        >
+          {!!stats.additions && <span className="text-diff-add-fg">+{stats.additions}</span>}
+          {!!stats.deletions && <span className="text-diff-del-fg">−{stats.deletions}</span>}
+        </span>
+      )}
+    </>
   );
 }
 

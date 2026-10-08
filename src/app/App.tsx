@@ -4282,6 +4282,15 @@ function Workspace({
     [activeTabId],
   );
 
+  const onOpenWorktreeChanges = (project: string, path: string) => {
+    closeMonoView();
+    setTabs((prev) => prev.map((tab) => tab.id === activeTabId
+      ? openChangesTab(tab, path, undefined, undefined, project)
+      : tab));
+    setSidebarTab("changes", project);
+    setComposerFocused(false);
+  };
+
   const onOpenCommit = useCallback(
     (commit: GitHistoryCommit, pin?: boolean) => {
       setTabs((prev) =>
@@ -14295,6 +14304,7 @@ function Workspace({
                   worktreeSessionIds(managerRemoval.tree, sessions).length
                 }
                 allowDeleteSessions={false}
+                onOpenChanges={(path) => onOpenWorktreeChanges(managerRemoval.project, path)}
                 onRemove={(cwd, path, force) =>
                   onRemoveWorktree(cwd, path, force, true)
                 }
@@ -14424,6 +14434,7 @@ function Workspace({
                     />
                   )}
                   onRemove={onRemoveWorktree}
+                  onOpenChanges={(path) => onOpenWorktreeChanges(project, path)}
                   onOpenTerminal={onOpenTerminal}
                   onGiveToManager={async (project, tree, goal) => {
                     await onOpenProjectManager(project);
@@ -14925,6 +14936,7 @@ function Workspace({
                   sessions={sidebarHistory}
                   liveSessions={sessions}
                   onRemoveWorktree={onRemoveWorktree}
+                  onOpenWorktreeChanges={onOpenWorktreeChanges}
                   onCheckWorktreeRemoval={onCheckWorktreeRemoval}
                   onDeleteWorktreeSessions={onDeleteWorktreeSessions}
                   besideRail

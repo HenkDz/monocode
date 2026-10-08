@@ -1645,6 +1645,7 @@ function useDiffIndex(
           files: next.files.length,
           additions: next.additions,
           deletions: next.deletions,
+          untracked: next.files.filter((file) => file.status === "untracked").length,
         });
         if (prev) {
           const paths = changedFilePaths(prev, next);

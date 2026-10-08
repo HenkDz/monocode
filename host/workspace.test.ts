@@ -30,6 +30,34 @@ afterEach(() => {
     rmSync(root, { recursive: true, force: true });
 });
 
+it("checks worktree discard status and upstream errors, including untracked files", async () => {
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "monocode-removal-status-")));
+  roots.push(root);
+  const store = new HostStore(":memory:");
+  store.addProject(root, "Removal status");
+  const commands = new WorkspaceCommands(store, async (_id, action) => action());
+  const git = (...args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
+  try {
+    await expect(commands.run("git_diff_index", { cwd: root, checked: true })).rejects.toThrow();
+    git("init", "-qb", "main");
+    git("config", "user.name", "Test");
+    git("config", "user.email", "test@example.test");
+    git("config", "commit.gpgsign", "false");
+    writeFileSync(join(root, "tracked.txt"), "base\n");
+    git("add", ".");
+    git("commit", "-qm", "base");
+    writeFileSync(join(root, "empty.txt"), "");
+    writeFileSync(join(root, "binary.bin"), Buffer.from([0, 1, 2]));
+    expect(await commands.run("git_diff_stats", { cwd: root })).toMatchObject({ files: 2, untracked: 2 });
+    expect(await commands.run("git_diff_index", { cwd: root, checked: true })).toMatchObject({ files: [expect.objectContaining({ status: "untracked" }), expect.objectContaining({ status: "untracked" })] });
+    git("config", "branch.main.remote", "origin");
+    git("config", "branch.main.merge", "refs/heads/main");
+    await expect(commands.run("git_diff_index", { cwd: root, checked: true })).rejects.toThrow();
+  } finally {
+    store.close();
+  }
+});
+
 it("task snapshots detect dirty content, untracked edits and commits with no diff", async () => {
   const root = realpathSync.native(mkdtempSync(join(tmpdir(), "monocode-task-snapshot-")));
   roots.push(root);

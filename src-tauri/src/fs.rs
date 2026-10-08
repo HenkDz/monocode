@@ -833,6 +833,7 @@ pub struct GitDiffStats {
     pub files: i64,
     pub additions: i64,
     pub deletions: i64,
+    pub untracked: i64,
 }
 
 /// Uncommitted line counts for the opened folder: staged + unstaged vs HEAD,
@@ -876,10 +877,17 @@ pub struct GitDiffIndex {
 
 /// Changed files in the opened folder, with per-file line counts and status.
 #[tauri::command]
-pub async fn git_diff_index(cwd: String) -> Result<GitDiffIndex, String> {
-    tauri::async_runtime::spawn_blocking(move || git_diff_index_for(&expand_home(&cwd)))
-        .await
-        .map_err(|e| e.to_string())
+pub async fn git_diff_index(cwd: String, checked: Option<bool>) -> Result<GitDiffIndex, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = expand_home(&cwd);
+        if checked == Some(true) {
+            git_diff_index_checked_for(&root)
+        } else {
+            Ok(git_diff_index_for(&root))
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Changed files and counts without branch/upstream synchronization metadata.
@@ -1848,6 +1856,7 @@ fn git_diff_stats_for(root: &Path) -> GitDiffStats {
         files: files.len() as i64,
         additions,
         deletions,
+        untracked: files.values().filter(|acc| acc.untracked).count() as i64,
     }
 }
 
@@ -1862,6 +1871,21 @@ struct FileAcc {
 
 pub(crate) fn git_diff_index_for(root: &Path) -> GitDiffIndex {
     git_diff_index_with(root, true)
+}
+
+fn git_diff_index_checked_for(root: &Path) -> Result<GitDiffIndex, String> {
+    git_checked(root, &["status", "--porcelain", "--untracked-files=all"])?;
+    let index = git_diff_index_for(root);
+    let configured_upstream = index.branch.as_ref().is_some_and(|branch| {
+        git_stdout(root, &["config", "--get", &format!("branch.{branch}.merge")]).is_some()
+    });
+    if index.upstream.is_some() || configured_upstream {
+        git_checked(
+            root,
+            &["rev-list", "--left-right", "--count", "HEAD...@{upstream}"],
+        )?;
+    }
+    Ok(index)
 }
 
 /// File list + counts only. Skips ahead/behind/remote lookups used by Git chrome.
@@ -7300,7 +7324,8 @@ mod tests {
             GitDiffStats {
                 files: 0,
                 additions: 0,
-                deletions: 0
+                deletions: 0,
+                untracked: 0,
             }
         );
     }
@@ -7321,6 +7346,24 @@ mod tests {
         assert_eq!(stats.files, 3);
         assert_eq!(stats.additions, 4);
         assert_eq!(stats.deletions, 1);
+        assert_eq!(stats.untracked, 2);
+    }
+
+    #[test]
+    fn git_diff_stats_count_untracked_files_without_line_changes() {
+        let dir = tmp("git-diff-untracked-empty");
+        assert!(init_git_commit(&dir.0, &[("a.txt", "alpha\n")]));
+        std::fs::write(dir.0.join("empty.txt"), "").unwrap();
+        std::fs::write(dir.0.join("binary.bin"), [0, 1, 2]).unwrap();
+        assert_eq!(
+            git_diff_stats_for(&dir.0),
+            GitDiffStats {
+                files: 2,
+                additions: 0,
+                deletions: 0,
+                untracked: 2,
+            }
+        );
     }
 
     #[test]
@@ -7334,9 +7377,42 @@ mod tests {
             GitDiffStats {
                 files: 0,
                 additions: 0,
-                deletions: 0
+                deletions: 0,
+                untracked: 0,
             }
         );
+    }
+
+    #[test]
+    fn checked_git_diff_index_rejects_unavailable_status_and_upstream() {
+        let dir = tmp("git-diff-checked");
+        assert!(git_diff_index_checked_for(&dir.0).is_err());
+        assert!(init_git_commit(&dir.0, &[("a.txt", "alpha\n")]));
+        std::fs::write(dir.0.join("untracked.txt"), "local changes").unwrap();
+        let index = git_diff_index_checked_for(&dir.0).unwrap();
+        assert_eq!(index.files.len(), 1);
+        assert_eq!(index.files[0].status, "untracked");
+        git_checked(&dir.0, &["branch", "base"]).unwrap();
+        git_checked(&dir.0, &["config", "branch.main.remote", "."]).unwrap();
+        git_checked(&dir.0, &["config", "branch.main.merge", "refs/heads/base"]).unwrap();
+        git_checked(
+            &dir.0,
+            &[
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "not pushed",
+            ],
+        )
+        .unwrap();
+        assert_eq!(git_diff_index_checked_for(&dir.0).unwrap().ahead, 1);
+        git_checked(&dir.0, &["config", "branch.main.remote", "origin"]).unwrap();
+        git_checked(&dir.0, &["config", "branch.main.merge", "refs/heads/main"]).unwrap();
+        assert!(git_diff_index_checked_for(&dir.0).is_err());
     }
 
     #[test]

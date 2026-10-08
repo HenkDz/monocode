@@ -27,6 +27,7 @@ vi.mock("../../../platform/tauri/fs", async (original) => ({
     return () => window.removeEventListener("test-git-changed", listener);
   },
   gitCheckout: vi.fn(),
+  gitDiffIndex: vi.fn(async () => ({ files: [{ relative: "edit.ts", status: "modified", staged: false, unstaged: true }], upstream: "origin/feature", ahead: 2 })),
   gitCommit: vi.fn(),
   gitCreateBranch: vi.fn(),
   gitStageAll: vi.fn(),

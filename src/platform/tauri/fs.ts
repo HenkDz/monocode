@@ -176,6 +176,7 @@ export type GitDiffStats = {
   files: number;
   additions: number;
   deletions: number;
+  untracked?: number;
 };
 
 export function gitDiffStats(cwd: string): Promise<GitDiffStats> {
@@ -210,8 +211,8 @@ export type GitDiffIndex = {
   headPushed: boolean;
 };
 
-export function gitDiffIndex(cwd: string): Promise<GitDiffIndex> {
-  return invoke<GitDiffIndex>("git_diff_index", { cwd });
+export function gitDiffIndex(cwd: string, checked = false): Promise<GitDiffIndex> {
+  return invoke<GitDiffIndex>("git_diff_index", checked ? { cwd, checked } : { cwd });
 }
 
 /** File list and counts only, for diff content views that do not need sync data. */

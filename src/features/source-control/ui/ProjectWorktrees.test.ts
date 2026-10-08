@@ -1047,10 +1047,79 @@ it("reflects a verified closed update without reloading the branch lookup", asyn
 const menuItem = (label: string) => {
   const item = [
     ...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
-  ].find((item) => item.textContent === label);
+  ].find((item) => item.querySelector("span > span")?.textContent === label);
   expect(item, label).toBeDefined();
   return item!;
 };
+
+it("allows detached removal and explains unavailable branch actions", async () => {
+  vi.mocked(useProjectWorktrees).mockReturnValue({
+    data: { worktrees: [{ ...tree("/trees/detached", ""), branch: null, headSubject: "Detached commit" }], defaultRoot: "/trees" },
+    refresh,
+  });
+  props.onRemove = vi.fn(async () => {});
+  await render();
+  await act(async () => button("Actions for Detached commit").click());
+  expect(menuItem("Remove worktree…").disabled).toBe(false);
+  for (const label of ["Create PR", "Copy branch"]) {
+    expect(menuItem(label).disabled).toBe(true);
+    expect(menuItem(label).textContent).toContain("No branch: this worktree is on a detached commit");
+  }
+  await act(async () => menuItem("Remove worktree…").click());
+  expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+  expect(props.onRemove).not.toHaveBeenCalled();
+});
+
+it.each([
+  [{ isMain: true }, "Primary checkout can't be removed"],
+  [{ locked: true }, "Worktree is locked"],
+] as const)("keeps protected worktrees disabled with a reason: %s", async (protection, reason) => {
+  vi.mocked(useProjectWorktrees).mockReturnValue({
+    data: { worktrees: [{ ...tree("/trees/protected", "protected"), ...protection }], defaultRoot: "/trees" }, refresh,
+  });
+  props.onRemove = vi.fn(async () => {});
+  await render();
+  await act(async () => button("Actions for protected").click());
+  expect(menuItem("Remove worktree…").disabled).toBe(true);
+  expect(menuItem("Remove worktree…").textContent).toContain(reason);
+});
+
+it("gives every disabled worktree menu item a reason, including Terminal", async () => {
+  vi.mocked(useProjectWorktrees).mockReturnValue({
+    data: { worktrees: [{ ...tree("/gone", "gone"), missing: true }], defaultRoot: "/trees" }, refresh,
+  });
+  await render();
+  await act(async () => button("Actions for gone").click());
+  for (const item of document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:disabled')) {
+    expect(item.querySelectorAll("span > span").length).toBe(2);
+  }
+  expect(menuItem("Open worktree").textContent).toContain("Worktree folder is missing");
+  expect(menuItem("Remove worktree…").textContent).toContain("Worktree removal is unavailable");
+  await act(async () => document.querySelector('[role="menu"]')!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  vi.mocked(useProjectWorktrees).mockReturnValue({ data: { worktrees: [tree("/trees/a", "feature-a")], defaultRoot: "/trees" }, refresh });
+  await render();
+  await act(async () => button("Actions for feature-a").click());
+  await act(async () => menuItem("Open in").click());
+  expect(menuItem("Terminal").disabled).toBe(true);
+  expect(menuItem("Terminal").textContent).toContain("Terminal is unavailable");
+});
+
+it("marks untracked-only changes even while sessions are busy, without mislabelling zero-line tracked files", async () => {
+  vi.mocked(useProjectDiffStats).mockImplementation((path) => path === "/trees/a"
+    ? { files: 2, additions: 0, deletions: 0, untracked: 2 }
+    : { files: 1, additions: 0, deletions: 0, untracked: 0 });
+  try {
+    await render();
+    expect(container.querySelector('[data-worktree="/trees/a"] [aria-label="2 untracked files"]')?.textContent).toBe("untracked");
+    expect(container.querySelector('[data-worktree="/trees/a"] [aria-label="2 untracked files"]')?.getAttribute("title")).toBe("2 untracked files");
+    expect(container.querySelector('[data-worktree="/trees/b"]')?.textContent).not.toContain("untracked");
+    props.busySessionIds = new Set();
+    vi.mocked(useProjectDiffStats).mockReturnValue({ files: 2, additions: 12, deletions: 0, untracked: 2 });
+    await render();
+    expect(container.querySelector('[data-worktree="/trees/a"] [aria-label="2 untracked files"]')).not.toBeNull();
+    expect(container.querySelector('[data-worktree="/trees/a"] [aria-label="12 additions, 0 deletions"]')).not.toBeNull();
+  } finally { vi.mocked(useProjectDiffStats).mockReturnValue(null); }
+});
 
 it("keeps a live subagent's worktree and lead visible beyond both paging limits", async () => {
   vi.mocked(useProjectWorktrees).mockReturnValue({

@@ -5,6 +5,7 @@ const mock = vi.hoisted(() => ({
   sent: [] as { method: string; params?: Record<string, unknown> }[],
   archived: false,
   missing: false,
+  failure: undefined as { method: string; message: string } | undefined,
   release: vi.fn(),
   spawn: vi.fn(async (..._args: unknown[]) => undefined),
   kill: vi.fn(async (_id: string) => undefined),
@@ -28,6 +29,10 @@ vi.mock("../../core/child", () => ({
     const request = JSON.parse(line);
     mock.sent.push(request);
     if (request.id === undefined) return;
+    if (request.method === mock.failure?.method) {
+      mock.handlers.get(childId)?.(JSON.stringify({ id: request.id, error: { message: mock.failure.message } }));
+      return;
+    }
     let result: unknown = {};
     if (request.method === "config/read") {
       result = {
@@ -88,6 +93,7 @@ beforeEach(() => {
   mock.sent.length = 0;
   mock.archived = false;
   mock.missing = false;
+  mock.failure = undefined;
   vi.clearAllMocks();
   mock.prepare.mockResolvedValue({ home: "/mono/default", hasThread: false });
   mock.copy.mockResolvedValue(undefined);
@@ -224,6 +230,16 @@ it("keeps normal recovery available when an old thread was already removed", asy
   ).resolves.toMatchObject({ hasThread: false });
   expect(mock.copy).not.toHaveBeenCalled();
   expect(mock.sent.some((r) => r.method === "thread/archive")).toBe(false);
+});
+
+it.each(["thread not loaded: root", "database file not found"])("labels a thread/read failure without discarding saved context: %s", async message => {
+  mock.failure = { method: "thread/read", message };
+  await expect(prepareCodexMonoContext({ ...input, threadId: "root" })).rejects.toThrow(`Codex storage thread/read: ${message}`);
+  expect(mock.copy).not.toHaveBeenCalled();
+  expect(mock.sent.some(request => ["thread/start", "thread/resume", "thread/archive", "turn/start"].includes(request.method))).toBe(false);
+  expect(mock.kill).toHaveBeenCalledOnce();
+  expect(mock.release).toHaveBeenCalledOnce();
+  expect(mock.handlers.size).toBe(0);
 });
 
 it("coalesces an overlapping startup migration and send preparation", async () => {

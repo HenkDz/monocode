@@ -98,8 +98,12 @@ async function prepare(
     },
     { includeJsonrpc: false, label: "codex-store" },
   );
+  let failedMethod: string | undefined;
   const request = <T = unknown>(method: string, params: unknown) =>
-    rpc.request<T>(method, params, 30_000);
+    rpc.request<T>(method, params, 30_000).catch(error => {
+      failedMethod = method;
+      throw error;
+    });
   watchChild(
     id,
     (line) => rpc.pushLine(line),
@@ -201,12 +205,15 @@ async function prepare(
     }
     return { config, hasThread: store.hasThread };
   } catch (error) {
+    // Keep recovery checks on the provider message before adding the RPC method.
+    const method = failedMethod;
     if (archivedByUs && input.threadId) {
       // A failed copy leaves the original intact and restores its visibility.
       await request("thread/unarchive", { threadId: input.threadId }).catch(
         () => undefined,
       );
     }
+    if (method) throw new Error(`Codex storage ${method}: ${error instanceof Error ? error.message : String(error)}`);
     throw error;
   } finally {
     rpc.close();

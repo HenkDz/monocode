@@ -521,7 +521,8 @@ fn replace_link(temp: &Path, target: &Path) -> Result<(), String> {
         canonical.strip_prefix(r"\\?\").unwrap_or(&canonical)
     );
     let name: Vec<u16> = std::ffi::OsStr::new(&native).encode_wide().collect();
-    let bytes = std::mem::offset_of!(FILE_RENAME_INFO, FileName) + name.len() * 2;
+    // Win32's path conversion also reads the NUL beyond the counted filename.
+    let bytes = std::mem::offset_of!(FILE_RENAME_INFO, FileName) + (name.len() + 1) * 2;
     // usize storage supplies the alignment required by FILE_RENAME_INFO.
     let mut buffer = vec![0usize; bytes.div_ceil(std::mem::size_of::<usize>())];
     let info = buffer.as_mut_ptr().cast::<FILE_RENAME_INFO>();
@@ -1521,6 +1522,62 @@ mod tests {
         );
         remove_link(&target).unwrap();
         assert!(source.join("keep.txt").exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn link_safety_relinks_nested_source_junctions_at_every_name_alignment() {
+        let fixture = Fixture::new();
+        let old = fixture.0.join("old-account/skills");
+        let actual = fixture.0.join("shared-skills");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::create_dir_all(&actual).unwrap();
+        std::fs::create_dir_all(fixture.source()).unwrap();
+        std::fs::write(old.join("keep"), "old skill").unwrap();
+        std::fs::write(actual.join("keep"), "new skill").unwrap();
+        std::fs::write(old.join("hooks.json.bak"), "old backup").unwrap();
+        std::fs::write(actual.join("hooks.json.bak"), "new backup").unwrap();
+        junction::create(&actual, fixture.source().join("skills")).unwrap();
+        let source = fixture.source().canonicalize().unwrap().join("skills");
+        for padding in 0..4 {
+            let home = fixture.0.join(format!("home{}", "x".repeat(padding)));
+            std::fs::create_dir_all(&home).unwrap();
+            let target = home.join("skills");
+            junction::create(&old, &target).unwrap();
+            link_entry(&source, &target).unwrap();
+            assert!(same_entry(&source, &target));
+            assert_eq!(
+                std::fs::read_to_string(target.join("keep")).unwrap(),
+                "new skill"
+            );
+            assert_eq!(
+                std::fs::read_to_string(old.join("keep")).unwrap(),
+                "old skill"
+            );
+            assert_eq!(
+                std::fs::read_to_string(actual.join("keep")).unwrap(),
+                "new skill"
+            );
+            let backup = home.join("hooks.json.bak");
+            std::fs::hard_link(old.join("hooks.json.bak"), &backup).unwrap();
+            link_entry(&source.join("hooks.json.bak"), &backup).unwrap();
+            assert!(same_entry(&source.join("hooks.json.bak"), &backup));
+            assert_eq!(
+                std::fs::read_to_string(old.join("hooks.json.bak")).unwrap(),
+                "old backup"
+            );
+            assert_eq!(
+                std::fs::read_to_string(actual.join("hooks.json.bak")).unwrap(),
+                "new backup"
+            );
+            assert!(std::fs::read_dir(&home)
+                .unwrap()
+                .all(|entry| ["skills", "hooks.json.bak"].iter().any(|name| entry
+                    .as_ref()
+                    .unwrap()
+                    .file_name()
+                    == *name)));
+        }
     }
 
     #[test]

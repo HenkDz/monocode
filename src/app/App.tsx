@@ -9,6 +9,8 @@ import { monoEngineId } from "../features/monos/model/monoEngines";
 import { archiveMonoConversation, archiveProjectMonos, offerProjectMonoRestore, projectMonoTeam } from "../features/monos/model/monoArchive";
 import { loadMonoView, saveMonoView, monoForView, monoViewProject, memberDetailsView, selectedOrgMono, monoLiveState } from "../features/monos/model/monoNavigation";
 import { MonoTeamActivity } from "../features/monos/ui/MonoTeamActivity";
+import { TeamMap } from "../features/teamMap/TeamMap";
+import { TeamMapHeaderAction, useTeamMap } from "../features/teamMap/navigation";
 import { recordCrewDecision } from "../features/monos/model/monoCrewEvents";
 import { teamDecisions } from "../features/monos/model/monoTeamActivity";
 import { crewMessages, recordCrewMessage } from "../features/monos/model/monoCrewEvents";
@@ -1171,6 +1173,7 @@ function Workspace({
     () => windowTransfer?.activeTabId ?? resumed?.activeTabId ?? seed.tab.id,
   );
   const [monoViewId, setMonoViewId] = useState<string | null>(() => loadMonoView(getCurrentWindow().label));
+  const teamMap = useTeamMap();
   useEffect(() => saveMonoView(getCurrentWindow().label, monoViewId), [monoViewId]);
   const [monoDetailsOpen, setMonoDetailsOpen] = useState(false);
   const [monoPanelTab, setMonoPanelTab] = useState<MonoPanelTab>("details");
@@ -14487,6 +14490,7 @@ function Workspace({
               onOpenInboxItem={onOpenLinkedWorkItem}
               onOpenNotes={notesEnabled ? onOpenNotes : undefined}
               onOpenAutomations={onOpenAutomations}
+              onOpenTeamMap={monosEnabled ? () => teamMap.show() : undefined}
               onGoToFile={onGoToFile}
               searchActive={searchViewOpen}
               inboxActive={inboxViewOpen}
@@ -14533,6 +14537,7 @@ function Workspace({
               />
             )}
             <div className="body-glass flex min-h-0 min-w-0 flex-1 flex-col">
+              {teamMap.open && <TeamMap sessions={sessions} runs={orchestrationRuns} statuses={managerPrStatuses} scope={teamMap.scope} onClose={teamMap.close} onOpenMono={id => void onOpenMono(id)} />}
               <div
                 className={
                   searchViewOpen ||
@@ -14728,6 +14733,7 @@ function Workspace({
                                         : "hidden"
                                     }
                                   >
+                                    <TeamMapHeaderAction monoId={monoForSession(session.id)?.id} onOpen={teamMap.show} />
                                     <SessionPane
                                       {...sessionPaneProps}
                                       session={session}

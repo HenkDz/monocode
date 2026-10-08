@@ -149,6 +149,7 @@ export class WorkspaceCommands {
       case "move_path":
         return this.move(input.from, input.destParent);
       case "git_diff_index":
+        return this.gitIndex(input.cwd, input.checked === true);
       case "git_diff_files":
         return this.gitIndex(input.cwd);
       case "git_task_snapshot":
@@ -158,6 +159,7 @@ export class WorkspaceCommands {
           files: index.files.length,
           additions: index.additions,
           deletions: index.deletions,
+          untracked: index.files.filter((file) => file.status === "untracked").length,
         }));
       case "git_file_diff":
         return this.gitFileDiff(input.cwd, input.relative, input.staged);
@@ -479,8 +481,16 @@ export class WorkspaceCommands {
     return searchHostContent(await this.gitRoot(options.cwd), options);
   }
 
-  private async gitIndex(input: unknown) {
-    return hostGitIndex(await this.gitRoot(input));
+  private async gitIndex(input: unknown, checked = false) {
+    const root = await this.gitRoot(input);
+    if (checked) await this.gitCommand(root, ["status", "--porcelain", "--untracked-files=all"]);
+    const index = await hostGitIndex(root);
+    if (checked && index.branch) {
+      const configured = await this.gitCommand(root, ["config", "--get", `branch.${index.branch}.merge`]).catch(() => "");
+      if (index.upstream || configured.trim())
+        await this.gitCommand(root, ["rev-list", "--left-right", "--count", "HEAD...@{upstream}"]);
+    }
+    return index;
   }
 
   private async gitTaskSnapshot(cwd: unknown, base: unknown) {

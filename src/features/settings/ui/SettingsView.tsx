@@ -428,6 +428,7 @@ type Props = {
   sessions: SessionSummary[];
   liveSessions?: Session[];
   onRemoveWorktree?: RemoveWorktree;
+  onOpenWorktreeChanges?: (project: string, path: string) => void;
   onCheckWorktreeRemoval?: RemoveWorktree;
   onDeleteWorktreeSessions?: (
     sessionIds: readonly string[],
@@ -456,6 +457,7 @@ export function SettingsView({
   sessions,
   liveSessions,
   onRemoveWorktree = removeWorktree,
+  onOpenWorktreeChanges,
   onCheckWorktreeRemoval,
   onDeleteWorktreeSessions,
   besideRail = false,
@@ -601,6 +603,10 @@ export function SettingsView({
                   recents={recents}
                   liveSessions={liveSessions}
                   onRemove={onRemoveWorktree}
+                  onOpenChanges={onOpenWorktreeChanges && ((project, path) => {
+                    onOpenWorktreeChanges(project, path);
+                    onClose();
+                  })}
                   onCheckRemove={onCheckWorktreeRemoval}
                   onDeleteSessions={onDeleteWorktreeSessions}
                 />

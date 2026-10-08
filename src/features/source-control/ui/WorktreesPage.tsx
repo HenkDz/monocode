@@ -30,6 +30,7 @@ export function WorktreesPage({
   onRemove,
   onCheckRemove = checkWorktreeRemoval,
   onDeleteSessions,
+  onOpenChanges,
 }: {
   cwd: string;
   recents?: RecentProject[];
@@ -37,6 +38,7 @@ export function WorktreesPage({
   onRemove: RemoveWorktree;
   onCheckRemove?: RemoveWorktree;
   onDeleteSessions?: (sessionIds: readonly string[]) => Promise<boolean>;
+  onOpenChanges?: (project: string, path: string) => void;
 }) {
   const projects = useMemo(() => {
     const choices: RecentProject[] = [];
@@ -248,6 +250,7 @@ export function WorktreesPage({
         <DeleteWorktreeDialog
           cwd={project}
           tree={deleting}
+          onOpenChanges={onOpenChanges && ((path) => onOpenChanges(project, path))}
           sessionCount={worktreeSessionIds(deleting, liveSessions).length}
           onRemove={async (cwd, path, force, deleteSessions) => {
             // Check predictable blockers before any conversation is destroyed.

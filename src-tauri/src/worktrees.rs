@@ -750,10 +750,6 @@ fn removal_target(root: &Path, path: &Path) -> Result<Worktree, String> {
     if tree.locked {
         return Err("This worktree is locked. Unlock it in Git before deleting it.".into());
     }
-    if tree.branch.is_none() {
-        // There is no branch retaining detached commits after removal.
-        return Err("Create a branch for this detached worktree before deleting it.".into());
-    }
     Ok(tree)
 }
 
@@ -1537,6 +1533,32 @@ mod tests {
             .unwrap_err()
             .contains("locked"));
         assert!(path.join("keep-me").exists());
+    }
+
+    #[test]
+    fn detached_removal_keeps_main_locked_and_dirty_guards() {
+        let repo = repo();
+        let root = repo.0.join("repo");
+        let path = repo.0.join("detached");
+        let path_text = path_to_js(&path);
+        git_checked(&root, &["worktree", "add", "--detach", &path_text, "HEAD"]).unwrap();
+        assert!(removal_target(&root, &path).unwrap().branch.is_none());
+        check_removal(&root, &path, false, false).unwrap();
+        assert!(remove(&root, &root, true).unwrap_err().contains("main"));
+        std::fs::write(path.join("keep-me"), "local changes").unwrap();
+        assert!(check_removal(&root, &path, false, false).is_err());
+        assert!(remove(&root, &path, false).is_err());
+        assert!(path.join("keep-me").exists());
+        git_checked(&root, &["worktree", "lock", &path_text]).unwrap();
+        assert!(check_removal(&root, &path, true, false)
+            .unwrap_err()
+            .contains("locked"));
+        assert!(remove(&root, &path, true).unwrap_err().contains("locked"));
+        git_checked(&root, &["worktree", "unlock", &path_text]).unwrap();
+        check_removal(&root, &path, true, false).unwrap();
+        remove(&root, &path, true).unwrap();
+        assert!(!path.exists());
+        assert_eq!(list(&root).unwrap().len(), 1);
     }
 
     #[test]

@@ -23,8 +23,23 @@ vi.mock("../../sessions/hooks/useFileDrop", () => ({
   useFileDrop: () => false,
 }));
 vi.mock("../../sessions/ui/AgentTranscript", () => ({
-  AgentTranscript: ({ blocks }: { blocks: { text: string }[] }) =>
-    createElement("div", null, blocks.map((b) => b.text).join(" ")),
+  AgentTranscript: ({
+    blocks,
+    onOpenArtifact,
+  }: {
+    blocks: { text: string }[];
+    onOpenArtifact: (id: string) => void;
+  }) =>
+    createElement(
+      "div",
+      null,
+      blocks.map((b) => b.text).join(" "),
+      createElement(
+        "button",
+        { "data-open-doc": "", onClick: () => onOpenArtifact("doc-1") },
+        "Open document",
+      ),
+    ),
 }));
 vi.mock("../hooks/useMonoTranscript", () => ({
   useMonoTranscript: (session: { blocks: unknown[] }) => ({
@@ -132,6 +147,63 @@ it("shows this window's Mono with its status beneath the name", async () => {
   ).not.toBeNull();
 });
 
+it("shows an org role and sends permission changes to its owner", async () => {
+  const view = snapshot(0);
+  native.invoke.mockImplementation(async (command) => command === "mono_chat_state" ? {
+    ...view,
+    monos: view.monos.map((mono) => ({ ...mono, role: "manager" })),
+    session: { ...view.session!, runtimeMode: "full-access" },
+  } : undefined);
+  await render();
+  expect(container.querySelector("header h1")?.textContent).toContain("manager");
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Full access"]')!.click());
+  const supervised = [...document.querySelectorAll<HTMLButtonElement>('[role="option"]')]
+    .find((option) => option.textContent?.includes("Supervised"))!;
+  await act(async () => supervised.click());
+  expect(native.invoke).toHaveBeenCalledWith("mono_chat_action", {
+    monoId: "first", action: { kind: "runtimeMode", mode: "supervised" },
+  });
+});
+
+it("lists every Mono beside the chat and switches or adds from there", async () => {
+  await render();
+  const rail = container.querySelector("[data-floating-mono-rail]")!;
+  const current = rail.querySelector('[aria-current="true"]');
+  expect(current?.getAttribute("aria-label")).toBe("Captain");
+  await act(async () =>
+    rail.querySelector<HTMLButtonElement>('[aria-label="Scout"]')!.click(),
+  );
+  expect(native.invoke).toHaveBeenCalledWith("mono_chat_switch", {
+    from: "first",
+    to: "second",
+  });
+  await act(async () =>
+    rail.querySelector<HTMLButtonElement>('[aria-label="New mono"]')!.click(),
+  );
+  expect(native.invoke).toHaveBeenCalledWith("mono_chat_action", {
+    monoId: "first",
+    action: { kind: "create" },
+  });
+});
+
+it("switches Monos inside the same frame, loading only the conversation", async () => {
+  await render();
+  const frame = container.querySelector("[data-floating-mono]");
+  const rail = container.querySelector("[data-floating-mono-rail]");
+  act(() => receive({ payload: { ...snapshot(1), session: null } }));
+  expect(container.querySelector("[data-floating-mono]")).toBe(frame);
+  expect(container.querySelector("[data-floating-mono-rail]")).toBe(rail);
+  expect(container.querySelector("header h1")?.textContent).toBe("Scout");
+  expect(
+    container.querySelector("[data-floating-mono-loader]")?.textContent,
+  ).toBe("Loading conversation…");
+  expect(
+    rail?.querySelector('[aria-current="true"]')?.getAttribute("aria-label"),
+  ).toBe("Scout");
+  act(() => receive({ payload: snapshot(1) }));
+  expect(container.textContent).toContain("Scout's conversation");
+});
+
 it("keeps one loading screen through initial lookup and roster updates until the conversation arrives", async () => {
   let initial!: (view: FloatingMonoView) => void;
   native.invoke.mockImplementation((command) => {
@@ -145,9 +217,9 @@ it("keeps one loading screen through initial lookup and roster updates until the
       expect(
         container.querySelector("[data-floating-mono-loading]"),
       ).not.toBeNull();
-      expect(container.querySelector('[role="status"]')?.textContent).toBe(
-        "Loading conversation…",
-      );
+      expect(
+        container.querySelector("[data-floating-mono-loader]")?.textContent,
+      ).toBe("Loading conversation…");
     }
     return Promise.resolve();
   });
@@ -163,7 +235,9 @@ it("keeps one loading screen through initial lookup and roster updates until the
   expect(container.querySelector("[data-floating-mono-loading]")).toBe(loader);
   act(() => receive({ payload: { ...opening, monos: [...monos] } }));
   expect(container.querySelector("[data-floating-mono-loading]")).toBe(loader);
-  expect(container.textContent).toBe("Loading conversation…");
+  expect(
+    container.querySelector("[data-floating-mono-loader]")?.textContent,
+  ).toBe("Loading conversation…");
 
   act(() => receive({ payload: snapshot(0) }));
   expect(container.querySelector("[data-floating-mono-loading]")).toBeNull();
@@ -245,4 +319,56 @@ it("ignores a stale initial snapshot after a newer update arrives", async () => 
   await act(async () => initial(snapshot(0)));
   expect(container.querySelector("h1")!.textContent).toBe("Scout");
   expect(container.textContent).toContain("Scout's conversation");
+});
+
+it("reads a Mono's document in a sheet over the chat and slides it away", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  native.invoke.mockImplementation(async (command) => {
+    if (command === "mono_chat_state") return snapshot(0);
+    if (command === "artifacts_get")
+      return {
+        id: "doc-1",
+        kind: "document",
+        title: "Menu plan",
+        body: "Soup first.",
+        createdAt: 1,
+        updatedAt: 1,
+      };
+  });
+  await render();
+  const trigger = container.querySelector<HTMLButtonElement>("[data-open-doc]")!;
+  trigger.focus();
+  await act(async () =>
+    trigger.click(),
+  );
+  const sheet = container.querySelector('[data-artifact-sheet="doc-1"]');
+  expect(sheet?.textContent).toContain("Menu plan");
+  expect(sheet?.textContent).toContain("Soup first.");
+  const close = sheet!.querySelector<HTMLButtonElement>('[aria-label="Close document"]')!;
+  expect(document.activeElement).toBe(close);
+  expect(trigger.closest("[inert]")).not.toBeNull();
+  expect(container.querySelector("[data-floating-mono-rail]")?.hasAttribute("inert")).toBe(true);
+  const controls = sheet!.querySelectorAll<HTMLButtonElement>("button");
+  await act(async () => close.dispatchEvent(new KeyboardEvent("keydown", {
+    key: "Tab", bubbles: true, cancelable: true,
+  })));
+  expect(document.activeElement).toBe(controls[0]);
+  await act(async () => controls[0].dispatchEvent(new KeyboardEvent("keydown", {
+    key: "Tab", shiftKey: true, bubbles: true, cancelable: true,
+  })));
+  expect(document.activeElement).toBe(close);
+  // Reading in place never asks the main window to take over.
+  expect(native.invoke).not.toHaveBeenCalledWith(
+    "mono_chat_action",
+    expect.anything(),
+  );
+  act(() => {
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+  });
+  expect(container.querySelector("[data-artifact-sheet]")).not.toBeNull();
+  act(() => vi.runAllTimers());
+  expect(container.querySelector("[data-artifact-sheet]")).toBeNull();
+  expect(document.activeElement).toBe(trigger);
+  expect(trigger.closest("[inert]")).toBeNull();
+  vi.useRealTimers();
 });

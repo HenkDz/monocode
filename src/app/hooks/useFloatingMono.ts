@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useSyncExternalStore } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { IS_MAC } from "../../platform/tauri/platform";
@@ -6,6 +6,10 @@ import type { Session } from "../../features/sessions/model/session";
 import { findMono, listMonos } from "../../features/monos/model/mono";
 import { monoLiveState } from "../../features/monos/model/monoNavigation";
 import type { OrchestrationRun } from "../../features/orchestration/model/orchestrationState";
+import {
+  loadMonoMenuBarIcon,
+  subscribeMonoMenuBarIcon,
+} from "../../features/settings/model/settings";
 import {
   deliverFloatingMonoRequest,
   floatingMonoRoster,
@@ -16,12 +20,17 @@ import {
   type FloatingMonoRequest,
 } from "../../features/monos/model/floatingMono";
 
+type Host = Omit<FloatingMonoHost, "create"> & {
+  /** Add a Mono to the roster and return its id. */
+  create(): string;
+};
+
 /** The floating webview never boots providers or persists the live transcript. */
 export function useFloatingMono(
   sessions: Session[],
   rosterKey: string,
   enabled: boolean,
-  host: FloatingMonoHost,
+  host: Host,
   runs: readonly OrchestrationRun[] = [],
 ) {
   const current = useRef({ sessions, enabled, host, runs });
@@ -85,7 +94,7 @@ export function useFloatingMono(
             try {
               const session = await deliverFloatingMonoRequest(
                 request,
-                current.current.host,
+                { ...current.current.host, create },
                 () =>
                   disposed
                     ? Promise.resolve(false)
@@ -105,7 +114,7 @@ export function useFloatingMono(
         draining = false;
       }
     };
-    const sync = () => {
+    const roster = () => {
       const monos = floatingMonoRoster(current.current.enabled);
       const hosted = monos.flatMap((mono) => {
         const session = current.current.sessions.find(
@@ -113,15 +122,22 @@ export function useFloatingMono(
         );
         return session ? [{ monoId: mono.id, busy: !!session.busy }] : [];
       });
+      return { monos, hosted, mascots: floatingMonoMenuMascots(monos) };
+    };
+    // The native side only opens Monos it has heard of. This runs inside a
+    // drain, so it must not wait on the sync queue, which waits on the drain.
+    const create = async (from: string) => {
+      const to = current.current.host.create();
+      await invoke("mono_chat_sync", roster());
+      await invoke("mono_chat_switch", { from, to });
+    };
+    const sync = () => {
+      const args = roster();
       syncing.current = syncing.current
         .catch(() => undefined)
         .then(async () => {
           if (disposed) return;
-          await invoke("mono_chat_sync", {
-            monos,
-            hosted,
-            mascots: floatingMonoMenuMascots(monos),
-          });
+          await invoke("mono_chat_sync", args);
           await drain();
           publish.current();
         })
@@ -157,6 +173,19 @@ export function useFloatingMono(
   useEffect(() => {
     refresh.current();
   }, [rosterKey, enabled, hostedKey]);
+
+  // The native side remembers this too; syncing here keeps it matching the
+  // setting if the two ever drift.
+  const menuBarIcon = useSyncExternalStore(
+    subscribeMonoMenuBarIcon,
+    loadMonoMenuBarIcon,
+  );
+  useEffect(() => {
+    if (!IS_MAC || !isTauri()) return;
+    void invoke("mono_menu_bar_set_visible", { visible: menuBarIcon }).catch(
+      console.error,
+    );
+  }, [menuBarIcon]);
 
   // Follow the same React commits as the main transcript. A polling interval
   // batches streamed lines into visible jumps and delays the send entrance.

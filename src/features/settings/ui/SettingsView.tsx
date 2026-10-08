@@ -332,7 +332,10 @@ import {
   loadModelControls,
   loadNotesEnabled,
   loadMonosEnabled,
+  loadMonoMenuBarIcon,
   loadKeybindingOverrides,
+  saveMonoMenuBarIcon,
+  subscribeMonoMenuBarIcon,
   loadQuickComposerEnabled,
   loadQuickComposerShortcut,
   loadTabAnimationsEnabled,
@@ -389,6 +392,8 @@ import {
 } from "../../notifications/model/notifications";
 import {
   installPendingUpdate,
+  packageManagedInstall,
+  packageManagerHint,
   readAppVersion,
   runUpdateFlow,
   type UpdaterSnapshot,
@@ -588,9 +593,7 @@ export function SettingsView({
               ) : null}
               {section === "chat" ? <ChatPage /> : null}
               {section === "keybindings" ? <KeybindingsPage /> : null}
-              {section === "monos" ? (
-                <MonosPage />
-              ) : null}
+              {section === "monos" ? <MonosPage /> : null}
               {section === "mcp" ? (
                 <McpSettings cwd={cwd} recents={recents} />
               ) : null}
@@ -1764,10 +1767,16 @@ function UpdateRow({
 
   useEffect(() => {
     let cancelled = false;
-    void readAppVersion().then((currentVersion) => {
-      if (cancelled) return;
-      setSnapshot((current) => ({ ...current, currentVersion }));
-    });
+    void Promise.all([readAppVersion(), packageManagedInstall()]).then(
+      ([currentVersion, packageManaged]) => {
+        if (cancelled) return;
+        setSnapshot((current) => ({
+          ...current,
+          currentVersion,
+          packageManaged: packageManaged ?? undefined,
+        }));
+      },
+    );
     return () => {
       cancelled = true;
     };
@@ -1797,7 +1806,9 @@ function UpdateRow({
             ? "You're on the latest version."
             : snapshot.phase === "error"
               ? (snapshot.error ?? "Update check failed.")
-              : "MonoCode updates itself from the release feed.";
+              : snapshot.packageManaged
+                ? packageManagerHint(snapshot.packageManaged)
+                : "MonoCode updates itself from the release feed.";
 
   return (
     <Row
@@ -3772,6 +3783,14 @@ function ProviderRow({
           label={`${HARNESS_TITLE[harness]} model`}
           value={current.id}
           onChange={(next) => onModelChange(harness, next)}
+          onOpen={() => {
+            // Opening the dropdown is an explicit refresh: fallbacks keep
+            // `models` non-empty, and routine refreshes skip once a live
+            // catalog exists, so force this one past that skip.
+            if (available) {
+              void refreshHarnessCatalogs([harness], { force: true });
+            }
+          }}
           options={models.map((item) => ({
             value: item.id,
             label: item.name,
@@ -3987,6 +4006,11 @@ function MonosPage() {
     loadMonosEnabled,
     () => true,
   );
+  const menuBarIcon = useSyncExternalStore(
+    subscribeMonoMenuBarIcon,
+    loadMonoMenuBarIcon,
+    () => true,
+  );
   const snapshot = useSyncExternalStore(subscribeMonos, monosSnapshot);
   const monos = useMemo(() => listMonos(), [snapshot]);
 
@@ -4000,6 +4024,19 @@ function MonosPage() {
         >
           <Toggle label="Show monos" on={enabled} onChange={saveMonosEnabled} />
         </Row>
+        {IS_MAC && (
+          <Row
+            id="mono-menu-bar-icon"
+            label="Menu bar icon"
+            description="Chat with a Mono or open the quick composer from the macOS menu bar. Turn this off to hide the icon."
+          >
+            <Toggle
+              label="Menu bar icon"
+              on={menuBarIcon}
+              onChange={saveMonoMenuBarIcon}
+            />
+          </Row>
+        )}
       </Group>
       <Group
         id="mono-list"
@@ -4399,11 +4436,13 @@ function Select({
   value,
   options,
   onChange,
+  onOpen,
 }: {
   label: string;
   value: string;
   options: { value: string; label: string; icon?: ReactNode }[];
   onChange: (value: string) => void;
+  onOpen?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(() =>
@@ -4429,6 +4468,11 @@ function Select({
       ),
     );
   }, [open, value, options]);
+
+  useEffect(() => {
+    if (open) onOpen?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;

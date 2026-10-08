@@ -44,23 +44,62 @@ export function ModalPanel({
 }: Props) {
   const popupHost = useContext(NativePopupHost);
   const closeRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLElement | null>(
+    typeof document !== "undefined" &&
+      document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null,
+  );
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   const uid = useId();
   const titleId = `${uid}-title`;
   const descriptionId = description ? `${uid}-desc` : undefined;
 
   useEffect(() => {
+    const trigger = triggerRef.current;
     if (!minimalHeader) closeRef.current?.focus();
+    return () => {
+      if (trigger?.isConnected) trigger.focus();
+    };
   }, [minimalHeader]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
+      const panel = panelRef.current;
+      const dialogs = document.querySelectorAll(
+        '[role="dialog"][aria-modal="true"]',
+      );
+      if (!panel || dialogs[dialogs.length - 1] !== panel) return;
       if (
-        event.key !== "Escape" ||
-        event.defaultPrevented ||
-        (event.target instanceof Element &&
-          event.target.closest("[data-dialog-popover]"))
+        event.target instanceof Element &&
+        event.target.closest("[data-dialog-popover]")
       )
+        return;
+      if (event.key === "Tab" && !event.defaultPrevented) {
+        const controls = [
+          ...panel.querySelectorAll<HTMLElement>(
+            'button:not(:disabled), a[href], input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex="-1"])',
+          ),
+        ].filter(
+          (element) =>
+            !element.closest('[hidden], [inert], [aria-hidden="true"]'),
+        );
+        const first = controls[0],
+          last = controls[controls.length - 1];
+        if (
+          !first ||
+          (event.shiftKey
+            ? document.activeElement === first
+            : document.activeElement === last) ||
+          !panel.contains(document.activeElement)
+        ) {
+          event.preventDefault();
+          (event.shiftKey ? last : first)?.focus();
+        }
+        return;
+      }
+      if (event.key !== "Escape" || event.defaultPrevented || event.isComposing)
         return;
       event.preventDefault();
       event.stopPropagation();
@@ -79,6 +118,7 @@ export function ModalPanel({
       }
     >
       <div
+        ref={panelRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}

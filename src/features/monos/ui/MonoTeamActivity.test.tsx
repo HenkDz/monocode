@@ -46,7 +46,7 @@ it("groups descendant decisions once and routes inline approval to the worker se
       await act(async () => [...container.querySelectorAll("button")].find(button => button.textContent === label)!.click());
       expect(approve).toHaveBeenLastCalledWith("worker", 42, label.toLowerCase());
     }
-    expect(container.textContent).toContain("Work in progress");
+    expect(container.textContent).toContain("Working");
     expect(container.textContent).toContain("Queued documentation goal");
     expect(container.textContent).toContain("Awaiting worker assignment");
     expect(container.textContent).not.toContain("Other project goal");
@@ -81,7 +81,7 @@ it("uses sidebar display names with path tooltips and places no-change completio
 });
 
 // A goal remains one group even when its tasks are in different states.
-it("shows one compact task per state, groups mixed-state goals once, expands prompts and opens the ready card", async () => {
+it("shows flat summary rows and counted keyboard tabs, and opens the ready card", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   localStorage.setItem("monocode:mono-roster", JSON.stringify(roster));
   const prompt = Array.from(
@@ -189,14 +189,20 @@ it("shows one compact task per state, groups mixed-state goals once, expands pro
       ),
     );
     expect(container.querySelectorAll("[data-team-project]")).toHaveLength(1);
-    expect(
-      container.querySelectorAll('[data-team-goal="shared-goal"]'),
-    ).toHaveLength(1);
-    expect(
-      container
-        .querySelector("[data-team-goal] > h4")
-        ?.classList.contains("line-clamp-2"),
-    ).toBe(true);
+    expect(container.querySelectorAll("[role=tab]")).toHaveLength(5);
+    const tabs = [...container.querySelectorAll<HTMLButtonElement>("[role=tab]")];
+    expect(tabs.map(tab => tab.textContent)).toEqual(["Needs you 0", "Working 1", "Ready 1", "Finished 1", "Feed 0"]);
+    expect(tabs[1].getAttribute("aria-selected")).toBe("true");
+    await act(async () => tabs[1].dispatchEvent(new KeyboardEvent("keydown", {key: "ArrowLeft", bubbles: true})));
+    expect(tabs[0].getAttribute("aria-selected")).toBe("true");
+    await act(async () => tabs[0].dispatchEvent(new KeyboardEvent("keydown", {key: "ArrowRight", bubbles: true})));
+    expect(tabs[1].getAttribute("aria-selected")).toBe("true");
+    expect(container.querySelector('[data-team-section="Work in progress"]')?.hasAttribute("hidden")).toBe(false);
+    expect(container.querySelector('[data-team-section="Ready to merge"]')?.hasAttribute("hidden")).toBe(true);
+    await act(async () => tabs[1].dispatchEvent(new KeyboardEvent("keydown", {key: "End", bubbles: true})));
+    expect(tabs[4].getAttribute("aria-selected")).toBe("true");
+    expect(container.querySelector('[role=tabpanel]')?.getAttribute("aria-labelledby")).toBe(tabs[4].id);
+    await act(async () => tabs[2].click());
     for (const [id, section] of [
       ["ready", "Ready to merge"],
       ["running", "Work in progress"],
@@ -213,7 +219,7 @@ it("shows one compact task per state, groups mixed-state goals once, expands pro
       ).toBe(section);
     }
     const task = container.querySelector('[data-team-task="ready"]')!;
-    expect(task.querySelector("button")?.textContent).toBe(
+    expect(task.querySelector("[data-task-title]")?.textContent).toBe(
       "Polish search experience",
     );
     expect(task.querySelector("[data-task-event]")?.textContent).toBe(
@@ -221,42 +227,11 @@ it("shows one compact task per state, groups mixed-state goals once, expands pro
     );
     expect(task.querySelector("svg")).not.toBeNull();
     expect(task.textContent).toContain("10s");
-    expect(
-      [...container.querySelectorAll('[data-team-task="running"] button')].some(
-        (button) => button.textContent === "Show more",
-      ),
-    ).toBe(true);
-    const details = task.querySelector("details")!;
-    expect(details.open).toBe(false);
-    expect(
-      task
-        .querySelector("[data-task-prompt]")
-        ?.classList.contains("line-clamp-4"),
-    ).toBe(true);
-    await act(async () => details.querySelector("summary")!.click());
-    expect(details.open).toBe(true);
-    const more = [...task.querySelectorAll("button")].find(
-      (button) => button.textContent === "Show more",
-    )!;
-    await act(async () => more.click());
-    expect(more.getAttribute("aria-expanded")).toBe("true");
-    expect(
-      task
-        .querySelector("[data-task-prompt]")
-        ?.classList.contains("line-clamp-4"),
-    ).toBe(false);
-    await act(async () =>
-      [...task.querySelectorAll("button")]
-        .find((button) => button.textContent === "Review in chat")!
-        .click(),
-    );
+    expect(container.querySelector("details")).toBeNull();
+    expect(container.querySelector("[data-task-prompt]")).toBeNull();
+    expect(task.textContent).not.toContain(prompt);
+    await act(async () => [...task.querySelectorAll("button")].find(button => button.textContent === "Open")!.click());
     expect(open).toHaveBeenCalledExactlyOnceWith("manager-chat", "ready");
-    await act(async () => more.click());
-    expect(
-      task
-        .querySelector("[data-task-prompt]")
-        ?.classList.contains("line-clamp-4"),
-    ).toBe(true);
   } finally {
     goals.mockRestore();
     await act(async () => root.unmount());

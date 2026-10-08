@@ -2,7 +2,11 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
-import { ProjectManagerReview, ProjectManagerStatus, ReadyCard } from "./ProjectManagerReview";
+import {
+  ProjectManagerReview,
+  ProjectManagerStatus,
+  ReadyCard,
+} from "./ProjectManagerReview";
 import { orchestrator } from "../model/orchestration";
 import type { OrchestrationRun } from "../model/orchestrationState";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -24,6 +28,7 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
   openUrl: vi.fn(async () => {}),
 }));
 vi.mock("../../inbox/model/githubTasks", () => ({
+  formatRelativeTime: vi.fn(() => "Just now"),
   githubPrDiff: vi.fn(async () => ({
     additions: 29,
     deletions: 0,
@@ -36,17 +41,57 @@ vi.mock("../../inbox/hooks/useGithubPrChecks", () => ({
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
 it("opens Review and PR summary documents from the PR-ready card", async () => {
-  const run = { cwd: "/repo", ownerMonoId: "manager", tasks: [] } as unknown as OrchestrationRun;
-  const task = { id: "linked", title: "Linked documents", harness: "codex", model: "codex:test", prUrl: "https://github.com/example/repo/pull/1", reviewArtifactId: "review-1", prSummaryArtifactId: "summary-1" } as OrchestrationRun["tasks"][number];
-  const host = document.createElement("div"), root = createRoot(host), open = vi.fn();
+  const run = {
+    cwd: "/repo",
+    ownerMonoId: "manager",
+    tasks: [],
+  } as unknown as OrchestrationRun;
+  const task = {
+    id: "linked",
+    title: "Linked documents",
+    harness: "codex",
+    model: "codex:test",
+    prUrl: "https://github.com/example/repo/pull/1",
+    reviewArtifactId: "review-1",
+    prSummaryArtifactId: "summary-1",
+  } as OrchestrationRun["tasks"][number];
+  const host = document.createElement("div"),
+    root = createRoot(host),
+    open = vi.fn();
   window.addEventListener("monocode:open-artifact", open);
   try {
-    await act(async () => root.render(<ReadyCard run={run} task={task} merged={false} />));
+    await act(async () =>
+      root.render(<ReadyCard run={run} task={task} merged={false} />),
+    );
     expect(host.querySelectorAll("[data-org-artifact]")).toHaveLength(2);
     for (const id of ["review-1", "summary-1"]) {
-      await act(async () => host.querySelector<HTMLButtonElement>(`[data-org-artifact="${id}"]`)!.click());
-      expect(open).toHaveBeenLastCalledWith(expect.objectContaining({ detail: { monoId: "manager", id } }));
+      await act(async () =>
+        host
+          .querySelector<HTMLButtonElement>(`[data-org-artifact="${id}"]`)!
+          .click(),
+      );
+      expect(open).toHaveBeenLastCalledWith(
+        expect.objectContaining({ detail: { monoId: "manager", id } }),
+      );
     }
+    await act(async () =>
+      host
+        .querySelector<HTMLButtonElement>('[aria-haspopup="dialog"]')!
+        .click(),
+    );
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(
+          '[role="dialog"] [data-org-artifact="review-1"]',
+        )!
+        .click(),
+    );
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(open).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        detail: { monoId: "manager", id: "review-1" },
+      }),
+    );
   } finally {
     await act(async () => root.unmount());
     window.removeEventListener("monocode:open-artifact", open);
@@ -54,27 +99,69 @@ it("opens Review and PR summary documents from the PR-ready card", async () => {
 });
 
 it("counts accepted no-change tasks as finished in the Manager header", async () => {
-  const host = document.createElement("div"), root = createRoot(host);
-  const run = { tasks: [{ id: "report", status: "completed", accepted: true, lastDispatchId: "dispatch", acceptedDispatchId: "dispatch", completionOutcome: "no-changes" }] } as unknown as OrchestrationRun;
+  const host = document.createElement("div"),
+    root = createRoot(host);
+  const run = {
+    tasks: [
+      {
+        id: "report",
+        status: "completed",
+        accepted: true,
+        lastDispatchId: "dispatch",
+        acceptedDispatchId: "dispatch",
+        completionOutcome: "no-changes",
+      },
+    ],
+  } as unknown as OrchestrationRun;
   try {
     await act(async () => root.render(<ProjectManagerStatus run={run} />));
     expect(host.textContent).toContain("0 running");
     expect(host.textContent).toContain("0 ready");
     expect(host.textContent).toContain("1 finished");
-  } finally { await act(async () => root.unmount()); }
+  } finally {
+    await act(async () => root.unmount());
+  }
 });
 
 it("explains a real blocker in chat and continues explicitly, without a Resume link", async () => {
-  const continueManager = vi.spyOn(orchestrator, "continueManager").mockResolvedValue();
+  const continueManager = vi
+    .spyOn(orchestrator, "continueManager")
+    .mockResolvedValue();
   const host = document.createElement("div");
   const root = createRoot(host);
   try {
-    await act(async () => root.render(<ProjectManagerReview run={{ leadId: "manager", tasks: [], status: "paused", error: "Provider unavailable" } as unknown as OrchestrationRun} />));
+    await act(async () =>
+      root.render(
+        <ProjectManagerReview
+          run={
+            {
+              leadId: "manager",
+              tasks: [],
+              status: "paused",
+              error: "Provider unavailable",
+            } as unknown as OrchestrationRun
+          }
+        />,
+      ),
+    );
     expect(host.textContent).toContain("Provider unavailable");
     expect(host.textContent).not.toContain("Resume");
     await act(async () => host.querySelector("button")!.click());
     expect(continueManager).toHaveBeenCalledWith("manager");
-    await act(async () => root.render(<ProjectManagerReview run={{ leadId: "manager", tasks: [], status: "active", recoveryNotice: "Continued 2 workers after restart." } as unknown as OrchestrationRun} />));
+    await act(async () =>
+      root.render(
+        <ProjectManagerReview
+          run={
+            {
+              leadId: "manager",
+              tasks: [],
+              status: "active",
+              recoveryNotice: "Continued 2 workers after restart.",
+            } as unknown as OrchestrationRun
+          }
+        />,
+      ),
+    );
     expect(host.textContent).toContain("Continued 2 workers");
     expect(host.querySelector("button")).toBeNull();
   } finally {
@@ -124,13 +211,21 @@ it("navigates to workers, cycles ready cards and offers removal only after match
     );
   try {
     await render();
+    expect(host.querySelector("details")).toBeNull();
+    await act(async () =>
+      host
+        .querySelector<HTMLButtonElement>('[aria-haspopup="dialog"]')!
+        .click(),
+    );
     await act(async () =>
       (
-        host.querySelector('[aria-label="Go to worktree"]') as HTMLButtonElement
+        document.querySelector(
+          '[aria-label="Go to worktree"]',
+        ) as HTMLButtonElement
       ).click(),
     );
     expect(openWorker).toHaveBeenCalledWith("worker-one");
-    expect(host.textContent).toContain("Codex · codex:test");
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
     await act(async () =>
       [...host.querySelectorAll("button")]
         .find((button) => button.textContent === "Next")!
@@ -165,11 +260,25 @@ it("navigates to workers, cycles ready cards and offers removal only after match
     const merged = host.querySelector('[aria-label="Merged: one"]')!;
     expect(merged.textContent).not.toContain("Send back");
     await act(async () =>
-      [...merged.querySelectorAll("button")]
+      merged
+        .querySelector<HTMLButtonElement>('[aria-haspopup="dialog"]')!
+        .click(),
+    );
+    await act(async () =>
+      [
+        ...document.querySelectorAll<HTMLButtonElement>(
+          '[role="dialog"] button',
+        ),
+      ]
         .find((button) => button.textContent === "Remove worktree")!
         .click(),
     );
     expect(remove).toHaveBeenCalledWith("/repo", "/one");
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>('[aria-label="Close"]')!
+        .click(),
+    );
     statusView.statuses = new Map([
       [
         prStatusKey("/one", "one"),
@@ -218,14 +327,14 @@ it("opens the PR and worker diff and resumes to send corrections without losing 
   const root = createRoot(host);
   const click = (label: string) =>
     act(async () => {
-      [...host.querySelectorAll("button")]
+      [...document.querySelectorAll("button")]
         .find((b) => b.textContent === label)!
         .click();
     });
   try {
     await act(async () => root.render(<ProjectManagerReview run={run} />));
-    expect(host.textContent).toContain("Tests passed");
-    expect(host.querySelector("details")?.open).toBe(false);
+    expect(host.textContent).not.toContain("Tests passed");
+    expect(host.querySelector("details")).toBeNull();
     expect(host.textContent).not.toContain("/worker");
     expect(host.textContent).toContain("+29 −0 · 1 file");
     expect(host.textContent).toContain("✓ 2 checks");
@@ -259,12 +368,21 @@ it("opens the PR and worker diff and resumes to send corrections without losing 
       await act(async () => root.render(<ProjectManagerReview run={run} />));
       expect(host.querySelector("span[title]")?.className).toBe(color);
     }
+    await act(async () =>
+      host
+        .querySelector<HTMLButtonElement>('[aria-haspopup="dialog"]')!
+        .click(),
+    );
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain(
+      "Tests passed",
+    );
+    expect(document.querySelector('[role="dialog"] details')).toBeNull();
     await click("Open PR");
     expect(openUrl).toHaveBeenCalledWith(run.tasks[0].prUrl);
     await click("Open diff");
     expect(openUrl).toHaveBeenCalledWith(`${run.tasks[0].prUrl}/files`);
     await click("Send back");
-    const textarea = host.querySelector("textarea")!;
+    const textarea = document.querySelector("textarea")!;
     await act(async () => {
       Object.getOwnPropertyDescriptor(
         HTMLTextAreaElement.prototype,
@@ -274,7 +392,7 @@ it("opens the PR and worker diff and resumes to send corrections without losing 
       textarea.dispatchEvent(new Event("change", { bubbles: true }));
     });
     await act(async () =>
-      host
+      document
         .querySelector("form")!
         .dispatchEvent(
           new Event("submit", { bubbles: true, cancelable: true }),
@@ -287,12 +405,12 @@ it("opens the PR and worker diff and resumes to send corrections without losing 
       undefined,
       true,
     );
-    expect(host.querySelector('[role="alert"]')?.textContent).toContain(
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain(
       "Unavailable",
     );
     expect(textarea.value).toBe("Add an example");
     await act(async () =>
-      host
+      document
         .querySelector("form")!
         .dispatchEvent(
           new Event("submit", { bubbles: true, cancelable: true }),
@@ -304,7 +422,7 @@ it("opens the PR and worker diff and resumes to send corrections without losing 
       "message",
       { taskId: "task", text: "Add an example" },
     );
-    expect(host.querySelector("textarea")).toBeNull();
+    expect(document.querySelector("textarea")).toBeNull();
   } finally {
     Object.assign(checkView, {
       loading: false,

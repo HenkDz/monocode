@@ -9,6 +9,33 @@ import { newSession } from "../../sessions/model/session";
 import { crewMessages, recordCrewDecision } from "../model/monoCrewEvents";
 import { activityToolTitle } from "../model/monoTeamActivity";
 
+it("summarizes the newest completed task and its pending approval", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const roster = [{ id: "worker", role: "member", reportsTo: "manager", name: "Worker", projects: ["/app"], mascot: "cat", color: "#abc" }] as Mono[];
+  const runs = [{ leadId: "engine", ownerMonoId: "manager", cwd: "/app", tasks: [
+    { id: "older", memberId: "worker", sessionId: "old-chat", title: "Old audit", status: "completed", lastDispatchId: "old-dispatch", accepted: true, acceptedDispatchId: "old-dispatch", completionOutcome: "no-changes" },
+    { id: "newer", memberId: "worker", sessionId: "new-chat", title: "New audit", status: "completed", lastDispatchId: "new-dispatch" },
+  ], dispatches: [
+    { id: "old-dispatch", taskId: "older", state: "completed", startedAt: 1, updatedAt: 2 },
+    { id: "new-dispatch", taskId: "newer", state: "completed", startedAt: 10, updatedAt: 20 },
+  ] }] as OrchestrationRun[];
+  const session = { ...newSession("codex", "/app"), id: "new-chat", blocks: [{ id: "approval", role: "tool" as const, text: "Review command", tool: { kind: "shell", status: "pending" }, approval: { requestId: 42 } }] };
+  const approve = vi.fn();
+  const container = document.createElement("div"), root = createRoot(container);
+  try {
+    await act(async () => root.render(<MonoOrgActivity rootId="worker" roster={roster} runs={runs} sessions={[session]} now={30} onApproval={approve} />));
+    const summary = container.querySelector('[data-org-member="worker"]')!;
+    expect(summary.querySelector('[title="2 tasks · Needs you"]')).not.toBeNull();
+    expect(summary.textContent).not.toContain("Completed (no changes)");
+    await act(async () => summary.querySelector<HTMLButtonElement>('[aria-label="Show work for Worker"]')!.click());
+    await act(async () => [...document.querySelectorAll<HTMLButtonElement>('[role=dialog] button')].find(button => button.textContent === "Allow")!.click());
+    expect(approve).toHaveBeenCalledExactlyOnceWith("new-chat", 42, "allow");
+    await act(async () => document.querySelector<HTMLButtonElement>('[role=dialog] [aria-label=Close]')!.click());
+    await act(async () => root.render(<MonoOrgActivity rootId="worker" roster={roster} runs={runs} sessions={[{ ...session, blocks: [] }]} now={30} />));
+    expect(summary.querySelector('[title="2 tasks · In review"]')).not.toBeNull();
+  } finally { await act(async () => root.unmount()); vi.unstubAllGlobals(); }
+});
+
 it("rolls descendant chat work and decisions through the org even without worker tasks", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const roster = [
@@ -253,6 +280,7 @@ it("shows hierarchy, live worker steps and a chronological feed from stored disp
         text: "",
         tool: { title: "Reading routes" },
       },
+      { id: "report", role: "assistant" as const, text: "See artifact-routing-report" },
     ],
   } as ReturnType<typeof newSession>;
   expect(crewFeed(roster, runs).map((event) => event.text)).toEqual([
@@ -274,12 +302,27 @@ it("shows hierarchy, live worker steps and a chronological feed from stored disp
     );
     expect(
       container.querySelector(
-        '[data-org-member="manager"] [data-org-member="backend"]',
+        '[data-org-member="backend"]',
       ),
     ).toBeTruthy();
     expect(container.textContent).toContain("Working");
-    expect(container.textContent).toContain("Now doing: Reading routes");
+    expect(container.textContent).not.toContain("Now doing: Reading routes");
     expect(container.textContent).toContain("Backend picked up Fix routing");
+    expect(container.querySelector("details")).toBeNull();
+    expect(container.querySelector('[data-org-member="manager"] [data-org-member="backend"]')).toBeNull();
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Show work for Backend"]')!.click());
+    expect(document.querySelector('[role=dialog]')).not.toBeNull();
+    expect(document.querySelector('[role=dialog]')?.textContent).toContain("Reading routes");
+    const opened = vi.fn();
+    window.addEventListener("monocode:open-artifact", opened);
+    try {
+      await act(async () => document.querySelector<HTMLButtonElement>('[role=dialog] [data-org-artifact="artifact-routing-report"]')!.click());
+      expect(opened.mock.calls[0][0].detail.id).toBe("artifact-routing-report");
+      expect(document.querySelector('[role=dialog]')).toBeNull();
+    } finally { window.removeEventListener("monocode:open-artifact", opened); }
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Show work for Backend"]')!.click());
+    await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", {key: "Escape", bubbles: true})));
+    expect(document.querySelector('[role=dialog]')).toBeNull();
   } finally {
     await act(async () => root.unmount());
     vi.unstubAllGlobals();

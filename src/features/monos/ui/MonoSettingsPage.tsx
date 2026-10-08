@@ -109,17 +109,16 @@ export function MonoSettingsPage({
         )}
 
         <nav className="flex flex-col gap-px border-t border-stroke p-2">
-          {(mono?.role === "manager" || mono?.role === "orchestrator") && (
-            <NavRow
-              label={mono.role === "orchestrator" ? "Managers" : "Team"}
-              description="Direct reports, roles and models."
-              onClick={() => onOpen("team")}
-            />
-          )}
           <NavRow
             label="Soul"
             description="Defines who this bot is and the rules it follows. Always included in its context."
             onClick={() => onOpen("soul")}
+          />
+          <NavRow
+            label="Memory"
+            description="Facts and preferences this bot remembers."
+            count={counts?.memory}
+            onClick={() => onOpen("memory")}
           />
           {mono?.role !== "member" && (
             <NavRow
@@ -129,12 +128,13 @@ export function MonoSettingsPage({
               onClick={() => onOpen("habits")}
             />
           )}
-          <NavRow
-            label="Memory"
-            description="Facts and preferences this bot remembers."
-            count={counts?.memory}
-            onClick={() => onOpen("memory")}
-          />
+          {(mono?.role === "manager" || mono?.role === "orchestrator") && (
+            <NavRow
+              label={mono.role === "orchestrator" ? "Managers" : "Team"}
+              description="Direct reports, roles and models."
+              onClick={() => onOpen("team")}
+            />
+          )}
         </nav>
         {onReset ? (
           <div className="mt-auto p-2">
@@ -186,12 +186,13 @@ function NavRow({
   return (
     <button
       type="button"
+      aria-label={label}
       onClick={onClick}
-      className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left hover:bg-content/5"
+      className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left hover:bg-content/5 focus-visible:outline-accent"
     >
       <span className="flex min-w-0 flex-1 flex-col">
         <span className="text-[13px] leading-5 text-content/90">{label}</span>
-        <span className="line-clamp-1 text-[12px] leading-5 text-content/40">
+        <span title={description} className="truncate text-[12px] leading-5 text-content/40">
           {description}
         </span>
       </span>

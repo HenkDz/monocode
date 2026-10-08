@@ -99,6 +99,10 @@ export function MonoDetails({
   const habits = useHabits(monoId, state.status);
   const actions = habitActions(monoId);
   const [routes, setRoutes] = useState<Route[]>([]);
+  const [showWork, setShowWork] = useState(false);
+  useEffect(() => {
+    setShowWork(Boolean(toolActivityOpen));
+  }, [monoId, toolActivityOpen, activity?.blocks[0]?.id]);
   // Another Mono starts at its own front page.
   useEffect(() => setRoutes([]), [monoId]);
   useEffect(() => {
@@ -230,11 +234,21 @@ export function MonoDetails({
         aria-labelledby={onTabChange ? `${panelId}-${tab}` : undefined}
         className="flex min-h-0 flex-1 flex-col"
       >
-        <PanelStack pages={tab === "details" ? pages : []}>
+        <PanelStack pages={tab === "details" ? pages : showWork && teamActivity ? [{
+          key: "work",
+          node: <div className="flex min-h-0 flex-1 flex-col" data-mono-work>
+            <PageHeader title="This agent's work" onBack={() => setShowWork(false)} />
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              <MonoActivityContent {...(activity ?? { blocks: [], live: false })} readOutput />
+            </div>
+          </div>,
+        }] : []}>
           {tab === "activity" ? (
             <div className="min-h-0 flex-1 overflow-y-auto">
             {teamActivity}
-            {teamActivity ? <details key={activity?.blocks[0]?.id ?? "tools"} open={toolActivityOpen} className="border-t border-stroke p-3"><summary className="text-xs text-content/60">This agent's tool activity</summary><MonoActivityContent {...(activity ?? { blocks: [], live: false })} /></details> : <MonoActivityContent
+            {teamActivity ? <div className="border-t border-stroke p-3">
+              <button type="button" onClick={() => setShowWork(true)} className="rounded-md px-2 py-1.5 text-xs text-content/60 hover:bg-content/5 hover:text-content focus-visible:outline-accent">Show work</button>
+            </div> : <MonoActivityContent
               key={activity?.blocks[0]?.id ?? "empty"}
               {...(activity ?? { blocks: [], live: false })}
             />}

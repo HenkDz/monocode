@@ -3100,7 +3100,8 @@ export function MonoActivityTrail({
   onApproval,
   onOpenFile,
   onOpenDiff,
-}: Omit<ActivityPhasesProps, "done" | "padded"> & { live?: boolean }) {
+  readOutput = false,
+}: Omit<ActivityPhasesProps, "done" | "padded"> & { live?: boolean; readOutput?: boolean }) {
   const steps = blocks.filter(
     (block) =>
       !block.internal &&
@@ -3167,7 +3168,9 @@ export function MonoActivityTrail({
                   aria-hidden="true"
                   className="absolute left-0 top-[10px] size-1.5 rounded-full bg-content/25"
                 />
-                {block.role === "plan" ||
+                {readOutput && !block.tool && !isSubagentBlock(block) && !block.plan && !block.taskList && !block.image ? (
+                  <AgentMarkdown text={block.text} cwd={cwd} onOpenFile={onOpenFile} className="mono-run-report" />
+                ) : block.role === "plan" ||
                 block.role === "tasks" ||
                 block.role === "image" ? (
                   <TranscriptBlock
@@ -3179,7 +3182,10 @@ export function MonoActivityTrail({
                   />
                 ) : (
                   <ActivityRow
-                    block={block}
+                    block={readOutput && block.tool && !needsApproval(block) ? {
+                      ...block,
+                      tool: { ...block.tool, detail: undefined, preview: block.tool.preview ? { ...block.tool.preview, output: undefined } : undefined },
+                    } : block}
                     live={live}
                     cwd={cwd}
                     onApproval={onApproval}
@@ -3187,6 +3193,9 @@ export function MonoActivityTrail({
                     onOpenDiff={onOpenDiff}
                   />
                 )}
+                {readOutput && block.tool && !needsApproval(block) && (block.tool.detail?.trim() || block.tool.preview?.output?.trim()) ? (
+                  <pre className="min-w-0 whitespace-pre-wrap break-words py-2 font-mono text-[12px] leading-5 text-content/65">{[...new Set([block.tool.detail?.trim(), block.tool.preview?.output?.trim()].filter(Boolean))].join("\n\n")}</pre>
+                ) : null}
               </div>
             ))}
           </li>

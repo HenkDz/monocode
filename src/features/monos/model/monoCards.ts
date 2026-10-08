@@ -1,4 +1,5 @@
 import { habitSchedule, type HabitSchedule } from "./monoHabits";
+import type { RuntimeMode } from "../../sessions/model/session";
 
 /**
  * Cards a Mono puts in its chat beside its words, with the app CLI's
@@ -147,6 +148,7 @@ export type CardSession = {
   harness: string;
   busy: boolean;
   needsInput: boolean;
+  runtimeMode?: RuntimeMode;
   /** The last thing its agent said, on one line. */
   lastLine?: string;
 };
@@ -171,6 +173,10 @@ export function publishCardSessions(
 
 export function cardSession(sessionId: string): CardSession | undefined {
   return index.sessions.get(sessionId);
+}
+
+export function cardSessionsSnapshot(): ReadonlyMap<string, CardSession> {
+  return index.sessions;
 }
 
 export function openCardSession(sessionId: string): void {

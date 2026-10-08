@@ -3,12 +3,9 @@ import { findMono, monoLook, type Mono } from "../model/mono";
 import { memberTasks } from "../model/monoNavigation";
 import { orchestrator } from "../../orchestration/model/orchestration";
 import {
-  managerPrReady,
-  managerTaskFinished,
+  managerTaskLifecycle,
   taskPrStatus,
 } from "../../orchestration/model/projectManager";
-import type { OrchestrationTask } from "../../orchestration/model/orchestrationState";
-import type { GitPr } from "../../../platform/tauri/fs";
 import { usePrStatusCache } from "../../source-control/hooks/usePrStatus";
 import { OrchestrationActions } from "../../orchestration/ui/OrchestrationActions";
 import { PixelMascot } from "../../projects/ui/PixelMascot";
@@ -36,42 +33,6 @@ const tones = {
   muted:
     "border-l-content/20 [&_[data-task-status]]:bg-content/5 [&_[data-task-status]]:text-content/60",
 };
-
-function taskStatus(
-  task: OrchestrationTask,
-  pr?: GitPr | null,
-): [string, keyof typeof tones] {
-  if (task.status === "cancelled") return ["Cancelled", "muted"];
-  if (managerTaskFinished(task, pr) && task.completionOutcome === "no-changes") return ["Completed (no changes)", "merged"];
-  if (managerTaskFinished(task, pr))
-    return pr?.state === "merged" ? ["Merged", "merged"] : ["Closed", "muted"];
-  if (task.status === "running") return ["Running", "running"];
-  if (task.status === "failed" || task.status === "blocked")
-    return [task.status === "failed" ? "Failed" : "Blocked", "failed"];
-  if (managerPrReady(task, pr)) return ["PR ready", "ready"];
-  const verdict =
-    task.status === "completed" &&
-    task.reviewVerdict?.dispatchId ===
-      (task.activeDispatchId ?? task.lastDispatchId)
-      ? task.reviewVerdict
-      : undefined;
-  if (verdict?.decision === "changes") return ["Changes requested", "changes"];
-  if (task.status === "completed")
-    return (task.accepted &&
-      !!task.lastDispatchId &&
-      task.acceptedDispatchId === task.lastDispatchId) ||
-      verdict?.decision === "approve"
-      ? ["Approved", "ready"]
-      : ["In review", "review"];
-  return [
-    task.status === "cancelling"
-      ? "Cancelling"
-      : task.status === "interrupted"
-        ? "Interrupted"
-        : "Queued",
-    "muted",
-  ];
-}
 
 /** Task snapshots are the durable work log; never copy streaming worker prose into another session. */
 export function MemberWorkLog({ member }: { member: Mono }) {
@@ -105,7 +66,7 @@ export function MemberWorkLog({ member }: { member: Mono }) {
         const key = `${member.id}:${task.id}`,
           needsYou = !!cardSession(task.sessionId)?.needsInput,
           open = expanded.get(key) ?? needsYou;
-        const [label, tone] = needsYou ? ["Needs you", "review"] as const : taskStatus(task, taskPrStatus(task, statuses));
+        const [label, tone] = managerTaskLifecycle(task, taskPrStatus(task, statuses), needsYou);
         const dispatch = runs
           .flatMap((run) => run.dispatches ?? [])
           .find(
@@ -220,6 +181,7 @@ export function MemberWorkLog({ member }: { member: Mono }) {
                     {task.workspace?.branch || projectName(cwd)}
                   </p>
                 )}
+                {!!task.checkoutBaseline?.inheritedChangedPaths?.length && <p className="text-content/60">Started with {task.checkoutBaseline.inheritedChangedPaths.length} inherited changes</p>}
                 {task.readOnly && <p className="text-content/60">Read-only task{task.readOnlyFallback ? ` · ${task.readOnlyFallback}` : ""}</p>}
                 <details>
                   <summary className="w-fit cursor-pointer rounded text-content/60 focus-visible:outline-accent">

@@ -2,11 +2,12 @@ import { sessionConversationPage } from "../features/agent-app/model/sessionConv
 import {
   adoptManagerMono,
   dedicatedMono,
+  ensureAssignedManagers,
   updateMono,
 } from "../features/monos/model/mono";
 import { monoEngineId } from "../features/monos/model/monoEngines";
 import { archiveMonoConversation, archiveProjectMonos, offerProjectMonoRestore, projectMonoTeam } from "../features/monos/model/monoArchive";
-import { loadMonoView, saveMonoView, monoForView, monoViewProject, memberDetailsView, selectedOrgMono, memberMonoState } from "../features/monos/model/monoNavigation";
+import { loadMonoView, saveMonoView, monoForView, monoViewProject, memberDetailsView, selectedOrgMono, monoLiveState } from "../features/monos/model/monoNavigation";
 import { MonoTeamActivity } from "../features/monos/ui/MonoTeamActivity";
 import { recordCrewDecision } from "../features/monos/model/monoCrewEvents";
 import { teamDecisions } from "../features/monos/model/monoTeamActivity";
@@ -1351,6 +1352,7 @@ function Workspace({
     () => true,
   );
   const monosSnap = useSyncExternalStore(subscribeMonos, monosSnapshot);
+  useEffect(() => { ensureAssignedManagers(); }, [monosSnap]);
   const restoreOffered = useRef(new Set<string>());
   useEffect(() => {
     const present = new Set(recents.map(({ path }) => projectKey(path)));
@@ -11570,11 +11572,8 @@ function Workspace({
     projects: async (monoId) => {
       const mono = findMono(monoId);
       if (!mono) throw new Error("Mono no longer exists");
-      const look = monoLook(
-        mono.role === "orchestrator"
-          ? { ...mono, projects: recents.map((project) => project.path) }
-          : mono,
-      );
+      ensureAssignedManagers();
+      const look = monoLook(mono);
       const projects = await validManagerProjects(
         look.projects.filter(
             (project) =>
@@ -11607,7 +11606,7 @@ function Workspace({
               branch: run?.workspace?.branch,
               managerId,
               managerExists:
-                !!run ||
+                !!owner || !!run ||
                 sessionsRef.current.some((session) => session.id === managerId),
               running: tasks.filter((task) => task.status === "running").length,
               needsDecision: managerQuestions.filter(
@@ -12866,7 +12865,8 @@ function Workspace({
         title: session.title,
         harness: session.harness,
         busy: !!session.busy,
-        needsInput: !!session.pendingQuestion,
+        needsInput: monoState(session).status === "needs-you",
+        runtimeMode: session.runtimeMode,
       })),
       (id) => {
         id = orchestrator.ownerSession(id);
@@ -14035,7 +14035,7 @@ function Workspace({
     },
     openFile: onOpenFile,
     resume: onUsageLimitResume,
-  });
+  }, orchestrationRuns);
 
   const sessionPaneProps = {
     workspaceSwitchingSessionId: workspaceNavigation.pending
@@ -14133,7 +14133,7 @@ function Workspace({
         monoId={monoViewMono.id}
         cwd={monoViewSession.cwd}
         agent={monoLook(monoViewMono)}
-        state={monoViewMono.role === "member" ? memberMonoState(orchestrationRuns, monoViewMono.id, sessions, monoViewMono.sessionId) : monoState(monoViewSession)}
+        state={monoLiveState(listMonos(), orchestrationRuns, sessions, monoViewMono.id)}
         harness={monoViewSession.harness}
         model={monoViewSession.model}
         modelSettings={monoViewSession.modelSettings}
@@ -14190,17 +14190,9 @@ function Workspace({
     const states = new Map<string, MonoState>();
     const unseen = new Set<string>();
     for (const mono of listMonos()) {
-      const session = mono.sessionId
-        ? sessions.find((entry) => entry.id === mono.sessionId)
-        : undefined;
-      if (mono.role === "member") states.set(mono.id, memberMonoState(orchestrationRuns, mono.id, sessions, mono.sessionId));
-      else if (session) states.set(mono.id, monoState(session));
+      states.set(mono.id, monoLiveState(listMonos(), orchestrationRuns, sessions, mono.id));
       if (mono.sessionId && unseenFinishedIds.has(mono.sessionId))
         unseen.add(mono.id);
-    }
-    for (const mono of listMonos().filter(mono => mono.role)) {
-      const count = teamDecisions(listMonos(), sessions, orchestrationRuns, mono.id).length;
-      if (count) states.set(mono.id, { status: "needs-you", activity: `${count} pending decision${count === 1 ? "" : "s"}` });
     }
     return { states, unseen };
     // The roster is read through its snapshot.
@@ -14400,6 +14392,7 @@ function Workspace({
                   renderManager={(expanded, onToggle, ownedCount) => (
                     <ProjectManagerRow
                       project={project}
+                      sessions={sessions}
                       enabled={enabled}
                       selected={
                         !chromeSurfaceOpen && (sidebarOrgId

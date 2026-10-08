@@ -288,6 +288,7 @@ export function listMonos(includeArchived = false): Mono[] {
 }
 
 function saveRoster(roster: readonly Mono[], strict = false, emptyTeamUndoManagerId?: string): void {
+  roster = withAssignedManagers(roster);
   validateMonoOrg(roster);
   validateMonoOrgTransition(listMonos(true), roster, emptyTeamUndoManagerId);
   try {
@@ -297,6 +298,37 @@ function saveRoster(roster: readonly Mono[], strict = false, emptyTeamUndoManage
     return;
   }
   window.dispatchEvent(new CustomEvent(MONOS_CHANGED));
+}
+
+function withAssignedManagers(roster: readonly Mono[]): Mono[] {
+  const next = [...roster];
+  const orchestrator = next.find(mono => mono.role === "orchestrator" && mono.archivedAt == null);
+  if (!orchestrator) return next;
+  for (const project of orchestrator.projects) {
+    const existing = next.findIndex(mono => mono.role === "manager" && monoWorksOn(mono, project));
+    if (existing >= 0) {
+      if (next[existing].archivedAt == null && next[existing].reportsTo !== orchestrator.id)
+        next[existing] = { ...next[existing], reportsTo: orchestrator.id };
+      continue;
+    }
+    const key = projectKey(project);
+    const seed = projectName(project);
+    next.push({
+      id: newMonoId(), role: "manager", reportsTo: orchestrator.id,
+      projects: [project], managerProject: project,
+      name: `${resolveTabGroupLabel(key, loadTabGroupLabels(), seed)} Manager`,
+      mascot: projectMascot(seed, resolveTabGroupMascot(key, loadTabGroupMascots())).name,
+      color: resolveTabGroupColor(key, loadTabGroupColors(), loadTabGroupCustomColors(), seed),
+    });
+  }
+  return next;
+}
+
+/** Migrate assigned projects without starting sessions or provider processes. */
+export function ensureAssignedManagers(): void {
+  const roster = listMonos(true);
+  const next = withAssignedManagers(roster);
+  if (next.length !== roster.length || next.some((mono, index) => mono !== roster[index])) saveRoster(next, true);
 }
 
 export function findMono(id: string): Mono | undefined {

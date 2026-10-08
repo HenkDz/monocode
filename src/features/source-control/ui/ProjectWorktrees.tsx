@@ -74,17 +74,12 @@ import {
   worktreeTaskSessions,
 } from "../model/worktreeSessions";
 import type { Worktree, WorktreeSessionOptions } from "../model/worktrees";
+import { useProjectExpansion } from "../../projects/hooks/useProjectExpansion";
 
 /** Older idle sessions fold behind "Show more"; anything active stays listed. */
 const SESSION_LIMIT = 5;
 /** Worktrees page in this many at a time; the focused or busy ones always show. */
 const WORKTREE_PAGE = 5;
-
-const taskWorktreesKey = (project: string) => `monocode:task-worktrees-expanded:${pathKey(project)}`;
-const taskWorktreesExpanded = (project: string) => {
-  try { return localStorage.getItem(taskWorktreesKey(project)) === "1"; }
-  catch { return false; }
-};
 
 type Props = {
   onAddAsSeparateProject?: (tree: Worktree) => void | Promise<void>;
@@ -178,11 +173,10 @@ export function ProjectWorktrees({
   const [goal, setGoal] = useState("");
   const [givingBusy, setGivingBusy] = useState(false);
   const [creatingPr, setCreatingPr] = useState<Worktree>();
-  const [teamExpanded, setTeamExpanded] = useState(true);
-  const [taskExpanded, setTaskExpanded] = useState(() => taskWorktreesExpanded(project));
-  const [doneExpanded, setDoneExpanded] = useState(false);
+  const [teamExpanded, setTeamExpanded] = useProjectExpansion(project, "manager-team", true);
+  const [taskExpanded, setTaskExpanded] = useProjectExpansion(project, "task-worktrees", false);
+  const [doneExpanded, setDoneExpanded] = useProjectExpansion(project, "finished-worktrees", false);
   const [activeOnly] = useActiveWorktrees(project);
-  useEffect(() => setTaskExpanded(taskWorktreesExpanded(project)), [project]);
   useEffect(() => {
     if (!menu) return;
     let disposed = false;
@@ -393,8 +387,6 @@ export function ProjectWorktrees({
               onClick={() => {
                 const expanded = !taskExpanded;
                 setTaskExpanded(expanded);
-                try { localStorage.setItem(taskWorktreesKey(project), expanded ? "1" : "0"); }
-                catch { /* The section still toggles when storage is unavailable. */ }
               }}
               className="mt-1 flex h-7 w-full items-center gap-1 rounded px-2 text-left text-[11px] text-content/50 hover:bg-content/5 hover:text-content focus-visible:outline-accent"
             >

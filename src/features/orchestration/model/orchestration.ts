@@ -26,6 +26,7 @@ import {
   orchestrationCheckoutCwd,
   orchestrationWorkspace,
   workspaceIdentity,
+  type CheckoutBaseline,
   type OrchestrationDispatch,
   type OrchestrationRun,
   type OrchestrationTask,
@@ -63,9 +64,16 @@ export type CheckoutSnapshot = {
   clean: boolean;
   commitsAhead: number;
   baseDiff: boolean;
+  pathHashes?: Record<string, string>;
+  inheritedChangedPaths?: string[];
+  headChangedPaths?: string[];
 };
 export const supportsReadOnlyTasks = (harness: HarnessId) =>
   harness === "codex" || harness === "claude";
+function currentDispatchBaseline(run: OrchestrationRun, taskId: string) {
+  return (run.dispatches ?? []).filter(dispatch => dispatch.taskId === taskId && dispatch.checkoutBaseline)
+    .sort((a, b) => a.startedAt - b.startedAt)[0]?.checkoutBaseline;
+}
 export type OrchestrationHost = {
   artifact?(id: string): Promise<Artifact | null>;
   checkoutSnapshot?(cwd: string, base?: string): Promise<CheckoutSnapshot>;
@@ -2074,16 +2082,21 @@ export class Orchestrator {
               target.reviewOf ? target.reviewVerdict?.artifactId : target.reportArtifactId);
           if (!target.workspace || !this.host?.checkoutSnapshot)
             throw new Error("Worker checkout is unavailable for no-change verification");
-          const snapshot = await this.host.checkoutSnapshot(
-            target.workspace.checkoutCwd, target.baseHead ?? target.baseBranch,
-          );
-          const unchanged = target.readOnly && target.workspacePolicy === "shared"
-            ? !!target.readOnlyBaseline && snapshot.head === target.readOnlyBaseline.head &&
-              snapshot.fingerprint === target.readOnlyBaseline.fingerprint
-            : !!(target.baseHead ?? target.baseBranch) && snapshot.clean &&
-              snapshot.commitsAhead === 0 && !snapshot.baseDiff;
-          if (!unchanged)
-            throw new Error("No-change completion rejected: the checkout has changes or commits ahead of the assignment base");
+          const baseline: CheckoutBaseline | undefined = target.checkoutBaseline ??
+            currentDispatchBaseline(run, target.id) ?? (target.checkoutBaselineUnknown ? undefined : target.readOnlyBaseline);
+          const snapshot = await this.host.checkoutSnapshot(target.workspace.checkoutCwd, baseline?.head);
+          const before = baseline?.pathHashes;
+          const changed = before && snapshot.pathHashes
+            ? [...new Set([...Object.keys(before), ...Object.keys(snapshot.pathHashes), ...snapshot.headChangedPaths ?? []])]
+              .filter(path => before[path] !== snapshot.pathHashes![path] || snapshot.headChangedPaths?.includes(path)).sort()
+            : [];
+          if (baseline && (snapshot.head !== baseline.head || snapshot.fingerprint !== baseline.fingerprint || changed.length)) {
+            throw new Error(`No-change completion rejected: changes or commits since the task started. ${
+              snapshot.head !== baseline.head ? "HEAD changed. " : ""
+            }${changed.length ? `Changed paths since the task started: ${changed.join(", ")}` :
+              !before ? "Changed paths are unavailable for this legacy baseline." : "Checkout fingerprint changed."}`);
+          }
+          const completionOutcome = baseline ? "no-changes" : "no-changes-baseline-unknown";
           const current = this.run(run.leadId)!;
           const latest = current.tasks.find(entry => entry.id === target.id);
           if (current.status !== "active" || latest?.status !== "completed" ||
@@ -2091,8 +2104,8 @@ export class Orchestrator {
             throw new Error("The worker changed during verification; inspect the latest result");
           return changeTask(target.id, {
             accepted: true, acceptedDispatchId: dispatchId,
-            completionOutcome: "no-changes", prUrl: undefined,
-          }, { accepted: true, completionOutcome: "no-changes", integrated: false, cleaned: false });
+            checkoutBaseline: baseline, completionOutcome, prUrl: undefined,
+          }, { accepted: true, completionOutcome, integrated: false, cleaned: false });
         }
         if (target.readOnly)
           throw new Error("Accept read-only reports with outcome: accept-no-changes");
@@ -2424,7 +2437,7 @@ export class Orchestrator {
             workspace: undefined, activeDispatchId: undefined, lastDispatchId: undefined, acceptedDispatchId: undefined,
             reviewArtifactId: undefined, reportArtifactId: undefined, prSummaryArtifactId: undefined,
             prUrl: undefined, delivery: undefined, reviewedHead: undefined, trivial: false, dependsOn: [],
-            baseHead: undefined, readOnlyBaseline: undefined });
+            baseHead: undefined, readOnlyBaseline: undefined, checkoutBaseline: undefined, checkoutBaselineUnknown: undefined });
           status = "active";
           await this.host?.handoff?.(task.sessionId, tasks[tasks.length - 1].sessionId, note);
         }
@@ -2543,6 +2556,9 @@ export class Orchestrator {
             )
               continue;
             const preparedRun = this.run(run.leadId)!;
+            const checkoutBaseline = task.checkoutBaseline ?? currentDispatchBaseline(preparedRun, task.id) ??
+              (task.checkoutBaselineUnknown ? undefined : task.readOnlyBaseline) ?? (!task.lastDispatchId &&
+                preparedRun.dispatches?.filter(dispatch => dispatch.taskId === task.id).length === 1 ? snapshot : undefined);
             const writeScopes = await this.store.scopes(
               prepared.workspace.checkoutCwd,
               task.files,
@@ -2556,6 +2572,8 @@ export class Orchestrator {
                       workspace: prepared.workspace,
                       scratchDir: prepared.scratchDir,
                       writeScopes,
+                      checkoutBaseline,
+                      checkoutBaselineUnknown: !checkoutBaseline || undefined,
                       ...(task.readOnly && snapshot ? {
                         readOnlyBaseline: entry.readOnlyBaseline ?? { head: snapshot.head, fingerprint: snapshot.fingerprint },
                       } : {}),
@@ -2568,6 +2586,7 @@ export class Orchestrator {
                       ...entry,
                       workspace: prepared.workspace,
                       stage: "session_prepared",
+                      checkoutBaseline,
                       updatedAt: Date.now(),
                     }
                   : entry,

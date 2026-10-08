@@ -96,6 +96,7 @@ import {
 import { remoteProjectFor } from "../../features/connections/model/remoteProjects";
 import { useProjectMenu } from "./useProjectMenu";
 import { MonoRailSection, type MonoRailProps } from "./MonoRailSection";
+import { useProjectExpansion } from "../../features/projects/hooks/useProjectExpansion";
 
 type Props = {
   visible?: boolean;
@@ -918,9 +919,11 @@ function ProjectCard({
   groupLogos: ReturnType<typeof useTabGroupLogos>;
   groupMascots: Record<string, string>;
 }) {
-  const [expanded, setExpanded] = useState(selected);
+  const [expanded, setExpanded] = useProjectExpansion(item.path, "project", selected);
+  const wasSelected = useRef(selected);
   useEffect(() => {
-    if (selected) setExpanded(true);
+    if (selected && !wasSelected.current) setExpanded(true);
+    wasSelected.current = selected;
   }, [selected]);
   const fallbackName = basename(item.path);
   const key = projectKey(item.path);
@@ -1007,7 +1010,7 @@ function ProjectCard({
             data-no-drag
             aria-label={`${expanded ? "Collapse" : "Expand"} worktrees in ${name}`}
             aria-expanded={expanded}
-            onClick={() => setExpanded((value) => !value)}
+            onClick={() => setExpanded(!expanded)}
             className="mr-1 grid w-4 shrink-0 place-items-center rounded-md text-content/60 hover:text-content"
           >
             {expanded ? (

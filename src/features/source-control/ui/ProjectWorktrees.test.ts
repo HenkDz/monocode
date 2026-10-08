@@ -406,6 +406,10 @@ it("labels peer user worktrees, scopes the guide to collapsed task worktrees, an
       done.querySelector('[data-worktree="/queue/merged"]')?.parentElement
         ?.hidden,
     ).toBe(false);
+    await act(async () => root.render(null));
+    await render();
+    expect(button("Toggle Task worktrees").getAttribute("aria-expanded")).toBe("true");
+    expect(button("Toggle Finished worktrees").getAttribute("aria-expanded")).toBe("true");
     await act(async () => {
       localStorage.setItem("monocode.activeWorktrees:/repo", "1");
       window.dispatchEvent(new Event("storage"));
@@ -435,12 +439,15 @@ it("remembers Task worktrees expansion per project across remounts, independentl
   await act(async () => root.render(null));
   await render();
   expect(button("Toggle Task worktrees").getAttribute("aria-expanded")).toBe("true");
+  expect(button("Toggle team").getAttribute("aria-expanded")).toBe("false");
   props.project = "/another";
   await render();
   expect(button("Toggle Task worktrees").getAttribute("aria-expanded")).toBe("false");
+  expect(button("Toggle team").getAttribute("aria-expanded")).toBe("true");
   props.project = "/repo";
   await render();
   expect(button("Toggle Task worktrees").getAttribute("aria-expanded")).toBe("true");
+  expect(button("Toggle team").getAttribute("aria-expanded")).toBe("false");
 });
 
 it("names remaining pagination separately from the inactive filter, including dirty worktrees", async () => {

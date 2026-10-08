@@ -956,6 +956,9 @@ function sanitizeBlock(
   const completion = sanitizeMonoSessionCompletion(block.monoSessionCompletion);
   const monoSource = sanitizeMonoSource(block.monoSource);
   if (monoSource) next.monoSource = monoSource;
+  const team = block.monoTeamMessage;
+  if (block.role === "user" && team && [team.id, team.name, team.mascot, team.color].every(value => typeof value === "string" && value.length > 0 && value.length <= 256) && typeof team.topic === "string" && team.topic.length <= 120 && typeof team.text === "string" && team.text.length <= 8000)
+    next.monoTeamMessage = { id: team.id, name: team.name, mascot: team.mascot, color: team.color, topic: team.topic, text: team.text };
   if (block.role === "assistant" && block.monoTeamChange && typeof block.monoTeamChange === "object") {
     const { managerId, changeId, changeIds } = block.monoTeamChange;
     if (typeof managerId === "string" && managerId.length <= 256 && isPersistableId(managerId) && typeof changeId === "string" && changeId.length <= 256 && isPersistableId(changeId))

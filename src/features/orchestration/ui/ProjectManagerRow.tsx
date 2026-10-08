@@ -7,7 +7,8 @@ import {
   MONO_STATUS_LABEL,
   subscribeMonos,
 } from "../../monos/model/mono";
-import { memberAvailability, memberTasks } from "../../monos/model/monoNavigation";
+import { memberAvailability, memberTasks, monoLiveState } from "../../monos/model/monoNavigation";
+import type { Session } from "../../sessions/model/session";
 import { PixelMascot } from "../../projects/ui/PixelMascot";
 import { ChevronDown, ChevronRight } from "../../../shared/ui/icons";
 import { ManagerAvatar } from "./ManagerAvatar";
@@ -28,6 +29,7 @@ export function ProjectManagerRow({
   busySessionIds,
   selectedMemberId,
   onOpenMember,
+  sessions,
 }: {
   project: string;
   onOpen(project: string): Promise<void>;
@@ -42,6 +44,7 @@ export function ProjectManagerRow({
   busySessionIds?: ReadonlySet<string>;
   selectedMemberId?: string;
   onOpenMember?: (memberId: string) => Promise<void>;
+  sessions?: readonly Session[];
 }) {
   const [opening, setOpening] = useState(false);
   useSyncExternalStore(subscribeMonos, monosSnapshot);
@@ -79,6 +82,7 @@ export function ProjectManagerRow({
       ["blocked", "failed", "interrupted"].includes(task.status),
     ) === true;
   const ready = waiting.some((item) => item.kind === "ready");
+  const live = mono && sessions ? monoLiveState(listMonos(), runs, sessions, mono.id) : undefined;
   const label = decision
     ? waiting.some(item => item.kind === "decision") ? "Needs your decision" : "Needs attention"
     : ready
@@ -140,9 +144,7 @@ export function ProjectManagerRow({
             color={look.color}
             still
             className="size-5 shrink-0"
-            status={
-              decision ? "needs-you" : label === "Running" ? "working" : "idle"
-            }
+            status={live?.status ?? (decision ? "needs-you" : label === "Running" ? "working" : "idle")}
           />
         ) : (
           <ManagerAvatar
@@ -163,7 +165,8 @@ export function ProjectManagerRow({
         <span className="truncate">
           {look?.name ?? "Manager"}
         </span>
-        {label && (
+        {live && <span role="status" className="ml-auto shrink-0 text-[10px] text-content/50">{MONO_STATUS_LABEL[live.status]}{waiting.length > 1 ? ` (${waiting.length})` : ""}</span>}
+        {label && !live && (
           <span
             role="status"
             aria-label={`${label}${waiting.length > 1 ? ` (${waiting.length})` : ""}`}
@@ -179,7 +182,7 @@ export function ProjectManagerRow({
           const look = monoLook(member);
           const tasks = memberTasks(runs, member.id);
           const task = tasks.find(task => ["queued", "running", "cancelling"].includes(task.status)) ?? tasks[0];
-          const availability = memberAvailability(tasks, approvalSessionIds, busySessionIds, member.sessionId);
+          const availability = sessions ? monoLiveState(listMonos(), runs, sessions, member.id).status : memberAvailability(tasks, approvalSessionIds, busySessionIds, member.sessionId);
           const memberSelected = member.id === selectedMemberId;
           return (
             <button

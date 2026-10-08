@@ -2,7 +2,7 @@ import type { ApprovalDecision } from "../../../integrations/harness";
 import type { Attachment, Session } from "../../sessions/model/session";
 import type { UserQuestionReply } from "../../sessions/model/userQuestion";
 import { displayAttachments } from "../../sessions/model/attachments";
-import { listMonos, monoLook } from "./mono";
+import { listMonos, monoLook, type MonoState } from "./mono";
 import { pixelLayers } from "../../projects/model/pixelMascots";
 
 export const FLOATING_MONO_CHANGED = "mono_chat_changed";
@@ -17,7 +17,7 @@ export type FloatingMonoEntry = {
 export type FloatingMonoView = {
   monos: FloatingMonoEntry[];
   monoId: string | null;
-  session: Session | null;
+  session: (Session & { monoLiveState?: MonoState }) | null;
   error: string | null;
 };
 export type FloatingMonoAction =
@@ -56,9 +56,10 @@ export function floatingMonoMenuMascots(monos: FloatingMonoEntry[]) {
 }
 
 /** Blob URLs belong to their webview; send attachment bytes/paths instead. */
-export function floatingMonoSession(session: Session): Session {
+export function floatingMonoSession(session: Session, state?: MonoState): Session & { monoLiveState?: MonoState } {
   return {
     ...session,
+    ...(state ? { monoLiveState: state } : {}),
     blocks: session.blocks.map((block) =>
       block.attachments?.length
         ? { ...block, attachments: floatingMonoAttachments(block.attachments) }

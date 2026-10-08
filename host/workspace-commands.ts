@@ -477,6 +477,45 @@ export class WorkspaceCommands {
     const root = await this.gitRoot((await this.gitCommand(cwd, ["rev-parse", "--show-toplevel"])).trim());
     const head = (await this.gitCommand(root, ["rev-parse", "--verify", "HEAD"])).trim();
     const status = await this.gitCommand(root, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
+    const inheritedChangedPaths: string[] = [];
+    const entries = status.split("\0").filter(Boolean);
+    for (let i = 0; i < entries.length; i++) {
+      inheritedChangedPaths.push(entries[i].slice(3));
+      if (/[RC]/.test(entries[i].slice(0, 2))) inheritedChangedPaths.push(entries[++i]);
+    }
+    const index = new Map<string, string>();
+    for (const entry of (await this.gitCommand(root, ["ls-files", "--stage", "-z"])).split("\0").filter(Boolean)) {
+      const tab = entry.indexOf("\t");
+      const name = entry.slice(tab + 1);
+      index.set(name, (index.get(name) ?? "") + entry.slice(0, tab));
+    }
+    const untracked = await this.gitCommand(root, ["ls-files", "--others", "--exclude-standard", "-z"]);
+    const pathHashes: Record<string, string> = Object.create(null);
+    for (const name of new Set(inheritedChangedPaths)) {
+      const hash = createHash("sha256").update(index.get(name) ?? "");
+      const path = workspacePath(root, name);
+      try {
+        const info = await lstat(path);
+        if (process.platform !== "win32") {
+          const mode = Buffer.alloc(4);
+          mode.writeUInt32LE(info.mode & 0o777);
+          hash.update(mode);
+        }
+        if (info.isSymbolicLink()) hash.update("link").update(await readlink(path));
+        else if (info.isDirectory()) {
+          if (index.get(name)?.startsWith("160000 ") && resolve((await this.gitCommand(path, ["rev-parse", "--show-toplevel"])).trim()) === resolve(path)) {
+            const child: { fingerprint: string; pathHashes: Record<string, string> } = await this.gitTaskSnapshot(path, undefined);
+            hash.update(child.fingerprint).update(JSON.stringify(Object.fromEntries(Object.entries(child.pathHashes).sort(([a], [b]) => a.localeCompare(b)))));
+          }
+          hash.update(await this.gitCommand(root, ["diff", "HEAD", "--binary", "--no-ext-diff", "--no-textconv", "--", name]));
+        }
+        else hash.update("file").update(await readFile(await existingPath(root, name)));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        hash.update("missing");
+      }
+      pathHashes[name] = hash.digest("hex");
+    }
     const hash = createHash("sha256");
     const hashPart = (value: string | Buffer) => {
       const bytes = typeof value === "string" ? Buffer.from(value) : value;
@@ -488,7 +527,6 @@ export class WorkspaceCommands {
     hashPart(status);
     hashPart(await this.gitCommand(root, ["diff", "--binary", "--no-ext-diff", "--no-textconv"]));
     hashPart(await this.gitCommand(root, ["diff", "--cached", "--binary", "--no-ext-diff", "--no-textconv"]));
-    const untracked = await this.gitCommand(root, ["ls-files", "--others", "--exclude-standard", "-z"]);
     for (const name of untracked.split("\0").filter(Boolean)) {
       const path = workspacePath(root, name);
       const info = await lstat(path);
@@ -497,14 +535,17 @@ export class WorkspaceCommands {
     }
     let commitsAhead = 0;
     let baseDiff = false;
+    let headChangedPaths: string[] = [];
     if (base != null) {
       if (typeof base !== "string" || !base || base.length > 256 || base.startsWith("-") || /[\0\r\n]/.test(base))
         throw new Error("Invalid task base");
       const resolved = (await this.gitCommand(root, ["rev-parse", "--verify", "--end-of-options", `${base}^{commit}`])).trim();
       commitsAhead = Number((await this.gitCommand(root, ["rev-list", "--count", `${resolved}..${head}`])).trim());
-      baseDiff = Boolean((await this.gitCommand(root, ["diff", "--no-ext-diff", "--no-textconv", "--name-only", resolved, head, "--"])).trim());
+      headChangedPaths = (await this.gitCommand(root, ["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--name-only", "-z", resolved, head, "--"])).split("\0").filter(Boolean);
+      baseDiff = headChangedPaths.length > 0;
     }
-    return { head, fingerprint: hash.digest("hex"), clean: !status, commitsAhead, baseDiff };
+    return { head, fingerprint: hash.digest("hex"), clean: !status, commitsAhead, baseDiff,
+      pathHashes, inheritedChangedPaths: [...new Set(inheritedChangedPaths)].sort(), headChangedPaths };
   }
 
   private async gitFileDiff(cwd: unknown, relative: unknown, staged: unknown) {

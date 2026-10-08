@@ -267,7 +267,8 @@ it("detects a lost Team plan link and recovers the durable reference on the same
 
 function reportTaskFixture() {
   const f = setup();
-  const snapshot = { head: "assignment-head", fingerprint: "baseline", clean: true, commitsAhead: 0, baseDiff: false };
+  const snapshot = { head: "assignment-head", fingerprint: "baseline", clean: true, commitsAhead: 0, baseDiff: false,
+    pathHashes: { "existing.txt": "original" } as Record<string, string>, inheritedChangedPaths: [] as string[] };
   f.host.checkoutSnapshot = vi.fn(async () => ({ ...snapshot }));
   const create = f.host.createWorker;
   f.host.createWorker = vi.fn(async (run, task) => {
@@ -308,8 +309,82 @@ it.each([
   await f.delegate(["."]);
   await f.finish();
   Object.assign(f.snapshot, changed);
+  f.snapshot.fingerprint = "changed";
   await expect(f.call("review", { taskId: f.tasks()[0].id, outcome: "accept-no-changes" })).rejects.toThrow("changes or commits");
   expect(f.tasks()[0].accepted).toBe(false);
+});
+
+it("accepts an isolated worker's inherited dirty edits and persists their dispatch baseline", async () => {
+  const f = reportTaskFixture();
+  f.snapshot.clean = false;
+  f.snapshot.inheritedChangedPaths = ["existing.txt"];
+  await f.start();
+  await f.delegate(["."]);
+  await f.finish();
+  expect(f.tasks()[0].checkoutBaseline).toMatchObject({ inheritedChangedPaths: ["existing.txt"], fingerprint: "baseline" });
+  expect(f.manager.run("lead")!.dispatches![0].checkoutBaseline).toMatchObject({ fingerprint: "baseline" });
+  await f.call("review", { taskId: f.tasks()[0].id, outcome: "accept-no-changes" });
+  expect(f.tasks()[0].completionOutcome).toBe("no-changes");
+});
+
+it("names only paths changed after dispatch and rejects an empty commit", async () => {
+  const f = reportTaskFixture();
+  f.snapshot.clean = false;
+  f.snapshot.inheritedChangedPaths = ["existing.txt"];
+  await f.start();
+  await f.delegate(["."]);
+  await f.finish();
+  f.snapshot.fingerprint = "changed";
+  f.snapshot.pathHashes = { ...f.snapshot.pathHashes, "new.txt": "new" };
+  await expect(f.call("review", { taskId: f.tasks()[0].id, outcome: "accept-no-changes" }))
+    .rejects.toThrow("Changed paths since the task started: new.txt");
+  f.snapshot.fingerprint = "baseline";
+  f.snapshot.pathHashes = { "existing.txt": "original" };
+  f.snapshot.head = "empty-commit";
+  await expect(f.call("review", { taskId: f.tasks()[0].id, outcome: "accept-no-changes" }))
+    .rejects.toThrow("HEAD changed");
+});
+
+it("rejects a changed path hash even when its legacy fingerprint is unchanged", async () => {
+  const f = reportTaskFixture();
+  f.snapshot.clean = false;
+  await f.start();
+  await f.delegate(["."]);
+  await f.finish();
+  f.snapshot.pathHashes = { "existing.txt": "changed-permissions" };
+  await expect(f.call("review", { taskId: f.tasks()[0].id, outcome: "accept-no-changes" }))
+    .rejects.toThrow("Changed paths since the task started: existing.txt");
+});
+
+it.each(["dispatch", "read-only", "unknown"] as const)("uses earliest recorded %s evidence for legacy report acceptance", async evidence => {
+  const f = reportTaskFixture();
+  f.snapshot.clean = false;
+  await f.start();
+  await f.delegate(["."], { readOnly: evidence === "read-only" });
+  await f.finish();
+  delete f.tasks()[0].checkoutBaseline;
+  if (evidence !== "dispatch") {
+    for (const dispatch of f.manager.run("lead")!.dispatches!) delete dispatch.checkoutBaseline;
+  }
+  await f.call("review", { taskId: f.tasks()[0].id, outcome: "accept-no-changes" });
+  expect(f.tasks()[0].completionOutcome).toBe(evidence === "unknown" ? "no-changes-baseline-unknown" : "no-changes");
+});
+
+it("keeps a legacy read-only retry's monitoring snapshot distinct from its unknown original baseline", async () => {
+  const f = reportTaskFixture();
+  await f.start();
+  await f.delegate(["."], { readOnly: true });
+  await f.finish();
+  delete f.tasks()[0].checkoutBaseline;
+  delete f.tasks()[0].readOnlyBaseline;
+  for (const dispatch of f.manager.run("lead")!.dispatches!) delete dispatch.checkoutBaseline;
+  f.completions.delete(f.tasks()[0].sessionId);
+  await f.call("message", { taskId: f.tasks()[0].id, text: "Continue the legacy report" });
+  await f.finish();
+  expect(f.tasks()[0].readOnlyBaseline).toBeDefined();
+  expect(f.tasks()[0].checkoutBaseline).toBeUndefined();
+  await f.call("review", { taskId: f.tasks()[0].id, outcome: "accept-no-changes" });
+  expect(f.tasks()[0].completionOutcome).toBe("no-changes-baseline-unknown");
 });
 
 it("runs read-only work in the project checkout and accepts an unchanged dirty baseline", async () => {
@@ -388,6 +463,7 @@ it("keeps the original read-only baseline through retries instead of accepting a
   await f.call("message", { taskId: f.tasks()[0].id, text: "Continue investigation" });
   await vi.waitFor(() => expect(f.tasks()[0].status).toBe("blocked"));
   expect(f.tasks()[0].readOnlyBaseline?.fingerprint).toBe("baseline");
+  expect(f.tasks()[0].checkoutBaseline?.fingerprint).toBe("baseline");
   expect(f.tasks()[0].error).toContain("read-only task modified files");
 });
 

@@ -9,6 +9,7 @@ import {
   managerQueueRank,
   managerTaskOutcome,
   reviewedManagerPullRequest,
+  managerTaskLifecycle,
 } from "./projectManager";
 import type { OrchestrationRun } from "./orchestrationState";
 import { newSession } from "../../sessions/model/session";
@@ -163,9 +164,9 @@ it("never labels an unreviewed or stale result PR ready", () => {
   const runs = [{ projectManager: true, tasks: [task] }] as OrchestrationRun[];
   expect(managerWorktreeStatus(runs, "/worker")).toBe("In review");
   task.accepted = true;
-  expect(managerWorktreeStatus(runs, "/worker")).toBeUndefined();
+  expect(managerWorktreeStatus(runs, "/worker")).toBe("In review");
   task.acceptedDispatchId = "new";
   expect(managerWorktreeStatus(runs, "/worker")).toBe("PR ready");
   task.status = "interrupted";
-  expect(managerWorktreeStatus(runs, "/worker")).toBe("Blocked");
+  expect(managerWorktreeStatus(runs, "/worker")).toBe("Interrupted");
 });

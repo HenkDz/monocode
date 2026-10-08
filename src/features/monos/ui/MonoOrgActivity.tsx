@@ -5,8 +5,8 @@ import {
   crewMessagesSnapshot,
   subscribeCrewMessages,
 } from "../model/monoCrewEvents";
-import { monoLook, MONO_STATUS_LABEL } from "../model/mono";
-import { memberAvailability, memberTasks } from "../model/monoNavigation";
+import { monoLook, monoState, MONO_STATUS_LABEL } from "../model/mono";
+import { monoLiveState, memberTasks } from "../model/monoNavigation";
 import {
   activityTaskEvent,
   activityTaskTitle,
@@ -18,10 +18,16 @@ import type { Session } from "../../sessions/model/session";
 import { formatLiveElapsed } from "../../sessions/model/liveAgents";
 import { PixelMascot } from "../../projects/ui/PixelMascot";
 import { openCardSession } from "../model/monoCards";
+import { managerTaskLifecycle, taskPrStatus } from "../../orchestration/model/projectManager";
+import { usePrStatusCache } from "../../source-control/hooks/usePrStatus";
+import type { GitPr } from "../../../platform/tauri/fs";
+import { ArtifactText } from "../../artifacts/ui/ArtifactReference";
 
 export function crewFeed(
   roster: readonly Mono[],
   runs: readonly OrchestrationRun[],
+  statuses: ReadonlyMap<string, GitPr | null> = new Map(),
+  sessions: readonly Session[] = [],
 ) {
   const events = runs.flatMap((run) =>
     run.tasks.flatMap((task) => {
@@ -30,6 +36,8 @@ export function crewFeed(
         task.memberName ??
         "Worker";
       const title = activityTaskTitle(task);
+      const session = sessions.find(entry => entry.id === task.sessionId);
+      const needsInput = !!session && monoState(session).status === "needs-you";
       const dispatches = (run.dispatches ?? []).filter(
         (d) => d.taskId === task.id,
       );
@@ -53,7 +61,7 @@ export function crewFeed(
                   id: `${d.id}:end`,
                   at: d.updatedAt,
                   memberId: task.memberId,
-                  text: `${name} ${d.state === "completed" ? "finished" : d.state} ${title}`,
+                  text: `${name} · ${managerTaskLifecycle(task, taskPrStatus(task, statuses), needsInput)[0]} · ${title}`,
                 },
               ]
             : []),
@@ -111,34 +119,8 @@ export function MonoOrgActivity({
   now: number;
 }) {
   useSyncExternalStore(subscribeCrewMessages, crewMessagesSnapshot);
-  const attention = new Set(
-    sessions
-      .filter(
-        (s) =>
-          s.pendingQuestion ||
-          s.blocks.some((b) => b.approval && !b.approval.decided),
-      )
-      .map((s) => s.id),
-  );
-  const busy = new Set(sessions.filter((s) => s.busy).map((s) => s.id));
-  const availability = (mono: Mono) => {
-    const scope = orgDescendants(roster, mono.id);
-    const chats = roster
-      .filter((m) => scope.has(m.id) && !m.archivedAt)
-      .flatMap((m) => (m.sessionId ? [m.sessionId] : []));
-    return memberAvailability(
-      mono.role === "member"
-        ? memberTasks(runs, mono.id)
-        : runs
-            .flatMap((run) => run.tasks)
-            .filter((task) => task.memberId && scope.has(task.memberId)),
-      attention,
-      busy,
-      chats.find((id) => attention.has(id)) ??
-        chats.find((id) => busy.has(id)) ??
-        mono.sessionId,
-    );
-  };
+  const statuses = usePrStatusCache();
+  const availability = (mono: Mono) => monoLiveState(roster, runs, sessions, mono.id).status;
   const node = (mono: Mono) => {
     const tasks = [
       ...new Map(
@@ -170,7 +152,7 @@ export function MonoOrgActivity({
           />
           <div className="min-w-0 flex-1">
             <div className="flex gap-2">
-              <span className="truncate font-medium">{look.name}</span>
+              <button type="button" className="truncate rounded font-medium hover:underline focus-visible:outline-accent" onClick={() => window.dispatchEvent(new CustomEvent("monocode:open-team", { detail: { monoId: mono.id } }))}>{look.name}</button>
               <span className="ml-auto shrink-0 text-content/45">
                 {MONO_STATUS_LABEL[status]}
                 {start !== undefined
@@ -189,7 +171,7 @@ export function MonoOrgActivity({
             </p>
             {current && (
               <p className="truncate text-content/45">
-                Now doing: {activityTaskEvent(current, session)}
+                Now doing: <ArtifactText text={activityTaskEvent(current, session)} monoId={mono.id} />
               </p>
             )}
             {tasks.length > 0 && (
@@ -204,7 +186,7 @@ export function MonoOrgActivity({
                       className="block w-full truncate text-left text-content/60 hover:underline"
                       onClick={() => openCardSession(task.sessionId)}
                     >
-                      {activityTaskTitle(task)} · {task.status}
+                      {activityTaskTitle(task)} · {managerTaskLifecycle(task, taskPrStatus(task, statuses), sessions.some(session => session.id === task.sessionId && monoState(session).status === "needs-you"))[0]}
                     </button>
                   ))}
                 </div>
@@ -245,7 +227,7 @@ export function MonoOrgActivity({
     if (mono.role === "manager" && orgDescendants(roster, rootId).has(mono.id))
       managerIds.add(mono.id);
   const feed = [
-    ...crewFeed(roster, runs),
+    ...crewFeed(roster, runs, statuses, sessions),
     ...crewMessages()
       .filter((event) => managerIds.has(event.managerId))
       .map((event) => ({
@@ -280,8 +262,8 @@ export function MonoOrgActivity({
                     className="size-4 shrink-0"
                   />
                 )}
-                <span title={event.text} className="line-clamp-2 break-words">
-                  {event.text}
+                <span className="line-clamp-2 break-words">
+                  <ArtifactText text={event.text} monoId={event.memberId} />
                 </span>
               </li>
             );

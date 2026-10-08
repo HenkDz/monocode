@@ -1,3 +1,4 @@
+import { parseTeamMessage } from "../model/teamMessage";
 import { useEffect, useRef, useState } from "react";
 import {
   Check,
@@ -45,7 +46,7 @@ export function MessageQueue({
     };
   }, []);
   // Legacy saved queues may still contain app events before hydration migrates them.
-  messages = messages.filter(message => !message.monoSessionCompletion);
+  messages = messages.filter(message => !message.monoSessionCompletion && !message.monoSource && !parseTeamMessage(message.text));
   if (messages.length === 0) return null;
   const paused = status === "paused";
   const failed = messages.some((message) => message.error);

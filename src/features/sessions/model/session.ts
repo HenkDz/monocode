@@ -338,6 +338,7 @@ export type Block = {
   /** Stable CLI request that submitted this turn, for safe retries. */
   appRequestId?: string;
   monoSource?: QueuedMessage["monoSource"];
+  monoTeamMessage?: { id: string; name: string; mascot: string; color: string; topic: string; text: string };
   /** Provider-reported token metrics for this user turn, when available. */
   turnMetrics?: TurnMetrics;
   tool?: {

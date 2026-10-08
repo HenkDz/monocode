@@ -9,14 +9,14 @@ import { memberMonoState } from "./monoNavigation";
 import { newSession } from "../../sessions/model/session";
 import type { OrchestrationRun } from "../../orchestration/model/orchestrationState";
 
-vi.mock("./mono", () => {
+vi.mock("./mono", async (original) => {
   const roster = [
     { id: "manager", role: "manager", sessionId: "manager-chat", projects: ["/app"] },
     { id: "backend", role: "member", projects: ["/app"] },
     { id: "boss", role: "orchestrator", sessionId: "boss-chat", projects: ["/app"] },
     { id: "archived-member", role: "member", sessionId: "archived-chat", projects: ["/app"], archivedAt: 1 },
   ];
-  return { findMono: (id: string) => roster.find(m => m.id === id), monoForSession: (id: string) => roster.find(m => m.sessionId === id) };
+  return { ...(await original<object>()), findMono: (id: string) => roster.find(m => m.id === id), monoForSession: (id: string) => roster.find(m => m.sessionId === id) };
 });
 beforeEach(() => vi.stubGlobal("localStorage", new Storage()));
 afterEach(() => vi.unstubAllGlobals());

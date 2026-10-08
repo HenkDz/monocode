@@ -101,6 +101,16 @@ afterEach(() => {
   container.remove();
   vi.unstubAllGlobals();
 });
+
+it("renders the owner's shared availability as it starts and finishes elsewhere", async () => {
+  const view = snapshot(0);
+  native.invoke.mockImplementation(async command => command === "mono_chat_state" ? { ...view, session: { ...view.session, monoLiveState: { status: "working" } } } : undefined);
+  await act(async () => root.render(createElement(FloatingMonoChat, { onShown: vi.fn() })));
+  expect(container.textContent).toContain("Working");
+  await act(async () => receive({ payload: { ...view, session: { ...view.session!, monoLiveState: { status: "idle" } } } }));
+  expect(container.textContent).toContain("Idle");
+  expect(container.textContent).not.toContain("Working");
+});
 async function render() {
   await act(async () =>
     root.render(createElement(FloatingMonoChat, { onShown: () => {} })),

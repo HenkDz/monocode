@@ -58,6 +58,14 @@ export type OrchestrationDispatch = {
   result?: string;
   error?: string;
   cleanupError?: string;
+  checkoutBaseline?: CheckoutBaseline;
+};
+
+export type CheckoutBaseline = {
+  head: string;
+  fingerprint: string;
+  pathHashes?: Record<string, string>;
+  inheritedChangedPaths?: string[];
 };
 
 export type OrchestrationTask = {
@@ -70,7 +78,10 @@ export type OrchestrationTask = {
   /** Immutable assignment base; never compare against a moving branch alone. */
   baseHead?: string;
   readOnlyBaseline?: { head: string; fingerprint: string };
-  completionOutcome?: "no-changes";
+  checkoutBaseline?: CheckoutBaseline;
+  completionOutcome?: "no-changes" | "no-changes-baseline-unknown";
+  /** A legacy retry's read-only guard is not evidence of its original dispatch state. */
+  checkoutBaselineUnknown?: boolean;
   origin?: "user" | "manager";
   id: string;
   monoGoalId?: string;
@@ -213,6 +224,10 @@ export function normalizeOrchestrationRun(
       task.error === legacyPauseError;
     return {
       ...task,
+      checkoutBaseline: task.checkoutBaseline ?? (run.dispatches ?? [])
+        .filter(dispatch => dispatch.taskId === task.id && dispatch.checkoutBaseline)
+        .sort((a, b) => a.startedAt - b.startedAt)[0]?.checkoutBaseline ??
+        (task.checkoutBaselineUnknown ? undefined : task.readOnlyBaseline),
       ...(legacyInterrupted
         ? {
             status:

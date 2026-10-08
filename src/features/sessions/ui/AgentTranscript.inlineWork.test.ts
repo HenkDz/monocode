@@ -102,6 +102,19 @@ function settleTicker() {
   act(() => vi.advanceTimersByTime(340));
 }
 
+it("renders incoming team messages with sender identity, collapse and no user actions", () => {
+  const text = "Long investigation update. ".repeat(30);
+  render([{ id: "team", role: "user", text: "provider envelope", monoTeamMessage: { id: "sender", name: "Backend", mascot: "fox", color: "#abc", topic: "report", text } }], { onEditLastTurn: vi.fn(), onRetryMessage: vi.fn(), onSendDraft: vi.fn(), onRemoveDraft: vi.fn() });
+  const incoming = container.querySelector('[data-team-message="sender"]')!;
+  expect(incoming.className).toContain("mr-auto");
+  expect(incoming.textContent).toContain("Backend");
+  expect(incoming.textContent).toContain("Team message");
+  expect(incoming.querySelector("details")?.open).toBe(false);
+  expect(container.querySelector("[data-prompt-anchor]")).toBeNull();
+  expect(container.querySelector('[aria-label="Edit message"]')).toBeNull();
+  expect(container.textContent).not.toContain("provider envelope");
+});
+
 it.each(["C:/preview/monocode.exe app projects.list", "C:/preview/monocode-r5-cards.exe app projects.list"])("shows automatic approval reason in the inline chat card for %s", command => {
   const onApproval = vi.fn();
   const reason = "Not auto-approved: executable does not resolve to the running MonoCode app.";

@@ -23,7 +23,8 @@ import {
   findMono,
   listMonos,
   railMonos,
-  MONO_STATUS_LABEL,
+  monoStatusLabel,
+  monoTeamWorkingLabel,
   monoIntroDismissed,
   nextMonoLook,
   monoLook,
@@ -134,7 +135,7 @@ export function MonoRailSection({
           const status =
             state.status === "idle"
               ? undefined
-              : (state.activity ?? MONO_STATUS_LABEL[state.status]);
+              : (state.activity ?? monoStatusLabel(state));
           return (
             <div
               key={mono.id}
@@ -174,8 +175,8 @@ export function MonoRailSection({
             >
               <button
                 type="button"
-                title={[look.name, projects, status].filter(Boolean).join("\n")}
-                aria-label={[look.name, MONO_STATUS_LABEL[state.status]].join(", ")}
+                title={[look.name, projects, monoStatusLabel(state), status, monoTeamWorkingLabel(state)].filter(Boolean).join("\n")}
+                aria-label={[look.name, monoStatusLabel(state), monoTeamWorkingLabel(state)].filter(Boolean).join(", ")}
                 aria-current={selected ? "true" : undefined}
                 className="flex min-w-0 flex-1 cursor-default items-center gap-2 text-left transition-[padding] duration-150 motion-reduce:transition-none group-hover:pr-6 group-has-[:focus-visible]:pr-6"
               >
@@ -197,6 +198,11 @@ export function MonoRailSection({
                     {look.name}
                   </span>
                 )}
+                {state.status === "needs-you" || state.teamWorking ? (
+                  <span className={`min-w-0 truncate text-[10px] ${state.status === "needs-you" ? "text-accent" : "text-content/50"}`}>
+                    {[state.status === "needs-you" ? monoStatusLabel(state) : undefined, monoTeamWorkingLabel(state)].filter(Boolean).join(" · ")}
+                  </span>
+                ) : null}
                 {unseen ? (
                   <span
                     aria-hidden

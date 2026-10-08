@@ -21,7 +21,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 vi.mock("@tauri-apps/api/webviewWindow", () => ({
   getCurrentWebviewWindow: () => ({ listen: native.listen }),
 }));
-vi.mock("../../platform/tauri/platform", () => ({ IS_MAC: true, IS_LINUX: false, IS_WINDOWS: false }));
+vi.mock("../../platform/tauri/platform", () => ({ IS_MAC: true, IS_LINUX: false, IS_WINDOWS: false, IS_WIN: false }));
 vi.mock("../../features/monos/model/mono", async (original) => ({
   ...(await original<object>()),
   findMono: (id: string) => ({ id, sessionId: `chat-${id}` }),
@@ -142,7 +142,7 @@ it("streams each open Mono on transcript commits without waiting for a poll", as
   await act(async () => root.render(createElement(Harness, { sessions })));
   expect(native.invoke).toHaveBeenCalledExactlyOnceWith("mono_chat_publish", {
     monoId: "first",
-    session: { ...sessions[0], monoLiveState: { status: "working", activity: "Thinking" } },
+    session: { ...sessions[0], monoLiveState: { status: "working", activity: "Thinking", teamWorking: 1 } },
   });
 });
 
@@ -168,7 +168,8 @@ it("publishes descendant start and finish, and run decisions while the owner's s
   const publishedState = () => native.invoke.mock.calls.find(([command, args]) => command === "mono_chat_publish" && args.monoId === "first")?.[1].session.monoLiveState.status;
   sessions = [owner, { ...sessions[1], busy: true }];
   await act(async () => root.render(createElement(Harness, { sessions })));
-  expect(publishedState()).toBe("working");
+  expect(publishedState()).toBe("idle");
+  expect(native.invoke.mock.calls.find(([command, args]) => command === "mono_chat_publish" && args.monoId === "first")?.[1].session.monoLiveState.teamWorking).toBe(1);
   native.invoke.mockClear();
   sessions = [owner, { ...sessions[1], busy: false }];
   await act(async () => root.render(createElement(Harness, { sessions })));

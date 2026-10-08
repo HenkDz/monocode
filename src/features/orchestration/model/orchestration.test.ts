@@ -405,6 +405,15 @@ it("runs read-only work in the project checkout and accepts an unchanged dirty b
   expect(f.tasks()[0].completionOutcome).toBe("no-changes");
 });
 
+it("runs read-only inspection alongside a writable worker with the same logical scope", async () => {
+  const f = setup();
+  await f.start();
+  await f.delegate(["src"], { readOnly: true });
+  await vi.waitFor(() => expect(f.tasks()[0].status).toBe("running"));
+  await f.delegate(["src"]);
+  await vi.waitFor(() => expect(f.tasks()[1].status).toBe("running"));
+});
+
 it("flags read-only content changes as blocked even when dirty status was already present", async () => {
   const f = reportTaskFixture();
   f.snapshot.clean = false;
@@ -603,7 +612,7 @@ it("allows an owning Mono's habit without acquiring or ending its Manager turn",
   expect(f.manager.run("lead")?.status).toBe("active");
   expect(f.manager.run("lead")?.managerTurnId).toBeUndefined();
   f.host.habitOwnerMono = () => "another-mono";
-  expect(f.manager.submissionError("habit")).toContain("active orchestrator");
+  expect(f.manager.submissionError("habit")).toBeNull();
 });
 
 it("keeps usage-limited Managers active but holds events for genuinely paused owners", async () => {
@@ -647,10 +656,16 @@ it("preflights independent launches in retained worker checkouts and nested fold
       cwd: "/repo",
       worktreeCwd: checkout,
     }),
-  ).toContain("worker checkout");
+  ).toBeNull();
   expect(
     f.manager.submissionError("new", false, { cwd: `${checkout}/src` }),
-  ).toContain("worker checkout");
+  ).toBeNull();
+  expect(f.manager.checkoutNotice("new", { cwd: `${checkout}/src` }))
+    .toBe("A teammate is working here; your changes may conflict");
+  expect(f.manager.checkoutNotice("new", { cwd: `${checkout}-other` })).toBeNull();
+  f.tasks()[0].status = "completed";
+  expect(f.manager.checkoutNotice("new", { cwd: checkout }))
+    .toBe("A teammate has work here; your changes may conflict");
   expect(
     f.manager.submissionError("new", false, { cwd: `${checkout}-other` }),
   ).toBeNull();
@@ -2543,7 +2558,7 @@ describe("local orchestration", () => {
       f.call("steer", { taskId: task.id, text: "Too late" }),
     ).rejects.toThrow(/Only a running agent can be steered.*message/s);
   });
-  it("blocks ordinary sessions while a run owns their checkout", async () => {
+  it("allows ordinary sessions while a run owns their checkout", async () => {
     const f = setup();
     await f.start();
     f.sessions.push({
@@ -2551,7 +2566,7 @@ describe("local orchestration", () => {
       id: "other",
       busy: false,
     });
-    expect(f.manager.submissionError("other")).toContain("active orchestrator");
+    expect(f.manager.submissionError("other")).toBeNull();
     expect(f.manager.submissionError("lead")).toBeNull();
   });
   it("does not block a home-folder session containing a controlled checkout", async () => {
@@ -2560,4 +2575,32 @@ describe("local orchestration", () => {
     f.sessions.push({ ...newSession("claude", "/"), id: "home", busy: false });
     expect(f.manager.submissionError("home")).toBeNull();
   });
+});
+
+it("does not reserve an org Manager's primary checkout or a read-only task checkout", async () => {
+  const f = reportTaskFixture();
+  f.lead.busy = false;
+  f.manager.registerMonoEngine("lead", "lead", "manager-mono", "/repo");
+  f.sessions.push({ ...newSession("codex", "/repo"), id: "user", busy: true });
+  await f.manager.start("lead", ["codex"], 2, undefined, true);
+  f.lead.busy = true;
+  expect(f.manager.submissionError("user")).toBeNull();
+  expect(() => f.manager.assertCanLaunch("new-agent", { cwd: "/repo" })).not.toThrow();
+  await f.delegate(["src"], { readOnly: true, memberName: "Native Core" });
+  await vi.waitFor(() => expect(f.tasks()[0].workspace).toBeDefined());
+  const checkout = f.tasks()[0].workspace!.checkoutCwd;
+  expect(f.manager.submissionError("user")).toBeNull();
+  expect(f.manager.checkoutNotice("user", { cwd: checkout })).toBeNull();
+  expect(() => f.manager.assertCanLaunch("new-agent", { cwd: checkout })).not.toThrow();
+});
+
+it("resumes a legacy project Manager while a user is working in the project checkout", async () => {
+  const f = setup();
+  f.lead.busy = false;
+  await f.manager.start("lead", ["codex"], 2, undefined, true);
+  await f.manager.pause("lead", "Paused by user");
+  f.sessions.push({ ...newSession("codex", "/repo"), id: "user", busy: true });
+  await f.manager.start("lead", ["codex"], 2);
+  expect(f.manager.run("lead")).toMatchObject({ status: "active", projectManager: true });
+  expect(f.manager.submissionError("user")).toBeNull();
 });

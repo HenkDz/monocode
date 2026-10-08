@@ -190,7 +190,7 @@ export function buildTeamMap({
       mono,
       state,
       status: state.status === "idle" && ready ? "pr-ready" : state.status,
-      title: current
+      title: current && (mono.role === "member" || state.status === "working")
         ? activityTaskTitle(current)
         : ready
           ? activityTaskTitle(ready)
@@ -294,7 +294,7 @@ export function buildTeamMap({
         liveStates.get(task.memberId)?.status !== "needs-you",
     );
     const flow =
-      working || node.status === "working"
+      working || node.status === "working" || (node.state.teamWorking ?? 0) > 0
         ? ("up" as const)
         : queued
           ? ("down" as const)

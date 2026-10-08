@@ -450,6 +450,7 @@ export function ProjectWorktrees({
                 !(sessions.some(session => session.id === activeSessionId) && !folded) &&
                 sameProjectPath(focus?.path ?? project, tree.path);
               const managerTask = taskByPath.get(key);
+              const checkoutNotice = orchestrator.checkoutNotice("", { cwd: tree.path });
               const label =
                 managerTask?.title ??
                 tree.branch ??
@@ -541,7 +542,7 @@ export function ProjectWorktrees({
                       aria-current={selected ? "true" : undefined}
                       aria-label={`Open worktree ${label}`}
                       aria-busy={selected && switchPending}
-                      title={`${label}\n${tree.branch ?? `Detached ${tree.head.slice(0, 7)}`}\n${prettyCwd(tree.path)}\n${outcome || workerStatus || progress}${tree.dirty ? "\nUncommitted changes" : ""}`}
+                      title={`${label}\n${tree.branch ?? `Detached ${tree.head.slice(0, 7)}`}\n${prettyCwd(tree.path)}\n${outcome || workerStatus || progress}${checkoutNotice ? `\n${checkoutNotice}` : ""}${tree.dirty ? "\nUncommitted changes" : ""}`}
                       onClick={() =>
                         taskTree && sessions.length
                           ? onSelectSession(sessions[0].id, { project, tree })
@@ -567,6 +568,7 @@ export function ProjectWorktrees({
                         </span>
                       ) : null}
                     </button>
+                    {checkoutNotice && <span role="status" title={checkoutNotice} aria-label={checkoutNotice} className="shrink-0 text-content/45"><CircleAlert className="size-3" /></span>}
                     {teammates.length > 0 && (
                       <div data-worktree-team className="flex min-w-0 max-w-[50%] items-center gap-1 pr-1">
                         {teammates.map(({ sessionId, task, look, name }) => (

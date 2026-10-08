@@ -2,10 +2,10 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { Storage } from "happy-dom";
 import { loadMonoView, saveMonoView, monoForView, memberDetailsView, memberTasks, memberAvailability, selectedOrgMono } from "./monoNavigation";
-import { monoForSession } from "./mono";
+import { monoForSession, monoStatusLabel, type Mono } from "./mono";
 import { reconcileProjectReturn } from "../../projects/model/projectReturn";
 import { newTab } from "../../workspace/model/layout";
-import { memberMonoState } from "./monoNavigation";
+import { memberMonoState, monoLiveState } from "./monoNavigation";
 import { newSession } from "../../sessions/model/session";
 import type { OrchestrationRun } from "../../orchestration/model/orchestrationState";
 
@@ -33,11 +33,45 @@ const runs = [{ tasks: [
   { id: "new", memberId: "backend", sessionId: "worker-chat" },
 ], dispatches: [{ taskId: "old", startedAt: 10 }, { taskId: "new", startedAt: 20 }] }] as OrchestrationRun[];
 
+it("keeps own status idle while counting working descendants once, including worker sessions", () => {
+  const roster = [
+    { id: "o", role: "orchestrator", sessionId: "orch", projects: [] },
+    { id: "m", role: "manager", reportsTo: "o", sessionId: "manager", projects: ["C:/projects/dzdistro"] },
+    { id: "b", role: "member", reportsTo: "m", projects: ["C:/projects/dzdistro"] },
+    { id: "old", role: "manager", reportsTo: "o", sessionId: "archived", projects: [], archivedAt: 1 },
+  ] as Mono[];
+  const sessions = ["orch", "manager", "archived"].map(id => ({ ...newSession("codex", "/app"), id, busy: id !== "orch" }));
+  expect(monoLiveState(roster, [], sessions, "o")).toEqual({ status: "idle", teamWorking: 1 });
+  const working = [{ ...runs[0], ownerMonoId: "m", tasks: [{ ...runs[0].tasks[1], memberId: "b", status: "running", title: "Routing", prompt: "Routing" }] }] as OrchestrationRun[];
+  expect(monoLiveState(roster, working, sessions, "o")).toEqual({ status: "idle", teamWorking: 2 });
+  expect(monoLiveState(roster, working, sessions, "m")).toMatchObject({ status: "working", teamWorking: 1 });
+  expect(monoLiveState(roster, working, sessions, "b").status).toBe("working");
+});
+
+it("labels rolled-up attention with its project while retaining direct decisions and own work", () => {
+  const roster = [
+    { id: "o", role: "orchestrator", sessionId: "orch", projects: [] },
+    { id: "m", role: "manager", reportsTo: "o", sessionId: "manager", managerProject: "C:/projects/dzdistro", projects: [] },
+  ] as Mono[];
+  const manager = { ...newSession("codex", "C:/projects/dzdistro"), id: "manager", pendingQuestion: { requestId: 1, title: "Choose", questions: [] } };
+  const state = monoLiveState(roster, [], [manager], "o");
+  expect(state).toEqual({ status: "needs-you", attentionLocation: "dzdistro", activity: "Choose" });
+  expect(monoStatusLabel(state)).toBe("Needs you · in dzdistro");
+  expect(monoLiveState(roster, [], [manager], "m")).toEqual({ status: "needs-you", activity: "Choose" });
+  const paused = [{ leadId: "engine", projectManager: true, ownerMonoId: "m", ownerSessionId: "manager", cwd: "C:/projects/dzdistro", status: "paused", tasks: [] }] as unknown as OrchestrationRun[];
+  expect(monoLiveState(roster, paused, [{ ...manager, pendingQuestion: undefined }], "o")).toMatchObject({ status: "needs-you", attentionLocation: "dzdistro" });
+  const own = { ...newSession("codex", "/app"), id: "orch", busy: true };
+  expect(monoLiveState(roster, [], [own], "o")).toEqual({ status: "working", activity: "Thinking" });
+});
+
 it("uses worker availability and tool activity while the durable member chat is idle", () => {
   const worker = { ...newSession("codex", "/app"), id: "worker-chat", busy: true, blocks: [{ id: "step", role: "tool" as const, text: "", tool: { title: "Checking routing" } }] } as ReturnType<typeof newSession>;
   const working = [{ ...runs[0], tasks: [{ ...runs[0].tasks[1], status: "running", prompt: "Routing", title: "Routing" }] }] as OrchestrationRun[];
   expect(memberMonoState(working, "backend", [worker], "idle-chat")).toEqual({ status: "working", activity: "Checking routing" });
   expect(memberMonoState(working, "backend", [{ ...worker, blocks: [{ ...worker.blocks[0], approval: { requestId: 1 } }] }])).toMatchObject({ status: "needs-you" });
+  const chat = { ...worker, id: "member-chat", blocks: [{ ...worker.blocks[0], tool: { title: "Answering your question" } }] };
+  expect(memberMonoState(working, "backend", [worker, chat], "member-chat")).toEqual({ status: "working", activity: "Answering your question" });
+  expect(memberMonoState([], "backend", [chat], "member-chat")).toEqual({ status: "working", activity: "Answering your question" });
 });
 
 it("shows current member availability without historical task outcomes dominating", () => {

@@ -120,6 +120,17 @@ it("uses shared availability and task titles, with PR readiness only when idle a
   expect(nodes([task({ id: "old", status: "failed" }), task({ status: "completed" })]).find(node => node.id === "backend")?.status).toBe("idle");
 });
 
+it("keeps an idle Orchestrator separate from its working Manager and labels team attention", () => {
+  const savedRoster = roster.map(node => node.id === "app" ? { ...node, sessionId: "manager-chat" } : node);
+  const manager = { ...newSession("codex", "/app"), id: "manager-chat", busy: true };
+  const map = buildTeamMap({ ...input, roster: savedRoster, sessions: [manager] });
+  expect(map.nodes.find(node => node.id === "orchestrator")).toMatchObject({ status: "idle", state: { status: "idle", teamWorking: 1 } });
+  expect(map.nodes.find(node => node.id === "app")?.status).toBe("working");
+  manager.pendingQuestion = { requestId: 1, title: "Choose", questions: [] };
+  expect(buildTeamMap({ ...input, roster: savedRoster, sessions: [manager] }).nodes.find(node => node.id === "orchestrator")?.state)
+    .toMatchObject({ status: "needs-you", attentionLocation: "app" });
+});
+
 it("uses clear coordination labels before assignment while actual task titles take priority over tool commands", () => {
   const rawCommand = "powershell -NoProfile -Command C:/Users/nooro/Temp/dispatch.ps1";
   const busyRoster = roster.map(node => ({ ...node, sessionId: `${node.id}-chat` }));

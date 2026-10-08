@@ -98,12 +98,19 @@ it("keeps sidebar, title, centered header and org nodes consistent on start, att
       session.busy = status === "working";
       session.pendingQuestion = status === "needs-you" ? { requestId: 1, title: "Choose", questions: [] } : undefined;
       await render();
-      const label = MONO_STATUS_LABEL[status];
+      const ownStatus = status === "working" ? "idle" : status;
+      const label = MONO_STATUS_LABEL[ownStatus] + (status === "needs-you" ? " · in app" : "");
       expect(host.querySelector("[data-mono-title]")?.textContent).toContain(label);
       expect(host.querySelector("header")?.textContent).toContain(label);
       expect(host.querySelector('[data-org-member="o"]')?.firstElementChild?.textContent).toContain(label);
-      expect(host.querySelector('[aria-label="Open project manager"]')?.textContent).toContain(label);
-      expect(host.querySelector(`[aria-label="GRAND ORCH, ${label}"]`)).not.toBeNull();
+      expect(host.querySelector('[aria-label="Open project manager"]')?.textContent).toContain(MONO_STATUS_LABEL[status]);
+      expect(host.querySelector(`[aria-label="GRAND ORCH, ${label}${status === "working" ? ", 1 working below" : ""}"]`)).not.toBeNull();
+      if (status === "working") {
+        expect(host.querySelector("[data-mono-title]")?.textContent).toContain("1 working below");
+        expect(host.querySelector("header")?.textContent).toContain("1 working below");
+        expect(host.querySelector('[data-org-member="o"]')?.firstElementChild?.textContent).toContain("1 working below");
+        expect(host.querySelector('[data-mono-rail] [data-mono-status="working"]')).toBeNull();
+      }
     }
   } finally { await act(async () => root.unmount()); localStorage.clear(); vi.unstubAllGlobals(); }
 });

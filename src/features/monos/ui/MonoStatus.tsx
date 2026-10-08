@@ -1,4 +1,4 @@
-import { MONO_STATUS_LABEL, type MonoState } from "../model/mono";
+import { monoStatusLabel, monoTeamWorkingLabel, type MonoState } from "../model/mono";
 
 type Props = {
   state: MonoState;
@@ -32,7 +32,8 @@ export function MonoStatus({ state, color, className = "" }: Props) {
         }`}
         style={dot ? { background: dot } : undefined}
       />
-      <span className="shrink-0">{MONO_STATUS_LABEL[status]}</span>
+      <span className="shrink-0">{monoStatusLabel(state)}</span>
+      {state.teamWorking ? <span className="shrink-0 text-content/45">· {monoTeamWorkingLabel(state)}</span> : null}
       {activity ? (
         <>
           <span aria-hidden className="shrink-0 opacity-60">

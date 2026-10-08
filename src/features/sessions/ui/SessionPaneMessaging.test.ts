@@ -10,9 +10,14 @@ const probes = vi.hoisted(() => ({
   member: false,
   pick: vi.fn(),
   transcript: vi.fn(),
+  composer: vi.fn(),
+  checkoutNotice: vi.fn(),
   runs: [],
 }));
-vi.mock("./Composer", () => ({ Composer: () => null }));
+vi.mock("./Composer", () => ({ Composer: (props: { disabled?: boolean; onSubmit: (text: string, attachments: []) => void }) => {
+  probes.composer(props);
+  return createElement("button", { disabled: props.disabled, onClick: () => props.onSubmit("Continue my work", []) }, "Send user message");
+} }));
 vi.mock("../hooks/useFileDrop", () => ({ useFileDrop: () => false }));
 vi.mock("../model/attachments", async (original) => ({
   ...(await original<typeof import("../model/attachments")>()),
@@ -36,6 +41,7 @@ vi.mock("../../orchestration/model/orchestration", async (original) => ({
     subscribe: () => () => {},
     snapshot: () => probes.runs,
     hydrate: async () => {},
+    checkoutNotice: probes.checkoutNotice,
   },
 }));
 vi.mock("../../monos/model/mono", async (original) => ({
@@ -74,6 +80,8 @@ beforeEach(() => {
   vi.stubGlobal("cancelAnimationFrame", vi.fn());
   localStorage.clear();
   probes.transcript.mockClear();
+  probes.composer.mockClear();
+  probes.checkoutNotice.mockReset().mockReturnValue(null);
   clearComposerDraft("chat");
   probes.pick.mockReset().mockResolvedValue([
     {
@@ -302,6 +310,41 @@ it("shows pending messages in the conversation and routes retry from the bubble"
   act(() => transcript.onRetryMessage("first"));
   expect(pane.onResumeQueue).toHaveBeenCalledWith("chat");
   expect(field()).not.toBeNull();
+});
+
+it("shows a worker checkout notice while keeping the user's composer send enabled", () => {
+  probes.mono = false;
+  probes.checkoutNotice.mockReturnValue("Native Core is working here; your changes may conflict");
+  const pane = props();
+  pane.session.worktreeCwd = "/worktrees/native-core";
+  pane.onSubmit = vi.fn();
+  render(pane);
+  expect(container.querySelector('[role="status"]')?.textContent).toContain(
+    "Native Core is working here; your changes may conflict",
+  );
+  expect(probes.checkoutNotice).toHaveBeenCalledWith("chat", pane.session);
+  const send = [...container.querySelectorAll<HTMLButtonElement>("button")]
+    .find(button => button.textContent === "Send user message")!;
+  expect(send.disabled).toBe(false);
+  act(() => send.click());
+  expect(pane.onSubmit).toHaveBeenCalledWith("chat", "Continue my work", [], undefined);
+});
+
+it("routes a previously blocked user's failed-send Retry through the existing queue", () => {
+  probes.mono = false;
+  const pane = props();
+  pane.onResumeQueue = vi.fn();
+  pane.session.queueStatus = "paused";
+  pane.session.queuedMessages = [{
+    id: "blocked", text: "Continue my work", attachments: [],
+    error: "This checkout has an active orchestrator. Stop that run before starting independent work.",
+  }];
+  render(pane);
+  const transcript = probes.transcript.mock.calls.at(-1)![0];
+  expect(transcript.messageDeliveries.get("blocked").status).toBe("failed");
+  act(() => transcript.onRetryMessage("blocked"));
+  expect(pane.onResumeQueue).toHaveBeenCalledWith("chat");
+  expect(probes.composer.mock.calls.at(-1)![0].disabled).toBe(false);
 });
 
 it("keeps internal notifications out of the Mono's composer and user outbox", () => {

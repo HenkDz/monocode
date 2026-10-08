@@ -722,6 +722,9 @@ export type MonoState = {
   status: MonoStatus;
   /** Short present-tense note while working or waiting. */
   activity?: string;
+  /** Descendant activity does not make this Mono busy. */
+  teamWorking?: number;
+  attentionLocation?: string;
 };
 
 export const MONO_STATUS_LABEL: Record<MonoStatus, string> = {
@@ -729,6 +732,12 @@ export const MONO_STATUS_LABEL: Record<MonoStatus, string> = {
   "needs-you": "Needs you",
   idle: "Idle",
 };
+
+export const monoStatusLabel = (state: MonoState) =>
+  `${MONO_STATUS_LABEL[state.status]}${state.status === "needs-you" && state.attentionLocation ? ` · in ${state.attentionLocation}` : ""}`;
+
+export const monoTeamWorkingLabel = (state: MonoState) =>
+  state.teamWorking ? `${state.teamWorking} working below` : undefined;
 
 /** The agent's state, with the step it is on or the call it is waiting for. */
 export function monoState(

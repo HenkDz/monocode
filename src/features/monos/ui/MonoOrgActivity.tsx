@@ -7,7 +7,7 @@ import {
   crewMessagesSnapshot,
   subscribeCrewMessages,
 } from "../model/monoCrewEvents";
-import { monoLook, monoState, MONO_STATUS_LABEL } from "../model/mono";
+import { monoLook, monoState, monoStatusLabel, monoTeamWorkingLabel } from "../model/mono";
 import { monoLiveState, memberTasks } from "../model/monoNavigation";
 import { activityTaskTitle, orgDescendants } from "../model/monoTeamActivity";
 import type { OrchestrationRun } from "../../orchestration/model/orchestrationState";
@@ -143,8 +143,6 @@ export function MonoOrgActivity({
   useSyncExternalStore(subscribeCrewMessages, crewMessagesSnapshot);
   const statuses = usePrStatusCache();
   const [workSession, setWorkSession] = useState<string>();
-  const availability = (mono: Mono) =>
-    monoLiveState(roster, runs, sessions, mono.id).status;
   const node = (mono: Mono) => {
     const tasks = [
       ...new Map(
@@ -156,7 +154,8 @@ export function MonoOrgActivity({
     );
     const selectedTask = current ?? tasks[0];
     const session = sessions.find((s) => s.id === selectedTask?.sessionId);
-    const status = availability(mono);
+    const state = monoLiveState(roster, runs, sessions, mono.id);
+    const status = state.status;
     const look = monoLook(mono);
     const taskLabel = selectedTask
       ? managerTaskLifecycle(
@@ -199,7 +198,8 @@ export function MonoOrgActivity({
                 {look.name}
               </button>
               <span className="ml-auto shrink-0 text-content/60">
-                {MONO_STATUS_LABEL[status]}
+                {monoStatusLabel(state)}
+                {state.teamWorking ? ` · ${monoTeamWorkingLabel(state)}` : ""}
                 {start !== undefined
                   ? ` · ${formatLiveElapsed(start, now)}`
                   : ""}
@@ -215,7 +215,7 @@ export function MonoOrgActivity({
                 {selectedTask
                   ? activityTaskTitle(selectedTask)
                   : children.length
-                    ? `${children.length} teammates · ${children.filter((child) => availability(child) === "working").length} working`
+                    ? `${children.length} teammates · ${state.teamWorking ?? 0} working below`
                     : status === "needs-you"
                       ? "Waiting for your decision"
                       : status === "working"

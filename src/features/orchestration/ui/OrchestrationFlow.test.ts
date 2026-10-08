@@ -44,6 +44,7 @@ vi.mock("../model/orchestration", async (importOriginal) => ({
     subscribe: () => () => {},
     snapshot: () => emptyRuns,
     hydrate: async () => {},
+    checkoutNotice: () => null,
     waitingFor: () => undefined,
     resumeBlocker: vi.fn(() => undefined),
     resumeLeadBusy: vi.fn(() => false),

@@ -25,9 +25,7 @@ import {
 import { Composer } from "./Composer";
 import type { Worktree } from "../../source-control/model/worktrees";
 import {
-  orchestrationCheckoutCwd,
   orchestrator,
-  sameCheckout,
 } from "../../orchestration/model/orchestration";
 import { DiscussionEmpty } from "./DiscussionEmpty";
 import { LinkedWorkItemUpdateNotice } from "../../inbox/ui/LinkedWorkItemUpdateNotice";
@@ -388,8 +386,9 @@ const LocalSessionPane = memo(function LocalSessionPane({
     orchestrationRuns.some(
       (run) =>
         (run.status === "active" || run.status === "paused") &&
-        sameCheckout(orchestrationCheckoutCwd(run), sessionWorkCwd(session)),
+        (run.leadId === session.id || run.tasks.some(task => task.sessionId === session.id)),
     );
+  const checkoutNotice = orchestrator.checkoutNotice(session.id, session);
   const title = sessionDisplayTitle(session.title, session.harness);
   const isEmpty = session.blocks.length === 0;
   const messageDeliveries = useMemo(
@@ -693,6 +692,8 @@ const LocalSessionPane = memo(function LocalSessionPane({
   const composerDockMotion = useComposerDockMotion(dockComposer);
   const draftRef = useRef<string | undefined>(getComposerDraft(session.id));
   const composer = (
+    <>
+    {checkoutNotice && <p role="status" className="px-3 py-1 text-xs text-content/55">{checkoutNotice}</p>}
     <Composer
       key={session.id}
       disabled={workspaceSwitchingSessionId === session.id}
@@ -832,6 +833,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
       }}
       onEditingLastTurnChange={setEditingLastTurn}
     />
+    </>
   );
 
   return (

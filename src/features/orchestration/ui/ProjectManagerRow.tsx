@@ -5,6 +5,8 @@ import {
   monoLook,
   monosSnapshot,
   MONO_STATUS_LABEL,
+  monoStatusLabel,
+  monoTeamWorkingLabel,
   subscribeMonos,
 } from "../../monos/model/mono";
 import { memberAvailability, memberTasks, monoLiveState } from "../../monos/model/monoNavigation";
@@ -165,7 +167,7 @@ export function ProjectManagerRow({
         <span className="truncate">
           {look?.name ?? "Manager"}
         </span>
-        {live && <span role="status" className="ml-auto shrink-0 text-[10px] text-content/50">{MONO_STATUS_LABEL[live.status]}{waiting.length > 1 ? ` (${waiting.length})` : ""}</span>}
+        {live && <span role="status" className="ml-auto shrink-0 text-[10px] text-content/50">{monoStatusLabel(live)}{live.teamWorking ? ` · ${monoTeamWorkingLabel(live)}` : ""}{waiting.length > 1 ? ` (${waiting.length})` : ""}</span>}
         {label && !live && (
           <span
             role="status"

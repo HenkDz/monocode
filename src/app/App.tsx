@@ -10824,33 +10824,6 @@ function Workspace({
                   throw new Error(
                     "Name an existing non-primary worktree in this project.",
                   );
-                if (
-                  sessionsRef.current.some(
-                    (session) =>
-                      session.busy &&
-                      sameProjectPath(sessionWorkCwd(session), tree.path),
-                  )
-                )
-                  throw new Error("The named worktree is already in use.");
-                if (
-                  orchestrator
-                    .snapshot()
-                    .some((owner) =>
-                      owner.tasks.some(
-                        (other) =>
-                          other.id !== task.id &&
-                          other.workspace &&
-                          sameProjectPath(
-                            other.workspace.checkoutCwd,
-                            tree.path,
-                          ) &&
-                          other.status !== "cancelled",
-                      ),
-                    )
-                )
-                  throw new Error(
-                    "Another assignment owns this worktree; continue that worker instead.",
-                  );
                 return workspaceIdentity(
                   projectCwd,
                   tree.path,
@@ -10912,22 +10885,14 @@ function Workspace({
         if (!workspace)
           throw new Error("Worker worktree could not be prepared.");
         const checkoutCwd = workspace.checkoutCwd;
-        if (
-          run.projectManager &&
-          sessionsRef.current.some(
-            (session) =>
-              session.id !== task.sessionId &&
-              !(task.readOnly && (session.id === run.leadId || session.id === run.ownerSessionId)) &&
-              session.busy &&
-              sameProjectPath(sessionWorkCwd(session), checkoutCwd),
-          )
-        )
+        if (!task.readOnly && orchestrator.checkoutNotice(task.sessionId, { cwd: checkoutCwd }))
           throw new Error(
-            "The retained worktree is in use. Stop that session before replacing its worker.",
+            "Another assignment owns this worktree; continue that worker instead.",
           );
         const scratchDir = await invoke<string>("control_attach_worker", {
           leadId: run.leadId,
           sessionId: task.sessionId,
+          checkoutReserved: !task.readOnly && workspace.kind === "worktree",
         });
         const existing = sessionsRef.current.find(
           (session) => session.id === task.sessionId,

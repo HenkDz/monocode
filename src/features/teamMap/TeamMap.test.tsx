@@ -6,6 +6,7 @@ import type { Mono } from "../monos/model/mono";
 import { recordCrewMessage } from "../monos/model/monoCrewEvents";
 import { monoManagerGoals, type ManagerGoalHost } from "../monos/model/monoManagerGoals";
 import type { OrchestrationRun } from "../orchestration/model/orchestrationState";
+import { newSession } from "../sessions/model/session";
 import { TeamMap } from "./TeamMap";
 
 vi.mock("@tauri-apps/api/core", async original => ({
@@ -60,6 +61,19 @@ it("opens Mono chat and navigates the hierarchy with arrow focus", async () => {
   expect(host.querySelector('[role="tooltip"]')?.textContent).toContain("Permissions");
   await act(async () => nodeButton("Backend").click());
   expect(close).toHaveBeenCalledOnce(); expect(open).toHaveBeenCalledExactlyOnceWith("backend");
+});
+
+it("shows team activity separately from the Orchestrator ring and locates attention", async () => {
+  localStorage.setItem("monocode:mono-roster", JSON.stringify(roster.map(mono => mono.id === "manager" ? { ...mono, sessionId: "manager-chat" } : mono)));
+  const session = { ...newSession("codex", "/app"), id: "manager-chat", busy: true };
+  const render = () => act(async () => root.render(<TeamMap sessions={[session]} runs={[]} statuses={new Map()} onOpenMono={open} onClose={close} />));
+  await render();
+  expect(nodeButton("Orchestrator").closest(".team-map-node")?.getAttribute("data-status")).toBe("idle");
+  expect(nodeButton("Orchestrator").textContent).toContain("1 working below");
+  expect(nodeButton("App Manager").closest(".team-map-node")?.getAttribute("data-status")).toBe("working");
+  session.pendingQuestion = { requestId: 1, title: "Choose", questions: [] };
+  await render();
+  expect(nodeButton("Orchestrator").textContent).toContain("Needs you · in app");
 });
 
 it("dims the Needs you filter, filters projects and expands collapsed teammates", async () => {

@@ -41,6 +41,7 @@ vi.mock("../../orchestration/model/orchestration", async (importOriginal) => ({
     subscribe: () => () => {},
     snapshot: () => probes.runs,
     hydrate: async () => {},
+    checkoutNotice: () => null,
   },
 }));
 vi.mock("../../monos/model/mono", async (importOriginal) => ({

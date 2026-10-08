@@ -42,7 +42,8 @@ import { TabLabel } from "../../shared/ui/TabLabel";
 import { WindowControls } from "./WindowControls";
 import { PixelMascot } from "../../features/projects/ui/PixelMascot";
 import {
-  MONO_STATUS_LABEL,
+  monoStatusLabel,
+  monoTeamWorkingLabel,
   type MonoLook,
   type MonoState,
 } from "../../features/monos/model/mono";
@@ -1187,8 +1188,9 @@ function MonoTitle({
           state.status === "needs-you" ? "text-accent" : "text-content/45"
         }`}
       >
-        {MONO_STATUS_LABEL[state.status]}
+        {monoStatusLabel(state)}
       </span>
+      {state.teamWorking ? <span className="min-w-0 truncate text-[11px] text-content/45">{monoTeamWorkingLabel(state)}</span> : null}
     </div>
   );
 }

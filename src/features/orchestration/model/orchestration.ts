@@ -199,6 +199,7 @@ const tasksConflict = (
   a: OrchestrationTask,
   b: OrchestrationTask,
 ) => {
+  if (a.readOnly || b.readOnly) return false;
   if (!run.projectManager) return scopesOverlap(a.scopes, b.scopes);
   const left = a.workspace?.checkoutCwd ?? a.checkout;
   const right = b.workspace?.checkoutCwd ?? b.checkout;
@@ -1290,7 +1291,8 @@ export class Orchestrator {
       throw new Error(
         "Return the lead to its original checkout before resuming orchestration",
       );
-    const blocker = this.resumeBlocker(leadId, workspace.checkoutCwd);
+    const blocker = projectManager || previous?.projectManager || this.monoOwners.has(leadId)
+      ? undefined : this.resumeBlocker(leadId, workspace.checkoutCwd);
     if (blocker) {
       const label = blocker.title.trim() || blocker.id;
       throw new Error(
@@ -1383,8 +1385,22 @@ export class Orchestrator {
     this.sync();
   }
   assertCanLaunch(id: string, candidate: Pick<Session, "cwd" | "worktreeCwd">): void {
-    const blocked = this.submissionError(id, false, candidate);
+    const blocked = this.submissionError(id, false, candidate) ??
+      (this.checkoutNotice(id, candidate) ? "This worker checkout belongs to a project Manager." : null);
     if (blocked) throw Object.assign(new Error(`${blocked} Do not retry this launch; delegate via goals.assign or the project's Manager.`), { retryable: false });
+  }
+  checkoutNotice(
+    id: string,
+    candidate: Pick<Session, "cwd" | "worktreeCwd">,
+  ): string | null {
+    const cwd = pathKey((candidate.worktreeCwd ?? candidate.cwd).replace(/\\/g, "/"));
+    const task = this.snapshot().flatMap(run => run.tasks).find(task => {
+      if (task.readOnly || task.status === "cancelled" || task.sessionId === id ||
+          !task.workspace || task.workspace.kind !== "worktree") return false;
+      const root = pathKey(task.workspace.checkoutCwd.replace(/\\/g, "/")).replace(/\/$/, "");
+      return cwd === root || cwd.startsWith(`${root}/`);
+    });
+    return task ? `${task.memberName ?? "A teammate"} ${activeTask(task) ? "is working here" : "has work here"}; your changes may conflict` : null;
   }
   submissionError(
     id: string,
@@ -1405,36 +1421,6 @@ export class Orchestrator {
       (own.status === "active" || own.tasks.some(activeTask))
     )
       return "This worker is managed by the orchestrator. Send instructions through its lead or stop the run first.";
-    const cwd = pathKey(
-      (session.worktreeCwd ?? session.cwd).replace(/\\/g, "/"),
-    );
-    const inside = (checkout: string) => {
-      const root = pathKey(checkout.replace(/\\/g, "/")).replace(/\/$/, "");
-      return cwd === root || cwd.startsWith(`${root}/`);
-    };
-    if (
-      this.runs.some((run) =>
-        run.tasks.some(
-          (task) =>
-            task.status !== "cancelled" &&
-            task.sessionId !== id &&
-            task.workspace &&
-            inside(task.workspace.checkoutCwd),
-        ),
-      )
-    )
-      return "This worker checkout belongs to a project Manager. Delegate through that Manager instead of starting an independent session.";
-    const habitOwner = this.host?.habitOwnerMono?.(id);
-    const other = this.runs.find(
-      (run) =>
-        (run.status === "active" || run.tasks.some(activeTask)) &&
-        run.leadId !== id &&
-        run.ownerSessionId !== id &&
-        !(habitOwner && run.ownerMonoId === habitOwner) &&
-        inside(orchestrationCheckoutCwd(run)),
-    );
-    if (other)
-      return "This checkout has an active orchestrator. Stop that run before starting independent work.";
     if (own?.status === "paused")
       return "Resume or stop orchestration before sending the lead another turn.";
     if (

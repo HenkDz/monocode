@@ -158,7 +158,7 @@ afterEach(async () => {
 
 it("opens an unloaded task worker from its worktree row without creating a blank session", async () => {
   const runs = [{ cwd: "/repo", projectManager: true, ownerMonoId: "manager", tasks: [{
-    id: "audit", title: "Audit smoke test", sessionId: "persisted-worker", harness: "pi", model: "", status: "running",
+    id: "audit", title: "Audit smoke test", sessionId: "persisted-worker", memberName: "Native Core", harness: "pi", model: "", status: "running",
     workspace: { projectCwd: "/repo", checkoutCwd: "/trees/a", kind: "worktree", branch: "feature-a" },
   }] }] as OrchestrationRun[];
   const snapshot = vi.spyOn(orchestrator, "snapshot").mockReturnValue(runs);
@@ -170,6 +170,11 @@ it("opens an unloaded task worker from its worktree row without creating a blank
     await act(async () => button("Toggle Task worktrees").click());
     expect(container.querySelector('[aria-label="Task worktrees"] [data-worktree="/trees/a"]')).not.toBeNull();
     expect(container.querySelector('[data-worktree-session="persisted-worker"]')).toBeNull();
+    expect(container.querySelector('[data-worktree="/trees/a"] [role="status"]')?.getAttribute("aria-label"))
+      .toBe("Native Core is working here; your changes may conflict");
+    await act(async () => button("New session in Audit smoke test").click());
+    expect(props.onNewSession).toHaveBeenCalledOnce();
+    vi.mocked(props.onNewSession).mockClear();
     await act(async () => button("Open worktree Audit smoke test").click());
     expect(props.onSelectSession).toHaveBeenCalledExactlyOnceWith("persisted-worker", { project: "/repo", tree: expect.objectContaining({ path: "/trees/a" }) });
     expect(props.onSelectWorktree).not.toHaveBeenCalled();
@@ -227,6 +232,7 @@ it.each([1, 2])("lists %i user sessions with a clickable teammate indicator and 
     expect(button("Open worktree feature-a").title).toContain("1 working");
     expect(button("Open worktree feature-a").title).not.toContain("2 working");
     expect(row.textContent).toContain("Native Core working here");
+    expect(row.querySelector('[role="status"]')).toBeNull();
     const indicator = [...row.querySelectorAll<HTMLButtonElement>("button")].find(item => item.textContent?.includes("Native Core working here"))!;
     expect(indicator).toBeDefined();
     await act(async () => indicator.click());

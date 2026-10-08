@@ -80,8 +80,8 @@ it("rolls descendant chat work and decisions through the org even without worker
     const row = () =>
       container.querySelector('[data-org-member="orchestrator"]')!
         .firstElementChild!.textContent;
-    expect(row()).toContain("Working");
-    expect(row()).toContain("1 working");
+    expect(row()).toContain("Idle");
+    expect(row()).toContain("1 working below");
     await act(async () =>
       root.render(
         <MonoOrgActivity
@@ -102,7 +102,7 @@ it("rolls descendant chat work and decisions through the org even without worker
         />,
       ),
     );
-    expect(row()).toContain("Needs you");
+    expect(row()).toContain("Needs you · in app");
   } finally {
     await act(async () => root.unmount());
     vi.unstubAllGlobals();

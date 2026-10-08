@@ -10,6 +10,8 @@ import { PixelMascot } from "../projects/ui/PixelMascot";
 import {
   listMonos,
   monoLook,
+  monoStatusLabel,
+  monoTeamWorkingLabel,
   monosSnapshot,
   subscribeMonos,
 } from "../monos/model/mono";
@@ -521,7 +523,7 @@ export function TeamMap({
                     }}
                     className="team-map-node-open"
                     tabIndex={tabStop === mono.id ? 0 : -1}
-                    aria-label={`${look.name}, ${mono.specialty || mono.role || "Mono"}, ${labels[node.status]}. Open chat`}
+                    aria-label={`${look.name}, ${mono.specialty || mono.role || "Mono"}, ${node.status === "pr-ready" ? labels[node.status] : monoStatusLabel(node.state)}${node.state.teamWorking ? `, ${monoTeamWorkingLabel(node.state)}` : ""}. Open chat`}
                     aria-describedby={
                       hovered === mono.id
                         ? `team-map-tip-${mono.id}`
@@ -574,18 +576,19 @@ export function TeamMap({
                             (mono.role === "member"
                               ? "Teammate"
                               : mono.role || "Mono")}
+                          {node.state.teamWorking ? ` · ${monoTeamWorkingLabel(node.state)}` : ""}
                         </span>
                       </span>
                       <span
                         className="team-map-status-dot"
-                        title={labels[node.status]}
+                        title={node.status === "pr-ready" ? labels[node.status] : monoStatusLabel(node.state)}
                       />
                     </span>
                     <span className="team-map-node-meta">
                       <span className="team-map-model" title={node.model}>
                         {node.model}
                       </span>
-                      <span>{labels[node.status]}</span>
+                      <span>{node.status === "pr-ready" ? labels[node.status] : monoStatusLabel(node.state)}</span>
                     </span>
                     <span
                       className="team-map-task"

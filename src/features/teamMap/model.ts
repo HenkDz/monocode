@@ -22,11 +22,23 @@ import type { OrchestrationRun } from "../orchestration/model/orchestrationState
 import { RUNTIME_MODE_LABEL, type Session } from "../sessions/model/session";
 import type { GitPr } from "../../platform/tauri/fs";
 import { projectKey } from "../../shared/lib/paths";
+import { fitTeamMap } from "./camera";
 
-export const TEAM_MAP_NODE_WIDTH = 240;
-export const TEAM_MAP_NODE_HEIGHT = 130;
-const gap = 32;
-const row = 216;
+export const TEAM_MAP_NODE_WIDTH = 176;
+export const TEAM_MAP_NODE_HEIGHT = 88;
+const gap = 12;
+const branchGap = 32;
+const podPadding = 4;
+
+export type TeamMapPoint = { x: number; y: number };
+export type TeamMapPod = {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  memberIds: string[];
+};
 
 export type TeamMapNode = {
   id: string;
@@ -51,6 +63,7 @@ export type TeamMapEdge = {
   label?: string;
   flow?: "down" | "up";
   tooltip: string;
+  points?: TeamMapPoint[];
 };
 export type TeamMapInput = {
   roster: readonly Mono[];
@@ -60,6 +73,7 @@ export type TeamMapInput = {
   project?: string;
   scope?: string;
   collapsed?: ReadonlySet<string>;
+  viewport?: { width: number; height: number };
 };
 
 export function buildTeamMap({
@@ -70,6 +84,7 @@ export function buildTeamMap({
   project,
   scope,
   collapsed = new Set(),
+  viewport = { width: 1100, height: 1250 },
 }: TeamMapInput) {
   const active = [
     ...new Map(
@@ -222,7 +237,7 @@ export function buildTeamMap({
       hiddenCount: collapsed.has(mono.id) ? teammates.length : 0,
       summary:
         mono.role === "manager" && collapsed.has(mono.id) && teammates.length
-          ? `${teammates.length} teammates · ${teammates.filter((member) => monoLiveState(active, runs, sessions, member.id).status === "working").length} working`
+          ? `${teammates.length} teammates · ${teammates.every((member) => liveStates.get(member.id)?.status === "idle") ? "all idle" : `${teammates.filter((member) => liveStates.get(member.id)?.status === "working").length} working`}`
           : undefined,
     };
   });
@@ -236,37 +251,85 @@ export function buildTeamMap({
     );
   const nodeChildren = (id: string) =>
     sorted(nodes.filter((node) => node.parentId === id));
-  const widths = new Map<string, number>();
-  const measure = (node: TeamMapNode): number => {
-    const children = nodeChildren(node.id);
-    const width = Math.max(
-      TEAM_MAP_NODE_WIDTH,
-      children.reduce((sum, child) => sum + measure(child), 0) +
-        Math.max(0, children.length - 1) * gap,
-    );
-    widths.set(node.id, width);
-    return width;
-  };
-  const place = (node: TeamMapNode, left: number, depth: number) => {
-    node.x = left + (widths.get(node.id)! - TEAM_MAP_NODE_WIDTH) / 2;
-    node.y = 48 + depth * row;
-    for (const child of nodeChildren(node.id)) {
-      place(child, left, depth + 1);
-      left += widths.get(child.id)! + gap;
-    }
-  };
-  let left = 48;
   const rootRank = (node: TeamMapNode) =>
     node.mono.role === "orchestrator" ? 0 : node.mono.role ? 1 : 2;
   const roots = sorted(
     nodes.filter((node) => !node.parentId || !nodeById.has(node.parentId)),
   ).sort((a, b) => rootRank(a) - rootRank(b));
-  for (const root of roots) {
-    measure(root);
-    place(root, left, 0);
-    left += widths.get(root.id)! + gap * 2;
+  type Block = {
+    width: number;
+    height: number;
+    positions: Map<string, TeamMapPoint>;
+    pods: TeamMapPod[];
+  };
+  const pack = (blocks: Block[], columns: number): Block => {
+    const packed: Block = { width: 0, height: 0, positions: new Map(), pods: [] };
+    for (let offset = 0; offset < blocks.length; offset += columns) {
+      const row = blocks.slice(offset, offset + columns);
+      let x = 0;
+      const y = packed.height;
+      for (const block of row) {
+        for (const [id, point] of block.positions)
+          packed.positions.set(id, { x: point.x + x, y: point.y + y });
+        packed.pods.push(...block.pods.map(pod => ({ ...pod, x: pod.x + x, y: pod.y + y })));
+        x += block.width + gap;
+      }
+      packed.width = Math.max(packed.width, x - gap);
+      packed.height += Math.max(...row.map(block => block.height)) + gap;
+    }
+    packed.height = Math.max(0, packed.height - gap);
+    return packed;
+  };
+  const layout = (orientation: "top-down" | "left-to-right", memberColumns: number, podColumns: number) => {
+    const measure = (node: TeamMapNode): Block => {
+      const children = nodeChildren(node.id);
+      const isPod = node.mono.role === "manager";
+      if (!children.length && !isPod)
+        return { width: TEAM_MAP_NODE_WIDTH, height: TEAM_MAP_NODE_HEIGHT, positions: new Map([[node.id, { x: 0, y: 0 }]]), pods: [] };
+      const columns = isPod && children.every(child => !nodeChildren(child.id).length)
+        ? Math.min(memberColumns, children.length)
+        : podColumns;
+      const childBlock = pack(children.map(measure), Math.max(1, columns));
+      const lateral = orientation === "left-to-right" && node.mono.role === "orchestrator" && children.length;
+      const width = lateral
+        ? TEAM_MAP_NODE_WIDTH + branchGap + childBlock.width
+        : Math.max(TEAM_MAP_NODE_WIDTH, childBlock.width);
+      const height = lateral
+        ? Math.max(TEAM_MAP_NODE_HEIGHT, childBlock.height)
+        : TEAM_MAP_NODE_HEIGHT + (children.length ? branchGap + childBlock.height : 0);
+      const childX = lateral ? TEAM_MAP_NODE_WIDTH + branchGap : (width - childBlock.width) / 2;
+      const childY = lateral ? 0 : TEAM_MAP_NODE_HEIGHT + branchGap;
+      const positions = new Map<string, TeamMapPoint>([[node.id, {
+        x: lateral ? podPadding : (width - TEAM_MAP_NODE_WIDTH) / 2 + podPadding,
+        y: lateral ? (height - TEAM_MAP_NODE_HEIGHT) / 2 + podPadding : podPadding,
+      }]]);
+      for (const [id, point] of childBlock.positions)
+        positions.set(id, { x: point.x + childX + podPadding, y: point.y + childY + podPadding });
+      const pods = childBlock.pods.map(pod => ({ ...pod, x: pod.x + childX + podPadding, y: pod.y + childY + podPadding }));
+      const block = { width: width + podPadding * 2, height: height + podPadding * 2, positions, pods };
+      if (isPod) pods.push({ id: node.id, x: 0, y: 0, width: block.width, height: block.height, memberIds: [...positions.keys()].filter(id => id !== node.id) });
+      return block;
+    };
+    const packed = pack(roots.map(measure), 1);
+    return { ...packed, width: Math.max(208, packed.width + 32), height: Math.max(160, packed.height + 32), orientation };
+  };
+  const fit = (block: Block) => fitTeamMap(viewport.width, viewport.height, block.width, block.height).zoom;
+  let best = layout("top-down", 2, 1);
+  const aspectError = (block: Block) => Math.abs(Math.log((block.width / block.height) / (viewport.width / viewport.height)));
+  for (const orientation of ["top-down", "left-to-right"] as const)
+    for (const memberColumns of [2, 3])
+      for (let columns = 1; columns <= Math.max(1, Math.min(nodes.length, 8)); columns++) {
+        const candidate = layout(orientation, memberColumns, columns);
+        if (fit(candidate) > fit(best) + 0.001 ||
+          (Math.abs(fit(candidate) - fit(best)) <= 0.001 && aspectError(candidate) < aspectError(best))) best = candidate;
+      }
+  for (const node of nodes) {
+    const point = best.positions.get(node.id)!;
+    node.x = point.x + 16;
+    node.y = point.y + 16;
   }
-  const edges: TeamMapEdge[] = nodes.flatMap((node) => {
+  const pods = best.pods.map(pod => ({ ...pod, x: pod.x + 16, y: pod.y + 16 }));
+  const edges: (TeamMapEdge & { points: TeamMapPoint[] })[] = nodes.flatMap((node) => {
     if (!node.parentId || !nodeById.has(node.parentId)) return [];
     const tasks =
       node.mono.role === "manager"
@@ -311,6 +374,16 @@ export function buildTeamMap({
       : undefined;
     const workerName = monoLook(byId.get(task?.memberId ?? "") ?? node.mono).name;
     const parentName = monoLook(nodeById.get(node.parentId)!.mono).name;
+    const parent = nodeById.get(node.parentId)!;
+    const lateral = best.orientation === "left-to-right" && parent.mono.role === "orchestrator";
+    const start = lateral
+      ? { x: parent.x + TEAM_MAP_NODE_WIDTH, y: parent.y + TEAM_MAP_NODE_HEIGHT / 2 }
+      : { x: parent.x + TEAM_MAP_NODE_WIDTH / 2, y: parent.y + TEAM_MAP_NODE_HEIGHT };
+    const end = { x: node.x + TEAM_MAP_NODE_WIDTH / 2, y: node.y };
+    const trunkX = lateral ? start.x + branchGap / 2 : (pods.find(pod => pod.id === parent.id)?.x ?? 16) + 2;
+    const trunkY = lateral ? start.y : start.y + branchGap / 2;
+    const points = [start, { x: lateral ? trunkX : start.x, y: trunkY }, { x: trunkX, y: trunkY }, { x: trunkX, y: end.y - gap / 2 }, { x: end.x, y: end.y - gap / 2 }, end]
+      .filter((point, index, values) => !index || point.x !== values[index - 1].x || point.y !== values[index - 1].y);
     const tooltip = flow === "up"
       ? `${workerName} is working on ${task ? activityTaskTitle(task) : node.title} · progress reports up to ${parentName}`
       : flow === "down"
@@ -324,6 +397,7 @@ export function buildTeamMap({
         label,
         flow,
         tooltip,
+        points,
       },
     ];
   });
@@ -332,12 +406,16 @@ export function buildTeamMap({
       return [node, ...nodeChildren(node.id).flatMap(visit)];
     }),
     edges,
-    width: Math.max(320, left + 16),
-    height: Math.max(
-      240,
-      ...nodes.map((node) => node.y + TEAM_MAP_NODE_HEIGHT + 48),
-    ),
+    pods,
+    orientation: best.orientation,
+    width: best.width,
+    height: best.height,
   };
+}
+
+export function teamMapEdgePath(edge: Pick<TeamMapEdge, "points">, reverse = false) {
+  const points = reverse ? [...(edge.points ?? [])].reverse() : edge.points ?? [];
+  return points.map((point, index) => `${index ? "L" : "M"} ${point.x} ${point.y}`).join(" ");
 }
 
 export type TeamMapEvent = {

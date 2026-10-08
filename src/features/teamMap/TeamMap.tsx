@@ -25,7 +25,7 @@ import type { Session } from "../sessions/model/session";
 import type { OrchestrationRun } from "../orchestration/model/orchestrationState";
 import type { GitPr } from "../../platform/tauri/fs";
 import { projectName } from "../../shared/lib/paths";
-import { Minus, Plus, X } from "../../shared/ui/icons";
+import { MessageSquare, Minus, Plus, X } from "../../shared/ui/icons";
 import {
   buildTeamMap,
   teamMapEvents,
@@ -33,8 +33,11 @@ import {
   teamMapEventEdges,
   teamMapKeyboardNode,
   teamMapFeed,
+  teamMapEdgePath,
+  TEAM_MAP_NODE_WIDTH,
+  TEAM_MAP_NODE_HEIGHT,
 } from "./model";
-import { fitTeamMap } from "./camera";
+import { fitTeamMap, focusTeamMap, teamMapCompact } from "./camera";
 import "./teamMap.css";
 
 type Props = {
@@ -126,6 +129,7 @@ export function TeamMap({
   const messages = useMemo(() => crewMessages(), [messageSnapshot]);
   const goals = useMemo(() => monoManagerGoals.goals(), [goalsSnapshot]);
   const [wholeOrg, setWholeOrg] = useState(false);
+  const [focusedPod, setFocusedPod] = useState<string | undefined>(scope);
   const activeScope = wholeOrg ? undefined : scope;
   const scopedMono = roster.find((mono) => mono.id === activeScope);
   const scopedProject = scopedMono?.role === "manager"
@@ -143,6 +147,7 @@ export function TeamMap({
     () => window.matchMedia("(prefers-reduced-motion: reduce)").matches,
   );
   const [camera, setCamera] = useState({ x: 0, y: 0, zoom: 1 });
+  const [size, setSize] = useState({ width: 1100, height: 1250 });
   const viewport = useRef<HTMLDivElement>(null);
   const buttons = useRef(new Map<string, HTMLButtonElement>());
   const seen = useRef<Set<string>>(undefined);
@@ -158,10 +163,11 @@ export function TeamMap({
     scope: activeScope,
     project: project || undefined,
     collapsed,
+    viewport: size,
   };
   const map = useMemo(
     () => buildTeamMap(input),
-    [roster, runs, sessions, statuses, activeScope, project, collapsed],
+    [roster, runs, sessions, statuses, activeScope, project, collapsed, size],
   );
   const allEvents = useMemo(
     () => teamMapEvents({ roster, runs, sessions, statuses, messages, goals }),
@@ -173,6 +179,7 @@ export function TeamMap({
   );
   const feed = useMemo(() => teamMapFeed(events, roster), [events, roster]);
   const nodeById = new Map(map.nodes.map((node) => [node.mono.id, node]));
+  const podBounds = map.pods.find((pod) => pod.id === focusedPod);
   const tabStop = nodeById.has(focused ?? "") ? focused : map.nodes[0]?.id;
   const projects = [
     ...new Set(
@@ -204,7 +211,20 @@ export function TeamMap({
   const fit = () => {
     if (!viewport.current) return;
     const { clientWidth: width, clientHeight: height } = viewport.current;
-    setCamera(fitTeamMap(width, height, map.width, map.height, map.nodes.length));
+    setCamera(podBounds
+      ? focusTeamMap(width, height, podBounds)
+      : fitTeamMap(width, height, map.width, map.height, map.nodes.length));
+  };
+  const showWholeOrg = () => {
+    setFocusedPod(undefined);
+    setWholeOrg(true);
+    setProject("");
+  };
+  const focusPod = (id: string) => {
+    setFocusedPod(id);
+    setHovered(undefined);
+    const pod = map.pods.find((pod) => pod.id === id);
+    if (pod && viewport.current) setCamera(focusTeamMap(viewport.current.clientWidth, viewport.current.clientHeight, pod));
   };
   const zoomBy = (amount: number) => {
     setCamera((previous) => {
@@ -230,8 +250,8 @@ export function TeamMap({
     }
     setCamera((previous) => ({
       ...previous,
-      x: viewport.current!.clientWidth / 2 - (node.x + 120) * previous.zoom,
-      y: viewport.current!.clientHeight / 2 - (node.y + 65) * previous.zoom,
+      x: viewport.current!.clientWidth / 2 - (node.x + TEAM_MAP_NODE_WIDTH / 2) * previous.zoom,
+      y: viewport.current!.clientHeight / 2 - (node.y + TEAM_MAP_NODE_HEIGHT / 2) * previous.zoom,
     }));
     buttons.current.get(id)?.focus({ preventScroll: true });
   };
@@ -250,17 +270,24 @@ export function TeamMap({
       if (event.key !== "Escape" || event.defaultPrevented) return;
       event.preventDefault();
       event.stopPropagation();
-      onClose();
+      if (focusedPod || activeScope) showWholeOrg();
+      else onClose();
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [onClose]);
+  }, [onClose, focusedPod, activeScope]);
   useEffect(() => {
-    fit();
-    const observer = new ResizeObserver(fit);
+    const resize = () => {
+      if (!viewport.current) return;
+      const { clientWidth: width, clientHeight: height } = viewport.current;
+      if (width && height) setSize((previous) => previous.width === width && previous.height === height ? previous : { width, height });
+    };
+    resize();
+    const observer = new ResizeObserver(resize);
     if (viewport.current) observer.observe(viewport.current);
     return () => observer.disconnect();
-  }, [map.width, map.height, map.nodes.length, project, activeScope, collapsed]);
+  }, []);
+  useEffect(() => { fit(); }, [map.width, map.height, map.nodes.length, size, focusedPod, podBounds?.x, podBounds?.y, podBounds?.width, podBounds?.height, collapsed, project, activeScope]);
   useEffect(() => {
     const element = viewport.current!;
     const wheel = (event: WheelEvent) => {
@@ -290,15 +317,8 @@ export function TeamMap({
   }, [events, allEvents]);
 
   const edgePath = (source: string, target: string, reverse = false) => {
-    const a = nodeById.get(source),
-      b = nodeById.get(target);
-    if (!a || !b) return "";
-    const start = { x: a.x + 120, y: a.y + 130 },
-      end = { x: b.x + 120, y: b.y };
-    const mid = (start.y + end.y) / 2;
-    return reverse
-      ? `M ${end.x} ${end.y} C ${end.x} ${mid}, ${start.x} ${mid}, ${start.x} ${start.y}`
-      : `M ${start.x} ${start.y} C ${start.x} ${mid}, ${end.x} ${mid}, ${end.x} ${end.y}`;
+    const edge = map.edges.find((edge) => edge.source === source && edge.target === target);
+    return edge ? teamMapEdgePath(edge, reverse) : "";
   };
 
   return (
@@ -324,7 +344,7 @@ export function TeamMap({
               aria-label="Project"
               value={project}
               disabled={Boolean(scopedProject)}
-              onChange={(event) => setProject(event.target.value)}
+              onChange={(event) => { setProject(event.target.value); setFocusedPod(undefined); }}
             >
               <option value="">All projects</option>
               {projects.map((path) => (
@@ -334,11 +354,8 @@ export function TeamMap({
               ))}
             </select>
           </label>
-          {activeScope && (
-            <button type="button" onClick={() => {
-              setWholeOrg(true);
-              setProject("");
-            }}>Show whole org</button>
+          {(activeScope || focusedPod) && (
+            <button type="button" onClick={showWholeOrg}>Whole org</button>
           )}
           <button
             type="button"
@@ -402,13 +419,19 @@ export function TeamMap({
         ) : (
           <div
             className="team-map-canvas"
+            data-compact={teamMapCompact(camera.zoom) && !window.matchMedia("(max-width: 680px)").matches}
+            data-orientation={map.orientation}
+            data-panning={Boolean(drag.current)}
             role="group"
             aria-label="Mono hierarchy"
             style={{
               width: map.width,
               height: map.height,
               transform: `translate(${camera.x}px, ${camera.y}px) scale(${camera.zoom})`,
-            }}
+              "--node-width": `${TEAM_MAP_NODE_WIDTH}px`,
+              "--node-height": `${TEAM_MAP_NODE_HEIGHT}px`,
+              "--map-zoom": camera.zoom,
+            } as CSSProperties}
           >
             <svg
               className="team-map-edges"
@@ -416,8 +439,7 @@ export function TeamMap({
               height={map.height}
             >
               {map.edges.map((edge) => {
-                const source = nodeById.get(edge.source)!,
-                  target = nodeById.get(edge.target)!;
+                const target = nodeById.get(edge.target)!;
                 return (
                   <g
                     key={edge.id}
@@ -434,18 +456,6 @@ export function TeamMap({
                     <title>{edge.tooltip}</title>
                     <path className="team-map-edge-hit" d={edgePath(edge.source, edge.target)} />
                     <path d={edgePath(edge.source, edge.target)} />
-                    {edge.label && (
-                      <foreignObject
-                        x={(source.x + target.x) / 2 + 30}
-                        y={(source.y + target.y) / 2 + 49}
-                        width="180"
-                        height="26"
-                      >
-                        <div className="team-map-edge-label" title={edge.label}>
-                          {edge.label}
-                        </div>
-                      </foreignObject>
-                    )}
                   </g>
                 );
               })}
@@ -475,8 +485,8 @@ export function TeamMap({
                         path={edgePath(edge.source, edge.target, reverse)}
                         delay={index * 1.5}
                         reducedMotion={reducedMotion}
-                        x={nodeById.get(edge.target)!.x + 120}
-                        y={nodeById.get(edge.target)!.y}
+                        x={reverse ? edge.points[0].x : edge.points[edge.points.length - 1].x}
+                        y={reverse ? edge.points[0].y : edge.points[edge.points.length - 1].y}
                       />
                     </g>
                   );
@@ -487,6 +497,8 @@ export function TeamMap({
               const mono = node.mono,
                 look = monoLook(mono);
               const dim = needsYou && node.status !== "needs-you";
+              let depth = 0;
+              for (let parent = node.parentId; parent && nodeById.has(parent); parent = nodeById.get(parent)?.parentId) depth++;
               return (
                 <div
                   key={mono.id}
@@ -500,16 +512,16 @@ export function TeamMap({
                       left: node.x,
                       top: node.y,
                       "--node-color": mono.color,
-                      "--node-depth": (node.y - 48) / 216,
+                      "--node-depth": depth,
                     } as CSSProperties
                   }
                   onMouseEnter={() => setHovered(mono.id)}
                   onMouseLeave={() => setHovered(undefined)}
                 >
                   {mono.role === "manager" && node.project && (
-                    <span className="team-map-cluster">
+                    <button type="button" className="team-map-cluster" onClick={() => focusPod(mono.id)} aria-label={`Focus ${projectName(node.project)} team`}>
                       {projectName(node.project)}
-                    </span>
+                    </button>
                   )}
                   {!mono.role &&
                     (index === 0 || map.nodes[index - 1].mono.role) && (
@@ -523,7 +535,7 @@ export function TeamMap({
                     }}
                     className="team-map-node-open"
                     tabIndex={tabStop === mono.id ? 0 : -1}
-                    aria-label={`${look.name}, ${mono.specialty || mono.role || "Mono"}, ${node.status === "pr-ready" ? labels[node.status] : monoStatusLabel(node.state)}${node.state.teamWorking ? `, ${monoTeamWorkingLabel(node.state)}` : ""}. Open chat`}
+                    aria-label={`${look.name}, ${mono.specialty || mono.role || "Mono"}, ${node.status === "pr-ready" ? labels[node.status] : monoStatusLabel(node.state)}${node.state.teamWorking ? `, ${monoTeamWorkingLabel(node.state)}` : ""}. ${mono.role === "manager" ? "Focus team" : "Open chat"}`}
                     aria-describedby={
                       hovered === mono.id
                         ? `team-map-tip-${mono.id}`
@@ -535,6 +547,7 @@ export function TeamMap({
                     }}
                     onBlur={() => setHovered(undefined)}
                     onClick={() => {
+                      if (mono.role === "manager") { focusPod(mono.id); return; }
                       onClose();
                       onOpenMono(mono.id);
                     }}
@@ -570,7 +583,7 @@ export function TeamMap({
                         />
                       </span>
                       <span className="team-map-identity">
-                        <strong>{look.name}</strong>
+                        <strong title={look.name}>{look.name}</strong>
                         <span>
                           {mono.specialty ||
                             (mono.role === "member"
@@ -584,6 +597,7 @@ export function TeamMap({
                         title={node.status === "pr-ready" ? labels[node.status] : monoStatusLabel(node.state)}
                       />
                     </span>
+                    <span className="team-map-status-chip">{labels[node.status]}</span>
                     <span className="team-map-node-meta">
                       <span className="team-map-model" title={node.model}>
                         {node.model}
@@ -602,6 +616,9 @@ export function TeamMap({
                             "Ready for the next task")}
                     </span>
                   </button>
+                  {mono.role === "manager" && (
+                    <button type="button" className="team-map-chat" title={`Open chat with ${look.name}`} aria-label={`Open chat with ${look.name}`} onClick={() => { onClose(); onOpenMono(mono.id); }}><MessageSquare className="size-3.5" /></button>
+                  )}
                   {mono.role === "manager" && (
                     <button
                       type="button"

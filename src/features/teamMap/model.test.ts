@@ -4,9 +4,11 @@ import type { Mono } from "../monos/model/mono";
 import type { MonoManagerGoal } from "../monos/model/monoManagerGoals";
 import type { OrchestrationRun, OrchestrationTask } from "../orchestration/model/orchestrationState";
 import { newSession } from "../sessions/model/session";
+import { fitTeamMap } from "./camera";
 import {
   buildTeamMap, teamMapEvents, teamMapEventAnimation, teamMapEventEdges,
   teamMapKeyboardNode, teamMapMatches, TEAM_MAP_NODE_WIDTH, TEAM_MAP_NODE_HEIGHT,
+  teamMapEdgePath,
 } from "./model";
 
 const mono = (id: string, role?: Mono["role"], reportsTo?: string, project = "/app"): Mono => ({
@@ -27,7 +29,7 @@ const run = (tasks: OrchestrationTask[] = [task()], overrides: Partial<Orchestra
 }) as OrchestrationRun;
 const input = { roster, runs: [], sessions: [] };
 
-it("lays out a top-down org, retains plain Monos and gives every card its own space", () => {
+it("lays out an adaptive org, retains plain Monos and gives every card its own space", () => {
   const map = buildTeamMap(input), byId = new Map(map.nodes.map(node => [node.id, node]));
   expect(map.nodes.map(node => node.id)).toEqual(["orchestrator", "app", "backend", "reviewer", "site", "design", "plain"]);
   expect(map.nodes.map(node => node.id).sort()).toEqual(roster.map(node => node.id).sort());
@@ -35,13 +37,102 @@ it("lays out a top-down org, retains plain Monos and gives every card its own sp
     "orchestrator->app", "orchestrator->site", "app->backend", "app->reviewer", "site->design",
   ].sort());
   expect(byId.get("plain")?.parentId).toBeUndefined();
-  for (const edge of map.edges) expect(byId.get(edge.target)!.y).toBeGreaterThan(byId.get(edge.source)!.y);
-  for (const a of map.nodes) for (const b of map.nodes.filter(node => node.id !== a.id && node.y === a.y))
-    expect(Math.abs(a.x - b.x)).toBeGreaterThanOrEqual(TEAM_MAP_NODE_WIDTH);
+  for (const a of map.nodes) for (const b of map.nodes.filter(node => node.id !== a.id))
+    expect(Math.abs(a.x - b.x) >= TEAM_MAP_NODE_WIDTH || Math.abs(a.y - b.y) >= TEAM_MAP_NODE_HEIGHT).toBe(true);
   for (const node of map.nodes) {
     expect(node.x + TEAM_MAP_NODE_WIDTH).toBeLessThanOrEqual(map.width);
     expect(node.y + TEAM_MAP_NODE_HEIGHT).toBeLessThanOrEqual(map.height);
   }
+});
+
+const organization = (counts: number[]) => [mono("lead", "orchestrator"), ...counts.flatMap((count, index) => [
+  mono(`manager-${index}`, "manager", "lead", `/project-${index}`),
+  ...Array.from({ length: count }, (_, member) => mono(`member-${index}-${member}`, "member", `manager-${index}`, `/project-${index}`)),
+])];
+
+it("packs 2–3 member columns, wraps large teams and bounds each pod independently of headcount", () => {
+  for (const count of [1, 2, 3, 4, 6, 10]) {
+    const map = buildTeamMap({ ...input, roster: organization([count]), viewport: { width: 1100, height: 1250 } });
+    const members = map.nodes.filter(node => node.mono.role === "member");
+    const columns = new Set(members.map(node => node.x)).size;
+    expect(columns).toBeLessThanOrEqual(3);
+    expect(columns).toBeGreaterThanOrEqual(Math.min(2, count));
+    if (count > 3) expect(new Set(members.map(node => node.y)).size).toBeGreaterThan(1);
+    const pod = map.pods.find(pod => pod.id === "manager-0")!;
+    expect(pod.memberIds).toHaveLength(count);
+    expect(pod.width).toBeLessThanOrEqual(3 * TEAM_MAP_NODE_WIDTH + 32);
+    for (const node of map.nodes.filter(node => node.id === pod.id || pod.memberIds.includes(node.id))) {
+      expect(node.x).toBeGreaterThanOrEqual(pod.x);
+      expect(node.y).toBeGreaterThanOrEqual(pod.y);
+      expect(node.x + TEAM_MAP_NODE_WIDTH).toBeLessThanOrEqual(pod.x + pod.width);
+      expect(node.y + TEAM_MAP_NODE_HEIGHT).toBeLessThanOrEqual(pod.y + pod.height);
+    }
+  }
+});
+
+it("adapts orientation and wraps Manager pods to match viewport proportions", () => {
+  const tall = buildTeamMap({ ...input, roster: organization([4, 3, 2, 2]), viewport: { width: 700, height: 1800 } });
+  const wide = buildTeamMap({ ...input, roster: organization([4, 3, 2, 2]), viewport: { width: 4000, height: 500 } });
+  expect(tall.orientation).toBe("top-down");
+  expect(wide.orientation).toBe("left-to-right");
+  expect(new Set(tall.pods.map(pod => pod.y)).size).toBeGreaterThan(1);
+  expect(wide.width / wide.height).toBeGreaterThan(tall.width / tall.height);
+});
+
+it("fits the user's org and five six-member teams above 90% without overlapping cards", () => {
+  for (const counts of [[4, 3, 0, 0], [6, 6, 6, 6, 6]]) {
+    const map = buildTeamMap({ ...input, roster: organization(counts), viewport: { width: 1100, height: 1250 } });
+    expect(fitTeamMap(1100, 1250, map.width, map.height).zoom).toBeGreaterThanOrEqual(0.9);
+    for (const a of map.nodes) for (const b of map.nodes.filter(node => node.id !== a.id))
+      expect(Math.abs(a.x - b.x) >= TEAM_MAP_NODE_WIDTH || Math.abs(a.y - b.y) >= TEAM_MAP_NODE_HEIGHT).toBe(true);
+  }
+});
+
+it("routes each grid row through a shared trunk and reverses pulses to the correct member", () => {
+  const map = buildTeamMap({ ...input, roster: organization([6]) });
+  const manager = map.nodes.find(node => node.id === "manager-0")!;
+  const edges = map.edges.filter(edge => edge.source === manager.id);
+  expect(new Set(edges.map(edge => JSON.stringify(edge.points!.slice(0, 3)))).size).toBe(1);
+  for (const edge of edges) {
+    const target = map.nodes.find(node => node.id === edge.target)!;
+    expect(edge.points![0]).toEqual({ x: manager.x + TEAM_MAP_NODE_WIDTH / 2, y: manager.y + TEAM_MAP_NODE_HEIGHT });
+    expect(edge.points!.at(-1)).toEqual({ x: target.x + TEAM_MAP_NODE_WIDTH / 2, y: target.y });
+    expect(edge.points!.slice(1, -1).every((point, index, points) => !index || point.x === points[index - 1].x || point.y === points[index - 1].y)).toBe(true);
+    expect(teamMapEdgePath(edge, true)).toBe(`M ${target.x + TEAM_MAP_NODE_WIDTH / 2} ${target.y} ${edge.points!.slice(0, -1).reverse().map(point => `L ${point.x} ${point.y}`).join(" ")}`);
+  }
+});
+
+it("keeps wrapped pod edge segments outside every card interior", () => {
+  for (const viewport of [{ width: 1100, height: 1250 }, { width: 4000, height: 500 }, { width: 700, height: 1800 }]) {
+    const map = buildTeamMap({ ...input, roster: organization([6, 6, 6, 6, 10]), viewport });
+    for (const edge of map.edges) for (let index = 1; index < edge.points.length; index++) {
+      const a = edge.points[index - 1], b = edge.points[index];
+      for (const node of map.nodes) {
+        const crosses = a.x === b.x
+          ? a.x > node.x && a.x < node.x + TEAM_MAP_NODE_WIDTH && Math.max(a.y, b.y) > node.y && Math.min(a.y, b.y) < node.y + TEAM_MAP_NODE_HEIGHT
+          : a.y > node.y && a.y < node.y + TEAM_MAP_NODE_HEIGHT && Math.max(a.x, b.x) > node.x && Math.min(a.x, b.x) < node.x + TEAM_MAP_NODE_WIDTH;
+        expect(crosses, `${edge.id} segment ${index} crosses ${node.id}`).toBe(false);
+      }
+    }
+  }
+});
+
+it("keeps grid arrow navigation on the adjacent row or column", () => {
+  const nodes = [
+    { id: "a", x: 0, y: 0 }, { id: "b", x: 188, y: 0 },
+    { id: "c", x: 0, y: 100 }, { id: "d", x: 188, y: 100 },
+    { id: "other-pod", x: 450, y: 100 },
+  ];
+  expect(teamMapKeyboardNode(nodes, "a", "ArrowDown")).toBe("c");
+  expect(teamMapKeyboardNode(nodes, "a", "ArrowRight")).toBe("b");
+  expect(teamMapKeyboardNode(nodes, "d", "ArrowUp")).toBe("b");
+  expect(teamMapKeyboardNode(nodes, "d", "ArrowLeft")).toBe("c");
+});
+
+it("summarizes collapsed idle pods and preserves their focus bounds", () => {
+  const map = buildTeamMap({ ...input, roster: organization([4]), collapsed: new Set(["manager-0"]) });
+  expect(map.nodes.find(node => node.id === "manager-0")).toMatchObject({ summary: "4 teammates · all idle", hiddenCount: 4 });
+  expect(map.pods[0]).toMatchObject({ id: "manager-0", memberIds: [], width: TEAM_MAP_NODE_WIDTH + 8, height: TEAM_MAP_NODE_HEIGHT + 8 });
 });
 
 it("keeps broken relationships visible, excludes archived Monos and breaks cycles", () => {

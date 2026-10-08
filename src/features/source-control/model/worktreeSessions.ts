@@ -4,7 +4,48 @@ import { sameProjectPath } from "../../projects/model/recents";
 import { isEqualOrInside, pathKey } from "../../../shared/lib/paths";
 import type { Worktree } from "./worktrees";
 import { isProjectManager } from "../../orchestration/model/projectManager";
-import type { OrchestrationRun } from "../../orchestration/model/orchestrationState";
+import type { OrchestrationRun, OrchestrationTask } from "../../orchestration/model/orchestrationState";
+
+/** Tasks retain worker identities even before their saved sessions are loaded. */
+export function worktreeTaskSessions(
+  project: string,
+  trees: readonly Worktree[],
+  runs: readonly OrchestrationRun[],
+) {
+  const groups = new Map<string, { sessionId: string; task: OrchestrationTask; startedAt: number }[]>(
+    trees.map(tree => [pathKey(tree.path), []]),
+  );
+  for (const run of runs) {
+    if (!run.projectManager || !sameProjectPath(run.cwd, project)) continue;
+    for (const task of run.tasks) {
+      const dispatches = (run.dispatches ?? []).filter(dispatch => dispatch.taskId === task.id);
+      for (const dispatch of dispatches) {
+        // Accepted dispatches still point at the manager checkout until preparation.
+        if (dispatch.stage === "accepted") continue;
+        groups.get(pathKey(dispatch.workspace.checkoutCwd))?.push({
+          sessionId: dispatch.sessionId, task, startedAt: dispatch.startedAt,
+        });
+      }
+      if (task.workspace && !dispatches.some(dispatch => dispatch.sessionId === task.sessionId)) {
+        groups.get(pathKey(task.workspace.checkoutCwd))?.push({
+          sessionId: task.sessionId, task,
+          startedAt: Math.max(0, ...dispatches.map(dispatch => dispatch.startedAt)),
+        });
+      }
+    }
+  }
+  for (const [key, sessions] of groups) {
+    const seen = new Set<string>();
+    groups.set(key, sessions.sort((a, b) => b.startedAt - a.startedAt ||
+      Number(b.sessionId === b.task.sessionId) - Number(a.sessionId === a.task.sessionId),
+    ).filter(session => {
+      if (seen.has(session.sessionId)) return false;
+      seen.add(session.sessionId);
+      return true;
+    }));
+  }
+  return groups;
+}
 
 /** Live rows override saved checkout bindings, including unsaved blank tabs. */
 export function worktreeSessionGroups(

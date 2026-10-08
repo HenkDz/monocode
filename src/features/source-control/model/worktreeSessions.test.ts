@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import type { SessionSummary } from "../../sessions/data/sessionStore";
 import type { Worktree } from "./worktrees";
-import { worktreeProgress, worktreeSessionGroups } from "./worktreeSessions";
+import { worktreeProgress, worktreeSessionGroups, worktreeTaskSessions } from "./worktreeSessions";
 import { pathKey } from "../../../shared/lib/paths";
 import type { OrchestrationRun } from "../../orchestration/model/orchestrationState";
 
@@ -11,6 +11,53 @@ it("keeps team workers and earlier dispatch sessions out of user worktrees and b
   const rows = grouped.get(pathKey("C:/repo"))!;
   expect(rows.map(row => row.id)).toEqual(["user"]);
   expect(worktreeProgress(rows, new Set(["reviewer", "old-reviewer"]), new Set(), new Set())).toBe("1 session");
+});
+
+it("resolves unloaded task sessions from dispatches, newest first, without duplicates", () => {
+  const workspace = { projectCwd: "C:/repo", checkoutCwd: "C:/trees/a", kind: "worktree" };
+  const task = { id: "audit", sessionId: "latest", title: "Audit", workspace };
+  const runs = [{
+    cwd: "C:/repo", projectManager: true, ownerMonoId: "manager", tasks: [task],
+    dispatches: [
+      { taskId: "audit", sessionId: "old", startedAt: 10, workspace },
+      { taskId: "audit", sessionId: "latest", startedAt: 30, workspace },
+      { taskId: "audit", sessionId: "middle", startedAt: 20, workspace },
+    ],
+  }] as OrchestrationRun[];
+  const rows = worktreeTaskSessions("c:\\repo", [tree("C:/trees/a")], runs).get(pathKey("C:/trees/a"))!;
+  expect(rows.map(row => row.sessionId)).toEqual(["latest", "middle", "old"]);
+  expect(rows.map(row => row.startedAt)).toEqual([30, 20, 10]);
+  expect(rows.every(row => row.task === task)).toBe(true);
+});
+
+it("keeps task sessions scoped to the owning project and concrete checkout", () => {
+  const workspace = { projectCwd: "C:/repo", checkoutCwd: "C:/trees/a", kind: "worktree" };
+  const runs = [
+    { cwd: "C:/other", projectManager: true, tasks: [{ id: "foreign", sessionId: "foreign", workspace: { ...workspace, projectCwd: "C:/other" } }] },
+    { cwd: "C:/repo", projectManager: true, tasks: [{ id: "own", sessionId: "own", workspace }, { id: "sibling", sessionId: "sibling", workspace: { ...workspace, checkoutCwd: "C:/trees/ab" } }] },
+    { cwd: "C:/repo", tasks: [{ id: "ordinary", sessionId: "ordinary", workspace }] },
+  ] as OrchestrationRun[];
+  const rows = worktreeTaskSessions("C:/repo", [tree("C:/trees/a")], runs).get(pathKey("C:/trees/a"))!;
+  expect(rows.map(row => row.sessionId)).toEqual(["own"]);
+});
+
+it("ignores an accepted dispatch before its worker checkout has been prepared", () => {
+  const workspace = { projectCwd: "C:/repo", checkoutCwd: "C:/repo", kind: "main" };
+  const runs = [{ cwd: "C:/repo", projectManager: true, tasks: [{ id: "audit", sessionId: "worker", workspace }], dispatches: [
+    { taskId: "audit", sessionId: "worker", stage: "accepted", startedAt: 1, workspace },
+  ] }] as OrchestrationRun[];
+  const rows = worktreeTaskSessions("C:/repo", [tree("C:/repo")], runs).get(pathKey("C:/repo"))!;
+  expect(rows).toEqual([]);
+});
+
+it("retains a prepared worker when a later retry for its task is only accepted", () => {
+  const workspace = { projectCwd: "C:/repo", checkoutCwd: "C:/trees/a", kind: "worktree" };
+  const runs = [{ cwd: "C:/repo", projectManager: true, tasks: [{ id: "audit", sessionId: "worker", workspace }], dispatches: [
+    { taskId: "audit", sessionId: "worker", stage: "settled", startedAt: 10, workspace },
+    { taskId: "audit", sessionId: "worker", stage: "accepted", startedAt: 20, workspace },
+  ] }] as OrchestrationRun[];
+  const rows = worktreeTaskSessions("C:/repo", [tree("C:/trees/a")], runs).get(pathKey("C:/trees/a"))!;
+  expect(rows.map(row => [row.sessionId, row.startedAt])).toEqual([["worker", 10]]);
 });
 
 const tree = (path: string): Worktree => ({

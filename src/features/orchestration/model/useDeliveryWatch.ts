@@ -26,7 +26,7 @@ export function useDeliveryWatch(runs: readonly OrchestrationRun[]) {
           const link = parseGithubWorkItemUrl(target.url);
           if (!link || stopped) continue;
           const [pr, checks] = await Promise.all([gitPrStatus(target.cwd), fetchGithubPrChecks(target.cwd, link.repo, link.number)]);
-          if (stopped || pr?.url !== target.url || pr.state !== "open") continue;
+          if (stopped || pr?.url !== target.url || pr.state !== "open" || checks.state === "merged" || checks.state === "closed") continue;
           const overall = summarizePrChecks({ loading: false, error: null, checks: checks.checks });
           const ci = overall.kind === "pass" || overall.kind === "fail" || overall.kind === "pending" ? overall.kind : "unknown";
           if (pr.headOid && pr.headOid !== checks.headOid) continue;

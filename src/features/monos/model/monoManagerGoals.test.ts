@@ -66,6 +66,31 @@ function setup() {
 const user = { kind: "user" as const, messageId: "user-1" };
 const event = { kind: "event" as const, messageId: "worker-report" };
 
+it("blocks new delegation while a durable cancel receipt is delivering and keeps failed delivery retryable", async () => {
+  const f = setup();
+  await f.ledger.handle("mono", user, "assign", "goals.assign", { projectId: "/project", goal: "Fix CI" }, f.host);
+  const goalId = f.ledger.goals()[0].id;
+  let reject!: (reason: Error) => void;
+  let begun!: () => void;
+  const began = new Promise<void>(resolve => { begun = resolve; });
+  f.deliver.mockImplementationOnce(async () => {
+    begun();
+    await new Promise<void>((_resolve, fail) => { reject = fail; });
+  });
+  const cancelling = f.ledger.handle("mono", user, "cancel", "goals.cancel", { goalId }, f.host);
+  const failed = expect(cancelling).rejects.toThrow("Unavailable");
+  await began;
+  expect(f.ledger.isCancelling(goalId)).toBe(true);
+  expect(f.saved.get("mono")!.receipts.cancel.pending?.cancel).toBe(true);
+  expect(f.ledger.goals()[0].state).toBe("queued");
+  reject(Error("Unavailable"));
+  await failed;
+  expect(f.ledger.isCancelling(goalId)).toBe(true);
+  await f.ledger.handle("mono", user, "cancel", "goals.cancel", { goalId }, f.host);
+  expect(f.ledger.isCancelling(goalId)).toBe(false);
+  expect(f.ledger.goals()[0].state).toBe("cancelled");
+});
+
 it("clears a pre-dispatch decision after the Manager resumes", async () => {
   const f = setup();
   await f.ledger.handle("mono", user, "new", "goals.assign", { projectId: "/project", goal: "Fix tests" }, f.host);

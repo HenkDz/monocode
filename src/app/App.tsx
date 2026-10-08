@@ -92,9 +92,13 @@ import {
 } from "./model/submissionAcceptance";
 import type { CiRepairRequest } from "../features/inbox/model/ciRepair";
 import { ciRepairSessions } from "../features/inbox/model/ciRepairSessions";
+import { useCiRepairLifecycle } from "../features/inbox/hooks/useCiRepairLifecycle";
+import { assignManagerCiRepair } from "../features/inbox/model/managerCiRepair";
+import { fetchGithubPrChecks } from "../features/inbox/model/githubPrChecks";
 import {
   rebaseCiRepairs,
   trackCiRepair,
+  type TrackedCiRepair,
 } from "../features/inbox/model/ciRepairTracking";
 import { invoke } from "@tauri-apps/api/core";
 import { useDeliveryWatch } from "../features/orchestration/model/useDeliveryWatch";
@@ -566,6 +570,7 @@ import {
   getSession,
   listLinkedSessions,
   listSessionsByProject,
+  migrateLegacyManagerConversations,
   persistFingerprint,
   rebaseProjectSessions,
   replaceInFlightSessions,
@@ -2371,6 +2376,15 @@ function Workspace({
   }, [flushHarnessEvents, keepWorkspaceTab, readProjectReturnMemory]);
 
   const historyLoads = useRef(new Map<string, Promise<boolean>>());
+  useEffect(() => {
+    void homeDir().then(home => migrateLegacyManagerConversations(recents.map(project => project.path), home)).then(archives => {
+      if (!archives.length) return;
+      const ids = new Set(archives.map(session => session.id));
+      setHistory(current => [...current.filter(session => !ids.has(session.id)), ...archives]);
+      sessionsRef.current = sessionsRef.current.map(session => ids.has(session.id) ? { ...session, sidebarHidden: true } : session);
+      setSessions(sessionsRef.current);
+    }).catch(error => console.error("Could not archive legacy Manager conversations", error));
+  }, [recents, homeDir]);
   const refreshHistory = useCallback((cwd: string): Promise<boolean> => {
     if (!cwd || cwd === "~") return Promise.resolve(false);
     // `history` holds every visited project's rows and the sidebar filters it
@@ -10783,6 +10797,7 @@ function Workspace({
 
   useLayoutEffect(() => {
     orchestrator.bind({
+      goalCancelled: goalId => monoManagerGoals.isCancelling(goalId) || monoManagerGoals.goals().some(goal => goal.id === goalId && goal.state === "cancelled"),
       checkoutSnapshot: (cwd, base) => invoke("git_task_snapshot", { cwd, base }),
       habitOwnerMono: habitRunMono,
       reviewerFor: (run) => {
@@ -11691,7 +11706,8 @@ function Workspace({
           modelSettings: session.modelSettings,
         });
       }
-      assertDirectReport(listMonos(), mono.id, owner.id, "goal");
+      if (mono.id !== owner.id || mono.role !== "manager")
+        assertDirectReport(listMonos(), mono.id, owner.id, "goal");
       const target = await ensureMonoSession(owner.id, {
         home: homeDir,
         load: ensureOpenSession, save: saveMonoPermissions,
@@ -11868,7 +11884,7 @@ function Workspace({
                 (goal) =>
                   goal.id === payload.input.monoGoalId &&
                   goal.managerId === payload.sessionId &&
-                  goal.state !== "cancelled",
+                  goal.state !== "cancelled" && !monoManagerGoals.isCancelling(goal.id),
               )
           )
             throw new Error("Goal does not belong to this Manager");
@@ -13178,10 +13194,57 @@ function Workspace({
     [history, onSelectHistorySession],
   );
 
+  const onRepairNotNeeded = useCallback(async (attempt: TrackedCiRepair, state: "merged" | "closed") => {
+    const message = `${attempt.repo} PR #${attempt.number} is already ${state}. This CI repair is no longer needed. Stop only this repair's work; retain all conversations, worktrees and files.`;
+    if (attempt.goalId) {
+      const ownerId = attempt.goalOwnerId ?? monoForSession(attempt.sessionId)?.id;
+      if (!ownerId) throw new Error("Could not find this repair's goal owner.");
+      await monoManagerGoals.hydrate(ownerId);
+      const goal = monoManagerGoals.goals(ownerId).find(goal => goal.id === attempt.goalId);
+      if (!goal) throw new Error("Could not find this repair's goal.");
+      if (goal.state === "done" || goal.state === "cancelled") return;
+      await monoManagerGoals.handle(ownerId, { kind: "user", messageId: `ci-stop-${attempt.id}` }, `ci-stop-${attempt.id}`, "goals.cancel", { goalId: goal.id }, {
+        ...managerGoalHost.current,
+        deliver: (goal, text, receiptId, cancel) => managerGoalHost.current.deliver(goal, `${message}\n\n${text}`, receiptId, cancel),
+      });
+      return;
+    }
+    const current = await ensureOpenSession(attempt.sessionId);
+    if (!current) return;
+    if ([...current.blocks].reverse().find(block => block.role === "user")?.appRequestId === attempt.id)
+      await onStop(current.id, true, true);
+    const latest = sessionsRef.current.find(session => session.id === current.id) ?? current;
+    const stopped = [...latest.blocks].reverse().find(block => block.role === "user")?.appRequestId === attempt.id ? stopStreaming(latest) : latest;
+    const noticeId = `ci-stop-${attempt.id}`;
+    const next = stopped.blocks.some(block => block.id === noticeId) ? stopped : { ...stopped, blocks: [...stopped.blocks, { id: noticeId, role: "system" as const, text: message }] };
+    sessionsRef.current = sessionsRef.current.map(session => session.id === next.id ? next : session);
+    setSessions(sessionsRef.current);
+    await upsertSession(next);
+  }, [ensureOpenSession, onStop]);
+  useCiRepairLifecycle(onRepairNotNeeded);
+
   const onRepairChecks = useCallback(
-    async (item: InboxItem, request: CiRepairRequest, sessionId?: string) => {
+    async (item: InboxItem, request: CiRepairRequest, sessionId?: string, managerMonoId?: string) => {
       const cwd = item.projectPath;
       if (!cwd) throw new Error("Choose a local project for this PR first.");
+      const latest = await fetchGithubPrChecks(cwd, request.target.repo, request.target.number);
+      if (latest.state && latest.state !== "open")
+        throw new Error(`This PR is already ${latest.state}. A CI fix is no longer needed.`);
+      if (managerMonoId) {
+        const manager = findMono(managerMonoId);
+        if (!manager) throw new Error("This project's Manager is no longer available.");
+        const receipt = await assignManagerCiRepair(manager, cwd, request, managerGoalHost.current) as { goalId: string; managerId: string };
+        const target = findMono(managerMonoId)?.sessionId;
+        if (!target) throw new Error("Manager conversation is unavailable. The goal was retained; do not submit it again.");
+        trackCiRepair(cwd, request, target, () => true, { ...receipt, goalOwnerId: manager.id });
+        setInboxViewOpen(false);
+        setNotesViewOpen(false);
+        setSearchViewOpen(false);
+        await onSelectHistorySession(target);
+        return;
+      }
+      if (sessionId && (isProjectManager(sessionId) || monoForSession(sessionId)?.role === "manager"))
+        throw new Error("Choose this project's Manager above to assign a repair goal.");
       let session = sessionId ? await ensureOpenSession(sessionId) : undefined;
       if (
         sessionId &&
@@ -13211,8 +13274,9 @@ function Workspace({
         setSessions(next);
       }
       const repairSessionId = session.id;
-      trackCiRepair(cwd, request, repairSessionId, (settle) =>
+      trackCiRepair(cwd, request, repairSessionId, (settle, repairId) =>
         onSubmit(repairSessionId, request.text, [], {
+          appRequestId: repairId,
           ciRepair: request,
           noteCard: undefined,
           handoffCard: undefined,
@@ -14789,6 +14853,7 @@ function Workspace({
                         <LinkedWorkItemPanel
                           repairSessions={repairSessions}
                           onRepairChecks={onRepairChecks}
+                          onRepairNotNeeded={onRepairNotNeeded}
                           onOpenSession={(sessionId) => {
                             closeLinkedWorkItemPanel(panel.sessionId);
                             onOpenInboxSession(sessionId);
@@ -14897,6 +14962,7 @@ function Workspace({
                   managerQuestions={managerQuestions}
                   repairSessions={repairSessions}
                   onRepairChecks={onRepairChecks}
+                  onRepairNotNeeded={onRepairNotNeeded}
                   onOpenSession={onOpenInboxSession}
                   onOpenIntegrations={onOpenInboxIntegrations}
                 />

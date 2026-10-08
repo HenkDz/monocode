@@ -3,6 +3,7 @@ import type { OrchestrationRun, OrchestrationTask } from "./orchestrationState";
 import type { Session } from "../../sessions/model/session";
 import type { GitPr } from "../../../platform/tauri/fs";
 import { prStatusKey } from "../../source-control/hooks/usePrStatus";
+import { isLegacyManagerSession } from "../../monos/model/legacyManagerSessions";
 
 const PREFIX = "project-manager-";
 export const isProjectManager = (id: string) => id.startsWith(PREFIX);
@@ -111,7 +112,7 @@ export function managerAttention(
   statuses: ReadonlyMap<string, GitPr | null>,
 ): ManagerAttention[] {
   const items: ManagerAttention[] = [];
-  for (const session of sessions.filter((s) => isProjectManager(s.id) || runs.some(run => run.projectManager && run.ownerSessionId === s.id))) {
+  for (const session of sessions.filter((s) => !isLegacyManagerSession(s) && (isProjectManager(s.id) || runs.some(run => run.projectManager && run.ownerSessionId === s.id)))) {
     const approval = session.blocks.find(
       (block) => block.approval && !block.approval.decided,
     );

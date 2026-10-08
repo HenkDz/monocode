@@ -17,7 +17,7 @@ import { createHash } from "node:crypto";
 import type { FileMtime, FsEntry, GitPr, ProjectFile } from "../src/platform/tauri/fs";
 import { hostWorktrees } from "./git-worktrees";
 import { createHostBranch, hostBranches, switchHostBranch } from "./git-branches";
-import { checkoutPrBranches, parsePrs, PR_STATUS_FIELDS, prCardActionArgs, prRepositories, sortPrs, trustedPrTarget } from "./git-prs";
+import { checkoutPrBranches, enrichPrCheckApps, parsePrs, PR_STATUS_FIELDS, prCardActionArgs, prRepositories, trustedPrTarget } from "./git-prs";
 import type { HostStore } from "./store";
 import {
   createHostPath,
@@ -620,7 +620,7 @@ export class WorkspaceCommands {
     const output = await this.ghCommand(cwd, ["pr", "view", "--json", PR_STATUS_FIELDS])
       .catch(() => "");
     if (!output) return null;
-    return parsePrs(`[${output}]`)[0] ?? null;
+    return parsePrs(await enrichPrCheckApps(`[${output}]`, args => this.ghCommand(cwd, args)))[0] ?? null;
   }
 
   private async gitPrList(cwd: unknown, inputBranches: unknown): Promise<GitPr[]> {
@@ -633,13 +633,15 @@ export class WorkspaceCommands {
     const repo = prRepositories(repository)[0];
     const slug = repo.pathname.replace(/^\/|\/$/g, "");
     const owner = slug.split("/")[0];
-    const prs: GitPr[] = [];
+    const rows: unknown[] = [];
     for (const branch of checkoutPrBranches(current.trim(), reflog, inputBranches as string[] ?? [])) {
       // ponytail: latest 100 PRs per branch, matching native lookup.
       const json = await this.ghCommand(cwd, ["pr", "list", "--repo", `${repo.host}/${slug}`, "--head", branch, "--json", PR_STATUS_FIELDS, "--limit", "100", "--state", "all"]);
-      prs.push(...parsePrs(json, owner));
+      const prs: unknown = JSON.parse(json);
+      if (!Array.isArray(prs)) throw new Error("Invalid GitHub pull requests");
+      rows.push(...prs);
     }
-    return sortPrs(prs);
+    return parsePrs(await enrichPrCheckApps(JSON.stringify(rows), args => this.ghCommand(cwd, args)), owner);
   }
 
   private async gitPrStatusByUrl(cwd: unknown, value: unknown): Promise<GitPr | null> {
@@ -647,7 +649,7 @@ export class WorkspaceCommands {
     const target = trustedPrTarget(value, repositories);
     if (!target) return null;
     const json = await this.ghCommand(cwd, ["pr", "view", String(target.number), "--repo", target.repo, "--json", PR_STATUS_FIELDS]);
-    const pr = parsePrs(`[${json}]`)[0];
+    const pr = parsePrs(await enrichPrCheckApps(`[${json}]`, args => this.ghCommand(cwd, args)))[0];
     const verified = pr && trustedPrTarget(pr.url, repositories);
     return verified?.number === target.number && verified.repo.toLowerCase() === target.repo.toLowerCase() ? pr : null;
   }

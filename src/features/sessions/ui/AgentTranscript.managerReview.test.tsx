@@ -31,7 +31,7 @@ vi.mock("../../inbox/hooks/useGithubPrChecks", () => ({
   useGithubPrChecks: () => ({
     loading: false,
     error: null,
-    checks: { checks: [{ state: "pass" }] },
+    checks: { headOid: "head", checks: [{ name: "build", workflow: "CI", state: "pass", url: null, startedAt: null, completedAt: null }] },
   }),
 }));
 

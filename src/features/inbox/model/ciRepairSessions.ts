@@ -2,6 +2,8 @@ import { summaryFromSession } from "../../sessions/data/sessionHistory";
 import type { SessionSummary } from "../../sessions/data/sessionStore";
 import { isPreparingHandoff } from "../../sessions/model/handoff";
 import type { Session } from "../../sessions/model/session";
+import { monoForSession } from "../../monos/model/mono";
+import { isLegacyManagerSession } from "../../monos/model/legacyManagerSessions";
 
 export function ciRepairSessions(
   history: readonly SessionSummary[],
@@ -24,5 +26,12 @@ export function ciRepairSessions(
           .map((session) => summaryFromSession(session)),
       ].map((session) => [session.id, session]),
     ).values(),
-  ].filter((session) => !unavailable.has(session.id) && !session.worktreeRemoved);
+  ].filter(
+    (session) =>
+      !unavailable.has(session.id) &&
+      !session.worktreeRemoved &&
+      !session.archived &&
+      !isLegacyManagerSession(session) &&
+      monoForSession(session.id)?.role !== "manager",
+  );
 }

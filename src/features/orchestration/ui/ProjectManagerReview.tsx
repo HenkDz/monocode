@@ -11,7 +11,7 @@ import {
   type GithubPrDiff,
 } from "../../inbox/model/githubTasks";
 import { useGithubPrChecks } from "../../inbox/hooks/useGithubPrChecks";
-import { summarizePrChecks } from "../../inbox/model/githubPrChecks";
+import { latestPrChecks, summarizePrChecks } from "../../inbox/model/githubPrChecks";
 import { parseGithubWorkItemUrl } from "../../sessions/model/sessionWorkItem";
 import { usePrStatusCache } from "../../source-control/hooks/usePrStatus";
 import {
@@ -273,6 +273,7 @@ export function ReadyCard({
     open: true,
   });
   const overall = summarizePrChecks({
+    state: label === "Merged" || label === "Closed" ? label.toLowerCase() : checks.checks?.state,
     loading: checks.loading,
     error: checks.error,
     checks: checks.checks?.checks ?? null,
@@ -396,7 +397,7 @@ export function ReadyCard({
           }
         >
           {overall.kind === "pass"
-            ? `✓ ${checks.checks?.checks.length} checks`
+            ? `✓ ${latestPrChecks(checks.checks?.checks ?? []).length} checks`
             : overall.kind === "fail"
               ? `✗ ${overall.failed} failed`
               : overall.description}

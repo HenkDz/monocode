@@ -128,6 +128,38 @@ async function saveTaskDocument(f: ReturnType<typeof setup>, task: Orchestration
   return artifact;
 }
 
+it("rejects an in-flight delegation whose goal was cancelled during async scope checks", async () => {
+  const f = setup();
+  await f.start();
+  let finish!: (scopes: string[]) => void;
+  let begun!: () => void;
+  const began = new Promise<void>(resolve => { begun = resolve; });
+  f.store.scopes.mockImplementationOnce(async () => {
+    begun();
+    return new Promise<string[]>(resolve => { finish = resolve; });
+  });
+  const delegation = f.delegate(["src"], { monoGoalId: "repair-goal" });
+  const blocked = expect(delegation).rejects.toThrow("goal was cancelled");
+  await began;
+  f.host.goalCancelled = id => id === "repair-goal";
+  finish(["/repo/src"]);
+  await blocked;
+  expect(f.tasks()).toHaveLength(0);
+  expect(f.host.createWorker).not.toHaveBeenCalled();
+});
+
+it("does not retry or message a cancelled goal's retained task", async () => {
+  const f = setup();
+  await f.start();
+  await f.delegate(["src"], { monoGoalId: "repair-goal" });
+  const task = f.tasks()[0];
+  await f.manager.cancelTask("lead", task.id);
+  f.host.goalCancelled = id => id === "repair-goal";
+  await expect(f.call("retry", { taskId: task.id, text: "Resume", files: ["src"] })).rejects.toThrow("goal was cancelled");
+  await expect(f.call("message", { taskId: task.id, text: "Resume" })).rejects.toThrow("goal was cancelled");
+  expect(f.tasks()[0].status).toBe("cancelled");
+});
+
 describe("delivery maintenance", () => {
   it("hands the Reviewer's change summary to the implementer without starting a retry", async () => {
     const f = setup();

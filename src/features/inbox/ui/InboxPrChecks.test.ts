@@ -103,6 +103,37 @@ it("keeps expanded details on the same check when checks share a URL", async () 
   );
 });
 
+it("counts only latest reruns and keeps earlier failures collapsed without repair actions", () => {
+  render(createElement(InboxPrChecks, {
+    onRefresh() {}, repair: { number: 7, sessions: [], onStart: vi.fn() },
+    view: view({ checks: { headOid: "head", checks: [
+      check({ state: "fail", completedAt: "2026-10-08T13:00:00Z" }),
+      check({ state: "pass", completedAt: "2026-10-08T14:00:00Z" }),
+    ] } }),
+  }));
+  expect(container.textContent).toContain("Checks passed");
+  expect(buttonByLabel("Needs attention: 0")?.disabled).toBe(true);
+  expect(buttonByLabel("Fix all failed")).toBeNull();
+  expect(buttonByLabel("Fix ci/build with AI")).toBeNull();
+  const history = container.querySelector("details")!;
+  expect(history.textContent).toContain("Earlier attempts (1)");
+  expect(history.open).toBe(false);
+});
+
+it("merged and closed PRs have no needs-attention filter or repair actions", () => {
+  for (const state of ["merged", "closed"] as const) {
+    render(createElement(InboxPrChecks, {
+      onRefresh() {}, repair: { number: 7, state, sessions: [], onStart: vi.fn() },
+      view: view({ checks: { headOid: "head", state, checks: [check({ state: "fail" })] } }),
+    }));
+    expect(container.textContent).toContain(`PR ${state}`);
+    expect(container.textContent).not.toContain("needs a fix");
+    expect(container.textContent).not.toContain("Needs attention");
+    expect(buttonByLabel("Fix all failed")).toBeNull();
+    expect(buttonByLabel("Fix ci/build with AI")).toBeNull();
+  }
+});
+
 it("filters attention checks without hiding cancelled or unknown outcomes", () => {
   render(
     createElement(InboxPrChecks, {

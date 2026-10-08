@@ -1,6 +1,37 @@
 import type { GitPr } from "../src/platform/tauri/fs";
+import { groupGithubChecks, githubActionsSuiteId, githubCheckAppIdentity, githubChecksMissingApps, enrichGithubCheckApps } from "../src/shared/model/githubChecks";
 
 export const PR_STATUS_FIELDS = "number,title,url,state,isDraft,headRepositoryOwner,baseRefName,headRefName,headRefOid,mergeable,closedAt,additions,deletions,updatedAt,reviewDecision,mergeStateStatus,statusCheckRollup";
+
+/** One paginated metadata request per ambiguous head, rather than one per check. */
+export async function enrichPrCheckApps(json: string, gh: (args: string[]) => Promise<string>): Promise<string> {
+  const input = JSON.parse(json);
+  const rows = Array.isArray(input) ? input : [input];
+  const heads = new Map<string, Promise<Record<string, unknown>[]>>();
+  for (const pr of rows) {
+    if (!pr || !Array.isArray(pr.statusCheckRollup) || pr.statusCheckRollup.some((row: unknown) => !row || typeof row !== "object" || Array.isArray(row)) || !githubChecksMissingApps(pr.statusCheckRollup).size) continue;
+    let metadata: Record<string, unknown>[] = [];
+    try {
+      const url = new URL(pr.url);
+      const match = /^\/([\w.-]+)\/([\w.-]+)\/pull\/[1-9]\d*$/.exec(url.pathname);
+      if (url.protocol !== "https:" || url.username || url.password || url.port || !match || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(pr.headRefOid)) throw new Error("Invalid PR check metadata target");
+      const key = `${url.host}/${match[1]}/${match[2]}/${pr.headRefOid}`;
+      let fetch = heads.get(key);
+      if (!fetch) {
+        fetch = gh(["api", "--hostname", url.hostname, `repos/${match[1]}/${match[2]}/commits/${pr.headRefOid}/check-runs?filter=all&per_page=100`, "--paginate", "--slurp"])
+          .then(json => {
+            const pages = JSON.parse(json);
+            if (!Array.isArray(pages) || pages.some(page => !Array.isArray(page.check_runs) || page.check_runs.some((check: unknown) => !check || typeof check !== "object" || Array.isArray(check)))) throw new Error("Invalid check metadata");
+            return pages.flatMap(page => page.check_runs);
+          }).catch(() => []);
+        heads.set(key, fetch);
+      }
+      metadata = await fetch;
+    } catch { /* Missing identity stays unknown and preserves existing blockers. */ }
+    pr.statusCheckRollup = enrichGithubCheckApps(pr.statusCheckRollup, metadata);
+  }
+  return JSON.stringify(input);
+}
 
 export function prRepositories(json: string): URL[] {
   const repository = JSON.parse(json);
@@ -46,21 +77,18 @@ function checkState(row: Record<string, unknown>): GitPr["checksStatus"] {
 }
 
 function latestCheckStates(rows: Record<string, unknown>[]): GitPr["checksStatus"][] {
-  const latest = new Map<string, { state: GitPr["checksStatus"]; stamp: number | undefined }>();
-  const anonymous: GitPr["checksStatus"][] = [];
-  const rank = (state: GitPr["checksStatus"]) => state === "failure" ? 4 : state === "unknown" ? 3 : state === "pending" ? 2 : 0;
-  for (const row of rows) {
+  return groupGithubChecks(rows.map(row => {
     const context = isStatusContext(row);
     const name = context ? row.context : row.name;
-    const state = checkState(row);
-    if (typeof name !== "string" || !name.trim()) { anonymous.push("unknown"); continue; }
-    const key = JSON.stringify([context ? "StatusContext" : "CheckRun", context ? "" : row.workflowName ?? "", name]);
-    const stamp = (context ? [row.createdAt] : [row.startedAt, row.createdAt, row.completedAt]).map(value => typeof value === "string" ? Date.parse(value) : NaN).find(Number.isFinite);
-    const old = latest.get(key);
-    // Without comparable dates, preserve a blocker rather than infer a successful rerun.
-    if (!old || (stamp !== undefined && old.stamp !== undefined && stamp !== old.stamp ? stamp > old.stamp : rank(state) > rank(old.state))) latest.set(key, { stamp, state });
-  }
-  return [...latest.values()].map(check => check.state).concat(anonymous);
+    const string = (value: unknown) => typeof value === "string" ? value : "";
+    const number = (value: unknown) => typeof value === "number" ? value : undefined;
+    return {
+      name: string(name), kind: context ? "StatusContext" : "CheckRun",
+      workflow: context ? "" : string(row.workflowName), app: githubCheckAppIdentity(row.app), context: string(row.matrixKey),
+      state: checkState(row) ?? "unknown", suiteId: number(row.suiteId) ?? githubActionsSuiteId(string(row.detailsUrl)),
+      runAttempt: number(row.runAttempt), startedAt: string(context ? row.createdAt : row.startedAt ?? row.createdAt), completedAt: string(row.completedAt),
+    };
+  })).map(group => group.latest.state as GitPr["checksStatus"]);
 }
 
 export function parsePrs(json: string, owner?: string): GitPr[] {

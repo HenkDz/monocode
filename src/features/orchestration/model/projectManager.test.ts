@@ -1,4 +1,5 @@
-import { expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+afterEach(() => vi.unstubAllGlobals());
 import {
   isProjectManager,
   projectManagerId,
@@ -91,10 +92,12 @@ it("shares unread, blocked and ready attention and clears terminal PRs", () => {
   };
   const run = {
     leadId: session.id,
+    ownerSessionId: session.id,
     cwd: "/repo",
     projectManager: true,
     tasks: [ready, { id: "failed", title: "Tests", status: "failed" }],
   } as OrchestrationRun;
+  vi.stubGlobal("localStorage", { getItem: (key: string) => key === "monocode:mono-roster" ? JSON.stringify([{ id: "manager", sessionId: session.id, role: "manager", projects: ["/repo"], mascot: "cat", color: "#abc" }]) : null });
   expect(
     managerAttention([session], [run], new Set([session.id]), new Map()).map(
       (i) => i.kind,

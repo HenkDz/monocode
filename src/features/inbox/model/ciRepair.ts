@@ -1,13 +1,17 @@
 import type { GithubPrCheck, GithubCheckDetails } from "./githubPrChecks";
 
 export type CiRepairRequest = {
+  requestId?: string;
   text: string;
   prompt: string;
   target: {
     repo: string;
     number: number;
     headOid: string;
-    checks: Pick<GithubPrCheck, "name" | "workflow" | "url">[];
+    checks: Pick<
+      GithubPrCheck,
+      "name" | "workflow" | "url" | "kind" | "app" | "context"
+    >[];
   };
 };
 
@@ -124,10 +128,13 @@ export function buildCiRepairRequest({
       repo,
       number,
       headOid,
-      checks: evidence.map(({ name, workflow, url }) => ({
+      checks: evidence.map(({ name, workflow, url, kind, app, context }) => ({
         name,
         workflow,
         url,
+        ...(kind === undefined ? {} : { kind }),
+        ...(app === undefined ? {} : { app }),
+        ...(context === undefined ? {} : { context }),
       })),
     },
   };

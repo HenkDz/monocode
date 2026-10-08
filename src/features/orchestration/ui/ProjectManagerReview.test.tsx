@@ -12,6 +12,10 @@ import type { OrchestrationRun } from "../model/orchestrationState";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { OrchestrationActions } from "./OrchestrationActions";
 import { prStatusKey } from "../../source-control/hooks/usePrStatus";
+import {
+  recordPullRequest,
+  pullRequests,
+} from "../../source-control/model/pullRequests";
 const statusView = vi.hoisted(() => ({ statuses: new Map() }));
 vi.mock("../../source-control/hooks/usePrStatus", async (importOriginal) => ({
   ...(await importOriginal<
@@ -39,6 +43,94 @@ vi.mock("../../inbox/hooks/useGithubPrChecks", () => ({
   useGithubPrChecks: () => checkView,
 }));
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+
+it("lists current, prior and follow-up task PRs without multiplying accepted tasks", async () => {
+  const task = {
+    id: "multi-r19",
+    title: "Task with follow-ups",
+    sessionId: "multi-worker",
+    harness: "codex",
+    model: "codex:test",
+    status: "completed",
+    accepted: true,
+    lastDispatchId: "dispatch",
+    acceptedDispatchId: "dispatch",
+    prUrl: "https://github.com/example/repo/pull/902",
+    reviewedHead: "accepted-head",
+    workspace: { checkoutCwd: "/multi-r19", branch: "multi" },
+  } as OrchestrationRun["tasks"][number];
+  const run = {
+    leadId: "multi-manager",
+    cwd: "/repo",
+    tasks: [task],
+  } as OrchestrationRun;
+  for (const [number, state] of [
+    [901, "merged"],
+    [902, "open"],
+    [903, "open"],
+  ] as const) {
+    recordPullRequest(
+      "/multi-r19",
+      {
+        number,
+        title: `Task PR ${number}`,
+        url: `https://github.com/example/repo/pull/${number}`,
+        state,
+        checksStatus: "success",
+        headOid: number === 902 ? "accepted-head" : "other-head",
+        mergeable: "MERGEABLE",
+        mergeStateStatus: "CLEAN",
+      },
+      {
+        sessionId: "multi-manager",
+        sessionTitle: "Manager",
+        turnId: "first",
+        blockId: `pr-${number}`,
+        at: 1000,
+        taskId: task.id,
+      },
+    );
+  }
+  const samePr = pullRequests().find((entry) => entry.pr.number === 902)!;
+  recordPullRequest("/repo", samePr.pr, samePr.links[0]);
+  const host = document.createElement("div"),
+    root = createRoot(host);
+  try {
+    await act(async () =>
+      root.render(
+        <>
+          <ProjectManagerStatus run={run} />
+          <ProjectManagerReview run={run} />
+        </>,
+      ),
+    );
+    expect(host.textContent).toContain("3 PRs");
+    expect(host.textContent).toContain("1 ready");
+    expect(
+      host.querySelector('[aria-label="Ready to merge: Task with follow-ups"]'),
+    ).not.toBeNull();
+    await act(async () =>
+      host
+        .querySelector<HTMLButtonElement>('[aria-haspopup="dialog"]')!
+        .click(),
+    );
+    const nav = document.querySelector('[aria-label="Task pull requests"]')!;
+    const buttons = Array.from(nav.querySelectorAll("button"));
+    expect(buttons).toHaveLength(3);
+    expect(nav.textContent).toContain("PR #901");
+    expect(nav.textContent).toContain("PR #902");
+    expect(nav.textContent).toContain("PR #903");
+    for (const button of buttons) await act(async () => button.click());
+    for (const number of [901, 902, 903])
+      expect(openUrl).toHaveBeenCalledWith(
+        `https://github.com/example/repo/pull/${number}`,
+      );
+    expect(task.accepted).toBe(true);
+    expect(task.prUrl).toBe("https://github.com/example/repo/pull/902");
+  } finally {
+    await act(async () => root.unmount());
+  }
+});
 
 it("opens Review and PR summary documents from the PR-ready card", async () => {
   const run = {

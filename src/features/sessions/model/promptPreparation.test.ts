@@ -73,7 +73,10 @@ describe("preparePrompt", () => {
     expect(mocks.events).toEqual(["warm", "files"]);
 
     files.resolve("with files");
-    await expect(preparation).resolves.toBe("prepared");
+    const prepared = await preparation;
+    expect(prepared).toContain("prepared\n\n<monocode_worktrees>");
+    expect(prepared).toContain("sibling <main-checkout-name>-worktrees");
+    expect(prepared).toContain("never edit .gitignore without authorization");
     expect(mocks.applyNotesToTurn).toHaveBeenCalledWith("with files");
     expect(mocks.applySkillsToTurn).toHaveBeenCalledWith("with files", {
       harness: "pi",

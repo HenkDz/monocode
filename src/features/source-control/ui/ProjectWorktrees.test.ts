@@ -19,6 +19,7 @@ import { savePinnedProjects } from "../../projects/model/recents";
 import { pathKey } from "../../../shared/lib/paths";
 import { copyText } from "../../../platform/tauri/clipboard";
 import { useProjectDiffStats } from "../hooks/useProjectDiffStats";
+import { recordPullRequest } from "../model/pullRequests";
 import { OrchestrationWorkers } from "../../orchestration/ui/OrchestrationActions";
 import { OrchestrationActions } from "../../orchestration/ui/OrchestrationActions";
 import {
@@ -27,6 +28,8 @@ import {
 } from "../../orchestration/model/orchestration";
 import {
   gitPrStatus,
+  gitPrList,
+  gitPrStatusByUrl,
   revealPath,
   notifyGitChanged,
   type GitPr,
@@ -35,6 +38,8 @@ import {
 vi.mock("../../../platform/tauri/fs", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../platform/tauri/fs")>()),
   gitPrStatus: vi.fn(async () => null),
+  gitPrList: vi.fn(),
+  gitPrStatusByUrl: vi.fn(),
   revealPath: vi.fn(async () => {}),
 }));
 vi.mock("../../../platform/tauri/clipboard", () => ({
@@ -115,6 +120,11 @@ beforeEach(() => {
   setWorktreeFocus("/repo", undefined);
   refresh.mockClear();
   vi.mocked(gitPrStatus).mockReset().mockResolvedValue(null);
+  vi.mocked(gitPrList).mockReset().mockImplementation(async (cwd) => {
+    const pr = await gitPrStatus(cwd);
+    return pr ? [pr] : [];
+  });
+  vi.mocked(gitPrStatusByUrl).mockReset().mockImplementation((cwd) => gitPrStatus(cwd));
   creationOptions = { keepOpen: false };
   vi.mocked(useProjectWorktrees).mockReturnValue({
     data: {
@@ -964,7 +974,7 @@ it("does not query PRs for hidden, detached, or missing worktrees", async () => 
   expect(gitPrStatus).not.toHaveBeenCalled();
 });
 
-it("ignores late PR responses from a previous branch", async () => {
+it("retains a PR discovered on the worktree's previous branch", async () => {
   let resolveOld!: (pr: GitPr) => void;
   vi.mocked(gitPrStatus).mockImplementation((cwd) =>
     cwd === "/trees/a"
@@ -998,7 +1008,40 @@ it("ignores late PR responses from a previous branch", async () => {
     button("Open worktree replacement")
       .querySelector('[role="img"]')!
       .getAttribute("aria-label"),
-  ).toBe("No PR status available");
+  ).toContain("Open PR #99: Old branch");
+});
+
+it("shows a newer open PR over a merged PR and lists both in the count, hover and menu", async () => {
+  const checkout = tree("/trees/followup", "followup");
+  vi.mocked(useProjectWorktrees).mockReturnValue({
+    data: { worktrees: [checkout], defaultRoot: "/trees" }, refresh,
+  });
+  vi.mocked(gitPrList).mockResolvedValue([
+    { number: 41, title: "Original change", url: "https://github.com/example/repo/pull/41", state: "merged" },
+    { number: 42, title: "Follow-up fix", url: "https://github.com/example/repo/pull/42", state: "open" },
+  ]);
+  await render();
+  const icon = button("Open worktree followup").querySelector('[role="img"]')!;
+  expect(icon.getAttribute("aria-label")).toBe("Open PR #42: Follow-up fix · 2 PRs");
+  expect(icon.textContent).toContain("2 PRs");
+  expect(icon.getAttribute("title")).toContain("Open PR #42: Follow-up fix");
+  expect(icon.getAttribute("title")).toContain("Merged PR #41: Original change");
+  await act(async () => button("Actions for followup").click());
+  expect(document.querySelector('[role="menu"]')?.textContent).toContain("Open PR #42: Follow-up fix");
+  expect(document.querySelector('[role="menu"]')?.textContent).toContain("Merged PR #41: Original change");
+});
+
+it("reflects a verified closed update without reloading the branch lookup", async () => {
+  const checkout = tree("/trees/live-pr-refresh", "live-pr-refresh");
+  const pr: GitPr = { number: 42, title: "Live status", url: "https://github.com/example/repo/pull/42", state: "open" };
+  vi.mocked(useProjectWorktrees).mockReturnValue({ data: { worktrees: [checkout], defaultRoot: "/trees" }, refresh });
+  vi.mocked(gitPrList).mockResolvedValue([pr]);
+  await render();
+  const label = () => button("Open worktree live-pr-refresh").querySelector('[role="img"]')?.getAttribute("aria-label");
+  expect(label()).toBe("Open PR #42: Live status");
+  await act(async () => recordPullRequest(checkout.path, { ...pr, state: "closed" }));
+  expect(label()).toBe("Closed PR #42: Live status");
+  expect(gitPrList).toHaveBeenCalledExactlyOnceWith(checkout.path, [checkout.branch]);
 });
 
 const menuItem = (label: string) => {

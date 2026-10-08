@@ -30,6 +30,8 @@ import {
 import { DiscussionEmpty } from "./DiscussionEmpty";
 import { LinkedWorkItemUpdateNotice } from "../../inbox/ui/LinkedWorkItemUpdateNotice";
 import { SessionReview } from "./SessionReview";
+import { usePullRequests, prIdentity } from "../../source-control/model/pullRequests";
+import { PullRequestCard } from "../../source-control/ui/PullRequestCard";
 import { PromptOutline } from "./PromptOutline";
 import {
   canCompactHarnessContext,
@@ -58,6 +60,7 @@ import {
 import { sessionHasBtwThreads, supportsBtwHarness } from "../model/btw";
 import { BtwSheet, useBtwConversation } from "./BtwSheet";
 import { AgentTranscript } from "./AgentTranscript";
+import { NestedWorktreeWarning } from "../../source-control/ui/NestedWorktreeWarning";
 import { PooledTranscript, type TranscriptPool } from "./TranscriptPool";
 import { TranscriptFind } from "./TranscriptFind";
 import {
@@ -581,6 +584,8 @@ const LocalSessionPane = memo(function LocalSessionPane({
     ownedRuns,
     monoTranscript.blocks,
   );
+  const sessionPrEntries = [...new Map(usePullRequests().filter(entry => entry.links.some(link => link.sessionId === session.id)).map(entry => [prIdentity(entry.pr.url), entry])).values()];
+  const prTurnIds = sessionPrEntries.flatMap(entry => entry.links.filter(link => link.sessionId === session.id).map(link => link.turnId));
   const openReview = useCallback(
     async (taskId: string) => {
       const run = orchestrationRuns.find(
@@ -966,6 +971,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
                 }
               />
             ) : null}
+            <NestedWorktreeWarning cwd={workCwd} enabled={visible && !remoteSessionLoading} />
             {remoteSessionLoading ? null : isEmpty ? (
               agent ? (
                 <div className="scrollbar-none h-full min-h-0 overflow-y-auto">
@@ -1135,15 +1141,19 @@ const LocalSessionPane = memo(function LocalSessionPane({
                     onNavigateReady={onNavigateReady}
                     turnAccessories={
                       new Map(
-                        [...reviewTimeline].map(([turnId, runs]) => [
+                        [...new Set([...reviewTimeline.keys(), ...prTurnIds])].map((turnId) => [
                           turnId,
                           <>
-                            {runs.map((run) => (
+                            {(reviewTimeline.get(turnId) ?? []).map((run) => (
                               <ProjectManagerReview
                                 key={run.leadId}
                                 run={run}
                                 historical
                               />
+                            ))}
+                            {sessionPrEntries.filter(entry => entry.links.some(link => link.sessionId === session.id && link.turnId === turnId) &&
+                              !ownedRuns.some(run => run.tasks.some(task => task.prUrl === entry.pr.url))).map(entry => (
+                              <div key={entry.pr.url} className="px-4 py-2"><PullRequestCard entry={entry} sessionId={session.id} /></div>
                             ))}
                           </>,
                         ]),

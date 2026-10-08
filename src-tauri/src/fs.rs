@@ -1158,6 +1158,18 @@ pub struct GitPr {
     pub mergeable: Option<String>,
     #[serde(default)]
     pub closed_at: Option<String>,
+    #[serde(default)]
+    pub additions: Option<u64>,
+    #[serde(default)]
+    pub deletions: Option<u64>,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+    #[serde(default)]
+    pub review_decision: Option<String>,
+    #[serde(default)]
+    pub merge_state_status: Option<String>,
+    #[serde(default)]
+    pub checks_status: Option<String>,
 }
 
 /// Latest pull request for the current branch, if `gh` can see one.
@@ -1166,6 +1178,24 @@ pub async fn git_pr_status(cwd: String) -> Result<Option<GitPr>, String> {
     tauri::async_runtime::spawn_blocking(move || Ok(git_pr_status_for(&expand_home(&cwd))))
         .await
         .map_err(|e| e.to_string())?
+}
+
+/// PRs for this checkout's current and previously checked out branches.
+#[tauri::command]
+pub async fn git_pr_list(cwd: String, branches: Option<Vec<String>>) -> Result<Vec<GitPr>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        git_pr_list_for(&expand_home(&cwd), &branches.unwrap_or_default())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// Verify a transcript URL against this checkout's forge before reading it.
+#[tauri::command]
+pub async fn git_pr_status_by_url(cwd: String, url: String) -> Result<Option<GitPr>, String> {
+    tauri::async_runtime::spawn_blocking(move || git_pr_status_by_url_for(&expand_home(&cwd), &url))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 #[derive(Deserialize)]
@@ -2676,30 +2706,205 @@ fn git_range_context_for(root: &Path) -> Result<GitRangeContext, String> {
     })
 }
 
+const GITHUB_PR_STATUS_FIELDS: &str = "number,title,url,state,isDraft,headRepositoryOwner,baseRefName,headRefName,headRefOid,mergeable,closedAt,additions,deletions,updatedAt,reviewDecision,mergeStateStatus,statusCheckRollup";
+
 fn git_pr_status_for(root: &Path) -> Option<GitPr> {
     let branch = git_branch(root)?;
-    let repo = git_github_repo_for(root).ok()?;
-    let (owner, _) = split_github_repo(&repo).ok()?;
-    let json = gh_stdout(
+    let repo = git_pr_repository_url_for(root).ok()?;
+    git_branch_prs_for(root, &repo, &branch)
+        .ok()?
+        .into_iter()
+        .next()
+}
+
+fn git_branch_prs_for(root: &Path, repo: &str, branch: &str) -> Result<Vec<GitPr>, String> {
+    let repository = url::Url::parse(repo).map_err(|error| error.to_string())?;
+    let (owner, name) = split_github_repo(repository.path().trim_matches('/'))?;
+    let selector = format!(
+        "{}/{owner}/{name}",
+        repository
+            .host_str()
+            .ok_or("GitHub repository is missing its host")?
+    );
+    // ponytail: retain the latest 100 PRs per branch; paginate if a checkout needs older history.
+    let json = gh_checked(
         root,
         &[
             "pr",
             "list",
             "--repo",
-            &repo,
+            &selector,
             "--head",
-            &branch,
+            branch,
             "--json",
-            "number,title,url,state,isDraft,headRepositoryOwner,baseRefName,headRefName,headRefOid,mergeable,closedAt",
+            GITHUB_PR_STATUS_FIELDS,
             "--limit",
-            "20",
+            "100",
             "--state",
             "all",
         ],
     )?;
     // gh --head does not support owner:branch. Filter the returned head owner
     // explicitly so a fork's identically named branch cannot satisfy review.
-    parse_gh_pr_list(&json, &owner)
+    parse_gh_prs(&json, Some(&owner))
+}
+
+fn checkout_branches(current: Option<String>, reflog: &str, branches: &[String]) -> Vec<String> {
+    let mut result = Vec::new();
+    let mut historical_count = 0;
+    for (branch, historical) in current
+        .into_iter()
+        .chain(branches.iter().cloned())
+        .map(|branch| (branch, false))
+        .chain(
+            reflog
+                .lines()
+                .filter_map(|line| line.strip_prefix("checkout: moving from "))
+                .flat_map(|line| {
+                    line.split_once(" to ")
+                        .into_iter()
+                        .flat_map(|(from, to)| [from.to_string(), to.to_string()])
+                })
+                .map(|branch| (branch, true)),
+        )
+    {
+        // Detached checkout hashes are not PR branch names.
+        if branch.is_empty()
+            || (branch.len() >= 40 && branch.bytes().all(|c| c.is_ascii_hexdigit()))
+        {
+            continue;
+        }
+        if !result.contains(&branch) {
+            // ponytail: scan 20 historical branches per checkout; detected PR URLs persist beyond this bound.
+            if historical {
+                if historical_count == 20 {
+                    break;
+                }
+                historical_count += 1;
+            }
+            result.push(branch);
+        }
+    }
+    result
+}
+
+fn sort_prs(prs: &mut [GitPr]) {
+    let rank = |pr: &GitPr| match (pr.state.as_str(), pr.is_draft) {
+        ("open", false) => 0,
+        ("open", true) => 1,
+        ("merged", _) => 2,
+        _ => 3,
+    };
+    prs.sort_by(|a, b| {
+        rank(a)
+            .cmp(&rank(b))
+            .then_with(|| b.updated_at.cmp(&a.updated_at))
+            .then_with(|| b.number.cmp(&a.number))
+    });
+}
+
+fn git_pr_list_for(root: &Path, branches: &[String]) -> Result<Vec<GitPr>, String> {
+    let repo = git_pr_repository_url_for(root)?;
+    // HEAD reflog belongs to this worktree; repository-wide refs would attach other sessions' PRs.
+    let reflog = git_run(root, &["reflog", "show", "--format=%gs", "HEAD"]).unwrap_or_default();
+    let mut prs = Vec::new();
+    for branch in checkout_branches(git_branch(root), &reflog, branches) {
+        for pr in git_branch_prs_for(root, &repo, &branch)? {
+            if !prs.iter().any(|existing: &GitPr| existing.url == pr.url) {
+                prs.push(pr);
+            }
+        }
+    }
+    sort_prs(&mut prs);
+    Ok(prs)
+}
+
+fn git_pr_repository_url_for(root: &Path) -> Result<String, String> {
+    let json = gh_checked(root, &["repo", "view", "--json", "url"])?;
+    parse_pr_repository_urls(&json)?
+        .into_iter()
+        .next()
+        .ok_or("GitHub did not return a repository".into())
+}
+
+fn verified_pr_target(candidate: &str, repositories: &[String]) -> Option<(String, i64)> {
+    let candidate = url::Url::parse(candidate).ok()?;
+    if candidate.scheme() != "https"
+        || !candidate.username().is_empty()
+        || candidate.password().is_some()
+        || candidate.port().is_some()
+    {
+        return None;
+    }
+    let parts: Vec<_> = candidate.path_segments()?.collect();
+    if parts.len() < 4 || parts[2] != "pull" {
+        return None;
+    }
+    let number = parts[3].parse::<i64>().ok().filter(|number| *number > 0)?;
+    for repository in repositories {
+        let trusted = url::Url::parse(repository).ok()?;
+        if candidate.host_str() != trusted.host_str()
+            || candidate.port_or_known_default() != trusted.port_or_known_default()
+        {
+            continue;
+        }
+        let slug = format!("{}/{}", parts[0], parts[1]);
+        if trusted.path().trim_matches('/').eq_ignore_ascii_case(&slug) {
+            return Some((format!("{}/{}", trusted.host_str()?, slug), number));
+        }
+    }
+    None
+}
+
+fn parse_pr_repository_urls(json: &str) -> Result<Vec<String>, String> {
+    #[derive(Deserialize)]
+    struct ParentOwner {
+        login: String,
+    }
+    #[derive(Deserialize)]
+    struct Parent {
+        name: String,
+        owner: ParentOwner,
+    }
+    #[derive(Deserialize)]
+    struct Repository {
+        url: String,
+        #[serde(default)]
+        parent: Option<Parent>,
+    }
+    let repository: Repository = serde_json::from_str(json).map_err(|error| error.to_string())?;
+    let mut repositories = vec![repository.url.clone()];
+    if let Some(parent) = repository.parent {
+        let mut parent_url = url::Url::parse(&repository.url).map_err(|error| error.to_string())?;
+        let (owner, name) = split_github_repo(&format!("{}/{}", parent.owner.login, parent.name))?;
+        parent_url.set_path(&format!("/{owner}/{name}"));
+        repositories.push(parent_url.to_string());
+    }
+    Ok(repositories)
+}
+
+fn git_pr_status_by_url_for(root: &Path, candidate: &str) -> Result<Option<GitPr>, String> {
+    let json = gh_checked(root, &["repo", "view", "--json", "url,parent"])?;
+    let repositories = parse_pr_repository_urls(&json)?;
+    let Some((repo, number)) = verified_pr_target(candidate, &repositories) else {
+        return Ok(None);
+    };
+    let json = gh_checked(
+        root,
+        &[
+            "pr",
+            "view",
+            &number.to_string(),
+            "--repo",
+            &repo,
+            "--json",
+            GITHUB_PR_STATUS_FIELDS,
+        ],
+    )?;
+    let pr = parse_gh_prs(&format!("[{json}]"), None)?.into_iter().next();
+    Ok(pr.filter(|pr| {
+        verified_pr_target(&pr.url, &repositories).is_some_and(|(_, verified)| verified == number)
+    }))
 }
 
 fn git_github_repo_for(root: &Path) -> Result<String, String> {
@@ -3746,13 +3951,69 @@ fn parse_github_pr_checks(json: &str) -> Result<GitHubPrChecks, String> {
     }
     Ok(GitHubPrChecks {
         head_oid,
-        checks: row
-            .status_check_rollup
-            .unwrap_or_default()
-            .into_iter()
-            .map(github_pr_check_from_row)
-            .collect(),
+        checks: latest_github_pr_checks(row.status_check_rollup.unwrap_or_default()),
     })
+}
+
+fn latest_github_pr_checks(rows: Vec<GitHubStatusCheckRow>) -> Vec<GitHubPrCheck> {
+    let mut result: Vec<(Option<i128>, GitHubPrCheck)> = Vec::new();
+    let mut positions = HashMap::new();
+    let rank = |state: &str| match state {
+        "fail" | "cancel" => 4,
+        "unknown" => 3,
+        "pending" => 2,
+        "skipping" => 1,
+        _ => 0,
+    };
+    for row in rows {
+        let context = row.typename.eq_ignore_ascii_case("StatusContext")
+            || (row.typename.is_empty() && !row.context.is_empty());
+        let key = if context {
+            ("StatusContext", String::new(), row.context.clone())
+        } else {
+            ("CheckRun", row.workflow_name.clone(), row.name.clone())
+        };
+        let stamp = if context {
+            [row.created_at.as_deref(), None, None]
+        } else {
+            [
+                row.started_at.as_deref(),
+                row.created_at.as_deref(),
+                row.completed_at.as_deref(),
+            ]
+        }
+        .into_iter()
+        .flatten()
+        .find_map(|value| {
+            time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
+                .ok()
+                .map(|time| time.unix_timestamp_nanos())
+        });
+        let mut check = github_pr_check_from_row(row);
+        if check.name.trim().is_empty() {
+            check.state = "unknown".into();
+            result.push((stamp, check));
+            continue;
+        }
+        if let Some(&index) = positions.get(&key) {
+            let (old_stamp, old): &(Option<i128>, GitHubPrCheck) = &result[index];
+            // Missing/tied dates cannot prove a successful rerun superseded a blocker.
+            let replace = match (stamp, *old_stamp) {
+                (Some(new), Some(old)) if new != old => new > old,
+                _ => {
+                    rank(&check.state) > rank(&old.state)
+                        || (rank(&check.state) == rank(&old.state) && check.url > old.url)
+                }
+            };
+            if replace {
+                result[index] = (stamp, check);
+            }
+        } else {
+            positions.insert(key, result.len());
+            result.push((stamp, check));
+        }
+    }
+    result.into_iter().map(|(_, check)| check).collect()
 }
 
 fn github_pr_check_from_row(row: GitHubStatusCheckRow) -> GitHubPrCheck {
@@ -4051,7 +4312,12 @@ fn parse_github_work_item(json: &str, kind: &str, repo: &str) -> Result<GitHubWo
         .ok_or_else(|| "GitHub did not return a work item".into())
 }
 
+#[cfg(test)]
 fn parse_gh_pr_list(json: &str, owner: &str) -> Option<GitPr> {
+    parse_gh_prs(json, Some(owner)).ok()?.into_iter().next()
+}
+
+fn parse_gh_prs(json: &str, owner: Option<&str>) -> Result<Vec<GitPr>, String> {
     #[derive(Deserialize)]
     struct Owner {
         login: String,
@@ -4076,17 +4342,50 @@ fn parse_gh_pr_list(json: &str, owner: &str) -> Option<GitPr> {
         mergeable: Option<String>,
         #[serde(default, rename = "closedAt")]
         closed_at: Option<String>,
+        #[serde(default)]
+        additions: Option<u64>,
+        #[serde(default)]
+        deletions: Option<u64>,
+        #[serde(default, rename = "updatedAt")]
+        updated_at: Option<String>,
+        #[serde(default, rename = "reviewDecision")]
+        review_decision: Option<String>,
+        #[serde(default, rename = "mergeStateStatus")]
+        merge_state_status: Option<String>,
+        #[serde(default, rename = "statusCheckRollup")]
+        status_check_rollup: Option<Vec<GitHubStatusCheckRow>>,
     }
-    let rows: Vec<Row> = serde_json::from_str(json).ok()?;
-    let mut best: Option<GitPr> = None;
+    let rows: Vec<Row> = serde_json::from_str(json).map_err(|error| error.to_string())?;
+    let mut prs = Vec::new();
     for row in rows {
-        if !row
-            .head_owner
-            .as_ref()
-            .is_some_and(|head| head.login.eq_ignore_ascii_case(owner))
-        {
+        if owner.is_some_and(|owner| {
+            !row.head_owner
+                .as_ref()
+                .is_some_and(|head| head.login.eq_ignore_ascii_case(owner))
+        }) {
             continue;
         }
+        let checks_status = row.status_check_rollup.map(|checks| {
+            let states: Vec<_> = latest_github_pr_checks(checks)
+                .into_iter()
+                .map(|check| check.state)
+                .collect();
+            if states.is_empty() {
+                "none"
+            } else if states
+                .iter()
+                .any(|state| matches!(state.as_str(), "fail" | "cancel"))
+            {
+                "failure"
+            } else if states.iter().any(|state| state == "unknown") {
+                "unknown"
+            } else if states.iter().any(|state| state == "pending") {
+                "pending"
+            } else {
+                "success"
+            }
+            .to_string()
+        });
         let pr = GitPr {
             head_ref_name: row.head_ref_name,
             base_ref_name: row.base_ref_name,
@@ -4098,15 +4397,17 @@ fn parse_gh_pr_list(json: &str, owner: &str) -> Option<GitPr> {
             head_oid: row.head_oid,
             mergeable: row.mergeable,
             closed_at: row.closed_at,
+            additions: row.additions,
+            deletions: row.deletions,
+            updated_at: row.updated_at,
+            review_decision: row.review_decision,
+            merge_state_status: row.merge_state_status,
+            checks_status,
         };
-        if pr.state == "open" {
-            return Some(pr);
-        }
-        if best.is_none() {
-            best = Some(pr);
-        }
+        prs.push(pr);
     }
-    best
+    sort_prs(&mut prs);
+    Ok(prs)
 }
 
 fn git_pr_create_for(root: &Path, input: &GitPrCreateInput) -> Result<String, String> {
@@ -7945,6 +8246,140 @@ mod tests {
     }
 
     #[test]
+    fn session_pr_url_is_scoped_to_checkout_forge_repositories() {
+        let repositories = vec![
+            "https://github.com/owner/project".into(),
+            "https://github.com/upstream/project".into(),
+        ];
+        assert_eq!(
+            verified_pr_target(
+                "https://github.com/OWNER/Project/pull/42/files?diff=split",
+                &repositories
+            ),
+            Some(("github.com/OWNER/Project".into(), 42))
+        );
+        assert!(
+            verified_pr_target("https://github.com/upstream/project/pull/7", &repositories)
+                .is_some()
+        );
+        for candidate in [
+            "https://evil.example/owner/project/pull/42",
+            "https://github.com/other/project/pull/42",
+            "https://github.com/owner/project/issues/42",
+            "http://github.com/owner/project/pull/42",
+            "https://user@github.com/owner/project/pull/42",
+            "https://github.com/owner/project/pull/0",
+            "https://github.com/owner/project/pull/42x",
+            "https://github.com/owner/project/pull/-1",
+            "https://github.com:444/owner/project/pull/42",
+        ] {
+            assert!(
+                verified_pr_target(candidate, &repositories).is_none(),
+                "{candidate}"
+            );
+        }
+    }
+
+    #[test]
+    fn pr_repository_urls_derive_parent_from_actual_gh_shape() {
+        let repositories = parse_pr_repository_urls(r#"{"parent":{"id":"R_parent","name":"monocode","owner":{"id":"O_parent","login":"hardbeat920"}},"url":"https://github.com/HenkDz/monocode"}"#).unwrap();
+        assert_eq!(
+            repositories,
+            [
+                "https://github.com/HenkDz/monocode",
+                "https://github.com/hardbeat920/monocode"
+            ]
+        );
+        let enterprise =
+            parse_pr_repository_urls(r#"{"url":"https://github.example/team/repo","parent":null}"#)
+                .unwrap();
+        assert!(
+            verified_pr_target("https://github.example/team/repo/pull/1", &enterprise).is_some()
+        );
+        assert!(verified_pr_target("https://github.com/team/repo/pull/1", &enterprise).is_none());
+    }
+
+    #[test]
+    fn checkout_pr_history_keeps_previous_branches_without_other_refs() {
+        let branches = checkout_branches(Some("new".into()), "checkout: moving from old to new\ncommit: unrelated\ncheckout: moving from 0123456789012345678901234567890123456789 to old", &["session-created".into(), "new".into()]);
+        assert_eq!(branches, ["new", "session-created", "old"]);
+    }
+
+    #[test]
+    fn checkout_pr_history_bounds_old_branches_but_keeps_explicit_targets() {
+        let reflog = (0..100)
+            .map(|i| format!("checkout: moving from history-{i} to current"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let branches = checkout_branches(
+            Some("current".into()),
+            &reflog,
+            &[
+                "history-99".into(),
+                "session-created".into(),
+                "current".into(),
+            ],
+        );
+        assert_eq!(branches.len(), 23);
+        assert_eq!(&branches[..3], ["current", "history-99", "session-created"]);
+        assert!(branches.contains(&"history-19".into()));
+        assert!(!branches.contains(&"history-20".into()));
+    }
+
+    #[test]
+    fn multiple_prs_prefer_open_then_draft_then_recent_merged() {
+        let json = serde_json::json!([
+            {"number": 5, "title": "Draft", "url": "draft", "state": "OPEN", "isDraft": true, "headRepositoryOwner": {"login": "owner"}},
+            {"number": 2, "title": "Merged", "url": "merged", "state": "MERGED", "headRepositoryOwner": {"login": "owner"}},
+            {"number": 3, "title": "Follow-up", "url": "open", "state": "OPEN", "headRepositoryOwner": {"login": "owner"}},
+            {"number": 4, "title": "Merged newer", "url": "merged-new", "state": "MERGED", "headRepositoryOwner": {"login": "owner"}}
+        ]);
+        let prs = parse_gh_prs(&json.to_string(), Some("owner")).unwrap();
+        assert_eq!(
+            prs.iter().map(|pr| pr.number).collect::<Vec<_>>(),
+            [3, 5, 4, 2]
+        );
+    }
+
+    #[test]
+    fn session_pr_readiness_uses_forge_checks_and_review() {
+        let row = serde_json::json!({"number": 9, "title": "Session PR", "url": "pr", "state": "OPEN", "headRefOid": "new-head", "additions": 10, "deletions": 2, "reviewDecision": "APPROVED", "mergeStateStatus": "CLEAN", "statusCheckRollup": []});
+        let mut row = row;
+        for (checks, expected) in [
+            (serde_json::json!([]), "none"),
+            (
+                serde_json::json!([{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}]),
+                "success",
+            ),
+            (
+                serde_json::json!([{"name": "ci", "status": "IN_PROGRESS", "conclusion": "SUCCESS"}]),
+                "pending",
+            ),
+            (
+                serde_json::json!([{"name": "ci", "status": "COMPLETED", "conclusion": "CANCELLED"}]),
+                "failure",
+            ),
+            (
+                serde_json::json!([{"name": "ci", "status": "UNKNOWN", "conclusion": "SUCCESS"}]),
+                "unknown",
+            ),
+        ] {
+            row["statusCheckRollup"] = checks;
+            let pr = parse_gh_prs(&format!("[{row}]"), None).unwrap().remove(0);
+            assert_eq!(pr.checks_status.as_deref(), Some(expected));
+            assert_eq!(pr.additions, Some(10));
+            assert_eq!(pr.deletions, Some(2));
+            assert_eq!(pr.head_oid.as_deref(), Some("new-head"));
+            assert_eq!(pr.review_decision.as_deref(), Some("APPROVED"));
+            assert_eq!(pr.merge_state_status.as_deref(), Some("CLEAN"));
+        }
+        row.as_object_mut().unwrap().remove("statusCheckRollup");
+        assert!(parse_gh_prs(&format!("[{row}]"), None).unwrap()[0]
+            .checks_status
+            .is_none());
+    }
+
+    #[test]
     fn pr_status_rejects_foreign_or_unknown_head_owners() {
         let json = r#"[{"number":1,"title":"Foreign","url":"https://example.com/1","state":"OPEN","headRepositoryOwner":{"login":"fork"}},{"number":2,"title":"Ours","url":"https://example.com/2","state":"MERGED","headRepositoryOwner":{"login":"owner"}}]"#;
         assert_eq!(parse_gh_pr_list(json, "owner").unwrap().state, "merged");
@@ -7983,7 +8418,10 @@ mod tests {
             let json = serde_json::json!([{"number":4,"title":"Fix","url":"https://example.invalid/4","state":state,"closedAt":"2026-10-08T10:00:00Z","headRepositoryOwner":{"login":"owner"}}]);
             let pr = parse_gh_pr_list(&json.to_string(), "owner").unwrap();
             assert_eq!(pr.closed_at.as_deref(), Some("2026-10-08T10:00:00Z"));
-            assert_eq!(serde_json::to_value(pr).unwrap()["closedAt"], "2026-10-08T10:00:00Z");
+            assert_eq!(
+                serde_json::to_value(pr).unwrap()["closedAt"],
+                "2026-10-08T10:00:00Z"
+            );
         }
         let open = parse_gh_pr_list(r#"[{"number":4,"title":"Fix","url":"https://example.invalid/4","state":"OPEN","closedAt":null,"headRepositoryOwner":{"login":"owner"}}]"#, "owner").unwrap();
         assert!(open.closed_at.is_none());
@@ -8599,6 +9037,75 @@ mod tests {
         let legacy = &checks.checks[2];
         assert_eq!(legacy.state, "pending");
         assert_eq!(legacy.url, None);
+    }
+
+    #[test]
+    fn pr_checks_reruns_choose_latest_for_cards_and_detailed_checks() {
+        for context in [false, true] {
+            for (new_state, expected, aggregate) in [
+                ("SUCCESS", "pass", "success"),
+                ("PENDING", "pending", "pending"),
+            ] {
+                let make = |state: &str, timestamp: &str| {
+                    if context {
+                        serde_json::json!({"__typename":"StatusContext","context":"ci","state":state,"createdAt":timestamp})
+                    } else {
+                        serde_json::json!({"__typename":"CheckRun","workflowName":"CI","name":"build (ubuntu)","status":if state == "PENDING" { "IN_PROGRESS" } else { "COMPLETED" },"conclusion":state,"startedAt":timestamp})
+                    }
+                };
+                let rows = [
+                    make("FAILURE", "2026-10-08T10:00:00Z"),
+                    make(new_state, "2026-10-08T11:00:00Z"),
+                ];
+                for rows in [rows.to_vec(), rows.into_iter().rev().collect()] {
+                    let detailed =
+                        serde_json::json!({"headRefOid":"head","statusCheckRollup":rows});
+                    let checks = parse_github_pr_checks(&detailed.to_string()).unwrap();
+                    assert_eq!(checks.checks.len(), 1);
+                    assert_eq!(checks.checks[0].state, expected);
+                    let pr = serde_json::json!([{"number":1,"title":"PR","url":"pr","state":"OPEN","statusCheckRollup":rows}]);
+                    assert_eq!(
+                        parse_gh_prs(&pr.to_string(), None).unwrap()[0]
+                            .checks_status
+                            .as_deref(),
+                        Some(aggregate)
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn pr_checks_keep_matrix_jobs_workflows_types_and_anonymous_blockers_separate() {
+        let json = serde_json::json!({"headRefOid":"head","statusCheckRollup":[
+            {"__typename":"CheckRun","workflowName":"CI","name":"build (ubuntu)","status":"COMPLETED","conclusion":"FAILURE"},
+            {"__typename":"CheckRun","workflowName":"CI","name":"build (windows)","status":"COMPLETED","conclusion":"SUCCESS"},
+            {"__typename":"CheckRun","workflowName":"Other","name":"build (ubuntu)","status":"COMPLETED","conclusion":"SUCCESS"},
+            {"__typename":"StatusContext","context":"build (ubuntu)","state":"SUCCESS"},
+            {"status":"COMPLETED","conclusion":"SUCCESS"},
+            {"status":"COMPLETED","conclusion":"SUCCESS"}
+        ]});
+        let checks = parse_github_pr_checks(&json.to_string()).unwrap();
+        assert_eq!(checks.checks.len(), 6);
+        assert_eq!(checks.checks[0].state, "fail");
+        assert_eq!(checks.checks[4].state, "unknown");
+        assert_eq!(checks.checks[5].state, "unknown");
+        for rows in [
+            serde_json::json!([
+                {"name":"ci","status":"COMPLETED","conclusion":"FAILURE"},
+                {"name":"ci","status":"COMPLETED","conclusion":"SUCCESS","startedAt":"2026-10-08T11:00:00Z"}
+            ]),
+            serde_json::json!([
+                {"name":"ci","status":"COMPLETED","conclusion":"SUCCESS","startedAt":"2026-10-08T11:00:00Z"},
+                {"name":"ci","status":"QUEUED"}
+            ]),
+        ] {
+            let checks = parse_github_pr_checks(
+                &serde_json::json!({"headRefOid":"head","statusCheckRollup":rows}).to_string(),
+            )
+            .unwrap();
+            assert_ne!(checks.checks[0].state, "pass");
+        }
     }
 
     #[test]

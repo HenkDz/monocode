@@ -51,6 +51,13 @@ const tree = () =>
     "app",
   );
 
+it("guides org sessions to the app's sibling worktree location", () => {
+  const context = orgTurnContext(tree(), "app");
+  expect(context).toContain("sibling <main-checkout-name>-worktrees");
+  expect(context).toContain("Never create Git worktrees inside");
+  expect(context).toContain("wait for explicit user confirmation");
+});
+
 it("routes a Manager's retained goal progress to its actual Orchestrator without changing ownership", () => {
   const roster = tree();
   const runs = [{ leadId: "engine", ownerMonoId: "app", ownerSessionId: "manager-session", cwd: "/app", status: "active",

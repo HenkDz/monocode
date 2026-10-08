@@ -383,7 +383,7 @@ type Props = {
   repairSessions?: CiRepairProps["repairSessions"];
   onRepairChecks?: CiRepairProps["onRepairChecks"];
   sessions?: readonly SessionSummary[];
-  managerQuestions?: readonly { id: string; key?: string; project: string; question: string; kind?: "decision" | "reply" | "ready" }[];
+  managerQuestions?: readonly { id: string; key?: string; project: string; question: string; sourceLabel?: string; kind?: "decision" | "reply" | "ready" }[];
   onOpenSession?: (sessionId: string) => void | Promise<void>;
   /** Session-card destination to reveal after the Inbox list loads. */
   target?: LinkedWorkItem | null;
@@ -918,7 +918,7 @@ export function InboxView({
         {managerQuestions.filter(item => (item.kind ?? "decision") === kind).map(item => <button key={item.key ?? item.id} type="button"
           onClick={() => void onOpenSession?.(item.id)}
           className="flex w-full flex-col gap-1 rounded-md p-2 text-left text-xs hover:bg-content/5 focus-visible:outline-accent">
-          <span className="text-content/50">{projectName(item.project)} · Manager</span><span className="line-clamp-2">{item.question}</span>
+          <span className="text-content/50">{item.sourceLabel ?? `${projectName(item.project)} · Manager`}</span><span className="line-clamp-2">{item.question}</span>
         </button>)}
         </div>)}
       </section>}

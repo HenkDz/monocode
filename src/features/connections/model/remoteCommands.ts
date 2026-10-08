@@ -35,6 +35,8 @@ const HOST_COMMANDS = new Set([
   "git_fetch",
   "git_sync",
   "git_pr_status",
+  "git_pr_list",
+  "git_pr_status_by_url",
   "git_pr_create",
   "git_history",
   "git_commit_files",

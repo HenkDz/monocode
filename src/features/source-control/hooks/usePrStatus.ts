@@ -1,10 +1,18 @@
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 import {
   gitPrStatus,
+  gitPrList,
+  gitPrStatusByUrl,
   subscribeGitChanged,
   type GitPr,
 } from "../../../platform/tauri/fs";
 import { pathKey } from "../../../shared/lib/paths";
+import {
+  recordPullRequest,
+  worktreePullRequests,
+  usePullRequests,
+  relevantPullRequests,
+} from "../model/pullRequests";
 
 // Shared by worktree icons, manager attention, and cards. A failed read must
 // not erase the last known state or pretend that a ready PR was closed.
@@ -23,15 +31,30 @@ export const prStatusKey = (cwd: string, branch?: string | null) =>
 export const usePrStatusCache = () =>
   useSyncExternalStore(subscribe, snapshot, snapshot);
 
-async function load(cwd: string, branch?: string | null): Promise<void> {
-  const key = prStatusKey(cwd, branch);
+async function load(
+  cwd: string,
+  branch?: string | null,
+  prUrl?: string,
+): Promise<void> {
+  const key = prStatusKey(cwd, prUrl ?? branch);
   const pending = inFlight.get(key);
   if (pending) return pending;
-  const request = gitPrStatus(cwd)
+  const query = async () => {
+    if (prUrl) return gitPrStatusByUrl(cwd, prUrl);
+    try {
+      const prs = await gitPrList(cwd, branch ? [branch] : undefined);
+      for (const pr of prs) recordPullRequest(cwd, pr);
+      return relevantPullRequests(prs)[0] ?? null;
+    } catch {
+      return gitPrStatus(cwd);
+    }
+  };
+  const request = query()
     .then((pr) => {
       // Native lookup also returns null when GitHub is unavailable. Do not
       // resurrect a merged/closed PR as "unknown" after a transient failure.
       if (pr === null && cache.has(key)) return;
+      if (pr) recordPullRequest(cwd, pr);
       cache = new Map(cache).set(key, pr);
       for (const listener of listeners) listener();
     })
@@ -45,16 +68,20 @@ async function load(cwd: string, branch?: string | null): Promise<void> {
 
 /** Also refresh accepted worktrees currently folded out of the sidebar. */
 export function usePrStatuses(
-  targets: readonly { cwd: string; branch?: string | null }[],
+  targets: readonly { cwd: string; branch?: string | null; prUrl?: string }[],
 ) {
   const keys = JSON.stringify(
     targets
-      .filter((t) => t.cwd && t.cwd !== "~" && t.branch)
-      .map((t) => [t.cwd, t.branch]),
+      .filter((t) => t.cwd && t.cwd !== "~" && (t.branch || t.prUrl))
+      .map((t) => [t.cwd, t.branch, t.prUrl]),
   );
   const reload = useCallback(() => {
-    for (const [cwd, branch] of JSON.parse(keys) as [string, string][])
-      void load(cwd, branch);
+    for (const [cwd, branch, prUrl] of JSON.parse(keys) as [
+      string,
+      string | undefined,
+      string | undefined,
+    ][])
+      void load(cwd, branch, prUrl);
   }, [keys]);
   useEffect(() => {
     reload();
@@ -62,10 +89,12 @@ export function usePrStatuses(
       if (!document.hidden) reload();
     };
     const unsubscribe = subscribeGitChanged(resume);
+    const timer = window.setInterval(resume, 30_000);
     window.addEventListener("focus", resume);
     document.addEventListener("visibilitychange", resume);
     return () => {
       unsubscribe();
+      clearInterval(timer);
       window.removeEventListener("focus", resume);
       document.removeEventListener("visibilitychange", resume);
     };
@@ -77,10 +106,17 @@ export function usePrStatus(
   cwd: string,
   branch: string | null | undefined,
   enabled = true,
-): { pr: GitPr | null; reload: () => void } {
+): { pr: GitPr | null; prs: GitPr[]; reload: () => void } {
   const { statuses, reload } = usePrStatuses(enabled ? [{ cwd, branch }] : []);
+  const entries = usePullRequests();
+  const prs = enabled ? worktreePullRequests(cwd, entries) : [];
+  const cached = enabled
+    ? (statuses.get(prStatusKey(cwd, branch)) ?? null)
+    : null;
+  const all = relevantPullRequests([...(cached ? [cached] : []), ...prs]);
   return {
-    pr: enabled ? (statuses.get(prStatusKey(cwd, branch)) ?? null) : null,
+    pr: all[0] ?? null,
+    prs: all,
     reload,
   };
 }

@@ -235,7 +235,6 @@
 .team-map-identity > span {
   font-size: 10px;
   opacity: 0.5;
-  text-transform: capitalize;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

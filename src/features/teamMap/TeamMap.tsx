@@ -39,8 +39,11 @@ import {
 } from "./model";
 import { fitTeamMap, focusTeamMap, teamMapCompact } from "./camera";
 import "./teamMap.css";
+import { OrbitMap } from "./OrbitMap";
+import { EdgePulse } from "./EdgePulse";
+import { loadOrbitPreferences, saveOrbitPreferences } from "./orbit";
 
-type Props = {
+export type TeamMapProps = {
   sessions: readonly Session[];
   runs: readonly OrchestrationRun[];
   statuses: ReadonlyMap<string, GitPr | null>;
@@ -48,6 +51,7 @@ type Props = {
   onOpenMono: (id: string) => void;
   onClose: () => void;
 };
+type Props = TeamMapProps & { onToggleView?: () => void };
 type MapEvent = ReturnType<typeof teamMapEvents>[number];
 const labels = {
   working: "Working",
@@ -56,65 +60,14 @@ const labels = {
   idle: "Idle",
 };
 
-function EdgePulse({
-  path,
-  delay,
-  reducedMotion,
-  x,
-  y,
-}: {
-  path: string;
-  delay: number;
-  reducedMotion: boolean;
-  x: number;
-  y: number;
-}) {
-  const motion = useRef<SVGAnimateMotionElement>(null);
-  const visibility = useRef<SVGSetElement>(null);
-  useEffect(() => {
-    const frame = requestAnimationFrame(() => {
-      motion.current?.beginElementAt(delay);
-      visibility.current?.beginElementAt(delay);
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [path, delay, reducedMotion]);
-  return (
-    <circle
-      r="5"
-      cx={reducedMotion ? x : 0}
-      cy={reducedMotion ? y : 0}
-      opacity={reducedMotion ? 1 : 0}
-    >
-      {!reducedMotion && (
-        <animateMotion
-          ref={motion}
-          dur="1.5s"
-          begin="indefinite"
-          fill="freeze"
-          path={path}
-        />
-      )}
-      {!reducedMotion && (
-        <set
-          ref={visibility}
-          attributeName="opacity"
-          to="1"
-          begin="indefinite"
-          dur="1.5s"
-          fill="freeze"
-        />
-      )}
-    </circle>
-  );
-}
-
-export function TeamMap({
+export function TreeMap({
   sessions,
   runs,
   statuses,
   scope,
   onOpenMono,
   onClose,
+  onToggleView,
 }: Props) {
   const rosterSnapshot = useSyncExternalStore(subscribeMonos, monosSnapshot);
   const messageSnapshot = useSyncExternalStore(
@@ -338,6 +291,7 @@ export function TeamMap({
           </p>
         </div>
         <div className="team-map-filters">
+          {onToggleView && <button type="button" onClick={onToggleView}>Orbit</button>}
           <label>
             <span className="sr-only">Project</span>
             <select
@@ -584,7 +538,7 @@ export function TeamMap({
                       </span>
                       <span className="team-map-identity">
                         <strong title={look.name}>{look.name}</strong>
-                        <span>
+                        <span title={mono.specialty || mono.role || "Mono"}>
                           {mono.specialty ||
                             (mono.role === "member"
                               ? "Teammate"
@@ -616,9 +570,7 @@ export function TeamMap({
                             "Ready for the next task")}
                     </span>
                   </button>
-                  {mono.role === "manager" && (
-                    <button type="button" className="team-map-chat" title={`Open chat with ${look.name}`} aria-label={`Open chat with ${look.name}`} onClick={() => { onClose(); onOpenMono(mono.id); }}><MessageSquare className="size-3.5" /></button>
-                  )}
+                  <button type="button" className="team-map-chat" title={`Open chat with ${look.name}`} aria-label={`Open chat with ${look.name}`} onClick={() => { onClose(); onOpenMono(mono.id); }}><MessageSquare className="size-3.5" /></button>
                   {mono.role === "manager" && (
                     <button
                       type="button"
@@ -723,4 +675,16 @@ export function TeamMap({
       </footer>
     </section>
   );
+}
+
+export function TeamMap(props: TeamMapProps) {
+  const [view, setView] = useState(() => loadOrbitPreferences().view);
+  const toggle = () => {
+    const next = view === "orbit" ? "tree" : "orbit";
+    setView(next);
+    saveOrbitPreferences({ ...loadOrbitPreferences(), view: next });
+  };
+  return view === "tree"
+    ? <TreeMap {...props} onToggleView={toggle} />
+    : <OrbitMap {...props} onToggleView={toggle} />;
 }

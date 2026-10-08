@@ -35,6 +35,7 @@ const buttons = () => [...host.querySelectorAll<HTMLButtonElement>(".team-map-no
 const nodeButton = (name: string) => buttons().find(button => button.getAttribute("aria-label")?.startsWith(`${name},`))!;
 
 beforeEach(() => {
+  localStorage.setItem("monocode:team-map-orbit", JSON.stringify({ view: "tree" }));
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   reducedMotion = false;
   narrow = false;

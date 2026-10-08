@@ -1,0 +1,929 @@
+{
+  "identifier": "com.monocode.r18.orbit-evidence",
+  "previewFolder": "C:/Users/nooro/AppData/Local/Temp/monocode-r18-orbit-evidence",
+  "previewOutsideGit": true,
+  "syntheticAnimationEvents": true,
+  "actualUserRosterReadOnlyReplay": true,
+  "userSnapshot": {
+    "profile": "com.monocode.desktop.manager-review-verified",
+    "sequence": 548,
+    "promptsAndTranscriptsOmitted": true,
+    "sessionBusyStatusUnknown": true
+  },
+  "userOrgShape": {
+    "projects": 4,
+    "memberCounts": [
+      4,
+      3,
+      0,
+      0
+    ]
+  },
+  "nativeDesktop": false,
+  "realProviderTurns": false,
+  "sourceHashes": {
+    "OrbitMap.tsx": "810a4b0e41b2d449f3e09b7ce13340ab002c19f554e9a15b751cb32bca6861d7",
+    "orbit.ts": "9332baad4ec791c4dd77259748150c5c56a6669d1c7769467a0e11e246cfdd9a",
+    "orbit.css": "d9c2ed4f29ba20da13d76730abb093195690a01af66eb44cb764bd9aa0512bd7",
+    "TeamMap.tsx": "ad8da8b93cd5c9b8c7d11c48458ea60f32595a7afc93e1ffb7a4195c3e7d41aa",
+    "EdgePulse.tsx": "2ee03de5d9f07367715b2336ae3847cc2a99f0c22dd48e0060fc40c0ff6f1c95"
+  },
+  "checks": [
+    {
+      "scenario": "user-org-shape",
+      "theme": "dark",
+      "viewport": {
+        "width": 1200,
+        "height": 1050
+      },
+      "order": [
+        "manager-1",
+        "manager-3",
+        "manager-0",
+        "manager-2"
+      ],
+      "boxes": [
+        {
+          "id": "Open chat with Grand Orchestrator",
+          "x": 480,
+          "y": 430,
+          "width": 240,
+          "height": 128
+        },
+        {
+          "id": "manager-1",
+          "x": 490,
+          "y": 168,
+          "width": 220,
+          "height": 112,
+          "focused": "false"
+        },
+        {
+          "id": "manager-3",
+          "x": 760,
+          "y": 438,
+          "width": 220,
+          "height": 112,
+          "focused": "false"
+        },
+        {
+          "id": "manager-0",
+          "x": 483.4000244140625,
+          "y": 704.6400146484375,
+          "width": 233.199951171875,
+          "height": 118.719970703125,
+          "focused": "true"
+        },
+        {
+          "id": "manager-2",
+          "x": 220,
+          "y": 438,
+          "width": 220,
+          "height": 112,
+          "focused": "false"
+        }
+      ],
+      "overlaps": [],
+      "focusedRows": [
+        "Reviewer, needs-you. Open chat",
+        "Engineer, working. Open chat",
+        "QA, idle. Open chat",
+        "Researcher, idle. Open chat"
+      ],
+      "scrollWidth": 1200,
+      "bodyWidth": 1200
+    },
+    {
+      "scenario": "user-org-shape",
+      "theme": "light",
+      "viewport": {
+        "width": 1200,
+        "height": 1050
+      },
+      "order": [
+        "manager-1",
+        "manager-3",
+        "manager-0",
+        "manager-2"
+      ],
+      "boxes": [
+        {
+          "id": "Open chat with Grand Orchestrator",
+          "x": 480,
+          "y": 430,
+          "width": 240,
+          "height": 128
+        },
+        {
+          "id": "manager-1",
+          "x": 490,
+          "y": 168,
+          "width": 220,
+          "height": 112,
+          "focused": "false"
+        },
+        {
+          "id": "manager-3",
+          "x": 760,
+          "y": 438,
+          "width": 220,
+          "height": 112,
+          "focused": "false"
+        },
+        {
+          "id": "manager-0",
+          "x": 483.4000244140625,
+          "y": 704.6400146484375,
+          "width": 233.199951171875,
+          "height": 118.719970703125,
+          "focused": "true"
+        },
+        {
+          "id": "manager-2",
+          "x": 220,
+          "y": 438,
+          "width": 220,
+          "height": 112,
+          "focused": "false"
+        }
+      ],
+      "overlaps": [],
+      "focusedRows": [
+        "Reviewer, needs-you. Open chat",
+        "Engineer, working. Open chat",
+        "QA, idle. Open chat",
+        "Researcher, idle. Open chat"
+      ],
+      "scrollWidth": 1200,
+      "bodyWidth": 1200
+    },
+    {
+      "scenario": "rotate-to-front",
+      "before": {
+        "viewport": {
+          "width": 1200,
+          "height": 1050
+        },
+        "order": [
+          "manager-1",
+          "manager-3",
+          "manager-0",
+          "manager-2"
+        ],
+        "boxes": [
+          {
+            "id": "Open chat with Grand Orchestrator",
+            "x": 480,
+            "y": 430,
+            "width": 240,
+            "height": 128
+          },
+          {
+            "id": "manager-1",
+            "x": 490,
+            "y": 168,
+            "width": 220,
+            "height": 112,
+            "focused": "false"
+          },
+          {
+            "id": "manager-3",
+            "x": 760,
+            "y": 438,
+            "width": 220,
+            "height": 112,
+            "focused": "false"
+          },
+          {
+            "id": "manager-0",
+            "x": 483.4000244140625,
+            "y": 704.6400146484375,
+            "width": 233.199951171875,
+            "height": 118.719970703125,
+            "focused": "true"
+          },
+          {
+            "id": "manager-2",
+            "x": 220,
+            "y": 438,
+            "width": 220,
+            "height": 112,
+            "focused": "false"
+          }
+        ],
+        "overlaps": [],
+        "focusedRows": [
+          "Reviewer, needs-you. Open chat",
+          "Engineer, working. Open chat",
+          "QA, idle. Open chat",
+          "Researcher, idle. Open chat"
+        ],
+        "scrollWidth": 1200,
+        "bodyWidth": 1200
+      },
+      "after": {
+        "viewport": {
+          "width": 1200,
+          "height": 1050
+        },
+        "order": [
+          "manager-1",
+          "manager-3",
+          "manager-0",
+          "manager-2"
+        ],
+        "boxes": [
+          {
+            "id": "Open chat with Grand Orchestrator",
+            "x": 480,
+            "y": 430,
+            "width": 240,
+            "height": 128
+          },
+          {
+            "id": "manager-1",
+            "x": 483.4000244140625,
+            "y": 704.6400146484375,
+            "width": 233.199951171875,
+            "height": 118.719970703125,
+            "focused": "true"
+          },
+          {
+            "id": "manager-3",
+            "x": 220,
+            "y": 438,
+            "width": 220,
+            "height": 112,
+            "focused": "false"
+          },
+          {
+            "id": "manager-0",
+            "x": 490,
+            "y": 168,
+            "width": 220,
+            "height": 112,
+            "focused": "false"
+          },
+          {
+            "id": "manager-2",
+            "x": 760,
+            "y": 438,
+            "width": 220,
+            "height": 112,
+            "focused": "false"
+          }
+        ],
+        "overlaps": [],
+        "focusedRows": [
+          "Engineer, working. Open chat",
+          "QA, idle. Open chat",
+          "Reviewer, idle. Open chat"
+        ],
+        "scrollWidth": 1200,
+        "bodyWidth": 1200
+      }
+    },
+    {
+      "scenario": "resize-stable-order",
+      "viewport": {
+        "width": 800,
+        "height": 1050
+      },
+      "order": [
+        "manager-1",
+        "manager-3",
+        "manager-0",
+        "manager-2"
+      ],
+      "boxes": [
+        {
+          "id": "Open chat with Grand Orchestrator",
+          "x": 281.8461608886719,
+          "y": 425.843994140625,
+          "width": 236.30770874023438,
+          "height": 126.03076171875
+        },
+        {
+          "id": "manager-1",
+          "x": 285.19384765625,
+          "y": 696.2587890625,
+          "width": 229.6123046875,
+          "height": 116.8935546875,
+          "focused": "true"
+        },
+        {
+          "id": "manager-3",
+          "x": 25.846145629882812,
+          "y": 433.7209167480469,
+          "width": 216.61538696289062,
+          "height": 110.27688598632812,
+          "focused": "false"
+        },
+        {
+          "id": "manager-0",
+          "x": 291.69232177734375,
+          "y": 167.874755859375,
+          "width": 216.6153564453125,
+          "height": 110.27691650390625,
+          "focused": "false"
+        },
+        {
+          "id": "manager-2",
+          "x": 557.5384521484375,
+          "y": 433.7209167480469,
+          "width": 216.61541748046875,
+          "height": 110.27688598632812,
+          "focused": "false"
+        }
+      ],
+      "overlaps": [],
+      "focusedRows": [
+        "Engineer, working. Open chat",
+        "QA, idle. Open chat",
+        "Reviewer, idle. Open chat"
+      ],
+      "scrollWidth": 800,
+      "bodyWidth": 800
+    },
+    {
+      "scenario": "resize-wide",
+      "viewport": {
+        "width": 1600,
+        "height": 1000
+      },
+      "order": [
+        "manager-1",
+        "manager-3",
+        "manager-0",
+        "manager-2"
+      ],
+      "boxes": [
+        {
+          "id": "Open chat with Grand Orchestrator",
+          "x": 680,
+          "y": 430,
+          "width": 240,
+          "height": 128
+        },
+        {
+          "id": "manager-1",
+          "x": 683.4000244140625,
+          "y": 704.6400146484375,
+          "width": 233.199951171875,
+          "height": 118.719970703125,
+          "focused": "true"
+        },
+        {
+          "id": "manager-3",
+          "x": 420,
+          "y": 438,
+          "width": 220,
+          "height": 112,
+          "focused": "false"
+        },
+        {
+          "id": "manager-0",
+          "x": 690,
+          "y": 168,
+          "width": 220,
+          "height": 112,
+          "focused": "false"
+        },
+        {
+          "id": "manager-2",
+          "x": 960,
+          "y": 438,
+          "width": 220,
+          "height": 112,
+          "focused": "false"
+        }
+      ],
+      "overlaps": [],
+      "focusedRows": [
+        "Engineer, working. Open chat",
+        "QA, idle. Open chat",
+        "Reviewer, idle. Open chat"
+      ],
+      "scrollWidth": 1600,
+      "bodyWidth": 1600
+    },
+    {
+      "scenario": "needs-you",
+      "capsules": 4,
+      "dimmed": 3,
+      "members": 4
+    },
+    {
+      "scenario": "project-dim-filter",
+      "capsules": 4,
+      "dimmed": 3
+    },
+    {
+      "scenario": "synthetic-goal",
+      "motionPaths": [
+        "M 0 0 L 0 270"
+      ],
+      "pulseGroups": 1
+    },
+    {
+      "scenario": "synthetic-task",
+      "motionPaths": [
+        "M 400 -80 Q 16 -80 16 8 L 16 96"
+      ],
+      "pulseGroups": 1
+    },
+    {
+      "scenario": "synthetic-report",
+      "motionPaths": [
+        "M 0 270 L 0 0",
+        "M 16 96 L 16 8 Q 16 -80 400 -80"
+      ],
+      "pulseGroups": 2
+    },
+    {
+      "scenario": "reduced-motion",
+      "motionElements": 0,
+      "indicator": 2
+    },
+    {
+      "scenario": "persisted-idle-focus",
+      "viewport": {
+        "width": 1200,
+        "height": 1050
+      },
+      "order": [
+        "manager-1",
+        "manager-3",
+        "manager-0",
+        "manager-2"
+      ],
+      "boxes": [
+        {
+          "id": "Open chat with Grand Orchestrator",
+          "x": 480,
+          "y": 430,
+          "width": 240,
+          "height": 128
+        },
+        {
+          "id": "manager-1",
+          "x": 483.4000244140625,
+          "y": 704.6400146484375,
+          "width": 233.199951171875,
+          "height": 118.719970703125,
+          "focused": "true"
+        },
+        {
+          "id": "manager-3",
+          "x": 220,
+          "y": 438,
+          "width": 220,
+          "height": 112,
+          "focused": "false"
+        },
+        {
+          "id": "manager-0",
+          "x": 490,
+          "y": 168,
+          "width": 220,
+          "height": 112,
+          "focused": "false"
+        },
+        {
+          "id": "manager-2",
+          "x": 760,
+          "y": 438,
+          "width": 220,
+          "height": 112,
+          "focused": "false"
+        }
+      ],
+      "overlaps": [],
+      "focusedRows": [
+        "Engineer, idle. Open chat",
+        "QA, idle. Open chat",
+        "Reviewer, idle. Open chat"
+      ],
+      "scrollWidth": 1200,
+      "bodyWidth": 1200
+    },
+    {
+      "scenario": "scoped-manager-focus",
+      "viewport": {
+        "width": 1200,
+        "height": 1050
+      },
+      "order": [
+        "manager-1",
+        "manager-3",
+        "manager-0",
+        "manager-2"
+      ],
+      "boxes": [
+        {
+          "id": "Open chat with Grand Orchestrator",
+          "x": 480,
+          "y": 430,
+          "width": 240,
+          "height": 128
+        },
+        {
+          "id": "manager-1",
+          "x": 490,
+          "y": 168,
+          "width": 220,
+          "height": 112,
+          "focused": "false"
+        },
+        {
+          "id": "manager-3",
+          "x": 760,
+          "y": 438,
+          "width": 220,
+          "height": 112,
+          "focused": "false"
+        },
+        {
+          "id": "manager-0",
+          "x": 483.4000244140625,
+          "y": 704.6400146484375,
+          "width": 233.199951171875,
+          "height": 118.719970703125,
+          "focused": "true"
+        },
+        {
+          "id": "manager-2",
+          "x": 220,
+          "y": 438,
+          "width": 220,
+          "height": 112,
+          "focused": "false"
+        }
+      ],
+      "overlaps": [],
+      "focusedRows": [
+        "Reviewer, needs-you. Open chat",
+        "Engineer, working. Open chat",
+        "QA, idle. Open chat",
+        "Researcher, idle. Open chat"
+      ],
+      "scrollWidth": 1200,
+      "bodyWidth": 1200
+    },
+    {
+      "scenario": "keyboard-right",
+      "label": "Focus monocode team"
+    },
+    {
+      "scenario": "keyboard-down",
+      "label": "Focus monocode team"
+    },
+    {
+      "scenario": "keyboard-enter",
+      "closed": false
+    },
+    {
+      "scenario": "actual-user-org-snapshot",
+      "theme": "dark",
+      "viewport": {
+        "width": 1200,
+        "height": 1050
+      },
+      "order": [
+        "project-manager-370e89bca1e977f84b6b2837e619545e14fdae037539886e68c7270d092097b0",
+        "project-manager-c1a740dd58f3ffa5d77a09c1bae0089e2168ca473e0e9cbb0286d417ea404975",
+        "70564ac0-8de0-426b-95c0-1841d890a97a",
+        "project-manager-5ad184646997a9e10d35a5438a665f6dc6ccc390e287dd3ed5ac274400eb9210"
+      ],
+      "boxes": [
+        {
+          "id": "Open chat with GRAND ORCH",
+          "x": 480,
+          "y": 430,
+          "width": 240,
+          "height": 128
+        },
+        {
+          "id": "project-manager-370e89bca1e977f84b6b2837e619545e14fdae037539886e68c7270d092097b0",
+          "x": 220,
+          "y": 438,
+          "width": 220,
+          "height": 112,
+          "focused": "false"
+        },
+        {
+          "id": "project-manager-c1a740dd58f3ffa5d77a09c1bae0089e2168ca473e0e9cbb0286d417ea404975",
+          "x": 490,
+          "y": 168,
+          "width": 220,
+          "height": 112,
+          "focused": "false"
+        },
+        {
+          "id": "70564ac0-8de0-426b-95c0-1841d890a97a",
+          "x": 760,
+          "y": 438,
+          "width": 220,
+          "height": 112,
+          "focused": "false"
+        },
+        {
+          "id": "project-manager-5ad184646997a9e10d35a5438a665f6dc6ccc390e287dd3ed5ac274400eb9210",
+          "x": 483.4000244140625,
+          "y": 704.6400146484375,
+          "width": 233.199951171875,
+          "height": 118.719970703125,
+          "focused": "true"
+        }
+      ],
+      "overlaps": [],
+      "focusedRows": [],
+      "scrollWidth": 1200,
+      "bodyWidth": 1200
+    },
+    {
+      "scenario": "actual-user-org-snapshot",
+      "theme": "light",
+      "viewport": {
+        "width": 1200,
+        "height": 1050
+      },
+      "order": [
+        "project-manager-370e89bca1e977f84b6b2837e619545e14fdae037539886e68c7270d092097b0",
+        "project-manager-c1a740dd58f3ffa5d77a09c1bae0089e2168ca473e0e9cbb0286d417ea404975",
+        "70564ac0-8de0-426b-95c0-1841d890a97a",
+        "project-manager-5ad184646997a9e10d35a5438a665f6dc6ccc390e287dd3ed5ac274400eb9210"
+      ],
+      "boxes": [
+        {
+          "id": "Open chat with GRAND ORCH",
+          "x": 480,
+          "y": 430,
+          "width": 240,
+          "height": 128
+        },
+        {
+          "id": "project-manager-370e89bca1e977f84b6b2837e619545e14fdae037539886e68c7270d092097b0",
+          "x": 220,
+          "y": 438,
+          "width": 220,
+          "height": 112,
+          "focused": "false"
+        },
+        {
+          "id": "project-manager-c1a740dd58f3ffa5d77a09c1bae0089e2168ca473e0e9cbb0286d417ea404975",
+          "x": 490,
+          "y": 168,
+          "width": 220,
+          "height": 112,
+          "focused": "false"
+        },
+        {
+          "id": "70564ac0-8de0-426b-95c0-1841d890a97a",
+          "x": 760,
+          "y": 438,
+          "width": 220,
+          "height": 112,
+          "focused": "false"
+        },
+        {
+          "id": "project-manager-5ad184646997a9e10d35a5438a665f6dc6ccc390e287dd3ed5ac274400eb9210",
+          "x": 483.4000244140625,
+          "y": 704.6400146484375,
+          "width": 233.199951171875,
+          "height": 118.719970703125,
+          "focused": "true"
+        }
+      ],
+      "overlaps": [],
+      "focusedRows": [],
+      "scrollWidth": 1200,
+      "bodyWidth": 1200
+    },
+    {
+      "scenario": "actual-user-browser-team",
+      "viewport": {
+        "width": 1200,
+        "height": 1050
+      },
+      "order": [
+        "project-manager-370e89bca1e977f84b6b2837e619545e14fdae037539886e68c7270d092097b0",
+        "project-manager-c1a740dd58f3ffa5d77a09c1bae0089e2168ca473e0e9cbb0286d417ea404975",
+        "70564ac0-8de0-426b-95c0-1841d890a97a",
+        "project-manager-5ad184646997a9e10d35a5438a665f6dc6ccc390e287dd3ed5ac274400eb9210"
+      ],
+      "boxes": [
+        {
+          "id": "Open chat with GRAND ORCH",
+          "x": 480,
+          "y": 430,
+          "width": 240,
+          "height": 128
+        },
+        {
+          "id": "project-manager-370e89bca1e977f84b6b2837e619545e14fdae037539886e68c7270d092097b0",
+          "x": 760,
+          "y": 438,
+          "width": 220,
+          "height": 112,
+          "focused": "false"
+        },
+        {
+          "id": "project-manager-c1a740dd58f3ffa5d77a09c1bae0089e2168ca473e0e9cbb0286d417ea404975",
+          "x": 483.4000244140625,
+          "y": 704.6400146484375,
+          "width": 233.199951171875,
+          "height": 118.719970703125,
+          "focused": "true"
+        },
+        {
+          "id": "70564ac0-8de0-426b-95c0-1841d890a97a",
+          "x": 220,
+          "y": 438,
+          "width": 220,
+          "height": 112,
+          "focused": "false"
+        },
+        {
+          "id": "project-manager-5ad184646997a9e10d35a5438a665f6dc6ccc390e287dd3ed5ac274400eb9210",
+          "x": 490,
+          "y": 168,
+          "width": 220,
+          "height": 112,
+          "focused": "false"
+        }
+      ],
+      "overlaps": [],
+      "focusedRows": [
+        "GPUI UI, idle. Open chat",
+        "Native Core, idle. Open chat",
+        "Reviewer, idle. Open chat"
+      ],
+      "scrollWidth": 1200,
+      "bodyWidth": 1200
+    },
+    {
+      "scenario": "actual-user-dzdistro-team",
+      "viewport": {
+        "width": 1200,
+        "height": 1050
+      },
+      "order": [
+        "project-manager-370e89bca1e977f84b6b2837e619545e14fdae037539886e68c7270d092097b0",
+        "project-manager-c1a740dd58f3ffa5d77a09c1bae0089e2168ca473e0e9cbb0286d417ea404975",
+        "70564ac0-8de0-426b-95c0-1841d890a97a",
+        "project-manager-5ad184646997a9e10d35a5438a665f6dc6ccc390e287dd3ed5ac274400eb9210"
+      ],
+      "boxes": [
+        {
+          "id": "Open chat with GRAND ORCH",
+          "x": 480,
+          "y": 430,
+          "width": 240,
+          "height": 128
+        },
+        {
+          "id": "project-manager-370e89bca1e977f84b6b2837e619545e14fdae037539886e68c7270d092097b0",
+          "x": 490,
+          "y": 168,
+          "width": 220,
+          "height": 112,
+          "focused": "false"
+        },
+        {
+          "id": "project-manager-c1a740dd58f3ffa5d77a09c1bae0089e2168ca473e0e9cbb0286d417ea404975",
+          "x": 760,
+          "y": 438,
+          "width": 220,
+          "height": 112,
+          "focused": "false"
+        },
+        {
+          "id": "70564ac0-8de0-426b-95c0-1841d890a97a",
+          "x": 483.4000244140625,
+          "y": 704.6400146484375,
+          "width": 233.199951171875,
+          "height": 118.719970703125,
+          "focused": "true"
+        },
+        {
+          "id": "project-manager-5ad184646997a9e10d35a5438a665f6dc6ccc390e287dd3ed5ac274400eb9210",
+          "x": 220,
+          "y": 438,
+          "width": 220,
+          "height": 112,
+          "focused": "false"
+        }
+      ],
+      "overlaps": [],
+      "focusedRows": [
+        "ERP Engineer, idle. Open chat",
+        "Frontend Engineer, idle. Open chat",
+        "Marketing Strategist, idle. Open chat",
+        "Reviewer, idle. Open chat"
+      ],
+      "scrollWidth": 1200,
+      "bodyWidth": 1200
+    },
+    {
+      "scenario": "eight-projects-narrow",
+      "viewport": {
+        "width": 600,
+        "height": 1050
+      },
+      "order": [
+        "manager-5",
+        "manager-1",
+        "manager-3",
+        "manager-7",
+        "manager-0",
+        "manager-2",
+        "manager-4",
+        "manager-6"
+      ],
+      "boxes": [
+        {
+          "id": "Open chat with Grand Orchestrator",
+          "x": 229.9199981689453,
+          "y": 472.5458679199219,
+          "width": 140.16001892089844,
+          "height": 74.75198364257812
+        },
+        {
+          "id": "manager-5",
+          "x": 235.760009765625,
+          "y": 278.6578674316406,
+          "width": 128.47998046875,
+          "height": 65.40798950195312,
+          "focused": "false"
+        },
+        {
+          "id": "manager-1",
+          "x": 376.1631164550781,
+          "y": 336.81475830078125,
+          "width": 128.48001098632812,
+          "height": 65.40798950195312,
+          "focused": "false"
+        },
+        {
+          "id": "manager-3",
+          "x": 434.32000732421875,
+          "y": 477.2178955078125,
+          "width": 128.47998046875,
+          "height": 65.407958984375,
+          "focused": "false"
+        },
+        {
+          "id": "manager-7",
+          "x": 376.1631164550781,
+          "y": 617.6209716796875,
+          "width": 128.48001098632812,
+          "height": 65.40802001953125,
+          "focused": "false"
+        },
+        {
+          "id": "manager-0",
+          "x": 231.90560913085938,
+          "y": 673.815673828125,
+          "width": 136.18878173828125,
+          "height": 69.3323974609375,
+          "focused": "true"
+        },
+        {
+          "id": "manager-2",
+          "x": 95.35688018798828,
+          "y": 617.6209716796875,
+          "width": 128.48001098632812,
+          "height": 65.40802001953125,
+          "focused": "false"
+        },
+        {
+          "id": "manager-4",
+          "x": 37.20000457763672,
+          "y": 477.2178955078125,
+          "width": 128.47998046875,
+          "height": 65.407958984375,
+          "focused": "false"
+        },
+        {
+          "id": "manager-6",
+          "x": 95.35688018798828,
+          "y": 336.81475830078125,
+          "width": 128.48001098632812,
+          "height": 65.40798950195312,
+          "focused": "false"
+        }
+      ],
+      "overlaps": [],
+      "focusedRows": [
+        "Reviewer, needs-you. Open chat",
+        "Engineer, working. Open chat",
+        "QA, idle. Open chat",
+        "Researcher, idle. Open chat"
+      ],
+      "scrollWidth": 600,
+      "bodyWidth": 600
+    }
+  ],
+  "errors": []
+}

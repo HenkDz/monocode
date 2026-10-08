@@ -240,16 +240,7 @@ export function MonoDetails({
             />}
             </div>
           ) : findMono(monoId)?.role === "member" ? (
-            <>
-            <MemberDetails member={findMono(monoId)!} fallback={{ harness, model, modelSettings }} onBack={onClose} onProfileChange={profile => { onModelChange(profile.harness, profile.model); onModelSettingsChange(profile.modelSettings ?? {}); }} />
-              {runtimeMode && onRuntimeModeChange && (
-                <dl className="border-t border-stroke px-4 py-3">
-                  <Property label="Permissions">
-                    <AccessPicker value={runtimeMode} onChange={onRuntimeModeChange} side="bottom" variant="plain" />
-                  </Property>
-                </dl>
-              )}
-            </>
+            <MemberDetails member={findMono(monoId)!} fallback={{ harness, model, modelSettings }} onBack={onClose} runtimeMode={runtimeMode} onRuntimeModeChange={onRuntimeModeChange} onProfileChange={profile => { onModelChange(profile.harness, profile.model); onModelSettingsChange(profile.modelSettings ?? {}); }} />
           ) : (
             <MonoSettingsPage
               monoId={monoId}

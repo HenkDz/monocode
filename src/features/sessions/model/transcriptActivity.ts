@@ -1,3 +1,4 @@
+import { isUserMessage } from "./teamMessage";
 import {
   composeToolTitle,
   isAgentTool,
@@ -535,7 +536,7 @@ export function groupMonoTurnItems(
   let interactive = false;
   for (const block of blocks) {
     if (
-      block.role === "user" &&
+      isUserMessage(block) &&
       block.sentAt != null &&
       block.startedAt == null &&
       !block.internal &&
@@ -547,8 +548,8 @@ export function groupMonoTurnItems(
   }
   // Keep the user's messages together above the work, without mutating history.
   const items = groupTurnItems([
-    ...blocks.filter((block) => block.role === "user"),
-    ...blocks.filter((block) => block.role !== "user"),
+    ...blocks.filter(isUserMessage),
+    ...blocks.filter((block) => !isUserMessage(block)),
   ]);
   const start = items.findIndex(
     (item) => item.type !== "block" || item.block.role !== "user",

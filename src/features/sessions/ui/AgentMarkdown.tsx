@@ -39,6 +39,8 @@ import {
 import type { EditorNavigation, OpenFileFn } from "../../search/model/search";
 import { remarkWorkspaceFileLinks } from "../../files/model/markdownFileLinks";
 import { isAtxHeadingLine } from "../../files/model/markdownSource";
+import { ARTIFACT_LINK_PREFIX, remarkArtifactLinks } from "../../artifacts/markdownArtifactLinks";
+import { ArtifactReference } from "../../artifacts/ui/ArtifactReference";
 import { useColorScheme } from "../../../shared/hooks/useColorScheme";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
 import { copyText } from "../../../platform/tauri/clipboard";
@@ -238,6 +240,7 @@ function MarkdownLink({
   const { cwd, onOpenFile, onFileContextMenu } = useContext(FileOpenContext);
   const file = href ? resolveWorkspaceFileReference(href, cwd) : undefined;
   const label = textContent(children);
+  if (href?.startsWith(ARTIFACT_LINK_PREFIX)) return <ArtifactReference id={href.slice(ARTIFACT_LINK_PREFIX.length)} />;
   if (allowRemoteMedia && href && isInboxMediaUrl(href)) {
     return <InboxMedia src={href} alt={label} />;
   }
@@ -540,6 +543,7 @@ export const AgentMarkdown = memo(function AgentMarkdown({
   const remarkPlugins = useMemo<PluggableList>(
     () => [
       ...Object.values(defaultRemarkPlugins),
+      remarkArtifactLinks,
       [remarkWorkspaceFileLinks, { cwd }],
     ],
     [cwd],

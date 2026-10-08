@@ -116,7 +116,7 @@ export function FloatingMonoChat({ onShown }: { onShown: () => void }) {
     [view.monoId],
   );
   const state = view.session
-    ? monoState(view.session)
+    ? view.session.monoLiveState ?? monoState(view.session)
     : { status: "idle" as const };
 
   if (!mono || !view.session) {

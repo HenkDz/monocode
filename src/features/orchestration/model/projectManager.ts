@@ -33,7 +33,7 @@ export function managerTaskFinished(
     task.accepted &&
     task.lastDispatchId &&
     task.acceptedDispatchId === task.lastDispatchId &&
-    (task.completionOutcome === "no-changes" || (task.prUrl &&
+    (task.completionOutcome?.startsWith("no-changes") || (task.prUrl &&
     pr?.url === task.prUrl &&
     (pr.state === "merged" || pr.state === "closed")))
   );
@@ -52,7 +52,21 @@ export function managerQueueRank(
 export function managerTaskOutcome(task: OrchestrationTask, pr?: GitPr | null) {
   if (task.status === "cancelled") return "Cancelled";
   if (managerTaskFinished(task, pr))
-    return task.completionOutcome === "no-changes" ? "Completed (no changes)" : pr?.state === "merged" ? "Merged" : "Closed (not merged)";
+    return task.completionOutcome === "no-changes-baseline-unknown" ? "Completed (no changes, baseline unknown)" : task.completionOutcome === "no-changes" ? "Completed (no changes)" : pr?.state === "merged" ? "Merged" : "Closed (not merged)";
+}
+
+/** Worker completion waits for review; acceptance belongs to the current dispatch. */
+export function managerTaskLifecycle(task: OrchestrationTask, pr?: GitPr | null, needsInput = false): [string, "running" | "review" | "changes" | "ready" | "merged" | "failed" | "muted"] {
+  const outcome = managerTaskOutcome(task, pr);
+  if (outcome) return [outcome, outcome === "Cancelled" || outcome === "Closed (not merged)" ? "muted" : "merged"];
+  if (needsInput) return ["Needs you", "review"];
+  if (task.status === "running") return ["Running", "running"];
+  if (task.status === "failed" || task.status === "blocked") return [task.status === "failed" ? "Failed" : "Blocked", "failed"];
+  if (managerPrReady(task, pr)) return ["PR ready", "ready"];
+  const verdict = task.status === "completed" && task.reviewVerdict?.dispatchId === (task.activeDispatchId ?? task.lastDispatchId) ? task.reviewVerdict : undefined;
+  if (verdict?.decision === "changes") return ["Changes requested", "changes"];
+  if (task.status === "completed") return (task.accepted && !!task.lastDispatchId && task.acceptedDispatchId === task.lastDispatchId) || verdict?.decision === "approve" ? ["Approved", "ready"] : ["In review", "review"];
+  return [task.status === "cancelling" ? "Cancelling" : task.status === "interrupted" ? "Interrupted" : "Queued", "muted"];
 }
 
 export function managerPrReady(
@@ -168,19 +182,9 @@ export function managerWorktreeStatus(
         orchestrationPathKey(task.workspace.checkoutCwd) ===
           orchestrationPathKey(checkout),
     );
-  if (
-    tasks.some(
-      (task) =>
-        needsInput?.has(task.sessionId) ||
-        ["blocked", "failed", "interrupted"].includes(task.status),
-    )
-  )
-    return "Blocked";
-  if (tasks.some((task) => ["running", "cancelling"].includes(task.status)))
-    return "Running";
-  if (tasks.some((task) => managerPrReady(task, taskPrStatus(task, statuses))))
-    return "PR ready";
-  if (tasks.some((task) => task.status === "completed" && !task.accepted))
-    return "In review";
-  if (tasks.some((task) => task.status === "queued")) return "Queued";
+  const current = tasks.find(task => needsInput?.has(task.sessionId)) ??
+    tasks.find(task => ["blocked", "failed", "interrupted"].includes(task.status)) ??
+    tasks.find(task => ["running", "cancelling"].includes(task.status)) ??
+    tasks.find(task => !managerTaskFinished(task, taskPrStatus(task, statuses)) && task.status !== "cancelled");
+  if (current) return managerTaskLifecycle(current, taskPrStatus(current, statuses), needsInput?.has(current.sessionId))[0];
 }

@@ -175,7 +175,7 @@ export function MonoRailSection({
               <button
                 type="button"
                 title={[look.name, projects, status].filter(Boolean).join("\n")}
-                aria-label={[look.name, status ?? "idle", projects].join(", ")}
+                aria-label={[look.name, MONO_STATUS_LABEL[state.status]].join(", ")}
                 aria-current={selected ? "true" : undefined}
                 className="flex min-w-0 flex-1 cursor-default items-center gap-2 text-left transition-[padding] duration-150 motion-reduce:transition-none group-hover:pr-6 group-has-[:focus-visible]:pr-6"
               >

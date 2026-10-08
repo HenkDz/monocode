@@ -1,6 +1,6 @@
-import { findMono, monoForSession, type MonoStatus, type MonoState } from "./mono";
+import { findMono, monoForSession, monoState, type Mono, type MonoStatus, type MonoState } from "./mono";
 import type { Session } from "../../sessions/model/session";
-import { activityTaskEvent } from "./monoTeamActivity";
+import { activityTaskEvent, orgDescendants, teamDecisions } from "./monoTeamActivity";
 import type { OrchestrationRun } from "../../orchestration/model/orchestrationState";
 
 export const memberDetailsView = (id: string) => `mono-member:${id}`;
@@ -47,11 +47,28 @@ export function memberAvailability(
 
 export function memberMonoState(runs: readonly OrchestrationRun[], memberId: string, sessions: readonly Session[], memberSessionId?: string): MonoState {
   const tasks = memberTasks(runs, memberId);
-  const attention = new Set(sessions.filter(s => s.pendingQuestion || s.blocks.some(b => b.approval && !b.approval.decided)).map(s => s.id));
-  const busy = new Set(sessions.filter(s => s.busy).map(s => s.id));
+  const attention = new Set(sessions.filter(s => monoState(s).status === "needs-you").map(s => s.id));
+  const busy = new Set(sessions.filter(s => monoState(s).status === "working").map(s => s.id));
   const status = memberAvailability(tasks, attention, busy, memberSessionId);
   const task = tasks.find(t => ["queued", "running", "cancelling"].includes(t.status)) ?? tasks[0];
   return { status, ...(status !== "idle" && task ? { activity: activityTaskEvent(task, sessions.find(s => s.id === task.sessionId)) } : {}) };
+}
+
+/** All Mono surfaces roll up the same current sessions and worker tasks. */
+export function monoLiveState(roster: readonly Mono[], runs: readonly OrchestrationRun[], sessions: readonly Session[], monoId: string): MonoState {
+  const mono = roster.find(entry => entry.id === monoId);
+  if (!mono) return { status: "idle" };
+  const scope = orgDescendants(roster, monoId);
+  const ownSession = sessions.find(session => session.id === mono.sessionId);
+  const own = ownSession ? monoState(ownSession) : { status: "idle" as const };
+  const states = roster.filter(entry => scope.has(entry.id) && !entry.archivedAt).map(entry => {
+    const session = sessions.find(value => value.id === entry.sessionId);
+    return entry.role === "member" ? memberMonoState(runs, entry.id, sessions, entry.sessionId) : session ? monoState(session) : { status: "idle" as const };
+  });
+  const decisions = teamDecisions(roster, sessions, runs, monoId);
+  const status = decisions.length || states.some(state => state.status === "needs-you") ? "needs-you" : states.some(state => state.status === "working") ? "working" : "idle";
+  if (status === "idle" || status === own.status) return { ...own, status };
+  return { status, activity: decisions.length ? `${decisions.length} pending decision${decisions.length === 1 ? "" : "s"}` : states.find(state => state.status === status)?.activity };
 }
 
 /** Exactly one org row owns a visible chat/worker/details view. */

@@ -55,6 +55,10 @@ it("shows and edits the agent's permission mode in Details", async () => {
 });
 
 it("keeps member settings inside Details and org tools collapsed below the team view", async () => {
+  setHarnessModels("codex", [{ id: "codex:gpt-5.4", harness: "codex", name: "GPT-5.4", settings: [
+    { id: "reasoningEffort", label: "Reasoning", kind: "select", value: "high", options: [{ value: "high", label: "High" }] },
+    { id: "serviceTier", label: "Service Tier", kind: "select", value: "default", options: [{ value: "default", label: "Standard" }] },
+  ] }]);
   localStorage.setItem("monocode:mono-roster", JSON.stringify([
     { id: "m", role: "manager", projects: ["/repo"], mascot: "cat", color: "#6ba" },
     { id: "member", role: "member", reportsTo: "m", specialty: "Backend", projects: ["/repo"], mascot: "cat", color: "#6ba" },
@@ -66,7 +70,11 @@ it("keeps member settings inside Details and org tools collapsed below the team 
     expect(container.textContent).toContain("Recent tasks");
     const permissions = container.querySelector('[data-access-picker-trigger]')!;
     const memberSettings = container.querySelector('[data-mono-settings]')!;
-    expect(memberSettings.compareDocumentPosition(permissions) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(memberSettings.contains(permissions)).toBe(true);
+    expect([...permissions.closest("dl")!.querySelectorAll("dt")].map(row => row.textContent)).toEqual(["Model", "Reasoning", "Service Tier", "Permissions", "Specialty"]);
+    const specialty = container.querySelector<HTMLInputElement>('[aria-label="Member specialty"]')!;
+    expect(specialty.title).toBe("Backend");
+    expect(specialty.classList.contains("truncate")).toBe(true);
     await act(async () => root.render(createElement(MonoDetails, { ...props, monoId: "m", tab: "activity", teamActivity: createElement("div", null, "Live team"), activity: { blocks: [], live: false } })));
     expect(container.textContent).toContain("Live team");
     expect(container.querySelector("details")?.open).toBe(false);

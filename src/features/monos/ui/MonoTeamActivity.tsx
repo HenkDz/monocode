@@ -1,6 +1,7 @@
 import { useContext, useEffect, useState, useSyncExternalStore } from "react";
 import { formatLiveElapsed } from "../../sessions/model/liveAgents";
-import { listMonos, monoLook } from "../model/mono";
+import { listMonos, monoLook, monoState } from "../model/mono";
+import { ArtifactText } from "../../artifacts/ui/ArtifactReference";
 import {
   activityTaskEvent,
   activityTaskTitle,
@@ -25,6 +26,7 @@ import { PixelMascot } from "../../projects/ui/PixelMascot";
 import { pathKey, projectName } from "../../../shared/lib/paths";
 import { loadTabGroupLabels, resolveTabGroupLabel } from "../../workspace/model/tabGroups";
 import { MonoOrgActivity } from "./MonoOrgActivity";
+import { managerTaskLifecycle, taskPrStatus } from "../../orchestration/model/projectManager";
 
 type Props = {
   monoId: string;
@@ -205,17 +207,9 @@ export function MonoTeamActivity({
             <span className="truncate">{look.name}</span>
           </span>
           <span
-            className={`rounded px-1.5 py-0.5 ${ready || task.completionOutcome === "no-changes" && section === "Recently finished" ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" : section === "Needs you" || task.status === "blocked" ? "bg-amber-500/10 text-amber-600" : "bg-content/5 text-content/60"}`}
+            className={`rounded px-1.5 py-0.5 ${ready || task.completionOutcome?.startsWith("no-changes") && section === "Recently finished" ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" : section === "Needs you" || task.status === "blocked" ? "bg-amber-500/10 text-amber-600" : "bg-content/5 text-content/60"}`}
           >
-            {ready
-              ? "PR ready"
-                : section === "Needs you"
-                ? "Needs you"
-                : task.completionOutcome === "no-changes" && section === "Recently finished"
-                  ? "Completed (no changes)"
-                : task.status === "completed" && !task.accepted
-                  ? "In review"
-                  : task.status}
+            {managerTaskLifecycle(task, taskPrStatus(task, statuses), !!session && monoState(session).status === "needs-you")[0]}
           </span>
           {task.reviewedBy && (
             <span className="text-emerald-600 dark:text-emerald-400">
@@ -235,7 +229,7 @@ export function MonoTeamActivity({
           )}
         </div>
         <p data-task-event className="mt-1 truncate text-content/50">
-          {activityTaskEvent(task, session)}
+          <ArtifactText text={activityTaskEvent(task, session)} monoId={task.memberId ?? run.ownerMonoId} />
         </p>
         <TaskPrompt prompt={task.prompt ?? ""} />
         {entry.decisions.map(decision)}
@@ -322,6 +316,7 @@ export function MonoTeamActivity({
         const pending = standalone.filter(
           (item) => pathKey(item.project) === projectKey,
         );
+        if (!projectTasks.length && !waiting.length && !pending.length) return null;
         const grouped = new Map<string, TeamActivityTask[]>();
         for (const entry of projectTasks) {
           const key = entry.task.monoGoalId ?? "";
@@ -389,10 +384,9 @@ export function MonoTeamActivity({
                         </span>
                         <button
                           className="ml-2 rounded text-content/50 hover:underline focus-visible:outline-accent"
-                          disabled={!manager?.sessionId}
+                          disabled={!manager}
                           onClick={() =>
-                            manager?.sessionId &&
-                            openCardSession(manager.sessionId)
+                            manager && window.dispatchEvent(new CustomEvent("monocode:open-team", { detail: { monoId: manager.id } }))
                           }
                         >
                           {manager ? monoLook(manager).name : "Manager"} ·

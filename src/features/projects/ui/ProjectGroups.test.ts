@@ -56,6 +56,46 @@ async function renderRail(visible = true) {
   );
 }
 
+it("retains expanded projects after Settings and a fresh rail mount", async () => {
+  const props = {
+    cwd: "/work/personal",
+    recents: [{ path: "/work/client", openedAt: 1 }, { path: "/work/personal", openedAt: 2 }],
+    onSelectProject: vi.fn(), onOpenProject: vi.fn(),
+    renderProjectWorktrees: (path: string) => createElement("span", null, `${path} worktrees`),
+  };
+  await act(async () => root.render(createElement(ProjectRail, props)));
+  act(() => button("Expand worktrees in client").click());
+  act(() => button("Collapse worktrees in personal").click());
+  await act(async () => root.render(createElement(ProjectRail, { ...props, settingsOpen: true })));
+  await act(async () => root.render(createElement(ProjectRail, props)));
+  expect(button("Collapse worktrees in client").getAttribute("aria-expanded")).toBe("true");
+  expect(button("Expand worktrees in personal").getAttribute("aria-expanded")).toBe("false");
+  act(() => root.unmount());
+  root = createRoot(container);
+  await act(async () => root.render(createElement(ProjectRail, props)));
+  expect(button("Collapse worktrees in client").getAttribute("aria-expanded")).toBe("true");
+  expect(button("Expand worktrees in personal").getAttribute("aria-expanded")).toBe("false");
+});
+
+it("persists default expansion when Settings returns to a different selected project", async () => {
+  const props = {
+    cwd: "/work/personal",
+    recents: [{ path: "/work/client", openedAt: 1 }, { path: "/work/personal", openedAt: 2 }],
+    onSelectProject: vi.fn(), onOpenProject: vi.fn(),
+    renderProjectWorktrees: () => createElement("span", null, "Worktrees"),
+  };
+  await act(async () => root.render(createElement(ProjectRail, props)));
+  expect(button("Collapse worktrees in personal").getAttribute("aria-expanded")).toBe("true");
+  await act(async () => root.render(createElement(ProjectRail, { ...props, cwd: "/work/client", settingsOpen: true })));
+  const returned = { ...props, cwd: "/work/client" };
+  await act(async () => root.render(createElement(ProjectRail, returned)));
+  expect(button("Collapse worktrees in personal").getAttribute("aria-expanded")).toBe("true");
+  act(() => root.unmount());
+  root = createRoot(container);
+  await act(async () => root.render(createElement(ProjectRail, returned)));
+  expect(button("Collapse worktrees in personal").getAttribute("aria-expanded")).toBe("true");
+});
+
 it("suspends project Git stats while the rail is hidden", async () => {
   await renderRail();
   expect(vi.mocked(useProjectDiffStats).mock.calls.some(([, enabled]) => enabled)).toBe(true);

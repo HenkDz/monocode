@@ -56,46 +56,189 @@ pub struct TaskSnapshot {
     clean: bool,
     commits_ahead: u64,
     base_diff: bool,
+    path_hashes: std::collections::BTreeMap<String, String>,
+    inherited_changed_paths: Vec<String>,
+    head_changed_paths: Vec<String>,
 }
 
 fn task_snapshot(root: &Path, base: Option<&str>) -> Result<TaskSnapshot, String> {
     let root = PathBuf::from(git(root, &["rev-parse", "--show-toplevel"])?.trim());
-    let head = git(&root, &["rev-parse", "--verify", "HEAD"])?.trim().to_string();
-    let status = git(&root, &["status", "--porcelain=v1", "-z", "--untracked-files=all"])?;
+    let head = git(&root, &["rev-parse", "--verify", "HEAD"])?
+        .trim()
+        .to_string();
+    let status = git(
+        &root,
+        &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+    )?;
+    let mut inherited_changed_paths = Vec::new();
+    let mut entries = status.split('\0').filter(|entry| !entry.is_empty());
+    while let Some(entry) = entries.next() {
+        inherited_changed_paths.push(entry[3..].to_string());
+        if entry[..2].contains('R') || entry[..2].contains('C') {
+            if let Some(original) = entries.next() {
+                inherited_changed_paths.push(original.to_string());
+            }
+        }
+    }
+    inherited_changed_paths.sort();
+    inherited_changed_paths.dedup();
+    let mut index = std::collections::BTreeMap::<String, String>::new();
+    for entry in git(&root, &["ls-files", "--stage", "-z"])?
+        .split('\0')
+        .filter(|entry| !entry.is_empty())
+    {
+        if let Some((state, name)) = entry.split_once('\t') {
+            index.entry(name.into()).or_default().push_str(state);
+        }
+    }
+    let mut path_hashes = std::collections::BTreeMap::new();
+    for name in &inherited_changed_paths {
+        let path = root.join(name);
+        let mut hash = Sha256::new();
+        hash.update(index.get(name).map(String::as_bytes).unwrap_or_default());
+        if let Some(mode) = file_mode(&path) {
+            hash.update(mode.to_le_bytes());
+        }
+        match std::fs::symlink_metadata(&path) {
+            Ok(info) if info.file_type().is_symlink() => {
+                hash.update(b"link");
+                hash.update(
+                    std::fs::read_link(&path)
+                        .map_err(|e| e.to_string())?
+                        .to_string_lossy()
+                        .as_bytes(),
+                );
+            }
+            Ok(info) if info.is_dir() => {
+                if index
+                    .get(name)
+                    .is_some_and(|state| state.starts_with("160000 "))
+                    && same_path(
+                        &path,
+                        Path::new(git(&path, &["rev-parse", "--show-toplevel"])?.trim()),
+                    )
+                {
+                    let child = task_snapshot(&path, None)?;
+                    hash.update(child.fingerprint.as_bytes());
+                    hash.update(
+                        serde_json::to_vec(&child.path_hashes)
+                            .map_err(|error| error.to_string())?,
+                    );
+                }
+                hash.update(
+                    git(
+                        &root,
+                        &[
+                            "diff",
+                            "HEAD",
+                            "--binary",
+                            "--no-ext-diff",
+                            "--no-textconv",
+                            "--",
+                            &name,
+                        ],
+                    )?
+                    .as_bytes(),
+                );
+            }
+            Ok(_) => {
+                hash.update(b"file");
+                hash.update(std::fs::read(&path).map_err(|e| e.to_string())?);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                hash.update(b"missing");
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+        path_hashes.insert(name.clone(), format!("{:x}", hash.finalize()));
+    }
     let mut fingerprint = Sha256::new();
     for part in [
-        head.clone(), status.clone(),
-        git(&root, &["diff", "--no-ext-diff", "--no-textconv", "--binary"] )?,
-        git(&root, &["diff", "--cached", "--no-ext-diff", "--no-textconv", "--binary"] )?,
+        head.clone(),
+        status.clone(),
+        git(
+            &root,
+            &["diff", "--no-ext-diff", "--no-textconv", "--binary"],
+        )?,
+        git(
+            &root,
+            &[
+                "diff",
+                "--cached",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--binary",
+            ],
+        )?,
     ] {
         fingerprint.update((part.len() as u64).to_le_bytes());
         fingerprint.update(part.as_bytes());
     }
     for relative in git(&root, &["ls-files", "--others", "--exclude-standard", "-z"])?
-        .split('\0').filter(|path| !path.is_empty()) {
+        .split('\0')
+        .filter(|path| !path.is_empty())
+    {
         let path = root.join(relative);
         let metadata = std::fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
         let bytes = if metadata.file_type().is_symlink() {
-            std::fs::read_link(&path).map_err(|e| e.to_string())?.to_string_lossy().as_bytes().to_vec()
-        } else { std::fs::read(&path).map_err(|e| e.to_string())? };
+            std::fs::read_link(&path)
+                .map_err(|e| e.to_string())?
+                .to_string_lossy()
+                .as_bytes()
+                .to_vec()
+        } else {
+            std::fs::read(&path).map_err(|e| e.to_string())?
+        };
         fingerprint.update((relative.len() as u64).to_le_bytes());
         fingerprint.update(relative.as_bytes());
         fingerprint.update((bytes.len() as u64).to_le_bytes());
         fingerprint.update(bytes);
     }
-    let (commits_ahead, base_diff) = if let Some(base) = base {
+    let (commits_ahead, head_changed_paths) = if let Some(base) = base {
         if base.is_empty() || base.starts_with('-') || base.chars().any(char::is_control) {
             return Err("Invalid assignment base".into());
         }
-        let base = git(&root, &["rev-parse", "--verify", &format!("{base}^{{commit}}")])?.trim().to_string();
+        let base = git(
+            &root,
+            &["rev-parse", "--verify", &format!("{base}^{{commit}}")],
+        )?
+        .trim()
+        .to_string();
         let ahead = git(&root, &["rev-list", "--count", &format!("{base}..HEAD")])?
-            .trim().parse().map_err(|_| "Invalid commit count")?;
-        let changed = !git(&root, &["diff", "--no-ext-diff", "--no-textconv", "--name-only", &base, "HEAD", "--"])?.is_empty();
+            .trim()
+            .parse()
+            .map_err(|_| "Invalid commit count")?;
+        let changed = git(
+            &root,
+            &[
+                "diff",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-renames",
+                "--name-only",
+                "-z",
+                &base,
+                "HEAD",
+                "--",
+            ],
+        )?
+        .split('\0')
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
         (ahead, changed)
-    } else { (0, false) };
+    } else {
+        (0, Vec::new())
+    };
     Ok(TaskSnapshot {
-        head, fingerprint: format!("{:x}", fingerprint.finalize()),
-        clean: status.is_empty(), commits_ahead, base_diff,
+        head,
+        fingerprint: format!("{:x}", fingerprint.finalize()),
+        clean: status.is_empty(),
+        commits_ahead,
+        base_diff: !head_changed_paths.is_empty(),
+        path_hashes,
+        inherited_changed_paths,
+        head_changed_paths,
     })
 }
 
@@ -990,8 +1133,24 @@ mod tests {
         let changed = task_snapshot(&root, Some(&initial.head)).unwrap();
         assert_ne!(dirty.fingerprint, changed.fingerprint);
         std::fs::remove_file(root.join("notes.txt")).unwrap();
-        assert_eq!(initial.fingerprint, task_snapshot(&root, None).unwrap().fingerprint);
-        git(&root, &["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "empty worker commit"]).unwrap();
+        assert_eq!(
+            initial.fingerprint,
+            task_snapshot(&root, None).unwrap().fingerprint
+        );
+        git(
+            &root,
+            &[
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "empty worker commit",
+            ],
+        )
+        .unwrap();
         let committed = task_snapshot(&root, Some(&initial.head)).unwrap();
         assert!(committed.clean && !committed.base_diff);
         assert_eq!(committed.commits_ahead, 1);
@@ -1005,14 +1164,146 @@ mod tests {
         let root = fixture.0.join("repo");
         std::fs::write(root.join("file.txt"), "initial").unwrap();
         git(&root, &["add", "file.txt"]).unwrap();
-        git(&root, &["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "file"]).unwrap();
+        git(
+            &root,
+            &[
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-m",
+                "file",
+            ],
+        )
+        .unwrap();
         std::fs::write(root.join("file.txt"), "first").unwrap();
         let first = task_snapshot(&root, None).unwrap();
+        assert_eq!(first.inherited_changed_paths, ["file.txt"]);
+        assert_eq!(
+            first.path_hashes,
+            task_snapshot(&root, None).unwrap().path_hashes
+        );
         std::fs::write(root.join("file.txt"), "second").unwrap();
         let second = task_snapshot(&root, None).unwrap();
         assert_ne!(first.fingerprint, second.fingerprint);
+        assert_ne!(
+            first.path_hashes["file.txt"],
+            second.path_hashes["file.txt"]
+        );
         git(&root, &["add", "file.txt"]).unwrap();
-        assert_ne!(second.fingerprint, task_snapshot(&root, None).unwrap().fingerprint);
+        let staged = task_snapshot(&root, None).unwrap();
+        assert_ne!(second.fingerprint, staged.fingerprint);
+        assert_ne!(
+            second.path_hashes["file.txt"],
+            staged.path_hashes["file.txt"]
+        );
+        std::fs::remove_file(root.join("file.txt")).unwrap();
+        assert_ne!(
+            staged.path_hashes["file.txt"],
+            task_snapshot(&root, None).unwrap().path_hashes["file.txt"]
+        );
+    }
+
+    #[test]
+    fn task_snapshot_tracks_restored_renamed_and_committed_paths() {
+        let fixture = repo();
+        let root = fixture.0.join("repo");
+        std::fs::write(root.join("old.txt"), "initial").unwrap();
+        git(&root, &["add", "."]).unwrap();
+        git(
+            &root,
+            &[
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-m",
+                "file",
+            ],
+        )
+        .unwrap();
+        let base = task_snapshot(&root, None).unwrap();
+        std::fs::write(root.join("old.txt"), "inherited").unwrap();
+        let dirty = task_snapshot(&root, None).unwrap();
+        git(&root, &["restore", "old.txt"]).unwrap();
+        assert!(dirty.path_hashes.contains_key("old.txt"));
+        assert!(task_snapshot(&root, None).unwrap().path_hashes.is_empty());
+        git(&root, &["mv", "old.txt", "new.txt"]).unwrap();
+        let renamed = task_snapshot(&root, None).unwrap();
+        assert_eq!(renamed.inherited_changed_paths, ["new.txt", "old.txt"]);
+        assert_eq!(renamed.path_hashes.len(), 2);
+        git(
+            &root,
+            &[
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-m",
+                "rename",
+            ],
+        )
+        .unwrap();
+        let committed = task_snapshot(&root, Some(&base.head)).unwrap();
+        assert!(committed.clean && committed.path_hashes.is_empty());
+        assert_eq!(committed.head_changed_paths, ["new.txt", "old.txt"]);
+    }
+
+    #[test]
+    fn task_snapshot_hashes_content_changes_inside_an_already_dirty_submodule() {
+        let parent = repo();
+        let child = repo();
+        let root = parent.0.join("repo");
+        let child_root = child.0.join("repo");
+        std::fs::write(child_root.join("file.txt"), "initial").unwrap();
+        git(&child_root, &["add", "."]).unwrap();
+        git(
+            &child_root,
+            &[
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-m",
+                "child file",
+            ],
+        )
+        .unwrap();
+        git(
+            &root,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                child_root.to_str().unwrap(),
+                "child",
+            ],
+        )
+        .unwrap();
+        git(
+            &root,
+            &[
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-m",
+                "submodule",
+            ],
+        )
+        .unwrap();
+        std::fs::write(root.join("child/file.txt"), "inherited").unwrap();
+        let before = task_snapshot(&root, None).unwrap();
+        std::fs::write(root.join("child/file.txt"), "worker edit").unwrap();
+        let after = task_snapshot(&root, None).unwrap();
+        assert_eq!(before.fingerprint, after.fingerprint);
+        assert_ne!(before.path_hashes["child"], after.path_hashes["child"]);
     }
 
     #[test]

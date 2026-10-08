@@ -45,18 +45,27 @@ it("task snapshots detect dirty content, untracked edits and commits with no dif
   const store = new HostStore(":memory:");
   store.addProject(root, "Snapshot");
   const commands = new WorkspaceCommands(store, async (_id, action) => action());
-  const snapshot = () => commands.run("git_task_snapshot", { cwd: root, base }) as Promise<{ fingerprint: string; clean: boolean; commitsAhead: number; baseDiff: boolean }>;
+  const snapshot = () => commands.run("git_task_snapshot", { cwd: root, base }) as Promise<{ fingerprint: string; clean: boolean; commitsAhead: number; baseDiff: boolean; pathHashes: Record<string, string>; inheritedChangedPaths: string[] }>;
   try {
     expect(await snapshot()).toMatchObject({ clean: true, commitsAhead: 0, baseDiff: false });
     writeFileSync(join(root, "tracked.txt"), "dirty baseline\n");
     const dirty = await snapshot();
+    expect(dirty.inheritedChangedPaths).toEqual(["tracked.txt"]);
+    expect((await snapshot()).pathHashes).toEqual(dirty.pathHashes);
     writeFileSync(join(root, "tracked.txt"), "changed dirty baseline\n");
-    expect((await snapshot()).fingerprint).not.toBe(dirty.fingerprint);
+    const changed = await snapshot();
+    expect(changed.fingerprint).not.toBe(dirty.fingerprint);
+    expect(changed.pathHashes["tracked.txt"]).not.toBe(dirty.pathHashes["tracked.txt"]);
+    git("add", "tracked.txt");
+    expect((await snapshot()).pathHashes["tracked.txt"]).not.toBe(changed.pathHashes["tracked.txt"]);
+    git("restore", "--staged", "tracked.txt");
     git("restore", "tracked.txt");
     writeFileSync(join(root, "new.txt"), "one");
     const untracked = await snapshot();
+    expect(untracked.inheritedChangedPaths).toEqual(["new.txt"]);
     writeFileSync(join(root, "new.txt"), "two");
     expect((await snapshot()).fingerprint).not.toBe(untracked.fingerprint);
+    expect((await snapshot()).pathHashes["new.txt"]).not.toBe(untracked.pathHashes["new.txt"]);
     rmSync(join(root, "new.txt"));
     git("commit", "--allow-empty", "-qm", "empty change");
     expect(await snapshot()).toMatchObject({ clean: true, commitsAhead: 1, baseDiff: false });
@@ -65,6 +74,36 @@ it("task snapshots detect dirty content, untracked edits and commits with no dif
   } finally {
     store.close();
   }
+});
+
+it("task snapshots detect edits within an already dirty submodule", async () => {
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "monocode-submodule-parent-")));
+  const child = realpathSync.native(mkdtempSync(join(tmpdir(), "monocode-submodule-child-")));
+  roots.push(root, child);
+  const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+  for (const cwd of [root, child]) {
+    git(cwd, "init", "-qb", "main");
+    git(cwd, "config", "user.name", "Test");
+    git(cwd, "config", "user.email", "test@example.test");
+    git(cwd, "config", "commit.gpgsign", "false");
+  }
+  writeFileSync(join(child, "file.txt"), "initial");
+  git(child, "add", ".");
+  git(child, "commit", "-qm", "child file");
+  git(root, "-c", "protocol.file.allow=always", "submodule", "add", child, "child");
+  git(root, "commit", "-qm", "submodule");
+  const store = new HostStore(":memory:");
+  store.addProject(root, "Submodule");
+  const commands = new WorkspaceCommands(store, async (_id, action) => action());
+  const snapshot = () => commands.run("git_task_snapshot", { cwd: root }) as Promise<{ fingerprint: string; pathHashes: Record<string, string> }>;
+  try {
+    writeFileSync(join(root, "child/file.txt"), "inherited");
+    const before = await snapshot();
+    writeFileSync(join(root, "child/file.txt"), "worker edit");
+    const after = await snapshot();
+    expect(after.fingerprint).toBe(before.fingerprint);
+    expect(after.pathHashes.child).not.toBe(before.pathHashes.child);
+  } finally { store.close(); }
 });
 
 it("fetch distinguishes remote existence from upstream and sync sets tracking safely", async () => {

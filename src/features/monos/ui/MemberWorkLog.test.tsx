@@ -264,7 +264,7 @@ it("maps lifecycle and verified PR outcomes to light/dark status colors without 
       ["stale", "In review", "border-l-amber-500"],
       ["stale-verdict", "In review", "border-l-amber-500"],
       ["merged", "Merged", "border-l-emerald-500/40"],
-      ["closed", "Closed", "border-l-content/20"],
+      ["closed", "Closed (not merged)", "border-l-content/20"],
       ["cancelled", "Cancelled", "border-l-content/20"],
       ["failed", "Failed", "border-l-red-500"],
       ["blocked", "Blocked", "border-l-red-500"],

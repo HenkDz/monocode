@@ -3,6 +3,7 @@ import {
   findMono,
   listMonos,
   monoLook,
+  monoDefaultRuntimeMode,
   monosSnapshot,
   subscribeMonos,
   updateMono,
@@ -10,12 +11,16 @@ import {
 } from "../model/mono";
 import { PixelMascot } from "../../projects/ui/PixelMascot";
 import { PageHeader, Property } from "./monoPanelParts";
-import { ModelPicker } from "../../sessions/ui/ModelPicker";
+import { ModelPicker, ModelSettingRows } from "../../sessions/ui/ModelPicker";
+import { RUNTIME_MODE_LABEL, type RuntimeMode } from "../../sessions/model/session";
+import { AccessPicker } from "../../sessions/ui/AccessPicker";
+import { usePrStatusCache } from "../../source-control/hooks/usePrStatus";
+import { managerTaskLifecycle, taskPrStatus } from "../../orchestration/model/projectManager";
 import { MemoryPage, SoulPage } from "./MonoFilePages";
 import { MonoSettingsPage } from "./MonoSettingsPage";
 import { useMonoFiles } from "./MonoDetails";
 import { orchestrator } from "../../orchestration/model/orchestration";
-import { openCardSession } from "../model/monoCards";
+import { cardSessionsSnapshot, openCardSession, subscribeCardSessions } from "../model/monoCards";
 import { memberTasks } from "../model/monoNavigation";
 import { assertTeamRetire, handleMonoTeam, lockMonoField } from "../model/monoTeam";
 import { monoTeamHost } from "../model/monoTeamRuntime";
@@ -101,7 +106,7 @@ export function MonoTeamPage({
                 className="min-w-0 flex-1 rounded text-left text-sm focus-visible:outline-accent"
                 onClick={() =>
                   owner?.role === "orchestrator"
-                    ? member.sessionId && openCardSession(member.sessionId)
+                    ? window.dispatchEvent(new CustomEvent("monocode:open-team", { detail: { monoId: member.id } }))
                     : select(member.id)
                 }
               >
@@ -177,19 +182,27 @@ export function MemberDetails({
   fallback,
   onBack,
   onProfileChange,
+  runtimeMode,
+  onRuntimeModeChange,
 }: {
   member: Mono;
   fallback: NonNullable<Mono["workerProfile"]>;
   onBack(): void;
   onProfileChange?: (profile: NonNullable<Mono["workerProfile"]>) => void;
+  runtimeMode?: RuntimeMode;
+  onRuntimeModeChange?: (mode: RuntimeMode) => void;
 }) {
   const [page, setPage] = useState("details");
   const [error, setError] = useState<string>();
   const runs = useSyncExternalStore(orchestrator.subscribe, orchestrator.snapshot, orchestrator.snapshot);
   const tasks = memberTasks(runs, member.id).slice(0, 8);
+  const statuses = usePrStatusCache();
   const files = useMonoFiles(member.id, "idle");
   const look = monoLook(member);
   const profile = member.workerProfile ?? fallback;
+  const sessions = useSyncExternalStore(subscribeCardSessions, cardSessionsSnapshot);
+  const session = member.sessionId ? sessions.get(member.sessionId) : undefined;
+  const permissionMode = runtimeMode ?? session?.runtimeMode ?? (member.sessionId ? undefined : monoDefaultRuntimeMode(member));
   if (page === "soul")
     return (
       <SoulPage
@@ -215,10 +228,37 @@ export function MemberDetails({
       onOpen={setPage}
     >
       <dl className="px-4 py-3">
+        <Property label="Model">
+          <ModelPicker
+            harness={profile.harness} model={profile.model} values={profile.modelSettings ?? {}}
+            project={member.projects[0]} side="bottom" variant="plain" hideSettings
+            onChange={(harness, model) => {
+              onProfileChange?.({ harness, model });
+              updateMono(member.id, value => ({ ...value, workerProfile: { harness, model } }));
+              lockMonoField(member.id, "harness"); lockMonoField(member.id, "model");
+            }}
+            onSettingsChange={(modelSettings) => {
+              onProfileChange?.({ ...profile, modelSettings });
+              updateMono(member.id, value => ({ ...value, workerProfile: { ...profile, modelSettings } }));
+              lockMonoField(member.id, "modelSettings");
+            }}
+          />
+          <MonoFieldLock monoId={member.id} field="harness" />
+          <MonoFieldLock monoId={member.id} field="model" />
+          <MonoFieldLock monoId={member.id} field="modelSettings" />
+        </Property>
+        <ModelSettingRows harness={profile.harness} model={profile.model} values={profile.modelSettings ?? {}} side="bottom"
+          onSettingsChange={modelSettings => {
+            onProfileChange?.({ ...profile, modelSettings });
+            updateMono(member.id, value => ({ ...value, workerProfile: { ...profile, modelSettings } }));
+            lockMonoField(member.id, "modelSettings");
+          }} row={({ label, control }) => <Property label={label}>{control}</Property>} />
+        <Property label="Permissions">{onRuntimeModeChange && permissionMode ? <AccessPicker value={permissionMode} onChange={onRuntimeModeChange} side="bottom" variant="plain" /> : <span className="text-xs" title="Open this teammate's chat to view or change permissions">{permissionMode ? RUNTIME_MODE_LABEL[permissionMode] : "Open chat to view"}</span>}</Property>
         <Property label="Specialty">
           <input
             aria-label="Member specialty"
             value={member.specialty ?? ""}
+            title={member.specialty ?? ""}
             maxLength={80}
             onChange={(event) => {
               try { if (event.target.value.trim()) {
@@ -232,39 +272,9 @@ export function MemberDetails({
                 setError(undefined);
               } } catch (error) { setError(String(error)); }
             }}
-            className="min-w-0 rounded bg-transparent text-xs"
+            className="min-w-0 flex-1 truncate rounded bg-transparent text-xs"
           />
           <MonoFieldLock monoId={member.id} field="specialty" />
-        </Property>
-        <Property label="Model">
-          <ModelPicker
-            harness={profile.harness}
-            model={profile.model}
-            values={profile.modelSettings ?? {}}
-            project={member.projects[0]}
-            side="bottom"
-            variant="plain"
-            onChange={(harness, model) => {
-              onProfileChange?.({ harness, model });
-              updateMono(member.id, (value) => ({
-                ...value,
-                workerProfile: { harness, model },
-              }));
-              lockMonoField(member.id, "harness");
-              lockMonoField(member.id, "model");
-            }}
-            onSettingsChange={(modelSettings) => {
-              onProfileChange?.({ ...profile, modelSettings });
-              updateMono(member.id, (value) => ({
-                ...value,
-                workerProfile: { ...profile, modelSettings },
-              }));
-              lockMonoField(member.id, "modelSettings");
-            }}
-          />
-          <MonoFieldLock monoId={member.id} field="harness" />
-          <MonoFieldLock monoId={member.id} field="model" />
-          <MonoFieldLock monoId={member.id} field="modelSettings" />
         </Property>
       </dl>
       {error && <p role="alert" className="px-4 text-xs text-red-500">{error}</p>}
@@ -273,7 +283,7 @@ export function MemberDetails({
         {tasks.length ? tasks.map(task => (
           <button key={task.id} type="button" onClick={() => openCardSession(task.sessionId)}
             className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-content/5 focus-visible:outline-accent">
-            <span className="min-w-0 flex-1 truncate">{task.title}</span><span className="text-content/50">{task.status}</span>
+            <span className="min-w-0 flex-1 truncate">{task.title}</span><span className="text-content/50">{managerTaskLifecycle(task, taskPrStatus(task, statuses), sessions.get(task.sessionId)?.needsInput)[0]}</span>
           </button>
         )) : <p className="text-xs text-content/50">No tasks yet. Your Manager assigns work here.</p>}
       </section>

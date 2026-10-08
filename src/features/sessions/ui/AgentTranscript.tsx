@@ -1,6 +1,9 @@
 import { ManagerAvatar } from "../../orchestration/ui/ManagerAvatar";
 import { MonoChatCard } from "../../monos/ui/MonoChatCard";
 import { MonoTeamChangeCard } from "../../monos/ui/MonoTeamChangeCard";
+import { TeamMessage } from "./TeamMessage";
+import { ArtifactText } from "../../artifacts/ui/ArtifactReference";
+import { isUserMessage, teamMessage } from "../model/teamMessage";
 import {
   ArrowUp,
   Chatting,
@@ -2060,6 +2063,8 @@ const TranscriptBlock = memo(function TranscriptBlock({
   onEditLastTurn?: () => void;
   editing?: boolean;
 }) {
+  const incoming = teamMessage(block);
+  if (incoming) return <TeamMessage message={incoming} cwd={cwd} />;
   if (block.role === "user") {
     return (
       <>
@@ -2173,7 +2178,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
     return (
       <div className={`${embedded ? "" : "px-4"} py-2 text-content/50`}>
         <pre className="min-w-0 whitespace-pre-wrap break-words">
-          {block.text}
+          <ArtifactText text={block.text} />
         </pre>
       </div>
     );
@@ -4804,7 +4809,7 @@ function sumDurations(durations: (number | undefined)[]): number | undefined {
 
 function userTurnCount(blocks: Block[], managed = false): number {
   return blocks.filter(
-    (block) => block.role === "user" && (managed || !block.internal),
+    (block) => isUserMessage(block) && (managed || !block.internal),
   ).length;
 }
 

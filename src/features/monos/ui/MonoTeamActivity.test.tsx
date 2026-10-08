@@ -73,7 +73,7 @@ it("uses sidebar display names with path tooltips and places no-change completio
   try {
     await act(async () => root.render(<MonoTeamActivity monoId="o" sessions={[]} runs={runs} statuses={new Map()} onApproval={vi.fn()} onQuestion={vi.fn()} onQuestionInteraction={vi.fn()} />));
     expect(host.querySelector('h3[title="/app"]')?.textContent).toBe("Friendly App");
-    expect(host.querySelector('h3[title="C:/Projects/Other"]')?.textContent).toBe("Other");
+    expect(host.querySelector('h3[title="C:/Projects/Other"]')).toBeNull();
     expect(host.querySelector('[data-team-section="Recently finished"] [data-team-task="report"]')).not.toBeNull();
     expect(host.textContent).toContain("Completed (no changes)");
     expect(host.querySelector('[data-team-section="Work in progress"]')).toBeNull();

@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import {
-  gitPrStatusByUrl,
+  gitPrStatusBatch,
   subscribeGitChanged,
 } from "../../../platform/tauri/fs";
 import type { Session } from "../../sessions/model/session";
@@ -19,6 +19,7 @@ import {
   setTaskPrAcceptance,
 } from "../model/pullRequests";
 import { pathKey } from "../../../shared/lib/paths";
+import { githubPollingAllowed, noteGithubError, refreshGithubBudget } from "../../inbox/model/githubBudget";
 
 function taskAcceptanceHead(task: OrchestrationTask): string | null {
   return task.status === "completed" &&
@@ -41,6 +42,7 @@ export function useSessionPullRequests(
   const attempted = useRef(new Map<string, number>());
   const refresh = useRef<(force?: boolean) => void>(() => {});
   refresh.current = (force = false) => {
+    if (!githubPollingAllowed()) return;
     const candidates = current.current.sessions
       .filter((s) => !s.ephemeral && !s.inboxAsk)
       .flatMap(sessionPrCandidates);
@@ -149,12 +151,13 @@ export function useSessionPullRequests(
       group.links.push(candidate.link);
       grouped.set(key, group);
     }
-    // Historical URLs keep polling even after switching branches or unloading a chat.
+    // Retain history, but only open PRs need revalidation.
     for (const entry of pullRequests()) {
       const key = `${pathKey(entry.cwd)}\n${prIdentity(entry.pr.url)}`;
       if (!grouped.has(key))
         grouped.set(key, { cwd: entry.cwd, url: entry.pr.url, links: [] });
     }
+    const batches = new Map<string, Promise<import("../../../platform/tauri/fs").GitPr[]>>();
     for (const [key, { cwd, url, links }] of grouped) {
       const known = pullRequests().find(
         (entry) =>
@@ -168,6 +171,10 @@ export function useSessionPullRequests(
               old.sessionId === link.sessionId && old.taskId === link.taskId,
           ),
       );
+      if (known && known.pr.state !== "open") {
+        if (newLink) for (const link of links) recordPullRequest(cwd, known.pr, link);
+        continue;
+      }
       if (
         inFlight.current.has(key) ||
         (!force &&
@@ -184,7 +191,17 @@ export function useSessionPullRequests(
         continue;
       inFlight.current.add(key);
       attempted.current.set(key, Date.now());
-      void gitPrStatusByUrl(cwd, url)
+      const batchKey = pathKey(cwd);
+      let batch = batches.get(batchKey);
+      if (!batch) {
+        const urls = [...grouped.values()]
+          .filter(candidate => pathKey(candidate.cwd) === batchKey &&
+            !pullRequests().some(entry => prIdentity(entry.pr.url) === prIdentity(candidate.url) && entry.pr.state !== "open"))
+          .map(candidate => candidate.url);
+        batch = gitPrStatusBatch(cwd, urls);
+        batches.set(batchKey, batch);
+      }
+      void batch.then(prs => prs.find(pr => prIdentity(pr.url) === prIdentity(url)) ?? null)
         .then((pr) => {
           if (!pr || prIdentity(pr.url) !== prIdentity(url)) {
             markPullRequestUnavailable(cwd, url);
@@ -204,8 +221,11 @@ export function useSessionPullRequests(
               );
           }
         })
-        .catch(() => markPullRequestUnavailable(cwd, url))
-        .finally(() => inFlight.current.delete(key));
+        .catch(reason => {
+          if (noteGithubError(reason, cwd) === (reason instanceof Error ? reason.message : String(reason)))
+            markPullRequestUnavailable(cwd, url);
+        })
+        .finally(() => { inFlight.current.delete(key); void refreshGithubBudget(); });
     }
   };
   useEffect(() => {

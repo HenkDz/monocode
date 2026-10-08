@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { noteGithubError } from "./githubBudget";
 import { clearKnownInboxItems } from "./inboxSeen";
 import {
   linearConnected,
@@ -1074,7 +1075,7 @@ export function collectInboxResults(
 }
 
 function inboxErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return noteGithubError(error);
 }
 
 export function inboxIdentityKey(item: {

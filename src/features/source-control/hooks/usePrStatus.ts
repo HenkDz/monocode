@@ -7,6 +7,7 @@ import {
   type GitPr,
 } from "../../../platform/tauri/fs";
 import { pathKey } from "../../../shared/lib/paths";
+import { githubPollingAllowed, refreshGithubBudget } from "../../inbox/model/githubBudget";
 import {
   recordPullRequest,
   worktreePullRequests,
@@ -35,8 +36,12 @@ async function load(
   cwd: string,
   branch?: string | null,
   prUrl?: string,
+  automatic = false,
 ): Promise<void> {
   const key = prStatusKey(cwd, prUrl ?? branch);
+  if (!githubPollingAllowed()) return;
+  const known = cache.get(key);
+  if (automatic && known && known.state !== "open") return;
   const pending = inFlight.get(key);
   if (pending) return pending;
   const query = async () => {
@@ -61,6 +66,7 @@ async function load(
     .catch(() => {})
     .finally(() => {
       inFlight.delete(key);
+      void refreshGithubBudget();
     });
   inFlight.set(key, request);
   return request;
@@ -75,20 +81,20 @@ export function usePrStatuses(
       .filter((t) => t.cwd && t.cwd !== "~" && (t.branch || t.prUrl))
       .map((t) => [t.cwd, t.branch, t.prUrl]),
   );
-  const reload = useCallback(() => {
+  const reload = useCallback((automatic = false) => {
     for (const [cwd, branch, prUrl] of JSON.parse(keys) as [
       string,
       string | undefined,
       string | undefined,
     ][])
-      void load(cwd, branch, prUrl);
+      void load(cwd, branch, prUrl, automatic);
   }, [keys]);
   useEffect(() => {
     reload();
     const resume = () => {
-      if (!document.hidden) reload();
+      if (!document.hidden) reload(true);
     };
-    const unsubscribe = subscribeGitChanged(resume);
+    const unsubscribe = subscribeGitChanged(() => reload());
     const timer = window.setInterval(resume, 30_000);
     window.addEventListener("focus", resume);
     document.addEventListener("visibilitychange", resume);

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useSyncExternalStore } from "react";
+import { githubPollingAllowed } from "../model/githubBudget";
 import {
   getCiRepairs,
   settleCiRepair,
@@ -68,7 +69,7 @@ export function useCiRepairLifecycle(
     let active = true;
     let polling = false;
     const poll = async () => {
-      if (polling) return;
+      if (polling || !githubPollingAllowed()) return;
       polling = true;
       try {
         await Promise.all(

@@ -17,7 +17,8 @@ import { createHash } from "node:crypto";
 import type { FileMtime, FsEntry, GitPr, ProjectFile } from "../src/platform/tauri/fs";
 import { hostWorktrees } from "./git-worktrees";
 import { createHostBranch, hostBranches, switchHostBranch } from "./git-branches";
-import { checkoutPrBranches, enrichPrCheckApps, parsePrs, PR_STATUS_FIELDS, prCardActionArgs, prRepositories, trustedPrTarget } from "./git-prs";
+import { checkoutPrBranches, parsePrs, prCardActionArgs, prRepositories, trustedPrTarget } from "./git-prs";
+import { githubGateway } from "./github-gateway";
 import type { HostStore } from "./store";
 import {
   createHostPath,
@@ -71,6 +72,8 @@ export const WORKSPACE_COMMANDS = [
   "git_pr_status",
   "git_pr_list",
   "git_pr_status_by_url",
+  "git_pr_status_batch",
+  "github_api_budget",
   "git_pr_action_by_url",
   "git_pr_create",
   "git_history",
@@ -195,6 +198,10 @@ export class WorkspaceCommands {
         return this.gitPrList(input.cwd, input.branches);
       case "git_pr_status_by_url":
         return this.gitPrStatusByUrl(input.cwd, input.url);
+      case "git_pr_status_batch":
+        return this.gitPrStatusBatch(input.cwd, input.urls);
+      case "github_api_budget":
+        return Promise.resolve(githubGateway.budget());
       case "git_pr_action_by_url":
         return this.gitPrActionByUrl(input.cwd, input.url, input.action, input.expectedHead, input.expectedBase);
       case "git_pr_create":
@@ -607,20 +614,18 @@ export class WorkspaceCommands {
 
   private async ghCommand(cwd: unknown, args: string[]): Promise<string> {
     const root = await this.gitRoot(cwd);
-    return (await exec("gh", args, {
-      cwd: root,
-      timeout: 30_000,
-      maxBuffer: 1024 * 1024,
-      encoding: "utf8",
-      env: { ...process.env, GH_PROMPT_DISABLED: "1", GIT_TERMINAL_PROMPT: "0" },
-    })).stdout.trim();
+    return githubGateway.run(root, args);
   }
 
   private async gitPrStatus(cwd: unknown) {
-    const output = await this.ghCommand(cwd, ["pr", "view", "--json", PR_STATUS_FIELDS])
-      .catch(() => "");
-    if (!output) return null;
-    return parsePrs(await enrichPrCheckApps(`[${output}]`, args => this.ghCommand(cwd, args)))[0] ?? null;
+    const [repository, current] = await Promise.all([
+      this.ghCommand(cwd, ["repo", "view", "--json", "url,parent"]),
+      this.gitCommand(cwd, ["symbolic-ref", "--quiet", "--short", "HEAD"]).catch(() => ""),
+    ]);
+    if (!current.trim()) return null;
+    const repo = prRepositories(repository)[0];
+    const [owner, name] = repo.pathname.replace(/^\/|\/$/g, "").split("/");
+    return parsePrs(JSON.stringify(await githubGateway.heads(String(cwd), repo.host, owner, name, [current.trim()], args => this.ghCommand(cwd, args))), owner)[0] ?? null;
   }
 
   private async gitPrList(cwd: unknown, inputBranches: unknown): Promise<GitPr[]> {
@@ -633,31 +638,41 @@ export class WorkspaceCommands {
     const repo = prRepositories(repository)[0];
     const slug = repo.pathname.replace(/^\/|\/$/g, "");
     const owner = slug.split("/")[0];
-    const rows: unknown[] = [];
-    for (const branch of checkoutPrBranches(current.trim(), reflog, inputBranches as string[] ?? [])) {
-      // ponytail: latest 100 PRs per branch, matching native lookup.
-      const json = await this.ghCommand(cwd, ["pr", "list", "--repo", `${repo.host}/${slug}`, "--head", branch, "--json", PR_STATUS_FIELDS, "--limit", "100", "--state", "all"]);
-      const prs: unknown = JSON.parse(json);
-      if (!Array.isArray(prs)) throw new Error("Invalid GitHub pull requests");
-      rows.push(...prs);
+    const branches = checkoutPrBranches(current.trim(), reflog, inputBranches as string[] ?? []);
+    if (!branches.length) return [];
+    const rows = await githubGateway.heads(String(cwd), repo.host, owner, slug.split("/")[1], branches, args => this.ghCommand(cwd, args));
+    return parsePrs(JSON.stringify(rows), owner);
+  }
+
+  private async gitPrStatusBatch(cwd: unknown, values: unknown): Promise<GitPr[]> {
+    if (!Array.isArray(values) || values.length > 100 || values.some(value => typeof value !== "string")) throw new Error("Invalid pull request URLs");
+    const repositories = prRepositories(await this.ghCommand(cwd, ["repo", "view", "--json", "url,parent"]));
+    const groups = new Map<string, number[]>();
+    for (const value of values) {
+      const target = trustedPrTarget(value, repositories);
+      if (target) groups.set(target.repo, [...groups.get(target.repo) ?? [], target.number]);
     }
-    return parsePrs(await enrichPrCheckApps(JSON.stringify(rows), args => this.ghCommand(cwd, args)), owner);
+    const rows = (await Promise.all([...groups].map(async ([repo, numbers]) => {
+      const [host, owner, name] = repo.split("/");
+      return githubGateway.summaries(String(cwd), host, owner, name, numbers, args => this.ghCommand(cwd, args));
+    }))).flat();
+    return parsePrs(JSON.stringify(rows)).filter(pr => {
+      const target = trustedPrTarget(pr.url, repositories);
+      return !!target && [...groups].some(([repo, numbers]) => repo.toLowerCase() === target.repo.toLowerCase() && numbers.includes(target.number) && pr.number === target.number);
+    });
   }
 
   private async gitPrStatusByUrl(cwd: unknown, value: unknown): Promise<GitPr | null> {
-    const repositories = prRepositories(await this.ghCommand(cwd, ["repo", "view", "--json", "url,parent"]));
-    const target = trustedPrTarget(value, repositories);
-    if (!target) return null;
-    const json = await this.ghCommand(cwd, ["pr", "view", String(target.number), "--repo", target.repo, "--json", PR_STATUS_FIELDS]);
-    const pr = parsePrs(await enrichPrCheckApps(`[${json}]`, args => this.ghCommand(cwd, args)))[0];
-    const verified = pr && trustedPrTarget(pr.url, repositories);
-    return verified?.number === target.number && verified.repo.toLowerCase() === target.repo.toLowerCase() ? pr : null;
+    return (await this.gitPrStatusBatch(cwd, [value]))[0] ?? null;
   }
 
   private async gitPrActionByUrl(cwd: unknown, url: unknown, action: unknown, expectedHead: unknown, expectedBase: unknown): Promise<GitPr> {
+    if (githubGateway.budget().low) throw new Error("GitHub rate limit reached · showing last known data");
+    githubGateway.invalidate();
     const current = await this.gitPrStatusByUrl(cwd, url);
     if (!current) throw new Error("PR URL is not part of this checkout's forge repository");
     await this.ghCommand(cwd, prCardActionArgs(current, action, expectedHead, expectedBase));
+    githubGateway.invalidate();
     const next = await this.gitPrStatusByUrl(cwd, current.url);
     if (!next) throw new Error("Could not verify the updated PR state");
     return next;

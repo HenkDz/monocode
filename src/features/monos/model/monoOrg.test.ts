@@ -58,6 +58,15 @@ it("guides org sessions to the app's sibling worktree location", () => {
   expect(context).toContain("wait for explicit user confirmation");
 });
 
+it("tells org agents to conserve the user's shared GitHub quota", () => {
+  for (const id of ["leader", "app", "app-backend"]) {
+    const context = orgTurnContext(tree(), id);
+    expect(context).toContain("gh pr view --json with only the fields needed");
+    expect(context).toContain("at most every 60 seconds");
+    expect(context).toContain("Stop GitHub polling");
+  }
+});
+
 it("routes a Manager's retained goal progress to its actual Orchestrator without changing ownership", () => {
   const roster = tree();
   const runs = [{ leadId: "engine", ownerMonoId: "app", ownerSessionId: "manager-session", cwd: "/app", status: "active",

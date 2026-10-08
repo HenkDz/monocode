@@ -1,4 +1,5 @@
 import { execFile, spawn } from "node:child_process";
+import { githubGateway } from "./github-gateway";
 import { promisify } from "node:util";
 import {
   lstat,
@@ -835,17 +836,7 @@ export async function hostGitAction(
       return;
     }
     case "createPr": {
-      const output = await exec("gh", ["pr", "create", "--fill"], {
-        cwd: root,
-        timeout: 30_000,
-        maxBuffer: 1024 * 1024,
-        env: {
-          ...process.env,
-          GH_PROMPT_DISABLED: "1",
-          GIT_TERMINAL_PROMPT: "0",
-        },
-      });
-      return output.stdout.trim();
+      return githubGateway.run(root, ["pr", "create", "--fill"], true);
     }
     default:
       throw new Error("Unsupported Git action");

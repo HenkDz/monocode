@@ -1206,6 +1206,29 @@ pub async fn git_pr_status_by_url(cwd: String, url: String) -> Result<Option<Git
         .map_err(|error| error.to_string())?
 }
 
+#[tauri::command]
+pub fn github_api_budget() -> crate::github_gateway::Budget {
+    crate::github_gateway::shared().budget()
+}
+
+#[tauri::command]
+pub async fn git_pr_status_batch(cwd: String, urls: Vec<String>) -> Result<Vec<GitPr>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = expand_home(&cwd);
+        let json = gh_checked(&root, &["repo", "view", "--json", "url,parent"])?;
+        let repositories = parse_pr_repository_urls(&json)?;
+        let mut prs = Vec::new();
+        for url in urls {
+            if let Some((repo, number)) = verified_pr_target(&url, &repositories) {
+                if let Some(pr) = github_status_by_number(&root, &repo, number)? {
+                    prs.push(pr);
+                }
+            }
+        }
+        Ok(prs)
+    }).await.map_err(|error| error.to_string())?
+}
+
 /// Confirm the current forge state before an explicit PR-card action.
 #[tauri::command]
 pub async fn git_pr_action_by_url(
@@ -1325,18 +1348,8 @@ fn git_github_status_for() -> GitHubStatus {
             authenticated: false,
         };
     };
-    let mut cmd = Command::new(program);
-    cmd.args(["auth", "status", "--active", "--hostname", "github.com"])
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GH_PROMPT_DISABLED", "1")
-        .env("GH_PAGER", "cat")
-        .env("GIT_PAGER", "cat");
-    crate::harness::apply_gui_env(&mut cmd);
-    crate::hide_window_console(&mut cmd);
-    let authenticated = cmd
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false);
+    let _ = program;
+    let authenticated = gh_run(Path::new("."), &["auth", "status", "--active", "--hostname", "github.com"], true).is_ok();
     GitHubStatus {
         connected: authenticated,
         installed: true,
@@ -2760,6 +2773,173 @@ fn git_range_context_for(root: &Path) -> Result<GitRangeContext, String> {
 
 const GITHUB_PR_STATUS_FIELDS: &str = "number,title,url,state,isDraft,headRepositoryOwner,baseRefName,headRefName,headRefOid,mergeable,closedAt,additions,deletions,updatedAt,reviewDecision,mergeStateStatus,statusCheckRollup";
 
+const GITHUB_BATCH_PR_FIELDS: &str = r#"number title url state isDraft headRepositoryOwner { login } baseRefName headRefName headRefOid mergeable closedAt additions deletions updatedAt reviewDecision mergeStateStatus commits(last:1) { nodes { commit { statusCheckRollup { contexts(first:100) { pageInfo { hasNextPage } nodes { __typename ... on CheckRun { name status conclusion detailsUrl createdAt startedAt completedAt checkSuite { databaseId app { databaseId slug name } workflowRun { workflow { name } } } } ... on StatusContext { context state targetUrl createdAt } } } } } } }"#;
+
+fn github_batch_query(previous: Option<&serde_json::Value>) -> String {
+    let states = if previous.is_some() {
+        "states:OPEN,"
+    } else {
+        ""
+    };
+    let mut selection =
+        format!("pullRequests({states}last:100) {{ nodes {{ {GITHUB_BATCH_PR_FIELDS} }} }}");
+    if let Some(rows) = previous.and_then(serde_json::Value::as_array) {
+        for row in rows.iter().filter(|row| row["state"] == "OPEN") {
+            if let Some(number) = row["number"].as_u64() {
+                selection.push_str(&format!(
+                    " p{number}:pullRequest(number:{number}) {{ {GITHUB_BATCH_PR_FIELDS} }}"
+                ));
+            }
+        }
+    }
+    format!("query($owner:String!,$name:String!) {{ rateLimit {{ cost remaining limit resetAt }} repository(owner:$owner,name:$name) {{ {selection} }} }}")
+}
+
+fn github_batch_rows(
+    json: &str,
+    previous: Option<&serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    let response: serde_json::Value =
+        serde_json::from_str(json).map_err(|error| error.to_string())?;
+    let repository = response["data"]["repository"]
+        .as_object()
+        .ok_or("GitHub did not return the repository")?;
+    let mut rows = previous
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let incoming = repository["pullRequests"]["nodes"]
+        .as_array()
+        .ok_or("GitHub did not return pull requests")?
+        .iter()
+        .chain(
+            repository
+                .iter()
+                .filter(|(name, _)| name.starts_with('p') && *name != "pullRequests")
+                .map(|(_, row)| row),
+        );
+    for row in incoming.filter(|row| row.is_object()) {
+        let mut row = row.clone();
+        let contexts = &row["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["contexts"];
+        let truncated = contexts["pageInfo"]["hasNextPage"] == true;
+        let mut checks = contexts["nodes"].as_array().cloned().unwrap_or_default();
+        for check in &mut checks {
+            let suite = check["checkSuite"].clone();
+            if suite.is_object() {
+                check["app"] = serde_json::json!({ "id": suite["app"]["databaseId"], "slug": suite["app"]["slug"] });
+                check["suiteId"] = suite["databaseId"].clone();
+                check["workflowName"] = suite["workflowRun"]["workflow"]["name"].clone();
+                if check["workflowName"].is_null() {
+                    check["workflowName"] = serde_json::json!("");
+                }
+            }
+        }
+        // Missing contexts must never turn an incomplete CI summary green.
+        if truncated {
+            checks.push(serde_json::json!({"name":"Additional checks", "status":"UNKNOWN"}));
+        }
+        row["statusCheckRollup"] = serde_json::Value::Array(checks);
+        row["__r24ChecksTruncated"] = serde_json::json!(truncated);
+        row.as_object_mut().unwrap().remove("commits");
+        if let Some(index) = rows.iter().position(|old| old["number"] == row["number"]) {
+            rows[index] = row;
+        } else {
+            rows.push(row);
+        }
+    }
+    Ok(serde_json::Value::Array(rows))
+}
+
+fn github_status_snapshot(root: &Path, repo: &str) -> Result<String, String> {
+    github_status_snapshot_with(crate::github_gateway::shared(), root, repo, |args| {
+        gh_run_raw(root, args, false, None)
+    })
+}
+
+fn github_status_snapshot_with(
+    gateway: &crate::github_gateway::Gateway,
+    root: &Path,
+    repo: &str,
+    fetch: impl FnOnce(&[&str]) -> Result<crate::github_gateway::Response, String>,
+) -> Result<String, String> {
+    let (host, slug) = repo
+        .split_once('/')
+        .filter(|(host, _)| host.contains('.'))
+        .unwrap_or(("github.com", repo));
+    let (owner, name) = split_github_repo(slug)?;
+    let target = format!("{host}/{owner}/{name}");
+    gateway.run(
+        root,
+        &[
+            "pr",
+            "view",
+            "--repo",
+            &target,
+            "--json",
+            "r24-status-batch",
+        ],
+        |_, _| {
+            let previous = gateway.snapshot(&target);
+            let generation = gateway.generation();
+            let query = github_batch_query(previous.as_ref());
+            let mut result = fetch(&[
+                "api",
+                "--hostname",
+                host,
+                "graphql",
+                "-f",
+                &format!("query={query}"),
+                "-F",
+                &format!("owner={owner}"),
+                "-F",
+                &format!("name={name}"),
+            ])?;
+            let rows = github_batch_rows(&result.body, previous.as_ref())?;
+            // Retain GraphQL budget metadata alongside the flattened gh-compatible rows.
+            let response: serde_json::Value =
+                serde_json::from_str(&result.body).map_err(|error| error.to_string())?;
+            result.graphql_rate = Some(response["data"]["rateLimit"].clone());
+            gateway.store_snapshot(&target, rows.clone(), generation);
+            result.body = rows.to_string();
+            Ok(result)
+        },
+    )
+}
+
+fn github_status_by_number(root: &Path, repo: &str, number: i64) -> Result<Option<GitPr>, String> {
+    if let Some(rows) = crate::github_gateway::shared().snapshot(repo) {
+        if let Some(row) = rows.as_array().and_then(|rows| {
+            rows.iter()
+                .find(|row| row["number"] == number && row["state"] != "OPEN")
+        }) {
+            return Ok(parse_gh_prs(&serde_json::json!([row]).to_string(), None)?
+                .into_iter()
+                .next());
+        }
+    }
+    let json = github_status_snapshot(root, repo)?;
+    if let Some(pr) = parse_gh_prs(&json, None)?
+        .into_iter()
+        .find(|pr| pr.number == number)
+    {
+        return Ok(Some(pr));
+    }
+    // shortcut: repository discovery keeps the latest 100; older explicit URLs load on demand.
+    let json = gh_checked(
+        root,
+        &[
+            "pr",
+            "view",
+            &number.to_string(),
+            "--repo",
+            repo,
+            "--json",
+            GITHUB_PR_STATUS_FIELDS,
+        ],
+    )?;
+    let json = enrich_github_pr_check_apps(&json, None, |args| gh_checked(root, args))?;
+    Ok(parse_gh_prs(&format!("[{json}]"), None)?.into_iter().next())
+}
 fn git_pr_status_for(root: &Path) -> Option<GitPr> {
     let branch = git_branch(root)?;
     let repo = git_pr_repository_url_for(root).ok()?;
@@ -2783,6 +2963,13 @@ fn git_branch_prs_for(
             .host_str()
             .ok_or("GitHub repository is missing its host")?
     );
+    let snapshot = github_status_snapshot(root, &selector)?;
+    let rows: serde_json::Value = serde_json::from_str(&snapshot).map_err(|error| error.to_string())?;
+    let matching: Vec<_> = rows.as_array().unwrap().iter().filter(|row| row["headRefName"] == branch).collect();
+    if !matching.is_empty() {
+        return parse_gh_prs(&serde_json::to_string(&matching).map_err(|error| error.to_string())?, Some(&owner));
+    }
+    if rows.as_array().unwrap().len() < 100 { return Ok(Vec::new()); }
     // ponytail: retain the latest 100 PRs per branch; paginate if a checkout needs older history.
     let json = gh_checked(
         root,
@@ -2949,20 +3136,7 @@ fn git_pr_status_by_url_for(root: &Path, candidate: &str) -> Result<Option<GitPr
     let Some((repo, number)) = verified_pr_target(candidate, &repositories) else {
         return Ok(None);
     };
-    let json = gh_checked(
-        root,
-        &[
-            "pr",
-            "view",
-            &number.to_string(),
-            "--repo",
-            &repo,
-            "--json",
-            GITHUB_PR_STATUS_FIELDS,
-        ],
-    )?;
-    let json = enrich_github_pr_check_apps(&json, None, |args| gh_checked(root, args))?;
-    let pr = parse_gh_prs(&format!("[{json}]"), None)?.into_iter().next();
+    let pr = github_status_by_number(root, &repo, number)?;
     Ok(pr.filter(|pr| {
         verified_pr_target(&pr.url, &repositories).is_some_and(|(verified_repo, verified)| {
             verified == number && verified_repo.eq_ignore_ascii_case(&repo)
@@ -3037,6 +3211,9 @@ fn git_pr_action_by_url_for(
     expected_head: Option<&str>,
     expected_base: Option<&str>,
 ) -> Result<GitPr, String> {
+    // Explicit actions must validate a fresh forge head, never a cached card.
+    if crate::github_gateway::shared().polling_paused() { return Err(crate::github_gateway::LIMITED_MESSAGE.into()); }
+    crate::github_gateway::shared().invalidate();
     let current = git_pr_status_by_url_for(root, candidate)?
         .ok_or("PR URL is not part of this checkout's forge repository")?;
     let args = github_pr_card_action_args(&current, action, expected_head, expected_base)?;
@@ -4022,6 +4199,13 @@ fn git_github_pr_checks_for(
     number: i64,
 ) -> Result<GitHubPrChecks, String> {
     let args = github_pr_checks_args(repo, number)?;
+    if let Some(rows) = crate::github_gateway::shared().snapshot(&format!("github.com/{repo}")) {
+        if let Some(row) = rows.as_array().and_then(|rows| rows.iter().find(|row| row["number"] == number)) {
+            if row["__r24ChecksTruncated"] != true && (row["state"] != "OPEN" || crate::github_gateway::shared().snapshot_fresh(&format!("github.com/{repo}"))) {
+                return parse_github_pr_checks(&row.to_string());
+            }
+        }
+    }
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
     let json = gh_checked(root, &refs)?;
     let json = enrich_github_pr_check_apps(&json, Some(repo), |args| gh_checked(root, args))?;
@@ -4860,130 +5044,42 @@ fn gh_checked(root: &Path, args: &[&str]) -> Result<String, String> {
     gh_run(root, args, false)
 }
 
-struct GitHubRateLimitBackoff {
-    until: SystemTime,
-    error: String,
-}
-
-// Shared by all webviews, including background Inbox and PR checks requests.
-static GITHUB_RATE_LIMIT_BACKOFF: Mutex<Option<GitHubRateLimitBackoff>> = Mutex::new(None);
-
 fn gh_run(root: &Path, args: &[&str], allow_empty: bool) -> Result<String, String> {
-    gh_with_backoff(
-        &GITHUB_RATE_LIMIT_BACKOFF,
-        args,
-        allow_empty,
-        |args, allow_empty| gh_run_raw(root, args, allow_empty),
-    )
+    crate::github_gateway::shared().run(root, args, |args, etag| {
+        gh_run_raw(root, args, allow_empty, etag)
+    })
 }
 
-fn github_rate_limit_error(
-    backoff: &mut Option<GitHubRateLimitBackoff>,
-    now: SystemTime,
-) -> Option<String> {
-    if let Some(active) = backoff.as_ref().filter(|active| now < active.until) {
-        return Some(active.error.clone());
-    }
-    *backoff = None;
-    None
-}
-
-fn gh_with_backoff(
-    backoff: &Mutex<Option<GitHubRateLimitBackoff>>,
-    args: &[&str],
-    allow_empty: bool,
-    mut run: impl FnMut(&[&str], bool) -> Result<String, String>,
-) -> Result<String, String> {
-    if let Ok(mut slot) = backoff.lock() {
-        if let Some(error) = github_rate_limit_error(&mut slot, SystemTime::now()) {
-            return Err(error);
-        }
-    }
-    let result = run(args, allow_empty);
-    let Err(error) = &result else {
-        return result;
-    };
-    let message = error.to_lowercase();
-    let primary = message.contains("api rate limit") && message.contains("exceeded");
-    let secondary = message.contains("secondary rate limit") || message.contains("abuse detection");
-    if !primary && !secondary {
-        return result;
-    }
-    // Stop other requests immediately and resolve the reset once. If GitHub
-    // cannot return it, retry after a minute rather than hammering the API.
-    if let Ok(mut slot) = backoff.lock() {
-        if github_rate_limit_error(&mut slot, SystemTime::now()).is_some() {
-            return result;
-        }
-        *slot = Some(GitHubRateLimitBackoff {
-            until: SystemTime::now() + Duration::from_secs(60),
-            error: error.clone(),
-        });
-    } else {
-        return result;
-    }
-    if primary && message.contains("graphql") {
-        // The REST /rate_limit endpoint can disagree with the live GraphQL
-        // quota. Query the same resource that reported the exhausted budget.
-        let reset = run(
-            &[
-                "api",
-                "graphql",
-                "-f",
-                "query=query { rateLimit { remaining resetAt } }",
-            ],
-            false,
-        )
-        .and_then(|json| parse_github_rate_limit_backoff(&json));
-        if let Ok(until) = reset {
-            if let Ok(mut slot) = backoff.lock() {
-                *slot = until
-                    .filter(|until| *until > SystemTime::now())
-                    .map(|until| GitHubRateLimitBackoff {
-                        until,
-                        error: error.clone(),
-                    });
-            }
-        }
-    }
-    result
-}
-
-fn parse_github_rate_limit_backoff(json: &str) -> Result<Option<SystemTime>, String> {
-    let response: serde_json::Value =
-        serde_json::from_str(json).map_err(|error| error.to_string())?;
-    let rate = &response["data"]["rateLimit"];
-    let remaining = rate["remaining"]
-        .as_u64()
-        .ok_or("GitHub did not return its remaining quota")?;
-    if remaining > 0 {
-        return Ok(None);
-    }
-    let reset = rate["resetAt"]
-        .as_str()
-        .ok_or("GitHub did not return its rate-limit reset")?;
-    let reset = time::OffsetDateTime::parse(reset, &time::format_description::well_known::Rfc3339)
-        .map_err(|error| error.to_string())?
-        .unix_timestamp();
-    let seconds = u64::try_from(reset).map_err(|error| error.to_string())?;
-    UNIX_EPOCH
-        .checked_add(Duration::from_secs(seconds.saturating_add(1)))
-        .map(Some)
-        .ok_or_else(|| "Invalid GitHub rate-limit reset".into())
-}
-
-fn gh_run_raw(root: &Path, args: &[&str], allow_empty: bool) -> Result<String, String> {
+fn gh_run_raw(root: &Path, args: &[&str], allow_empty: bool, etag: Option<&str>) -> Result<crate::github_gateway::Response, String> {
     let program = crate::harness::resolve_gui_binary("gh")
         .ok_or_else(|| "GitHub CLI (`gh`) is not installed.".to_string())?;
     let mut cmd = Command::new(&program);
+    let mut observed_args: Vec<String> = args.iter().map(|arg| arg.to_string()).collect();
+    if args.contains(&"graphql") {
+        for arg in &mut observed_args {
+            if arg.starts_with("query=") && !arg.contains("mutation") && !arg.contains("rateLimit") {
+                if let Some(end) = arg.rfind('}') { arg.insert_str(end, " rateLimit { cost remaining limit resetAt } "); }
+            }
+        }
+    }
     cmd.current_dir(root)
-        .args(args)
+        .args(&observed_args)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GH_PROMPT_DISABLED", "1")
+        .env("GH_DEBUG", "api")
         .env("GH_PAGER", "cat")
         .env("GIT_PAGER", "cat");
     crate::harness::apply_gui_env(&mut cmd);
     crate::hide_window_console(&mut cmd);
+    let conditional = args.first() == Some(&"api") && !args.contains(&"graphql")
+        && crate::github_gateway::read(args)
+        && !args.contains(&"--paginate") && !args.contains(&"--silent")
+        && !args.contains(&"--method") && !args.contains(&"-X")
+        && !args.iter().any(|arg| matches!(*arg, "-f" | "-F" | "--field" | "--raw-field"));
+    if conditional {
+        cmd.arg("--include");
+        if let Some(etag) = etag { cmd.args(["-H", &format!("If-None-Match: {etag}")]); }
+    }
     let output = cmd.output().map_err(|error| {
         if error.kind() == ErrorKind::NotFound {
             "GitHub CLI (`gh`) is not installed.".to_string()
@@ -4991,25 +5087,28 @@ fn gh_run_raw(root: &Path, args: &[&str], allow_empty: bool) -> Result<String, S
             error.to_string()
         }
     })?;
-    if output.status.success() {
-        let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let mut headers = String::from_utf8_lossy(&output.stderr).into_owned();
+    let stdout = String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n");
+    let (body, not_modified) = if conditional && stdout.starts_with("HTTP/") {
+        let (included, body) = stdout.split_once("\n\n").unwrap_or((&stdout, ""));
+        headers.push('\n'); headers.push_str(included);
+        (body, included.lines().next().is_some_and(|line| line.contains("304")))
+    } else { (stdout.as_str(), false) };
+    if output.status.success() || not_modified {
+        let text = body.trim().to_string();
         if text.is_empty() {
-            if allow_empty {
-                return Ok(String::new());
-            }
-            return Err("gh returned no output".into());
+            if !allow_empty && !not_modified { return Err("gh returned no output".into()); }
         }
-        return Ok(text);
+        return Ok(crate::github_gateway::Response { body: text, headers, not_modified, graphql_rate: None });
     }
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let detail = if !stderr.is_empty() {
+    // Debug bodies can contain private data; return only gh's final diagnostic.
+    let stderr = headers.lines().rev().find(|line| !line.trim().is_empty()).unwrap_or_default().trim().to_string();
+    let detail = if !stderr.is_empty() && !stderr.starts_with(['*', '<', '>', '{', '[', '"']) {
         stderr
-    } else if !stdout.is_empty() {
-        stdout
     } else {
-        format!("gh {} failed", args.join(" "))
+        "GitHub request failed.".to_string()
     };
+    crate::github_gateway::shared().observe_error_headers(headers, stdout);
     Err(detail)
 }
 
@@ -6707,104 +6806,50 @@ mod tests {
     static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
     #[test]
-    fn github_rate_limit_blocks_other_commands_until_reset() {
-        let backoff = Mutex::new(None);
-        let error = "GraphQL: API rate limit already exceeded for user ID 1.";
-        let mut calls = 0;
-        let result = gh_with_backoff(&backoff, &["pr", "list"], false, |args, _| {
-            calls += 1;
-            if args[0] == "api" {
-                Ok(
-                    r#"{"data":{"rateLimit":{"remaining":0,"resetAt":"2099-01-01T00:00:00Z"}}}"#
-                        .into(),
-                )
-            } else {
-                Err(error.into())
+    fn github_batch_75_prs_10_minute_fixture_uses_ten_queries() {
+        let gateway = crate::github_gateway::Gateway::default();
+        let rows: Vec<_> = (1..=75).map(|number| serde_json::json!({
+            "number":number, "title":format!("PR {number}"), "url":format!("https://github.com/owner/repo/pull/{number}"),
+            "state":if number <= 15 { "OPEN" } else { "CLOSED" }, "headRefName":format!("branch-{number}"),
+            "headRefOid":"a".repeat(40), "headRepositoryOwner":{"login":"owner"},
+            "commits":{"nodes":[{"commit":{"statusCheckRollup":{"contexts":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}]}
+        })).collect();
+        let mut before = 0;
+        let mut after = 0;
+        for cycle in 0..20 {
+            if cycle % 2 == 0 { gateway.expire_cache(); }
+            for number in 1..=75 {
+                // Baseline URL getter issued repo view and PR view for each displayed PR.
+                for _ in ["repo view", "pr view"] { before += 1; }
+                let json = github_status_snapshot_with(&gateway, Path::new(&format!("worktree{}", number % 4)), "github.com/owner/repo", |args| {
+                    after += 1;
+                    let query = args.iter().find(|arg| arg.starts_with("query=")).unwrap();
+                    let fresh = if cycle == 0 { rows.clone() } else {
+                        assert!(query.contains("states:OPEN"));
+                        assert!(!query.contains("p16:pullRequest"));
+                        rows.iter().filter(|row| row["state"] == "OPEN").cloned().collect()
+                    };
+                    Ok(crate::github_gateway::Response { body:serde_json::json!({"data":{"repository":{"pullRequests":{"nodes":fresh}},"rateLimit":{"remaining":4999,"limit":5000,"cost":1,"resetAt":"2099-01-01T00:00:00Z"}}}).to_string(),
+                        headers:String::new(), not_modified:false, graphql_rate:None })
+                }).unwrap();
+                assert_eq!(parse_gh_prs(&json, None).unwrap().len(), 75);
             }
-        });
-        assert_eq!(result.unwrap_err(), error);
-        assert_eq!(calls, 2);
-        assert_eq!(
-            gh_with_backoff(&backoff, &["issue", "view", "42"], false, |_, _| {
-                panic!("No command may reach GitHub before the reset")
-            })
-            .unwrap_err(),
-            error
-        );
-        backoff.lock().unwrap().as_mut().unwrap().until =
-            SystemTime::now() - Duration::from_secs(1);
-        assert_eq!(
-            gh_with_backoff(&backoff, &["pr", "list"], false, |_, _| Ok("fresh".into())).unwrap(),
-            "fresh"
-        );
-        assert!(backoff.lock().unwrap().is_none());
+        }
+        assert_eq!(before, 3000);
+        assert_eq!(after, 10);
+        println!("native URL status fixture: baseline gh calls={before}, batched GraphQL calls={after}; mock GraphQL points=10 (live cost unknown)");
     }
 
     #[test]
-    fn github_rate_limit_probe_failure_still_pauses_requests() {
-        let backoff = Mutex::new(None);
-        let mut calls = 0;
-        assert!(gh_with_backoff(&backoff, &["pr", "list"], false, |_, _| {
-            calls += 1;
-            if calls == 1 {
-                Err("GraphQL: API rate limit already exceeded".into())
-            } else {
-                Err("offline".into())
-            }
-        })
-        .is_err());
-        assert_eq!(calls, 2);
-        assert!(gh_with_backoff(&backoff, &["pr", "view"], false, |_, _| {
-            panic!("A failed reset lookup must not cause a request storm")
-        })
-        .is_err());
-    }
-
-    #[test]
-    fn github_secondary_rate_limit_pauses_without_a_quota_probe() {
-        let backoff = Mutex::new(None);
-        let mut calls = 0;
-        assert!(gh_with_backoff(&backoff, &["pr", "list"], false, |_, _| {
-            calls += 1;
-            Err("You have exceeded a secondary rate limit".into())
-        })
-        .is_err());
-        assert_eq!(calls, 1);
-        assert!(backoff.lock().unwrap().is_some());
-    }
-
-    #[test]
-    fn github_network_errors_do_not_pause_other_commands() {
-        let backoff = Mutex::new(None);
-        assert!(gh_with_backoff(&backoff, &["pr", "list"], false, |_, _| {
-            Err("error connecting to api.github.com".into())
-        })
-        .is_err());
-        assert!(backoff.lock().unwrap().is_none());
-        assert!(gh_with_backoff(&backoff, &["pr", "view"], false, |_, _| {
-            Ok("fresh".into())
-        })
-        .is_ok());
-    }
-
-    #[test]
-    fn github_rate_limit_reset_parser_requires_valid_quota_data() {
-        let reset = parse_github_rate_limit_backoff(
-            r#"{"data":{"rateLimit":{"remaining":0,"resetAt":"2026-10-06T13:48:40Z"}}}"#,
-        )
-        .unwrap()
-        .unwrap();
-        assert_eq!(reset, UNIX_EPOCH + Duration::from_secs(1791294521));
-        assert!(
-            parse_github_rate_limit_backoff(r#"{"data":{"rateLimit":{"remaining":10}}}"#)
-                .unwrap()
-                .is_none()
-        );
-        assert!(parse_github_rate_limit_backoff(r#"{"errors":[{"message":"offline"}]}"#).is_err());
-        assert!(parse_github_rate_limit_backoff(
-            r#"{"data":{"rateLimit":{"remaining":0,"resetAt":"invalid"}}}"#
-        )
-        .is_err());
+    fn github_batch_truncation_and_transition_keep_check_summary_conservative() {
+        let row = serde_json::json!({"number":42,"title":"PR","url":"https://github.com/o/r/pull/42","state":"OPEN",
+            "commits":{"nodes":[{"commit":{"statusCheckRollup":{"contexts":{"nodes":[],"pageInfo":{"hasNextPage":true}}}}}]}});
+        let rows = github_batch_rows(&serde_json::json!({"data":{"repository":{"pullRequests":{"nodes":[row]}}}}).to_string(), None).unwrap();
+        assert_eq!(parse_gh_prs(&rows.to_string(), None).unwrap()[0].checks_status.as_deref(), Some("unknown"));
+        let closed = serde_json::json!({"number":42,"title":"PR","url":"https://github.com/o/r/pull/42","state":"CLOSED"});
+        let updated = github_batch_rows(&serde_json::json!({"data":{"repository":{"pullRequests":{"nodes":[]},"p42":closed}}}).to_string(), Some(&rows)).unwrap();
+        assert_eq!(updated[0]["state"], "CLOSED");
+        assert!(!github_batch_query(Some(&updated)).contains("p42:pullRequest"));
     }
 
     #[test]

@@ -5,6 +5,8 @@ const mock = vi.hoisted(() => ({
   sent: [] as { method: string; params?: Record<string, unknown> }[],
   archived: false,
   missing: false,
+  unloadedThread: undefined as string | undefined,
+  loaded: false,
   failure: undefined as { method: string; message: string } | undefined,
   release: vi.fn(),
   spawn: vi.fn(async (..._args: unknown[]) => undefined),
@@ -44,6 +46,10 @@ vi.mock("../../core/child", () => ({
         },
       };
     } else if (request.method === "thread/read") {
+      if (request.params.threadId === mock.unloadedThread && !mock.loaded) {
+        mock.handlers.get(childId)?.(JSON.stringify({ id: request.id, error: { message: `thread not loaded: ${request.params.threadId}` } }));
+        return;
+      }
       if (mock.missing) {
         mock.handlers.get(childId)?.(
           JSON.stringify({
@@ -60,6 +66,9 @@ vi.mock("../../core/child", () => ({
           path: `/ordinary/${mock.archived ? "archived_sessions" : "sessions"}/rollout-${id}.jsonl`,
         },
       };
+    } else if (request.method === "thread/resume") {
+      mock.loaded = true;
+      result = { thread: { id: request.params.threadId } };
     } else if (request.method === "thread/list") {
       const id = request.params.archived
         ? "archived-child"
@@ -93,6 +102,8 @@ beforeEach(() => {
   mock.sent.length = 0;
   mock.archived = false;
   mock.missing = false;
+  mock.unloadedThread = undefined;
+  mock.loaded = false;
   mock.failure = undefined;
   vi.clearAllMocks();
   mock.prepare.mockResolvedValue({ home: "/mono/default", hasThread: false });
@@ -232,7 +243,7 @@ it("keeps normal recovery available when an old thread was already removed", asy
   expect(mock.sent.some((r) => r.method === "thread/archive")).toBe(false);
 });
 
-it.each(["thread not loaded: root", "database file not found"])("labels a thread/read failure without discarding saved context: %s", async message => {
+it.each(["thread not loaded: another-thread", "database file not found"])("labels a thread/read failure without discarding saved context: %s", async message => {
   mock.failure = { method: "thread/read", message };
   await expect(prepareCodexMonoContext({ ...input, threadId: "root" })).rejects.toThrow(`Codex storage thread/read: ${message}`);
   expect(mock.copy).not.toHaveBeenCalled();
@@ -240,6 +251,40 @@ it.each(["thread not loaded: root", "database file not found"])("labels a thread
   expect(mock.kill).toHaveBeenCalledOnce();
   expect(mock.release).toHaveBeenCalledOnce();
   expect(mock.handlers.size).toBe(0);
+});
+
+it("loads the same saved thread once before rereading and migrating its exact context", async () => {
+  mock.unloadedThread = "root";
+  await expect(prepareCodexMonoContext({ ...input, threadId: "root" })).resolves.toMatchObject({ hasThread: true });
+  expect(mock.sent.slice(3, 6)).toEqual([
+    { id: expect.any(Number), method: "thread/read", params: { threadId: "root", includeTurns: false } },
+    { id: expect.any(Number), method: "thread/resume", params: { threadId: "root" } },
+    { id: expect.any(Number), method: "thread/read", params: { threadId: "root", includeTurns: false } },
+  ]);
+  expect(mock.sent.filter(request => request.method === "thread/resume")).toHaveLength(1);
+  expect(mock.sent.some(request => ["thread/start", "turn/start"].includes(request.method))).toBe(false);
+  expect(mock.copy).toHaveBeenCalledWith("account", "root", ["/ordinary/archived_sessions/rollout-root.jsonl", "/ordinary/archived_sessions/rollout-child.jsonl", "/ordinary/archived_sessions/rollout-second-child.jsonl", "/ordinary/archived_sessions/rollout-archived-child.jsonl"], "/ordinary");
+});
+
+it.each(["thread/resume", "thread/read"])("retains context if the same-thread loading recovery fails at %s", async method => {
+  mock.unloadedThread = "root";
+  mock.failure = { method, message: "thread not loaded: root" };
+  await expect(prepareCodexMonoContext({ ...input, threadId: "root" })).rejects.toThrow(`Codex storage ${method}: thread not loaded: root`);
+  expect(mock.sent.filter(request => request.method === "thread/resume")).toHaveLength(1);
+  expect(mock.sent.filter(request => request.method === "thread/read")).toHaveLength(method === "thread/read" ? 2 : 1);
+  expect(mock.copy).not.toHaveBeenCalled();
+  expect(mock.sent.some(request => ["thread/start", "turn/start", "thread/archive"].includes(request.method))).toBe(false);
+  expect(mock.kill).toHaveBeenCalledOnce();
+  expect(mock.release).toHaveBeenCalledOnce();
+  expect(mock.handlers.size).toBe(0);
+});
+
+it("does not label a later copy failure with the successfully recovered read method", async () => {
+  mock.unloadedThread = "root";
+  mock.copy.mockRejectedValueOnce(new Error("Disk full"));
+  await expect(prepareCodexMonoContext({ ...input, threadId: "root" })).rejects.toThrow(/^Disk full$/);
+  expect(mock.sent.at(-1)?.method).toBe("thread/unarchive");
+  expect(mock.archived).toBe(false);
 });
 
 it("coalesces an overlapping startup migration and send preparation", async () => {

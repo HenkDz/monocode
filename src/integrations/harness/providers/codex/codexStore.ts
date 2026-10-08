@@ -99,11 +99,13 @@ async function prepare(
     { includeJsonrpc: false, label: "codex-store" },
   );
   let failedMethod: string | undefined;
-  const request = <T = unknown>(method: string, params: unknown) =>
-    rpc.request<T>(method, params, 30_000).catch(error => {
+  const request = <T = unknown>(method: string, params: unknown) => {
+    failedMethod = undefined;
+    return rpc.request<T>(method, params, 30_000).catch(error => {
       failedMethod = method;
       throw error;
     });
+  };
   watchChild(
     id,
     (line) => rpc.pushLine(line),
@@ -142,10 +144,19 @@ async function prepare(
           })
         ).thread;
       } catch (error) {
-        // Match normal Codex recovery for a thread that was already deleted.
-        if (isRecoverableThreadResumeError(error))
-          return { config, hasThread: false };
-        throw error;
+        const message = error instanceof Error ? error.message : String(error);
+        if (message === `thread not loaded: ${input.threadId}`) {
+          await request("thread/resume", { threadId: input.threadId });
+          root = (await request<{ thread: Thread }>("thread/read", {
+            threadId: input.threadId,
+            includeTurns: false,
+          })).thread;
+        } else {
+          // Match normal Codex recovery for a thread that was already deleted.
+          if (isRecoverableThreadResumeError(error))
+            return { config, hasThread: false };
+          throw error;
+        }
       }
       if (!root.path)
         throw new Error("Codex did not return the saved Mono context");

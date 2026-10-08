@@ -172,6 +172,10 @@ export type HarnessSessionInput = {
   runtimeMode: RuntimeMode;
   /** Trusted task constraint; filesystem read-only does not imply a planning conversation. */
   readOnly?: boolean;
+  /** Keep provider context in memory; MonoCode owns the saved transcript. */
+  ephemeral?: boolean;
+  /** Persist Codex context in MonoCode's private Mono store. */
+  codexStore?: "mono";
   intent?: TurnIntent;
   /**
    * This session drives MonoCode's control CLI, which reaches the app over

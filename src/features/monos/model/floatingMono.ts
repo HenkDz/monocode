@@ -1,8 +1,9 @@
 import type { ApprovalDecision } from "../../../integrations/harness";
 import type { Attachment, Session } from "../../sessions/model/session";
+import { RUNTIME_MODES, type RuntimeMode } from "../../sessions/model/session";
 import type { UserQuestionReply } from "../../sessions/model/userQuestion";
 import { displayAttachments } from "../../sessions/model/attachments";
-import { listMonos, monoLook, type MonoState } from "./mono";
+import { listMonos, monoLook, type Mono, type MonoState } from "./mono";
 import { pixelLayers } from "../../projects/model/pixelMascots";
 
 export const FLOATING_MONO_CHANGED = "mono_chat_changed";
@@ -13,6 +14,7 @@ export type FloatingMonoEntry = {
   mascot: string;
   color: string;
   sessionId: string | null;
+  role?: Mono["role"];
 };
 export type FloatingMonoView = {
   monos: FloatingMonoEntry[];
@@ -24,6 +26,8 @@ export type FloatingMonoAction =
   | { kind: "open" }
   | { kind: "submit"; text: string; attachments: Attachment[] }
   | { kind: "stop" }
+  | { kind: "create" }
+  | { kind: "runtimeMode"; mode: RuntimeMode }
   | { kind: "approval"; requestId: number; decision: ApprovalDecision }
   | { kind: "question"; requestId: number; reply: UserQuestionReply }
   | { kind: "questionInteraction"; requestId: number }
@@ -43,6 +47,7 @@ export function floatingMonoRoster(enabled: boolean): FloatingMonoEntry[] {
         id: mono.id,
         ...monoLook(mono),
         sessionId: mono.sessionId ?? null,
+        ...(mono.role ? { role: mono.role } : {}),
       }))
     : [];
 }
@@ -103,6 +108,9 @@ export type FloatingMonoHost = {
   openFile(path: string): void | Promise<void>;
   openArtifact?(monoId: string, id: string): void | Promise<void>;
   resume(sessionId: string): void;
+  /** Add a Mono and show it in place of the chat that asked. */
+  create?(fromMonoId: string): Promise<void>;
+  runtimeMode?(sessionId: string, mode: RuntimeMode): void;
 };
 
 /** Preparation may await disk; recheck the receipt before mutating a session. */
@@ -148,6 +156,15 @@ export async function deliverFloatingMonoRequest(
       break;
     case "resume":
       host.resume(session.id);
+      break;
+    case "create":
+      if (!host.create) throw new Error("New Monos are unavailable here.");
+      await host.create(request.monoId);
+      break;
+    case "runtimeMode":
+      if (!host.runtimeMode || !RUNTIME_MODES.includes(action.mode))
+        throw new Error("Those permissions are unavailable here.");
+      host.runtimeMode(session.id, action.mode);
       break;
     default:
       throw new Error("Unknown chat action.");

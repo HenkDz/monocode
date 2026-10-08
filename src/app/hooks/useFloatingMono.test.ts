@@ -12,6 +12,7 @@ import type {
 } from "../../features/monos/model/floatingMono";
 import { useFloatingMono } from "./useFloatingMono";
 import type { OrchestrationRun } from "../../features/orchestration/model/orchestrationState";
+import { saveMonoMenuBarIcon } from "../../features/settings/model/settings";
 
 const native = vi.hoisted(() => ({ invoke: vi.fn(), listen: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({
@@ -21,7 +22,10 @@ vi.mock("@tauri-apps/api/core", () => ({
 vi.mock("@tauri-apps/api/webviewWindow", () => ({
   getCurrentWebviewWindow: () => ({ listen: native.listen }),
 }));
-vi.mock("../../platform/tauri/platform", () => ({ IS_MAC: true, IS_LINUX: false, IS_WINDOWS: false, IS_WIN: false }));
+vi.mock("../../platform/tauri/platform", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  IS_MAC: true,
+}));
 vi.mock("../../features/monos/model/mono", async (original) => ({
   ...(await original<object>()),
   findMono: (id: string) => ({ id, sessionId: `chat-${id}` }),
@@ -34,7 +38,7 @@ let container: HTMLDivElement;
 let root: Root;
 let requests: FloatingMonoRequest[];
 let sessions: Session[];
-let host: FloatingMonoHost;
+let host: Omit<FloatingMonoHost, "create"> & { create(): string };
 
 function Harness({
   sessions,
@@ -62,6 +66,7 @@ beforeEach(() => {
     action: { kind: "open" },
   }));
   host = {
+    create: vi.fn(() => "new-mono"),
     open: vi.fn(async (id) => sessions.find((s) => s.id === `chat-${id}`)),
     submit: vi.fn(),
     stop: vi.fn(),
@@ -181,4 +186,21 @@ it("publishes descendant start and finish, and run decisions while the owner's s
   native.invoke.mockClear();
   await act(async () => root.render(createElement(Harness, { sessions, runs: [] })));
   expect(publishedState()).toBe("idle");
+});
+
+it("shows or hides the menu bar icon to match the setting", async () => {
+  const stored = new Map<string, string>();
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => stored.get(key) ?? null,
+    setItem: (key: string, value: string) => stored.set(key, value),
+    removeItem: (key: string) => stored.delete(key),
+  });
+  await act(async () => root.render(createElement(Harness, { sessions })));
+  expect(native.invoke).toHaveBeenCalledWith("mono_menu_bar_set_visible", {
+    visible: true,
+  });
+  await act(async () => saveMonoMenuBarIcon(false));
+  expect(native.invoke).toHaveBeenLastCalledWith("mono_menu_bar_set_visible", {
+    visible: false,
+  });
 });

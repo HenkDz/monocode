@@ -7,6 +7,8 @@ import {
   type ReactNode,
 } from "react";
 import { OrchestrationActions } from "../../orchestration/ui/OrchestrationActions";
+import { PixelMascot } from "../../projects/ui/PixelMascot";
+import { findMono, monoLook } from "../../monos/model/mono";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
@@ -69,6 +71,7 @@ import { useWorktreeFocus } from "../model/worktreeFocus";
 import {
   worktreeProgress,
   worktreeSessionGroups,
+  worktreeTaskSessions,
 } from "../model/worktreeSessions";
 import type { Worktree, WorktreeSessionOptions } from "../model/worktrees";
 
@@ -231,6 +234,19 @@ export function ProjectWorktrees({
   );
   const agents = new Map(liveAgents.map((agent) => [agent.id, agent]));
   const trees = data?.worktrees ?? [];
+  const workers = useMemo(
+    () => worktreeTaskSessions(project, data?.worktrees ?? [], managerRuns),
+    [project, data, managerRuns],
+  );
+  const teamTasks = new Set(managerRuns.filter(run => run.ownerMonoId).flatMap(run => run.tasks));
+  const teamByPath = new Map([...workers].map(([key, sessions]) => [key,
+    sessions.filter(({ sessionId, task }) =>
+      teamTasks.has(task) && sessionId === task.sessionId &&
+      (busySessionIds.has(sessionId) || task.status === "running" || task.status === "cancelling"),
+    ).filter((worker, index, all) =>
+      all.findIndex(other => (other.task.memberId ?? other.sessionId) === (worker.task.memberId ?? worker.sessionId)) === index,
+    ),
+  ]));
   const focusedPath =
     selectionEnabled &&
     !isProjectManager(activeSessionId ?? "") &&
@@ -249,11 +265,10 @@ export function ProjectWorktrees({
           ["running", "queued", "cancelling"].includes(task.status)),
     );
   const taskByPath = new Map(
-    managerRuns
-      .filter((run) => run.projectManager && sameProjectPath(run.cwd, project))
-      .flatMap((run) => run.tasks)
-      .filter((task) => task.workspace && task.workspacePolicy !== "shared")
-      .map((task) => [pathKey(task.workspace!.checkoutCwd), task]),
+    [...workers].flatMap(([key, sessions]) => {
+      const task = sessions.find(({ task }) => task.workspacePolicy !== "shared")?.task;
+      return task ? [[key, task] as const] : [];
+    }),
   );
   const rank = (tree: Worktree) => {
     const task = taskByPath.get(pathKey(tree.path));
@@ -262,6 +277,7 @@ export function ProjectWorktrees({
   const filteredTrees = trees.filter(
     (tree) =>
       !activeOnly ||
+      !!teamByPath.get(pathKey(tree.path))?.length ||
       (groups.get(pathKey(tree.path)) ?? []).some(needsAttention) ||
       (!!focusedPath && sameProjectPath(focusedPath, tree.path)) ||
       (tree.branch &&
@@ -283,6 +299,7 @@ export function ProjectWorktrees({
   const listedTrees = filteredTrees.filter(
     (tree) =>
       regularPage.has(pathKey(tree.path)) ||
+      !!teamByPath.get(pathKey(tree.path))?.length ||
       (!!renderManager && taskByPath.has(pathKey(tree.path))) ||
       (!!focusedPath && sameProjectPath(focusedPath, tree.path)) ||
       !!managerWorktreeStatus(managerRuns, tree.path, undefined, prStatuses) ||
@@ -408,8 +425,26 @@ export function ProjectWorktrees({
                 <div hidden={!group.expanded}>
             {group.trees.map((tree) => {
               const key = pathKey(tree.path);
-              const sessions = groups.get(key) ?? [];
-              const expanded = sessions.length > 1 && !collapsed.has(key);
+              const userSessions = groups.get(key) ?? [];
+              const taskTree = section.name === "Task worktrees";
+              const workerSessions = workers.get(key) ?? [];
+              const workerIds = new Set(workerSessions.map(worker => worker.sessionId));
+              const sessions: SessionSummary[] = taskTree ? [
+                ...workerSessions.map(({ sessionId, task, startedAt }): SessionSummary => ({
+                  id: sessionId, cwd: project, worktreeCwd: tree.path,
+                  title: task.title, harness: task.harness, model: task.model,
+                  runtimeMode: "supervised", createdAt: startedAt, updatedAt: startedAt,
+                })),
+                ...userSessions.filter(session => !workerIds.has(session.id)),
+              ] : userSessions;
+              const folded = taskTree && sessions.length === 1;
+              const expandable = sessions.length > (taskTree ? 1 : 0);
+              const expanded = expandable && !collapsed.has(key);
+              const teammates = (taskTree ? [] : teamByPath.get(key) ?? []).map(worker => {
+                const member = worker.task.memberId && findMono(worker.task.memberId);
+                const look = member ? monoLook(member) : undefined;
+                return { ...worker, look, name: look?.name ?? worker.task.memberName ?? "Teammate" };
+              });
               const listed = showAll.has(key)
                 ? sessions
                 : sessions.filter(
@@ -419,7 +454,7 @@ export function ProjectWorktrees({
               const hiddenCount = sessions.length - listed.length;
               const selected =
                 !!focusedPath &&
-                !(expanded && sessions.some(session => session.id === activeSessionId)) &&
+                !(sessions.some(session => session.id === activeSessionId) && !folded) &&
                 sameProjectPath(focus?.path ?? project, tree.path);
               const managerTask = taskByPath.get(key);
               const label =
@@ -430,7 +465,7 @@ export function ProjectWorktrees({
                 "Detached worktree";
               const done = group.name === "Finished";
               const outcome = managerTask && managerTaskOutcome(managerTask, taskPrStatus(managerTask, prStatuses));
-              const workerStatus = managerWorktreeStatus(
+              const workerStatus = taskTree && managerWorktreeStatus(
                 managerRuns,
                 tree.path,
                 approvalSessionIds,
@@ -456,7 +491,7 @@ export function ProjectWorktrees({
                 <div
                   key={key}
                   data-worktree={tree.path}
-                  className={`my-1 rounded-md border border-transparent hover:border-content/15 hover:bg-content/5 focus-within:border-content/15 focus-within:bg-content/5 ${done ? "opacity-60" : ""} ${sessions.length === 1 && sessions[0].id === activeSessionId ? "bg-selection" : ""} ${menu?.tree.path === tree.path ? "border-content/15 bg-content/5" : ""}`}
+                  className={`my-1 rounded-md border border-transparent hover:border-content/15 hover:bg-content/5 focus-within:border-content/15 focus-within:bg-content/5 ${done ? "opacity-60" : ""} ${folded && sessions[0].id === activeSessionId ? "bg-selection" : ""} ${menu?.tree.path === tree.path ? "border-content/15 bg-content/5" : ""}`}
                 >
                   <div
                     className="group/worktree relative flex h-7 items-center gap-1 rounded-md"
@@ -490,7 +525,7 @@ export function ProjectWorktrees({
                       setMenu({ tree, x: rect.left, y: rect.bottom, trigger });
                     }}
                   >
-                    {sessions.length > 1 ? (
+                    {expandable ? (
                       <button
                         type="button"
                         className="grid w-4 shrink-0 place-items-center text-content/40 hover:text-content focus-visible:outline-accent"
@@ -515,7 +550,7 @@ export function ProjectWorktrees({
                       aria-busy={selected && switchPending}
                       title={`${label}\n${tree.branch ?? `Detached ${tree.head.slice(0, 7)}`}\n${prettyCwd(tree.path)}\n${outcome || workerStatus || progress}${tree.dirty ? "\nUncommitted changes" : ""}`}
                       onClick={() =>
-                        sessions.length === 1
+                        taskTree && sessions.length
                           ? onSelectSession(sessions[0].id, { project, tree })
                           : onSelectWorktree(project, tree)
                       }
@@ -539,6 +574,23 @@ export function ProjectWorktrees({
                         </span>
                       ) : null}
                     </button>
+                    {teammates.length > 0 && (
+                      <div data-worktree-team className="flex min-w-0 max-w-[50%] items-center gap-1 pr-1">
+                        {teammates.map(({ sessionId, task, look, name }) => (
+                            <button key={sessionId} type="button" disabled={tree.missing}
+                              aria-label={`Open ${name}'s session`} title={`${name} working here`}
+                              onClick={() => onSelectSession(sessionId, { project, tree })}
+                              className="shrink-0 rounded hover:bg-content/8 focus-visible:outline-accent disabled:opacity-40">
+                              <PixelMascot name={look?.mascot ?? task.memberMascot ?? "robot"} color={look?.color ?? task.memberColor ?? "#888"} still className="size-4" />
+                            </button>
+                        ))}
+                        <button type="button" disabled={tree.missing}
+                          onClick={() => onSelectSession(teammates[0].sessionId, { project, tree })}
+                          className="truncate rounded text-[11px] text-content/65 hover:text-content focus-visible:outline-accent disabled:opacity-40">
+                          {teammates.length === 1 ? `${teammates[0].name} working here` : `${teammates.length} teammates here`}
+                        </button>
+                      </div>
+                    )}
                     <div data-worktree-metadata className="ml-auto flex max-w-[45%] shrink-0 items-center gap-1 overflow-hidden pr-1 text-[11px] text-content/50 group-hover/worktree:hidden group-focus-within/worktree:hidden group-data-[actions-open=true]/worktree:hidden [@media(hover:none)]:hidden">
                       {done ? (
                         <>
@@ -641,6 +693,9 @@ export function ProjectWorktrees({
                                   {title}
                                 </span>
                               </span>
+                              {taskTree && !workerIds.has(session.id) && (
+                                <span className="shrink-0 text-[11px] text-content/50">Yours</span>
+                              )}
                               {waiting ? (
                                 <CircleAlert className="mt-0.5 size-3 shrink-0 text-amber-400" />
                               ) : busy ? (
@@ -685,7 +740,7 @@ export function ProjectWorktrees({
                       ) : null}
                     </div>
                   ) : null}
-                  {sessions.length === 1 &&
+                  {folded &&
                   sessions[0].orchestration?.tasks.length ? (
                     <div
                       data-worktree-session={sessions[0].id}

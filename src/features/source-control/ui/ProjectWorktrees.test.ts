@@ -156,10 +156,137 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
+it("opens an unloaded task worker from its worktree row without creating a blank session", async () => {
+  const runs = [{ cwd: "/repo", projectManager: true, ownerMonoId: "manager", tasks: [{
+    id: "audit", title: "Audit smoke test", sessionId: "persisted-worker", harness: "pi", model: "", status: "running",
+    workspace: { projectCwd: "/repo", checkoutCwd: "/trees/a", kind: "worktree", branch: "feature-a" },
+  }] }] as OrchestrationRun[];
+  const snapshot = vi.spyOn(orchestrator, "snapshot").mockReturnValue(runs);
+  props.renderManager = () => createElement("span", null, "Manager");
+  props.history = [];
+  props.openSessions = [];
+  try {
+    await render();
+    await act(async () => button("Toggle Task worktrees").click());
+    expect(container.querySelector('[aria-label="Task worktrees"] [data-worktree="/trees/a"]')).not.toBeNull();
+    expect(container.querySelector('[data-worktree-session="persisted-worker"]')).toBeNull();
+    await act(async () => button("Open worktree Audit smoke test").click());
+    expect(props.onSelectSession).toHaveBeenCalledExactlyOnceWith("persisted-worker", { project: "/repo", tree: expect.objectContaining({ path: "/trees/a" }) });
+    expect(props.onSelectWorktree).not.toHaveBeenCalled();
+    expect(props.onNewSession).not.toHaveBeenCalled();
+  } finally { snapshot.mockRestore(); }
+});
+
+it("opens the latest dispatch and lists earlier workers alongside sessions marked as yours", async () => {
+  const workspace = { projectCwd: "/repo", checkoutCwd: "/trees/a", kind: "worktree", branch: "feature-a" };
+  const runs = [{ cwd: "/repo", projectManager: true, ownerMonoId: "manager", tasks: [{
+    id: "audit", title: "Audit", sessionId: "latest-worker", harness: "pi", model: "", status: "running", workspace,
+  }], dispatches: [
+    { taskId: "audit", sessionId: "old-worker", workspace, startedAt: 10 },
+    { taskId: "audit", sessionId: "latest-worker", workspace, startedAt: 30 },
+    { taskId: "audit", sessionId: "middle-worker", workspace, startedAt: 20 },
+  ] }] as OrchestrationRun[];
+  const snapshot = vi.spyOn(orchestrator, "snapshot").mockReturnValue(runs);
+  props.renderManager = () => createElement("span", null, "Manager");
+  props.history = [session("your-chat", "/trees/a")];
+  props.openSessions = [];
+  try {
+    await render();
+    await act(async () => button("Toggle Task worktrees").click());
+    const row = container.querySelector('[data-worktree="/trees/a"]')!;
+    expect([...row.querySelectorAll("[data-worktree-session]")].map(item => item.getAttribute("data-worktree-session"))).toEqual(["latest-worker", "middle-worker", "old-worker", "your-chat"]);
+    expect(row.querySelector('[data-worktree-session="your-chat"]')?.textContent).toMatch(/yours/i);
+    await act(async () => button("Open worktree Audit").click());
+    expect(props.onSelectSession).toHaveBeenLastCalledWith("latest-worker", { project: "/repo", tree: expect.objectContaining({ path: "/trees/a" }) });
+    await act(async () => (row.querySelector('[data-worktree-session="your-chat"] button') as HTMLButtonElement).click());
+    expect(props.onSelectSession).toHaveBeenLastCalledWith("your-chat", { project: "/repo", tree: expect.objectContaining({ path: "/trees/a" }) });
+    expect(props.onSelectWorktree).not.toHaveBeenCalled();
+  } finally { snapshot.mockRestore(); }
+});
+
+it.each([1, 2])("lists %i user sessions with a clickable teammate indicator and user-only progress", async (count) => {
+  const runs = [{ cwd: "/repo", projectManager: true, ownerMonoId: "manager", tasks: [{
+    id: "native", sessionId: "native-worker", title: "Review GPUI", harness: "pi", model: "", memberId: "native", memberName: "Native Core", memberMascot: "fox", status: "running", readOnly: true, workspacePolicy: "shared",
+    workspace: { projectCwd: "/repo", checkoutCwd: "/trees/a", kind: "worktree", branch: "feature-a" },
+  }] }] as OrchestrationRun[];
+  const snapshot = vi.spyOn(orchestrator, "snapshot").mockReturnValue(runs);
+  props.renderManager = () => createElement("span", null, "Manager");
+  props.history = [session("native-worker", "/trees/a"), ...Array.from({ length: count }, (_, index) => session(`your-${index}`, "/trees/a"))];
+  props.openSessions = [];
+  props.activeSessionId = "your-0";
+  props.busySessionIds = new Set(["native-worker", "your-0"]);
+  props.approvalSessionIds = new Set();
+  try {
+    await render();
+    const row = container.querySelector('[aria-label="Your worktrees"] [data-worktree="/trees/a"]')!;
+    expect(row).not.toBeNull();
+    expect(row.querySelectorAll("[data-worktree-session]")).toHaveLength(count);
+    expect(row.querySelector('[data-worktree-session="native-worker"]')).toBeNull();
+    expect(row.querySelector('[data-worktree-session="your-0"] button')?.getAttribute("aria-current")).toBe("true");
+    expect(row.className).not.toContain("bg-selection");
+    expect(button("Open worktree feature-a").title).toContain("1 working");
+    expect(button("Open worktree feature-a").title).not.toContain("2 working");
+    expect(row.textContent).toContain("Native Core working here");
+    const indicator = [...row.querySelectorAll<HTMLButtonElement>("button")].find(item => item.textContent?.includes("Native Core working here"))!;
+    expect(indicator).toBeDefined();
+    await act(async () => indicator.click());
+    expect(props.onSelectSession).toHaveBeenCalledExactlyOnceWith("native-worker", { project: "/repo", tree: expect.objectContaining({ path: "/trees/a" }) });
+  } finally { snapshot.mockRestore(); }
+});
+
+it("counts teammates once per member and opens each member's session from its mascot", async () => {
+  const workspace = { projectCwd: "/repo", checkoutCwd: "/trees/a", kind: "worktree", branch: "feature-a" };
+  const tasks = [
+    { id: "native-one", sessionId: "native-one", title: "Native first", harness: "pi", model: "", memberId: "native", memberName: "Native Core", status: "running", readOnly: true, workspacePolicy: "shared", workspace },
+    { id: "native-two", sessionId: "native-two", title: "Native second", harness: "pi", model: "", memberId: "native", memberName: "Native Core", status: "running", readOnly: true, workspacePolicy: "shared", workspace },
+    { id: "review", sessionId: "review-worker", title: "Review", harness: "pi", model: "", memberId: "review", memberName: "Reviewer", status: "running", readOnly: true, workspacePolicy: "shared", workspace },
+  ];
+  const snapshot = vi.spyOn(orchestrator, "snapshot").mockReturnValue([{ cwd: "/repo", projectManager: true, ownerMonoId: "manager", tasks }] as OrchestrationRun[]);
+  props.renderManager = () => createElement("span", null, "Manager");
+  props.history = [];
+  props.openSessions = [];
+  try {
+    await render();
+    const indicator = container.querySelector('[data-worktree="/trees/a"] [data-worktree-team]')!;
+    expect(indicator.textContent).toContain("2 teammates here");
+    expect(indicator.querySelectorAll('[aria-label^="Open "]')).toHaveLength(2);
+    await act(async () => button("Open Reviewer's session").click());
+    expect(props.onSelectSession).toHaveBeenLastCalledWith("review-worker", { project: "/repo", tree: expect.objectContaining({ path: "/trees/a" }) });
+    expect(container.querySelector('[data-worktree="/trees/a"] [data-worktree-session]')).toBeNull();
+    expect(button("Open worktree feature-a").title).toContain("0 sessions");
+  } finally { snapshot.mockRestore(); }
+});
+
+it("keeps a checkout with an unloaded teammate beyond paging and the active-only filter", async () => {
+  vi.mocked(useProjectWorktrees).mockReturnValue({
+    data: { worktrees: Array.from({ length: 7 }, (_, index) => tree(`/trees/${index}`, `feature-${index}`)), defaultRoot: "/trees" }, refresh,
+  });
+  const snapshot = vi.spyOn(orchestrator, "snapshot").mockReturnValue([{ cwd: "/repo", projectManager: true, ownerMonoId: "manager", tasks: [{
+    id: "native", sessionId: "native-worker", title: "Native", harness: "pi", model: "", memberId: "native", memberName: "Native Core", status: "running", readOnly: true, workspacePolicy: "shared",
+    workspace: { projectCwd: "/repo", checkoutCwd: "/trees/6", kind: "worktree", branch: "feature-6" },
+  }] }] as OrchestrationRun[]);
+  props.renderManager = () => createElement("span", null, "Manager");
+  props.history = [];
+  props.openSessions = [];
+  props.busySessionIds = new Set();
+  props.approvalSessionIds = new Set();
+  try {
+    await render();
+    expect(container.querySelectorAll("[data-worktree]")).toHaveLength(6);
+    expect(container.querySelector('[data-worktree="/trees/6"] [data-worktree-team]')?.textContent).toContain("Native Core working here");
+    await act(async () => {
+      localStorage.setItem("monocode.activeWorktrees:/repo", "1");
+      window.dispatchEvent(new Event("storage"));
+    });
+    expect(container.querySelectorAll("[data-worktree]")).toHaveLength(1);
+    expect(container.querySelector('[data-worktree="/trees/6"] [data-worktree-team]')).not.toBeNull();
+  } finally { snapshot.mockRestore(); }
+});
+
 it("keeps a read-only shared linked checkout in Your worktrees and its enforced fallback in Task worktrees", async () => {
   const tasks = [
-    { id: "report", sessionId: "report-worker", status: "running", readOnly: true, workspacePolicy: "shared", workspace: { kind: "worktree", checkoutCwd: "/trees/a", branch: "feature-a" } },
-    { id: "fallback", sessionId: "fallback-worker", status: "running", readOnly: true, readOnlyFallback: "Harness cannot enforce read-only", workspacePolicy: "isolated-child", workspace: { kind: "worktree", checkoutCwd: "/trees/b", branch: "feature-b" } },
+    { id: "report", title: "Report", harness: "pi", model: "", sessionId: "report-worker", status: "running", readOnly: true, workspacePolicy: "shared", workspace: { kind: "worktree", checkoutCwd: "/trees/a", branch: "feature-a" } },
+    { id: "fallback", title: "Fallback", harness: "pi", model: "", sessionId: "fallback-worker", status: "running", readOnly: true, readOnlyFallback: "Harness cannot enforce read-only", workspacePolicy: "isolated-child", workspace: { kind: "worktree", checkoutCwd: "/trees/b", branch: "feature-b" } },
   ];
   const snapshot = vi.spyOn(orchestrator, "snapshot").mockReturnValue([{ leadId: "manager", cwd: "/repo", projectManager: true, tasks }] as unknown as OrchestrationRun[]);
   props.renderManager = () => createElement("span", null, "Manager");
@@ -425,17 +552,18 @@ it("uses quiet single-line idle rows, with selection only on the active session"
   expect(container.textContent).not.toContain("· root");
   expect(container.textContent).not.toContain("No sessions yet");
   expect(button("Open worktree main").getAttribute("aria-current")).toBe(
-    "true",
+    null,
   );
   expect(button("Open worktree main").parentElement!.className).not.toContain(
     "bg-selection",
   );
   expect(
     container.querySelector('[data-worktree="/repo"]')?.className,
-  ).toContain("bg-selection");
+  ).not.toContain("bg-selection");
   expect(
-    container.querySelector('[data-worktree-session="main-chat"]'),
-  ).toBeNull();
+    container.querySelector('[data-worktree-session="main-chat"] button')?.getAttribute("aria-current"),
+  ).toBe("true");
+  expect(container.querySelector('[data-worktree-session="main-chat"] button')?.className).toContain("bg-selection");
   expect(container.querySelectorAll('[class*="border-l"]')).toHaveLength(0);
   act(() => button("Collapse sessions in feature-a").click());
   expect(button("Open worktree feature-a").textContent).toContain("2");
@@ -480,10 +608,8 @@ it("overlays worktree actions and only reserves title space when they are reveal
 it("switches and creates repeated sessions in the explicit checkout without mutating its bindings", async () => {
   await render();
   act(() => button("Open worktree feature-b").click());
-  expect(props.onSelectSession).toHaveBeenCalledWith("b-chat", {
-    project: "/repo",
-    tree: expect.objectContaining({ path: "/trees/b" }),
-  });
+  expect(props.onSelectWorktree).toHaveBeenCalledWith("/repo", expect.objectContaining({ path: "/trees/b" }));
+  expect(props.onSelectSession).not.toHaveBeenCalled();
   expect(worktreeFocus("/repo")).toBeUndefined();
   act(() => button("Collapse sessions in feature-a").click());
   act(() => {
@@ -1061,6 +1187,6 @@ it("shows saved and live subagents under their lead inside the hover/focus workt
   expect(props.onSelectSession).not.toHaveBeenCalled();
   expect(
     container.querySelector('[aria-label="Collapse sessions in feature-a"]'),
-  ).toBeNull();
+  ).not.toBeNull();
   expect(card.querySelector("[data-orchestration-agent]")).not.toBeNull();
 });

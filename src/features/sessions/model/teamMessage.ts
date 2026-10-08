@@ -2,7 +2,7 @@ import type { Block } from "./session";
 
 /** The legacy envelope is still the provider prompt; its delivery guidance is not chat prose. */
 export function parseTeamMessage(text: string) {
-  const match = text.match(/^Team message from (.+) to (.+) \(([^\n]*)\):\r?\n([\s\S]*?)\r?\n\r?\nReply directly with app team\.message /);
+  const match = text.match(/^Team message from (.+) to (.+) \(([^\n]*)\):\r?\n([\s\S]*?)\r?\n\r?\n(?:Reply|When a reply is needed, reply) directly with app team\.message /);
   if (!match) return;
   const marker = match[4].match(/\n<team_sender>([^\n]+)<\/team_sender>$/);
   let sender: { id: string; name: string; mascot: string; color: string } | undefined;

@@ -1,14 +1,16 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { Share } from "../../shared/ui/icons";
 import { findMono } from "../monos/model/mono";
 
 export function useTeamMap() {
   const [scope, setScope] = useState<string | null>();
+  const show = useCallback((monoId?: string) => setScope(monoId ?? null), []);
+  const close = useCallback(() => setScope(undefined), []);
   return {
     open: scope !== undefined,
     scope: scope ?? undefined,
-    show: (monoId?: string) => setScope(monoId ?? null),
-    close: () => setScope(undefined),
+    show,
+    close,
   };
 }
 

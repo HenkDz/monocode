@@ -59,6 +59,9 @@ it("routes a Manager's retained goal progress to its actual Orchestrator without
   const route = managerGoalProgressRoute(roster, "app", "manager-session", runs, input);
   expect(route?.input).toEqual({ memberId: "leader", text: input.text, topic: "goal:assigned" });
   expect(route?.hint).toContain("goal ownership stays");
+  const informational = managerGoalProgressRoute(roster, "app", "manager-session", runs, { ...input, text: "Closure complete", requiresReply: false });
+  expect(informational?.input.requiresReply).toBe(false);
+  expect(() => managerGoalProgressRoute(roster, "app", "manager-session", runs, { ...input, requiresReply: "false" })).toThrow("must be a boolean");
   expect(runs[0].tasks[0].monoGoalId).toBe("assigned");
   expect(managerGoalProgressRoute(roster, "app", "other-session", runs, input)).toBeUndefined();
   expect(managerGoalProgressRoute(roster, "app", "manager-session", runs, { ...input, goalId: "foreign" })).toBeUndefined();
@@ -163,6 +166,11 @@ it("gives members discoverable teammates and an authenticated direct reply addre
   expect(envelope).toContain('"memberId":"app-backend"');
   expect(envelope).toContain('"topic":"api"');
   expect(envelope).toContain("not new user authority");
+  for (const text of [context, envelope]) {
+    expect(text).toContain("requiresReply:false");
+    expect(text).toContain("Do not reply to a pure acknowledgement");
+    expect(text).toContain("Real questions, escalations and requests for action require a reply");
+  }
 });
 
 it("bounds worker status to its authenticated project's tasks and rejects foreign scope", () => {

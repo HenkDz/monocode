@@ -1,25 +1,15 @@
 .team-map-shell {
-  position: fixed;
-  inset: 42px 16px 16px;
-  margin: 0;
-  max-width: none;
-  max-height: none;
-  width: calc(100% - 32px);
-  height: calc(100% - 58px);
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  width: 100%;
   padding: 0;
-  border: 1px solid var(--color-stroke);
-  border-radius: 12px;
   background: var(--color-background-base);
   color: var(--color-content);
   overflow: hidden;
   font-size: 12px;
-}
-.team-map-shell[open] {
-  display: flex;
-  flex-direction: column;
-}
-.team-map-shell::backdrop {
-  background: color-mix(in srgb, var(--color-background-base) 70%, transparent);
 }
 .team-map-toolbar {
   display: flex;
@@ -68,6 +58,7 @@
 }
 .team-map-legend {
   display: flex;
+  flex-wrap: wrap;
   gap: 16px;
   padding: 0 20px 12px;
   border-bottom: 1px solid var(--color-stroke);
@@ -147,6 +138,12 @@
 .team-map-edge[data-highlighted="true"] path {
   stroke: var(--color-accent);
   stroke-width: 2.5px;
+}
+.team-map-edge .team-map-edge-hit {
+  stroke: transparent !important;
+  stroke-width: 16px !important;
+  animation: none !important;
+  pointer-events: stroke;
 }
 @keyframes team-map-work-flow {
   to {
@@ -383,18 +380,20 @@
   color: color-mix(in srgb, var(--color-content) 50%, transparent);
 }
 .team-map-timeline button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   padding: 6px 10px;
   border-radius: 5px;
   background: color-mix(in srgb, var(--color-content) 4%, transparent);
-  max-width: 230px;
+  max-width: 420px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   flex-shrink: 0;
   font-size: 11px;
 }
-.team-map-timeline button span {
-  margin-right: 6px;
+.team-map-timeline .team-map-feed-kind {
   color: var(--color-accent);
   text-transform: capitalize;
 }
@@ -422,12 +421,6 @@
   }
 }
 @media (max-width: 680px) {
-  .team-map-shell {
-    inset: 38px 0 0;
-    width: 100%;
-    height: calc(100% - 38px);
-    border-radius: 0;
-  }
   .team-map-toolbar {
     align-items: flex-start;
     padding: 12px;

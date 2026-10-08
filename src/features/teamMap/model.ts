@@ -50,6 +50,7 @@ export type TeamMapEdge = {
   target: string;
   label?: string;
   flow?: "down" | "up";
+  tooltip: string;
 };
 export type TeamMapInput = {
   roster: readonly Mono[];
@@ -308,6 +309,13 @@ export function buildTeamMap({
           ? `PR #${task.prUrl.match(/\/(\d+)\/?$/)?.[1] ?? "ready"}`
           : activityTaskTitle(task)
       : undefined;
+    const workerName = monoLook(byId.get(task?.memberId ?? "") ?? node.mono).name;
+    const parentName = monoLook(nodeById.get(node.parentId)!.mono).name;
+    const tooltip = flow === "up"
+      ? `${workerName} is working on ${task ? activityTaskTitle(task) : node.title} · progress reports up to ${parentName}`
+      : flow === "down"
+        ? `${parentName} assigned ${task ? activityTaskTitle(task) : node.title} · waiting for ${workerName} to start`
+        : `${monoLook(node.mono).name} reports to ${parentName}${label ? ` · ${label}` : ""}`;
     return [
       {
         id: `${node.parentId}->${node.id}`,
@@ -315,6 +323,7 @@ export function buildTeamMap({
         target: node.id,
         label,
         flow,
+        tooltip,
       },
     ];
   });
@@ -337,7 +346,8 @@ export type TeamMapEvent = {
   source: string;
   target: string;
   label: string;
-  kind: "dispatch" | "report" | "review" | "pr" | "escalation" | "message";
+  kind: "dispatch" | "report" | "review" | "pr" | "escalation" | "message" | "closed" | "accepted";
+  taskId?: string;
   changes?: boolean;
 };
 
@@ -371,6 +381,7 @@ export function teamMapEvents({
           source: manager,
           target: member,
           kind: "dispatch",
+          taskId: task.id,
         });
         events.set(`${dispatch.id}:end`, {
           source: member,
@@ -378,17 +389,26 @@ export function teamMapEvents({
           kind: ["blocked", "failed", "interrupted"].includes(dispatch.state)
             ? "escalation"
             : "report",
+          taskId: task.id,
         });
       }
       events.set(`${task.id}:handoff`, {
         source: manager,
         target: member,
         kind: "dispatch",
+        taskId: task.id,
       });
       events.set(`${task.id}:pr`, {
         source: member,
         target: manager,
         kind: "pr",
+        taskId: task.id,
+      });
+      events.set(`${task.id}:finished`, {
+        source: member,
+        target: manager,
+        kind: task.completionOutcome?.startsWith("no-changes") ? "accepted" : "closed",
+        taskId: task.id,
       });
       if (task.reviewVerdict)
         events.set(`${task.id}:review:${task.reviewVerdict.dispatchId}`, {
@@ -397,6 +417,7 @@ export function teamMapEvents({
             ? (tasks.get(task.reviewOf.taskId)?.memberId ?? manager)
             : manager,
           kind: "review",
+          taskId: task.reviewOf?.taskId ?? task.id,
           changes: task.reviewVerdict.decision === "changes",
         });
     }
@@ -424,32 +445,45 @@ export function teamMapEvents({
     const id = verdict
       ? `${event.id}:${verdict.decision}:${verdict.headOid ?? ""}:${verdict.artifactId ?? ""}`
       : event.id;
+    const task = route?.taskId && tasks.get(route.taskId);
     return route
-      ? [{ ...route, id, at: reviewedAt ?? event.at, label: event.text }]
+      ? [{ ...route, id, at: reviewedAt ?? event.at, label: task ? activityTaskTitle(task) : event.text }]
       : [];
   });
   for (const message of messages) {
+    const text = `${message.topic} ${message.summary ?? ""} ${message.text}`;
+    const taskIds = text.split(/\s+/);
+    const namedTasks = [...tasks.values()].filter(task => taskIds.includes(task.id));
+    const matchingTasks = namedTasks.length ? namedTasks : [...tasks.values()].filter(task =>
+      task.title.length > 3 && text.toLowerCase().includes(task.title.toLowerCase()),
+    );
+    const relatedTask = matchingTasks.length === 1 ? matchingTasks[0] : undefined;
     const kind = /\b(escalation|blocked|needs you)\b/i.test(message.topic)
       ? "escalation"
-      : /\b(report|completion|completed)\b/i.test(message.topic)
-        ? "report"
-        : /\b(dispatch|assignment|delegation)\b/i.test(message.topic)
-          ? "dispatch"
-          : /\breview\b/i.test(message.topic)
-            ? "review"
-            : /\bpr ready\b/i.test(message.topic)
-              ? "pr"
-              : "message";
+      : /\b(accepted|acceptance)\b[^\n]*\bno[- ]changes\b/i.test(text)
+        ? "accepted"
+        : /\b(closed|closure)\b/i.test(message.topic)
+          ? "closed"
+          : /\b(report|completion|completed)\b/i.test(message.topic)
+            ? "report"
+            : /\b(dispatch|assignment|delegation)\b/i.test(message.topic)
+              ? "dispatch"
+              : /\breview\b/i.test(message.topic)
+                ? "review"
+                : /\bpr ready\b/i.test(message.topic)
+                  ? "pr"
+                  : "message";
     feed.push({
       id: message.id,
       at: message.at,
       source:
         message.senderId === "user" ? message.managerId : message.senderId,
       target: message.recipientId,
-      label: message.summary ?? `${message.topic}: ${message.text}`,
+      label: relatedTask ? activityTaskTitle(relatedTask) : message.summary ?? `${message.topic}: ${message.text}`,
+      taskId: relatedTask?.id,
       kind,
       ...(kind === "review"
-        ? { changes: /\bchanges?\b/i.test(message.topic) }
+        ? { changes: /\bchanges?\b/i.test(message.topic) || /\b(changes? requested|requested changes?)\b/i.test(text) }
         : {}),
     });
   }
@@ -526,6 +560,32 @@ export function teamMapEvents({
   ].sort((a, b) => a.at - b.at || a.id.localeCompare(b.id));
 }
 
+export function teamMapFeed(events: readonly TeamMapEvent[], roster: readonly Mono[]) {
+  const feed: (TeamMapEvent & { count: number; sentence: string })[] = [];
+  const name = (id: string) => {
+    const mono = roster.find(mono => mono.id === id);
+    return mono ? monoLook(mono).name : id;
+  };
+  const verbs: Record<TeamMapEvent["kind"], string> = {
+    dispatch: "assigned", report: "reported", review: "approved", pr: "PR ready",
+    escalation: "escalated", message: "Message", closed: "closed", accepted: "accepted (no changes)",
+  };
+  const key = (event: TeamMapEvent) => JSON.stringify([
+    event.kind, event.source, event.target, event.taskId ?? event.label.trim().replace(/\s+/g, " ").toLowerCase(), event.changes,
+  ]);
+  for (const event of [...events].sort((a, b) => b.at - a.at || b.id.localeCompare(a.id))) {
+    const previous = feed[feed.length - 1];
+    if (previous && key(previous) === key(event)) {
+      previous.count++;
+      continue;
+    }
+    const verb = event.kind === "review" && event.changes ? "requested changes" : verbs[event.kind];
+    const title = event.label.replace(/\s+/g, " ").trim();
+    feed.push({ ...event, count: 1, sentence: `${name(event.source)} → ${name(event.target)} · ${verb} · ${title.length > 100 ? `${title.slice(0, 97)}…` : title}` });
+  }
+  return feed;
+}
+
 export function teamMapEventAnimation(
   event: TeamMapEvent,
   reducedMotion: boolean,
@@ -536,7 +596,7 @@ export function teamMapEventAnimation(
     direction:
       event.kind === "dispatch"
         ? ("down" as const)
-        : ["report", "pr", "escalation"].includes(event.kind)
+        : ["report", "pr", "escalation", "closed", "accepted"].includes(event.kind)
           ? ("up" as const)
           : ("across" as const),
   };

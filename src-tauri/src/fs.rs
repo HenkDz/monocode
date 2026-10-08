@@ -1156,6 +1156,8 @@ pub struct GitPr {
     pub head_oid: Option<String>,
     #[serde(default)]
     pub mergeable: Option<String>,
+    #[serde(default)]
+    pub closed_at: Option<String>,
 }
 
 /// Latest pull request for the current branch, if `gh` can see one.
@@ -2688,7 +2690,7 @@ fn git_pr_status_for(root: &Path) -> Option<GitPr> {
             "--head",
             &branch,
             "--json",
-            "number,title,url,state,isDraft,headRepositoryOwner,baseRefName,headRefName,headRefOid,mergeable",
+            "number,title,url,state,isDraft,headRepositoryOwner,baseRefName,headRefName,headRefOid,mergeable,closedAt",
             "--limit",
             "20",
             "--state",
@@ -4072,6 +4074,8 @@ fn parse_gh_pr_list(json: &str, owner: &str) -> Option<GitPr> {
         head_oid: Option<String>,
         #[serde(default)]
         mergeable: Option<String>,
+        #[serde(default, rename = "closedAt")]
+        closed_at: Option<String>,
     }
     let rows: Vec<Row> = serde_json::from_str(json).ok()?;
     let mut best: Option<GitPr> = None;
@@ -4093,6 +4097,7 @@ fn parse_gh_pr_list(json: &str, owner: &str) -> Option<GitPr> {
             is_draft: row.is_draft,
             head_oid: row.head_oid,
             mergeable: row.mergeable,
+            closed_at: row.closed_at,
         };
         if pr.state == "open" {
             return Some(pr);
@@ -7970,6 +7975,18 @@ mod tests {
         assert_eq!(pr.head_oid.as_deref(), Some("abc123"));
         assert_eq!(pr.head_ref_name.as_deref(), Some("work"));
         assert_eq!(pr.mergeable.as_deref(), Some("CONFLICTING"));
+    }
+
+    #[test]
+    fn pr_status_retains_actual_closure_time() {
+        for state in ["CLOSED", "MERGED"] {
+            let json = serde_json::json!([{"number":4,"title":"Fix","url":"https://example.invalid/4","state":state,"closedAt":"2026-10-08T10:00:00Z","headRepositoryOwner":{"login":"owner"}}]);
+            let pr = parse_gh_pr_list(&json.to_string(), "owner").unwrap();
+            assert_eq!(pr.closed_at.as_deref(), Some("2026-10-08T10:00:00Z"));
+            assert_eq!(serde_json::to_value(pr).unwrap()["closedAt"], "2026-10-08T10:00:00Z");
+        }
+        let open = parse_gh_pr_list(r#"[{"number":4,"title":"Fix","url":"https://example.invalid/4","state":"OPEN","closedAt":null,"headRepositoryOwner":{"login":"owner"}}]"#, "owner").unwrap();
+        assert!(open.closed_at.is_none());
     }
 
     #[test]

@@ -51,7 +51,8 @@ afterEach(async () => {
 
 it("opens Mono chat and navigates the hierarchy with arrow focus", async () => {
   await renders();
-  expect(host.querySelector('dialog')?.getAttribute("aria-labelledby")).toBe("team-map-title");
+  expect(host.querySelector('section')?.getAttribute("aria-labelledby")).toBe("team-map-title");
+  expect(host.querySelector('dialog')).toBeNull();
   await act(async () => nodeButton("Orchestrator").focus());
   await act(async () => nodeButton("Orchestrator").dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })));
   expect(document.activeElement).toBe(nodeButton("App Manager"));
@@ -91,7 +92,7 @@ it("reacts to crew events with static reduced-motion indicators and timeline foc
   await act(async () => recordCrewMessage({ id: "report", managerId: "manager", senderId: "backend", recipientId: "manager", topic: "Report", text: "Routing verified", at: Date.now() }));
   expect(host.querySelector('[data-event-id="report"]')).not.toBeNull();
   expect(host.querySelector("animateMotion")).toBeNull();
-  const event = host.querySelector<HTMLButtonElement>('.team-map-timeline button[title="Report: Routing verified"]')!;
+  const event = [...host.querySelectorAll<HTMLButtonElement>('.team-map-timeline button')].find(button => button.textContent?.includes("Routing verified"))!;
   await act(async () => event.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));
   expect(nodeButton("Backend").closest(".team-map-node")?.getAttribute("data-highlighted")).toBe("true");
   await act(async () => event.click());
@@ -102,6 +103,9 @@ it("opens a Manager's own team and zooms by controls and wheel", async () => {
   await renders([], "manager");
   expect(buttons().map(button => button.getAttribute("aria-label")?.split(",")[0]).sort()).toEqual(["App Manager", "Backend"].sort());
   expect(host.textContent).toContain("App Manager’s team");
+  const project = host.querySelector<HTMLSelectElement>('[aria-label="Project"]')!;
+  expect(project.value).toBe("/app");
+  expect(project.disabled).toBe(true);
   const canvas = host.querySelector<HTMLDivElement>(".team-map-canvas")!;
   const initial = canvas.style.transform;
   await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Zoom in"]')!.click());
@@ -109,6 +113,19 @@ it("opens a Manager's own team and zooms by controls and wheel", async () => {
   const zoomed = canvas.style.transform;
   await act(async () => host.querySelector(".team-map-viewport")!.dispatchEvent(new WheelEvent("wheel", { deltaY: -100, bubbles: true, cancelable: true })));
   expect(canvas.style.transform).not.toBe(zoomed);
+  await act(async () => [...host.querySelectorAll("button")].find(button => button.textContent === "Show whole org")!.click());
+  expect(project.value).toBe("");
+  expect(project.disabled).toBe(false);
+  expect(buttons()).toHaveLength(5);
+  expect(host.textContent).toContain("Your team, working together");
+});
+
+it("closes the full view on Escape without leaving the event unclaimed", async () => {
+  await renders();
+  const event = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+  await act(async () => window.dispatchEvent(event));
+  expect(event.defaultPrevented).toBe(true);
+  expect(close).toHaveBeenCalledOnce();
 });
 
 it("starts a subscribed goal pulse after SVG mount and restarts only when its path changes", async () => {
@@ -176,13 +193,17 @@ it("uses tree order and adjacent arrow navigation at narrow widths without consu
 it("keeps both reporting edges marked while working and removes flow on finish, with reduced-motion indicators", async () => {
   reducedMotion = true;
   const running = { leadId: "engine", ownerMonoId: "manager", cwd: "/app", tasks: [
-    { id: "work", memberId: "backend", sessionId: "worker", title: "Current task", prompt: "Current task", result: "", status: "running" },
+    { id: "work", memberId: "backend", sessionId: "worker", title: "Current task", prompt: "Please verify the current task", result: "", status: "running" },
   ], dispatches: [] } as unknown as OrchestrationRun;
   await renders([running]);
   const flows = [...host.querySelectorAll('.team-map-edge[data-flow="up"]')];
   expect(flows).toHaveLength(2);
   expect(flows.every(edge => edge.getAttribute("data-reduced-motion") === "true")).toBe(true);
   expect(flows.every(edge => edge.querySelector("path"))).toBe(true);
+  expect(host.textContent).toContain("↓ assigned · ↑ reporting back · ↔ review");
+  expect(flows.every(edge => edge.querySelector("title")?.textContent?.includes("Current task"))).toBe(true);
+  expect(flows.every(edge => edge.getAttribute("aria-label")?.includes("progress reports up"))).toBe(true);
+  expect(flows.every(edge => edge.querySelector(".team-map-edge-hit"))).toBe(true);
   expect(host.querySelector("animateMotion")).toBeNull();
   await act(async () => [...host.querySelectorAll("button")].find(button => button.textContent === "Needs you")!.click());
   expect(flows.every(edge => edge.getAttribute("data-dimmed") === "true")).toBe(true);

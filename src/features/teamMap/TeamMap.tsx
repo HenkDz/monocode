@@ -30,7 +30,9 @@ import {
   teamMapEventAnimation,
   teamMapEventEdges,
   teamMapKeyboardNode,
+  teamMapFeed,
 } from "./model";
+import { fitTeamMap } from "./camera";
 import "./teamMap.css";
 
 type Props = {
@@ -121,7 +123,14 @@ export function TeamMap({
   const roster = useMemo(() => listMonos(), [rosterSnapshot]);
   const messages = useMemo(() => crewMessages(), [messageSnapshot]);
   const goals = useMemo(() => monoManagerGoals.goals(), [goalsSnapshot]);
-  const [project, setProject] = useState("");
+  const [wholeOrg, setWholeOrg] = useState(false);
+  const activeScope = wholeOrg ? undefined : scope;
+  const scopedMono = roster.find((mono) => mono.id === activeScope);
+  const scopedProject = scopedMono?.role === "manager"
+    ? scopedMono.managerProject ?? scopedMono.projects[0] ?? ""
+    : "";
+  const [projectFilter, setProject] = useState<string>();
+  const project = projectFilter ?? scopedProject;
   const [needsYou, setNeedsYou] = useState(false);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [hovered, setHovered] = useState<string>();
@@ -132,7 +141,6 @@ export function TeamMap({
     () => window.matchMedia("(prefers-reduced-motion: reduce)").matches,
   );
   const [camera, setCamera] = useState({ x: 0, y: 0, zoom: 1 });
-  const dialog = useRef<HTMLDialogElement>(null);
   const viewport = useRef<HTMLDivElement>(null);
   const buttons = useRef(new Map<string, HTMLButtonElement>());
   const seen = useRef<Set<string>>(undefined);
@@ -145,13 +153,13 @@ export function TeamMap({
     runs,
     sessions,
     statuses,
-    scope,
+    scope: activeScope,
     project: project || undefined,
     collapsed,
   };
   const map = useMemo(
     () => buildTeamMap(input),
-    [roster, runs, sessions, statuses, scope, project, collapsed],
+    [roster, runs, sessions, statuses, activeScope, project, collapsed],
   );
   const allEvents = useMemo(
     () => teamMapEvents({ roster, runs, sessions, statuses, messages, goals }),
@@ -159,8 +167,9 @@ export function TeamMap({
   );
   const events = useMemo(
     () => teamMapEvents({ ...input, messages, goals }),
-    [roster, runs, sessions, statuses, scope, project, messages, goals],
+    [roster, runs, sessions, statuses, activeScope, project, messages, goals],
   );
+  const feed = useMemo(() => teamMapFeed(events, roster), [events, roster]);
   const nodeById = new Map(map.nodes.map((node) => [node.mono.id, node]));
   const tabStop = nodeById.has(focused ?? "") ? focused : map.nodes[0]?.id;
   const projects = [
@@ -170,7 +179,7 @@ export function TeamMap({
           (mono) =>
             !mono.archivedAt &&
             mono.role === "manager" &&
-            (!scope || mono.id === scope),
+            (!activeScope || mono.id === activeScope),
         )
         .flatMap((mono) => mono.managerProject ?? mono.projects[0] ?? []),
     ),
@@ -193,18 +202,7 @@ export function TeamMap({
   const fit = () => {
     if (!viewport.current) return;
     const { clientWidth: width, clientHeight: height } = viewport.current;
-    const zoom = Math.min(
-      1,
-      Math.max(
-        0.2,
-        Math.min((width - 48) / map.width, (height - 48) / map.height),
-      ),
-    );
-    setCamera({
-      zoom,
-      x: (width - map.width * zoom) / 2,
-      y: (height - map.height * zoom) / 2,
-    });
+    setCamera(fitTeamMap(width, height, map.width, map.height, map.nodes.length));
   };
   const zoomBy = (amount: number) => {
     setCamera((previous) => {
@@ -237,23 +235,30 @@ export function TeamMap({
   };
 
   useEffect(() => {
-    const element = dialog.current!;
-    element.showModal();
     const motion = window.matchMedia("(prefers-reduced-motion: reduce)");
     const update = () => setReducedMotion(motion.matches);
     motion.addEventListener("change", update);
     return () => {
-      element.close();
       motion.removeEventListener("change", update);
       timers.current.forEach(clearTimeout);
     };
   }, []);
   useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      event.preventDefault();
+      event.stopPropagation();
+      onClose();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [onClose]);
+  useEffect(() => {
     fit();
     const observer = new ResizeObserver(fit);
     if (viewport.current) observer.observe(viewport.current);
     return () => observer.disconnect();
-  }, [map.width, map.height, project, scope, collapsed]);
+  }, [map.width, map.height, map.nodes.length, project, activeScope, collapsed]);
   useEffect(() => {
     const element = viewport.current!;
     const wheel = (event: WheelEvent) => {
@@ -295,22 +300,18 @@ export function TeamMap({
   };
 
   return (
-    <dialog
-      ref={dialog}
+    <section
       className="team-map-shell"
       aria-labelledby="team-map-title"
-      onCancel={(event) => {
-        event.preventDefault();
-        onClose();
-      }}
     >
       <header className="team-map-toolbar">
         <div>
           <h1 id="team-map-title">Team map</h1>
           <p>
-            {scope && roster.find((mono) => mono.id === scope)
-              ? monoLook(roster.find((mono) => mono.id === scope)!).name +
+            {scopedMono
+              ? monoLook(scopedMono).name +
                 "’s team"
+              : project ? `${projectName(project)} team`
               : "Your team, working together"}
           </p>
         </div>
@@ -320,6 +321,7 @@ export function TeamMap({
             <select
               aria-label="Project"
               value={project}
+              disabled={Boolean(scopedProject)}
               onChange={(event) => setProject(event.target.value)}
             >
               <option value="">All projects</option>
@@ -330,6 +332,12 @@ export function TeamMap({
               ))}
             </select>
           </label>
+          {activeScope && (
+            <button type="button" onClick={() => {
+              setWholeOrg(true);
+              setProject("");
+            }}>Show whole org</button>
+          )}
           <button
             type="button"
             aria-pressed={needsYou}
@@ -337,7 +345,7 @@ export function TeamMap({
           >
             Needs you
           </button>
-          <button type="button" aria-label="Close team map" onClick={onClose}>
+          <button type="button" autoFocus aria-label="Close team map" onClick={onClose}>
             <X className="size-4" />
           </button>
         </div>
@@ -349,6 +357,7 @@ export function TeamMap({
             {label}
           </span>
         ))}
+        <span>↓ assigned · ↑ reporting back · ↔ review</span>
         <span className="team-map-hint">
           Drag to pan · scroll to zoom · arrows to explore
         </span>
@@ -403,7 +412,6 @@ export function TeamMap({
               className="team-map-edges"
               width={map.width}
               height={map.height}
-              aria-hidden="true"
             >
               {map.edges.map((edge) => {
                 const source = nodeById.get(edge.source)!,
@@ -418,7 +426,11 @@ export function TeamMap({
                       (needsYou && target.status !== "needs-you") || undefined
                     }
                     className="team-map-edge"
+                    role="img"
+                    aria-label={edge.tooltip}
                   >
+                    <title>{edge.tooltip}</title>
+                    <path className="team-map-edge-hit" d={edgePath(edge.source, edge.target)} />
                     <path d={edgePath(edge.source, edge.target)} />
                     {edge.label && (
                       <foreignObject
@@ -652,15 +664,14 @@ export function TeamMap({
       </div>
       <footer className="team-map-timeline" aria-label="Recent crew events">
         <span className="team-map-feed-label">Crew feed</span>
-        {events.length ? (
-          events
-            .slice(-16)
-            .reverse()
+        {feed.length ? (
+          feed
+            .slice(0, 16)
             .map((event) => (
               <button
                 key={event.id}
                 type="button"
-                title={event.label}
+                title={event.sentence}
                 onMouseEnter={() => setHighlight(event)}
                 onMouseLeave={() => setHighlight(undefined)}
                 onFocus={() => setHighlight(event)}
@@ -677,14 +688,19 @@ export function TeamMap({
                   if (nodeById.has(id)) focusNode(id);
                 }}
               >
-                <span>{event.kind}</span>
-                {event.label}
+                {[event.source, event.target].map((id, index) => {
+                  const mono = roster.find((mono) => mono.id === id);
+                  const look = mono && monoLook(mono);
+                  return look ? <PixelMascot key={`${id}:${index}`} name={look.mascot} color={look.color} still className="size-4 shrink-0" /> : null;
+                })}
+                <span className="team-map-feed-kind">{event.kind}{event.count > 1 ? ` ×${event.count}` : ""}</span>
+                {event.sentence}
               </button>
             ))
         ) : (
           <p>Delegations and reports will appear here as your team works.</p>
         )}
       </footer>
-    </dialog>
+    </section>
   );
 }

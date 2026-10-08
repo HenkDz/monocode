@@ -13,7 +13,7 @@ import { TeamMap } from "../features/teamMap/TeamMap";
 import { TeamMapHeaderAction, useTeamMap } from "../features/teamMap/navigation";
 import { recordCrewDecision } from "../features/monos/model/monoCrewEvents";
 import { teamDecisions } from "../features/monos/model/monoTeamActivity";
-import { crewMessages, recordCrewMessage } from "../features/monos/model/monoCrewEvents";
+import { crewMessages, deliverCrewMessage, teamMessageRequiresReply } from "../features/monos/model/monoCrewEvents";
 import { requestMemberWork } from "../features/monos/model/memberWorkRequest";
 import {
   assertDirectReport,
@@ -2640,6 +2640,7 @@ function Workspace({
       paneId?: string,
       reason: "session" | "workspace" = "session",
     ) => {
+      teamMap.close();
       closeMonoView();
       const tab = tabsRef.current.find((entry) => entry.id === id);
       const nextFocusedId =
@@ -2810,6 +2811,7 @@ function Workspace({
   );
 
   const onNew = useCallback(() => {
+    teamMap.close();
     setSearchViewOpen(false);
     setInboxViewOpen(false);
     setNotesViewOpen(false);
@@ -4775,6 +4777,7 @@ function Workspace({
 
   const onOpenMono = useCallback(
     async (monoId: string) => {
+      teamMap.close();
       setMonoTeamRequest(0);
       updateMono(monoId, (mono) => ({ ...mono, lastUsedAt: Date.now() }));
       workspaceSessionRequest.current++;
@@ -4949,6 +4952,7 @@ function Workspace({
       sessionId: string,
       workspace?: { project: string; tree: Worktree },
     ) => {
+      teamMap.close();
       const request = ++workspaceSessionRequest.current;
       workspaceNavigation.cancel();
       let session = await ensureOpenSession(sessionId);
@@ -6345,6 +6349,7 @@ function Workspace({
 
   const onSelectProject = useCallback(
     async (path: string) => {
+      teamMap.close();
       const remembered = readProjectReturnMemory().get(pathKey(path));
       const mono = monoForView(remembered);
       if (mono && monoViewProject(remembered) && sameProjectPath(monoViewProject(remembered)!, path)) {
@@ -11929,32 +11934,35 @@ function Workspace({
           ? managerGoalProgressRoute(listMonos(), goalActor.id, source.id, orchestrator.snapshot(), payload.input) : undefined;
         if (source && (payload.action === "team.message" || peerRecipient || goalProgress)) {
           const actor = workerMember ?? monoForSession(source.id) ?? findMono(habitRunMono(source.id) ?? "");
-          const input = goalProgress?.input ?? (peerRecipient ? { memberId: peerRecipient.id, text: payload.input.prompt, topic: "general" } : payload.input);
+          const input: Record<string, unknown> = goalProgress?.input ?? (peerRecipient ? { memberId: peerRecipient.id, text: payload.input.prompt, topic: "general" } : payload.input);
           if (!actor?.role || !source.busy) throw new Error("Team messages require an active team turn");
-          if (Object.keys(input).some(field => !["memberId", "text", "topic"].includes(field)) || typeof input.memberId !== "string" || typeof input.text !== "string" || !input.text.trim() || input.text.length > (goalProgress ? 8000 : 6000) || (input.topic != null && (typeof input.topic !== "string" || input.topic.length > 120))) throw new Error("Choose a memberId, nonempty text under 6000 characters and an optional short topic");
+          if (Object.keys(input).some(field => !["memberId", "text", "topic", "requiresReply"].includes(field)) || typeof input.memberId !== "string" || typeof input.text !== "string" || !input.text.trim() || input.text.length > (goalProgress ? 8000 : 6000) || (input.topic != null && (typeof input.topic !== "string" || input.topic.length > 120))) throw new Error("Choose a memberId, nonempty text under 6000 characters and an optional short topic");
+          const requiresReply = teamMessageRequiresReply(input.requiresReply);
+          const messageText = input.text;
           const eventId = `${source.id}:${payload.requestId}`;
           const topic = typeof input.topic === "string" ? input.topic.trim() : "general";
           const events = crewMessages();
           const prior = events.find(event => event.id === eventId);
-          if (prior && (prior.text !== input.text || prior.recipientId !== input.memberId || prior.topic !== topic)) throw new Error("Request ID was already used with different input");
+          if (prior && (prior.text !== input.text || prior.recipientId !== input.memberId || prior.topic !== topic || (prior.requiresReply !== false) !== requiresReply)) throw new Error("Request ID was already used with different input");
           const exchanges = events.filter(event => event.topic === topic && ((event.senderId === actor.id && event.recipientId === input.memberId) || (event.recipientId === actor.id && event.senderId === input.memberId))).length;
           const route = teamMessageRoute(listMonos(), actor.id, input.memberId, exchanges);
           if (!prior) {
-            const text = teamMessageEnvelope(actor, route.target, topic, input.text, route.hint);
-            const worker = route.target.role === "member" && teamMessageWorker(orchestrator.snapshot(), route.target.id);
-            if (worker) {
-              await orchestrator.handle(worker.leadId, eventId, "steer", { taskId: worker.taskId, text });
-            } else {
-              const target = await ensureMonoSession(route.target.id, {
-                home: homeDir, load: ensureOpenSession, save: saveMonoPermissions,
-                create: path => newDefaultSession(path, sessionDefaults?.runtimeMode),
-                add: session => { sessionsRef.current = [...sessionsRef.current, session]; setSessions(sessionsRef.current); },
+            await deliverCrewMessage({ id: eventId, managerId: route.managerId ?? route.target.id, senderId: actor.id, recipientId: input.memberId, topic, text: input.text, at: Date.now(), requiresReply }, async () => {
+              const text = teamMessageEnvelope(actor, route.target, topic, messageText, route.hint);
+              const worker = route.target.role === "member" && teamMessageWorker(orchestrator.snapshot(), route.target.id);
+              if (worker) {
+                await orchestrator.handle(worker.leadId, eventId, "steer", { taskId: worker.taskId, text });
+              } else {
+                const target = await ensureMonoSession(route.target.id, {
+                  home: homeDir, load: ensureOpenSession, save: saveMonoPermissions,
+                  create: path => newDefaultSession(path, sessionDefaults?.runtimeMode),
+                  add: session => { sessionsRef.current = [...sessionsRef.current, session]; setSessions(sessionsRef.current); },
               });
               if (!target) throw new Error("Recipient conversation is unavailable");
               const accepted = await submitSessionRef.current(target.id, text, [], { appRequestId: eventId });
               if (!accepted) throw new Error("Recipient could not accept the message");
             }
-            recordCrewMessage({ id: eventId, managerId: route.managerId ?? route.target.id, senderId: actor.id, recipientId: input.memberId, topic, text: input.text, at: Date.now() });
+            });
           }
           return { sent: true, routedTo: route.target.id, ...(goalProgress || route.hint || peerRecipient ? { hint: goalProgress?.hint ?? route.hint ?? "Sent as a teammate question; use team.message for team conversations." } : {}) };
         }
@@ -13113,6 +13121,7 @@ function Workspace({
   }, []);
 
   const onOpenSearch = useCallback(() => {
+    teamMap.close();
     workspaceNavigation.cancel();
     startTransition(() => {
       setFilePickerOpen(false);
@@ -13130,6 +13139,7 @@ function Workspace({
   }, []);
 
   const onOpenInbox = useCallback(() => {
+    teamMap.close();
     workspaceNavigation.cancel();
     startTransition(() => {
       setFilePickerOpen(false);
@@ -13245,6 +13255,7 @@ function Workspace({
   );
 
   const onOpenNotes = useCallback(() => {
+    teamMap.close();
     workspaceNavigation.cancel();
     if (!loadNotesEnabled()) return;
     startTransition(() => {
@@ -13262,6 +13273,7 @@ function Workspace({
   }, []);
 
   const onOpenAutomations = useCallback(() => {
+    teamMap.close();
     workspaceNavigation.cancel();
     startTransition(() => {
       setFilePickerOpen(false);
@@ -13276,6 +13288,17 @@ function Workspace({
   const onLeaveAutomations = useCallback(() => {
     setAutomationsViewOpen(false);
   }, []);
+
+  const onOpenTeamMap = useCallback((scope?: string) => {
+    workspaceNavigation.cancel();
+    setFilePickerOpen(false);
+    setSettingsOpen(false);
+    setSearchViewOpen(false);
+    setInboxViewOpen(false);
+    setNotesViewOpen(false);
+    setAutomationsViewOpen(false);
+    teamMap.show(scope);
+  }, [teamMap.show, workspaceNavigation.cancel]);
 
   const onOpenAutomationSession = useCallback(
     async (sessionId: string) => {
@@ -13298,6 +13321,7 @@ function Workspace({
 
   const openSettings = useCallback(
     (section?: SettingsSectionId, anchor?: SettingsAnchor) => {
+      teamMap.close();
       workspaceNavigation.cancel();
       if (!settingsOpenRef.current) {
         settingsReturnViewRef.current = {
@@ -13383,6 +13407,10 @@ function Workspace({
   );
 
   const onRailBack = useCallback(() => {
+    if (teamMap.open) {
+      teamMap.close();
+      return;
+    }
     if (settingsOpen) {
       onCloseSettings();
       return;
@@ -13410,6 +13438,8 @@ function Workspace({
     }
     onVisitBack();
   }, [
+    teamMap.open,
+    teamMap.close,
     onCloseSettings,
     onVisitBack,
     closeMonoView,
@@ -13421,6 +13451,7 @@ function Workspace({
   ]);
 
   const onRailForward = useCallback(() => {
+    teamMap.close();
     setSearchViewOpen(false);
     setSettingsOpen(false);
     setInboxViewOpen(false);
@@ -14202,6 +14233,7 @@ function Workspace({
   }, [monosSnap, sessions, unseenFinishedIds, orchestrationRuns]);
 
   const chromeSurfaceOpen =
+    teamMap.open ||
     searchViewOpen ||
     settingsOpen ||
     inboxViewOpen ||
@@ -14246,7 +14278,7 @@ function Workspace({
       projectRailOpen={projectRailOpen}
       sessionSidebarOpen={sessionSidebarOpen}
       compactRail={compactTitleNavigation}
-      canGoBack={!!monoViewId || tabVisitNav.canBack}
+      canGoBack={teamMap.open || !!monoViewId || tabVisitNav.canBack}
       canGoForward={tabVisitNav.canForward}
       onGoBack={onRailBack}
       onGoForward={onRailForward}
@@ -14358,6 +14390,7 @@ function Workspace({
               onFileMoved={onFileMoved}
               onFileDeleted={onFileDeleted}
               canGoBack={
+                teamMap.open ||
                 !!monoViewId ||
                 tabVisitNav.canBack ||
                 searchViewOpen ||
@@ -14490,7 +14523,7 @@ function Workspace({
               onOpenInboxItem={onOpenLinkedWorkItem}
               onOpenNotes={notesEnabled ? onOpenNotes : undefined}
               onOpenAutomations={onOpenAutomations}
-              onOpenTeamMap={monosEnabled ? () => teamMap.show() : undefined}
+              onOpenTeamMap={monosEnabled ? () => onOpenTeamMap() : undefined}
               onGoToFile={onGoToFile}
               searchActive={searchViewOpen}
               inboxActive={inboxViewOpen}
@@ -14537,9 +14570,10 @@ function Workspace({
               />
             )}
             <div className="body-glass flex min-h-0 min-w-0 flex-1 flex-col">
-              {teamMap.open && <TeamMap sessions={sessions} runs={orchestrationRuns} statuses={managerPrStatuses} scope={teamMap.scope} onClose={teamMap.close} onOpenMono={id => void onOpenMono(id)} />}
+              {teamMap.open && <TeamMap key={teamMap.scope ?? "org"} sessions={sessions} runs={orchestrationRuns} statuses={managerPrStatuses} scope={teamMap.scope} onClose={teamMap.close} onOpenMono={id => void onOpenMono(id)} />}
               <div
                 className={
+                  teamMap.open ||
                   searchViewOpen ||
                   settingsOpen ||
                   inboxViewOpen ||
@@ -14549,6 +14583,7 @@ function Workspace({
                     : "flex min-h-0 min-w-0 flex-1 flex-col"
                 }
                 aria-hidden={
+                  teamMap.open ||
                   searchViewOpen ||
                   settingsOpen ||
                   inboxViewOpen ||
@@ -14556,6 +14591,7 @@ function Workspace({
                   automationsViewOpen
                 }
                 inert={
+                  teamMap.open ||
                   searchViewOpen ||
                   settingsOpen ||
                   inboxViewOpen ||
@@ -14733,7 +14769,7 @@ function Workspace({
                                         : "hidden"
                                     }
                                   >
-                                    <TeamMapHeaderAction monoId={monoForSession(session.id)?.id} onOpen={teamMap.show} />
+                                    <TeamMapHeaderAction monoId={monoForSession(session.id)?.id} onOpen={onOpenTeamMap} />
                                     <SessionPane
                                       {...sessionPaneProps}
                                       session={session}

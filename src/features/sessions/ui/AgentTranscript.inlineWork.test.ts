@@ -102,14 +102,24 @@ function settleTicker() {
   act(() => vi.advanceTimersByTime(340));
 }
 
-it("renders incoming team messages with sender identity, collapse and no user actions", () => {
+it("renders incoming team messages inline with sender identity, clamping and no user actions", () => {
   const text = "Long investigation update. ".repeat(30);
   render([{ id: "team", role: "user", text: "provider envelope", monoTeamMessage: { id: "sender", name: "Backend", mascot: "fox", color: "#abc", topic: "report", text } }], { onEditLastTurn: vi.fn(), onRetryMessage: vi.fn(), onSendDraft: vi.fn(), onRemoveDraft: vi.fn() });
   const incoming = container.querySelector('[data-team-message="sender"]')!;
   expect(incoming.className).toContain("mr-auto");
   expect(incoming.textContent).toContain("Backend");
   expect(incoming.textContent).toContain("Team message");
-  expect(incoming.querySelector("details")?.open).toBe(false);
+  expect(incoming.querySelector("details")).toBeNull();
+  expect(incoming.textContent).toContain("Long investigation update.");
+  expect(incoming.querySelector(".line-clamp-4")).not.toBeNull();
+  const expand = incoming.querySelector<HTMLButtonElement>('button[aria-expanded]')!;
+  expect(expand.textContent).toBe("Show more");
+  act(() => expand.click());
+  expect(incoming.querySelector(".line-clamp-4")).toBeNull();
+  expect(expand.getAttribute("aria-expanded")).toBe("true");
+  expect(expand.textContent).toBe("Show less");
+  act(() => expand.click());
+  expect(incoming.querySelector(".line-clamp-4")).not.toBeNull();
   expect(container.querySelector("[data-prompt-anchor]")).toBeNull();
   expect(container.querySelector('[aria-label="Edit message"]')).toBeNull();
   expect(container.textContent).not.toContain("provider envelope");

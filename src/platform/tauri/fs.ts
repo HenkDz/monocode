@@ -375,6 +375,7 @@ export type GitPr = {
   url: string;
   state: string;
   isDraft?: boolean;
+  closedAt?: string | null;
 };
 
 export function gitPrStatus(cwd: string): Promise<GitPr | null> {

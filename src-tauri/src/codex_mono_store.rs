@@ -1,8 +1,9 @@
 //! Mono threads retain native Codex rollouts, but outside the Codex app's home.
 //! Configuration and credentials remain shared with the selected provider account.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -10,6 +11,8 @@ use tauri::{AppHandle, Manager};
 
 // Preparation and Repair share one lock, including harness startup.
 static STORAGE_LOCK: Mutex<()> = Mutex::new(());
+static STORAGE_ISSUES: LazyLock<Mutex<HashSet<String>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
 
 const STATE_NAMES: &[&str] = &[
     "sessions",
@@ -206,8 +209,27 @@ pub(crate) fn prepare(app: &AppHandle, account_id: Option<&str>) -> Result<MonoC
 }
 
 fn storage_error(error: String) -> String {
-    eprintln!("Mono Codex storage: {error}");
+    log_storage_issue(format!("Mono Codex storage: {error}"));
     format!("Codex storage needs repair: {error}")
+}
+
+fn log_storage_issue(issue: String) {
+    if STORAGE_ISSUES
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(issue.clone())
+    {
+        eprintln!("{issue}");
+    }
+}
+
+fn required_entry(name: &str) -> bool {
+    !name.ends_with(".bak")
+        && (matches!(
+            name,
+            "auth.json" | ".credentials.json" | "secrets" | "AGENTS.md" | "skills" | "hooks.json"
+        ) || name == "config"
+            || name.starts_with("config."))
 }
 
 fn private_entry(name: &str) -> bool {
@@ -247,8 +269,8 @@ fn prepare_files(source: &Path, home: &Path) -> Result<(), String> {
         if private_entry(&name.to_string_lossy()) {
             continue;
         }
-        match std::fs::symlink_metadata(source.join(&name)) {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+        let result = match std::fs::symlink_metadata(source.join(&name)) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (|| {
                 if replaceable_link(&entry.path())? {
                     remove_link(&entry.path())?;
                 } else if name == "auth.json" || name == ".credentials.json" {
@@ -257,9 +279,22 @@ fn prepare_files(source: &Path, home: &Path) -> Result<(), String> {
                         entry.path().display()
                     ));
                 }
+                Ok(())
+            })(),
+            Err(e) => Err(e.to_string()),
+            Ok(_) => Ok(()),
+        };
+        if let Err(error) = result {
+            let error = format!(
+                "Could not reconcile Codex storage {}: {error}",
+                entry.path().display()
+            );
+            if required_entry(&name.to_string_lossy()) {
+                return Err(error);
             }
-            Err(e) => return Err(e.to_string()),
-            Ok(_) => {}
+            log_storage_issue(format!(
+                "Mono Codex storage skipped optional entry: {error}"
+            ));
         }
     }
     for entry in std::fs::read_dir(&source).map_err(|e| e.to_string())? {
@@ -269,28 +304,50 @@ fn prepare_files(source: &Path, home: &Path) -> Result<(), String> {
             continue;
         }
         let target = home.join(&name);
-        if (name == "config.toml" || name == "config.toml.bak")
-            && std::fs::symlink_metadata(&target).is_ok_and(|m| m.is_file())
-            && !replaceable_link(&target)?
-        {
-            eprintln!(
-                "Mono Codex storage preserves private configuration overriding {}: {}",
-                entry.path().display(),
-                target.display()
-            );
-            continue;
+        let result = (|| {
+            if (name == "config.toml" || name == "config.toml.bak")
+                && std::fs::symlink_metadata(&target).is_ok_and(|m| m.is_file())
+                && !replaceable_link(&target)?
+            {
+                log_storage_issue(format!(
+                    "Mono Codex storage preserves private configuration overriding {}: {}",
+                    entry.path().display(),
+                    target.display()
+                ));
+                return Ok(());
+            }
+            link_entry(&entry.path(), &target)
+        })();
+        if let Err(error) = result {
+            let error = format!("Codex storage entry {}: {error}", target.display());
+            if required_entry(&name.to_string_lossy()) {
+                return Err(error);
+            }
+            log_storage_issue(format!(
+                "Mono Codex storage skipped optional entry: {error}"
+            ));
         }
-        link_entry(&entry.path(), &target)?;
     }
     // Keep the auth link valid even if login creates/replaces the original later.
     #[cfg(unix)]
     for name in ["auth.json", ".credentials.json"] {
-        link_entry(&source.join(name), &home.join(name))?;
+        link_entry(&source.join(name), &home.join(name))
+            .map_err(|e| format!("Codex storage entry {}: {e}", home.join(name).display()))?;
     }
     // Encrypted auth/MCP files are replaced atomically. Sharing their directory,
     // rather than individual files, preserves those writes in both homes.
-    std::fs::create_dir_all(source.join("secrets")).map_err(|e| e.to_string())?;
-    link_entry(&source.join("secrets"), &home.join("secrets"))?;
+    std::fs::create_dir_all(source.join("secrets")).map_err(|e| {
+        format!(
+            "Could not create Codex secrets {}: {e}",
+            source.join("secrets").display()
+        )
+    })?;
+    link_entry(&source.join("secrets"), &home.join("secrets")).map_err(|e| {
+        format!(
+            "Codex storage entry {}: {e}",
+            home.join("secrets").display()
+        )
+    })?;
     std::fs::create_dir_all(home.join("sessions")).map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -421,10 +478,29 @@ fn replace_link(temp: &Path, target: &Path) -> Result<(), String> {
 fn replace_link(temp: &Path, target: &Path) -> Result<(), String> {
     use std::os::windows::{ffi::OsStrExt, fs::OpenOptionsExt, io::AsRawHandle};
     use windows_sys::Win32::Storage::FileSystem::{
-        FileRenameInfoEx, SetFileInformationByHandle, DELETE, FILE_FLAG_BACKUP_SEMANTICS,
-        FILE_FLAG_OPEN_REPARSE_POINT, FILE_RENAME_INFO, FILE_SHARE_DELETE, FILE_SHARE_READ,
-        FILE_SHARE_WRITE,
+        FileRenameInfoEx, MoveFileExW, SetFileInformationByHandle, DELETE,
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_RENAME_INFO,
+        FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, MOVEFILE_REPLACE_EXISTING,
     };
+    if std::fs::symlink_metadata(temp)
+        .map_err(|e| e.to_string())?
+        .is_file()
+    {
+        // File replacement uses DOS paths; the junction rename below uses NT paths.
+        let wide = |path: &Path| {
+            path.as_os_str()
+                .encode_wide()
+                .chain(Some(0))
+                .collect::<Vec<_>>()
+        };
+        let source = wide(temp);
+        let target = wide(target);
+        if unsafe { MoveFileExW(source.as_ptr(), target.as_ptr(), MOVEFILE_REPLACE_EXISTING) } == 0
+        {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        return Ok(());
+    }
     // Open the junction itself, never the directory it points to.
     let file = std::fs::OpenOptions::new()
         .access_mode(DELETE)
@@ -1093,6 +1169,167 @@ mod tests {
         assert!(same_entry(&new, &target));
         assert_eq!(std::fs::read_to_string(&old).unwrap(), "old login");
         assert_eq!(std::fs::read_to_string(&new).unwrap(), "new login");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn link_safety_relinks_backup_hardlinks_between_homes() {
+        let fixture = Fixture::new();
+        let other = fixture.0.join("other-account");
+        for (source, content) in [(&other, "old hooks"), (&fixture.source(), "new hooks")] {
+            std::fs::create_dir_all(source).unwrap();
+            for name in ["hooks.json", "hooks.json.bak"] {
+                std::fs::write(source.join(name), content).unwrap();
+            }
+        }
+        prepare_files(&other, &fixture.home()).unwrap();
+        prepare_files(&fixture.source(), &fixture.home()).unwrap();
+        for name in ["hooks.json", "hooks.json.bak"] {
+            assert!(same_entry(
+                &fixture.source().join(name),
+                &fixture.home().join(name)
+            ));
+            assert_eq!(
+                std::fs::read_to_string(other.join(name)).unwrap(),
+                "old hooks"
+            );
+            assert_eq!(
+                std::fs::read_to_string(fixture.source().join(name)).unwrap(),
+                "new hooks"
+            );
+        }
+        assert!(same_entry(
+            &fixture.source().join("secrets"),
+            &fixture.home().join("secrets")
+        ));
+        println!(
+            "retained backup source-switch fixture: {}",
+            fixture.0.display()
+        );
+    }
+
+    #[test]
+    fn link_safety_optional_real_conflicts_are_preserved_and_do_not_block() {
+        let fixture = Fixture::new();
+        std::fs::create_dir_all(fixture.source()).unwrap();
+        std::fs::create_dir_all(fixture.home()).unwrap();
+        for name in ["hooks.json.bak", "models_cache.json", "cache"] {
+            std::fs::write(fixture.source().join(name), "source data").unwrap();
+            std::fs::write(fixture.home().join(name), "private data").unwrap();
+        }
+        std::fs::write(fixture.source().join("hooks.json"), "hooks").unwrap();
+        prepare_files(&fixture.source(), &fixture.home()).unwrap();
+        assert!(same_entry(
+            &fixture.source().join("hooks.json"),
+            &fixture.home().join("hooks.json")
+        ));
+        for name in ["hooks.json.bak", "models_cache.json", "cache"] {
+            assert_eq!(
+                std::fs::read_to_string(fixture.home().join(name)).unwrap(),
+                "private data"
+            );
+            assert_eq!(
+                std::fs::read_to_string(fixture.source().join(name)).unwrap(),
+                "source data"
+            );
+        }
+        for name in [
+            "auth.json",
+            ".credentials.json",
+            "secrets",
+            "config.toml",
+            "config.json",
+            "AGENTS.md",
+            "skills",
+            "hooks.json",
+        ] {
+            assert!(required_entry(name), "{name}");
+            assert!(!required_entry(&format!("{name}.bak")), "{name}.bak");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn link_safety_busy_backup_is_skipped_but_busy_hooks_blocks() {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE};
+        for name in ["hooks.json.bak", "hooks.json"] {
+            let fixture = Fixture::new();
+            let other = fixture.0.join("other-account");
+            std::fs::create_dir_all(&other).unwrap();
+            std::fs::create_dir_all(fixture.source()).unwrap();
+            std::fs::write(other.join(name), "old hooks").unwrap();
+            std::fs::write(fixture.source().join(name), "new hooks").unwrap();
+            prepare_files(&other, &fixture.home()).unwrap();
+            let _busy = std::fs::OpenOptions::new()
+                .read(true)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+                .open(fixture.home().join(name))
+                .unwrap();
+            let result = prepare_files(&fixture.source(), &fixture.home());
+            if name.ends_with(".bak") {
+                result.unwrap();
+                assert!(same_entry(
+                    &fixture.source().join("secrets"),
+                    &fixture.home().join("secrets")
+                ));
+                assert!(fixture.home().join("sessions").is_dir());
+            } else {
+                assert!(result.unwrap_err().contains("hooks.json"));
+            }
+            let empty = fixture.0.join("empty-account");
+            std::fs::create_dir_all(&empty).unwrap();
+            let cleanup = prepare_files(&empty, &fixture.home());
+            if name.ends_with(".bak") {
+                cleanup.unwrap();
+            } else {
+                assert!(cleanup.unwrap_err().contains("hooks.json"));
+            }
+            assert!(same_entry(&other.join(name), &fixture.home().join(name)));
+            assert_eq!(
+                std::fs::read_to_string(other.join(name)).unwrap(),
+                "old hooks"
+            );
+            assert_eq!(
+                std::fs::read_to_string(fixture.source().join(name)).unwrap(),
+                "new hooks"
+            );
+            assert!(std::fs::read_dir(fixture.home())
+                .unwrap()
+                .all(|entry| !entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".monocode-link-")));
+        }
+    }
+
+    #[test]
+    fn storage_issues_are_logged_once_per_distinct_message() {
+        let issue = format!("test issue {}", uuid::Uuid::new_v4());
+        log_storage_issue(issue.clone());
+        log_storage_issue(issue.clone());
+        let other = format!("{issue} another entry");
+        log_storage_issue(other.clone());
+        let issues = STORAGE_ISSUES.lock().unwrap();
+        assert_eq!(issues.iter().filter(|value| **value == issue).count(), 1);
+        assert!(issues.contains(&other));
+    }
+
+    #[test]
+    fn link_safety_missing_source_secrets_names_and_preserves_real_conflict() {
+        let fixture = Fixture::new();
+        let target = fixture.home().join("secrets");
+        std::fs::create_dir_all(fixture.source()).unwrap();
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("keep"), "private secret").unwrap();
+        let error = prepare_files(&fixture.source(), &fixture.home()).unwrap_err();
+        assert!(error.contains(&target.display().to_string()), "{error}");
+        assert!(error.contains("preserved"), "{error}");
+        assert_eq!(
+            std::fs::read_to_string(target.join("keep")).unwrap(),
+            "private secret"
+        );
     }
 
     #[test]

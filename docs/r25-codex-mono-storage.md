@@ -33,3 +33,17 @@ The same isolated profile was then restarted with `CODEX_HOME` unset and a synth
 Final frontend snapshot: **5,695 tests, 5,682 passed, 13 skipped, zero failures**; TypeScript and the production build passed. The local Vitest JSON report is `C:/Users/nooro/AppData/Local/Temp/r25-storage-vitest-final.json`.
 
 Repair retention, concurrent submission handling, the single notice, and its action were exercised by frontend tests and independently reviewed. An optional live failure-injection probe did not intercept any preparation calls, so it supplies no live Repair-action evidence. Owned preview processes were stopped; scratch homes were retained without recursive cleanup.
+
+## R26 follow-up: file relinking and repair feedback
+
+An existing `hooks.json.bak` hardlink could fail the junction-oriented Windows rename with OS error 123. File links now use `MoveFileExW` with replacement, while junctions retain their handle-based atomic rename. Replacement remains restricted to established links: lone files, source contents, private state, and real configuration overrides are preserved.
+
+Preparation logs and skips optional-entry failures, including backups and caches, during both stale-link cleanup and sharing. Auth, secrets, runtime configuration, instructions, skills, and hooks failures still block with the failing entry. Each distinct storage error or private-configuration notice is logged once per application run.
+
+Repair shows progress, then a dismissible success after retrying the retained turn. Its notice stays mounted while storage errors clear, and missing/busy conversations or a failed retry report an error instead of silent success. Failed-entry details can be copied using the existing clipboard integration.
+
+Focused Windows tests cover hardlinked `hooks.json` and `hooks.json.bak` switching between separate source homes, a busy backup being skipped during replacement and cleanup, a busy hooks file blocking both operations, preservation of real optional conflicts and both source files, unchanged junction replacement, and log deduplication. Synthetic homes are retained for inspection; no real-file cleanup is performed.
+
+R26 validation: **18 Windows native tests passed**; the same three unrelated migration tests remain excluded. The full frontend suite passed **5,685 tests, with 13 skipped and zero failures**; TypeScript and the production frontend build passed. Existing bundler warnings remain. Evidence summaries are `C:/Users/nooro/AppData/Local/Temp/r26-native-validation.txt` and `C:/Users/nooro/AppData/Local/Temp/r26-vitest-final.json`.
+
+The final rebuilt native app passed the source-switch reproduction in an isolated empty working directory with a synthetic home and inherited `CODEX_HOME`/`ORCA_*` variables unset. A stale `hooks.json.bak` hardlink moved to the selected source, both original files retained their bytes, and the skills junction remained valid. The notice exercised real preparation IPC in the native webview: progress, exact critical hooks failure, Copy details, and success were observed. A real optional cache conflict stayed untouched and logged once across repeated preparations. Logs and inspected screenshots are retained under `C:/Users/nooro/AppData/Local/Temp/r26-native-preview-_inaj7eo/`. Preview processes were stopped. No credentials or live model turns were used; retained-turn retry is covered by frontend tests.

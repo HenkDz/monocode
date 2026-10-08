@@ -1254,9 +1254,9 @@ const LocalSessionPane = memo(function LocalSessionPane({
               </>
             )}
           </div>
-          {session.codexStorageError && onCodexStorageRepair && (
+          {onCodexStorageRepair && (
             <div className="mx-auto w-full max-w-4xl shrink-0">
-              <MonoCodexStorageNotice detail={session.codexStorageError} onRepair={() => onCodexStorageRepair(session.id)} />
+              <MonoCodexStorageNotice key={session.id} detail={session.codexStorageError} onRepair={() => onCodexStorageRepair(session.id)} />
             </div>
           )}
           {dockComposer ? (

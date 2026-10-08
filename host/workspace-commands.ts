@@ -17,7 +17,7 @@ import { createHash } from "node:crypto";
 import type { FileMtime, FsEntry, GitPr, ProjectFile } from "../src/platform/tauri/fs";
 import { hostWorktrees } from "./git-worktrees";
 import { createHostBranch, hostBranches, switchHostBranch } from "./git-branches";
-import { checkoutPrBranches, parsePrs, PR_STATUS_FIELDS, prRepositories, sortPrs, trustedPrTarget } from "./git-prs";
+import { checkoutPrBranches, parsePrs, PR_STATUS_FIELDS, prCardActionArgs, prRepositories, sortPrs, trustedPrTarget } from "./git-prs";
 import type { HostStore } from "./store";
 import {
   createHostPath,
@@ -71,6 +71,7 @@ export const WORKSPACE_COMMANDS = [
   "git_pr_status",
   "git_pr_list",
   "git_pr_status_by_url",
+  "git_pr_action_by_url",
   "git_pr_create",
   "git_history",
   "git_commit_files",
@@ -192,6 +193,8 @@ export class WorkspaceCommands {
         return this.gitPrList(input.cwd, input.branches);
       case "git_pr_status_by_url":
         return this.gitPrStatusByUrl(input.cwd, input.url);
+      case "git_pr_action_by_url":
+        return this.gitPrActionByUrl(input.cwd, input.url, input.action, input.expectedHead, input.expectedBase);
       case "git_pr_create":
         return this.gitPrCreate(input.cwd, input.title, input.body, input.base, input.head);
       case "git_history":
@@ -636,7 +639,16 @@ export class WorkspaceCommands {
     const json = await this.ghCommand(cwd, ["pr", "view", String(target.number), "--repo", target.repo, "--json", PR_STATUS_FIELDS]);
     const pr = parsePrs(`[${json}]`)[0];
     const verified = pr && trustedPrTarget(pr.url, repositories);
-    return verified?.number === target.number ? pr : null;
+    return verified?.number === target.number && verified.repo.toLowerCase() === target.repo.toLowerCase() ? pr : null;
+  }
+
+  private async gitPrActionByUrl(cwd: unknown, url: unknown, action: unknown, expectedHead: unknown, expectedBase: unknown): Promise<GitPr> {
+    const current = await this.gitPrStatusByUrl(cwd, url);
+    if (!current) throw new Error("PR URL is not part of this checkout's forge repository");
+    await this.ghCommand(cwd, prCardActionArgs(current, action, expectedHead, expectedBase));
+    const next = await this.gitPrStatusByUrl(cwd, current.url);
+    if (!next) throw new Error("Could not verify the updated PR state");
+    return next;
   }
 
   private async gitPrCreate(cwd: unknown, title: unknown, body: unknown, base: unknown, head: unknown) {

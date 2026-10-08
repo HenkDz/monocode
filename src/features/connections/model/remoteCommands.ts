@@ -37,6 +37,7 @@ const HOST_COMMANDS = new Set([
   "git_pr_status",
   "git_pr_list",
   "git_pr_status_by_url",
+  "git_pr_action_by_url",
   "git_pr_create",
   "git_history",
   "git_commit_files",

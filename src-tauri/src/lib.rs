@@ -348,6 +348,7 @@ pub fn run() {
             fs::git_pr_status,
             fs::git_pr_list,
             fs::git_pr_status_by_url,
+            fs::git_pr_action_by_url,
             fs::git_pr_create,
             fs::git_github_status,
             fs::github_monocode_star_status,

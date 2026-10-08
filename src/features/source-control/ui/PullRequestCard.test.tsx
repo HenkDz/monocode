@@ -73,8 +73,12 @@ it("renders PR metadata, opens PR/diff/worktree, and updates checks/merge state 
     expect(host.textContent).toContain("+12");
     expect(host.textContent).toContain("3");
     expect(host.textContent).toContain("Checks pending");
-    const buttons = Array.from(host.querySelectorAll("button"));
-    for (const button of buttons) await act(async () => button.click());
+    for (const label of ["Open PR", "Open diff", "Go to worktree"]) {
+      const button = Array.from(host.querySelectorAll("button")).find(
+        (button) => button.textContent === label,
+      )!;
+      await act(async () => button.click());
+    }
     expect(openUrl).toHaveBeenCalledWith(entry.pr.url);
     expect(openUrl).toHaveBeenCalledWith(`${entry.pr.url}/files`);
     expect(openWorker).toHaveBeenCalledWith("chat");

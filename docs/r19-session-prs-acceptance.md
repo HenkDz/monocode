@@ -43,3 +43,20 @@ The disposable PR's repository CI was pending at open capture and subsequently f
 ## Scope limits
 
 GitHub and GitHub Enterprise are supported. Remote PR transport and Enterprise trust behavior have focused coverage; live capture used local native execution and public GitHub. Nested warnings/cleanup cover local registered untracked worktrees. Discovery scans 20 recent historical branches and 100 PRs per branch; detected session URLs persist independently. Checks with missing/tied attempt timestamps conservatively retain blockers. Source was committed locally; no R19 code branch was pushed.
+
+## Follow-up: card Close/Merge and clearly isolated tests
+
+The original screenshot window was the executable built in this R19 worktree, with identifier/profile `com.monocode.desktop.r19-session-prs-test` and only isolated Temp projects. Read-only process, runtime and hash receipts confirmed it was separate from the working `nou/target/manager-final-preview/debug/monocode.exe` process/profile; the working executable's hash/start time were unchanged. The original test title was ambiguous. The idle original test preview was exited gracefully, and subsequent tests use a new clearly named `R19 ISOLATED TEST` fixture project and identifier `com.monocode.desktop.r19-card-actions-test`.
+
+Session and team PR cards now reuse the Inbox's confirmation controls: Close, merge/squash/rebase, and Reopen for a closed PR. The controls were extracted into a standalone component so cards do not load the entire Inbox view. Each confirmation freezes repository, PR number, checkout, commit and branch labels. Changing the selected PR cannot redirect the confirmation.
+
+The native/connected-Host URL action API revalidates trusted repository identity, current state, expected head/base and merge readiness. Merge includes `--match-head-commit`; branch deletion, administrator bypass and force flags are absent. Base and Close/Reopen head comparisons are preflight checks; only merge-head matching is atomic. Team merge controls retain the accepted-head guard. Fresh results update the shared list immediately, including a team card's Closed/Merged badge before legacy cache polling completes. Errors refresh metadata and preserve a cancellable confirmation.
+
+- Follow-up full frontend: **5,416 passed, 13 existing skipped**, with two workers and the same 15-second timeout. Later identity/state regressions passed focused checks as well.
+- Final combined focused UI consumers/actions: **65 passed**, including identity changes, cancellation, stale head/base, review revocation, retries, queued state and the immediate team badge regression.
+- Relevant native PR/action tests: **28 passed**; connected Host tests: **18 passed**. TypeScript, frontend/native builds, Host build and diff checks passed.
+- Live checks use the separate labelled preview, a tiny README-only fixture checkout, and a transport guard denying mutations. Already-closed PR #1845 was observed through real read-only native forge lookup; its Reopen confirmation was captured and cancelled. Ready Close/Merge controls use an explicitly labelled mock-forge fixture. No real merge, reopen or close was executed in this follow-up; execution and rejection paths are covered by mocked native/Host tests.
+
+Isolation receipts and follow-up captures/logs are under `target/r19-verification/`, including `isolation-readonly-processes.json`, `isolation-readonly-runtime.json`, `isolation-readonly-hashes.json`, `card-actions-reopen-cancel-light.png`, `card-actions-reopen-cancel-dark.png` and `card-actions-full-frontend.log`. The former working-app process/profile was preserved throughout.
+
+The final follow-up executable is `R19-ISOLATED-TEST-card-actions-final.exe`, SHA256 `1f16e303bee7f3732364b4ec3828597793101031e59aba6ddba1f9886dbf4a1d`. The clearly disclosed ready fixture captures are `card-actions-mock-merge-cancel-dark.png`, `card-actions-mock-close-cancel-light.png` and `card-actions-mock-methods-light.png`; merge and close confirmations were cancelled, with zero mutation attempts recorded by the transport guard.

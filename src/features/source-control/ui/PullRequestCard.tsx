@@ -3,6 +3,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { OrchestrationActions } from "../../orchestration/ui/OrchestrationActions";
 import { pullRequestLabel, type WorktreePr } from "../model/pullRequests";
 import { formatRelativeTime } from "../../inbox/model/githubTasks";
+import { WorktreePrActions } from "./WorktreePrActions";
 
 /** Ordinary sessions and follow-up team PRs share the worktree's verified list. */
 export function PullRequestCard({
@@ -94,6 +95,7 @@ export function PullRequestCard({
         )}
       </div>
       <div className="mt-2 flex flex-wrap gap-1">
+        <WorktreePrActions entry={entry} sessionId={sessionId} />
         <button
           type="button"
           className={`${button} bg-content/8 font-medium`}

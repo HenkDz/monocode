@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import type { HostStore } from "./store";
 import { WorkspaceCommands, WORKSPACE_COMMANDS } from "./workspace-commands";
-import { checkoutPrBranches, parsePrs, PR_STATUS_FIELDS, prRepositories, trustedPrTarget } from "./git-prs";
+import { checkoutPrBranches, parsePrs, PR_STATUS_FIELDS, prCardActionArgs, prRepositories, trustedPrTarget } from "./git-prs";
 
 afterEach(() => vi.restoreAllMocks());
 const row = (number: number, state = "OPEN", extra = {}) => ({ number, title: `PR ${number}`, url: `https://github.com/owner/repo/pull/${number}`, state, headRepositoryOwner: { login: "owner" }, ...extra });
@@ -97,4 +97,49 @@ it("dispatches branch history lookup and preserves legacy current-branch status"
   expect(gh).toHaveBeenLastCalledWith("/repo", ["pr", "view", "--json", PR_STATUS_FIELDS]);
   await expect(commands.run("git_pr_list", { cwd: "/repo", branches: ["--help"] })).rejects.toThrow("Invalid pull request branches");
   expect(WORKSPACE_COMMANDS).toContain("git_pr_list");
+});
+
+const cardHead = "a".repeat(40);
+const readyCard = () => parsePrs(JSON.stringify([row(42, "OPEN", { headRefOid: cardHead, baseRefName: "staging", mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", reviewDecision: "APPROVED", statusCheckRollup: [] })]))[0];
+
+it("pins every merge strategy to a full SHA and blocks changed head/base or unavailable readiness", () => {
+  const pr = readyCard();
+  for (const action of ["merge", "squash", "rebase"]) expect(prCardActionArgs(pr, action, cardHead, "staging")).toEqual(["pr", "merge", "42", "--repo", "github.com/owner/repo", `--${action}`, "--match-head-commit", cardHead]);
+  expect(prCardActionArgs({ ...pr, headOid: "b".repeat(64) }, "merge", "b".repeat(64), "staging")).toContain("b".repeat(64));
+  for (const head of ["abc", "--help", "z".repeat(40), "a".repeat(41), null]) expect(() => prCardActionArgs(pr, "merge", head, "staging")).toThrow();
+  expect(() => prCardActionArgs(pr, "merge", "b".repeat(40), "staging")).toThrow("head changed");
+  expect(() => prCardActionArgs(pr, "merge", cardHead, "main")).toThrow("base changed");
+  expect(() => prCardActionArgs(pr, "merge", cardHead, null)).toThrow("reviewed head and base");
+  for (const patch of [{ state: "closed" }, { isDraft: true }, { checksStatus: "pending" }, { checksStatus: "failure" }, { checksStatus: "unknown" }, { checksStatus: undefined }, { mergeable: "CONFLICTING" }, { mergeStateStatus: "DIRTY" }, { reviewDecision: "CHANGES_REQUESTED" }, { reviewDecision: "REVIEW_REQUIRED" }]) expect(() => prCardActionArgs({ ...pr, ...patch } as typeof pr, "merge", cardHead, "staging")).toThrow("not ready");
+  expect(prCardActionArgs(pr, "close", cardHead, "staging")).toEqual(["pr", "close", "42", "--repo", "github.com/owner/repo"]);
+  expect(() => prCardActionArgs(pr, "reopen", cardHead, "staging")).toThrow("state changed");
+  expect(prCardActionArgs({ ...pr, state: "closed" }, "reopen", cardHead, "staging")).toContain("reopen");
+  expect(() => prCardActionArgs({ ...pr, state: "merged" }, "reopen", cardHead, "staging")).toThrow("state changed");
+});
+
+it("runs only an explicitly validated card mutation and refreshes rich state including merge queue", async () => {
+  for (const queued of [false, true]) {
+    const { commands, gh } = fixture();
+    let views = 0;
+    gh.mockImplementation(async (_cwd, args) => {
+      if (args[0] === "repo") return '{"url":"https://github.com/owner/repo","parent":null}';
+      if (args[1] === "merge") return "";
+      views++;
+      return JSON.stringify(row(42, views === 2 && !queued ? "MERGED" : "OPEN", { headRefOid: cardHead, baseRefName: "staging", mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", reviewDecision: "APPROVED", additions: 10, statusCheckRollup: [] }));
+    });
+    expect(await commands.run("git_pr_action_by_url", { cwd: "/repo", url: "https://github.com/owner/repo/pull/42", action: "merge", expectedHead: cardHead, expectedBase: "staging" })).toMatchObject({ state: queued ? "open" : "merged", additions: 10, checksStatus: "none" });
+    expect(gh.mock.calls.filter(([, args]) => args[1] === "merge")).toEqual([["/repo", ["pr", "merge", "42", "--repo", "github.com/owner/repo", "--merge", "--match-head-commit", cardHead]]]);
+    expect(views).toBe(2);
+    gh.mockRestore();
+  }
+});
+
+it("rejects untrusted or changed card targets before any mutating executor call", async () => {
+  for (const scenario of ["foreign", "wrong-parent", "stale-head", "stale-base", "pending", "closed"]) {
+    const { commands, gh } = fixture();
+    gh.mockImplementation(async (_cwd, args) => args[0] === "repo" ? '{"url":"https://github.com/owner/repo","parent":{"name":"upstream","owner":{"login":"parent"}}}' : JSON.stringify(row(42, scenario === "closed" ? "CLOSED" : "OPEN", { url: scenario === "wrong-parent" ? "https://github.com/parent/upstream/pull/42" : "https://github.com/owner/repo/pull/42", headRefOid: scenario === "stale-head" ? "b".repeat(40) : cardHead, baseRefName: scenario === "stale-base" ? "main" : "staging", mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", statusCheckRollup: scenario === "pending" ? [{ name: "ci", status: "QUEUED" }] : [] })));
+    await expect(commands.run("git_pr_action_by_url", { cwd: "/repo", url: scenario === "foreign" ? "https://evil.example/owner/repo/pull/42" : "https://github.com/owner/repo/pull/42", action: "merge", expectedHead: cardHead, expectedBase: "staging" })).rejects.toThrow();
+    expect(gh.mock.calls.some(([, args]) => ["merge", "close", "reopen"].includes(args[1]))).toBe(false);
+    gh.mockRestore();
+  }
 });

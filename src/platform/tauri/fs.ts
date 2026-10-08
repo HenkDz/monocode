@@ -396,6 +396,10 @@ export function gitPrStatusByUrl(cwd: string, url: string): Promise<GitPr | null
   return invoke<GitPr | null>("git_pr_status_by_url", { cwd, url });
 }
 
+export function gitPrActionByUrl(cwd: string, url: string, action: string, expectedHead?: string, expectedBase?: string): Promise<GitPr> {
+  return invoke<GitPr>("git_pr_action_by_url", { cwd, url, action, expectedHead, expectedBase });
+}
+
 export function gitPrCreate(
   cwd: string,
   title: string,

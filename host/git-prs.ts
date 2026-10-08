@@ -103,3 +103,23 @@ export function checkoutPrBranches(current: string, reflog: string, explicit: re
   }
   return branches;
 }
+
+export function prCardActionArgs(pr: GitPr, action: unknown, expectedHead: unknown, expectedBase: unknown): string[] {
+  if (typeof action !== "string" || !["merge", "squash", "rebase", "close", "reopen"].includes(action)) throw new Error("Unknown PR card action");
+  const merging = ["merge", "squash", "rebase"].includes(action);
+  if (expectedHead != null) {
+    if (typeof expectedHead !== "string" || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(expectedHead)) throw new Error("Expected PR head must be a full commit SHA");
+    if (pr.headOid?.toLowerCase() !== expectedHead.toLowerCase()) throw new Error("PR head changed; refresh and review the current commit");
+  }
+  if (expectedBase != null && (typeof expectedBase !== "string" || !expectedBase || pr.baseRefName !== expectedBase)) throw new Error("PR base changed; refresh before continuing");
+  if (merging) {
+    if (expectedHead == null || expectedBase == null) throw new Error("Merge requires the reviewed head and base branch");
+    if (pr.state !== "open" || pr.isDraft || !["success", "none"].includes(pr.checksStatus ?? "") || pr.mergeable !== "MERGEABLE" || pr.mergeStateStatus !== "CLEAN" || ["CHANGES_REQUESTED", "REVIEW_REQUIRED"].includes(pr.reviewDecision ?? "")) throw new Error("PR is not ready to merge; refresh its checks and review state");
+  } else if (pr.state !== (action === "close" ? "open" : "closed")) throw new Error("PR state changed; refresh before continuing");
+  const url = new URL(pr.url);
+  const match = /^\/([\w.-]+)\/([\w.-]+)\/pull\/([1-9]\d*)$/.exec(url.pathname);
+  if (!match || Number(match[3]) !== pr.number) throw new Error("Invalid PR URL");
+  const args = ["pr", merging ? "merge" : action, String(pr.number), "--repo", `${url.host}/${match[1]}/${match[2]}`];
+  if (merging) args.push(`--${action}`, "--match-head-commit", expectedHead as string);
+  return args;
+}

@@ -44,6 +44,81 @@ vi.mock("../../inbox/hooks/useGithubPrChecks", () => ({
 }));
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
+it("updates the task card immediately from closed or merged store state while parent readiness is stale", async () => {
+  const task = {
+    id: "fresh-state-r19",
+    title: "Immediate forge state",
+    sessionId: "fresh-worker",
+    harness: "codex",
+    model: "codex:test",
+    status: "completed",
+    accepted: true,
+    lastDispatchId: "dispatch",
+    acceptedDispatchId: "dispatch",
+    prUrl: "https://github.com/example/repo/pull/931",
+    reviewedHead: "accepted-head",
+    workspace: { checkoutCwd: "/fresh-r19", branch: "fresh" },
+  } as OrchestrationRun["tasks"][number];
+  const run = {
+    leadId: "fresh-manager",
+    cwd: "/repo",
+    tasks: [task],
+  } as OrchestrationRun;
+  const pr = {
+    number: 931,
+    title: task.title,
+    url: task.prUrl!,
+    state: "open",
+    checksStatus: "success" as const,
+    headOid: "accepted-head",
+    baseRefName: "main",
+    mergeable: "MERGEABLE",
+    mergeStateStatus: "CLEAN",
+  };
+  recordPullRequest("/fresh-r19", pr, {
+    sessionId: "fresh-manager",
+    sessionTitle: "Manager",
+    turnId: "first",
+    blockId: "pr",
+    at: 1000,
+    taskId: task.id,
+    acceptedHead: "accepted-head",
+  });
+  statusView.statuses = new Map([[prStatusKey("/fresh-r19", task.prUrl), pr]]);
+  const host = document.createElement("div"),
+    root = createRoot(host);
+  try {
+    await act(async () =>
+      root.render(
+        <ReadyCard
+          run={run}
+          task={task}
+          merged={false}
+          state="Ready to merge"
+        />,
+      ),
+    );
+    const card = host.querySelector("section")!;
+    expect(card.getAttribute("aria-label")).toBe(
+      "Ready to merge: Immediate forge state",
+    );
+    for (const state of ["closed", "merged"] as const) {
+      await act(async () => recordPullRequest("/fresh-r19", { ...pr, state }));
+      expect(host.querySelector("section")).toBe(card);
+      expect(card.getAttribute("aria-label")).toBe(
+        `${state === "closed" ? "Closed" : "Merged"}: Immediate forge state`,
+      );
+      expect(card.textContent).not.toContain("Ready to merge");
+      expect(
+        statusView.statuses.get(prStatusKey("/fresh-r19", task.prUrl))?.state,
+      ).toBe("open");
+    }
+  } finally {
+    await act(async () => root.unmount());
+    statusView.statuses = new Map();
+  }
+});
+
 it("lists current, prior and follow-up task PRs without multiplying accepted tasks", async () => {
   const task = {
     id: "multi-r19",

@@ -1198,6 +1198,28 @@ pub async fn git_pr_status_by_url(cwd: String, url: String) -> Result<Option<Git
         .map_err(|error| error.to_string())?
 }
 
+/// Confirm the current forge state before an explicit PR-card action.
+#[tauri::command]
+pub async fn git_pr_action_by_url(
+    cwd: String,
+    url: String,
+    action: String,
+    expected_head: Option<String>,
+    expected_base: Option<String>,
+) -> Result<GitPr, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        git_pr_action_by_url_for(
+            &expand_home(&cwd),
+            &url,
+            &action,
+            expected_head.as_deref(),
+            expected_base.as_deref(),
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 #[derive(Deserialize)]
 struct GitPrCreateInput {
     title: String,
@@ -2903,8 +2925,86 @@ fn git_pr_status_by_url_for(root: &Path, candidate: &str) -> Result<Option<GitPr
     )?;
     let pr = parse_gh_prs(&format!("[{json}]"), None)?.into_iter().next();
     Ok(pr.filter(|pr| {
-        verified_pr_target(&pr.url, &repositories).is_some_and(|(_, verified)| verified == number)
+        verified_pr_target(&pr.url, &repositories).is_some_and(|(verified_repo, verified)| {
+            verified == number && verified_repo.eq_ignore_ascii_case(&repo)
+        })
     }))
+}
+
+fn github_pr_card_action_args(
+    pr: &GitPr,
+    action: &str,
+    expected_head: Option<&str>,
+    expected_base: Option<&str>,
+) -> Result<Vec<String>, String> {
+    let merging = matches!(action, "merge" | "squash" | "rebase");
+    if !merging && !matches!(action, "close" | "reopen") {
+        return Err("Unknown PR card action".into());
+    }
+    if let Some(head) = expected_head {
+        if !matches!(head.len(), 40 | 64) || !head.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err("Expected PR head must be a full commit SHA".into());
+        }
+        if !pr
+            .head_oid
+            .as_deref()
+            .is_some_and(|current| current.eq_ignore_ascii_case(head))
+        {
+            return Err("PR head changed; refresh and review the current commit".into());
+        }
+    }
+    if let Some(base) = expected_base {
+        if base.is_empty() || pr.base_ref_name.as_deref() != Some(base) {
+            return Err("PR base changed; refresh before continuing".into());
+        }
+    }
+    if merging {
+        if expected_head.is_none() || expected_base.is_none() {
+            return Err("Merge requires the reviewed head and base branch".into());
+        }
+        if pr.state != "open"
+            || pr.is_draft
+            || !matches!(pr.checks_status.as_deref(), Some("success" | "none"))
+            || pr.mergeable.as_deref() != Some("MERGEABLE")
+            || pr.merge_state_status.as_deref() != Some("CLEAN")
+            || matches!(
+                pr.review_decision.as_deref(),
+                Some("CHANGES_REQUESTED" | "REVIEW_REQUIRED")
+            )
+        {
+            return Err("PR is not ready to merge; refresh its checks and review state".into());
+        }
+    } else if pr.state != if action == "close" { "open" } else { "closed" } {
+        return Err("PR state changed; refresh before continuing".into());
+    }
+    let url = url::Url::parse(&pr.url).map_err(|error| error.to_string())?;
+    let parts: Vec<_> = url.path_segments().ok_or("Invalid PR URL")?.collect();
+    if parts.len() != 4 || parts[2] != "pull" || parts[3].parse::<i64>().ok() != Some(pr.number) {
+        return Err("Invalid PR URL".into());
+    }
+    let slug = format!("{}/{}", parts[0], parts[1]);
+    let mut args = github_pr_action_args(&slug, pr.number, action)?;
+    args[4] = format!("{}/{slug}", url.host_str().ok_or("Invalid PR host")?);
+    if merging {
+        args.extend(["--match-head-commit".into(), expected_head.unwrap().into()]);
+    }
+    Ok(args)
+}
+
+fn git_pr_action_by_url_for(
+    root: &Path,
+    candidate: &str,
+    action: &str,
+    expected_head: Option<&str>,
+    expected_base: Option<&str>,
+) -> Result<GitPr, String> {
+    let current = git_pr_status_by_url_for(root, candidate)?
+        .ok_or("PR URL is not part of this checkout's forge repository")?;
+    let args = github_pr_card_action_args(&current, action, expected_head, expected_base)?;
+    let refs: Vec<_> = args.iter().map(String::as_str).collect();
+    gh_run(root, &refs, true)?;
+    git_pr_status_by_url_for(root, &current.url)?
+        .ok_or("Could not verify the updated PR state".into())
 }
 
 fn git_github_repo_for(root: &Path) -> Result<String, String> {
@@ -9073,6 +9173,108 @@ mod tests {
                 }
             }
         }
+    }
+
+    fn ready_pr_card() -> GitPr {
+        parse_gh_prs(&serde_json::json!([{"number":42,"title":"Card PR","url":"https://github.example/owner/repo/pull/42","state":"OPEN","headRefOid":"a".repeat(40),"baseRefName":"staging","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","statusCheckRollup":[]}]).to_string(), None).unwrap().remove(0)
+    }
+
+    #[test]
+    fn pr_card_merge_args_pin_full_head_on_trusted_forge_without_bypasses() {
+        for length in [40, 64] {
+            let mut pr = ready_pr_card();
+            let head = "a".repeat(length);
+            pr.head_oid = Some(head.clone());
+            for action in ["merge", "squash", "rebase"] {
+                let args =
+                    github_pr_card_action_args(&pr, action, Some(&head), Some("staging")).unwrap();
+                assert_eq!(
+                    args,
+                    [
+                        "pr",
+                        "merge",
+                        "42",
+                        "--repo",
+                        "github.example/owner/repo",
+                        &format!("--{action}"),
+                        "--match-head-commit",
+                        &head
+                    ]
+                );
+                assert!(!args
+                    .iter()
+                    .any(|arg| matches!(arg.as_str(), "--admin" | "--auto" | "--delete-branch")));
+            }
+        }
+    }
+
+    #[test]
+    fn pr_card_merge_blocks_stale_head_base_and_unready_forge_state() {
+        let pr = ready_pr_card();
+        let head = "a".repeat(40);
+        for invalid in ["abc", "--help", &"z".repeat(40), &"a".repeat(41)] {
+            assert!(
+                github_pr_card_action_args(&pr, "merge", Some(invalid), Some("staging")).is_err()
+            );
+        }
+        assert!(
+            github_pr_card_action_args(&pr, "merge", Some(&"b".repeat(40)), Some("staging"))
+                .is_err()
+        );
+        assert!(github_pr_card_action_args(&pr, "merge", Some(&head), Some("main")).is_err());
+        assert!(github_pr_card_action_args(&pr, "merge", None, Some("staging")).is_err());
+        assert!(github_pr_card_action_args(&pr, "merge", Some(&head), None).is_err());
+        for field in [
+            "closed",
+            "draft",
+            "pending",
+            "unknown",
+            "failure",
+            "conflicts",
+            "review",
+            "required",
+            "dirty",
+        ] {
+            let mut unready = pr.clone();
+            match field {
+                "closed" => unready.state = "closed".into(),
+                "draft" => unready.is_draft = true,
+                "pending" | "unknown" | "failure" => unready.checks_status = Some(field.into()),
+                "conflicts" => unready.mergeable = Some("CONFLICTING".into()),
+                "review" => unready.review_decision = Some("CHANGES_REQUESTED".into()),
+                "required" => unready.review_decision = Some("REVIEW_REQUIRED".into()),
+                "dirty" => unready.merge_state_status = Some("DIRTY".into()),
+                _ => unreachable!(),
+            }
+            assert!(
+                github_pr_card_action_args(&unready, "merge", Some(&head), Some("staging"))
+                    .is_err(),
+                "{field}"
+            );
+        }
+    }
+
+    #[test]
+    fn pr_card_close_reopen_recheck_state_and_pin_supplied_head_and_base() {
+        let mut pr = ready_pr_card();
+        let head = "a".repeat(40);
+        let args = github_pr_card_action_args(&pr, "close", Some(&head), Some("staging")).unwrap();
+        assert_eq!(
+            args,
+            ["pr", "close", "42", "--repo", "github.example/owner/repo"]
+        );
+        assert!(github_pr_card_action_args(&pr, "reopen", None, None).is_err());
+        assert!(
+            github_pr_card_action_args(&pr, "close", Some(&"b".repeat(40)), Some("staging"))
+                .is_err()
+        );
+        assert!(github_pr_card_action_args(&pr, "close", Some(&head), Some("main")).is_err());
+        pr.state = "closed".into();
+        assert!(github_pr_card_action_args(&pr, "reopen", Some(&head), Some("staging")).is_ok());
+        assert!(github_pr_card_action_args(&pr, "close", None, None).is_err());
+        pr.state = "merged".into();
+        assert!(github_pr_card_action_args(&pr, "reopen", None, None).is_err());
+        assert!(github_pr_card_action_args(&pr, "draft", None, None).is_err());
     }
 
     #[test]

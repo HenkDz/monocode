@@ -32,6 +32,7 @@ import type {
 import { OrgArtifactLinks } from "../../artifacts/ui/OrgArtifactLinks";
 import { Modal } from "../../../shared/ui/Modal";
 import { usePullRequests, prIdentity } from "../../source-control/model/pullRequests";
+import { WorktreePrActions } from "../../source-control/ui/WorktreePrActions";
 
 export function ProjectManagerStatus({
   run,
@@ -242,8 +243,10 @@ export function ReadyCard({
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string>();
   const taskPrs = [...new Map(usePullRequests().filter(entry => entry.links.some(link => link.taskId === task.id)).map(entry => [prIdentity(entry.pr.url), entry])).values()];
-  const currentPr = taskPrs.find(entry => prIdentity(entry.pr.url) === prIdentity(task.prUrl ?? ""))?.pr;
+  const currentEntry = taskPrs.find(entry => prIdentity(entry.pr.url) === prIdentity(task.prUrl ?? ""));
+  const currentPr = currentEntry?.pr;
   const label =
+    currentPr?.state === "merged" ? "Merged" : currentPr?.state === "closed" ? "Closed" :
     merged || state === "Closed"
       ? (state ?? "Merged")
       : task.delivery?.state === "fixing-ci"
@@ -407,6 +410,7 @@ export function ReadyCard({
           </time>
         )}
       </div>
+      {currentEntry && <div className="mt-2 flex flex-wrap gap-1"><WorktreePrActions entry={currentEntry} sessionId={run.ownerSessionId ?? run.leadId} taskId={task.id} /></div>}
       <OrgArtifactLinks
         monoId={run.ownerMonoId}
         links={[

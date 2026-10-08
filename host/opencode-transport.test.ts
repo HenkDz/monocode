@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { HostChildBackend } from "./child-backend";
@@ -76,7 +77,7 @@ afterAll(async () => {
   await backend?.close();
   release?.();
   store?.close();
-  if (directory) rmSync(directory, { recursive: true, force: true });
+  if (directory) await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 });
 
 it("runs an OpenCode session through the host HTTP and SSE bridge", async () => {

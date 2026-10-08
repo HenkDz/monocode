@@ -840,10 +840,10 @@ it("pages worktrees five at a time and keeps busy ones listed", async () => {
 });
 
 it.each([
-  ["open", false, "Open", "text-emerald-400/90"],
-  ["merged", false, "Merged", "text-violet-400/90"],
-  ["closed", false, "Closed", "text-rose-400/90"],
-  ["open", true, "Draft", "text-content/50"],
+  ["open", false, "1 open PR", "text-emerald-400/90"],
+  ["merged", false, "No open PR", "text-content/45"],
+  ["closed", false, "No open PR", "text-content/45"],
+  ["open", true, "1 open PR", "text-emerald-400/90"],
 ] as const)(
   "reflects %s PR status (draft: %s) for the worktree's own checkout",
   async (state, isDraft, label, color) => {
@@ -863,15 +863,15 @@ it.each([
       '[role="img"]',
     )!;
     expect(icon.getAttribute("aria-label")).toBe(
-      `${label} PR #42: Sidebar fix`,
+      label,
     );
-    expect(icon.getAttribute("title")).toBe(`${label} PR #42: Sidebar fix`);
+    expect(icon.getAttribute("title")).toBe(state === "open" ? "Open PR #42: Sidebar fix" : "No open PR");
     expect(icon.querySelector("svg")!.getAttribute("class")).toContain(color);
     expect(
       button("Open worktree feature-b")
         .querySelector('[role="img"]')!
         .getAttribute("aria-label"),
-    ).toBe("No PR status available");
+    ).toBe("No open PR");
     expect(gitPrStatus).toHaveBeenCalledWith("/trees/a");
   },
 );
@@ -889,19 +889,19 @@ it("refreshes PR status on focus and Git changes and retains known status on fai
     button("Open worktree feature-a")
       .querySelector('[role="img"]')!
       .getAttribute("aria-label");
-  expect(label()).toContain("Open PR #42");
+  expect(label()).toBe("1 open PR");
   vi.mocked(gitPrStatus).mockResolvedValue({ ...pr, state: "merged" });
   await act(async () => window.dispatchEvent(new Event("focus")));
-  expect(label()).toContain("Merged PR #42");
+  expect(label()).toBe("No open PR");
   vi.mocked(gitPrStatus).mockResolvedValue({ ...pr, state: "closed" });
   await act(async () => notifyGitChanged());
-  expect(label()).toContain("Closed PR #42");
+  expect(label()).toBe("No open PR");
   vi.mocked(gitPrStatus).mockRejectedValue(new Error("GitHub unavailable"));
   await act(async () => window.dispatchEvent(new Event("focus")));
-  expect(label()).toBe("Closed PR #42: Sidebar fix");
+  expect(label()).toBe("No open PR");
   vi.mocked(gitPrStatus).mockResolvedValue(null);
   await act(async () => window.dispatchEvent(new Event("focus")));
-  expect(label()).toBe("Closed PR #42: Sidebar fix");
+  expect(label()).toBe("No open PR");
 });
 
 it.each(["merged", "closed"])(
@@ -1007,11 +1007,11 @@ it("retains a PR discovered on the worktree's previous branch", async () => {
   expect(
     button("Open worktree replacement")
       .querySelector('[role="img"]')!
-      .getAttribute("aria-label"),
+      .getAttribute("title"),
   ).toContain("Open PR #99: Old branch");
 });
 
-it("shows a newer open PR over a merged PR and lists both in the count, hover and menu", async () => {
+it("shows only open PR state and keeps merged history in a collapsed menu", async () => {
   const checkout = tree("/trees/followup", "followup");
   vi.mocked(useProjectWorktrees).mockReturnValue({
     data: { worktrees: [checkout], defaultRoot: "/trees" }, refresh,
@@ -1022,13 +1022,17 @@ it("shows a newer open PR over a merged PR and lists both in the count, hover an
   ]);
   await render();
   const icon = button("Open worktree followup").querySelector('[role="img"]')!;
-  expect(icon.getAttribute("aria-label")).toBe("Open PR #42: Follow-up fix · 2 PRs");
-  expect(icon.textContent).toContain("2 PRs");
+  expect(icon.getAttribute("aria-label")).toBe("1 open PR");
+  expect(icon.textContent).toContain("1 open PR");
+  expect(icon.textContent).not.toContain("2 PRs");
   expect(icon.getAttribute("title")).toContain("Open PR #42: Follow-up fix");
-  expect(icon.getAttribute("title")).toContain("Merged PR #41: Original change");
+  expect(icon.getAttribute("title")).not.toContain("Merged PR #41: Original change");
   await act(async () => button("Actions for followup").click());
   expect(document.querySelector('[role="menu"]')?.textContent).toContain("Open PR #42: Follow-up fix");
-  expect(document.querySelector('[role="menu"]')?.textContent).toContain("Merged PR #41: Original change");
+  expect(document.querySelector('[role="menu"]')?.textContent).not.toContain("Merged PR #41: Original change");
+  const settled = [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(item => item.textContent?.includes("Merged / closed PRs"))!;
+  await act(async () => settled.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));
+  expect(document.body.textContent).toContain("Merged PR #41: Original change");
 });
 
 it("reflects a verified closed update without reloading the branch lookup", async () => {
@@ -1038,10 +1042,21 @@ it("reflects a verified closed update without reloading the branch lookup", asyn
   vi.mocked(gitPrList).mockResolvedValue([pr]);
   await render();
   const label = () => button("Open worktree live-pr-refresh").querySelector('[role="img"]')?.getAttribute("aria-label");
-  expect(label()).toBe("Open PR #42: Live status");
+  expect(label()).toBe("1 open PR");
   await act(async () => recordPullRequest(checkout.path, { ...pr, state: "closed" }));
-  expect(label()).toBe("Closed PR #42: Live status");
+  expect(label()).toBe("No open PR");
   expect(gitPrList).toHaveBeenCalledExactlyOnceWith(checkout.path, [checkout.branch]);
+});
+
+it("prioritizes failing checks over another ready open PR", async () => {
+  const checkout = tree("/trees/mixed-checks", "mixed-checks");
+  vi.mocked(useProjectWorktrees).mockReturnValue({ data: { worktrees: [checkout], defaultRoot: "/trees" }, refresh });
+  vi.mocked(gitPrList).mockResolvedValue([
+    { number: 51, title: "Ready", url: "https://github.com/example/repo/pull/51", state: "open", checksStatus: "success", mergeable: "MERGEABLE", mergeStateStatus: "CLEAN" },
+    { number: 50, title: "Failing", url: "https://github.com/example/repo/pull/50", state: "open", checksStatus: "failure" },
+  ]);
+  await render();
+  expect(button("Open worktree mixed-checks").querySelector('[role="img"]')!.getAttribute("aria-label")).toBe("checks failing");
 });
 
 const menuItem = (label: string) => {

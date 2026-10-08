@@ -20,6 +20,9 @@ vi.mock("./MonoHabits", async (original) => ({
   ...(await original<object>()),
   useHabits: () => [],
 }));
+vi.mock("../../pullRequests/ui/PullRequestsList", () => ({
+  PullRequestsList: ({ scope }: { scope: unknown }) => createElement("div", { "data-pr-scope": JSON.stringify(scope) }, "Scoped pull requests"),
+}));
 
 let root: Root;
 let container: HTMLDivElement;
@@ -300,4 +303,39 @@ it("keeps the last activity readable after the turn ends and supports keyboard t
       .querySelector('[role="tabpanel"]')!
       .getAttribute("aria-labelledby"),
   ).toBe(tabButton("Activity").id);
+});
+
+it("scopes the PR tab to Manager, Orchestrator, member and session and navigates three tabs", async () => {
+  localStorage.setItem("monocode:mono-roster", JSON.stringify([
+    { id: "manager", role: "manager", projects: ["/app"], managerProject: "/app", mascot: "cat", color: "#6ba" },
+    { id: "org", role: "orchestrator", projects: ["/app", "/other"], mascot: "cat", color: "#6ba" },
+    { id: "empty-org", role: "orchestrator", projects: [], mascot: "cat", color: "#6ba" },
+    { id: "child-manager", role: "manager", reportsTo: "empty-org", projects: ["/child"], managerProject: "/child", mascot: "cat", color: "#6ba" },
+    { id: "other-org-manager", role: "manager", reportsTo: "org", projects: ["/other"], mascot: "cat", color: "#6ba" },
+    { id: "member", role: "member", reportsTo: "manager", projects: ["/app"], mascot: "cat", color: "#6ba" },
+  ]));
+  for (const [monoId, scope] of [
+    ["manager", { project: "/app" }],
+    ["org", { projects: ["/app", "/other"] }],
+    ["empty-org", { projects: ["/child"] }],
+    ["member", { monoId: "member" }],
+    ["sample", { sessionId: "chat" }],
+  ] as const) {
+    await act(async () => root.render(createElement(MonoDetails, {
+      open: true, monoId, sessionId: "chat", cwd: "/repo", agent, state: { status: "idle" },
+      harness: "codex", model: "codex:gpt-5.4", modelSettings: {}, runtimeMode: "auto",
+      onRuntimeModeChange: noop, onModelChange: noop, onModelSettingsChange: noop, onClose: noop,
+      tab: "prs", onTabChange: noop,
+    })));
+    expect(JSON.parse(container.querySelector("[data-pr-scope]")!.getAttribute("data-pr-scope")!)).toEqual(scope);
+    expect(tabButton("PRs").getAttribute("aria-selected")).toBe("true");
+    expect(container.querySelector("[data-mono-prs]")).not.toBeNull();
+  }
+  await render();
+  act(() => tabButton("Details").dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true })));
+  expect(document.activeElement).toBe(tabButton("PRs"));
+  act(() => tabButton("PRs").dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
+  expect(document.activeElement).toBe(tabButton("Details"));
+  act(() => tabButton("Details").dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true })));
+  expect(document.activeElement).toBe(tabButton("PRs"));
 });

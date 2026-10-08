@@ -134,6 +134,12 @@ it.each([
   ]);
 });
 
+it("discovers stored Mono PR blocks with explicit and session repository defaults", async () => {
+  const { sessionPrCandidates } = await import("./pullRequests");
+  const session = { id: "cards", title: "Cards", cwd: "/repo", linkedWorkItem: { kind: "pr", repo: "example/repo", number: 2, url: "https://github.com/example/repo/pull/2" }, blocks: [{ id: "u", role: "user", text: "Cleanup", startedAt: 1000 }, { id: "explicit", role: "assistant", text: "", monoCard: { type: "pr", repo: "example/repo", number: 1 } }, { id: "default", role: "assistant", text: "", monoCard: { type: "pr", number: 2 } }] } as Session;
+  expect(sessionPrCandidates(session).map(candidate => candidate.url)).toEqual(["https://github.com/example/repo/pull/1", "https://github.com/example/repo/pull/2"]);
+});
+
 it("never infers a PR card from user requests or unanchored tool output", async () => {
   const { sessionPrCandidates } = await import("./pullRequests");
   const session = {

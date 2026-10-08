@@ -252,6 +252,7 @@ export function sessionPrCandidates(
     if (!turn || block.streaming || !["assistant", "tool"].includes(block.role)) continue;
     const text = [
       block.text,
+      block.monoCard?.type === "pr" && (block.monoCard.repo ?? session.linkedWorkItem?.repo) ? `https://github.com/${block.monoCard.repo ?? session.linkedWorkItem?.repo}/pull/${block.monoCard.number}` : undefined,
       block.tool?.title,
       block.tool?.detail,
       block.tool?.preview?.output,

@@ -73,7 +73,7 @@ import {
 import { ProjectManagerRow } from "../features/orchestration/ui/ProjectManagerRow";
 import { gitBranches, gitPrStatus } from "../platform/tauri/fs";
 import { useSessionPullRequests } from "../features/source-control/hooks/useSessionPullRequests";
-import { sessionPrAttention } from "../features/source-control/model/pullRequests";
+import { buildPullRequestRows, pullRequestAttention, type PullRequestScope } from "../features/pullRequests/model/pullRequestView";
 import { useWorkspaceNavigation } from "./hooks/useWorkspaceNavigation";
 import { useIdleSessionDetach } from "./hooks/useIdleSessionDetach";
 import { HarnessEventQueue } from "./model/harnessFlush";
@@ -888,6 +888,10 @@ const LinkedWorkItemPanel = lazySurface(async () => {
   const module = await import("../features/inbox/ui/InboxView");
   return { default: module.LinkedWorkItemPanel };
 });
+const PullRequestsView = lazySurface(async () => {
+  const module = await import("../features/pullRequests/ui/PullRequestsView");
+  return { default: module.PullRequestsView };
+});
 const NotesView = lazySurface(
   async () => {
     const module = await import("../features/notes/ui/NotesView");
@@ -1301,6 +1305,7 @@ function Workspace({
   const [searchViewOpen, setSearchViewOpen] = useState(false);
   const [searchViewFocusToken, setSearchViewFocusToken] = useState(0);
   const [inboxViewOpen, setInboxViewOpen] = useState(false);
+  const [pullRequestsViewScope, setPullRequestsViewScope] = useState<PullRequestScope | null>(null);
   const [linkedWorkItemPanels, setLinkedWorkItemPanels] = useState<
     ReadonlyMap<string, LinkedWorkItemPanelState>
   >(() => new Map());
@@ -2251,12 +2256,12 @@ function Workspace({
     () => {
       const decisions = teamDecisions(listMonos(), sessions, orchestrationRuns);
       const covered = new Set(decisions.map(item => item.session.id));
-      return [...sessionPrAttention(sessionPrRecords), ...managerAttention(
+      return [...pullRequestAttention(buildPullRequestRows(sessionPrRecords, { sessions, runs: orchestrationRuns, roster: listMonos() })), ...managerAttention(
         sessions,
         orchestrationRuns,
         unseenFinishedIds,
         managerPrStatuses,
-      ).filter(item => !(item.kind === "decision" && covered.has(item.id))),
+      ).filter(item => item.kind !== "ready" && !(item.kind === "decision" && covered.has(item.id))),
         ...decisions.map(item => ({ key: item.key, id: item.session.id, project: item.project, kind: "decision" as const,
           notificationId: item.resume ? `${item.key}:${item.resume.reason}` : item.key, question: `${monoLook(item.owner).name}: ${item.resume?.reason || item.approval?.tool?.title || item.approval?.text || item.session.pendingQuestion?.title || "Needs your decision"}` })),
       ];
@@ -13213,6 +13218,7 @@ function Workspace({
   }, []);
 
   const onOpenInbox = useCallback(() => {
+    setPullRequestsViewScope(null);
     teamMap.close();
     workspaceNavigation.cancel();
     startTransition(() => {
@@ -13224,6 +13230,16 @@ function Workspace({
       setInboxViewOpen(true);
     });
   }, []);
+
+  useEffect(() => {
+    const open = (event: Event) => {
+      const scope = (event as CustomEvent<PullRequestScope>).detail ?? {};
+      onOpenInbox();
+      setPullRequestsViewScope(scope);
+    };
+    window.addEventListener("monocode:open-pull-requests", open);
+    return () => window.removeEventListener("monocode:open-pull-requests", open);
+  }, [onOpenInbox]);
 
   const onOpenLinkedWorkItem = useCallback(
     (item: LinkedWorkItem, sessionId: string) => {
@@ -14268,6 +14284,9 @@ function Workspace({
   const monoDetailsPanel =
     monoViewMono && monoViewSession ? (
       <MonoDetails
+        sessionId={monoViewSession.id}
+        sessions={sessions}
+        runs={orchestrationRuns}
         teamActivity={monoViewMono.role ? <MonoTeamActivity monoId={monoViewMono.id} sessions={sessions} runs={orchestrationRuns} statuses={managerPrStatuses} onApproval={onApproval} onQuestion={onQuestionReply} onQuestionInteraction={onQuestionInteraction} /> : undefined}
         toolActivityOpen={!!monoActivity}
         teamRequest={monoTeamRequest}
@@ -14650,7 +14669,8 @@ function Workspace({
               onOpenTeamMap={monosEnabled ? () => onOpenTeamMap() : undefined}
               onGoToFile={onGoToFile}
               searchActive={searchViewOpen}
-              inboxActive={inboxViewOpen}
+              inboxActive={inboxViewOpen && pullRequestsViewScope === null}
+              pullRequestsActive={inboxViewOpen && pullRequestsViewScope !== null}
               notesActive={notesViewOpen}
               automationsActive={automationsViewOpen}
               notesEnabled={notesEnabled}
@@ -15025,7 +15045,23 @@ function Workspace({
                     );
                   })}
               </div>
-              {inboxViewOpen ? (
+              {inboxViewOpen && pullRequestsViewScope !== null ? (
+                <PullRequestsView
+                  sessions={sessions}
+                  runs={orchestrationRuns}
+                  recents={recents}
+                  scope={pullRequestsViewScope}
+                  sessionSummaries={inboxRelatedSessions}
+                  besideRail={projectRailOpen || compactProjectRail}
+                  compactRail={compactRailActive}
+                  onClose={onLeaveInbox}
+                  onToggleSidebar={onToggleSidebar}
+                  repairSessions={repairSessions}
+                  onRepairChecks={onRepairChecks}
+                  onRepairNotNeeded={onRepairNotNeeded}
+                  onOpenSession={onOpenInboxSession}
+                />
+              ) : inboxViewOpen ? (
                 <InboxView
                   cwd={sidebarCwd}
                   recents={recents}

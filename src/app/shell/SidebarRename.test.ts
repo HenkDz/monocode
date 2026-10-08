@@ -1618,6 +1618,7 @@ describe("collapsed rail Inbox actions", () => {
       "Changes",
       "Search",
       "Inbox",
+      "Pull requests",
       "Notes",
       "Automations",
       "Settings",

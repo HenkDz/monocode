@@ -12,6 +12,7 @@ import {
 import { savePinnedProjects } from "../model/recents";
 import { ProjectRail } from "../../../app/shell/ProjectRail";
 import { useProjectDiffStats } from "../../source-control/hooks/useProjectDiffStats";
+import { recordPullRequest } from "../../source-control/model/pullRequests";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async () => null),
@@ -55,6 +56,18 @@ async function renderRail(visible = true) {
     ),
   );
 }
+
+it("badges only actionable PRs using their sibling worktree session's project", async () => {
+  const project = "/work/sidebar-pr", checkout = "/sibling-worktrees/sidebar-pr";
+  const pr = { number: 932, title: "Ready", url: "https://github.com/example/repo/pull/932", state: "open", checksStatus: "success" as const, mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", headOid: "head" };
+  const link = { sessionId: "sidebar-pr", sessionTitle: "Fix", turnId: "first", blockId: "answer", at: 1 };
+  recordPullRequest(checkout, pr, link);
+  const props = { cwd: project, recents: [{ path: project, openedAt: 1 }], sessions: [{ id: link.sessionId, cwd: project, worktreeCwd: checkout }], onSelectProject: vi.fn(), onOpenProject: vi.fn() };
+  await act(async () => root.render(createElement(ProjectRail, props)));
+  expect(container.querySelector('[aria-label="1 pull requests need attention"]')).not.toBeNull();
+  await act(async () => recordPullRequest(checkout, { ...pr, state: "merged" }));
+  expect(container.querySelector('[aria-label="1 pull requests need attention"]')).toBeNull();
+});
 
 it("retains expanded projects after Settings and a fresh rail mount", async () => {
   const props = {

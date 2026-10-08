@@ -1,17 +1,7 @@
 import { useContext, useEffect, useState } from "react";
 import { OrchestrationActions } from "./OrchestrationActions";
-import { ExternalLink as ArrowUpRight } from "../../../shared/ui/icons";
-import { HARNESS_TITLE } from "../../sessions/model/session";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { ManagerAvatar } from "./ManagerAvatar";
 import { PixelMascot } from "../../projects/ui/PixelMascot";
-import {
-  formatRelativeTime,
-  githubPrDiff,
-  type GithubPrDiff,
-} from "../../inbox/model/githubTasks";
-import { useGithubPrChecks } from "../../inbox/hooks/useGithubPrChecks";
-import { latestPrChecks, summarizePrChecks } from "../../inbox/model/githubPrChecks";
 import { parseGithubWorkItemUrl } from "../../sessions/model/sessionWorkItem";
 import { usePrStatusCache } from "../../source-control/hooks/usePrStatus";
 import {
@@ -29,10 +19,8 @@ import type {
   OrchestrationRun,
   OrchestrationTask,
 } from "../model/orchestrationState";
-import { OrgArtifactLinks } from "../../artifacts/ui/OrgArtifactLinks";
-import { Modal } from "../../../shared/ui/Modal";
 import { usePullRequests, prIdentity } from "../../source-control/model/pullRequests";
-import { WorktreePrActions } from "../../source-control/ui/WorktreePrActions";
+import { buildPullRequestRows, openPullRequests } from "../../pullRequests/model/pullRequestView";
 
 export function ProjectManagerStatus({
   run,
@@ -106,6 +94,89 @@ export function ProjectManagerStatus({
   );
 }
 
+export function ReadyCard({
+  run,
+  task,
+  merged,
+  state,
+}: {
+  run: OrchestrationRun;
+  task: OrchestrationTask;
+  merged: boolean;
+  state?: "Ready to merge" | "Merged" | "Closed" | "Sent back";
+}) {
+  const row = buildPullRequestRows(usePullRequests(), { runs: [run] }).find(
+    (row) => prIdentity(row.entry.pr.url) === prIdentity(task.prUrl ?? ""),
+  );
+  const entry = row?.entry;
+  const reviewed =
+    !!entry?.pr.headOid &&
+    (task.reviewedHead ?? task.delivery?.head) === entry.pr.headOid &&
+    task.status === "completed" &&
+    task.accepted &&
+    !!task.lastDispatchId &&
+    task.acceptedDispatchId === task.lastDispatchId;
+  const forgeLabel = row?.label;
+  const label =
+    entry?.pr.state === "merged"
+      ? "Merged"
+      : entry?.pr.state === "closed"
+        ? "Closed"
+        : merged
+          ? "Merged"
+          : task.delivery?.state === "fixing-ci"
+            ? "Fixing CI"
+            : task.delivery?.state === "resolving-conflicts"
+              ? "Resolving conflicts"
+              : task.delivery?.state === "review-outdated"
+                ? "Review outdated"
+                : task.delivery?.state === "watching"
+                  ? "Checks running"
+                  : forgeLabel === "Ready to merge" && !reviewed
+                    ? "Awaiting team review"
+                    : (forgeLabel ?? state ?? "Awaiting review");
+  const number =
+    entry?.pr.number ?? parseGithubWorkItemUrl(task.prUrl ?? "")?.number;
+  const verdict = task.trivial
+    ? "Not reviewed (trivial)"
+    : task.delivery?.state === "review-outdated" ||
+        (task.reviewedBy && !reviewed)
+      ? "Re-review requested"
+      : task.reviewedBy?.startsWith("Not reviewed")
+        ? task.reviewedBy
+        : task.reviewedBy && reviewed
+          ? `Reviewed by ${task.reviewedBy} ✓`
+          : "Awaiting review";
+  return (
+    <button
+      id={`manager-review-${task.id}`}
+      type="button"
+      aria-label={`${label}: ${task.title}`}
+      title={task.title}
+      className="flex w-full min-w-0 items-center gap-2 rounded px-2 py-1 text-left font-sans text-xs text-content/65 hover:bg-content/5 hover:text-content focus-visible:outline-accent"
+      onClick={() => openPullRequests({ urls: task.prUrl ? [task.prUrl] : [] })}
+    >
+      {task.memberMascot && task.memberColor ? (
+        <PixelMascot
+          name={task.memberMascot}
+          color={task.memberColor}
+          still
+          className="size-4 shrink-0"
+        />
+      ) : (
+        <ManagerAvatar
+          project={run.cwd}
+          status={label === "Ready to merge" ? "ready" : undefined}
+        />
+      )}
+      <span className="truncate">
+        PR #{number ?? "?"} {label.toLowerCase()} · {verdict}
+      </span>
+      <span aria-hidden>›</span>
+    </button>
+  );
+}
+
 export function ProjectManagerReview({
   run,
   historical = false,
@@ -146,7 +217,7 @@ export function ProjectManagerReview({
           event.stopPropagation();
           next(
             (event.target as HTMLElement)
-              .closest("section")
+              .closest('[id^="manager-review-"]')
               ?.id.replace("manager-review-", ""),
           );
         }
@@ -215,401 +286,9 @@ export function ProjectManagerReview({
                 task={task}
                 merged={managerTaskMerged(task, taskPrStatus(task, statuses))}
                 state={state}
-                onNext={ready.length ? () => next(task.id) : undefined}
               />
             );
           })}
     </div>
-  );
-}
-
-export function ReadyCard({
-  run,
-  task,
-  merged,
-  onNext,
-  state,
-}: {
-  run: OrchestrationRun;
-  task: OrchestrationTask;
-  merged: boolean;
-  onNext?: () => void;
-  state?: "Ready to merge" | "Merged" | "Closed" | "Sent back";
-}) {
-  const [editing, setEditing] = useState(false);
-  const [open, setOpen] = useState(false);
-  const actions = useContext(OrchestrationActions);
-  const [message, setMessage] = useState("");
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState<string>();
-  const taskPrs = [...new Map(usePullRequests().filter(entry => entry.links.some(link => link.taskId === task.id)).map(entry => [prIdentity(entry.pr.url), entry])).values()];
-  const currentEntry = taskPrs.find(entry => prIdentity(entry.pr.url) === prIdentity(task.prUrl ?? ""));
-  const currentPr = currentEntry?.pr;
-  const label =
-    currentPr?.state === "merged" ? "Merged" : currentPr?.state === "closed" ? "Closed" :
-    merged || state === "Closed"
-      ? (state ?? "Merged")
-      : task.delivery?.state === "fixing-ci"
-        ? "Fixing CI…"
-        : task.delivery?.state === "resolving-conflicts"
-          ? "Resolving conflicts…"
-          : task.delivery?.state === "review-outdated"
-            ? "Review outdated"
-            : task.delivery?.state === "watching"
-              ? task.delivery.ci === "pending"
-                ? "Awaiting CI…"
-                : "Checking delivery…"
-              : (state ?? (merged ? "Merged" : "Ready to merge"));
-  const target = parseGithubWorkItemUrl(task.prUrl || "");
-  const repo = target?.repo || "";
-  const number = target?.number || 0;
-  const [diff, setDiff] = useState<GithubPrDiff>();
-  const [diffError, setDiffError] = useState(false);
-  const checks = useGithubPrChecks({
-    cwd: run.cwd,
-    repo,
-    number,
-    enabled: !!number,
-    open: true,
-  });
-  const overall = summarizePrChecks({
-    state: label === "Merged" || label === "Closed" ? label.toLowerCase() : checks.checks?.state,
-    loading: checks.loading,
-    error: checks.error,
-    checks: checks.checks?.checks ?? null,
-  });
-  useEffect(() => {
-    let disposed = false;
-    setDiff(undefined);
-    setDiffError(false);
-    if (number)
-      void githubPrDiff(run.cwd, repo, number, { maxAgeMs: 30_000 })
-        .then((value) => {
-          if (!disposed) setDiff(value);
-        })
-        .catch(() => {
-          if (!disposed) setDiffError(true);
-        });
-    return () => {
-      disposed = true;
-    };
-  }, [run.cwd, repo, number]);
-  const button =
-    "rounded-md px-2.5 py-1.5 text-xs hover:bg-content/8 focus-visible:outline-accent disabled:opacity-40";
-  const sendBack = async () => {
-    if (!message.trim() || pending) return;
-    setPending(true);
-    setError(undefined);
-    try {
-      if (orchestrator.run(run.leadId)?.status !== "active")
-        await orchestrator.start(
-          run.leadId,
-          run.allowedHarnesses,
-          run.maxWorkers,
-          undefined,
-          true,
-        );
-      await orchestrator.handle(run.leadId, crypto.randomUUID(), "message", {
-        taskId: task.id,
-        text: message.trim(),
-      });
-      setEditing(false);
-      setMessage("");
-    } catch (reason) {
-      setError(String(reason));
-    } finally {
-      setPending(false);
-    }
-  };
-  return (
-    <section
-      id={`manager-review-${task.id}`}
-      tabIndex={-1}
-      aria-label={`${label}: ${task.title}`}
-      className="min-w-0 rounded-xl border border-content/20 bg-content/5 p-3 font-sans text-xs focus:outline-2 focus:outline-offset-2 focus:outline-accent"
-    >
-      <div
-        className={`flex min-w-0 items-center gap-2 font-medium ${label === "Merged" ? "text-violet-600 dark:text-violet-400" : label === "Ready to merge" ? "text-emerald-600 dark:text-emerald-400" : "text-content/60"}`}
-      >
-        {task.memberMascot && task.memberColor ? (
-          <PixelMascot
-            name={task.memberMascot}
-            color={task.memberColor}
-            still
-            className="size-5"
-          />
-        ) : (
-          <ManagerAvatar
-            project={run.cwd}
-            status={label === "Ready to merge" ? "ready" : undefined}
-          />
-        )}
-        <span className="shrink-0 rounded-md bg-content/5 px-1.5 py-0.5">
-          {label}
-        </span>
-        <h3
-          className="min-w-0 flex-1 truncate text-sm font-medium text-content"
-          title={task.title}
-        >
-          {task.title}
-        </h3>
-        <button
-          type="button"
-          aria-haspopup="dialog"
-          className={`${button} shrink-0 bg-content/8 font-medium text-content`}
-          onClick={() => setOpen(true)}
-        >
-          Open
-        </button>
-      </div>
-      <div className="mt-2 flex min-w-0 flex-wrap items-center gap-2 text-content/80 [&>span]:rounded-md [&>span]:bg-content/5 [&>span]:px-1.5 [&>span]:py-0.5">
-        <span>PR #{number || "?"}</span>
-        {currentPr?.baseRefName && currentPr.headRefName && <span>{currentPr.baseRefName} ← {currentPr.headRefName}</span>}
-        {taskPrs.length > 1 && <span>{taskPrs.length} PRs</span>}
-        <span>
-          {diff ? (
-            <>
-              <span className="text-emerald-700 dark:text-emerald-400">
-                +{diff.additions}
-              </span>{" "}
-              <span className="text-rose-700 dark:text-rose-400">
-                −{diff.deletions}
-              </span>
-              {` · ${diff.files.length} ${diff.files.length === 1 ? "file" : "files"}`}
-            </>
-          ) : diffError ? (
-            "Diff unavailable"
-          ) : (
-            "Loading diff…"
-          )}
-        </span>
-        <span
-          title={overall.description}
-          className={
-            {
-              pass: "text-emerald-700 dark:text-emerald-400",
-              fail: "text-rose-700 dark:text-rose-400",
-              error: "text-rose-700 dark:text-rose-400",
-              pending: "text-amber-700 dark:text-amber-400",
-              loading: "text-content/60",
-              neutral: "text-content/60",
-            }[overall.kind]
-          }
-        >
-          {overall.kind === "pass"
-            ? `✓ ${latestPrChecks(checks.checks?.checks ?? []).length} checks`
-            : overall.kind === "fail"
-              ? `✗ ${overall.failed} failed`
-              : overall.description}
-        </span>
-        {task.prReadyAt !== undefined && (
-          <time
-            dateTime={new Date(task.prReadyAt).toISOString()}
-            className="text-content/50"
-          >
-            {formatRelativeTime(new Date(task.prReadyAt).toISOString())}
-          </time>
-        )}
-      </div>
-      {currentEntry && <div className="mt-2 flex flex-wrap gap-1"><WorktreePrActions entry={currentEntry} sessionId={run.ownerSessionId ?? run.leadId} taskId={task.id} /></div>}
-      <OrgArtifactLinks
-        monoId={run.ownerMonoId}
-        links={[
-          { id: task.reviewArtifactId, label: "Review" },
-          { id: task.prSummaryArtifactId, label: "PR summary" },
-        ]}
-      />
-      {onNext && (
-        <button
-          type="button"
-          className={button}
-          title="Next PR (Alt+Shift+N while reviewing cards)"
-          onClick={onNext}
-        >
-          Next
-        </button>
-      )}
-      {open && (
-        <Modal title={task.title} fitViewport onClose={() => setOpen(false)}>
-          <div
-            className="space-y-3 p-4 text-xs"
-            onClickCapture={(event) => {
-              if (
-                event.target instanceof Element &&
-                event.target.closest("[data-org-artifact]")
-              )
-                setOpen(false);
-            }}
-          >
-            <p className="text-content/60">
-              {task.memberName ? `${task.memberName} · ` : ""}
-              {task.trivial
-                ? "Not reviewed (trivial)"
-                : task.delivery?.state === "review-outdated"
-                  ? "Approval outdated · re-review requested"
-                  : task.delivery && !task.reviewedBy
-                    ? "Awaiting review"
-                    : task.reviewedBy?.startsWith("Not reviewed")
-                      ? task.reviewedBy
-                      : `Reviewed by ${task.reviewedBy ?? "Manager"}`}
-            </p>
-            <p className="text-content/60" aria-label="Delivery timeline">
-              Opened → CI{" "}
-              {task.delivery?.ci === "pass"
-                ? "✓"
-                : task.delivery?.ci === "fail"
-                  ? "failed"
-                  : "pending"}{" "}
-              →{" "}
-              {task.trivial
-                ? "Review skipped (trivial)"
-                : task.delivery?.state === "review-outdated"
-                  ? "Review outdated"
-                  : task.reviewedBy &&
-                      !task.reviewedBy.startsWith("Not reviewed")
-                    ? "Reviewed ✓"
-                    : "Review pending"}{" "}
-              → {managerPrReady(task) ? "Ready" : "In progress"}
-            </p>
-            <div className="flex min-w-0 items-center gap-1">
-              <button
-                type="button"
-                disabled={!actions?.openWorker}
-                onClick={() => {
-                  setOpen(false);
-                  actions?.openWorker?.(task.sessionId);
-                }}
-                title={task.workspace?.checkoutCwd}
-                className="truncate rounded font-mono text-content/60 hover:underline focus-visible:outline-accent"
-              >
-                {task.workspace?.branch}
-              </button>
-              <button
-                type="button"
-                aria-label="Go to worktree"
-                title="Go to worktree"
-                disabled={!actions?.openWorker}
-                onClick={() => {
-                  setOpen(false);
-                  actions?.openWorker?.(task.sessionId);
-                }}
-                className="rounded p-1 hover:bg-content/10 focus-visible:outline-accent"
-              >
-                <ArrowUpRight className="size-3.5" />
-              </button>
-            </div>
-            <p className="text-content/50">
-              {HARNESS_TITLE[task.harness]} · {task.model}
-            </p>
-            <OrgArtifactLinks
-              monoId={run.ownerMonoId}
-              links={[
-                { id: task.reviewArtifactId, label: "Review" },
-                { id: task.prSummaryArtifactId, label: "PR summary" },
-              ]}
-            />
-            <div className="text-content/75">
-              <h3 className="font-medium">Manager's review</h3>
-              <p className="mt-2 whitespace-pre-wrap leading-relaxed">
-                {task.checksSummary ||
-                  (task.accepted
-                    ? "Manager accepted this result. See the conversation for review and checks."
-                    : "Delivery is being checked. Review and checks are available in the team conversation.")}
-              </p>
-            </div>
-            <div className="mt-2 flex flex-wrap gap-1">
-              {taskPrs.length > 1 && <nav aria-label="Task pull requests" className="flex w-full flex-wrap gap-1">
-                {taskPrs.map(entry => <button key={entry.pr.url} type="button" className={button} onClick={() => void openUrl(entry.pr.url).catch(reason => setError(String(reason)))}>
-                  PR #{entry.pr.number} · {entry.pr.state === "open" && entry.pr.isDraft ? "draft" : entry.pr.state} · {entry.pr.title}
-                </button>)}
-              </nav>}
-              <button
-                type="button"
-                className={`${button} bg-content font-medium text-background-base hover:bg-content/85`}
-                onClick={() =>
-                  void openUrl(task.prUrl!).catch((reason) =>
-                    setError(String(reason)),
-                  )
-                }
-              >
-                Open PR
-              </button>
-              <button
-                type="button"
-                className={button}
-                onClick={() =>
-                  void openUrl(`${task.prUrl}/files`).catch((reason) =>
-                    setError(String(reason)),
-                  )
-                }
-              >
-                Open diff
-              </button>
-              {merged ? (
-                <button
-                  type="button"
-                  className={button}
-                  disabled={!actions?.removeManagerWorktree || !task.workspace}
-                  onClick={() => {
-                    if (task.workspace)
-                      void actions
-                        ?.removeManagerWorktree?.(
-                          run.cwd,
-                          task.workspace.checkoutCwd,
-                        )
-                        .catch((reason) => setError(String(reason)));
-                  }}
-                >
-                  Remove worktree
-                </button>
-              ) : label === "Ready to merge" ? (
-                <button
-                  type="button"
-                  className={button}
-                  disabled={pending}
-                  aria-expanded={editing}
-                  onClick={() => setEditing(!editing)}
-                >
-                  Send back
-                </button>
-              ) : null}
-            </div>
-            {editing && label === "Ready to merge" && (
-              <form
-                className="mt-2"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void sendBack();
-                }}
-              >
-                <label className="block text-content/60">
-                  Changes to request
-                  <textarea
-                    autoFocus
-                    rows={2}
-                    value={message}
-                    disabled={pending}
-                    onChange={(event) => setMessage(event.target.value)}
-                    className="mt-1 w-full resize-y rounded-md border border-stroke bg-transparent p-2 text-content focus-visible:outline-accent"
-                  />
-                </label>
-                <button
-                  type="submit"
-                  className={button}
-                  disabled={pending || !message.trim()}
-                >
-                  {pending ? "Sending…" : "Send to worker"}
-                </button>
-              </form>
-            )}
-            {error && (
-              <p role="alert" className="mt-2 text-red-400">
-                {error}
-              </p>
-            )}
-          </div>
-        </Modal>
-      )}
-    </section>
   );
 }

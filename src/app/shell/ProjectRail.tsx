@@ -5,6 +5,7 @@ import {
   FolderPlus,
   Internet,
   Inbox,
+  GitPullRequest,
   MoreHorizontal,
   ListFilter,
   Pin,
@@ -16,10 +17,13 @@ import {
   Zap,
 } from "../../shared/ui/icons";
 import {
+  createContext,
+  useContext,
   useEffect,
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type MouseEvent,
   type ReactNode,
 } from "react";
@@ -96,9 +100,15 @@ import {
 import { remoteProjectFor } from "../../features/connections/model/remoteProjects";
 import { useProjectMenu } from "./useProjectMenu";
 import { MonoRailSection, type MonoRailProps } from "./MonoRailSection";
+import { buildPullRequestRows, pullRequestGroup, openPullRequests, type PullRequestContext } from "../../features/pullRequests/model/pullRequestView";
+import { usePullRequests } from "../../features/source-control/model/pullRequests";
+import { orchestrator } from "../../features/orchestration/model/orchestration";
+import { cardSessionsSnapshot, subscribeCardSessions } from "../../features/monos/model/monoCards";
+import { listMonos, subscribeMonos } from "../../features/monos/model/mono";
 import { useProjectExpansion } from "../../features/projects/hooks/useProjectExpansion";
 
 type Props = {
+  sessions?: PullRequestContext["sessions"];
   visible?: boolean;
   cwd: string;
   recents: RecentProject[];
@@ -112,6 +122,7 @@ type Props = {
   searchActive?: boolean;
   onOpenInbox?: () => void;
   inboxActive?: boolean;
+  pullRequestsActive?: boolean;
   notesEnabled?: boolean;
   onOpenNotes?: () => void;
   notesActive?: boolean;
@@ -140,6 +151,7 @@ type Props = {
 };
 
 export function ProjectRail({
+  sessions,
   visible = true,
   cwd,
   recents,
@@ -153,6 +165,7 @@ export function ProjectRail({
   searchActive = false,
   onOpenInbox,
   inboxActive = false,
+  pullRequestsActive = false,
   notesEnabled = true,
   onOpenNotes,
   notesActive = false,
@@ -178,6 +191,19 @@ export function ProjectRail({
   onDismissUpdate,
   monos,
 }: Props) {
+  const prs = usePullRequests();
+  const runs = useSyncExternalStore(orchestrator.subscribe, orchestrator.snapshot, orchestrator.snapshot);
+  const cardSessions = useSyncExternalStore(subscribeCardSessions, cardSessionsSnapshot, cardSessionsSnapshot);
+  const [roster, setRoster] = useState(listMonos);
+  useEffect(() => subscribeMonos(() => setRoster(listMonos())), []);
+  const attention = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const row of buildPullRequestRows(prs, { sessions, runs, cardSessions, roster })) {
+      const group = pullRequestGroup(row);
+      if (group === "Needs you" || group === "Ready to merge") counts.set(pathKey(row.project), (counts.get(pathKey(row.project)) ?? 0) + 1);
+    }
+    return counts;
+  }, [prs, sessions, runs, cardSessions, roster]);
   const resize = useDragResize({
     min: PROJECT_RAIL_WIDTH_MIN,
     max: () =>
@@ -344,6 +370,7 @@ export function ProjectRail({
   const otherViewActive =
     searchActive ||
     inboxActive ||
+    pullRequestsActive ||
     notesActive ||
     automationsActive ||
     !!monos?.activeId;
@@ -356,6 +383,7 @@ export function ProjectRail({
     "y",
   );
   return (
+    <ProjectPrAttention.Provider value={attention}>
     <nav
       ref={resize.setPaneRef}
       aria-label="Projects"
@@ -411,6 +439,7 @@ export function ProjectRail({
               dot={inboxUnseen}
               ariaLabel={inboxUnseen ? "Inbox, new items" : "Inbox"}
             />
+            <RailAction label="Pull requests" icon={GitPullRequest} active={pullRequestsActive} onClick={() => openPullRequests()} ariaLabel="Pull requests" />
             {notesEnabled ? (
               <RailAction
                 label="Notes"
@@ -593,10 +622,12 @@ export function ProjectRail({
         onDoubleClick={resize.onDoubleClick}
       />
     </nav>
+    </ProjectPrAttention.Provider>
   );
 }
 
 type SortableHandle = ReturnType<typeof useAnimatedReorder>;
+const ProjectPrAttention = createContext<ReadonlyMap<string, number>>(new Map());
 
 function ProjectSection({
   label,
@@ -925,6 +956,7 @@ function ProjectCard({
     if (selected && !wasSelected.current) setExpanded(true);
     wasSelected.current = selected;
   }, [selected]);
+  const actionablePrs = useContext(ProjectPrAttention).get(pathKey(item.path)) ?? 0;
   const fallbackName = basename(item.path);
   const key = projectKey(item.path);
   const seed = projectName(item.path);
@@ -1053,6 +1085,7 @@ function ProjectCard({
           ) : (
             <span className={labelClassName}>{name}</span>
           )}
+          {actionablePrs > 0 && <span aria-label={`${actionablePrs} pull requests need attention`} title={`${actionablePrs} PRs need you or are ready to merge`} className="rounded bg-accent/10 px-1 text-[10px] text-accent">{actionablePrs}</span>}
           {machine ? (
             <span className="min-w-0 flex-1 truncate text-[11px] leading-tight text-content/45">
               {machine.name}

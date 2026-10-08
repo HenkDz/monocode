@@ -654,6 +654,19 @@ it("allows an owning Mono's habit without acquiring or ending its Manager turn",
   expect(f.manager.submissionError("habit")).toBeNull();
 });
 
+it("keeps storage-blocked Managers active without escalating a user decision", async () => {
+  const f = setup();
+  f.lead.busy = false;
+  f.lead.codexStorageError = "Codex storage needs repair: AGENTS.md";
+  f.manager.registerMonoEngine("lead", "lead", "manager-mono", "/repo");
+  await f.manager.start("lead", ["codex"], 2, undefined, true);
+  const turn = await f.manager.beginManagerTurn("lead", true);
+  await f.manager.endManagerTurn("lead", turn, { status: "failed", text: "", error: f.lead.codexStorageError });
+  expect(f.manager.run("lead")?.status).toBe("active");
+  expect(f.manager.run("lead")?.error).toBeUndefined();
+  expect(f.manager.submissionError("lead", true)).toBeNull();
+});
+
 it("keeps usage-limited Managers active but holds events for genuinely paused owners", async () => {
   const f = setup();
   f.lead.busy = false;
@@ -2205,6 +2218,35 @@ describe("local orchestration", () => {
     expect(f.store.disable).toHaveBeenCalledWith("lead");
     expect(f.host.submit).toHaveBeenCalledTimes(1);
   });
+  it("retains Manager events during storage preparation and classified rejection, then dispatches after repair", async () => {
+    const f = setup();
+    f.lead.busy = false;
+    await f.manager.start("lead", ["codex"], 2, undefined, true);
+    f.lead.busy = true;
+    await f.delegate(["a"]);
+    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledTimes(1));
+    f.lead.busy = false;
+    f.lead.codexStoragePreparing = true;
+    f.completions.get(f.tasks()[0].sessionId)!({ status: "completed", text: "Result retained" });
+    await vi.waitFor(() => expect(f.tasks()[0].status).toBe("completed"));
+    expect(f.tasks()[0].delivered).toBe(false);
+    expect(f.host.submit).toHaveBeenCalledTimes(1);
+    f.lead.codexStoragePreparing = undefined;
+    f.manager.sync();
+    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledTimes(2));
+    f.lead.codexStorageError = "Codex storage needs repair: preparation is already pending.";
+    f.completions.get("lead")!({ status: "failed", text: "", error: f.lead.codexStorageError });
+    await vi.waitFor(() => expect(f.tasks()[0].delivered).toBe(false));
+    expect(f.manager.run("lead")!.status).toBe("active");
+    expect(f.manager.run("lead")!.continuations).toBe(0);
+    f.manager.sync();
+    expect(f.host.submit).toHaveBeenCalledTimes(2);
+    f.lead.codexStorageError = undefined;
+    f.manager.sync();
+    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledTimes(3));
+    expect(vi.mocked(f.host.submit).mock.calls[2][1]).toContain("Result retained");
+  });
+
   it("defers results when a user turn starts during continuation persistence", async () => {
     const f = setup();
     await f.start();

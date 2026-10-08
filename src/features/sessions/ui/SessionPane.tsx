@@ -89,6 +89,7 @@ import {
 import { MonoHeader } from "../../monos/ui/MonoHeader";
 import { MonoComposer } from "../../monos/ui/MonoComposer";
 import { MonoUsageLimitNotice } from "../../monos/ui/MonoUsageLimitNotice";
+import { MonoCodexStorageNotice } from "../../monos/ui/MonoCodexStorageNotice";
 import { QuestionForm } from "./QuestionForm";
 import { MemberWorkLog } from "../../monos/ui/MemberWorkLog";
 import {
@@ -211,6 +212,7 @@ export type SessionPaneProps = {
   onSteerQueuedMessage: (sessionId: string, messageId: string) => void;
   onResumeQueue: (sessionId: string) => void;
   onUsageLimitResume: (sessionId: string) => void;
+  onCodexStorageRepair?: (sessionId: string) => Promise<void>;
   onUsageLimitResumeAtReset: (sessionId: string, enabled: boolean) => void;
   onUsageLimitDismiss: (sessionId: string) => void;
   onUsageLimitAccountChange?: (sessionId: string, accountId: string) => void;
@@ -344,6 +346,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
   onSteerQueuedMessage,
   onResumeQueue,
   onUsageLimitResume,
+  onCodexStorageRepair,
   onUsageLimitResumeAtReset,
   onUsageLimitDismiss,
   onUsageLimitAccountChange,
@@ -1251,6 +1254,11 @@ const LocalSessionPane = memo(function LocalSessionPane({
               </>
             )}
           </div>
+          {session.codexStorageError && onCodexStorageRepair && (
+            <div className="mx-auto w-full max-w-4xl shrink-0">
+              <MonoCodexStorageNotice detail={session.codexStorageError} onRepair={() => onCodexStorageRepair(session.id)} />
+            </div>
+          )}
           {dockComposer ? (
             <div
               ref={composerDockMotion.dockedRef}

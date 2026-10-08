@@ -35,6 +35,7 @@ import {
 } from "./monoPanelParts";
 import { MonoActivityContent } from "./MonoActivityPanel";
 import { PanelStack, type StackPage } from "./PanelStack";
+import { MonoCodexStorageSource } from "./MonoCodexStorageSource";
 import { MonoSidebar, MonoSidebarHeader } from "./MonoSidebar";
 import { ArchivedManagerConversation, ArchivedManagerConversations } from "./ArchivedManagerConversations";
 import { PullRequestsList } from "../../pullRequests/ui/PullRequestsList";
@@ -57,6 +58,7 @@ type Props = {
   open: boolean;
   monoId: string;
   sessionId?: string;
+  providerAccountId?: string;
   /** Its conversation's folder, which the model picker reads settings from. */
   cwd: string;
   agent: MonoLook;
@@ -90,6 +92,7 @@ export function MonoDetails({
   open,
   monoId,
   sessionId,
+  providerAccountId,
   cwd,
   agent,
   state,
@@ -278,7 +281,7 @@ export function MonoDetails({
             />}
             </div>
           ) : findMono(monoId)?.role === "member" ? (
-            <MemberDetails member={findMono(monoId)!} fallback={{ harness, model, modelSettings }} onBack={onClose} runtimeMode={runtimeMode} onRuntimeModeChange={onRuntimeModeChange} onProfileChange={profile => { onModelChange(profile.harness, profile.model); onModelSettingsChange(profile.modelSettings ?? {}); }} />
+            <MemberDetails member={findMono(monoId)!} fallback={{ harness, model, modelSettings }} onBack={onClose} providerAccountId={providerAccountId} runtimeMode={runtimeMode} onRuntimeModeChange={onRuntimeModeChange} onProfileChange={profile => { onModelChange(profile.harness, profile.model); onModelSettingsChange(profile.modelSettings ?? {}); }} />
           ) : (
             <MonoSettingsPage
               monoId={monoId}
@@ -304,6 +307,7 @@ export function MonoDetails({
                     onSettingsChange={onModelSettingsChange}
                   />
                 </Property>
+                <MonoCodexStorageSource harness={harness} providerAccountId={providerAccountId} cwd={cwd} />
                 <ModelSettingRows
                   harness={harness}
                   model={model}

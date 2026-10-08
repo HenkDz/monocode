@@ -469,6 +469,7 @@ pub fn run() {
             harness::harness_free_port,
             harness::harness_spawn,
             codex_mono_store::codex_mono_store_prepare,
+            codex_mono_store::codex_mono_store_info,
             codex_mono_store::codex_mono_store_copy,
             codex_mono_store::codex_mono_store_restore_agent_state,
             harness::harness_write,

@@ -4,6 +4,7 @@ import { approvedMemberReview } from "./memberReview";
 import { memberContinuity } from "./memberContinuity";
 import type { Artifact } from "../../artifacts/artifacts";
 import { usageLimitFromError } from "../../sessions/model/usageLimit";
+import { isCodexStorageError } from "../../monos/model/monoCodexStorage";
 import {
   HARNESSES,
   type HarnessId,
@@ -1114,6 +1115,7 @@ export class Orchestrator {
     await this.commit({ ...run, managerTurnId: undefined });
     if (
       outcome.status !== "completed" &&
+      !isCodexStorageError(outcome.error ?? outcome.text) &&
       !usageLimitFromError(outcome.error ?? outcome.text)
     )
       await this.pause(
@@ -1139,7 +1141,7 @@ export class Orchestrator {
       id,
       "Continue the pending goals. Inspect existing work and uncertain external outcomes before retrying. Do not repeat a push or PR creation blindly, or bypass a safety refusal.",
       (outcome) => {
-        if (outcome.status !== "completed")
+        if (outcome.status !== "completed" && !isCodexStorageError(outcome.error ?? outcome.text))
           void this.pause(
             id,
             outcome.error || "Manager could not continue.",
@@ -1228,7 +1230,7 @@ export class Orchestrator {
       leadId,
       `The user confirmed the orchestration card, including any edits. The app has already queued the exact assignments below; do not delegate duplicates. Supervise them through the control CLI, review their changes, request corrections when needed, and finish the original request.\n\nOriginal request:\n${proposal.request}\n\nApproved assignments:\n${JSON.stringify(tasks.map(({ id, title, prompt, harness, model, modelSettings, files, dependsOn }) => ({ taskId: id, title, prompt, harness, model, modelSettings, files, dependsOn })))}`,
       (outcome) => {
-        if (outcome.status !== "completed")
+        if (outcome.status !== "completed" && !isCodexStorageError(outcome.error ?? outcome.text))
           void this.pause(
             leadId,
             outcome.error ??
@@ -3040,7 +3042,7 @@ export class Orchestrator {
       )
         continue;
       const lead = this.host?.session(run.leadId);
-      if (!lead || lead.busy || lead.usageLimit || lead.queuedMessages?.length)
+      if (!lead || lead.busy || lead.usageLimit || lead.codexStorageError || lead.codexStoragePreparing || lead.queuedMessages?.length)
         continue;
       const announced = this.announced.get(run.leadId) ?? new Set<string>();
       const results = run.tasks.filter((task) => !task.delivered);
@@ -3062,6 +3064,8 @@ export class Orchestrator {
               !session ||
               session.busy ||
               session.usageLimit ||
+              session.codexStorageError ||
+              session.codexStoragePreparing ||
               session.queuedMessages?.length
             )
               return;
@@ -3106,6 +3110,8 @@ export class Orchestrator {
               !target ||
               target.busy ||
               target.usageLimit ||
+              target.codexStorageError ||
+              target.codexStoragePreparing ||
               target.queuedMessages?.length
             ) {
               await this.commit({
@@ -3156,7 +3162,7 @@ export class Orchestrator {
               if (outcome.status !== "completed") {
                 if (
                   current.projectManager &&
-                  usageLimitFromError(outcome.error ?? outcome.text)
+                  (usageLimitFromError(outcome.error ?? outcome.text) || isCodexStorageError(outcome.error ?? outcome.text))
                 ) {
                   const latest = this.run(run.leadId);
                   this.announced.delete(run.leadId);

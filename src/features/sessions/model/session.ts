@@ -482,6 +482,9 @@ export type Session = {
   sendingQueuedMessageId?: string;
   /** Last turn hit a provider usage limit; cleared by the next send. In-memory only. */
   usageLimit?: UsageLimit;
+  /** Storage preparation failed; hold automatic turns until Repair succeeds. */
+  codexStorageError?: string;
+  codexStoragePreparing?: boolean;
   /**
    * Lives only in memory: never saved, never listed with the project's chats.
    * A Mono's habit runs are, and disappear when the run ends.

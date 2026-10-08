@@ -38,7 +38,7 @@ export function dequeueQueuedMessage(
 export function canDispatchQueuedHead(session: Session): boolean {
   if (session.busy) return false;
   if (session.worktreePreparing || session.worktreeRemoved) return false;
-  if (session.usageLimit) return false;
+  if (session.usageLimit || session.codexStorageError || session.codexStoragePreparing) return false;
   if (session.queueStatus === "paused" || session.queueStatus === "resuming") {
     return false;
   }
@@ -62,6 +62,8 @@ export function canSteerQueuedHead(session: Session): boolean {
     !session.worktreeRemoved &&
     !session.pendingSwitch &&
     !session.usageLimit &&
+    !session.codexStorageError &&
+    !session.codexStoragePreparing &&
     !(
       session.pendingQuestion && session.pendingQuestion.autoResolveAt == null
     ) &&

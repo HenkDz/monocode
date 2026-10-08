@@ -412,6 +412,11 @@ export function TeamMap({
                   <g
                     key={edge.id}
                     data-highlighted={activeEdges.has(edge.id)}
+                    data-flow={edge.flow}
+                    data-reduced-motion={reducedMotion || undefined}
+                    data-dimmed={
+                      (needsYou && target.status !== "needs-you") || undefined
+                    }
                     className="team-map-edge"
                   >
                     <path d={edgePath(edge.source, edge.target)} />
@@ -442,6 +447,11 @@ export function TeamMap({
                       key={`${event.id}:${id}`}
                       className={`team-map-pulse ${animation.dashed ? "team-map-return" : ""}`}
                       data-event-id={event.id}
+                      data-dimmed={
+                        (needsYou &&
+                          nodeById.get(edge.target)?.status !== "needs-you") ||
+                        undefined
+                      }
                     >
                       <path
                         d={edgePath(edge.source, edge.target)}

@@ -49,6 +49,7 @@ export type TeamMapEdge = {
   source: string;
   target: string;
   label?: string;
+  flow?: "down" | "up";
 };
 export type TeamMapInput = {
   roster: readonly Mono[];
@@ -145,6 +146,12 @@ export function buildTeamMap({
   const visible = active.filter(
     (mono) => included.has(mono.id) && !hidden.has(mono.id),
   );
+  const liveStates = new Map(
+    active.map((mono) => [
+      mono.id,
+      monoLiveState(active, runs, sessions, mono.id),
+    ]),
+  );
   const taskUpdated = new Map<string, number>();
   for (const run of runs)
     for (const dispatch of run.dispatches ?? [])
@@ -153,7 +160,7 @@ export function buildTeamMap({
         Math.max(taskUpdated.get(dispatch.taskId) ?? 0, dispatch.updatedAt),
       );
   const nodes: TeamMapNode[] = visible.map((mono) => {
-    const state = monoLiveState(active, runs, sessions, mono.id);
+    const state = liveStates.get(mono.id)!;
     const scope = orgDescendants(active, mono.id);
     const tasks =
       mono.role === "member"
@@ -266,12 +273,32 @@ export function buildTeamMap({
             .filter((run) => run.ownerMonoId === node.id)
             .flatMap((run) => run.tasks)
         : memberTasks(runs, node.id);
-    const task = tasks.find(
+    const pending = tasks.filter(
       (task) =>
         ["queued", "running", "cancelling", "completed"].includes(
           task.status,
         ) && !managerTaskFinished(task, taskPrStatus(task, statuses)),
     );
+    const working = pending.find(
+      (task) =>
+        ["running", "cancelling"].includes(task.status) &&
+        task.memberId &&
+        liveStates.get(task.memberId)?.status === "working",
+    );
+    const queued = pending.find(
+      (task) =>
+        task.status === "queued" &&
+        task.memberId &&
+        liveStates.has(task.memberId) &&
+        liveStates.get(task.memberId)?.status !== "needs-you",
+    );
+    const flow =
+      working || node.status === "working"
+        ? ("up" as const)
+        : queued
+          ? ("down" as const)
+          : undefined;
+    const task = working ?? queued ?? pending[0];
     const lifecycle =
       task && managerTaskLifecycle(task, taskPrStatus(task, statuses));
     const label = task
@@ -287,6 +314,7 @@ export function buildTeamMap({
         source: node.parentId,
         target: node.id,
         label,
+        flow,
       },
     ];
   });

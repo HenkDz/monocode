@@ -127,9 +127,31 @@
   stroke: color-mix(in srgb, var(--color-content) 20%, transparent);
   stroke-width: 1.5px;
 }
+.team-map-edge[data-dimmed="true"],
+.team-map-pulse[data-dimmed="true"] {
+  opacity: 0.25;
+}
+.team-map-edge[data-flow] path {
+  stroke: var(--color-accent);
+  stroke-width: 2;
+  stroke-dasharray: 6 6;
+  stroke-linecap: round;
+  animation: team-map-work-flow 1s linear infinite;
+}
+.team-map-edge[data-flow="up"] path {
+  animation-direction: reverse;
+}
+.team-map-edge[data-reduced-motion="true"] path {
+  animation: none;
+}
 .team-map-edge[data-highlighted="true"] path {
   stroke: var(--color-accent);
   stroke-width: 2.5px;
+}
+@keyframes team-map-work-flow {
+  to {
+    stroke-dashoffset: -24;
+  }
 }
 .team-map-edge-label {
   width: fit-content;

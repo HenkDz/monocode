@@ -142,6 +142,8 @@ it("starts a subscribed goal pulse after SVG mount and restarts only when its pa
   expect(begin.mock.calls).toEqual([[0], [0]]);
   expect(begin.mock.contexts).toEqual([motion, visibility]);
   expect(host.querySelector(".team-map-timeline")?.textContent).toContain("Verify the Team map");
+  await act(async () => [...host.querySelectorAll("button")].find(button => button.textContent === "Needs you")!.click());
+  expect(motion.closest(".team-map-pulse")?.getAttribute("data-dimmed")).toBe("true");
   const starts = raf.mock.calls.length;
   const path = motion.getAttribute("path");
   await renders();
@@ -169,4 +171,24 @@ it("uses tree order and adjacent arrow navigation at narrow widths without consu
   const wheel = new WheelEvent("wheel", { deltaY: 100, bubbles: true, cancelable: true });
   await act(async () => host.querySelector(".team-map-viewport")!.dispatchEvent(wheel));
   expect(wheel.defaultPrevented).toBe(false);
+});
+
+it("keeps both reporting edges marked while working and removes flow on finish, with reduced-motion indicators", async () => {
+  reducedMotion = true;
+  const running = { leadId: "engine", ownerMonoId: "manager", cwd: "/app", tasks: [
+    { id: "work", memberId: "backend", sessionId: "worker", title: "Current task", prompt: "Current task", result: "", status: "running" },
+  ], dispatches: [] } as unknown as OrchestrationRun;
+  await renders([running]);
+  const flows = [...host.querySelectorAll('.team-map-edge[data-flow="up"]')];
+  expect(flows).toHaveLength(2);
+  expect(flows.every(edge => edge.getAttribute("data-reduced-motion") === "true")).toBe(true);
+  expect(flows.every(edge => edge.querySelector("path"))).toBe(true);
+  expect(host.querySelector("animateMotion")).toBeNull();
+  await act(async () => [...host.querySelectorAll("button")].find(button => button.textContent === "Needs you")!.click());
+  expect(flows.every(edge => edge.getAttribute("data-dimmed") === "true")).toBe(true);
+  expect(host.querySelectorAll('.team-map-edge[data-flow="up"]')).toHaveLength(2);
+  await renders([{ ...running, tasks: [{ ...running.tasks[0], status: "completed", accepted: true,
+    completionOutcome: "no-changes", lastDispatchId: "dispatch", acceptedDispatchId: "dispatch" }] }]);
+  expect(host.querySelectorAll(".team-map-edge[data-flow]")).toHaveLength(0);
+  expect(host.querySelectorAll(".team-map-edge")).toHaveLength(4);
 });

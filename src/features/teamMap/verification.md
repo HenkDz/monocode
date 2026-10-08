@@ -1,14 +1,14 @@
 # Team map verification
 
-Final frontend checks passed: 16 focused tests; 5,280 tests across 497 files in the full suite (13 tests and two files skipped); TypeScript and the production build. The full suite used `NODE_OPTIONS=--no-experimental-webstorage` on Node 26 with four workers. No dependencies or Rust source were changed.
+Frontend validation passed: 20 focused tests; 5,284 tests across 497 files in the full suite (13 tests and two files skipped); TypeScript and the production build. The broad suite covers the streaming model; the final Needs you dimming and highlight-order presentation tweaks additionally passed focused tests, TypeScript and build. The full suite used `NODE_OPTIONS=--no-experimental-webstorage` on Node 26 with four workers. No dependencies or Rust source were changed.
 
-The final Windows preview was built and checked on 2026-10-08 with the actual native app, real Codex GPT-6.1-Sol turns, and a separate `com.monocode.desktop.r14-team-map-test` profile. It launched from an empty OS-temp folder outside Git ancestry. The original user preview, PID `88776`, remained running; tests used only the isolated profile.
+The baseline Windows preview was built and checked on 2026-10-08 with the actual native app, real Codex GPT-6.1-Sol turns, and a separate `com.monocode.desktop.r14-team-map-test` profile. It launched from an empty OS-temp folder outside Git ancestry. The original user preview, PID `88776`, remained running; tests used only the isolated profile. The latest continuous-streaming acceptance is recorded below.
 
-Executable: `target/r14-preview/monocode-r14-delivery.exe`. SHA-256: `00954cb070612c5767687522cc7ae98c268e2d580209ca10372a5d53a850bbea`. Loaded frontend asset: `App-BcBqkQZz.js`. Native build passed; no frontend asset interception was used.
+Baseline executable: `target/r14-preview/monocode-r14-delivery.exe`. SHA-256: `00954cb070612c5767687522cc7ae98c268e2d580209ca10372a5d53a850bbea`. Loaded frontend asset: `App-BcBqkQZz.js`. Native build passed; no frontend asset interception was used.
 
 The isolated profile contains a persisted Orchestrator, Atlas and Beacon Managers, two members per Manager, and an ordinary Notes companion. Only that initial roster and two standalone README repositories were configured as fixtures. Goals, dispatches, reports, acceptance receipts and crew events were produced by real native app/control calls with prepared `--input` files and `login:false`.
 
-| Final live evidence | ID |
+| Baseline live evidence | ID |
 | --- | --- |
 | Final Orchestrator → Atlas goal, done | `e6034577-6077-4546-8f5e-ce6cbd4dfd3a` |
 | Atlas Engineer task, accepted without changes | `95823cbb-3e3b-4b95-954a-dcf61a0b1a0a` |
@@ -29,3 +29,15 @@ Ten live interaction groups passed: zoom/fit, mouse panning, Needs you dimming, 
 The reported bottom gap was reproduced by temporary capture emulation: the native client remained `1280×1038`, while an emulated height of `800` placed the dialog bottom at `784`. Clearing the override restored `innerHeight`, document height and visual viewport to `1038`, with dialog bottom `1022` and the intended `16px` inset. The preview is left visible, idle and dark, with no forced device metrics, media preferences or diagnostic hooks.
 
 Live PR states and Reviewer changes requests were not exercised; their event/status mappings have unit coverage. No push, remote PR, merge or deployment was performed.
+
+## Continuous streaming follow-up
+
+The latest native executable is `target/r14-preview/monocode-r14-stream.exe`, PID `123272`, SHA-256 `450cdbec42dfad0690e64f8a5684fc06b8d05942da2b7cdbf9a2ca5038d3b167`, with loaded `App-DUEFOdYu.js` and `App-C-Pl6AZq.css`. It uses the same isolated profile, launched from another empty temp folder. The baseline receipt and pulse sequences above are retained as earlier acceptance evidence.
+
+Real goal `673a9e52-9693-4aa8-9c20-d019516e00f1` dispatched read-only task `674104f0-0c66-4917-81fa-e65b078804ef` to Atlas Engineer. The worker ran a prepared README assertion, waited 12 seconds, asserted the repeated read was unchanged, and saved its report. The Manager accepted exact dispatch `71c83289-a180-47eb-a0a6-4a0a9a1aef68` with `completionOutcome:no-changes`; the goal is done and the run finished. Both repositories retain their original HEAD, byte-identical README and clean status.
+
+At 7.7 seconds after dispatch, no one-shot pulses remained. Both Engineer → Manager and Manager → Orchestrator paths still had upward, infinite `team-map-work-flow` CSS animation. Their dash offsets changed from `-2.77841px` / `-7.1952px` to `-14.7784px` / `-19.1952px` in the next sample. Needs you dimmed both active edge groups while preserving their underlying flow. Reduced motion preserved static `6px, 6px` dashes with no edge animation. After report acceptance and the team becoming idle, both flow attributes and animations were absent.
+
+Evidence: [underway](evidence/streaming-active.png), [finished](evidence/streaming-finished.png), [streaming receipt](evidence/streaming.json). These screenshots use the actual `1280×1038` native client without device emulation. The continuous effect reads existing availability/task state and animates through CSS; it adds no event generator, polling or progress timer.
+
+The preview remains visible, idle and dark. Final native and browser heights are both `1038`, with dialog bottom `1022`; device and media overrides are cleared. The original user preview, PID `88776`, remains running. No push or remote publication was performed.

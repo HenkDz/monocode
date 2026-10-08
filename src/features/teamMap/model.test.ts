@@ -135,6 +135,52 @@ it("uses clear coordination labels before assignment while actual task titles ta
     expect(assigned.find(node => node.id === id)?.title).toBe("Verify project routing");
 });
 
+it("keeps work flowing upward, sends eligible queued work downward and stops at attention or completion", () => {
+  const edges = (entry: OrchestrationTask, sessions = [] as ReturnType<typeof newSession>[]) =>
+    buildTeamMap({ ...input, runs: [run([entry])], sessions }).edges;
+  for (const status of ["running", "cancelling"] as const)
+    expect(edges(task({ status })).filter(edge => edge.flow).map(edge => [edge.id, edge.flow])).toEqual([
+      ["orchestrator->app", "up"], ["app->backend", "up"],
+    ]);
+  expect(edges(task({ status: "queued" })).filter(edge => edge.flow).map(edge => [edge.id, edge.flow])).toEqual([
+    ["orchestrator->app", "down"], ["app->backend", "down"],
+  ]);
+  for (const status of ["blocked", "failed", "interrupted", "completed", "cancelled"] as const)
+    expect(edges(task({ status })).filter(edge => edge.flow)).toEqual([]);
+  const approval = { ...newSession("codex", "/app"), id: "worker", busy: true,
+    blocks: [{ id: "approval", role: "tool" as const, text: "Approval", approval: { requestId: 7 } }] };
+  for (const status of ["queued", "running"] as const)
+    expect(edges(task({ status }), [approval]).filter(edge => edge.flow)).toEqual([]);
+  const ready = task({ status: "completed", accepted: true, prUrl: "https://github.com/example/repo/pull/12",
+    lastDispatchId: "dispatch", acceptedDispatchId: "dispatch" });
+  expect(edges(ready).filter(edge => edge.flow)).toEqual([]);
+});
+
+it("preserves the working reporting chain despite blocked siblings and prioritizes the active task label", () => {
+  const historical = task({ id: "historical", status: "completed", title: "Historical completed work" });
+  const blocked = task({ id: "blocked", memberId: "reviewer", sessionId: "reviewer-worker", status: "blocked" });
+  const current = task({ id: "current", title: "Current worker task" });
+  const map = buildTeamMap({ ...input, runs: [run([historical, blocked, current])] });
+  expect(map.nodes.find(node => node.id === "app")?.status).toBe("needs-you");
+  for (const id of ["orchestrator->app", "app->backend"])
+    expect(map.edges.find(edge => edge.id === id)).toMatchObject({ flow: "up", label: "Current worker task" });
+  expect(map.edges.find(edge => edge.id === "app->reviewer")?.flow).toBeUndefined();
+  const worker = { ...newSession("codex", "/app"), id: "worker", busy: true };
+  const stillBusy = buildTeamMap({ ...input, runs: [run([historical])], sessions: [worker] });
+  expect(stillBusy.edges.filter(edge => edge.flow).map(edge => edge.id)).toEqual(["orchestrator->app", "app->backend"]);
+});
+
+it("retains collapsed upstream flow, scopes visible reporting edges and stops archived work", () => {
+  const working = { ...input, runs: [run()] };
+  const collapsed = buildTeamMap({ ...working, collapsed: new Set(["app"]) });
+  expect(collapsed.edges.filter(edge => edge.flow).map(edge => edge.id)).toEqual(["orchestrator->app"]);
+  expect(collapsed.edges.find(edge => edge.id === "orchestrator->app")?.flow).toBe("up");
+  expect(buildTeamMap({ ...working, scope: "app" }).edges.filter(edge => edge.flow).map(edge => edge.id)).toEqual(["app->backend"]);
+  expect(buildTeamMap({ ...working, project: "/site" }).edges.filter(edge => edge.flow)).toEqual([]);
+  for (const id of ["backend", "app"])
+    expect(buildTeamMap({ ...working, roster: roster.map(node => node.id === id ? { ...node, archivedAt: 1 } : node) }).edges.filter(edge => edge.flow)).toEqual([]);
+});
+
 it("maps actual dispatch, report, review and goal events to direction and reduced-motion indicators", () => {
   const dispatch = { id: "dispatch", taskId: "task", sessionId: "worker", state: "completed", stage: "settled", startedAt: 10, updatedAt: 20 } as OrchestrationRun["dispatches"][number];
   const reviewed = task({ id: "review", memberId: "reviewer", status: "completed", reviewOf: { taskId: "task", dispatchId: "dispatch" },

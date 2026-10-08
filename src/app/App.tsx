@@ -72,6 +72,8 @@ import {
 } from "../features/source-control/hooks/usePrStatus";
 import { ProjectManagerRow } from "../features/orchestration/ui/ProjectManagerRow";
 import { gitBranches, gitPrStatus } from "../platform/tauri/fs";
+import { useSessionPullRequests } from "../features/source-control/hooks/useSessionPullRequests";
+import { sessionPrAttention } from "../features/source-control/model/pullRequests";
 import { useWorkspaceNavigation } from "./hooks/useWorkspaceNavigation";
 import { useIdleSessionDetach } from "./hooks/useIdleSessionDetach";
 import { HarnessEventQueue } from "./model/harnessFlush";
@@ -2165,6 +2167,7 @@ function Workspace({
     [sessions],
   );
   useDeliveryWatch(orchestrationRuns);
+  const sessionPrRecords = useSessionPullRequests(sessions, orchestrationRuns);
   const { statuses: managerPrStatuses } = usePrStatuses(
     orchestrationRuns
       .filter((run) => run.projectManager)
@@ -2175,6 +2178,7 @@ function Workspace({
                 {
                   cwd: task.workspace.checkoutCwd,
                   branch: task.workspace.branch,
+                  prUrl: task.prUrl,
                 },
               ]
             : [],
@@ -2185,7 +2189,7 @@ function Workspace({
     () => {
       const decisions = teamDecisions(listMonos(), sessions, orchestrationRuns);
       const covered = new Set(decisions.map(item => item.session.id));
-      return [...managerAttention(
+      return [...sessionPrAttention(sessionPrRecords), ...managerAttention(
         sessions,
         orchestrationRuns,
         unseenFinishedIds,
@@ -2200,6 +2204,7 @@ function Workspace({
       orchestrationRuns,
       unseenFinishedIds,
       managerPrStatuses,
+      sessionPrRecords,
       monosSnap,
     ],
   );

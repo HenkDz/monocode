@@ -10,6 +10,7 @@ import {
 import type { LinkedWorkItem } from "../../sessions/model/session";
 import type { SessionSummary } from "../../sessions/data/sessionStore";
 import {
+  InboxView,
   InboxDetail,
   inboxStatusMark,
   inboxShowsFullFileDiff,
@@ -17,6 +18,38 @@ import {
 } from "./InboxView";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+
+it("labels ordinary-session ready PRs with their session and worktree in the actual Inbox", () => {
+  vi.stubGlobal("window", { innerWidth: 1280 });
+  try {
+    const markup = renderToStaticMarkup(
+      createElement(InboxView, {
+        cwd: "/repo",
+        recents: [],
+        onAsk: async () => "",
+        onAskRestart: async () => "",
+        onAskMount: () => {},
+        onOpenIntegrations: () => {},
+        managerQuestions: [
+          {
+            id: "ordinary",
+            key: "session-pr:ordinary:910",
+            project: "/repo-worktrees/ordinary",
+            kind: "ready",
+            sourceLabel: "My regular session · ordinary",
+            question: "PR #910: Regular session fix",
+          },
+        ],
+      }),
+    );
+    expect(markup).toContain("Ready to merge");
+    expect(markup).toContain("My regular session · ordinary");
+    expect(markup).toContain("PR #910: Regular session fix");
+    expect(markup).not.toContain("ordinary · Manager");
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
 
 function item(overrides: Partial<InboxItem> = {}): InboxItem {
   return {

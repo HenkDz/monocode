@@ -55,6 +55,7 @@ mod window_transfer;
 mod windows;
 mod worktree_lifecycle;
 mod worktrees;
+mod nested_worktrees;
 
 // Phase 1 seam: spawn / kill harness children per MonoCode thread.
 // Adapters own the protocol; this host only supervises processes.
@@ -345,6 +346,9 @@ pub fn run() {
             fs::git_sync,
             fs::git_range_context,
             fs::git_pr_status,
+            fs::git_pr_list,
+            fs::git_pr_status_by_url,
+            fs::git_pr_action_by_url,
             fs::git_pr_create,
             fs::git_github_status,
             fs::github_monocode_star_status,
@@ -401,6 +405,8 @@ pub fn run() {
             worktrees::git_worktrees,
             worktrees::git_task_snapshot,
             worktrees::git_worktree_create,
+            nested_worktrees::git_nested_worktrees,
+            nested_worktrees::git_cleanup_nested_leftovers,
             worktrees::git_orchestration_worktree_create,
             worktrees::git_worktree_rename_branch,
             worktrees::git_worktree_check_remove,

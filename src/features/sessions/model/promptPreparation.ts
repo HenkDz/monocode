@@ -7,6 +7,7 @@ import {
   type SkillCatalogContext,
 } from "../../skills/model/skills";
 import { nativeCommandPrompt } from "../../../integrations/harness/core/nativeCommands";
+import { WORKTREE_LOCATION_GUIDANCE } from "./worktreeGuidance";
 
 export async function preparePrompt(
   text: string,
@@ -17,5 +18,6 @@ export async function preparePrompt(
     return nativeCommandPrompt(context.harness, text);
   const withFiles = await applyFileMentionsToTurn(text, context.cwd);
   const withNotes = await applyNotesToTurn(withFiles);
-  return applySkillsToTurn(withNotes, context);
+  const prepared = await applySkillsToTurn(withNotes, context);
+  return `${prepared}\n\n<monocode_worktrees>${WORKTREE_LOCATION_GUIDANCE}</monocode_worktrees>`;
 }

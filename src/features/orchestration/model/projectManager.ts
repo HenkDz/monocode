@@ -90,9 +90,9 @@ export const taskPrStatus = (
   statuses: ReadonlyMap<string, GitPr | null>,
 ) =>
   task.workspace
-    ? statuses.get(
+    ? (statuses.get(prStatusKey(task.workspace.checkoutCwd, task.prUrl)) ?? statuses.get(
         prStatusKey(task.workspace.checkoutCwd, task.workspace.branch),
-      )
+      ))
     : undefined;
 
 export type ManagerAttention = {

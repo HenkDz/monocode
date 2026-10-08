@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { forgetSessionPullRequests } from "../../source-control/model/pullRequests";
 import { parseCard } from "../../monos/model/monoCards";
 import { isMonoSession } from "../../monos/model/mono";
 import { sanitizeMonoSpawnedSessions } from "../../monos/model/monoSpawnedSessions";
@@ -771,6 +772,7 @@ export async function deleteSession(
     await enqueueSessionWrite(sessionId, () =>
       invoke<void>("session_delete", { sessionId, imagePaths }),
     );
+    forgetSessionPullRequests(sessionId);
     monoSavedBlocks.delete(sessionId);
     const tombstone = setTimeout(
       () => deletedSessionIds.delete(sessionId),

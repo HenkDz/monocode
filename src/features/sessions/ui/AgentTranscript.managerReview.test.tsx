@@ -11,6 +11,8 @@ import { managerReviewTimeline } from "../../orchestration/model/projectManagerT
 import type { OrchestrationRun } from "../../orchestration/model/orchestrationState";
 import type { Block } from "../model/session";
 import { prStatusKey } from "../../source-control/hooks/usePrStatus";
+import { PullRequestCard } from "../../source-control/ui/PullRequestCard";
+import type { WorktreePr } from "../../source-control/model/pullRequests";
 
 const view = vi.hoisted(() => ({ statuses: new Map() }));
 vi.mock("../../source-control/hooks/usePrStatus", async (original) => ({
@@ -86,6 +88,68 @@ const initial: Block[] = [
   { id: "first", role: "user", text: "Prepare docs", startedAt: 100 },
   { id: "reply", role: "assistant", text: "The PR is ready." },
 ];
+
+it("keeps ordinary-session PR cards at their first turn while live status updates", async () => {
+  const entry: WorktreePr = {
+    cwd: "/repo-worktrees/ordinary",
+    verifiedAt: 1000,
+    pr: {
+      number: 910,
+      title: "Regular session fix",
+      url: "https://github.com/example/repo/pull/910",
+      state: "open",
+      checksStatus: "pending",
+    },
+    links: [
+      {
+        sessionId: "ordinary",
+        sessionTitle: "My session",
+        turnId: "first",
+        blockId: "reply",
+        at: 1000,
+      },
+    ],
+  };
+  const show = async (blocks: Block[], current: WorktreePr) => {
+    await act(async () =>
+      root.render(
+        <AgentTranscript
+          blocks={blocks}
+          inlineWork
+          turnAccessories={
+            new Map([
+              [
+                "first",
+                <PullRequestCard entry={current} sessionId="ordinary" />,
+              ],
+            ])
+          }
+        />,
+      ),
+    );
+  };
+  await show(initial, entry);
+  const card = host.querySelector<HTMLElement>("#session-pr-ordinary-910")!;
+  expect(
+    card
+      .closest("[data-transcript-turn]")
+      ?.getAttribute("data-transcript-turn"),
+  ).toBe("first");
+  const newer: Block[] = [
+    ...initial,
+    { id: "next", role: "user", text: "Another task", startedAt: 5000 },
+  ];
+  await show(newer, {
+    ...entry,
+    pr: { ...entry.pr, state: "merged", checksStatus: "success" },
+  });
+  expect(host.querySelector("#session-pr-ordinary-910")).toBe(card);
+  expect(card.textContent).toContain("Merged");
+  const next = host.querySelector('[data-transcript-turn="next"]')!;
+  expect(
+    card.compareDocumentPosition(next) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+});
 async function render(blocks: Block[], current = run) {
   const accessories = new Map(
     [...managerReviewTimeline([current], blocks)].map(([id, runs]) => [

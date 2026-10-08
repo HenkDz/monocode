@@ -24,7 +24,6 @@ import {
 } from "../../../platform/tauri/fs";
 import { DeleteWorktreeDialog } from "./DeleteWorktreeDialog";
 import { Modal } from "../../../shared/ui/Modal";
-import { prStatusKey } from "../hooks/usePrStatus";
 import { useProjectDiffStats } from "../hooks/useProjectDiffStats";
 import { useActiveWorktrees } from "../hooks/useActiveWorktrees";
 import {
@@ -67,6 +66,7 @@ import {
 } from "../../../shared/ui/icons";
 import { useProjectWorktrees } from "../hooks/useProjectWorktrees";
 import { usePrStatus, usePrStatusCache } from "../hooks/usePrStatus";
+import { usePullRequests, worktreePullRequests } from "../model/pullRequests";
 import { useWorktreeFocus } from "../model/worktreeFocus";
 import {
   worktreeProgress,
@@ -154,6 +154,7 @@ export function ProjectWorktrees({
     orchestrator.snapshot,
   );
   const prStatuses = usePrStatusCache();
+  const prRecords = usePullRequests();
   const focus = useWorktreeFocus(project);
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const [showAll, setShowAll] = useState<Set<string>>(() => new Set());
@@ -852,13 +853,14 @@ export function ProjectWorktrees({
             {
               kind: "item",
               id: "pr",
-              label:
-                prStatuses.get(prStatusKey(menu.tree.path, menu.tree.branch))
-                  ?.state === "open"
-                  ? "Open PR"
-                  : "Create PR",
+              label: "Create PR",
               disabled: menu.tree.missing || !menu.tree.branch,
             },
+            ...worktreePullRequests(menu.tree.path, prRecords).map(pr => ({
+              kind: "item" as const,
+              id: `pr-url:${pr.url}`,
+              label: `${pr.state === "open" ? pr.isDraft ? "Draft" : "Open" : pr.state === "merged" ? "Merged" : "Closed"} PR #${pr.number}: ${pr.title}`,
+            })),
             { kind: "item", id: "copy-path", label: "Copy path" },
             {
               kind: "item",
@@ -918,10 +920,11 @@ export function ProjectWorktrees({
                 setGiving(tree);
               } else if (id === "remove" && !tree.isMain) setDeleting(tree);
               else if (id === "pr") {
-                const pr = prStatuses.get(prStatusKey(tree.path, tree.branch));
+                const pr = await gitPrStatus(tree.path);
                 if (pr?.state === "open") await openUrl(pr.url);
                 else setCreatingPr(tree);
-              } else if (id === "copy-path") await copyText(tree.path);
+              } else if (id.startsWith("pr-url:")) await openUrl(id.slice(7));
+              else if (id === "copy-path") await copyText(tree.path);
               else if (id === "copy-name") await copyText(tree.branch ?? "");
               else if (id === "toggle") toggle(tree.path);
               else if (id === "refresh") await refresh();
@@ -1181,7 +1184,7 @@ function WorktreePrIcon({
   tree: Worktree;
   enabled: boolean;
 }) {
-  const { pr } = usePrStatus(tree.path, tree.branch, enabled && !tree.missing);
+  const { pr, prs } = usePrStatus(tree.path, tree.branch, enabled && !tree.missing);
   const mark =
     pr?.state === "merged"
       ? { Icon: GitMerge, color: "text-violet-400/90", label: "Merged" }
@@ -1209,9 +1212,11 @@ function WorktreePrIcon({
               label: "No PR status available",
             };
   const label = pr ? `${mark.label} PR #${pr.number}: ${pr.title}` : mark.label;
+  const allPrs = prs.map(item => `${item.state === "open" ? item.isDraft ? "Draft" : "Open" : item.state === "merged" ? "Merged" : "Closed"} PR #${item.number}: ${item.title}`).join("\n");
   return (
-    <span className="flex shrink-0" role="img" aria-label={label} title={label}>
+    <span className="flex shrink-0 items-center gap-1" role="img" aria-label={prs.length > 1 ? `${label} · ${prs.length} PRs` : label} title={allPrs || label}>
       <mark.Icon className={`size-3 ${mark.color}`} />
+      {prs.length > 1 && <span className="text-[10px] text-content/50">{prs.length} PRs</span>}
     </span>
   );
 }

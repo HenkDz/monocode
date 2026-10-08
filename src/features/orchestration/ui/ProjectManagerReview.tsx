@@ -31,6 +31,8 @@ import type {
 } from "../model/orchestrationState";
 import { OrgArtifactLinks } from "../../artifacts/ui/OrgArtifactLinks";
 import { Modal } from "../../../shared/ui/Modal";
+import { usePullRequests, prIdentity } from "../../source-control/model/pullRequests";
+import { WorktreePrActions } from "../../source-control/ui/WorktreePrActions";
 
 export function ProjectManagerStatus({
   run,
@@ -240,7 +242,11 @@ export function ReadyCard({
   const [message, setMessage] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string>();
+  const taskPrs = [...new Map(usePullRequests().filter(entry => entry.links.some(link => link.taskId === task.id)).map(entry => [prIdentity(entry.pr.url), entry])).values()];
+  const currentEntry = taskPrs.find(entry => prIdentity(entry.pr.url) === prIdentity(task.prUrl ?? ""));
+  const currentPr = currentEntry?.pr;
   const label =
+    currentPr?.state === "merged" ? "Merged" : currentPr?.state === "closed" ? "Closed" :
     merged || state === "Closed"
       ? (state ?? "Merged")
       : task.delivery?.state === "fixing-ci"
@@ -357,6 +363,8 @@ export function ReadyCard({
       </div>
       <div className="mt-2 flex min-w-0 flex-wrap items-center gap-2 text-content/80 [&>span]:rounded-md [&>span]:bg-content/5 [&>span]:px-1.5 [&>span]:py-0.5">
         <span>PR #{number || "?"}</span>
+        {currentPr?.baseRefName && currentPr.headRefName && <span>{currentPr.baseRefName} ← {currentPr.headRefName}</span>}
+        {taskPrs.length > 1 && <span>{taskPrs.length} PRs</span>}
         <span>
           {diff ? (
             <>
@@ -402,6 +410,7 @@ export function ReadyCard({
           </time>
         )}
       </div>
+      {currentEntry && <div className="mt-2 flex flex-wrap gap-1"><WorktreePrActions entry={currentEntry} sessionId={run.ownerSessionId ?? run.leadId} taskId={task.id} /></div>}
       <OrgArtifactLinks
         monoId={run.ownerMonoId}
         links={[
@@ -508,6 +517,11 @@ export function ReadyCard({
               </p>
             </div>
             <div className="mt-2 flex flex-wrap gap-1">
+              {taskPrs.length > 1 && <nav aria-label="Task pull requests" className="flex w-full flex-wrap gap-1">
+                {taskPrs.map(entry => <button key={entry.pr.url} type="button" className={button} onClick={() => void openUrl(entry.pr.url).catch(reason => setError(String(reason)))}>
+                  PR #{entry.pr.number} · {entry.pr.state === "open" && entry.pr.isDraft ? "draft" : entry.pr.state} · {entry.pr.title}
+                </button>)}
+              </nav>}
               <button
                 type="button"
                 className={`${button} bg-content font-medium text-background-base hover:bg-content/85`}

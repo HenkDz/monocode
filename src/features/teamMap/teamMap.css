@@ -106,6 +106,10 @@
 .team-map-canvas {
   position: absolute;
   transform-origin: 0 0;
+  transition: transform 280ms ease;
+}
+.team-map-canvas[data-panning="true"] {
+  transition: none;
 }
 .team-map-edges {
   position: absolute;
@@ -150,20 +154,6 @@
     stroke-dashoffset: -24;
   }
 }
-.team-map-edge-label {
-  width: fit-content;
-  max-width: 180px;
-  margin: auto;
-  padding: 3px 7px;
-  border: 1px solid var(--color-stroke);
-  border-radius: 4px;
-  background: var(--color-background-base);
-  font-size: 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  overflow: hidden;
-  color: color-mix(in srgb, var(--color-content) 65%, transparent);
-}
 .team-map-pulse {
   color: var(--color-accent);
 }
@@ -184,12 +174,12 @@
 }
 .team-map-node {
   position: absolute;
-  width: 240px;
-  height: 130px;
+  width: var(--node-width);
+  height: var(--node-height);
   border: 1px solid var(--color-stroke);
   border-radius: 10px;
   background: var(--color-background-base);
-  transition: opacity 0.16s;
+  transition: opacity 160ms, left 280ms ease, top 280ms ease;
 }
 .team-map-node[data-dimmed="true"] {
   opacity: 0.25;
@@ -202,7 +192,7 @@
   flex-direction: column;
   width: 100%;
   height: 100%;
-  padding: 14px;
+  padding: 6px;
   text-align: left;
   border-radius: inherit;
 }
@@ -211,7 +201,7 @@
 }
 .team-map-node-heading {
   display: flex;
-  gap: 10px;
+  gap: 5px;
   align-items: center;
   width: 100%;
 }
@@ -219,8 +209,8 @@
   display: grid;
   place-items: center;
   flex-shrink: 0;
-  width: 40px;
-  height: 40px;
+  width: 30px;
+  height: 30px;
   border: 2px solid var(--status-color);
   border-radius: 50%;
 }
@@ -233,16 +223,17 @@
   flex-direction: column;
   gap: 2px;
   min-width: 0;
+  line-height: 1.2;
 }
 .team-map-identity strong {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .team-map-identity > span {
-  font-size: 11px;
+  font-size: 10px;
   opacity: 0.5;
   text-transform: capitalize;
   overflow: hidden;
@@ -262,14 +253,14 @@
   align-items: center;
   justify-content: space-between;
   gap: 6px;
-  margin-top: 11px;
+  margin-top: 3px;
   width: 100%;
   font-size: 10px;
   color: color-mix(in srgb, var(--color-content) 55%, transparent);
 }
 .team-map-model {
-  max-width: 140px;
-  padding: 2px 5px;
+  max-width: 96px;
+  padding: 1px 5px;
   border-radius: 3px;
   background: color-mix(in srgb, var(--color-content) 5%, transparent);
   overflow: hidden;
@@ -278,7 +269,7 @@
 }
 .team-map-task {
   display: block;
-  margin-top: 8px;
+  margin-top: 3px;
   width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -297,6 +288,48 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.team-map-status-chip {
+  display: none;
+}
+.team-map-chat {
+  position: absolute;
+  right: 8px;
+  bottom: 6px;
+  padding: 2px;
+  border-radius: 3px;
+  background: var(--color-background-base);
+  color: var(--color-accent);
+}
+.team-map-node[data-role="manager"] .team-map-task {
+  padding-right: 24px;
+}
+.team-map-canvas[data-compact="true"] .team-map-identity > span,
+.team-map-canvas[data-compact="true"] .team-map-node-meta,
+.team-map-canvas[data-compact="true"] .team-map-task,
+.team-map-canvas[data-compact="true"] .team-map-status-dot {
+  display: none;
+}
+.team-map-canvas[data-compact="true"] .team-map-node-open {
+  justify-content: center;
+  gap: 5px;
+}
+.team-map-canvas[data-compact="true"] .team-map-identity strong {
+  font-size: 18px;
+}
+.team-map-canvas[data-compact="true"] .team-map-status-chip {
+  display: block;
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: var(--status-color);
+  background: color-mix(in srgb, var(--status-color) 12%, transparent);
+  font-size: 16px;
+}
+.team-map-canvas[data-compact="true"] .team-map-chat {
+  bottom: 4px;
+}
+.team-map-canvas[data-compact="true"] .team-map-cluster {
+  font-size: 18px;
+}
 .team-map-collapse {
   position: absolute;
   right: -10px;
@@ -312,7 +345,7 @@
 .team-map-tooltip {
   position: absolute;
   left: 0;
-  top: 140px;
+  top: calc(var(--node-height) + 10px);
   width: 280px;
   padding: 12px;
   border: 1px solid var(--color-stroke);
@@ -322,6 +355,8 @@
   box-shadow: 0 8px 24px
     color-mix(in srgb, var(--color-content) 10%, transparent);
   pointer-events: none;
+  transform: scale(calc(1 / var(--map-zoom)));
+  transform-origin: top left;
 }
 .team-map-node:has(.team-map-tooltip) {
   z-index: 3;
@@ -464,6 +499,7 @@
     top: auto !important;
     margin-left: calc(var(--node-depth) * 12px);
     width: calc(100% - var(--node-depth) * 12px);
+    height: 112px;
   }
   .team-map-node:has(.team-map-identity > span) {
     border-left: 2px solid var(--node-color);
@@ -474,5 +510,10 @@
   }
   .team-map-tooltip {
     max-width: 100%;
+    transform: none;
+    top: 122px;
+  }
+  .team-map-canvas[data-compact="true"] .team-map-identity strong {
+    font-size: 12px;
   }
 }

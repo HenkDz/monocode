@@ -25,6 +25,9 @@ let root: ReturnType<typeof createRoot>;
 const open = vi.fn(), close = vi.fn();
 let reducedMotion = false;
 let narrow = false;
+let viewportWidth = 1100;
+let viewportHeight = 1250;
+let resize: () => void;
 const renders = (runs: OrchestrationRun[] = [], scope?: string) => act(async () => root.render(
   <TeamMap sessions={[]} runs={runs} statuses={new Map()} scope={scope} onOpenMono={open} onClose={close} />,
 ));
@@ -35,11 +38,18 @@ beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   reducedMotion = false;
   narrow = false;
+  viewportWidth = 1100;
+  viewportHeight = 1250;
   vi.spyOn(window, "matchMedia").mockImplementation(query => ({
     matches: query.includes("prefers-reduced-motion") ? reducedMotion : narrow,
     addEventListener: vi.fn(), removeEventListener: vi.fn(),
   }) as unknown as MediaQueryList);
-  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(() => viewportWidth);
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(() => viewportHeight);
+  vi.stubGlobal("ResizeObserver", class {
+    constructor(callback: () => void) { resize = callback; }
+    observe() {} disconnect() {}
+  });
   Object.defineProperty(SVGElement.prototype, "beginElementAt", { configurable: true, value: vi.fn() });
   localStorage.setItem("monocode:mono-roster", JSON.stringify(roster));
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
@@ -50,14 +60,14 @@ afterEach(async () => {
   Reflect.deleteProperty(SVGElement.prototype, "beginElementAt");
 });
 
-it("opens Mono chat and navigates the hierarchy with arrow focus", async () => {
+it("opens Mono chat and moves arrow focus to the nearest card in that direction", async () => {
   await renders();
   expect(host.querySelector('section')?.getAttribute("aria-labelledby")).toBe("team-map-title");
   expect(host.querySelector('dialog')).toBeNull();
   await act(async () => nodeButton("Orchestrator").focus());
   await act(async () => nodeButton("Orchestrator").dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })));
-  expect(document.activeElement).toBe(nodeButton("App Manager"));
-  expect(nodeButton("App Manager").tabIndex).toBe(0);
+  expect(document.activeElement).toBe(nodeButton("Site Manager"));
+  expect(nodeButton("Site Manager").tabIndex).toBe(0);
   expect(host.querySelector('[role="tooltip"]')?.textContent).toContain("Permissions");
   await act(async () => nodeButton("Backend").click());
   expect(close).toHaveBeenCalledOnce(); expect(open).toHaveBeenCalledExactlyOnceWith("backend");
@@ -127,11 +137,88 @@ it("opens a Manager's own team and zooms by controls and wheel", async () => {
   const zoomed = canvas.style.transform;
   await act(async () => host.querySelector(".team-map-viewport")!.dispatchEvent(new WheelEvent("wheel", { deltaY: -100, bubbles: true, cancelable: true })));
   expect(canvas.style.transform).not.toBe(zoomed);
-  await act(async () => [...host.querySelectorAll("button")].find(button => button.textContent === "Show whole org")!.click());
+  await act(async () => [...host.querySelectorAll("button")].find(button => button.textContent === "Whole org")!.click());
   expect(project.value).toBe("");
   expect(project.disabled).toBe(false);
   expect(buttons()).toHaveLength(5);
   expect(host.textContent).toContain("Your team, working together");
+});
+
+it("focuses Managers and project labels, restores the org on Escape, and keeps Manager chat available", async () => {
+  await renders();
+  const canvas = host.querySelector<HTMLDivElement>(".team-map-canvas")!;
+  const original = canvas.style.transform;
+  await act(async () => nodeButton("App Manager").click());
+  expect(canvas.style.transform).not.toBe(original);
+  const focused = canvas.style.transform;
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Zoom out"]')!.click());
+  expect(canvas.style.transform).not.toBe(focused);
+  await act(async () => nodeButton("App Manager").click());
+  expect(canvas.style.transform).toBe(focused);
+  expect(close).not.toHaveBeenCalled();
+  expect(open).not.toHaveBeenCalled();
+  expect(host.querySelectorAll(".team-map-node-open")).toHaveLength(5);
+  const escape = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+  await act(async () => window.dispatchEvent(escape));
+  expect(escape.defaultPrevented).toBe(true);
+  expect(close).not.toHaveBeenCalled();
+  expect(canvas.style.transform).toBe(original);
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Focus app team"]')!.click());
+  expect(canvas.style.transform).not.toBe(original);
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Open chat with App Manager"]')!.click());
+  expect(close).toHaveBeenCalledOnce();
+  expect(open).toHaveBeenCalledExactlyOnceWith("manager");
+});
+
+it("starts scoped maps focused and Escape returns to the full org before closing", async () => {
+  await renders([], "manager");
+  expect(buttons()).toHaveLength(2);
+  const escape = () => act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+  await escape();
+  expect(close).not.toHaveBeenCalled();
+  expect(buttons()).toHaveLength(5);
+  expect(host.querySelector<HTMLSelectElement>('[aria-label="Project"]')!.disabled).toBe(false);
+  await escape();
+  expect(close).toHaveBeenCalledOnce();
+});
+
+it("switches to compact cards below 70% and restores full detail above it", async () => {
+  await renders();
+  const canvas = host.querySelector<HTMLDivElement>(".team-map-canvas")!;
+  expect(canvas.getAttribute("data-compact")).toBe("false");
+  const out = host.querySelector<HTMLButtonElement>('[aria-label="Zoom out"]')!;
+  await act(async () => out.click());
+  expect(canvas.getAttribute("data-compact")).toBe("false");
+  await act(async () => out.click());
+  expect(canvas.getAttribute("data-compact")).toBe("true");
+  expect(host.querySelectorAll(".team-map-status-chip")).toHaveLength(5);
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Zoom in"]')!.click());
+  expect(canvas.getAttribute("data-compact")).toBe("false");
+});
+
+it("refits the focused team when its viewport resizes", async () => {
+  await renders();
+  await act(async () => nodeButton("App Manager").click());
+  const canvas = host.querySelector<HTMLDivElement>(".team-map-canvas")!;
+  const before = canvas.style.transform;
+  await act(async () => { viewportWidth = 1800; viewportHeight = 650; resize(); });
+  expect(canvas.style.transform).not.toBe(before);
+  expect(close).not.toHaveBeenCalled();
+  expect([...host.querySelectorAll("button")].some(button => button.textContent === "Whole org")).toBe(true);
+});
+
+it("preserves manual zoom through status-only updates", async () => {
+  localStorage.setItem("monocode:mono-roster", JSON.stringify(roster.map(mono => mono.id === "manager" ? { ...mono, sessionId: "manager-chat" } : mono)));
+  const session = { ...newSession("codex", "/app"), id: "manager-chat", busy: true };
+  const render = () => act(async () => root.render(<TeamMap sessions={[session]} runs={[]} statuses={new Map()} onOpenMono={open} onClose={close} />));
+  await render();
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Zoom out"]')!.click());
+  const canvas = host.querySelector<HTMLDivElement>(".team-map-canvas")!;
+  const zoomed = canvas.style.transform;
+  session.busy = false;
+  await render();
+  expect(nodeButton("App Manager").closest(".team-map-node")?.getAttribute("data-status")).toBe("idle");
+  expect(canvas.style.transform).toBe(zoomed);
 });
 
 it("closes the full view on Escape without leaving the event unclaimed", async () => {
@@ -196,6 +283,10 @@ it("uses tree order and adjacent arrow navigation at narrow widths without consu
   expect(buttons().map(button => button.getAttribute("aria-label")?.split(",")[0])).toEqual([
     "Orchestrator", "App Manager", "Backend", "Site Manager", "Designer",
   ]);
+  expect(host.querySelector(".team-map-canvas")?.getAttribute("data-compact")).toBe("false");
+  expect(nodeButton("Orchestrator").closest<HTMLElement>(".team-map-node")!.style.getPropertyValue("--node-depth")).toBe("0");
+  expect(nodeButton("App Manager").closest<HTMLElement>(".team-map-node")!.style.getPropertyValue("--node-depth")).toBe("1");
+  expect(nodeButton("Backend").closest<HTMLElement>(".team-map-node")!.style.getPropertyValue("--node-depth")).toBe("2");
   await act(async () => nodeButton("App Manager").focus());
   await act(async () => nodeButton("App Manager").dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })));
   expect(document.activeElement).toBe(nodeButton("Backend"));

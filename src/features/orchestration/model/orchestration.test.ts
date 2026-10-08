@@ -17,6 +17,13 @@ import { previewFromToolPart } from "../../../integrations/harness/providers/ope
 import type { Artifact, OrgArtifactPurpose } from "../../artifacts/artifacts";
 import type { OrchestrationTask } from "./orchestrationState";
 
+it("includes GitHub quota guidance in every worker assignment", () => {
+  const prompt = workerTurnPrompt("Inspect the PR", ["src"]);
+  expect(prompt).toContain("gh pr view --json with only the fields needed");
+  expect(prompt).toContain("at most every 60 seconds");
+  expect(prompt).toContain("low or exhausted budget");
+});
+
 function setup() {
   const documents = new Map<string, Artifact>();
   const saved = new Map<string, OrchestrationRun>();

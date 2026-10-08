@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { noteGithubError, useGithubBudget } from "../model/githubBudget";
 import {
   GitMerge,
   GitPullRequest,
@@ -141,6 +142,7 @@ export function GithubPrActions({
   ) => Promise<{ state: string }>;
 }) {
   const mergeGroup = useRef<HTMLDivElement>(null);
+  const budget = useGithubBudget();
   const [mergeAction, setMergeAction] = useState<GithubPrMergeAction>("merge");
   const [mergeMenuOpen, setMergeMenuOpen] = useState(false);
   const [confirmation, setConfirmation] = useState<{
@@ -181,7 +183,7 @@ export function GithubPrActions({
   };
 
   const runAction = async () => {
-    if (!confirmation || busy) return;
+    if (!confirmation || busy || budget.paused) return;
     if (
       confirmation.target.number !== item.number ||
       confirmation.target.repo.toLowerCase() !== item.repo.toLowerCase() ||
@@ -222,7 +224,7 @@ export function GithubPrActions({
           : null,
       );
     } catch (error: unknown) {
-      setActionError(error instanceof Error ? error.message : String(error));
+      setActionError(noteGithubError(error, item.projectPath));
     } finally {
       setBusy(false);
     }
@@ -248,9 +250,9 @@ export function GithubPrActions({
         >
           <button
             type="button"
-            disabled={busy || mergeDisabled}
+            disabled={budget.paused || busy || mergeDisabled}
             title={
-              mergeDisabled
+              budget.paused ? budget.message : mergeDisabled
                 ? "Merge is available when checks and review pass for this commit."
                 : undefined
             }
@@ -264,11 +266,11 @@ export function GithubPrActions({
           </button>
           <button
             type="button"
-            title="Merge options"
+            title={budget.paused ? budget.message : "Merge options"}
             aria-label="Merge options"
             aria-haspopup="menu"
             aria-expanded={mergeMenuOpen}
-            disabled={busy || mergeDisabled}
+            disabled={budget.paused || busy || mergeDisabled}
             onClick={() => setMergeMenuOpen((open) => !open)}
             className={`grid w-7 place-items-center border-l border-background-base/20 hover:bg-background-base/10 disabled:cursor-default disabled:opacity-40 ${PR_ACTION_PRESS}`}
           >
@@ -279,7 +281,8 @@ export function GithubPrActions({
       {!onAction && state === "open" && item.draft ? (
         <button
           type="button"
-          disabled={busy}
+          disabled={budget.paused || busy}
+          title={budget.paused ? budget.message : undefined}
           onClick={(event) => askToRun("ready", event.currentTarget)}
           className={stateButton}
         >
@@ -290,7 +293,8 @@ export function GithubPrActions({
       {!onAction && state === "open" && !item.draft ? (
         <button
           type="button"
-          disabled={busy}
+          disabled={budget.paused || busy}
+          title={budget.paused ? budget.message : undefined}
           onClick={(event) => askToRun("draft", event.currentTarget)}
           className={stateButton}
         >
@@ -301,7 +305,8 @@ export function GithubPrActions({
       {state === "open" ? (
         <button
           type="button"
-          disabled={busy}
+          disabled={budget.paused || busy}
+          title={budget.paused ? budget.message : undefined}
           onClick={(event) => askToRun("close", event.currentTarget)}
           className={`${stateButton} hover:text-rose-400`}
         >
@@ -312,7 +317,8 @@ export function GithubPrActions({
       {state === "closed" ? (
         <button
           type="button"
-          disabled={busy}
+          disabled={budget.paused || busy}
+          title={budget.paused ? budget.message : undefined}
           onClick={(event) => askToRun("reopen", event.currentTarget)}
           className={stateButton}
         >
@@ -422,7 +428,7 @@ export function GithubPrActions({
             <button
               type="button"
               disabled={
-                busy ||
+                budget.paused || busy ||
                 (mergeDisabled &&
                   ["merge", "squash", "rebase"].includes(confirmation.action))
               }

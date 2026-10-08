@@ -24,6 +24,7 @@ import {
   type IconComponent,
 } from "../../../shared/ui/icons";
 import type { GithubPrChecksView } from "../hooks/useGithubPrChecks";
+import { githubErrorMessage, useGithubBudget } from "../model/githubBudget";
 import {
   CHECK_STATES,
   checkDuration,
@@ -163,6 +164,7 @@ function PrCheckRow({
   refreshToken,
   onFix,
   fixDisabled,
+  fixDisabledReason,
   fixAnchor,
   repairItem,
   wideStatus,
@@ -178,6 +180,7 @@ function PrCheckRow({
   refreshToken: unknown;
   onFix?: (anchor: HTMLButtonElement) => void;
   fixDisabled?: boolean;
+  fixDisabledReason?: string;
   fixAnchor?: HTMLButtonElement;
   repairItem?: RepairGroup["items"][number];
   wideStatus: boolean;
@@ -240,7 +243,7 @@ function PrCheckRow({
         },
         (reason: unknown) => {
           if (active)
-            setError(reason instanceof Error ? reason.message : String(reason));
+            setError(githubErrorMessage(reason));
         },
       )
       .finally(() => {
@@ -363,7 +366,7 @@ function PrCheckRow({
             aria-haspopup="dialog"
             aria-expanded={fixOpen}
             aria-label={`Fix ${check.name} with AI`}
-            title="Fix with AI"
+            title={fixDisabledReason ?? "Fix with AI"}
             className="grid size-7 shrink-0 place-items-center rounded-lg bg-content/[0.03] text-content/65 hover:bg-selection hover:text-content focus-visible:outline focus-visible:outline-1 focus-visible:outline-content/50"
           >
             <Sparkles className="size-3.5" strokeWidth={1.75} />
@@ -549,6 +552,7 @@ export function InboxPrChecks({
   repair?: CheckRepair;
 }) {
   const { checks, loading, refreshing, error, stale } = view;
+  const budget = useGithubBudget();
   const prState = repair?.state === "merged" || repair?.state === "closed" ? repair.state : checks?.state ?? repair?.state;
   const terminal = prState === "merged" || prState === "closed";
   const repairGroups = useCheckRepairs(cwd, repo, repair?.number, view, prState);
@@ -593,11 +597,12 @@ export function InboxPrChecks({
     return (
       <div className="flex flex-col items-start gap-2" data-inbox-pr-checks>
         <p role="alert" className="text-[13px] text-content/50">
-          {error}
+          {githubErrorMessage(error)}
         </p>
         <button
           type="button"
-          title="Retry loading checks"
+          title={budget.paused ? budget.message : "Retry loading checks"}
+          disabled={budget.paused}
           aria-label="Retry loading checks"
           onClick={onRefresh}
           className="inline-flex h-7 items-center gap-1.5 rounded-md border border-content/15 px-3 text-[12px] text-content/80 hover:bg-content/5"
@@ -659,7 +664,8 @@ export function InboxPrChecks({
             <button
               ref={allFixRef}
               type="button"
-              disabled={refreshing || stale || Boolean(error)}
+              disabled={budget.paused || refreshing || stale || Boolean(error)}
+              title={budget.paused ? budget.message : "Fix all failed"}
               onClick={(event) =>
                 setSelection({
                   checks: rows.filter((row) => row.state === "fail"),
@@ -686,9 +692,9 @@ export function InboxPrChecks({
           ) : null}
           <button
             type="button"
-            title="Refresh checks"
+            title={budget.paused ? budget.message : "Refresh checks"}
             aria-label="Refresh checks"
-            disabled={refreshing}
+            disabled={budget.paused || refreshing}
             onClick={onRefresh}
             className={REFRESH_BUTTON}
           >
@@ -735,7 +741,7 @@ export function InboxPrChecks({
           cwd={cwd}
           repo={repo}
           repair={repair}
-          blocked={refreshing || stale || Boolean(error)}
+          blocked={budget.paused || refreshing || stale || Boolean(error)}
           onClose={() => setSelection(null)}
         />
       ) : null}
@@ -838,7 +844,8 @@ export function InboxPrChecks({
                               })
                           : undefined
                       }
-                      fixDisabled={refreshing || stale || Boolean(error)}
+                      fixDisabled={budget.paused || refreshing || stale || Boolean(error)}
+                      fixDisabledReason={budget.paused ? budget.message : undefined}
                       fixAnchor={selection?.anchor}
                       cwd={cwd}
                       repo={repo}

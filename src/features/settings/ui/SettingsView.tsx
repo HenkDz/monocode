@@ -44,6 +44,7 @@ import { JiraSettings } from "./JiraSettings";
 import { GradientBlurBackground } from "./GradientBlurBackground";
 import { McpSettings } from "./McpSettings";
 import { InboxProviderMark } from "../../inbox/ui/InboxProviderMark";
+import { GithubBudgetUsage } from "../../inbox/ui/GithubBudgetNotice";
 import { RemoveProjectDialog } from "../../projects/ui/RemoveProjectDialog";
 import { WindowControls } from "../../../app/shell/WindowControls";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
@@ -1218,7 +1219,7 @@ function InboxPage({
         }
         description="Pull requests, reviews, and issues, read through the GitHub CLI."
       >
-        <GithubSettings />
+        <GithubSettings cwd={cwd} />
       </Group>
 
       <Group
@@ -1279,7 +1280,7 @@ function InboxPage({
   );
 }
 
-function GithubSettings() {
+function GithubSettings({ cwd }: { cwd: string }) {
   const [status, setStatus] = useState<GithubStatus | null>(null);
   const [checking, setChecking] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -1323,6 +1324,7 @@ function GithubSettings() {
 
   return (
     <>
+      <GithubBudgetUsage cwd={cwd} />
       <Row label="Connection" description={description}>
         <span className="text-[12px] text-content/50">{label}</span>
         {!checking && !status?.installed ? (

@@ -437,7 +437,7 @@ it("opens a job that fails during polling and lets the user retry unavailable de
     }),
   );
   await act(async () => {});
-  expect(invoke).not.toHaveBeenCalled();
+  expect(invoke.mock.calls.filter(([command]) => command !== "github_api_budget")).toHaveLength(0);
   invoke.mockRejectedValueOnce(new Error("Request timed out"));
   render(
     createElement(InboxPrChecks, {
@@ -561,12 +561,12 @@ it("offers a retry after a load error and refreshes on demand", async () => {
   const onRefresh = vi.fn();
   const failed = render(
     createElement(InboxPrChecks, {
-      view: view({ error: "rate limited" }),
+      view: view({ error: "Request timed out" }),
       onRefresh,
     }),
   );
   expect(failed.querySelector('[role="alert"]')?.textContent).toBe(
-    "rate limited",
+    "Request timed out",
   );
   const retry = buttonByLabel("Retry loading checks");
   expect(retry).not.toBeNull();
@@ -725,7 +725,7 @@ describe("Checks tab user behavior", () => {
     expect(container.querySelector(`button[role="tab"][aria-label="Checks: PR ${state.toLowerCase()}"]`)).not.toBeNull();
   });
 
-  it("loads checks on open in the inbox even while Summary is active", async () => {
+  it("loads check details only when Checks is opened", async () => {
     mockBackend();
     const checksCalls = () =>
       invoke.mock.calls.filter(
@@ -743,26 +743,22 @@ describe("Checks tab user behavior", () => {
       }),
     );
     await flush();
-    expect(invoke).toHaveBeenCalledWith("git_github_pr_checks", {
-      cwd: "/tmp/web",
-      repo: "acme/web",
-      number: 157,
-    });
+    expect(checksCalls()).toHaveLength(0);
     const summaryTab = container.querySelector<HTMLButtonElement>(
       'button[role="tab"][aria-selected="true"]',
     );
     expect(summaryTab?.textContent).toContain("Summary");
-    expect(checksCalls()).toHaveLength(1);
+    expect(checksCalls()).toHaveLength(0);
 
     const checksTab = container.querySelector<HTMLButtonElement>(
-      'button[role="tab"][aria-label="Checks: 1 passed"]',
+      'button[role="tab"][aria-label^="Checks:"]',
     );
     expect(checksTab).not.toBeNull();
     await act(async () => {
       checksTab?.click();
     });
     // Opening Checks resumes polling and immediately revalidates the PR.
-    expect(checksCalls()).toHaveLength(2);
+    expect(checksCalls()).toHaveLength(1);
     expect(container.textContent).toContain("build");
     expect(container.textContent).toContain("CI · Passed · 1m 00s");
     const row = buttonByLabel("build · Passed, took 1m 00s, CI");
@@ -786,7 +782,7 @@ describe("Checks tab user behavior", () => {
       }),
     );
     await flush();
-    expect(checksCalls()).toHaveLength(3);
+    expect(checksCalls()).toHaveLength(2);
   });
 
   it("loads checks in the linked side panel where revision stays 0", async () => {
@@ -806,20 +802,16 @@ describe("Checks tab user behavior", () => {
     );
     await flush();
     await flush();
-    expect(invoke).toHaveBeenCalledWith("git_github_pr_checks", {
-      cwd: "/tmp/web",
-      repo: "acme/web",
-      number: 157,
-    });
+    expect(invoke.mock.calls.filter(([command]) => command === "git_github_pr_checks")).toHaveLength(0);
     expect(
       container.querySelector(
-        'button[role="tab"][aria-label="Checks: 1 passed"]',
+        'button[role="tab"][aria-label^="Checks:"]',
       ),
     ).not.toBeNull();
     await act(async () => {
       (
         container.querySelector(
-          'button[role="tab"][aria-label="Checks: 1 passed"]',
+          'button[role="tab"][aria-label^="Checks:"]',
         ) as HTMLButtonElement
       )?.click();
     });

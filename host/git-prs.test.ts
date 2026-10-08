@@ -2,10 +2,12 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { HostStore } from "./store";
 import { WorkspaceCommands, WORKSPACE_COMMANDS } from "./workspace-commands";
 import { checkoutPrBranches, enrichPrCheckApps, parsePrs, PR_STATUS_FIELDS, prCardActionArgs, prRepositories, trustedPrTarget } from "./git-prs";
+import { githubGateway } from "./github-gateway";
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => { vi.restoreAllMocks(); githubGateway.invalidate(); });
 const row = (number: number, state = "OPEN", extra = {}) => ({ number, title: `PR ${number}`, url: `https://github.com/owner/repo/pull/${number}`, state, headRepositoryOwner: { login: "owner" }, ...extra });
 const repositories = () => prRepositories(JSON.stringify({ url: "https://github.com/owner/repo", parent: { name: "upstream", owner: { login: "parent" } } }));
+const graphqlRows = (rows: Record<string, unknown>[]) => JSON.stringify({ data: { repository: Object.fromEntries(rows.map((pr, index) => [`p${index}`, { ...pr, commits: { nodes: [{ commit: { statusCheckRollup: { contexts: { nodes: pr.statusCheckRollup ?? [], totalCount: (pr.statusCheckRollup as unknown[] ?? []).length } } } }] } }])) } });
 
 it("verifies repository, parent and enterprise PR URLs without trusting arbitrary hosts", () => {
   expect(trustedPrTarget("https://github.com/OWNER/Repo/pull/42/files?diff=split", repositories())).toEqual({ repo: "github.com/OWNER/Repo", number: 42 });
@@ -110,13 +112,14 @@ function fixture() {
   return { commands, gh: vi.spyOn(backend, "ghCommand"), git: vi.spyOn(backend, "gitCommand") };
 }
 
-it("enriches external identity in remote current/by-URL/list paths once per head", async () => {
+it("gets external identity in batched remote paths without per-head REST requests", async () => {
   const { commands, gh, git } = fixture();
   const checks = ["10", "11"].map((hour, index) => ({ name: "scan", workflowName: "", status: "COMPLETED", conclusion: index ? "SUCCESS" : "FAILURE", startedAt: `2026-10-08T${hour}:00:00Z`, detailsUrl: null }));
   const pr = row(42, "OPEN", { headRefOid: "a".repeat(40), statusCheckRollup: checks });
   git.mockImplementation(async (_cwd, args) => args[0] === "symbolic-ref" ? "new" : "checkout: moving from old to new");
-  gh.mockImplementation(async (_cwd, args) => args[0] === "repo" ? '{"url":"https://github.com/owner/repo","parent":null}' : args[0] === "api" ? JSON.stringify([{ check_runs: checks.map((check, index) => ({ name: check.name, started_at: check.startedAt, app: { id: index + 1 } })) }]) : args[1] === "list" ? JSON.stringify([pr]) : JSON.stringify(pr));
+  gh.mockImplementation(async (_cwd, args) => args[0] === "repo" ? '{"url":"https://github.com/owner/repo","parent":null}' : args.includes("graphql") ? graphqlRows([{ ...pr, statusCheckRollup: checks.map((check, index) => ({ ...check, checkSuite: { app: { databaseId: index + 1 } } })) }]) : args[0] === "api" ? JSON.stringify([{ check_runs: checks.map((check, index) => ({ name: check.name, started_at: check.startedAt, app: { id: index + 1 } })) }]) : JSON.stringify(pr));
   for (const command of ["git_pr_list", "git_pr_status", "git_pr_status_by_url"]) {
+    githubGateway.invalidate();
     gh.mockClear();
     const value = await commands.run(command, { cwd: "/repo", url: pr.url });
     expect(Array.isArray(value) ? value[0] : value).toMatchObject({ checksStatus: "failure" });
@@ -126,9 +129,9 @@ it("enriches external identity in remote current/by-URL/list paths once per head
 
 it("dispatches trusted remote URL lookup by numeric PR and rejects unrelated URLs", async () => {
   const { commands, gh } = fixture();
-  gh.mockResolvedValueOnce('{"url":"https://github.com/owner/repo","parent":null}').mockResolvedValueOnce(JSON.stringify(row(42)));
+  gh.mockResolvedValueOnce('{"url":"https://github.com/owner/repo","parent":null}').mockResolvedValueOnce(graphqlRows([row(42)]));
   expect(await commands.run("git_pr_status_by_url", { cwd: "/repo", url: "https://github.com/owner/repo/pull/42" })).toMatchObject({ number: 42, state: "open" });
-  expect(gh).toHaveBeenLastCalledWith("/repo", ["pr", "view", "42", "--repo", "github.com/owner/repo", "--json", PR_STATUS_FIELDS]);
+  expect(gh.mock.calls.at(-1)?.[1].join(" ")).toContain("pullRequest(number:42)");
   gh.mockClear().mockResolvedValue('{"url":"https://github.com/owner/repo","parent":null}');
   expect(await commands.run("git_pr_status_by_url", { cwd: "/repo", url: "https://evil.example/owner/repo/pull/42" })).toBeNull();
   expect(gh).toHaveBeenCalledTimes(1);
@@ -138,10 +141,10 @@ it("dispatches trusted remote URL lookup by numeric PR and rejects unrelated URL
 it("dispatches branch history lookup and preserves legacy current-branch status", async () => {
   const { commands, gh, git } = fixture();
   git.mockImplementation(async (_cwd, args) => args[0] === "symbolic-ref" ? "new\n" : "checkout: moving from old to new\n");
-  gh.mockImplementation(async (_cwd, args) => args[0] === "repo" ? '{"url":"https://github.com/owner/repo","parent":null}' : args.includes("--head") ? JSON.stringify([row(args.includes("new") ? 2 : 1, args.includes("new") ? "OPEN" : "MERGED")]) : JSON.stringify(row(2)));
+  gh.mockImplementation(async (_cwd, args) => args[0] === "repo" ? '{"url":"https://github.com/owner/repo","parent":null}' : args.includes("graphql") ? graphqlRows([row(2, "OPEN", { headRefName: "new" }), row(1, "MERGED", { headRefName: "old" })]) : JSON.stringify(row(2)));
   expect((await commands.run("git_pr_list", { cwd: "/repo" }) as { number: number }[]).map(pr => pr.number)).toEqual([2, 1]);
   expect(await commands.run("git_pr_status", { cwd: "/repo" })).toMatchObject({ number: 2, state: "open" });
-  expect(gh).toHaveBeenLastCalledWith("/repo", ["pr", "view", "--json", PR_STATUS_FIELDS]);
+  expect(gh.mock.calls.filter(([, args]) => args.includes("graphql"))).toHaveLength(1);
   await expect(commands.run("git_pr_list", { cwd: "/repo", branches: ["--help"] })).rejects.toThrow("Invalid pull request branches");
   expect(WORKSPACE_COMMANDS).toContain("git_pr_list");
 });
@@ -172,7 +175,7 @@ it("runs only an explicitly validated card mutation and refreshes rich state inc
       if (args[0] === "repo") return '{"url":"https://github.com/owner/repo","parent":null}';
       if (args[1] === "merge") return "";
       views++;
-      return JSON.stringify(row(42, views === 2 && !queued ? "MERGED" : "OPEN", { headRefOid: cardHead, baseRefName: "staging", mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", reviewDecision: "APPROVED", additions: 10, statusCheckRollup: [] }));
+      return graphqlRows([row(42, views === 2 && !queued ? "MERGED" : "OPEN", { headRefOid: cardHead, baseRefName: "staging", mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", reviewDecision: "APPROVED", additions: 10, statusCheckRollup: [] })]);
     });
     expect(await commands.run("git_pr_action_by_url", { cwd: "/repo", url: "https://github.com/owner/repo/pull/42", action: "merge", expectedHead: cardHead, expectedBase: "staging" })).toMatchObject({ state: queued ? "open" : "merged", additions: 10, checksStatus: "none" });
     expect(gh.mock.calls.filter(([, args]) => args[1] === "merge")).toEqual([["/repo", ["pr", "merge", "42", "--repo", "github.com/owner/repo", "--merge", "--match-head-commit", cardHead]]]);
@@ -184,7 +187,7 @@ it("runs only an explicitly validated card mutation and refreshes rich state inc
 it("rejects untrusted or changed card targets before any mutating executor call", async () => {
   for (const scenario of ["foreign", "wrong-parent", "stale-head", "stale-base", "pending", "closed"]) {
     const { commands, gh } = fixture();
-    gh.mockImplementation(async (_cwd, args) => args[0] === "repo" ? '{"url":"https://github.com/owner/repo","parent":{"name":"upstream","owner":{"login":"parent"}}}' : JSON.stringify(row(42, scenario === "closed" ? "CLOSED" : "OPEN", { url: scenario === "wrong-parent" ? "https://github.com/parent/upstream/pull/42" : "https://github.com/owner/repo/pull/42", headRefOid: scenario === "stale-head" ? "b".repeat(40) : cardHead, baseRefName: scenario === "stale-base" ? "main" : "staging", mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", statusCheckRollup: scenario === "pending" ? [{ name: "ci", status: "QUEUED" }] : [] })));
+    gh.mockImplementation(async (_cwd, args) => args[0] === "repo" ? '{"url":"https://github.com/owner/repo","parent":{"name":"upstream","owner":{"login":"parent"}}}' : graphqlRows([row(42, scenario === "closed" ? "CLOSED" : "OPEN", { url: scenario === "wrong-parent" ? "https://github.com/parent/upstream/pull/42" : "https://github.com/owner/repo/pull/42", headRefOid: scenario === "stale-head" ? "b".repeat(40) : cardHead, baseRefName: scenario === "stale-base" ? "main" : "staging", mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", statusCheckRollup: scenario === "pending" ? [{ name: "ci", status: "QUEUED" }] : [] })]));
     await expect(commands.run("git_pr_action_by_url", { cwd: "/repo", url: scenario === "foreign" ? "https://evil.example/owner/repo/pull/42" : "https://github.com/owner/repo/pull/42", action: "merge", expectedHead: cardHead, expectedBase: "staging" })).rejects.toThrow();
     expect(gh.mock.calls.some(([, args]) => ["merge", "close", "reopen"].includes(args[1]))).toBe(false);
     gh.mockRestore();

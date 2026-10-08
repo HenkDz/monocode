@@ -184,14 +184,14 @@ describe("InboxDetail layout", () => {
     const scrollIndex = markup.indexOf("data-inbox-detail-scroll");
     const header = markup.slice(headerIndex, scrollIndex);
 
-    expect(header).toContain('aria-label="Checks: Loading checks"');
-    expect(header).toContain('title="Checks: Loading checks"');
+    expect(header).toContain('aria-label="Checks: Open Checks to load details"');
+    expect(header).toContain('title="Checks: Open Checks to load details"');
     expect(header).toContain(">Checks<");
-    // Summary is the first selected tab; loading never steals the selection.
+    // Summary stays selected; detailed check reads wait until Checks is opened.
     const summarySelected = markup.indexOf('aria-selected="true"');
     expect(summarySelected).toBeGreaterThan(-1);
     expect(summarySelected).toBeLessThan(
-      markup.indexOf('aria-label="Checks: Loading checks"'),
+      markup.indexOf('aria-label="Checks: Open Checks to load details"'),
     );
   });
 
@@ -220,7 +220,7 @@ describe("InboxDetail layout", () => {
         relatedSessions: [],
       }),
     );
-    expect(markup).toContain('aria-label="Checks: Loading checks"');
+    expect(markup).toContain('aria-label="Checks: Open Checks to load details"');
   });
 
   it("offers GitHub-style actions for an open pull request", () => {

@@ -14,6 +14,7 @@ mod cursor_store;
 mod external_editor;
 mod fs;
 mod gitlab;
+mod github_gateway;
 mod harness;
 mod harness_updates;
 mod inbox_media;
@@ -351,6 +352,8 @@ pub fn run() {
             fs::git_pr_status,
             fs::git_pr_list,
             fs::git_pr_status_by_url,
+            fs::git_pr_status_batch,
+            fs::github_api_budget,
             fs::git_pr_action_by_url,
             fs::git_pr_create,
             fs::git_github_status,

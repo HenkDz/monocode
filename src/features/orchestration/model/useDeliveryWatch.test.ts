@@ -8,7 +8,7 @@ import type { OrchestrationRun } from "./orchestrationState";
 const { gitPrStatus, gitBranches, fetchGithubPrChecks, maintainDelivery, discoverDeliveryPr } = vi.hoisted(() => ({
   gitPrStatus: vi.fn(), gitBranches: vi.fn(), fetchGithubPrChecks: vi.fn(), maintainDelivery: vi.fn(async () => {}), discoverDeliveryPr: vi.fn(async () => true),
 }));
-vi.mock("../../../platform/tauri/fs", () => ({ gitPrStatus, gitBranches }));
+vi.mock("../../../platform/tauri/fs", () => ({ gitPrStatus, gitBranches, gitPrStatusByUrl: gitPrStatus }));
 vi.mock("./orchestration", () => ({ orchestrator: { maintainDelivery, discoverDeliveryPr } }));
 vi.mock("../../inbox/model/githubPrChecks", async importOriginal => ({
   ...await importOriginal<object>(), fetchGithubPrChecks,
@@ -38,6 +38,18 @@ it("watches a PR outside Activity, ignores mixed heads, and stops after unmount"
   roots.push(second);
   await act(async () => second.render(createElement(Consumer)));
   expect(maintainDelivery).not.toHaveBeenCalled();
+});
+
+it("maintains delivery from the cached PR summary without fetching detailed checks", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const run = { leadId: "manager", projectManager: true, tasks: [{ id: "task", prUrl: "https://github.com/acme/app/pull/7", workspace: { checkoutCwd: "/worker" } }] } as OrchestrationRun;
+  gitPrStatus.mockResolvedValue({ url: run.tasks[0].prUrl, state: "open", headOid: "head", checksStatus: "success", mergeable: "MERGEABLE" });
+  function Consumer() { useDeliveryWatch([run]); return null; }
+  const root = createRoot(document.createElement("div"));
+  roots.push(root);
+  await act(async () => root.render(createElement(Consumer)));
+  expect(fetchGithubPrChecks).not.toHaveBeenCalled();
+  expect(maintainDelivery).toHaveBeenCalledWith("manager", "task", { head: "head", ci: "pass", conflicts: false, mergeable: true });
 });
 
 it("discovers the completed worker's open PR before Manager review", async () => {

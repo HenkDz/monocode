@@ -72,6 +72,7 @@ import {
 } from "../features/source-control/hooks/usePrStatus";
 import { ProjectManagerRow } from "../features/orchestration/ui/ProjectManagerRow";
 import { gitBranches, gitPrStatus } from "../platform/tauri/fs";
+import { GithubBudgetNotice } from "../features/inbox/ui/GithubBudgetNotice";
 import { useSessionPullRequests } from "../features/source-control/hooks/useSessionPullRequests";
 import { buildPullRequestRows, pullRequestAttention, type PullRequestScope } from "../features/pullRequests/model/pullRequestView";
 import { useWorkspaceNavigation } from "./hooks/useWorkspaceNavigation";
@@ -14456,6 +14457,7 @@ function Workspace({
           }`}
         >
           {compactTitleBar ? workspaceTitleBar : null}
+          <GithubBudgetNotice cwd={sidebarCwd} />
           {projectAdditionDialog}
           <div className="flex min-h-0 min-w-0 flex-1">
             {managerRemoval && (

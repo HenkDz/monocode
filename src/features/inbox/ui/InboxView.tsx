@@ -1,7 +1,9 @@
 import { useGithubPrChecks } from "../hooks/useGithubPrChecks";
+import { noteGithubError, useGithubBudget } from "../model/githubBudget";
 import { GithubPrActions } from "./GithubPrActions";
 export { GithubPrActions } from "./GithubPrActions";
-import { summarizePrChecks } from "../model/githubPrChecks";
+import { summarizePrChecks, type GithubPrChecksOverall } from "../model/githubPrChecks";
+import { usePullRequests, prIdentity } from "../../source-control/model/pullRequests";
 import type { CiRepairRequest } from "../model/ciRepair";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
@@ -431,6 +433,7 @@ export function InboxView({
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
   const logos = useTabGroupLogos();
+  const budget = useGithubBudget();
   const [groupMascots] = useState(loadTabGroupMascots);
   const [groupColors] = useState(loadTabGroupColors);
   const [groupCustomColors] = useState(loadTabGroupCustomColors);
@@ -718,7 +721,7 @@ export function InboxView({
         if (cancelled) return;
         if (cached) return;
         setItems([]);
-        const message = err instanceof Error ? err.message : String(err);
+        const message = noteGithubError(err);
         setProviderErrors({
           github: message,
           linear: message,
@@ -1014,6 +1017,8 @@ export function InboxView({
           <button
             type="button"
             aria-label="Refresh"
+            disabled={budget.paused}
+            title={budget.paused ? budget.message : "Refresh"}
             onClick={() => setRefresh((value) => value + 1)}
             className="grid size-6 shrink-0 place-items-center rounded-md text-content/45 hover:bg-content/10 hover:text-content"
           >
@@ -1298,7 +1303,7 @@ export function LinkedWorkItemPanel({
       })
       .catch((reason: unknown) => {
         if (cancelled) return;
-        setError(reason instanceof Error ? reason.message : String(reason));
+        setError(noteGithubError(reason));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -1834,21 +1839,26 @@ export function InboxDetail({
   const headRef =
     details?.headRefName?.trim() || thread?.headRefName?.trim() || "";
 
-  // Checks load as soon as a GitHub PR is open, whatever tab is active. The
-  // panel passes revision 0, so its loads ride on mount and the identity key.
+  // Check details load on demand; retained PRs already have a shared summary.
   const prChecksEnabled = githubKind === "pr";
+  const savedPr = usePullRequests().find(entry => prIdentity(entry.pr.url) === prIdentity(item.url))?.pr;
   const prState = item.state.trim().toLowerCase();
   const prChecksView = useGithubPrChecks({
     cwd: item.projectPath || cwd,
     repo: item.repo,
     number: item.number,
-    enabled: prChecksEnabled,
+    enabled: prChecksEnabled && tab === "checks",
     open: isPr && prState === "open",
     poll: visible && tab === "checks",
     revision,
   });
-  const prChecksOverall = prChecksEnabled
-    ? summarizePrChecks({
+  const prChecksOverall: GithubPrChecksOverall | null = prChecksEnabled
+    ? !prChecksView.checks && !prChecksView.loading && !prChecksView.error && prState === "open"
+      ? savedPr?.checksStatus === "failure" ? { kind: "fail", failed: 0, description: "Checks failed" }
+        : savedPr?.checksStatus === "pending" ? { kind: "pending", description: "Checks in progress" }
+        : savedPr?.checksStatus === "success" ? { kind: "pass", description: "Checks passed" }
+        : { kind: "neutral", description: "Open Checks to load details" }
+      : summarizePrChecks({
         state: prState === "merged" || prState === "closed" ? prState : prChecksView.checks?.state ?? prState as "open" | undefined,
         loading: prChecksView.loading,
         error: prChecksView.error,
@@ -1916,7 +1926,7 @@ export function InboxDetail({
       .catch((err: unknown) => {
         if (cancelled) return;
         if (cachedDetails) return;
-        setError(err instanceof Error ? err.message : String(err));
+        setError(noteGithubError(err));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -1962,7 +1972,7 @@ export function InboxDetail({
         .catch((err: unknown) => {
           if (cancelled) return;
           if (cachedThread) return;
-          setThreadError(err instanceof Error ? err.message : String(err));
+          setThreadError(noteGithubError(err));
         })
         .finally(() => {
           if (!cancelled) setThreadLoading(false);
@@ -1991,7 +2001,7 @@ export function InboxDetail({
         .catch((err: unknown) => {
           if (cancelled) return;
           if (cachedThread) return;
-          setThreadError(err instanceof Error ? err.message : String(err));
+          setThreadError(noteGithubError(err));
         })
         .finally(() => {
           if (!cancelled) setThreadLoading(false);
@@ -2024,7 +2034,7 @@ export function InboxDetail({
         .catch((err: unknown) => {
           if (cancelled) return;
           if (cachedThread) return;
-          setThreadError(err instanceof Error ? err.message : String(err));
+          setThreadError(noteGithubError(err));
         })
         .finally(() => {
           if (!cancelled) setThreadLoading(false);
@@ -2057,7 +2067,7 @@ export function InboxDetail({
         .catch((err: unknown) => {
           if (cancelled) return;
           if (cachedThread) return;
-          setThreadError(err instanceof Error ? err.message : String(err));
+          setThreadError(noteGithubError(err));
         })
         .finally(() => {
           if (!cancelled) setThreadLoading(false);
@@ -2096,7 +2106,7 @@ export function InboxDetail({
       .catch((err: unknown) => {
         if (cancelled) return;
         if (cachedThread) return;
-        setThreadError(err instanceof Error ? err.message : String(err));
+        setThreadError(noteGithubError(err));
       })
       .finally(() => {
         if (!cancelled) setThreadLoading(false);
@@ -2153,7 +2163,7 @@ export function InboxDetail({
       .catch((err: unknown) => {
         if (cancelled) return;
         if (cachedDiff) return;
-        setDiffError(err instanceof Error ? err.message : String(err));
+        setDiffError(noteGithubError(err));
       })
       .finally(() => {
         if (!cancelled) setDiffLoading(false);
@@ -2190,7 +2200,7 @@ export function InboxDetail({
         try {
           setThread(await linearIssueThread(id, { force: true }));
         } catch (err: unknown) {
-          setPostError(err instanceof Error ? err.message : String(err));
+          setPostError(noteGithubError(err));
         }
         return;
       }
@@ -2200,7 +2210,7 @@ export function InboxDetail({
         try {
           setThread(await jiraIssueThread(jiraKey, { force: true }));
         } catch (err: unknown) {
-          setPostError(err instanceof Error ? err.message : String(err));
+          setPostError(noteGithubError(err));
         }
         return;
       }
@@ -2214,7 +2224,7 @@ export function InboxDetail({
             }),
           );
         } catch (err: unknown) {
-          setPostError(err instanceof Error ? err.message : String(err));
+          setPostError(noteGithubError(err));
         }
         return;
       }
@@ -2238,7 +2248,7 @@ export function InboxDetail({
             ),
           );
         } catch (err: unknown) {
-          setPostError(err instanceof Error ? err.message : String(err));
+          setPostError(noteGithubError(err));
         }
         return;
       }
@@ -2265,10 +2275,10 @@ export function InboxDetail({
           ),
         );
       } catch (err: unknown) {
-        setPostError(err instanceof Error ? err.message : String(err));
+        setPostError(noteGithubError(err));
       }
     } catch (err: unknown) {
-      setPostError(err instanceof Error ? err.message : String(err));
+      setPostError(noteGithubError(err));
       throw err;
     } finally {
       setPosting(false);
@@ -2486,7 +2496,7 @@ export function InboxDetail({
                         )
                           .catch((err: unknown) => {
                             setStartError(
-                              err instanceof Error ? err.message : String(err),
+                              noteGithubError(err),
                             );
                           })
                           .finally(() => setStarting(false));

@@ -6,10 +6,11 @@ import type { GitPr } from "../../../platform/tauri/fs";
 
 const mocks = vi.hoisted(() => ({
   view: vi.fn(),
+  batch: vi.fn(),
   changed: undefined as (() => void) | undefined,
 }));
 vi.mock("../../../platform/tauri/fs", () => ({
-  gitPrStatusByUrl: mocks.view,
+  gitPrStatusBatch: mocks.batch,
   subscribeGitChanged: (callback: () => void) => {
     mocks.changed = callback;
     return () => {
@@ -53,6 +54,8 @@ const session = (fields: Partial<Session> = {}): Session =>
 beforeEach(() => {
   vi.resetModules();
   mocks.view.mockReset();
+  mocks.batch.mockReset().mockImplementation(async (cwd: string, urls: string[]) =>
+    (await Promise.all(urls.map(url => mocks.view(cwd, url)))).filter(Boolean));
   mocks.changed = undefined;
   const storage = new Map<string, string>();
   vi.stubGlobal("localStorage", {
@@ -181,6 +184,32 @@ it("retains the first appearance when later turns repeat a URL, and refreshes un
   } finally {
     await view.unmount();
   }
+});
+
+it("batches different PRs in the same checkout into one status request", async () => {
+  const secondUrl = "https://github.com/example/repo/pull/24";
+  mocks.view.mockImplementation(async (_cwd, target) => ({ ...forge, url: target, number: target === url ? 23 : 24 }));
+  const view = await mount([session(), session({ id: "other", blocks: [
+    { id: "turn", role: "user", text: "Follow-up", startedAt: 1000 },
+    { id: "pr", role: "assistant", text: secondUrl, sentAt: 2000 },
+  ] })]);
+  try {
+    expect(mocks.batch).toHaveBeenCalledTimes(1);
+    expect(mocks.batch).toHaveBeenCalledWith("/repo-worktrees/fix", [url, secondUrl]);
+    expect(view.model.pullRequests()).toHaveLength(2);
+  } finally { await view.unmount(); }
+});
+
+it("keeps terminal historical PRs without polling them", async () => {
+  vi.useFakeTimers();
+  mocks.view.mockResolvedValue({ ...forge, state: "merged" });
+  const view = await mount([session()]);
+  try {
+    expect(mocks.batch).toHaveBeenCalledTimes(1);
+    await view.act(async () => vi.advanceTimersByTimeAsync(10 * 60_000));
+    expect(mocks.batch).toHaveBeenCalledTimes(1);
+    expect(view.model.pullRequests()[0].pr.state).toBe("merged");
+  } finally { await view.unmount(); }
 });
 
 it("uses one forge request for sessions sharing a PR while recording each association", async () => {

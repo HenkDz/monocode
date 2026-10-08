@@ -1,0 +1,463 @@
+.team-map-shell {
+  position: fixed;
+  inset: 42px 16px 16px;
+  margin: 0;
+  max-width: none;
+  max-height: none;
+  width: calc(100% - 32px);
+  height: calc(100% - 58px);
+  padding: 0;
+  border: 1px solid var(--color-stroke);
+  border-radius: 12px;
+  background: var(--color-background-base);
+  color: var(--color-content);
+  overflow: hidden;
+  font-size: 12px;
+}
+.team-map-shell[open] {
+  display: flex;
+  flex-direction: column;
+}
+.team-map-shell::backdrop {
+  background: color-mix(in srgb, var(--color-background-base) 70%, transparent);
+}
+.team-map-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 20px 12px;
+}
+.team-map-toolbar h1 {
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+.team-map-toolbar p {
+  margin-top: 3px;
+  opacity: 0.5;
+}
+.team-map-filters {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.team-map-shell button,
+.team-map-shell select {
+  cursor: pointer;
+}
+.team-map-filters button,
+.team-map-filters select,
+.team-map-zoom button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 7px 10px;
+  background: color-mix(in srgb, var(--color-content) 4%, transparent);
+  border: 1px solid var(--color-stroke);
+  border-radius: 6px;
+}
+.team-map-shell button:focus-visible,
+.team-map-shell select:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 3px;
+}
+.team-map-filters button[aria-pressed="true"] {
+  color: #c58b30;
+  background: color-mix(in srgb, #c58b30 12%, transparent);
+}
+.team-map-legend {
+  display: flex;
+  gap: 16px;
+  padding: 0 20px 12px;
+  border-bottom: 1px solid var(--color-stroke);
+  color: color-mix(in srgb, var(--color-content) 55%, transparent);
+  font-size: 11px;
+}
+.team-map-legend > span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.team-map-legend i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--status-color);
+}
+[data-status="working"] {
+  --status-color: var(--color-accent);
+}
+[data-status="needs-you"] {
+  --status-color: #c58b30;
+}
+[data-status="pr-ready"] {
+  --status-color: #4d9b70;
+}
+[data-status="idle"] {
+  --status-color: color-mix(in srgb, var(--color-content) 28%, transparent);
+}
+.team-map-hint {
+  margin-left: auto;
+}
+.team-map-viewport {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  touch-action: none;
+  background-image: radial-gradient(
+    color-mix(in srgb, var(--color-content) 10%, transparent) 0.8px,
+    transparent 0.8px
+  );
+  background-size: 22px 22px;
+}
+.team-map-canvas {
+  position: absolute;
+  transform-origin: 0 0;
+}
+.team-map-edges {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+.team-map-edge path {
+  fill: none;
+  stroke: color-mix(in srgb, var(--color-content) 20%, transparent);
+  stroke-width: 1.5px;
+}
+.team-map-edge[data-highlighted="true"] path {
+  stroke: var(--color-accent);
+  stroke-width: 2.5px;
+}
+.team-map-edge-label {
+  width: fit-content;
+  max-width: 180px;
+  margin: auto;
+  padding: 3px 7px;
+  border: 1px solid var(--color-stroke);
+  border-radius: 4px;
+  background: var(--color-background-base);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow: hidden;
+  color: color-mix(in srgb, var(--color-content) 65%, transparent);
+}
+.team-map-pulse {
+  color: var(--color-accent);
+}
+.team-map-pulse circle {
+  fill: currentColor;
+}
+.team-map-pulse-track {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  opacity: 0.5;
+}
+.team-map-return {
+  color: #c58b30;
+}
+.team-map-return .team-map-pulse-track {
+  stroke-dasharray: 5 5;
+}
+.team-map-node {
+  position: absolute;
+  width: 240px;
+  height: 130px;
+  border: 1px solid var(--color-stroke);
+  border-radius: 10px;
+  background: var(--color-background-base);
+  transition: opacity 0.16s;
+}
+.team-map-node[data-dimmed="true"] {
+  opacity: 0.25;
+}
+.team-map-node[data-highlighted="true"] {
+  border-color: var(--color-accent);
+}
+.team-map-node-open {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  padding: 14px;
+  text-align: left;
+  border-radius: inherit;
+}
+.team-map-node-open:hover {
+  background: color-mix(in srgb, var(--color-content) 3%, transparent);
+}
+.team-map-node-heading {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+}
+.team-map-ring {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border: 2px solid var(--status-color);
+  border-radius: 50%;
+}
+[data-status="working"] .team-map-ring,
+[data-status="needs-you"] .team-map-ring {
+  animation: team-map-breathe 1.8s ease-in-out infinite;
+}
+.team-map-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.team-map-identity strong {
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.team-map-identity > span {
+  font-size: 11px;
+  opacity: 0.5;
+  text-transform: capitalize;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.team-map-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  margin-left: auto;
+  flex-shrink: 0;
+  background: var(--status-color);
+}
+.team-map-node-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-top: 11px;
+  width: 100%;
+  font-size: 10px;
+  color: color-mix(in srgb, var(--color-content) 55%, transparent);
+}
+.team-map-model {
+  max-width: 140px;
+  padding: 2px 5px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--color-content) 5%, transparent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.team-map-task {
+  display: block;
+  margin-top: 8px;
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: color-mix(in srgb, var(--color-content) 70%, transparent);
+}
+.team-map-cluster {
+  position: absolute;
+  left: 0;
+  top: -25px;
+  max-width: 220px;
+  color: color-mix(in srgb, var(--color-content) 50%, transparent);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.team-map-collapse {
+  position: absolute;
+  right: -10px;
+  top: -10px;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--color-stroke);
+  border-radius: 50%;
+  background: var(--color-background-base);
+}
+.team-map-tooltip {
+  position: absolute;
+  left: 0;
+  top: 140px;
+  width: 280px;
+  padding: 12px;
+  border: 1px solid var(--color-stroke);
+  border-radius: 8px;
+  background: var(--color-background-base);
+  z-index: 2;
+  box-shadow: 0 8px 24px
+    color-mix(in srgb, var(--color-content) 10%, transparent);
+  pointer-events: none;
+}
+.team-map-node:has(.team-map-tooltip) {
+  z-index: 3;
+}
+.team-map-tooltip dl {
+  margin-top: 8px;
+  display: grid;
+  grid-template-columns: 76px 1fr;
+  gap: 7px;
+  font-size: 11px;
+}
+.team-map-tooltip dt {
+  opacity: 0.5;
+}
+.team-map-tooltip dd {
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.team-map-zoom {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--color-stroke);
+  border-radius: 8px;
+  background: var(--color-background-base);
+}
+.team-map-zoom span {
+  width: 42px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.6;
+}
+.team-map-zoom button {
+  border: 0;
+  background: transparent;
+}
+.team-map-timeline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  height: 58px;
+  flex-shrink: 0;
+  overflow-x: auto;
+  border-top: 1px solid var(--color-stroke);
+}
+.team-map-feed-label {
+  flex-shrink: 0;
+  color: color-mix(in srgb, var(--color-content) 50%, transparent);
+}
+.team-map-timeline button {
+  padding: 6px 10px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--color-content) 4%, transparent);
+  max-width: 230px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 0;
+  font-size: 11px;
+}
+.team-map-timeline button span {
+  margin-right: 6px;
+  color: var(--color-accent);
+  text-transform: capitalize;
+}
+.team-map-timeline p {
+  color: color-mix(in srgb, var(--color-content) 45%, transparent);
+}
+.team-map-empty {
+  display: grid;
+  place-content: center;
+  height: 100%;
+  text-align: center;
+  gap: 6px;
+  color: color-mix(in srgb, var(--color-content) 60%, transparent);
+}
+@keyframes team-map-breathe {
+  50% {
+    opacity: 0.5;
+    transform: scale(1.06);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .team-map-shell * {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+@media (max-width: 680px) {
+  .team-map-shell {
+    inset: 38px 0 0;
+    width: 100%;
+    height: calc(100% - 38px);
+    border-radius: 0;
+  }
+  .team-map-toolbar {
+    align-items: flex-start;
+    padding: 12px;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .team-map-filters {
+    width: 100%;
+  }
+  .team-map-filters label {
+    flex: 1;
+    min-width: 0;
+  }
+  .team-map-filters select {
+    width: 100%;
+  }
+  .team-map-legend {
+    gap: 10px;
+    padding: 0 12px 10px;
+  }
+  .team-map-hint {
+    display: none !important;
+  }
+  .team-map-viewport {
+    overflow-y: auto;
+    touch-action: pan-y;
+    padding: 40px 20px 30px;
+  }
+  .team-map-canvas {
+    position: relative;
+    width: 100% !important;
+    height: auto !important;
+    transform: none !important;
+    display: flex;
+    flex-direction: column;
+    gap: 35px;
+  }
+  .team-map-node {
+    position: relative;
+    left: auto !important;
+    top: auto !important;
+    margin-left: calc(var(--node-depth) * 12px);
+    width: calc(100% - var(--node-depth) * 12px);
+  }
+  .team-map-node:has(.team-map-identity > span) {
+    border-left: 2px solid var(--node-color);
+  }
+  .team-map-edges,
+  .team-map-zoom {
+    display: none;
+  }
+  .team-map-tooltip {
+    max-width: 100%;
+  }
+}

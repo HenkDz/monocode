@@ -1,4 +1,5 @@
 import { createPortal } from "react-dom";
+import { TeamMapNav } from "../../features/teamMap/navigation";
 import { NO_BRANCH_LABEL } from "../../features/source-control/model/worktrees";
 import {
   type WorktreeFocus,
@@ -323,6 +324,7 @@ type Props = {
   onOpenInboxItem?: (item: LinkedWorkItem, sessionId: string) => void;
   onOpenNotes?: () => void;
   onOpenAutomations?: () => void;
+  onOpenTeamMap?: () => void;
   onGoToFile?: () => void;
   searchActive?: boolean;
   inboxActive?: boolean;
@@ -423,6 +425,7 @@ function SidebarComponent({
   onOpenInboxItem,
   onOpenNotes,
   onOpenAutomations,
+  onOpenTeamMap,
   onGoToFile,
   searchActive = false,
   inboxActive = false,
@@ -1760,6 +1763,7 @@ function SidebarComponent({
               onOpenNotificationSettings={onOpenNotificationSettings}
               onOpenNotes={notesEnabled ? onOpenNotes : undefined}
               onOpenAutomations={onOpenAutomations}
+              onOpenTeamMap={onOpenTeamMap}
               searchActive={searchActive}
               inboxActive={inboxActive}
               notesActive={notesActive}
@@ -2283,6 +2287,7 @@ function SidebarComponent({
           notesActive={notesActive}
           onOpenAutomations={onOpenAutomations}
           automationsActive={automationsActive}
+          onOpenTeamMap={onOpenTeamMap}
           onOpenSettings={onOpenSettings}
           onTogglePanel={onToggleProjectRail}
           onLeaveActive={onGoBack}
@@ -2292,6 +2297,8 @@ function SidebarComponent({
         />
       ) : null}
       {railMounted.current && onSelectProject && onOpenProject ? (
+        <div className={railVisible ? "flex min-h-0 flex-col [&>nav]:min-h-0 [&>nav]:flex-1" : "hidden"}>
+        {onOpenTeamMap && <TeamMapNav onOpen={onOpenTeamMap} />}
         <ProjectRail
           visible={railVisible}
           cwd={cwd}
@@ -2331,6 +2338,7 @@ function SidebarComponent({
           onDismissUpdate={onDismissUpdate}
           monos={railMonos}
         />
+        </div>
       ) : null}
       {sidebarVisible
         ? dockedRight
@@ -2397,6 +2405,7 @@ function SidebarProjectPicker({
   onOpenNotificationSettings,
   onOpenNotes,
   onOpenAutomations,
+  onOpenTeamMap,
   searchActive = false,
   inboxActive = false,
   notesActive = false,
@@ -2415,6 +2424,7 @@ function SidebarProjectPicker({
   onOpenNotificationSettings?: (projectPath?: string) => void;
   onOpenNotes?: () => void;
   onOpenAutomations?: () => void;
+  onOpenTeamMap?: () => void;
   searchActive?: boolean;
   inboxActive?: boolean;
   notesActive?: boolean;
@@ -2484,6 +2494,7 @@ function SidebarProjectPicker({
             <StickyNote className="size-3.5" strokeWidth={1.75} />
           </IconButton>
         ) : null}
+        {onOpenTeamMap && <TeamMapNav compact onOpen={onOpenTeamMap} />}
         {onOpenAutomations ? (
           <IconButton
             label="Automations"
@@ -2531,6 +2542,7 @@ function CompactProjectRail({
   onOpenNotes,
   notesActive,
   onOpenAutomations,
+  onOpenTeamMap,
   automationsActive,
   onOpenSettings,
   onTogglePanel,
@@ -2560,6 +2572,7 @@ function CompactProjectRail({
   onOpenNotes?: () => void;
   notesActive: boolean;
   onOpenAutomations?: () => void;
+  onOpenTeamMap?: () => void;
   automationsActive: boolean;
   onOpenSettings?: () => void;
   onTogglePanel?: () => void;
@@ -2696,6 +2709,7 @@ function CompactProjectRail({
           active={automationsActive}
           onClick={action(automationsActive, onOpenAutomations)}
         />
+        {onOpenTeamMap && <TeamMapNav compact onOpen={onOpenTeamMap} />}
       </div>
       <div className="min-h-2 flex-1" />
       <div className="flex w-full flex-col items-center gap-1 py-1.5">

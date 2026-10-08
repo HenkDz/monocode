@@ -1,0 +1,35 @@
+# Codex Mono storage links (upstream 0.10.0)
+
+Local branch: `HenkDz/r25-codex-mono-storage`, based on `8f07a46f96feabf540f2e19f62df938071009220`. This patch does not authorize a push, merge, or deployment.
+
+MonoCode 0.10.0 can reject a valid shared configuration entry when the selected Codex home's source is itself a link. For example, an Orca account's `AGENTS.md` points to the user's ordinary `.codex/AGENTS.md`; the Mono storage entry resolves to that same file, but the old check compares it with the unresolved account path. Every Manager retry fails before Codex starts and eventually asks the user for a decision.
+
+The Windows fallback also removed arbitrary regular files before creating hardlinks. A local configuration conflict could therefore lose data. A source change needs to replace only an established link, while private sessions, configuration conflicts, and migration state remain intact.
+
+## Patch
+
+- Compare canonical source and destination paths, including Windows path prefixes, and use file identity for hardlinks.
+- Serialize storage preparation and repair. Replace mismatched links safely and remove obsolete links when switching sources; remove directory links without walking their targets. Keep real conflicting entries and report the conflict. A detached former hardlink with only one remaining name is conservatively treated as a real file.
+- Preserve and log existing real `config.toml` and `config.toml.bak` as private overrides. Credential-store selection reads the effective private configuration. Other real conflicts, including credentials, stop preparation and remain untouched.
+- Stop automatic turn retries for storage failures. Show one `Codex storage needs repair` notice with a Repair action, retain the failed turn, and resume it only after successful repair.
+- Expose the selected source home and its selection origin (provider account, `CODEX_HOME`, or the ordinary `.codex` home) in Mono Details and return the source after successful preparation.
+
+## Reproduction
+
+Use isolated temporary homes and an isolated application profile. Create a source `AGENTS.md` that links to another file, prepare the Mono store twice, then switch the source home and prepare again. Assert that the entry resolves to the new source and that both source targets, real conflicting files, private sessions, and migration state retain their bytes. On Windows, cover junctions and hardlinks as well as symbolic links. Never run a deployment request as a smoke test.
+
+## Validation
+
+Thirteen Windows native tests passed: resolved source chains, hardlink identity and replacement, atomic junction replacement and link-only removal, failed replacement preservation, stale link cleanup, real-file/directory preservation, private config overrides, private state isolation, and a two-source relink fixture. Three unrelated migration tests were deliberately excluded because they remove real marker files in fixture Codex storage. All fixture homes remain available for inspection.
+
+Real, read-only Codex turns completed against the isolated native-prepared source-link fixture and after switching to a second source (`R25_STORAGE_OK`, successful turn completion, exit 0). The original Orca authentication file's hash remained unchanged. These provider checks use an empty working directory and remove inherited `ORCA_*` variables; they do not replay a deployment request.
+
+The full frontend Vitest suite, `tsc --noEmit`, and `npm run build` passed with `NODE_OPTIONS=--no-experimental-webstorage` for Node 26/happy-dom. Existing bundler chunk warnings remain. Repository-wide `cargo fmt --check` reports formatting problems in unchanged files; the changed storage module passes its scoped formatter check.
+
+An application rebuilt from this worktree ran an actual Manager turn in a separate profile under a synthetic user home, launched from an empty directory with inherited `ORCA_*` variables removed. With the explicit `CODEX_HOME` source containing a linked `AGENTS.md`, the native rollout completed with `R25_MANAGER_CODEX_HOME_OK`, without an unexpected-link error or decision escalation. Mono Details displayed the selected source home and `CODEX_HOME` origin. The user's running profile and dzdistro checkout were untouched.
+
+The same isolated profile was then restarted with `CODEX_HOME` unset and a synthetic `USERPROFILE/.codex` containing a different linked source. Storage reported the `default` origin, `AGENTS.md` resolved to the new instructions file, and an actual Manager turn completed with `R25_MANAGER_CLEAN_ENV_OK`. Both Manager markers are confirmed in native saved rollouts; neither test operated on the real dzdistro project.
+
+Final frontend snapshot: **5,695 tests, 5,682 passed, 13 skipped, zero failures**; TypeScript and the production build passed. The local Vitest JSON report is `C:/Users/nooro/AppData/Local/Temp/r25-storage-vitest-final.json`.
+
+Repair retention, concurrent submission handling, the single notice, and its action were exercised by frontend tests and independently reviewed. An optional live failure-injection probe did not intercept any preparation calls, so it supplies no live Repair-action evidence. Owned preview processes were stopped; scratch homes were retained without recursive cleanup.

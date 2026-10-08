@@ -12,6 +12,7 @@ import {
 import { PixelMascot } from "../../projects/ui/PixelMascot";
 import { PageHeader, Property } from "./monoPanelParts";
 import { ModelPicker, ModelSettingRows } from "../../sessions/ui/ModelPicker";
+import { MonoCodexStorageSource } from "./MonoCodexStorageSource";
 import { RUNTIME_MODE_LABEL, type RuntimeMode } from "../../sessions/model/session";
 import { AccessPicker } from "../../sessions/ui/AccessPicker";
 import { usePrStatusCache } from "../../source-control/hooks/usePrStatus";
@@ -183,6 +184,7 @@ export function MemberDetails({
   fallback,
   onBack,
   onProfileChange,
+  providerAccountId,
   runtimeMode,
   onRuntimeModeChange,
 }: {
@@ -190,6 +192,7 @@ export function MemberDetails({
   fallback: NonNullable<Mono["workerProfile"]>;
   onBack(): void;
   onProfileChange?: (profile: NonNullable<Mono["workerProfile"]>) => void;
+  providerAccountId?: string;
   runtimeMode?: RuntimeMode;
   onRuntimeModeChange?: (mode: RuntimeMode) => void;
 }) {
@@ -248,6 +251,7 @@ export function MemberDetails({
           <MonoFieldLock monoId={member.id} field="model" />
           <MonoFieldLock monoId={member.id} field="modelSettings" />
         </Property>
+        <MonoCodexStorageSource harness={profile.harness} providerAccountId={providerAccountId} cwd={member.projects[0] ?? ""} />
         <ModelSettingRows harness={profile.harness} model={profile.model} values={profile.modelSettings ?? {}} side="bottom"
           onSettingsChange={modelSettings => {
             onProfileChange?.({ ...profile, modelSettings });

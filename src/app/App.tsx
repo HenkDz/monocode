@@ -159,6 +159,8 @@ import { ProviderSignInDialog } from "../features/sessions/ui/ProviderSignInDial
 import { TitleBar, type Tab as TitleTab } from "./shell/TitleBar";
 import { WindowControls } from "./shell/WindowControls";
 import { MonoDetails } from "../features/monos/ui/MonoDetails";
+import { MonoCodexStorageRecovery, isCodexStorageError } from "../features/monos/model/monoCodexStorage";
+import { prepareMonoCodexStore } from "../integrations/harness/core/child";
 import { handleMonoTeam, isTeamReviewer } from "../features/monos/model/monoTeam";
 import { monoTeamHost, registerTeamCards } from "../features/monos/model/monoTeamRuntime";
 import { appendTeamChangeCard } from "../features/monos/model/monoTeamCards";
@@ -937,6 +939,9 @@ type SubmitOptions = ComposerTurnOptions & {
   refreshTitle?: boolean;
   /** Internal guard for the retry after resolving a renamed project. */
   projectLocationReady?: boolean;
+  codexStoragePrepared?: boolean;
+  codexStorageRetryBlockId?: string;
+  codexStorageResuming?: boolean;
 };
 
 type Submit = (
@@ -7140,6 +7145,7 @@ function Workspace({
     [invalidateLoadedSession],
   );
 
+  const codexStorageRecovery = useRef(new MonoCodexStorageRecovery());
   const submitSession = useCallback(
     (
       sessionId: string,
@@ -7161,10 +7167,38 @@ function Workspace({
           options,
         );
       if (editedResends.isActive(sessionId)) return false;
+      if (remote?.codexStorageError || (codexStorageRecovery.current.isPreparing(sessionId) && !options?.codexStoragePrepared)) {
+        if (options?.managed) options.onSettled?.({ status: "failed", text: "", error:
+          `Codex storage needs repair: ${remote?.codexStorageError ?? "preparation is already pending."}` });
+        return false;
+      }
+      if (remote?.harness === "codex" && (owner || isProjectManager(sessionId)) && !remote.busy && !options?.codexStoragePrepared) {
+        flushSync(() => setSessions(previous => previous.map(session => session.id === sessionId
+          ? { ...session, codexStoragePreparing: true } : session)));
+        const providerAccountId = remote.providerAccountId ?? selectedProviderAccountId("codex", remote.cwd);
+        return codexStorageRecovery.current.prepare(sessionId,
+          () => prepareMonoCodexStore(providerAccountId, remote.providerSessionId),
+          () => submitSessionRef.current(sessionId, text, attachments, { ...options, codexStoragePrepared: true }),
+          error => {
+            console.error("Mono Codex storage preparation failed", error);
+            flushSync(() => {
+              if (!options?.managed && !options?.queuedMessageId) saveDraftRef.current(sessionId, text, attachments);
+              setSessions(previous => previous.map(session => session.id === sessionId
+                ? { ...session, codexStorageError: String(error) } : session));
+            });
+            const draft = !options?.managed && !options?.queuedMessageId && sessionsRef.current.find(session => session.id === sessionId)?.blocks.find(block =>
+              block.draft && block.text === text && JSON.stringify(block.attachments ?? []) === JSON.stringify(attachments));
+            codexStorageRecovery.current.hold(sessionId, () => submitSessionRef.current(sessionId, text, attachments, {
+              ...options, draftBlockId: options?.draftBlockId ?? (draft ? draft.id : undefined), codexStorageResuming: true,
+            }));
+          },
+        ).finally(() => setSessions(previous => previous.map(session => session.id === sessionId
+          ? { ...session, codexStoragePreparing: undefined } : session)));
+      }
       // Output already received belongs before the submitted user message.
       // Flush before reading the session too, since pending errors can settle it.
       flushHarnessEvents();
-      if (!options?.queuedMessageId && !options?.managed) {
+      if (!options?.queuedMessageId && !options?.managed && !options?.codexStorageResuming && !options?.codexStorageRetryBlockId) {
         const current = sessionsRef.current.find(session => session.id === sessionId);
         const accepted = current && sendDraftOnce(current, text, attachments, options?.draftBlockId, options?.appRequestId);
         if (accepted) {
@@ -7386,6 +7420,7 @@ function Workspace({
         ? withPlanBuildTarget(draftCleared, options.buildTarget)
         : draftCleared;
       current = { ...current, runtimeMode: monoRuntimeMode(monoForSession(sessionId) ?? findMono(habitRunMono(sessionId) ?? ""), current.runtimeMode) };
+      if (options?.codexStoragePrepared) current = { ...current, codexStoragePreparing: undefined };
       const editedResend = options?.resendEdited
         ? createEditedResendAttempt(current, options.onResendRejected)
         : undefined;
@@ -7941,6 +7976,7 @@ function Workspace({
               handoffCard:
                 rawCommand || options?.ciRepair ? s.handoffCard : undefined,
             };
+            if (options?.codexStorageRetryBlockId) return { ...next, busy: true, turnReady: false };
             if (editedResend) {
               next = editedResend.replace(next);
             }
@@ -8140,6 +8176,7 @@ function Workspace({
         error: "Turn did not complete",
       };
       let controlText = "";
+      let codexStorageFailure = false;
       let proposalText = "";
       let nativeProposalText = "";
       let completedProposal: OrchestrationProposal | undefined;
@@ -8646,7 +8683,16 @@ function Workspace({
               ? error.message
               : String(error) || `${current.harness} adapter failed`;
           controlOutcome.error = message;
-          if (error instanceof TurnAuthorizationError) {
+          if (isCodexStorageError(error) && (mono || isProjectManager(sessionId))) {
+            codexStorageFailure = true;
+            console.error("Mono Codex storage failed before provider acceptance", error);
+            codexStorageRecovery.current.hold(sessionId, () => submitSessionRef.current(sessionId, text, attachments, {
+              ...options, codexStoragePrepared: false, codexStorageRetryBlockId: submittedBlockId,
+              queuedMessageId: undefined, draftBlockId: undefined,
+            }));
+            flushSync(() => setSessions(previous => previous.map(session => session.id === sessionId
+              ? { ...session, codexStorageError: message } : session)));
+          } else if (error instanceof TurnAuthorizationError) {
             setSessions(prev => prev.map(session => session.id === sessionId
               ? rejectMessageSend(session, {
                   ...queuedMonoMessage,
@@ -8782,6 +8828,7 @@ function Workspace({
         .finally(() => {
           editedResend?.reject();
           if (editedResend) editedResends.finish(sessionId);
+          if (codexStorageFailure) return;
           options?.onSettled?.(
             turnGen.current.get(sessionId) !== gen
               ? { status: "cancelled", text: controlText }
@@ -9739,6 +9786,23 @@ function Workspace({
     },
     [onSubmit, onUsageLimitDismiss],
   );
+
+  const onCodexStorageRepair = useCallback(async (sessionId: string) => {
+    const session = sessionsRef.current.find(entry => entry.id === sessionId);
+    if (!session || session.busy) return;
+    const accountId = session.providerAccountId ?? selectedProviderAccountId("codex", session.cwd);
+    try {
+      await codexStorageRecovery.current.repair(sessionId, async () => {
+        await prepareMonoCodexStore(accountId, session.providerSessionId);
+        flushSync(() => setSessions(previous => previous.map(entry => entry.id === sessionId
+          ? { ...entry, codexStorageError: undefined } : entry)));
+      });
+    } catch (error) {
+      flushSync(() => setSessions(previous => previous.map(entry => entry.id === sessionId
+        ? { ...entry, codexStorageError: String(error) } : entry)));
+      throw error;
+    }
+  }, []);
 
   const onUsageLimitAccountChange = useCallback(
     (sessionId: string, accountId: string) => {
@@ -14240,6 +14304,7 @@ function Workspace({
     onSteerQueuedMessage,
     onResumeQueue,
     onUsageLimitResume,
+    onCodexStorageRepair,
     onUsageLimitResumeAtReset,
     onUsageLimitDismiss,
     onUsageLimitAccountChange,
@@ -14285,6 +14350,7 @@ function Workspace({
   const monoDetailsPanel =
     monoViewMono && monoViewSession ? (
       <MonoDetails
+        providerAccountId={monoViewSession.providerAccountId}
         sessionId={monoViewSession.id}
         sessions={sessions}
         runs={orchestrationRuns}

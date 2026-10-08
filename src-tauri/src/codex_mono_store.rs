@@ -8,6 +8,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager};
 
+// Preparation and Repair share one lock, including harness startup.
+static STORAGE_LOCK: Mutex<()> = Mutex::new(());
+
 const STATE_NAMES: &[&str] = &[
     "sessions",
     "archived_sessions",
@@ -67,9 +70,22 @@ impl MonoCodexStore {
 pub struct PreparedStore {
     home: String,
     has_thread: bool,
+    source_home: String,
+    source_kind: &'static str,
 }
 
-fn locations(app: &AppHandle, account_id: Option<&str>) -> Result<(PathBuf, PathBuf), String> {
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageInfo {
+    home: String,
+    source_home: String,
+    source_kind: &'static str,
+}
+
+fn locations(
+    app: &AppHandle,
+    account_id: Option<&str>,
+) -> Result<(PathBuf, PathBuf, &'static str), String> {
     let account_id = account_id.unwrap_or("default");
     // Validate the default id as well: it is used as a private directory name.
     if account_id.is_empty()
@@ -80,21 +96,40 @@ fn locations(app: &AppHandle, account_id: Option<&str>) -> Result<(PathBuf, Path
     {
         return Err("Invalid Codex account id".into());
     }
-    let source = crate::harness::provider_account_dir(app, "codex", Some(account_id))?
-        .or_else(|| {
-            std::env::var_os("CODEX_HOME")
-                .filter(|v| !v.is_empty())
-                .map(PathBuf::from)
-        })
-        .or_else(|| crate::dirs_home().map(|h| PathBuf::from(h).join(".codex")))
-        .ok_or("Could not find the Codex home directory")?;
+    let (source, source_kind) = if let Some(source) =
+        crate::harness::provider_account_dir(app, "codex", Some(account_id))?
+    {
+        (source, "account")
+    } else if let Some(source) = std::env::var_os("CODEX_HOME").filter(|v| !v.is_empty()) {
+        (PathBuf::from(source), "CODEX_HOME")
+    } else {
+        (
+            crate::dirs_home()
+                .map(|h| PathBuf::from(h).join(".codex"))
+                .ok_or("Could not find the Codex home directory")?,
+            "default",
+        )
+    };
     let home = app
         .path()
         .app_data_dir()
         .map_err(|e| e.to_string())?
         .join("codex-monos")
         .join(account_id);
-    Ok((source, home))
+    Ok((source, home, source_kind))
+}
+
+#[tauri::command(async)]
+pub fn codex_mono_store_info(
+    app: AppHandle,
+    provider_account_id: Option<String>,
+) -> Result<StorageInfo, String> {
+    let (source, home, source_kind) = locations(&app, provider_account_id.as_deref())?;
+    Ok(StorageInfo {
+        home: crate::fs::path_to_js(&home),
+        source_home: crate::fs::path_to_js(&source),
+        source_kind,
+    })
 }
 
 #[tauri::command(async)]
@@ -103,8 +138,9 @@ pub fn codex_mono_store_prepare(
     provider_account_id: Option<String>,
     thread_id: Option<String>,
 ) -> Result<PreparedStore, String> {
-    let (source, home) = locations(&app, provider_account_id.as_deref())?;
-    prepare_files(&source, &home)?;
+    let (source, home, source_kind) =
+        locations(&app, provider_account_id.as_deref()).map_err(storage_error)?;
+    prepare_files(&source, &home).map_err(storage_error)?;
     let has_thread = match thread_id {
         Some(id) => {
             validate_thread_id(&id)?;
@@ -116,6 +152,8 @@ pub fn codex_mono_store_prepare(
     Ok(PreparedStore {
         home: crate::fs::path_to_js(&home),
         has_thread,
+        source_home: crate::fs::path_to_js(&source),
+        source_kind,
     })
 }
 
@@ -127,7 +165,7 @@ pub fn codex_mono_store_copy(
     paths: Vec<String>,
     sqlite_home: Option<String>,
 ) -> Result<(), String> {
-    let (source, home) = locations(&app, provider_account_id.as_deref())?;
+    let (source, home, _) = locations(&app, provider_account_id.as_deref())?;
     let sqlite_home = sqlite_home
         .map(PathBuf::from)
         .or_else(|| {
@@ -153,18 +191,23 @@ pub fn codex_mono_store_restore_agent_state(
     thread_id: String,
 ) -> Result<(), String> {
     validate_thread_id(&thread_id)?;
-    let (_, home) = locations(&app, provider_account_id.as_deref())?;
+    let (_, home, _) = locations(&app, provider_account_id.as_deref())?;
     restore_agent_edges(&home, &thread_id)
 }
 
 pub(crate) fn prepare(app: &AppHandle, account_id: Option<&str>) -> Result<MonoCodexStore, String> {
-    let (source, home) = locations(app, account_id)?;
-    prepare_files(&source, &home)?;
-    let auth = prepare_keyring(&source, &home)?;
+    let (source, home, _) = locations(app, account_id).map_err(storage_error)?;
+    prepare_files(&source, &home).map_err(storage_error)?;
+    let auth = prepare_keyring(&source, &home).map_err(storage_error)?;
     Ok(MonoCodexStore {
         home,
         auth: Mutex::new(auth),
     })
+}
+
+fn storage_error(error: String) -> String {
+    eprintln!("Mono Codex storage: {error}");
+    format!("Codex storage needs repair: {error}")
 }
 
 fn private_entry(name: &str) -> bool {
@@ -177,6 +220,7 @@ fn private_entry(name: &str) -> bool {
 }
 
 fn prepare_files(source: &Path, home: &Path) -> Result<(), String> {
+    let _lock = STORAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     std::fs::create_dir_all(source)
         .map_err(|e| format!("Could not open the Codex account directory: {e}"))?;
     std::fs::create_dir_all(home)
@@ -197,22 +241,51 @@ fn prepare_files(source: &Path, home: &Path) -> Result<(), String> {
             return Err("Mono Codex state must remain in its private storage directory".into());
         }
     }
+    for entry in std::fs::read_dir(home).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let name = entry.file_name();
+        if private_entry(&name.to_string_lossy()) {
+            continue;
+        }
+        match std::fs::symlink_metadata(source.join(&name)) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                if replaceable_link(&entry.path())? {
+                    remove_link(&entry.path())?;
+                } else if name == "auth.json" || name == ".credentials.json" {
+                    return Err(format!(
+                        "Real login entry conflicts with the selected Codex home; preserved: {}",
+                        entry.path().display()
+                    ));
+                }
+            }
+            Err(e) => return Err(e.to_string()),
+            Ok(_) => {}
+        }
+    }
     for entry in std::fs::read_dir(&source).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
         let name = entry.file_name();
         if private_entry(&name.to_string_lossy()) {
             continue;
         }
-        link_entry(&entry.path(), &home.join(name))?;
+        let target = home.join(&name);
+        if (name == "config.toml" || name == "config.toml.bak")
+            && std::fs::symlink_metadata(&target).is_ok_and(|m| m.is_file())
+            && !replaceable_link(&target)?
+        {
+            eprintln!(
+                "Mono Codex storage preserves private configuration overriding {}: {}",
+                entry.path().display(),
+                target.display()
+            );
+            continue;
+        }
+        link_entry(&entry.path(), &target)?;
     }
     // Keep the auth link valid even if login creates/replaces the original later.
     #[cfg(unix)]
     for name in ["auth.json", ".credentials.json"] {
         link_entry(&source.join(name), &home.join(name))?;
-    }
-    #[cfg(windows)]
-    if !source.join("auth.json").exists() && home.join("auth.json").exists() {
-        std::fs::remove_file(home.join("auth.json")).map_err(|e| e.to_string())?;
     }
     // Encrypted auth/MCP files are replaced atomically. Sharing their directory,
     // rather than individual files, preserves those writes in both homes.
@@ -223,40 +296,184 @@ fn prepare_files(source: &Path, home: &Path) -> Result<(), String> {
 }
 
 fn link_entry(source: &Path, target: &Path) -> Result<(), String> {
-    if let Ok(link) = std::fs::read_link(target) {
-        if link == source {
-            return Ok(());
-        }
-        // Windows junctions can return a different path spelling than the
-        // canonical source (for example, without the verbatim path prefix).
-        #[cfg(windows)]
-        if link.canonicalize().is_ok_and(|resolved| resolved == source) {
-            return Ok(());
-        }
+    if same_entry(source, target) {
+        return Ok(());
+    }
+    let existing = match std::fs::symlink_metadata(target) {
+        Ok(metadata) => Some(metadata),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(e.to_string()),
+    };
+    if existing.is_some() && !replaceable_link(target)? {
         return Err(format!(
-            "Unexpected link in Mono Codex storage: {}",
+            "Real entry conflicts with Codex storage; preserved: {}",
             target.display()
         ));
     }
-    if target.exists() {
-        #[cfg(windows)]
-        if target.is_file() && source.is_file() {
-            std::fs::remove_file(target).map_err(|e| e.to_string())?;
-        } else {
+    if existing.is_some() {
+        let temp = target.with_file_name(format!(".monocode-link-{}", uuid::Uuid::new_v4()));
+        create_link(source, &temp)?;
+        // Publish only a complete link; failed replacement leaves the old link intact.
+        if let Err(error) = replace_link(&temp, target) {
+            remove_link(&temp)?;
             return Err(format!(
-                "Unexpected entry in Mono Codex storage: {}",
+                "Could not relink Codex storage {}: {error}",
                 target.display()
             ));
         }
-        #[cfg(not(windows))]
+    } else {
+        create_link(source, target)?;
+    }
+    Ok(())
+}
+
+fn same_entry(source: &Path, target: &Path) -> bool {
+    // Resolve BOTH ends: the selected account entry may itself be a link.
+    if source
+        .canonicalize()
+        .ok()
+        .zip(target.canonicalize().ok())
+        .is_some_and(|(a, b)| a == b)
+    {
+        return true;
+    }
+    #[cfg(windows)]
+    return file_info(source)
+        .ok()
+        .zip(file_info(target).ok())
+        .is_some_and(|(a, b)| {
+            a.dwVolumeSerialNumber == b.dwVolumeSerialNumber
+                && a.nFileIndexHigh == b.nFileIndexHigh
+                && a.nFileIndexLow == b.nFileIndexLow
+        });
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        std::fs::metadata(source)
+            .ok()
+            .zip(std::fs::metadata(target).ok())
+            .is_some_and(|(a, b)| a.dev() == b.dev() && a.ino() == b.ino())
+    }
+}
+
+#[cfg(windows)]
+fn file_info(
+    path: &Path,
+) -> Result<windows_sys::Win32::Storage::FileSystem::BY_HANDLE_FILE_INFORMATION, String> {
+    use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS,
+    };
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)
+        .map_err(|e| e.to_string())?;
+    let mut info = BY_HANDLE_FILE_INFORMATION::default();
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, &mut info) } == 0 {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    Ok(info)
+}
+
+fn replaceable_link(path: &Path) -> Result<bool, String> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+    if metadata.file_type().is_symlink() {
+        return Ok(true);
+    }
+    #[cfg(windows)]
+    if metadata.is_file() {
+        // A lone file may be private data or a detached former hardlink: preserve it.
+        return Ok(file_info(path)?.nNumberOfLinks > 1);
+    }
+    Ok(false)
+}
+
+fn remove_link(path: &Path) -> Result<(), String> {
+    if !replaceable_link(path)? {
         return Err(format!(
-            "Unexpected entry in Mono Codex storage: {}",
-            target.display()
+            "Refusing to remove a real Codex storage entry: {}",
+            path.display()
         ));
     }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_DIRECTORY;
+        if std::fs::symlink_metadata(path)
+            .map_err(|e| e.to_string())?
+            .file_attributes()
+            & FILE_ATTRIBUTE_DIRECTORY
+            != 0
+        {
+            return std::fs::remove_dir(path).map_err(|e| e.to_string());
+        }
+    }
+    std::fs::remove_file(path).map_err(|e| e.to_string())
+}
+
+#[cfg(unix)]
+fn replace_link(temp: &Path, target: &Path) -> Result<(), String> {
+    std::fs::rename(temp, target).map_err(|e| e.to_string())
+}
+
+#[cfg(windows)]
+fn replace_link(temp: &Path, target: &Path) -> Result<(), String> {
+    use std::os::windows::{ffi::OsStrExt, fs::OpenOptionsExt, io::AsRawHandle};
+    use windows_sys::Win32::Storage::FileSystem::{
+        FileRenameInfoEx, SetFileInformationByHandle, DELETE, FILE_FLAG_BACKUP_SEMANTICS,
+        FILE_FLAG_OPEN_REPARSE_POINT, FILE_RENAME_INFO, FILE_SHARE_DELETE, FILE_SHARE_READ,
+        FILE_SHARE_WRITE,
+    };
+    // Open the junction itself, never the directory it points to.
+    let file = std::fs::OpenOptions::new()
+        .access_mode(DELETE)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(temp)
+        .map_err(|e| e.to_string())?;
+    let absolute = target
+        .parent()
+        .ok_or("Missing link parent")?
+        .canonicalize()
+        .map_err(|e| e.to_string())?
+        .join(target.file_name().ok_or("Missing link name")?);
+    // The native rename information expects an NT path, not a DOS drive path.
+    let canonical = absolute.to_string_lossy();
+    let native = format!(
+        r"\??\{}",
+        canonical.strip_prefix(r"\\?\").unwrap_or(&canonical)
+    );
+    let name: Vec<u16> = std::ffi::OsStr::new(&native).encode_wide().collect();
+    let bytes = std::mem::offset_of!(FILE_RENAME_INFO, FileName) + name.len() * 2;
+    // usize storage supplies the alignment required by FILE_RENAME_INFO.
+    let mut buffer = vec![0usize; bytes.div_ceil(std::mem::size_of::<usize>())];
+    let info = buffer.as_mut_ptr().cast::<FILE_RENAME_INFO>();
+    unsafe {
+        (*info).Anonymous.Flags = 3; // REPLACE_IF_EXISTS | POSIX_SEMANTICS
+        (*info).FileNameLength = (name.len() * 2) as u32;
+        std::ptr::copy_nonoverlapping(
+            name.as_ptr(),
+            std::ptr::addr_of_mut!((*info).FileName).cast::<u16>(),
+            name.len(),
+        );
+        if SetFileInformationByHandle(
+            file.as_raw_handle() as _,
+            FileRenameInfoEx,
+            info.cast(),
+            bytes as u32,
+        ) == 0
+        {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+    }
+    Ok(())
+}
+
+fn create_link(source: &Path, target: &Path) -> Result<(), String> {
     #[cfg(unix)]
     if let Err(error) = std::os::unix::fs::symlink(source, target) {
-        if std::fs::read_link(target).ok().as_deref() != Some(source) {
+        if !same_entry(source, target) {
             return Err(format!("Could not share Codex configuration: {error}"));
         }
     }
@@ -302,7 +519,7 @@ fn write_keyring(service: &str, key: &str, value: &str) -> Result<(), String> {
 }
 
 fn prepare_keyring(source: &Path, home: &Path) -> Result<Vec<KeyringMirror>, String> {
-    let explicit_keyring = std::fs::read_to_string(source.join("config.toml"))
+    let explicit_keyring = std::fs::read_to_string(home.join("config.toml"))
         .ok()
         .and_then(|s| s.parse::<toml::Value>().ok())
         .and_then(|v| {
@@ -734,11 +951,7 @@ mod tests {
             path
         }
     }
-    impl Drop for Fixture {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
+    // Keep isolated fixtures for inspection; never recursively clean Codex homes.
 
     #[test]
     fn shares_settings_and_login_but_not_codex_state() {
@@ -821,9 +1034,231 @@ mod tests {
         assert_eq!(target.canonicalize().unwrap(), source);
     }
 
+    #[test]
+    fn link_safety_preserves_real_files_directories_and_private_state() {
+        let fixture = Fixture::new();
+        std::fs::create_dir_all(fixture.source()).unwrap();
+        std::fs::create_dir_all(fixture.home().join("sessions")).unwrap();
+        std::fs::create_dir_all(fixture.home().join(".monocode-migrations")).unwrap();
+        for name in ["config.toml", "config.toml.bak", "AGENTS.md"] {
+            std::fs::write(fixture.source().join(name), "source").unwrap();
+            std::fs::write(fixture.home().join(name), "private data").unwrap();
+            assert!(
+                link_entry(&fixture.source().join(name), &fixture.home().join(name))
+                    .unwrap_err()
+                    .contains("preserved")
+            );
+            assert!(remove_link(&fixture.home().join(name)).is_err());
+            assert_eq!(
+                std::fs::read_to_string(fixture.home().join(name)).unwrap(),
+                "private data"
+            );
+        }
+        std::fs::write(fixture.home().join("sessions/keep"), "rollout").unwrap();
+        std::fs::write(fixture.home().join(".monocode-migrations/keep"), "marker").unwrap();
+        std::fs::create_dir_all(fixture.source().join("skills")).unwrap();
+        std::fs::create_dir_all(fixture.home().join("skills")).unwrap();
+        std::fs::write(fixture.home().join("skills/keep"), "private skill").unwrap();
+        assert!(link_entry(
+            &fixture.source().join("skills"),
+            &fixture.home().join("skills")
+        )
+        .is_err());
+        assert!(prepare_files(&fixture.source(), &fixture.home()).is_err());
+        for name in ["sessions/keep", ".monocode-migrations/keep", "skills/keep"] {
+            assert!(fixture.home().join(name).is_file());
+        }
+    }
+
     #[cfg(windows)]
     #[test]
-    fn rejects_an_unrelated_configuration_junction() {
+    fn link_safety_accepts_hardlink_identity_and_relinks_only_links() {
+        let fixture = Fixture::new();
+        std::fs::create_dir_all(fixture.source()).unwrap();
+        std::fs::create_dir_all(fixture.home()).unwrap();
+        let old = fixture.source().join("old.json");
+        let new = fixture.source().join("new.json");
+        let target = fixture.home().join("auth.json");
+        std::fs::write(&old, "old login").unwrap();
+        std::fs::write(&new, "new login").unwrap();
+        std::fs::hard_link(&old, &target).unwrap();
+        assert!(same_entry(&old, &target));
+        let before = file_info(&target).unwrap();
+        link_entry(&old, &target).unwrap();
+        assert_eq!(
+            before.nFileIndexLow,
+            file_info(&target).unwrap().nFileIndexLow
+        );
+        link_entry(&new, &target).unwrap();
+        assert!(same_entry(&new, &target));
+        assert_eq!(std::fs::read_to_string(&old).unwrap(), "old login");
+        assert_eq!(std::fs::read_to_string(&new).unwrap(), "new login");
+    }
+
+    #[test]
+    fn link_safety_resolves_a_linked_source_and_a_link_chain() {
+        let fixture = Fixture::new();
+        std::fs::create_dir_all(fixture.source()).unwrap();
+        std::fs::create_dir_all(fixture.home()).unwrap();
+        let actual = fixture.0.join("actual-AGENTS.md");
+        let source = fixture.source().join("AGENTS.md");
+        let target = fixture.home().join("AGENTS.md");
+        std::fs::write(&actual, "instructions").unwrap();
+        std::fs::write(fixture.source().join("auth.json"), "{}").unwrap();
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&actual, &source).unwrap();
+            std::os::unix::fs::symlink(&actual, &target).unwrap();
+        }
+        #[cfg(windows)]
+        {
+            std::os::windows::fs::symlink_file(&actual, &source).unwrap();
+            std::os::windows::fs::symlink_file(&source, &target).unwrap();
+        }
+        prepare_files(&fixture.source(), &fixture.home()).unwrap();
+        prepare_files(&fixture.source(), &fixture.home()).unwrap();
+        assert!(same_entry(&source, &target));
+        assert_eq!(std::fs::read_to_string(&actual).unwrap(), "instructions");
+        println!("retained linked-source fixture: {}", fixture.0.display());
+    }
+
+    #[test]
+    fn link_safety_removes_only_stale_links_missing_from_the_new_source() {
+        let fixture = Fixture::new();
+        let other = fixture.0.join("other-account");
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::create_dir_all(fixture.source()).unwrap();
+        std::fs::write(other.join("auth.json"), "old login").unwrap();
+        std::fs::create_dir_all(other.join("skills")).unwrap();
+        std::fs::write(other.join("skills/keep"), "old skill").unwrap();
+        prepare_files(&other, &fixture.home()).unwrap();
+        prepare_files(&fixture.source(), &fixture.home()).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(other.join("auth.json")).unwrap(),
+            "old login"
+        );
+        assert_eq!(
+            std::fs::read_to_string(other.join("skills/keep")).unwrap(),
+            "old skill"
+        );
+        assert!(!fixture.home().join("auth.json").exists());
+        assert!(!fixture.home().join("skills").exists());
+    }
+
+    #[test]
+    fn link_safety_preserves_a_real_login_absent_from_the_selected_home() {
+        let fixture = Fixture::new();
+        std::fs::create_dir_all(fixture.source()).unwrap();
+        std::fs::create_dir_all(fixture.home()).unwrap();
+        std::fs::write(fixture.home().join("auth.json"), "private login").unwrap();
+        assert!(prepare_files(&fixture.source(), &fixture.home())
+            .unwrap_err()
+            .contains("preserved"));
+        assert_eq!(
+            std::fs::read_to_string(fixture.home().join("auth.json")).unwrap(),
+            "private login"
+        );
+    }
+
+    #[test]
+    fn link_safety_preparation_preserves_private_configuration_and_state() {
+        let fixture = Fixture::new();
+        std::fs::create_dir_all(fixture.source()).unwrap();
+        std::fs::create_dir_all(fixture.home().join("sessions")).unwrap();
+        std::fs::create_dir_all(fixture.home().join(".monocode-migrations")).unwrap();
+        for name in ["config.toml", "config.toml.bak"] {
+            std::fs::write(fixture.source().join(name), "source configuration").unwrap();
+            std::fs::write(fixture.home().join(name), "private configuration").unwrap();
+        }
+        for name in ["sessions/keep", ".monocode-migrations/keep"] {
+            std::fs::write(fixture.home().join(name), "private state").unwrap();
+        }
+        prepare_files(&fixture.source(), &fixture.home()).unwrap();
+        prepare_files(&fixture.source(), &fixture.home()).unwrap();
+        for name in ["config.toml", "config.toml.bak"] {
+            assert_eq!(
+                std::fs::read_to_string(fixture.home().join(name)).unwrap(),
+                "private configuration"
+            );
+            assert_eq!(
+                std::fs::read_to_string(fixture.source().join(name)).unwrap(),
+                "source configuration"
+            );
+        }
+        for name in ["sessions/keep", ".monocode-migrations/keep"] {
+            assert_eq!(
+                std::fs::read_to_string(fixture.home().join(name)).unwrap(),
+                "private state"
+            );
+        }
+    }
+
+    #[test]
+    fn link_safety_source_switch_relinks_link_chains_and_keeps_both_homes() {
+        let fixture = Fixture::new();
+        let first = fixture.source();
+        let second = fixture.0.join("clean-account");
+        for (source, content) in [(&first, "inherited source"), (&second, "clean source")] {
+            std::fs::create_dir_all(source).unwrap();
+            let actual = source.join("instructions.md");
+            std::fs::write(&actual, content).unwrap();
+            std::fs::write(source.join("auth.json"), "{}").unwrap();
+            std::fs::write(source.join("config.toml"), "").unwrap();
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(&actual, source.join("AGENTS.md")).unwrap();
+            #[cfg(windows)]
+            std::os::windows::fs::symlink_file(&actual, source.join("AGENTS.md")).unwrap();
+        }
+        prepare_files(&first, &fixture.home()).unwrap();
+        prepare_files(&second, &fixture.home()).unwrap();
+        assert!(same_entry(
+            &second.join("AGENTS.md"),
+            &fixture.home().join("AGENTS.md")
+        ));
+        assert!(same_entry(
+            &second.join("auth.json"),
+            &fixture.home().join("auth.json")
+        ));
+        assert_eq!(
+            std::fs::read_to_string(first.join("instructions.md")).unwrap(),
+            "inherited source"
+        );
+        assert_eq!(
+            std::fs::read_to_string(second.join("instructions.md")).unwrap(),
+            "clean source"
+        );
+        println!("retained source-switch fixture: {}", fixture.0.display());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn link_safety_failed_atomic_replacement_keeps_the_old_link_and_both_sources() {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE};
+        let fixture = Fixture::new();
+        std::fs::create_dir_all(fixture.source()).unwrap();
+        std::fs::create_dir_all(fixture.home()).unwrap();
+        let old = fixture.source().join("old.json");
+        let new = fixture.source().join("new.json");
+        let target = fixture.home().join("auth.json");
+        std::fs::write(&old, "old").unwrap();
+        std::fs::write(&new, "new").unwrap();
+        std::fs::hard_link(&old, &target).unwrap();
+        let _busy = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .open(&target)
+            .unwrap();
+        assert!(link_entry(&new, &target).is_err());
+        assert!(same_entry(&old, &target));
+        assert_eq!(std::fs::read_to_string(&old).unwrap(), "old");
+        assert_eq!(std::fs::read_to_string(&new).unwrap(), "new");
+        assert_eq!(std::fs::read_dir(fixture.home()).unwrap().count(), 1);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn relinks_an_unrelated_configuration_junction_without_touching_targets() {
         let fixture = Fixture::new();
         let source = fixture.source();
         let other = fixture.0.join("other-account");
@@ -831,12 +1266,24 @@ mod tests {
         std::fs::create_dir_all(&source).unwrap();
         std::fs::create_dir_all(&other).unwrap();
         std::fs::create_dir_all(fixture.home()).unwrap();
+        std::fs::write(other.join("keep.txt"), "old account data").unwrap();
+        std::fs::write(source.join("keep.txt"), "new account data").unwrap();
         junction::create(&other, &target).unwrap();
-        assert!(link_entry(&source.canonicalize().unwrap(), &target).is_err());
+        link_entry(&source.canonicalize().unwrap(), &target).unwrap();
         assert_eq!(
             target.canonicalize().unwrap(),
-            other.canonicalize().unwrap()
+            source.canonicalize().unwrap()
         );
+        assert_eq!(
+            std::fs::read_to_string(other.join("keep.txt")).unwrap(),
+            "old account data"
+        );
+        assert_eq!(
+            std::fs::read_to_string(source.join("keep.txt")).unwrap(),
+            "new account data"
+        );
+        remove_link(&target).unwrap();
+        assert!(source.join("keep.txt").exists());
     }
 
     #[test]

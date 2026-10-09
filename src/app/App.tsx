@@ -9789,7 +9789,8 @@ function Workspace({
 
   const onCodexStorageRepair = useCallback(async (sessionId: string) => {
     const session = sessionsRef.current.find(entry => entry.id === sessionId);
-    if (!session || session.busy) return;
+    if (!session) throw new Error("The conversation is no longer available. Reopen it before repairing Codex storage.");
+    if (session.busy) throw new Error("The conversation is busy. Wait for its current turn to finish, then try Repair again.");
     const accountId = session.providerAccountId ?? selectedProviderAccountId("codex", session.cwd);
     try {
       await codexStorageRecovery.current.repair(sessionId, async () => {
@@ -9797,6 +9798,8 @@ function Workspace({
         flushSync(() => setSessions(previous => previous.map(entry => entry.id === sessionId
           ? { ...entry, codexStorageError: undefined } : entry)));
       });
+      const failure = sessionsRef.current.find(entry => entry.id === sessionId)?.codexStorageError;
+      if (failure) throw new Error(failure);
     } catch (error) {
       flushSync(() => setSessions(previous => previous.map(entry => entry.id === sessionId
         ? { ...entry, codexStorageError: String(error) } : entry)));

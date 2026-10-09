@@ -182,6 +182,25 @@ async function startTurn(
 }
 
 describe("codex live turn sequence", () => {
+  it("labels only a rejected turn/start RPC without accepting or replacing its retained thread", async () => {
+    bindCodexSession("codex-live", "thr_1", "/repo");
+    const events: HarnessEvent[] = [];
+    const onAccepted = vi.fn();
+    const turn = sendCodexTurn({ sessionId: "codex-live", cwd: "/repo", model: "codex:gpt-5.4", runtimeMode: "supervised", codexStore: "mono", text: "Continue", onAccepted, onEvent: event => events.push(event) });
+    const rejected = expect(turn).rejects.toThrow("Codex turn/start: thread not loaded: thr_1");
+    await waitFor(() => parse().some(message => message.method === "initialize"), "initialize");
+    reply(parse().find(message => message.method === "initialize")!.id as number, {});
+    await waitFor(() => parse().some(message => message.method === "thread/resume"), "resume");
+    reply(parse().find(message => message.method === "thread/resume")!.id as number, { thread: { id: "thr_1" } });
+    await waitFor(() => parse().some(message => message.method === "turn/start"), "turn/start");
+    onLine!(JSON.stringify({ id: parse().find(message => message.method === "turn/start")!.id, error: { message: "thread not loaded: thr_1" } }));
+    await rejected;
+    expect(onAccepted).not.toHaveBeenCalled();
+    expect(parse().filter(message => message.method === "turn/start")).toHaveLength(1);
+    expect(parse().some(message => message.method === "thread/start")).toBe(false);
+    expect(events).toContainEqual({ type: "session.error", message: "Codex turn/start: thread not loaded: thr_1" });
+  });
+
   it.each(["orchestrator", "manager", "member"])("preserves private context and permissions for %s across restart, rotation and Habit turns", async role => {
     const saved = JSON.stringify([{ id: "org", role, projects: ["/repo"], mascot: "cat", color: "#abc" }]);
     vi.stubGlobal("localStorage", { getItem: (key: string) => key === "monocode:mono-roster" ? saved : null, setItem: () => {} });

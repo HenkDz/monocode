@@ -734,9 +734,10 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       } catch (error) {
         if (store?.hasThread)
           throw new Error(
-            "The saved Mono Codex context could not be resumed. Retry to keep its saved context.",
+            `The saved Mono Codex context could not be resumed. Retry to keep its saved context. Codex thread/resume: ${error instanceof Error ? error.message : String(error)}`,
           );
-        if (!isRecoverableThreadResumeError(error)) throw error;
+        if (!isRecoverableThreadResumeError(error))
+          throw new Error(`Codex thread/resume: ${error instanceof Error ? error.message : String(error)}`);
         threadId = undefined;
       }
     }
@@ -867,10 +868,12 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
   settlePendingTurn(live);
 
   try {
-    const response = await live.rpc.request<{ turn?: { id?: string } }>(
-      "turn/start",
-      params,
-    );
+    let response: { turn?: { id?: string } };
+    try {
+      response = await live.rpc.request("turn/start", params);
+    } catch (error) {
+      throw new Error(`Codex turn/start: ${error instanceof Error ? error.message : String(error)}`);
+    }
     input.onAccepted?.();
     const turnId = response.turn?.id ?? live.activeTurnId;
     // turn/completed can arrive before turn/start returns; don't resurrect a

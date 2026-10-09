@@ -25,7 +25,7 @@ import type { Session } from "../sessions/model/session";
 import type { OrchestrationRun } from "../orchestration/model/orchestrationState";
 import type { GitPr } from "../../platform/tauri/fs";
 import { projectName } from "../../shared/lib/paths";
-import { MessageSquare, Minus, Plus, X } from "../../shared/ui/icons";
+import { Minus, Plus, X } from "../../shared/ui/icons";
 import {
   buildTeamMap,
   teamMapEvents,
@@ -34,11 +34,11 @@ import {
   teamMapKeyboardNode,
   teamMapFeed,
   teamMapEdgePath,
-  TEAM_MAP_NODE_WIDTH,
-  TEAM_MAP_NODE_HEIGHT,
 } from "./model";
+import { treeLayout, TREE_NODE_WIDTH as TEAM_MAP_NODE_WIDTH, TREE_NODE_HEIGHT as TEAM_MAP_NODE_HEIGHT } from "./treeLayout";
 import { fitTeamMap, focusTeamMap, teamMapCompact } from "./camera";
 import "./teamMap.css";
+import "./treeMap.css";
 import { OrbitMap } from "./OrbitMap";
 import { EdgePulse } from "./EdgePulse";
 import { loadOrbitPreferences, saveOrbitPreferences } from "./orbit";
@@ -92,6 +92,9 @@ export function TreeMap({
   const project = projectFilter ?? scopedProject;
   const [needsYou, setNeedsYou] = useState(false);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [order, setOrder] = useState(() => loadOrbitPreferences().order);
+  const [dropTarget, setDropTarget] = useState<string>();
+  const projectDrag = useRef<string>(undefined);
   const [hovered, setHovered] = useState<string>();
   const [highlight, setHighlight] = useState<MapEvent>();
   const [focused, setFocused] = useState<string>();
@@ -119,8 +122,8 @@ export function TreeMap({
     viewport: size,
   };
   const map = useMemo(
-    () => buildTeamMap(input),
-    [roster, runs, sessions, statuses, activeScope, project, collapsed, size],
+    () => treeLayout(buildTeamMap(input), order),
+    [roster, runs, sessions, statuses, activeScope, project, collapsed, size, order],
   );
   const allEvents = useMemo(
     () => teamMapEvents({ roster, runs, sessions, statuses, messages, goals }),
@@ -160,13 +163,20 @@ export function TreeMap({
         ]
       : [],
   );
+  for (let id = focused; id && nodeById.has(id); id = nodeById.get(id)?.parentId) {
+    activeNodes.add(id);
+    const parent = nodeById.get(id)?.parentId;
+    if (parent) activeEdges.add(`${parent}->${id}`);
+  }
 
+  const projectIds = [...new Set([...order, ...roster.filter(mono => mono.role === "manager" && !mono.archivedAt).sort((a, b) => monoLook(a).name.localeCompare(monoLook(b).name) || a.id.localeCompare(b.id)).map(mono => mono.id)])];
   const fit = () => {
     if (!viewport.current) return;
     const { clientWidth: width, clientHeight: height } = viewport.current;
     setCamera(podBounds
       ? focusTeamMap(width, height, podBounds)
-      : fitTeamMap(width, height, map.width, map.height, map.nodes.length));
+      : { zoom: 1, x: Math.max(24, (width - map.width) / 2), y: 24 });
+    viewport.current.scrollTo?.({ left: 0, top: 0 });
   };
   const showWholeOrg = () => {
     setFocusedPod(undefined);
@@ -178,6 +188,17 @@ export function TreeMap({
     setHovered(undefined);
     const pod = map.pods.find((pod) => pod.id === id);
     if (pod && viewport.current) setCamera(focusTeamMap(viewport.current.clientWidth, viewport.current.clientHeight, pod));
+  };
+  const reorder = (target: string) => {
+    const source = projectDrag.current;
+    projectDrag.current = undefined;
+    setDropTarget(undefined);
+    if (!source || source === target) return;
+    const ids = projectIds.filter(id => id !== source);
+    if (!ids.includes(target)) return;
+    ids.splice(ids.indexOf(target), 0, source);
+    setOrder(ids);
+    saveOrbitPreferences({ ...loadOrbitPreferences(), order: ids });
   };
   const zoomBy = (amount: number) => {
     setCamera((previous) => {
@@ -195,18 +216,8 @@ export function TreeMap({
     const node = nodeById.get(id);
     if (!node || !viewport.current) return;
     setFocused(id);
-    if (window.matchMedia("(max-width: 680px)").matches) {
-      const button = buttons.current.get(id);
-      button?.focus({ preventScroll: true });
-      button?.scrollIntoView({ block: "nearest", behavior: "instant" });
-      return;
-    }
-    setCamera((previous) => ({
-      ...previous,
-      x: viewport.current!.clientWidth / 2 - (node.x + TEAM_MAP_NODE_WIDTH / 2) * previous.zoom,
-      y: viewport.current!.clientHeight / 2 - (node.y + TEAM_MAP_NODE_HEIGHT / 2) * previous.zoom,
-    }));
     buttons.current.get(id)?.focus({ preventScroll: true });
+    buttons.current.get(id)?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "instant" });
   };
 
   useEffect(() => {
@@ -244,7 +255,7 @@ export function TreeMap({
   useEffect(() => {
     const element = viewport.current!;
     const wheel = (event: WheelEvent) => {
-      if (window.matchMedia("(max-width: 680px)").matches || !event.deltaY)
+      if (window.matchMedia("(max-width: 680px)").matches || !event.deltaY || (!event.ctrlKey && !event.metaKey))
         return;
       event.preventDefault();
       zoomBy(event.deltaY < 0 ? 1.1 : 1 / 1.1);
@@ -276,7 +287,7 @@ export function TreeMap({
 
   return (
     <section
-      className="team-map-shell"
+      className="team-map-shell tree-map"
       aria-labelledby="team-map-title"
     >
       <header className="team-map-toolbar">
@@ -292,6 +303,7 @@ export function TreeMap({
         </div>
         <div className="team-map-filters">
           {onToggleView && <button type="button" onClick={onToggleView}>Orbit</button>}
+          <button type="button" onClick={() => { setFocusedPod(undefined); setCamera({ zoom: 1, x: Math.max(24, (size.width - map.width) / 2), y: 24 }); viewport.current?.scrollTo?.({ left: 0, top: 0 }); }}>Arrange</button>
           <label>
             <span className="sr-only">Project</span>
             <select
@@ -332,7 +344,7 @@ export function TreeMap({
         ))}
         <span>↓ assigned · ↑ reporting back · ↔ review</span>
         <span className="team-map-hint">
-          Drag to pan · scroll to zoom · arrows to explore
+          Drag project headers to reorder · arrows to explore
         </span>
       </div>
       <div
@@ -371,7 +383,7 @@ export function TreeMap({
             </p>
           </div>
         ) : (
-          <div
+          <div className="tree-map-stage" style={{ width: Math.max(size.width, camera.x + map.width * camera.zoom + 24), height: Math.max(size.height, camera.y + map.height * camera.zoom + 24) }}><div
             className="team-map-canvas"
             data-compact={teamMapCompact(camera.zoom) && !window.matchMedia("(max-width: 680px)").matches}
             data-orientation={map.orientation}
@@ -392,18 +404,6 @@ export function TreeMap({
               width={map.width}
               height={map.height}
             >
-              {map.pods.map((pod) => (
-                <rect
-                  key={pod.id}
-                  className="team-map-pod"
-                  x={pod.x}
-                  y={pod.y}
-                  width={pod.width}
-                  height={pod.height}
-                  rx="12"
-                  aria-hidden="true"
-                />
-              ))}
               {map.edges.map((edge) => {
                 const target = nodeById.get(edge.target)!;
                 return (
@@ -421,7 +421,8 @@ export function TreeMap({
                   >
                     <title>{edge.tooltip}</title>
                     <path className="team-map-edge-hit" d={edgePath(edge.source, edge.target)} />
-                    <path d={edgePath(edge.source, edge.target)} />
+                    <path className="team-map-edge-route" d={edgePath(edge.source, edge.target)} />
+                    {edge.flow && <path className="team-map-edge-flow" d={teamMapEdgePath({ points: edge.points.slice(-2) })} />}
                   </g>
                 );
               })}
@@ -459,6 +460,36 @@ export function TreeMap({
                 });
               })}
             </svg>
+            {map.pods.map(pod => {
+              const manager = nodeById.get(pod.id)!;
+              return <div key={pod.id} className="tree-project" data-drop-target={dropTarget === pod.id} style={{ left: pod.x, top: pod.y, width: pod.width, height: pod.height }}>
+                <button type="button" className="tree-project-header" draggable
+                  aria-label={`Focus ${manager.project ? projectName(manager.project) : monoLook(manager.mono).name} team`}
+                  title="Drag to reorder projects. Alt + Left or Right moves this project."
+                  onClick={() => focusPod(pod.id)}
+                  onDragStart={event => { projectDrag.current = pod.id; event.dataTransfer.setData("text/plain", pod.id); event.dataTransfer.effectAllowed = "move"; }}
+                  onDragOver={event => { if (!projectDrag.current) return; event.preventDefault(); setDropTarget(pod.id); event.dataTransfer.dropEffect = "move"; }}
+                  onDrop={event => { event.preventDefault(); reorder(pod.id); }}
+                  onDragEnd={() => { projectDrag.current = undefined; setDropTarget(undefined); }}
+                  onKeyDown={event => {
+                    if (!event.altKey || !["ArrowLeft", "ArrowRight"].includes(event.key)) return;
+                    event.preventDefault();
+                    const ids = map.pods.map(pod => pod.id);
+                    const index = ids.indexOf(pod.id), next = index + (event.key === "ArrowLeft" ? -1 : 1);
+                    if (next < 0 || next >= ids.length) return;
+                    [ids[index], ids[next]] = [ids[next], ids[index]];
+                    const visible = new Set(ids);
+                    const saved = projectIds;
+                    let slot = 0;
+                    const merged = saved.map(id => visible.has(id) ? ids[slot++] : id);
+                    setOrder(merged); saveOrbitPreferences({ ...loadOrbitPreferences(), order: merged });
+                  }}>
+                  <span className="tree-project-grip" aria-hidden="true">⠿</span>
+                  <strong>{manager.project ? projectName(manager.project) : monoLook(manager.mono).name}</strong>
+                  <span>{pod.memberIds.length + manager.hiddenCount} workers</span>
+                </button>
+              </div>;
+            })}
             {map.nodes.map((node, index) => {
               const mono = node.mono,
                 look = monoLook(mono);
@@ -470,6 +501,7 @@ export function TreeMap({
                   key={mono.id}
                   className="team-map-node"
                   data-role={mono.role || "mono"}
+                  data-selected={focused === mono.id}
                   data-status={node.status}
                   data-dimmed={dim}
                   data-highlighted={activeNodes.has(mono.id)}
@@ -484,11 +516,6 @@ export function TreeMap({
                   onMouseEnter={() => setHovered(mono.id)}
                   onMouseLeave={() => setHovered(undefined)}
                 >
-                  {mono.role === "manager" && node.project && (
-                    <button type="button" className="team-map-cluster" onClick={() => focusPod(mono.id)} aria-label={`Focus ${projectName(node.project)} team`}>
-                      {projectName(node.project)}
-                    </button>
-                  )}
                   {!mono.role &&
                     (index === 0 || map.nodes[index - 1].mono.role) && (
                       <span className="team-map-cluster">Other Monos</span>
@@ -501,7 +528,7 @@ export function TreeMap({
                     }}
                     className="team-map-node-open"
                     tabIndex={tabStop === mono.id ? 0 : -1}
-                    aria-label={`${look.name}, ${mono.specialty || mono.role || "Mono"}, ${node.status === "pr-ready" ? labels[node.status] : monoStatusLabel(node.state)}${node.state.teamWorking ? `, ${monoTeamWorkingLabel(node.state)}` : ""}. ${mono.role === "manager" ? "Focus team" : "Open chat"}`}
+                    aria-label={`${look.name}, ${mono.specialty || mono.role || "Mono"}, ${node.status === "pr-ready" ? labels[node.status] : monoStatusLabel(node.state)}${node.state.teamWorking ? `, ${monoTeamWorkingLabel(node.state)}` : ""}. Open chat`}
                     aria-describedby={
                       hovered === mono.id
                         ? `team-map-tip-${mono.id}`
@@ -513,7 +540,7 @@ export function TreeMap({
                     }}
                     onBlur={() => setHovered(undefined)}
                     onClick={() => {
-                      if (mono.role === "manager") { focusPod(mono.id); return; }
+                      setHovered(undefined);
                       onClose();
                       onOpenMono(mono.id);
                     }}
@@ -564,12 +591,7 @@ export function TreeMap({
                       />
                     </span>
                     <span className="team-map-status-chip">{labels[node.status]}</span>
-                    <span className="team-map-node-meta">
-                      <span className="team-map-model" title={node.model}>
-                        {node.model}
-                      </span>
-                      <span>{node.status === "pr-ready" ? labels[node.status] : monoStatusLabel(node.state)}</span>
-                    </span>
+                    <span className="team-map-node-meta"><span>{node.status === "pr-ready" ? labels[node.status] : monoStatusLabel(node.state)}</span></span>
                     <span
                       className="team-map-task"
                       title={node.title || node.state.activity}
@@ -582,7 +604,6 @@ export function TreeMap({
                             "Ready for the next task")}
                     </span>
                   </button>
-                  <button type="button" className="team-map-chat" title={`Open chat with ${look.name}`} aria-label={`Open chat with ${look.name}`} onClick={() => { onClose(); onOpenMono(mono.id); }}><MessageSquare className="size-3.5" /></button>
                   {mono.role === "manager" && (
                     <button
                       type="button"
@@ -623,7 +644,7 @@ export function TreeMap({
                 </div>
               );
             })}
-          </div>
+          </div></div>
         )}
         <div className="team-map-zoom">
           <button
@@ -641,7 +662,7 @@ export function TreeMap({
           >
             <Plus className="size-3.5" />
           </button>
-          <button type="button" onClick={fit}>
+          <button type="button" onClick={() => { setCamera(fitTeamMap(size.width, size.height, map.width, map.height)); viewport.current?.scrollTo?.({ left: 0, top: 0 }); }}>
             Fit to view
           </button>
         </div>

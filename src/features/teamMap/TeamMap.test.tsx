@@ -67,9 +67,10 @@ it("opens Mono chat and moves arrow focus to the nearest card in that direction"
   expect(host.querySelector('dialog')).toBeNull();
   await act(async () => nodeButton("Orchestrator").focus());
   await act(async () => nodeButton("Orchestrator").dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })));
-  expect(document.activeElement).toBe(nodeButton("Site Manager"));
-  expect(nodeButton("Site Manager").tabIndex).toBe(0);
+  expect(document.activeElement).toBe(nodeButton("App Manager"));
+  expect(nodeButton("App Manager").tabIndex).toBe(0);
   expect(host.querySelector('[role="tooltip"]')?.textContent).toContain("Permissions");
+  expect(host.querySelector('.team-map-edge[data-highlighted="true"]')?.getAttribute('aria-label')).toContain('reports to');
   await act(async () => nodeButton("Backend").click());
   expect(close).toHaveBeenCalledOnce(); expect(open).toHaveBeenCalledExactlyOnceWith("backend");
 });
@@ -136,7 +137,9 @@ it("opens a Manager's own team and zooms by controls and wheel", async () => {
   await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Zoom in"]')!.click());
   expect(canvas.style.transform).not.toBe(initial);
   const zoomed = canvas.style.transform;
-  await act(async () => host.querySelector(".team-map-viewport")!.dispatchEvent(new WheelEvent("wheel", { deltaY: -100, bubbles: true, cancelable: true })));
+  const wheel = new WheelEvent("wheel", { deltaY: -100, bubbles: true, cancelable: true });
+  Object.defineProperty(wheel, "ctrlKey", { value: true });
+  await act(async () => host.querySelector(".team-map-viewport")!.dispatchEvent(wheel));
   expect(canvas.style.transform).not.toBe(zoomed);
   await act(async () => [...host.querySelectorAll("button")].find(button => button.textContent === "Whole org")!.click());
   expect(project.value).toBe("");
@@ -145,16 +148,16 @@ it("opens a Manager's own team and zooms by controls and wheel", async () => {
   expect(host.textContent).toContain("Your team, working together");
 });
 
-it("focuses Managers and project labels, restores the org on Escape, and keeps Manager chat available", async () => {
+it("focuses project headers, restores the org on Escape, and opens Manager cards", async () => {
   await renders();
   const canvas = host.querySelector<HTMLDivElement>(".team-map-canvas")!;
   const original = canvas.style.transform;
-  await act(async () => nodeButton("App Manager").click());
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Focus app team"]')!.click());
   expect(canvas.style.transform).not.toBe(original);
   const focused = canvas.style.transform;
   await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Zoom out"]')!.click());
   expect(canvas.style.transform).not.toBe(focused);
-  await act(async () => nodeButton("App Manager").click());
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Focus app team"]')!.click());
   expect(canvas.style.transform).toBe(focused);
   expect(close).not.toHaveBeenCalled();
   expect(open).not.toHaveBeenCalled();
@@ -166,7 +169,7 @@ it("focuses Managers and project labels, restores the org on Escape, and keeps M
   expect(canvas.style.transform).toBe(original);
   await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Focus app team"]')!.click());
   expect(canvas.style.transform).not.toBe(original);
-  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Open chat with App Manager"]')!.click());
+  await act(async () => nodeButton("App Manager").click());
   expect(close).toHaveBeenCalledOnce();
   expect(open).toHaveBeenCalledExactlyOnceWith("manager");
 });
@@ -199,13 +202,38 @@ it("switches to compact cards below 70% and restores full detail above it", asyn
 
 it("refits the focused team when its viewport resizes", async () => {
   await renders();
-  await act(async () => nodeButton("App Manager").click());
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Focus app team"]')!.click());
   const canvas = host.querySelector<HTMLDivElement>(".team-map-canvas")!;
   const before = canvas.style.transform;
   await act(async () => { viewportWidth = 1800; viewportHeight = 650; resize(); });
   expect(canvas.style.transform).not.toBe(before);
   expect(close).not.toHaveBeenCalled();
   expect([...host.querySelectorAll("button")].some(button => button.textContent === "Whole org")).toBe(true);
+});
+
+it("reorders whole project columns by drag and preserves order when arranged and reopened", async () => {
+  await renders();
+  const header = (project: string) => host.querySelector<HTMLButtonElement>(`[aria-label="Focus ${project} team"]`)!;
+  const transfer = { setData: vi.fn(), effectAllowed: "", dropEffect: "" };
+  const drag = (kind: string) => Object.assign(new Event(kind, { bubbles: true, cancelable: true }), { dataTransfer: transfer });
+  await act(async () => header("site").dispatchEvent(drag("dragstart")));
+  await act(async () => header("app").dispatchEvent(drag("dragover")));
+  expect(host.querySelectorAll('.tree-project[data-drop-target="true"]')).toHaveLength(1);
+  await act(async () => header("app").dispatchEvent(drag("drop")));
+  expect([...host.querySelectorAll('.tree-project-header strong')].map(node => node.textContent)).toEqual(["site", "app"]);
+  expect(JSON.parse(localStorage.getItem("monocode:team-map-orbit")!).order).toEqual(["site-manager", "manager"]);
+  await act(async () => [...host.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === "Arrange")!.click());
+  expect([...host.querySelectorAll('.tree-project-header strong')].map(node => node.textContent)).toEqual(["site", "app"]);
+  await act(async () => root.unmount()); root = createRoot(host);
+  await renders();
+  expect([...host.querySelectorAll('.tree-project-header strong')].map(node => node.textContent)).toEqual(["site", "app"]);
+});
+
+it("supports keyboard project reordering without changing reporting relationships", async () => {
+  await renders();
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Focus app team"]')!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", altKey: true, bubbles: true, cancelable: true })));
+  expect(JSON.parse(localStorage.getItem("monocode:team-map-orbit")!).order).toEqual(["site-manager", "manager"]);
+  expect(JSON.parse(localStorage.getItem("monocode:mono-roster")!).find((mono: Mono) => mono.id === "backend").reportsTo).toBe("manager");
 });
 
 it("preserves manual zoom through status-only updates", async () => {

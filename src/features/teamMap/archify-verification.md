@@ -1,5 +1,7 @@
 # Archify Team Map experiment
 
+This is the historical receipt for the first experiment. The current revision supersedes it; see [Tree command center verification](tree-verification.md). Orbit-only changes below were restored to the original base. The older `browser-check.mjs` harness targets the previous preview; use `tree-browser-check.mjs` for the current Tree preview.
+
 Based on `nour` at `0b758e5c8b0eee476b6ac1c92d95c320f5279363`, in the separate `HenkDz/archify-team-map` worktree. Applies Archify's role hierarchy, grouping and relationship visibility guidance directly to MonoCode's existing components; Archify's standalone renderer is not a runtime dependency.
 
 Orbit gives the Orchestrator and project teams distinct headings and card accents, strengthens the focused project's connection, and shows continuous assignment/report lines. Those lines reuse the existing Tree edge state: queued work flows toward its owner, working progress returns to its parent, and idle/blocked branches stop. The focused member list has a shared trunk with independent branches, so opposite directions do not overlap on the trunk. Reduced motion leaves static dashed lines; filters dim their matching connections.

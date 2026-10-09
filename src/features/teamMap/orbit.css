@@ -23,7 +23,7 @@
 .orbit-ring {
   position: absolute;
   transform: translate(-50%, -50%);
-  border: 1px solid color-mix(in srgb, var(--color-content) 8%, transparent);
+  border: 1px dashed color-mix(in srgb, var(--color-content) 16%, transparent);
   border-radius: 50%;
   pointer-events: none;
 }
@@ -48,35 +48,7 @@
 .orbit-spoke-line {
   fill: none;
   stroke: color-mix(in srgb, var(--color-content) 16%, transparent);
-  stroke-width: 1.5;
-}
-.orbit-spoke[data-focused="true"] .orbit-spoke-line {
-  stroke: color-mix(in srgb, var(--color-accent) 55%, transparent);
-}
-.orbit-member-edge path,
-.orbit-member-trunk {
-  fill: none;
-  stroke: var(--color-stroke);
   stroke-width: 1;
-}
-.orbit-spoke[data-flow] .orbit-spoke-line,
-.orbit-member-edge[data-flow] path {
-  stroke: var(--color-accent);
-  stroke-width: 2;
-  stroke-dasharray: 6 6;
-  stroke-linecap: round;
-  animation: team-map-work-flow 1s linear infinite;
-}
-.orbit-spoke[data-flow="up"] .orbit-spoke-line,
-.orbit-member-edge[data-flow="up"] path {
-  animation-direction: reverse;
-}
-.orbit-map[data-reduced-motion="true"] .orbit-spoke-line,
-.orbit-map[data-reduced-motion="true"] .orbit-member-edge path {
-  animation: none;
-}
-.orbit-member-edge[data-dimmed="true"] {
-  opacity: 0.35;
 }
 .orbit-spoke .team-map-pulse {
   pointer-events: none;
@@ -96,9 +68,9 @@
   margin-left: -110px;
   margin-top: -56px;
   border: 1px solid var(--color-stroke);
-  border-radius: 8px;
+  border-radius: 16px;
   background: var(--color-background-base);
-  border-top: 3px solid color-mix(in srgb, var(--color-accent) 65%, var(--color-stroke));
+  box-shadow: 0 4px 6px color-mix(in srgb, var(--color-content) 6%, transparent);
   transition:
     opacity 160ms,
     border-color 160ms,
@@ -106,23 +78,8 @@
 }
 .orbit-capsule[data-focused="true"] {
   border-color: var(--color-accent);
-  background: color-mix(in srgb, var(--color-accent) 5%, var(--color-background-base));
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 10%, transparent);
-}
-.orbit-role {
-  position: absolute;
-  left: 0;
-  top: -22px;
-  font-size: 9px;
-  font-weight: 600;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--color-content-secondary);
-  pointer-events: none;
-}
-.orbit-center .orbit-role {
-  width: 100%;
-  text-align: center;
+  box-shadow: 0 4px 16px
+    color-mix(in srgb, var(--color-accent) 16%, transparent);
 }
 .orbit-capsule[data-active="true"] .team-map-ring {
   animation: orbit-arrival 1.5s ease-in-out 3;
@@ -224,10 +181,9 @@
   margin-left: -120px;
   margin-top: -64px;
   z-index: 2;
-  border-radius: 8px;
-  border-top-color: #a78bfa;
+  border-radius: 16px;
 }
-.orbit-center > button:first-of-type {
+.orbit-center > button:first-child {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -252,9 +208,6 @@
   position: relative;
   max-width: 800px;
   margin: 12px auto 0;
-  border: 1px solid var(--color-stroke);
-  border-radius: 10px;
-  background: var(--color-background-base);
 }
 .orbit-team::before {
   content: "";
@@ -270,7 +223,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 12px 16px;
+  padding: 12px 8px;
 }
 .orbit-team h2 {
   font-size: 14px;
@@ -304,7 +257,7 @@
   width: 100%;
   height: 100%;
   text-align: left;
-  padding: 8px 40px 8px 30px;
+  padding: 8px 40px 8px 24px;
 }
 .orbit-member-name {
   display: flex;
@@ -344,9 +297,6 @@
 }
 .orbit-member-row[data-status="idle"] {
   height: 48px;
-}
-.orbit-member-row:last-child {
-  border-radius: 0 0 10px 10px;
 }
 .orbit-member-row[data-status="idle"] .orbit-member-task,
 .orbit-member-row[data-status="idle"] .team-map-model {
@@ -444,7 +394,7 @@
   }
   .orbit-member-row > button:first-child {
     gap: 8px;
-    padding-left: 30px;
+    padding-left: 16px;
   }
   .orbit-member-name {
     width: 96px;

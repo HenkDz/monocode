@@ -340,6 +340,8 @@ export async function spawnChild(
   account?: { provider: "claude" | "codex"; id: string },
   binaryProvider?: ConfigurableBinaryProvider,
   codexStore?: "mono",
+  /** `devin acp` only: start with an approval rule for every edit. */
+  devinAskEdits?: boolean,
 ): Promise<void> {
   livePid.delete(sessionId);
   pendingExit.delete(sessionId);
@@ -356,6 +358,7 @@ export async function spawnChild(
     binaryProvider,
     binaryPath,
     ...(codexStore ? { codexStore } : {}),
+    ...(devinAskEdits ? { devinAskEdits } : {}),
   });
   if (typeof pid !== "number" || pid <= 0) return;
   livePid.set(sessionId, pid);
@@ -420,6 +423,7 @@ async function resolveHarnessBinary(
     fx: "harness_resolve_fx",
     hermes: "harness_resolve_hermes",
     antigravity: "harness_resolve_antigravity",
+    devin: "harness_resolve_devin",
   };
   return invoke(command[provider]);
 }
@@ -476,6 +480,12 @@ export function resolveHermesBinary(
   binaryPath?: string | null,
 ): Promise<{ path: string }> {
   return resolveHarnessBinary("hermes", binaryPath);
+}
+
+export function resolveDevinBinary(
+  binaryPath?: string | null,
+): Promise<{ path: string }> {
+  return resolveHarnessBinary("devin", binaryPath);
 }
 
 export function resolveAntigravityBinary(

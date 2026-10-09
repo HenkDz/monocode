@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { newSession } from "../../sessions/model/session";
+import * as monoModel from "./mono";
 import {
   deliverFloatingMonoRequest,
   floatingMonoSession,
+  floatingMonoRoster,
   type FloatingMonoHost,
 } from "./floatingMono";
 
@@ -23,6 +25,23 @@ function host(): FloatingMonoHost {
 }
 
 describe("floating Mono delivery", () => {
+  it("keeps org roles alongside live rail status and forwarded org activity", () => {
+    const roster = vi.spyOn(monoModel, "listMonos").mockReturnValue([
+      { id: "manager", role: "manager", sessionId: session.id, projects: ["/tmp"], mascot: "cat", color: "#abc" },
+      { id: "member", role: "member", reportsTo: "manager", projects: ["/tmp"], mascot: "cat", color: "#abc" },
+    ]);
+    try {
+      expect(floatingMonoRoster(true, [{ ...session, busy: true }])).toEqual([
+        expect.objectContaining({ id: "manager", role: "manager", status: "working", sessionId: session.id }),
+        expect.objectContaining({ id: "member", role: "member", status: "idle", sessionId: null }),
+      ]);
+      expect(floatingMonoRoster(false, [session])).toEqual([]);
+      const state = { status: "needs-you" as const, activity: "Review team" };
+      expect(floatingMonoSession(session, state).monoLiveState).toEqual(state);
+    } finally {
+      roster.mockRestore();
+    }
+  });
   it("allows permission actions through the native floating chat bridge", () => {
     const native = readFileSync("src-tauri/src/mono_chat.rs", "utf8");
     const action = native.slice(native.indexOf("pub async fn mono_chat_action("));

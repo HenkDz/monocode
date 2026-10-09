@@ -37,6 +37,9 @@ pub struct MonoEntry {
     session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     role: Option<String>,
+    /// Drives the rail's status circle; the tray menu ignores it.
+    #[serde(default)]
+    status: String,
 }
 
 #[derive(Clone, Deserialize)]
@@ -374,11 +377,18 @@ pub fn mono_chat_sync(
     {
         return Err("Invalid Mono identity.".into());
     }
-    let roster_changed = {
+    let (roster_changed, menu_changed) = {
         let state = app.state::<MonoChatState>();
         let mut inner = state.0.lock().unwrap();
         inner.hosts.insert(window.label().to_owned(), hosted);
-        let updated = inner.monos != monos || inner.menu_mascots != mascots;
+        let menu_changed = inner.menu_mascots != mascots
+            || inner.monos.len() != monos.len()
+            || inner
+                .monos
+                .iter()
+                .zip(&monos)
+                .any(|(a, b)| a.id != b.id || a.name != b.name);
+        let updated = menu_changed || inner.monos != monos;
         inner.menu_mascots = mascots;
         inner
             .owners
@@ -391,7 +401,7 @@ pub fn mono_chat_sync(
             }
         }
         inner.monos = monos;
-        updated
+        (updated, menu_changed)
     };
     if roster_changed {
         let (roster, mascots) = {
@@ -399,7 +409,7 @@ pub fn mono_chat_sync(
             let inner = state.0.lock().unwrap();
             (inner.monos.clone(), inner.menu_mascots.clone())
         };
-        if let Some(tray) = app.tray_by_id(TRAY) {
+        if let Some(tray) = app.tray_by_id(TRAY).filter(|_| menu_changed) {
             tray.set_menu(Some(
                 menu(&app, &roster, &mascots).map_err(|e| e.to_string())?,
             ))
@@ -929,11 +939,15 @@ mod tests {
         });
         let legacy: MonoEntry = serde_json::from_value(entry.clone()).unwrap();
         assert!(legacy.role.is_none());
+        assert!(legacy.status.is_empty());
         assert!(serde_json::to_value(legacy).unwrap().get("role").is_none());
+        entry["status"] = json!("working");
         for role in ["orchestrator", "manager", "member"] {
             entry["role"] = json!(role);
             let mono: MonoEntry = serde_json::from_value(entry.clone()).unwrap();
-            assert_eq!(serde_json::to_value(mono).unwrap()["role"], role);
+            let published = serde_json::to_value(mono).unwrap();
+            assert_eq!(published["role"], role);
+            assert_eq!(published["status"], "working");
         }
     }
 

@@ -3,7 +3,7 @@ import type { Attachment, Session } from "../../sessions/model/session";
 import { RUNTIME_MODES, type RuntimeMode } from "../../sessions/model/session";
 import type { UserQuestionReply } from "../../sessions/model/userQuestion";
 import { displayAttachments } from "../../sessions/model/attachments";
-import { listMonos, monoLook, type Mono, type MonoState } from "./mono";
+import { listMonos, monoLook, monoState, type Mono, type MonoState, type MonoStatus } from "./mono";
 import { pixelLayers } from "../../projects/model/pixelMascots";
 
 export const FLOATING_MONO_CHANGED = "mono_chat_changed";
@@ -15,6 +15,7 @@ export type FloatingMonoEntry = {
   color: string;
   sessionId: string | null;
   role?: Mono["role"];
+  status: MonoStatus;
 };
 export type FloatingMonoView = {
   monos: FloatingMonoEntry[];
@@ -41,14 +42,21 @@ export type FloatingMonoRequest = {
   action: FloatingMonoAction;
 };
 
-export function floatingMonoRoster(enabled: boolean): FloatingMonoEntry[] {
+export function floatingMonoRoster(
+  enabled: boolean,
+  sessions: readonly Session[] = [],
+): FloatingMonoEntry[] {
   return enabled
-    ? listMonos().map((mono) => ({
-        id: mono.id,
-        ...monoLook(mono),
-        sessionId: mono.sessionId ?? null,
-        ...(mono.role ? { role: mono.role } : {}),
-      }))
+    ? listMonos().map((mono) => {
+        const session = sessions.find((s) => s.id === mono.sessionId);
+        return {
+          id: mono.id,
+          ...monoLook(mono),
+          sessionId: mono.sessionId ?? null,
+          ...(mono.role ? { role: mono.role } : {}),
+          status: session ? monoState(session).status : "idle",
+        };
+      })
     : [];
 }
 

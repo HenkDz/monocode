@@ -135,7 +135,7 @@ fn task_snapshot(root: &Path, base: Option<&str>) -> Result<TaskSnapshot, String
                             "--no-ext-diff",
                             "--no-textconv",
                             "--",
-                            &name,
+                            name,
                         ],
                     )?
                     .as_bytes(),
@@ -1071,16 +1071,34 @@ pub async fn git_orchestration_branch_remove(cwd: String, branch: String) -> Res
 }
 
 #[tauri::command(async)]
-pub async fn git_worktree_branch_remove(cwd: String, branch: String, force: Option<bool>) -> Result<(), String> {
+pub async fn git_worktree_branch_remove(
+    cwd: String,
+    branch: String,
+    force: Option<bool>,
+) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         let root = expand_home(&cwd);
         git(&root, &["check-ref-format", "--branch", &branch])?;
-        if list(&root)?.iter().any(|tree| tree.branch.as_deref() == Some(branch.as_str())) {
+        if list(&root)?
+            .iter()
+            .any(|tree| tree.branch.as_deref() == Some(branch.as_str()))
+        {
             return Err("This branch still has a worktree; nothing was deleted.".into());
         }
         // Conservative by default; only explicit user confirmation permits -D.
-        git(&root, &["branch", if force == Some(true) { "-D" } else { "-d" }, "--", &branch]).map(|_| ())
-    }).await.map_err(|error| error.to_string())?
+        git(
+            &root,
+            &[
+                "branch",
+                if force == Some(true) { "-D" } else { "-d" },
+                "--",
+                &branch,
+            ],
+        )
+        .map(|_| ())
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[cfg(test)]
@@ -1306,19 +1324,46 @@ mod tests {
     fn sidebar_branch_cleanup_refuses_checked_out_and_unmerged_work() {
         let fixture = repo();
         let root = fixture.0.join("repo");
-        let remove = |branch: &str| tauri::async_runtime::block_on(git_worktree_branch_remove(path_to_js(&root), branch.into(), None));
+        let remove = |branch: &str| {
+            tauri::async_runtime::block_on(git_worktree_branch_remove(
+                path_to_js(&root),
+                branch.into(),
+                None,
+            ))
+        };
         assert!(remove("main").unwrap_err().contains("still has a worktree"));
         git(&root, &["branch", "merged"]).unwrap();
         remove("merged").unwrap();
         assert!(git(&root, &["rev-parse", "--verify", "refs/heads/merged"]).is_err());
         git(&root, &["checkout", "-b", "unmerged"]).unwrap();
-        git(&root, &["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "retained"]).unwrap();
+        git(
+            &root,
+            &[
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "retained",
+            ],
+        )
+        .unwrap();
         git(&root, &["checkout", "main"]).unwrap();
         assert!(remove("unmerged").is_err());
         assert!(git(&root, &["rev-parse", "--verify", "refs/heads/unmerged"]).is_ok());
         assert!(remove("--force").is_err());
-        let force_remove = |branch: &str| tauri::async_runtime::block_on(git_worktree_branch_remove(path_to_js(&root), branch.into(), Some(true)));
-        assert!(force_remove("main").unwrap_err().contains("still has a worktree"));
+        let force_remove = |branch: &str| {
+            tauri::async_runtime::block_on(git_worktree_branch_remove(
+                path_to_js(&root),
+                branch.into(),
+                Some(true),
+            ))
+        };
+        assert!(force_remove("main")
+            .unwrap_err()
+            .contains("still has a worktree"));
         assert!(force_remove("--force").is_err());
         force_remove("unmerged").unwrap();
         assert!(git(&root, &["rev-parse", "--verify", "refs/heads/unmerged"]).is_err());
@@ -1417,16 +1462,31 @@ mod tests {
         git_checked(
             folder,
             &[
-                "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
-                "commit", "--allow-empty", "-m", "v4 only",
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.invalid",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "v4 only",
             ],
         )
         .unwrap();
         let worker = create_seeded(folder, "mc/v4-worker").unwrap();
         assert_eq!(head_subject(folder).as_deref(), Some("v4 only"));
-        assert_eq!(worker.head, git(folder, &["rev-parse", "HEAD"]).unwrap().trim());
-        assert_ne!(worker.head, git(&root, &["rev-parse", "HEAD"]).unwrap().trim());
-        assert_eq!(git(folder, &["branch", "--show-current"]).unwrap().trim(), "v4");
+        assert_eq!(
+            worker.head,
+            git(folder, &["rev-parse", "HEAD"]).unwrap().trim()
+        );
+        assert_ne!(
+            worker.head,
+            git(&root, &["rev-parse", "HEAD"]).unwrap().trim()
+        );
+        assert_eq!(
+            git(folder, &["branch", "--show-current"]).unwrap().trim(),
+            "v4"
+        );
         assert_eq!(list(&root).unwrap().len(), 3);
     }
 

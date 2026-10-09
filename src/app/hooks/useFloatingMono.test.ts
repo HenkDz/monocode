@@ -188,6 +188,27 @@ it("publishes descendant start and finish, and run decisions while the owner's s
   expect(publishedState()).toBe("idle");
 });
 
+it("resyncs the roster with each Mono's status for the rail", async () => {
+  await act(async () => root.render(createElement(Harness, { sessions })));
+  native.invoke.mockClear();
+  sessions = sessions.map((session, index) =>
+    index ? session : { ...session, busy: false },
+  );
+  await act(async () => root.render(createElement(Harness, { sessions })));
+  const sync = native.invoke.mock.calls.find(
+    ([command]) => command === "mono_chat_sync",
+  )?.[1];
+  expect(
+    sync.monos.map((mono: { id: string; status: string }) => [
+      mono.id,
+      mono.status,
+    ]),
+  ).toEqual([
+    ["first", "idle"],
+    ["second", "working"],
+  ]);
+});
+
 it("shows or hides the menu bar icon to match the setting", async () => {
   const stored = new Map<string, string>();
   vi.stubGlobal("localStorage", {

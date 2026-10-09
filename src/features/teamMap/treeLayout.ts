@@ -1,9 +1,9 @@
 import type { buildTeamMap, TeamMapNode, TeamMapPoint, TeamMapPod } from "./model";
 
 export const TREE_NODE_WIDTH = 256;
-export const TREE_NODE_HEIGHT = 128;
-const columnWidth = 320;
-const columnGap = 24;
+export const TREE_NODE_HEIGHT = 112;
+const columnWidth = 288;
+const columnGap = 16;
 const rowGap = 24;
 
 export function treeLayout(map: ReturnType<typeof buildTeamMap>, order: readonly string[]) {
@@ -25,7 +25,7 @@ export function treeLayout(map: ReturnType<typeof buildTeamMap>, order: readonly
     const x = 24 + index * (columnWidth + columnGap);
     let y = top;
     const visit = (node: TeamMapNode) => {
-      node.x = x + 32;
+      node.x = x + 16;
       node.y = y;
       y += TREE_NODE_HEIGHT + rowGap;
       ordered.push(node);
@@ -45,7 +45,7 @@ export function treeLayout(map: ReturnType<typeof buildTeamMap>, order: readonly
     if (parent === root) {
       points = [start, { x: start.x, y: 168 }, { x: target.x + TREE_NODE_WIDTH / 2, y: 168 }, { x: target.x + TREE_NODE_WIDTH / 2, y: target.y - 48 }];
     } else {
-      const spine = parent.x - 16;
+      const spine = parent.x - 8;
       const mid = target.y + TREE_NODE_HEIGHT / 2;
       points = [start, { x: start.x, y: start.y + 12 }, { x: spine, y: start.y + 12 }, { x: spine, y: mid }, { x: target.x, y: mid }];
     }

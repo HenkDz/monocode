@@ -51,7 +51,7 @@ export type TeamMapProps = {
   onOpenMono: (id: string) => void;
   onClose: () => void;
 };
-type Props = TeamMapProps & { onToggleView?: () => void };
+type Props = TeamMapProps & { onToggleView?: () => void; onSelectMono?: (id: string) => void; selectedMonoId?: string; onDismissSelection?: () => boolean };
 type MapEvent = ReturnType<typeof teamMapEvents>[number];
 const labels = {
   working: "Working",
@@ -68,6 +68,9 @@ export function TreeMap({
   onOpenMono,
   onClose,
   onToggleView,
+  onSelectMono,
+  selectedMonoId,
+  onDismissSelection,
 }: Props) {
   const rosterSnapshot = useSyncExternalStore(subscribeMonos, monosSnapshot);
   const messageSnapshot = useSyncExternalStore(
@@ -93,6 +96,7 @@ export function TreeMap({
   const [needsYou, setNeedsYou] = useState(false);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [order, setOrder] = useState(() => loadOrbitPreferences().order);
+  const [undoOrder, setUndoOrder] = useState<string[]>();
   const [dropTarget, setDropTarget] = useState<string>();
   const projectDrag = useRef<string>(undefined);
   const [hovered, setHovered] = useState<string>();
@@ -163,7 +167,7 @@ export function TreeMap({
         ]
       : [],
   );
-  for (let id = focused; id && nodeById.has(id); id = nodeById.get(id)?.parentId) {
+  for (let id = selectedMonoId ?? focused; id && nodeById.has(id); id = nodeById.get(id)?.parentId) {
     activeNodes.add(id);
     const parent = nodeById.get(id)?.parentId;
     if (parent) activeEdges.add(`${parent}->${id}`);
@@ -197,8 +201,12 @@ export function TreeMap({
     const ids = projectIds.filter(id => id !== source);
     if (!ids.includes(target)) return;
     ids.splice(ids.indexOf(target), 0, source);
-    setOrder(ids);
-    saveOrbitPreferences({ ...loadOrbitPreferences(), order: ids });
+    saveOrder(ids);
+  };
+  const saveOrder = (next: string[]) => {
+    setUndoOrder(order);
+    setOrder(next);
+    saveOrbitPreferences({ ...loadOrbitPreferences(), order: next });
   };
   const zoomBy = (amount: number) => {
     setCamera((previous) => {
@@ -216,9 +224,14 @@ export function TreeMap({
     const node = nodeById.get(id);
     if (!node || !viewport.current) return;
     setFocused(id);
+    onSelectMono?.(id);
     buttons.current.get(id)?.focus({ preventScroll: true });
     buttons.current.get(id)?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "instant" });
   };
+  useEffect(() => {
+    if (!selectedMonoId) return;
+    buttons.current.get(selectedMonoId)?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "instant" });
+  }, [selectedMonoId, size]);
 
   useEffect(() => {
     const motion = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -234,12 +247,13 @@ export function TreeMap({
       if (event.key !== "Escape" || event.defaultPrevented) return;
       event.preventDefault();
       event.stopPropagation();
+      if (onDismissSelection?.()) return;
       if (focusedPod || activeScope) showWholeOrg();
       else onClose();
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [onClose, focusedPod, activeScope]);
+  }, [onClose, focusedPod, activeScope, onDismissSelection]);
   useEffect(() => {
     const resize = () => {
       if (!viewport.current) return;
@@ -303,7 +317,7 @@ export function TreeMap({
         </div>
         <div className="team-map-filters">
           {onToggleView && <button type="button" onClick={onToggleView}>Orbit</button>}
-          <button type="button" onClick={() => { setFocusedPod(undefined); setCamera({ zoom: 1, x: Math.max(24, (size.width - map.width) / 2), y: 24 }); viewport.current?.scrollTo?.({ left: 0, top: 0 }); }}>Arrange</button>
+          <button type="button" title="Restore readable spacing and keep your project order" onClick={() => { setFocusedPod(undefined); setCamera({ zoom: 1, x: Math.max(24, (size.width - map.width) / 2), y: 24 }); viewport.current?.scrollTo?.({ left: 0, top: 0 }); }}>Arrange</button>
           <label>
             <span className="sr-only">Project</span>
             <select
@@ -466,7 +480,7 @@ export function TreeMap({
                 <button type="button" className="tree-project-header" draggable
                   aria-label={`Focus ${manager.project ? projectName(manager.project) : monoLook(manager.mono).name} team`}
                   title="Drag to reorder projects. Alt + Left or Right moves this project."
-                  onClick={() => focusPod(pod.id)}
+                  onClick={() => { focusPod(pod.id); onSelectMono?.(pod.id); }}
                   onDragStart={event => { projectDrag.current = pod.id; event.dataTransfer.setData("text/plain", pod.id); event.dataTransfer.effectAllowed = "move"; }}
                   onDragOver={event => { if (!projectDrag.current) return; event.preventDefault(); setDropTarget(pod.id); event.dataTransfer.dropEffect = "move"; }}
                   onDrop={event => { event.preventDefault(); reorder(pod.id); }}
@@ -482,9 +496,10 @@ export function TreeMap({
                     const saved = projectIds;
                     let slot = 0;
                     const merged = saved.map(id => visible.has(id) ? ids[slot++] : id);
-                    setOrder(merged); saveOrbitPreferences({ ...loadOrbitPreferences(), order: merged });
+                    saveOrder(merged);
                   }}>
                   <span className="tree-project-grip" aria-hidden="true">⠿</span>
+                  <span className="tree-project-mark" aria-hidden="true">{(manager.project ? projectName(manager.project) : monoLook(manager.mono).name).slice(0, 2).toUpperCase()}</span>
                   <strong>{manager.project ? projectName(manager.project) : monoLook(manager.mono).name}</strong>
                   <span>{pod.memberIds.length + manager.hiddenCount} workers</span>
                 </button>
@@ -499,9 +514,10 @@ export function TreeMap({
               return (
                 <div
                   key={mono.id}
+                  data-id={mono.id}
                   className="team-map-node"
                   data-role={mono.role || "mono"}
-                  data-selected={focused === mono.id}
+                  data-selected={(selectedMonoId ?? focused) === mono.id}
                   data-status={node.status}
                   data-dimmed={dim}
                   data-highlighted={activeNodes.has(mono.id)}
@@ -513,7 +529,7 @@ export function TreeMap({
                       "--node-depth": depth,
                     } as CSSProperties
                   }
-                  onMouseEnter={() => setHovered(mono.id)}
+                  onMouseEnter={() => { if (!onSelectMono) setHovered(mono.id); }}
                   onMouseLeave={() => setHovered(undefined)}
                 >
                   {!mono.role &&
@@ -536,11 +552,12 @@ export function TreeMap({
                     }
                     onFocus={() => {
                       setFocused(mono.id);
-                      setHovered(mono.id);
+                      if (!onSelectMono) setHovered(mono.id);
                     }}
                     onBlur={() => setHovered(undefined)}
                     onClick={() => {
                       setHovered(undefined);
+                      if (onSelectMono) { onSelectMono(mono.id); return; }
                       onClose();
                       onOpenMono(mono.id);
                     }}
@@ -577,27 +594,19 @@ export function TreeMap({
                       </span>
                       <span className="team-map-identity">
                         <strong title={look.name}>{look.name}</strong>
-                        <span title={mono.specialty || mono.role || "Mono"}>
-                          {mono.specialty ||
-                            (mono.role === "member"
-                              ? "Teammate"
-                              : mono.role || "Mono")}
-                          {node.state.teamWorking ? ` · ${monoTeamWorkingLabel(node.state)}` : ""}
+                        <span className="tree-agent-status" title={mono.specialty || mono.role || "Mono"}>
+                          <i aria-hidden="true" />
+                          <span>{node.status === "pr-ready" ? labels[node.status] : monoStatusLabel(node.state)}</span>
                         </span>
                       </span>
-                      <span
-                        className="team-map-status-dot"
-                        title={node.status === "pr-ready" ? labels[node.status] : monoStatusLabel(node.state)}
-                      />
                     </span>
                     <span className="team-map-status-chip">{labels[node.status]}</span>
-                    <span className="team-map-node-meta"><span>{node.status === "pr-ready" ? labels[node.status] : monoStatusLabel(node.state)}</span></span>
                     <span
                       className="team-map-task"
                       title={node.title || node.state.activity}
                     >
                       {node.summary ||
-                        (node.status === "working" && node.title
+                        (node.state.teamWorking ? `${monoTeamWorkingLabel(node.state)} · ${node.title}` : node.status === "working" && node.title
                           ? `Now: ${node.title}`
                           : node.title ||
                             node.state.activity ||
@@ -706,6 +715,7 @@ export function TreeMap({
           <p>Delegations and reports will appear here as your team works.</p>
         )}
       </footer>
+      {undoOrder && <div className="tree-reorder-toast" role="status">Project order updated <button type="button" onClick={() => { setOrder(undoOrder); saveOrbitPreferences({ ...loadOrbitPreferences(), order: undoOrder }); setUndoOrder(undefined); }}>Undo reorder</button></div>}
     </section>
   );
 }

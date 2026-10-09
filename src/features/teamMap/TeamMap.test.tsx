@@ -7,7 +7,7 @@ import { recordCrewMessage } from "../monos/model/monoCrewEvents";
 import { monoManagerGoals, type ManagerGoalHost } from "../monos/model/monoManagerGoals";
 import type { OrchestrationRun } from "../orchestration/model/orchestrationState";
 import { newSession } from "../sessions/model/session";
-import { TeamMap } from "./TeamMap";
+import { TeamMap, TreeMap } from "./TeamMap";
 
 vi.mock("@tauri-apps/api/core", async original => ({
   ...await original<object>(), invoke: vi.fn(async () => null),
@@ -234,6 +234,26 @@ it("supports keyboard project reordering without changing reporting relationship
   await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Focus app team"]')!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", altKey: true, bubbles: true, cancelable: true })));
   expect(JSON.parse(localStorage.getItem("monocode:team-map-orbit")!).order).toEqual(["site-manager", "manager"]);
   expect(JSON.parse(localStorage.getItem("monocode:mono-roster")!).find((mono: Mono) => mono.id === "backend").reportsTo).toBe("manager");
+  await act(async () => [...host.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === "Undo reorder")!.click());
+  expect([...host.querySelectorAll('.tree-project-header strong')].map(node => node.textContent)).toEqual(["app", "site"]);
+  expect(JSON.parse(localStorage.getItem("monocode:team-map-orbit")!).order).toEqual([]);
+  expect(host.querySelector('.tree-reorder-toast')).toBeNull();
+});
+
+it("selects agents and navigates their panel without closing the tree or clearing the selection on Escape", async () => {
+  const select = vi.fn(), dismiss = vi.fn(() => true);
+  const render = (selectedMonoId = "backend") => act(async () => root.render(<TreeMap sessions={[]} runs={[]} statuses={new Map()} onOpenMono={open} onClose={close} selectedMonoId={selectedMonoId} onSelectMono={select} onDismissSelection={dismiss} />));
+  await render();
+  await act(async () => nodeButton("App Manager").click());
+  expect(select).toHaveBeenCalledExactlyOnceWith("manager");
+  expect(open).not.toHaveBeenCalled(); expect(close).not.toHaveBeenCalled();
+  expect(host.querySelector('[data-id="backend"]')?.getAttribute('data-selected')).toBe('true');
+  await act(async () => nodeButton("Backend").dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true })));
+  expect(select).toHaveBeenLastCalledWith("manager");
+  await render("manager");
+  await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+  expect(dismiss).toHaveBeenCalledOnce(); expect(close).not.toHaveBeenCalled();
+  expect(host.querySelector('[data-id="manager"]')?.getAttribute('data-selected')).toBe('true');
 });
 
 it("preserves manual zoom through status-only updates", async () => {

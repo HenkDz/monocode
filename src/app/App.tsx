@@ -13139,9 +13139,12 @@ function Workspace({
   );
   const sidebarOpenSessions = useMemo(() => {
     const runs = new Map(orchestrationRuns.map((run) => [run.leadId, run]));
+    const shown = openSessionIds(tabs);
     const rows = sessions
       .filter(
         (session) =>
+          // A closed tab's unsent session is never saved, so it is gone.
+          (shown.has(session.id) || !isBlankSession(session)) &&
           !session.inboxAsk &&
           !isProjectManager(session.id) &&
           !isMonoSession(session.id) &&
@@ -13183,7 +13186,7 @@ function Workspace({
       }
     }
     return rows;
-  }, [sessions, orchestrationRuns]);
+  }, [sessions, tabs, orchestrationRuns]);
 
   const openProjectSessions = useMemo(
     () =>

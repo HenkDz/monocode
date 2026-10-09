@@ -260,8 +260,10 @@ export function ProjectWorktrees({
           ["running", "queued", "cancelling"].includes(task.status)),
     );
   const taskByPath = new Map(
-    [...workers].flatMap(([key, sessions]) => {
-      const task = sessions.find(({ task }) => task.workspacePolicy !== "shared")?.task;
+    trees.flatMap((tree) => {
+      if (tree.isMain) return [];
+      const key = pathKey(tree.path);
+      const task = workers.get(key)?.find(({ task }) => task.workspacePolicy !== "shared")?.task;
       return task ? [[key, task] as const] : [];
     }),
   );
@@ -385,6 +387,7 @@ export function ProjectWorktrees({
               type="button"
               aria-label="Toggle Task worktrees"
               aria-expanded={taskExpanded}
+              title={section.groups.map(group => `${group.trees.length} ${group.name === "Finished" ? "finished" : "active"}`).join(" · ")}
               onClick={() => {
                 const expanded = !taskExpanded;
                 setTaskExpanded(expanded);
@@ -396,7 +399,7 @@ export function ProjectWorktrees({
               ) : (
                 <ChevronRight className="size-3" />
               )}
-              Task worktrees · {section.groups.reduce((count, group) => count + group.trees.length, 0)}
+              Task worktrees · {section.groups[0].trees.length} active
             </button>
           ) : <p className="mt-1 flex h-7 items-center px-5 text-[11px] text-content/50">Your worktrees</p>}
           <div
@@ -466,6 +469,10 @@ export function ProjectWorktrees({
                 approvalSessionIds,
                 prStatuses,
               );
+              // Manager can report a PR before the GitHub status cache sees it.
+              const openPrUrl =
+                worktreePullRequests(tree.path, prRecords).find((pr) => pr.state === "open" && (!taskTree || pr.url === managerTask?.prUrl))?.url ??
+                (workerStatus === "PR ready" ? managerTask?.prUrl : undefined);
               const progress = tree.missing
                 ? "Missing folder"
                 : worktreeProgress(
@@ -489,7 +496,7 @@ export function ProjectWorktrees({
                   className={`my-1 rounded-md border border-transparent hover:border-content/15 hover:bg-content/5 focus-within:border-content/15 focus-within:bg-content/5 ${done ? "opacity-60" : ""} ${folded && sessions[0].id === activeSessionId ? "bg-selection" : ""} ${menu?.tree.path === tree.path ? "border-content/15 bg-content/5" : ""}`}
                 >
                   <div
-                    className="group/worktree relative flex h-7 items-center gap-1 rounded-md"
+                    className={`group/worktree relative flex ${taskTree ? "h-10" : "h-7"} items-center gap-1 rounded-md`}
                     data-actions-open={
                       menu?.tree.path === tree.path || undefined
                     }
@@ -549,11 +556,11 @@ export function ProjectWorktrees({
                           ? onSelectSession(sessions[0].id, { project, tree })
                           : onSelectWorktree(project, tree)
                       }
-                      className={`flex h-full min-w-0 flex-1 items-center gap-2 text-left text-xs transition-[padding] duration-150 motion-reduce:transition-none group-hover/worktree:pr-14 group-focus-within/worktree:pr-14 group-data-[actions-open=true]/worktree:pr-14 [@media(hover:none)]:pr-14 disabled:opacity-40 ${selected ? "text-content" : "text-content/65"}`}
+                      className={`flex h-full min-w-0 flex-1 items-center gap-2 text-left text-xs disabled:opacity-40 ${selected ? "text-content" : "text-content/65"}`}
                     >
-                      <WorktreePrIcon tree={tree} enabled={enabled} />
+                      <WorktreePrIcon tree={tree} enabled={enabled} taskPrUrl={taskTree ? managerTask?.prUrl ?? null : undefined} status={workerStatus || undefined} />
                       <span
-                        className={`min-w-0 truncate ${selected ? "font-medium" : ""}`}
+                        className={`min-w-0 flex-1 ${taskTree ? "line-clamp-2 py-1 leading-4" : "truncate"} ${selected ? "font-medium" : ""}`}
                       >
                         {label}
                       </span>
@@ -569,7 +576,7 @@ export function ProjectWorktrees({
                         </span>
                       ) : null}
                     </button>
-                    {checkoutNotice && <span role="status" title={checkoutNotice} aria-label={checkoutNotice} className="shrink-0 text-content/45"><CircleAlert className="size-3" /></span>}
+                    {checkoutNotice && <span role="status" tabIndex={0} title={checkoutNotice} aria-label={checkoutNotice} className="shrink-0 rounded text-content/45 hover:text-content focus-visible:outline-accent"><CircleAlert className="size-3" /></span>}
                     {teammates.length > 0 && (
                       <div data-worktree-team className="flex min-w-0 max-w-[50%] items-center gap-1 pr-1">
                         {teammates.map(({ sessionId, task, look, name }) => (
@@ -590,14 +597,28 @@ export function ProjectWorktrees({
                     <div data-worktree-metadata className="ml-auto flex max-w-[45%] shrink-0 items-center gap-1 overflow-hidden pr-1 text-[11px] text-content/50 group-hover/worktree:hidden group-focus-within/worktree:hidden group-data-[actions-open=true]/worktree:hidden [@media(hover:none)]:hidden">
                       {done ? (
                         <>
-                        <span className={`truncate ${outcome === "Merged" ? "text-emerald-700 dark:text-emerald-400" : ""}`}>{outcome}</span>
+                        <span title={outcome || undefined} className={`truncate ${outcome === "Merged" ? "text-emerald-700 dark:text-emerald-400" : ""}`}>{outcome === "Closed (not merged)" ? "Closed" : outcome}</span>
                         <WorktreeDoneWarning tree={tree} enabled={enabled && !tree.missing} />
                         </>
                       ) : workerStatus || activeProgress ? (
                         <span className={`truncate ${workerStatus === "PR ready" ? "text-emerald-600 dark:text-emerald-400" : ""}`}>{workerStatus || progress}</span>
                       ) : null}
-                      <WorktreeDiffStat path={tree.path} enabled={enabled && !tree.missing} showLines={!done && !workerStatus && !activeProgress} />
+                      {!done && <WorktreeDiffStat path={tree.path} enabled={enabled && !tree.missing} showLines={!workerStatus && !activeProgress} />}
                     </div>
+                    {/* Reserves room for the hover actions so in-flow items (notice, teammates) stay visible beside them. */}
+                    <span aria-hidden data-worktree-actions-spacer className={`hidden shrink-0 group-hover/worktree:block group-focus-within/worktree:block group-data-[actions-open=true]/worktree:block [@media(hover:none)]:block ${openPrUrl ? "w-[5rem]" : "w-13"}`} />
+                    {openPrUrl && (
+                      <button
+                        type="button"
+                        className={`${worktreeAction} right-[3.75rem] text-emerald-500 hover:text-emerald-400`}
+                        aria-label={`Open pull request for ${label}`}
+                        title={`Open pull request
+${openPrUrl}`}
+                        onClick={() => void openUrl(openPrUrl).catch((error) => setActionError(String(error)))}
+                      >
+                        <GitPullRequest className="size-3.5" />
+                      </button>
+                    )}
                     <button
                       type="button"
                       className={`${worktreeAction} right-8`}
@@ -1161,6 +1182,7 @@ function WorktreeDoneWarning({ tree, enabled }: { tree: Worktree; enabled: boole
     tree.dirty
       ? `${stats?.files ? `${stats.files} changed file${stats.files === 1 ? "" : "s"}` : "Uncommitted changes"} would be lost if this worktree is removed.`
       : "",
+    tree.dirty && stats?.untracked ? `${stats.untracked} untracked file${stats.untracked === 1 ? "" : "s"}.` : "",
     tree.unpushed
       ? `${tree.unpushed} unpushed commit${tree.unpushed === 1 ? "" : "s"}. Keep or push the branch before deleting it.`
       : "",
@@ -1208,18 +1230,22 @@ function WorktreeDiffStat({
 function WorktreePrIcon({
   tree,
   enabled,
+  taskPrUrl,
+  status,
 }: {
   tree: Worktree;
   enabled: boolean;
+  taskPrUrl?: string | null;
+  status?: string;
 }) {
   const { prs } = usePrStatus(tree.path, tree.branch, enabled && !tree.missing);
-  const open = prs.filter(pr => pr.state === "open");
+  const open = prs.filter(pr => pr.state === "open" && (taskPrUrl === undefined || pr.url === taskPrUrl));
   const pr = open[0];
   const labels = open.map(pr => pullRequestLabel({ cwd: tree.path, pr, links: [], verifiedAt: 0 }));
   const label = !pr ? "No open PR" : labels.includes("Checks failed") ? "checks failing" : labels.includes("Conflicts") ? "merge conflicts" : labels.every(label => label === "Ready to merge") ? "PR ready" : `${open.length} open ${open.length === 1 ? "PR" : "PRs"}`;
   const Icon = pr ? pr.isDraft ? GitPullRequestDraft : GitPullRequest : GitBranch;
   return <span className="flex shrink-0 items-center gap-1" role="img" aria-label={label} title={open.map(pr => `Open PR #${pr.number}: ${pr.title}`).join("\n") || label}>
     <Icon className={`size-3 ${pr ? "text-emerald-400/90" : "text-content/45"}`} />
-    {pr && <span className="text-[10px] text-content/50">{label}</span>}
+    {pr && label !== status && <span className="text-[10px] text-content/50">{label}</span>}
   </span>;
 }

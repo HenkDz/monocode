@@ -219,6 +219,93 @@ it("opens the latest dispatch and lists earlier workers alongside sessions marke
   } finally { snapshot.mockRestore(); }
 });
 
+it("keeps the primary checkout's identity and actions when a cancelled task has an earlier dispatch there", async () => {
+  const workspace = { projectCwd: "/repo", checkoutCwd: "/trees/a", kind: "worktree", branch: "feature-a" };
+  const snapshot = vi.spyOn(orchestrator, "snapshot").mockReturnValue([{
+    cwd: "/repo", projectManager: true, tasks: [{
+      id: "docs", title: "Document acceptance", sessionId: "worker", status: "cancelled", workspace,
+    }], dispatches: [
+      { taskId: "docs", sessionId: "earlier-worker", startedAt: 1, stage: "settled", workspace: { ...workspace, checkoutCwd: "/repo", kind: "main", branch: "main" } },
+    ],
+  }] as OrchestrationRun[]);
+  props.renderManager = vi.fn(() => createElement("span", null, "Manager"));
+  try {
+    await render();
+    expect(container.querySelector('[aria-label="Your worktrees"] [data-worktree="/repo"]')).not.toBeNull();
+    expect(container.querySelector('[aria-label="Task worktrees"] [data-worktree="/repo"]')).toBeNull();
+    expect(button("Open worktree main").textContent).toContain("primary");
+    expect(button("Open worktree main").title).not.toContain("Cancelled");
+    expect(props.renderManager).toHaveBeenLastCalledWith(true, expect.any(Function), 1);
+    expect(button("Toggle Task worktrees").textContent).toContain("0 active");
+    expect(button("Toggle Task worktrees").title).toBe("0 active · 1 finished");
+    await act(async () => button("Open worktree main").click());
+    expect(props.onSelectWorktree).toHaveBeenCalledWith("/repo", expect.objectContaining({ isMain: true }));
+    expect(props.onSelectSession).not.toHaveBeenCalled();
+    await act(async () => button("Actions for main").click());
+    expect(document.querySelector('[role="menu"]')?.textContent).not.toContain("Review in Manager");
+  } finally { snapshot.mockRestore(); }
+});
+
+it.each([undefined, "https://example.com/other-task", "https://example.com/owned-task"])(
+  "scopes a cancelled task's PR icon and shortcut to its PR URL: %s", async (prUrl) => {
+    const checkout = tree(`/task-pr/${prUrl?.split("/").at(-1) ?? "missing"}`, "docs");
+    vi.mocked(useProjectWorktrees).mockReturnValue({ data: { worktrees: [checkout], defaultRoot: "/task-pr" }, refresh });
+    const snapshot = vi.spyOn(orchestrator, "snapshot").mockReturnValue([{
+      cwd: "/repo", projectManager: true, tasks: [{
+        id: "docs", title: "Document acceptance", sessionId: "worker", status: "cancelled", prUrl,
+        workspace: { checkoutCwd: checkout.path, branch: checkout.branch },
+      }],
+    }] as OrchestrationRun[]);
+    const pr: GitPr = { number: 77, title: "Owned change", url: "https://example.com/owned-task", state: "open" };
+    vi.mocked(gitPrStatus).mockImplementation(async cwd => cwd === checkout.path ? pr : null);
+    props.renderManager = () => createElement("span", null, "Manager");
+    try {
+      await render();
+      const icon = button("Open worktree Document acceptance").querySelector('[role="img"]')!;
+      const matches = prUrl === pr.url;
+      expect(icon.getAttribute("aria-label")).toBe(matches ? "1 open PR" : "No open PR");
+      expect(container.querySelector('[aria-label="Open pull request for Document acceptance"]') !== null).toBe(matches);
+      expect(button("Open worktree Document acceptance").title).toContain("Cancelled");
+    } finally { snapshot.mockRestore(); }
+  },
+);
+
+it.each([
+  ["success", "MERGEABLE", "PR ready"],
+  ["failure", "MERGEABLE", "checks failing"],
+  ["success", "CONFLICTING", "merge conflicts"],
+] as const)("deduplicates readiness while keeping forge problems visible: %s / %s", async (checksStatus, mergeable, label) => {
+  const checkout = tree(`/task-readiness/${checksStatus}-${mergeable}`, "validate");
+  vi.mocked(useProjectWorktrees).mockReturnValue({ data: { worktrees: [checkout], defaultRoot: "/task-readiness" }, refresh });
+  const pr: GitPr = {
+    number: 78, title: "Task change", url: "https://example.com/ready-task", state: "open",
+    checksStatus, mergeable, mergeStateStatus: "CLEAN",
+  };
+  const snapshot = vi.spyOn(orchestrator, "snapshot").mockReturnValue([{
+    cwd: "/repo", projectManager: true, tasks: [{
+      id: "validate", title: "Validate the complete PR acceptance document", sessionId: "worker", status: "completed",
+      accepted: true, lastDispatchId: "d", acceptedDispatchId: "d", prUrl: pr.url,
+      workspace: { checkoutCwd: checkout.path, branch: checkout.branch },
+    }],
+  }] as OrchestrationRun[]);
+  vi.mocked(gitPrList).mockImplementation(async cwd => cwd === checkout.path ? [
+    { ...pr, number: 79, title: "Unrelated change", url: "https://example.com/unrelated" }, pr,
+  ] : []);
+  props.renderManager = () => createElement("span", null, "Manager");
+  try {
+    await render();
+    const row = container.querySelector(`[data-worktree="${checkout.path}"]`)!;
+    const icon = row.querySelector('[role="img"]')!;
+    expect(icon.getAttribute("aria-label")).toBe(label);
+    expect(icon.getAttribute("title")).not.toContain("Unrelated change");
+    expect(icon.textContent).toBe(label === "PR ready" ? "" : label);
+    expect(row.querySelector('[data-worktree-metadata]')?.textContent).toBe("PR ready");
+    expect((row.querySelector('[aria-label^="Open pull request"]') as HTMLButtonElement).title).toContain(pr.url);
+    expect(button("Open worktree Validate the complete PR acceptance document").querySelector('[class*="line-clamp-2"]')).not.toBeNull();
+    expect(row.firstElementChild?.className).toContain("h-10");
+  } finally { snapshot.mockRestore(); }
+});
+
 it.each([1, 2])("lists %i user sessions with a clickable teammate indicator and user-only progress", async (count) => {
   const runs = [{ cwd: "/repo", projectManager: true, ownerMonoId: "manager", tasks: [{
     id: "native", sessionId: "native-worker", title: "Review GPUI", harness: "pi", model: "", memberId: "native", memberName: "Native Core", memberMascot: "fox", status: "running", readOnly: true, workspacePolicy: "shared",
@@ -344,7 +431,7 @@ it("labels peer user worktrees, scopes the guide to collapsed task worktrees, an
     { leadId: "manager", cwd: "/repo", projectManager: true, tasks },
   ] as OrchestrationRun[];
   const snapshot = vi.spyOn(orchestrator, "snapshot").mockReturnValue(runs);
-  vi.mocked(useProjectDiffStats).mockReturnValue({ files: 1, additions: 21, deletions: 0 });
+  vi.mocked(useProjectDiffStats).mockReturnValue({ files: 1, additions: 21, deletions: 0, untracked: 1 });
   vi.mocked(useProjectWorktrees).mockReturnValue({
     data: { worktrees, defaultRoot: "/queue" },
     refresh,
@@ -387,6 +474,8 @@ it("labels peer user worktrees, scopes the guide to collapsed task worktrees, an
     expect(your.parentElement).toBe(queue.parentElement);
     expect(queue.querySelector('[class*="border-l"]')).toBeNull();
     expect(button("Toggle Task worktrees").getAttribute("aria-expanded")).toBe("false");
+    expect(button("Toggle Task worktrees").textContent).toContain("3 active");
+    expect(button("Toggle Task worktrees").title).toBe("3 active · 3 finished");
     expect(queue.querySelector<HTMLDivElement>('[data-worktree-group-list]')?.hidden).toBe(true);
     await act(async () => button("Toggle Task worktrees").click());
     expect(
@@ -403,12 +492,16 @@ it("labels peer user worktrees, scopes the guide to collapsed task worktrees, an
     expect(merged.className).toContain("opacity-60");
     expect(merged.textContent).not.toContain("+21");
     expect(merged.querySelector("[data-worktree-metadata]")?.textContent).toBe("Merged");
-    expect(closed.querySelector("[data-worktree-metadata]")?.textContent).toContain("Closed (not merged)");
+    expect(closed.querySelector("[data-worktree-metadata]")?.textContent).toContain("Closed");
+    expect(closed.querySelector('[title="Closed (not merged)"]')).not.toBeNull();
+    expect(button("Open worktree closed").title).toContain("Closed (not merged)");
     expect(done.querySelector('[data-worktree="/queue/cancelled"] [data-worktree-metadata]')?.textContent).toBe("Cancelled");
     const warning = closed.querySelector("[data-worktree-metadata] [role=img]")!;
     expect(warning.textContent).toBe("2");
     expect(warning.getAttribute("title")).toContain("2 unpushed commits");
     expect(warning.getAttribute("title")).toContain("1 changed file would be lost");
+    expect(warning.getAttribute("title")).toContain("1 untracked file");
+    expect(closed.querySelector('[aria-label="1 untracked file"]')).toBeNull();
     expect(warning.getAttribute("title")).toContain("before deleting it");
     expect(done.querySelector('[data-worktree="/queue/closed"]')).not.toBeNull();
     expect(
@@ -598,12 +691,13 @@ it("overlays worktree actions and only reserves title space when they are reveal
   const open = button("Open worktree feature-a");
   const row = open.parentElement!;
   expect(row.className).toContain("relative");
-  expect(open.className.split(" ")).not.toContain("pr-14");
-  expect(open.className).toContain("transition-[padding]");
-  expect(open.className).toContain("group-hover/worktree:pr-14");
-  expect(open.className).toContain("group-focus-within/worktree:pr-14");
-  expect(open.className).toContain("[@media(hover:none)]:pr-14");
-  expect(open.className).toContain("motion-reduce:transition-none");
+  expect(open.className).not.toContain("pr-14");
+  // An in-flow spacer reserves the space so status icons shift left of the actions instead of under them.
+  const spacer = row.querySelector("[data-worktree-actions-spacer]")!;
+  expect(spacer.className.split(" ")).toContain("hidden");
+  expect(spacer.className).toContain("group-hover/worktree:block");
+  expect(spacer.className).toContain("group-focus-within/worktree:block");
+  expect(spacer.className).toContain("[@media(hover:none)]:block");
   for (const label of ["New session in feature-a", "Actions for feature-a"]) {
     const action = button(label);
     expect(action.parentElement).toBe(row);
@@ -616,8 +710,8 @@ it("overlays worktree actions and only reserves title space when they are reveal
   expect(row.hasAttribute("data-actions-open")).toBe(false);
   act(() => button("Actions for feature-a").click());
   expect(row.getAttribute("data-actions-open")).toBe("true");
-  expect(open.className).toContain(
-    "group-data-[actions-open=true]/worktree:pr-14",
+  expect(spacer.className).toContain(
+    "group-data-[actions-open=true]/worktree:block",
   );
   act(() =>
     document.dispatchEvent(

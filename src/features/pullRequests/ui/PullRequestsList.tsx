@@ -372,7 +372,7 @@ function CompactPullRequestRow({
         aria-hidden
         className={`size-3.5 shrink-0 ${pr.state === "merged" ? "text-violet-500" : row.label === "Ready to merge" ? "text-emerald-500" : row.label === "Conflicts" || row.label === "Checks failed" ? "text-rose-500" : "text-content/45"}`}
       />
-      <span className="min-w-0 flex-1">
+      <span className="min-w-0 flex-1 overflow-hidden">
         <span className="flex min-w-0 items-baseline gap-2">
           <span className="shrink-0 text-content/45">#{pr.number}</span>
           <strong
@@ -382,8 +382,8 @@ function CompactPullRequestRow({
             {pr.title}
           </strong>
         </span>
-        <span className="mt-1 flex min-w-0 items-center gap-2 text-[11px] text-content/50">
-          <span className="shrink-0">{row.label}</span>
+        <span className="mt-1 flex min-w-0 items-center gap-2 overflow-hidden whitespace-nowrap text-[11px] text-content/50">
+          <span className="min-w-0 truncate">{row.label}</span>
           {pr.baseRefName && pr.headRefName && (
             <span className="truncate">
               {pr.baseRefName} ← {pr.headRefName}
@@ -401,7 +401,7 @@ function CompactPullRequestRow({
           {pr.reviewDecision === "APPROVED" && <span>Approved</span>}
         </span>
       </span>
-      <span className="flex max-w-32 shrink-0 flex-col items-end gap-1 text-[11px] text-content/50">
+      <span className="flex min-w-0 max-w-32 shrink flex-col items-end gap-1 text-[11px] text-content/50">
         <span className="flex max-w-full items-center gap-1">
           {row.author.mascot && (
             <PixelMascot

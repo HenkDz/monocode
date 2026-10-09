@@ -127,6 +127,17 @@ it("preserves saved archive flags on live rows and never groups prefix siblings"
   expect(groups.get(pathKey("C:/trees/a"))).toEqual([]);
 });
 
+it("lists a session whose worktree was deleted elsewhere under its project checkout", () => {
+  const groups = worktreeSessionGroups(
+    "C:/repo",
+    [tree("C:/repo"), tree("C:/trees/a")],
+    [session("orphan", "C:/trees/gone")],
+    [],
+  );
+  expect(groups.get(pathKey("C:/repo"))?.map((s) => s.id)).toEqual(["orphan"]);
+  expect(groups.get(pathKey("C:/trees/a"))).toEqual([]);
+});
+
 it("summarizes all progress with input taking priority over working and done", () => {
   const rows = [
     session("waiting"),

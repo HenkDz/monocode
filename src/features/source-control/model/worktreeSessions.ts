@@ -81,9 +81,15 @@ export function worktreeSessionGroups(
       session.worktreeRemoved
     )
       continue;
-    const tree = ordered.find((tree) =>
-      isEqualOrInside(session.worktreeCwd || session.cwd, tree.path),
-    );
+    // A worktree deleted outside MonoCode leaves the session working in the
+    // project checkout, so list it there rather than nowhere.
+    const tree =
+      ordered.find((tree) =>
+        isEqualOrInside(session.worktreeCwd || session.cwd, tree.path),
+      ) ??
+      (session.worktreeCwd
+        ? ordered.find((tree) => isEqualOrInside(session.cwd, tree.path))
+        : undefined);
     if (tree) groups.get(pathKey(tree.path))!.push(session);
   }
   for (const sessions of groups.values())

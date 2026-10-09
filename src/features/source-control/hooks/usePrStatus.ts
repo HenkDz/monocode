@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 import {
   gitPrStatus,
   gitPrList,
@@ -29,8 +29,24 @@ const subscribe = (listener: () => void) => {
 };
 export const prStatusKey = (cwd: string, branch?: string | null) =>
   `${pathKey(cwd)}\n${branch ?? ""}`;
-export const usePrStatusCache = () =>
-  useSyncExternalStore(subscribe, snapshot, snapshot);
+/** Persisted forge-verified records cover URLs the in-memory cache has not
+ * (re)fetched, e.g. after a restart while GitHub is unavailable, so a closed
+ * PR never reads as unknown (and therefore "ready"). Every cache hit is also
+ * recorded, so a record is never older than the cached entry for its URL. */
+export function withRecordedPullRequests(
+  live: ReadonlyMap<string, GitPr | null>,
+  records: readonly { cwd: string; pr: GitPr }[],
+): ReadonlyMap<string, GitPr | null> {
+  if (!records.length) return live;
+  const merged = new Map(live);
+  for (const { cwd, pr } of records) merged.set(prStatusKey(cwd, pr.url), pr);
+  return merged;
+}
+export function usePrStatusCache() {
+  const live = useSyncExternalStore(subscribe, snapshot, snapshot);
+  const records = usePullRequests();
+  return useMemo(() => withRecordedPullRequests(live, records), [live, records]);
+}
 
 async function load(
   cwd: string,

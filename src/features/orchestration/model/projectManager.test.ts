@@ -14,7 +14,7 @@ import {
 } from "./projectManager";
 import type { OrchestrationRun } from "./orchestrationState";
 import { newSession } from "../../sessions/model/session";
-import { prStatusKey } from "../../source-control/hooks/usePrStatus";
+import { prStatusKey, withRecordedPullRequests } from "../../source-control/hooks/usePrStatus";
 
 it("accepts only an open non-draft PR targeting the assignment's captured project branch", () => {
   const task = { baseBranch: "v4" } as OrchestrationRun["tasks"][number];
@@ -172,4 +172,22 @@ it("never labels an unreviewed or stale result PR ready", () => {
   expect(managerWorktreeStatus(runs, "/worker")).toBe("PR ready");
   task.status = "interrupted";
   expect(managerWorktreeStatus(runs, "/worker")).toBe("Interrupted");
+});
+
+it("uses the recorded PR state when the live status cache has not fetched it", () => {
+  const task = {
+    status: "completed",
+    accepted: true,
+    workspace: { checkoutCwd: "/worker", branch: "feature" },
+    prUrl: "https://example.test/pr/2",
+    lastDispatchId: "d",
+    acceptedDispatchId: "d",
+  };
+  const runs = [{ projectManager: true, tasks: [task] }] as OrchestrationRun[];
+  // Empty after a restart while GitHub is unavailable: unknown reads as ready.
+  expect(managerWorktreeStatus(runs, "/worker", undefined, new Map())).toBe("PR ready");
+  const statuses = withRecordedPullRequests(new Map(), [
+    { cwd: "/worker", pr: { number: 2, title: "PR", url: task.prUrl, state: "closed" } },
+  ]);
+  expect(managerWorktreeStatus(runs, "/worker", undefined, statuses)).toBeUndefined();
 });

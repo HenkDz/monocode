@@ -98,6 +98,22 @@ it("shows the Orchestrator's own busy status separately from team attention", as
   expect(host.querySelector(".orbit-center")?.textContent).toContain("Needs you");
 });
 
+it("keeps live reporting lines, queued assignments and blocked branches consistent with Tree", async () => {
+  await renderMap();
+  expect(host.querySelector('.orbit-spoke[data-flow="up"]')).not.toBeNull();
+  const branches = () => [...host.querySelectorAll('.orbit-member-edge')].map(edge => edge.getAttribute('data-flow'));
+  expect(branches()).toEqual([null, "up"]);
+
+  const queued = runs.map(run => ({ ...run, tasks: run.tasks.map(task => ({ ...task, status: "queued" as const })) }));
+  await renderMap(queued);
+  expect(host.querySelectorAll('.orbit-spoke[data-flow="down"]')).toHaveLength(1);
+  expect(branches()).toEqual(["down", "down"]);
+
+  await renderMap([]);
+  expect(host.querySelectorAll('.orbit-spoke[data-flow], .orbit-member-edge[data-flow]')).toHaveLength(0);
+  expect(host.querySelectorAll('.orbit-capsule')).toHaveLength(2);
+});
+
 it("rotates with left and right, moves through the team, opens Enter and collapses Escape", async () => {
   await renderMap();
   await act(async () => focusProject("app").focus());

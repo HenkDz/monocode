@@ -392,6 +392,18 @@ export function TreeMap({
               width={map.width}
               height={map.height}
             >
+              {map.pods.map((pod) => (
+                <rect
+                  key={pod.id}
+                  className="team-map-pod"
+                  x={pod.x}
+                  y={pod.y}
+                  width={pod.width}
+                  height={pod.height}
+                  rx="12"
+                  aria-hidden="true"
+                />
+              ))}
               {map.edges.map((edge) => {
                 const target = nodeById.get(edge.target)!;
                 return (

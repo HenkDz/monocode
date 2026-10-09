@@ -117,6 +117,11 @@
   overflow: visible;
   pointer-events: none;
 }
+.team-map-pod {
+  fill: color-mix(in srgb, var(--color-accent) 3%, var(--color-background-base));
+  stroke: color-mix(in srgb, var(--color-accent) 16%, var(--color-stroke));
+  stroke-dasharray: 4 4;
+}
 .team-map-edge path {
   fill: none;
   stroke: color-mix(in srgb, var(--color-content) 20%, transparent);
@@ -177,9 +182,18 @@
   width: var(--node-width);
   height: var(--node-height);
   border: 1px solid var(--color-stroke);
-  border-radius: 10px;
+  border-radius: 7px;
   background: var(--color-background-base);
   transition: opacity 160ms, left 280ms ease, top 280ms ease;
+}
+.team-map-node[data-role="orchestrator"] {
+  border-top: 3px solid #a78bfa;
+}
+.team-map-node[data-role="manager"] {
+  border-top: 3px solid var(--color-accent);
+}
+.team-map-node[data-role="member"] {
+  border-top: 3px solid #4d9b70;
 }
 .team-map-node[data-dimmed="true"] {
   opacity: 0.25;

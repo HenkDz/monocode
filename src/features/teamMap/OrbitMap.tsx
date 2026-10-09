@@ -95,6 +95,7 @@ export function OrbitMap({
     () => buildTeamMap({ roster, runs, sessions, statuses }),
     [roster, runs, sessions, statuses],
   );
+  const edgeByTarget = new Map(map.edges.map((edge) => [edge.target, edge]));
   const [order, setOrder] = useState(() => loadOrbitPreferences().order);
   const projects = useMemo(
     () => orbitProjects(map.nodes, order),
@@ -474,6 +475,7 @@ export function OrbitMap({
               >
                 {visible.projects.map((entry, index) => {
                   const angle = (index * 360) / visible.projects.length;
+                  const edge = edgeByTarget.get(entry.manager.id);
                   const activity = pulses.filter(
                     (event) =>
                       eventProject(event)?.manager.id === entry.manager.id,
@@ -482,13 +484,15 @@ export function OrbitMap({
                     <svg
                       key={entry.manager.id}
                       className="orbit-spoke"
+                      data-flow={edge?.flow}
+                      data-focused={entry.manager.id === focusedId}
                       data-dimmed={!matchesProject(entry)}
                       width="20"
                       height={layout.radiusY}
                       viewBox={`-10 0 20 ${layout.radiusY}`}
                       style={{ transform: `rotate(${angle}deg)` }}
                     >
-                      <title>{`Orchestrator ↔ ${monoLook(entry.manager.mono).name}: goals down, reports back`}</title>
+                      <title>{edge?.tooltip ?? `Orchestrator ↔ ${monoLook(entry.manager.mono).name}: goals down, reports back`}</title>
                       <path
                         className="orbit-spoke-line"
                         d={`M 0 0 L 0 ${layout.radiusY}`}
@@ -550,6 +554,7 @@ export function OrbitMap({
                     transform: `scale(${layout.scale})`,
                   }}
                 >
+                  <span className="orbit-role" aria-hidden="true">Orchestrator</span>
                   <button
                     type="button"
                     ref={centerButton}
@@ -622,6 +627,7 @@ export function OrbitMap({
                           drag.current = undefined;
                         }}
                       >
+                        <span className="orbit-role" aria-hidden="true">Project team</span>
                         <button
                           type="button"
                           className="orbit-capsule-focus"
@@ -738,6 +744,17 @@ export function OrbitMap({
                       preserveAspectRatio="none"
                       aria-hidden="true"
                     >
+                      <path className="orbit-member-trunk" d={`M 16 0 L 16 ${rowCenters[rowCenters.length - 1] ?? 0}`} />
+                      {members.map((node, index) => (
+                        <g
+                          key={node.id}
+                          className="orbit-member-edge"
+                          data-flow={edgeByTarget.get(node.id)?.flow}
+                          data-dimmed={!teamMapMatches(node, needsYou, projectFilter || undefined)}
+                        >
+                          <path d={`M 16 ${rowCenters[index]} L 26 ${rowCenters[index]}`} />
+                        </g>
+                      ))}
                       {pulses
                         .filter(
                           (event) =>

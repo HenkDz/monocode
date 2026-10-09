@@ -211,7 +211,7 @@ it("opens the latest dispatch and lists earlier workers alongside sessions marke
     const row = container.querySelector('[data-worktree="/trees/a"]')!;
     expect([...row.querySelectorAll("[data-worktree-session]")].map(item => item.getAttribute("data-worktree-session"))).toEqual(["latest-worker", "middle-worker", "old-worker", "your-chat"]);
     expect(row.querySelector('[data-worktree-session="your-chat"]')?.textContent).toMatch(/yours/i);
-    await act(async () => button("Open worktree Audit").click());
+    await act(async () => (row.querySelector('[data-worktree-session="latest-worker"] button') as HTMLButtonElement).click());
     expect(props.onSelectSession).toHaveBeenLastCalledWith("latest-worker", { project: "/repo", tree: expect.objectContaining({ path: "/trees/a" }) });
     await act(async () => (row.querySelector('[data-worktree-session="your-chat"] button') as HTMLButtonElement).click());
     expect(props.onSelectSession).toHaveBeenLastCalledWith("your-chat", { project: "/repo", tree: expect.objectContaining({ path: "/trees/a" }) });
@@ -238,8 +238,10 @@ it("keeps the primary checkout's identity and actions when a cancelled task has 
     expect(props.renderManager).toHaveBeenLastCalledWith(true, expect.any(Function), 1);
     expect(button("Toggle Task worktrees").textContent).toContain("0 active");
     expect(button("Toggle Task worktrees").title).toBe("0 active · 1 finished");
+    const expandedBefore = button("Open worktree main").getAttribute("aria-expanded");
     await act(async () => button("Open worktree main").click());
-    expect(props.onSelectWorktree).toHaveBeenCalledWith("/repo", expect.objectContaining({ isMain: true }));
+    expect(button("Open worktree main").getAttribute("aria-expanded")).not.toBe(expandedBefore);
+    expect(props.onSelectWorktree).not.toHaveBeenCalled();
     expect(props.onSelectSession).not.toHaveBeenCalled();
     await act(async () => button("Actions for main").click());
     expect(document.querySelector('[role="menu"]')?.textContent).not.toContain("Review in Manager");
@@ -725,7 +727,8 @@ it("overlays worktree actions and only reserves title space when they are reveal
 it("switches and creates repeated sessions in the explicit checkout without mutating its bindings", async () => {
   await render();
   act(() => button("Open worktree feature-b").click());
-  expect(props.onSelectWorktree).toHaveBeenCalledWith("/repo", expect.objectContaining({ path: "/trees/b" }));
+  expect(button("Open worktree feature-b").getAttribute("aria-expanded")).toBe("false");
+  expect(props.onSelectWorktree).not.toHaveBeenCalled();
   expect(props.onSelectSession).not.toHaveBeenCalled();
   expect(worktreeFocus("/repo")).toBeUndefined();
   act(() => button("Collapse sessions in feature-a").click());
@@ -1423,4 +1426,27 @@ it("shows saved and live subagents under their lead inside the hover/focus workt
     container.querySelector('[aria-label="Collapse sessions in feature-a"]'),
   ).not.toBeNull();
   expect(card.querySelector("[data-orchestration-agent]")).not.toBeNull();
+});
+
+it("shows or hides a worktree's sessions when its row is clicked", async () => {
+  vi.mocked(useProjectWorktrees).mockReturnValue({
+    data: { worktrees: [tree("/repo", "main", true)], defaultRoot: "/trees" },
+    refresh,
+  });
+  props.history = [session("chat", "/repo")];
+  props.openSessions = [];
+  props.busySessionIds = new Set();
+  props.approvalSessionIds = new Set();
+  await render();
+  const row = button("Open worktree main");
+  const listed = () => container.querySelector('[data-worktree-session="chat"]');
+  expect(row.getAttribute("aria-expanded")).toBe("true");
+  expect(listed()).not.toBeNull();
+  await act(async () => row.click());
+  expect(row.getAttribute("aria-expanded")).toBe("false");
+  expect(listed()).toBeNull();
+  await act(async () => row.click());
+  expect(listed()).not.toBeNull();
+  expect(props.onSelectWorktree).not.toHaveBeenCalled();
+  expect(props.onSelectSession).not.toHaveBeenCalled();
 });

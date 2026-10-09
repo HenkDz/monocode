@@ -553,13 +553,17 @@ export function ProjectWorktrees({
                       type="button"
                       disabled={tree.missing}
                       aria-current={selected ? "true" : undefined}
+                      aria-expanded={expandable ? expanded : undefined}
                       aria-label={`Open worktree ${label}`}
                       aria-busy={selected && switchPending}
                       title={`${label}\n${tree.branch ?? `Detached ${tree.head.slice(0, 7)}`}\n${prettyCwd(tree.path)}\n${outcome || workerStatus || progress}${checkoutNotice ? `\n${checkoutNotice}` : ""}${tree.dirty ? "\nUncommitted changes" : ""}`}
+                      // A row with sessions to list only shows or hides them.
                       onClick={() =>
-                        taskTree && sessions.length
-                          ? onSelectSession(sessions[0].id, { project, tree })
-                          : onSelectWorktree(project, tree)
+                        expandable
+                          ? toggle(tree.path)
+                          : taskTree && sessions.length
+                            ? onSelectSession(sessions[0].id, { project, tree })
+                            : onSelectWorktree(project, tree)
                       }
                       className={`flex h-full min-w-0 flex-1 items-center gap-2 text-left text-xs disabled:opacity-40 ${selected ? "text-content" : "text-content/65"}`}
                     >

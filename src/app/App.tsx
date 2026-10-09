@@ -5047,7 +5047,7 @@ function Workspace({
   const onSelectHistorySession = useCallback(
     async (
       sessionId: string,
-      workspace?: { project: string; tree: Worktree },
+      workspace?: { project: string; tree: Worktree; orphaned?: boolean },
     ) => {
       teamMap.close();
       const request = ++workspaceSessionRequest.current;
@@ -5101,7 +5101,10 @@ function Workspace({
           session.worktreeRemoved ||
           workspace.tree.missing ||
           !sameProjectPath(session.cwd, workspace.project) ||
-          !isEqualOrInside(sessionWorkCwd(session), workspace.tree.path)
+          !isEqualOrInside(
+            workspace.orphaned ? session.cwd : sessionWorkCwd(session),
+            workspace.tree.path,
+          )
         )
           return;
         setSearchViewOpen(false);

@@ -49,7 +49,7 @@ import { ExplorerMenu } from "../../files/ui/ExplorerMenu";
 import { copyText } from "../../../platform/tauri/clipboard";
 import { revealPath } from "../../../platform/tauri/fs";
 import { sameProjectPath } from "../../projects/model/recents";
-import { pathKey, prettyCwd, projectName } from "../../../shared/lib/paths";
+import { isEqualOrInside, pathKey, prettyCwd, projectName } from "../../../shared/lib/paths";
 import {
   ChevronDown,
   ChevronRight,
@@ -117,7 +117,7 @@ type Props = {
   ) => void;
   onSelectSession: (
     sessionId: string,
-    workspace: { project: string; tree: Worktree },
+    workspace: { project: string; tree: Worktree; orphaned?: boolean },
   ) => void;
 };
 
@@ -703,7 +703,17 @@ ${openPrUrl}`}
                                   : `${title}\n${status}`
                               }
                               onClick={() =>
-                                onSelectSession(session.id, { project, tree })
+                                onSelectSession(session.id, {
+                                  project,
+                                  tree,
+                                  // Its own worktree is gone; it runs here now.
+                                  ...(session.worktreeCwd &&
+                                  !trees.some((entry) =>
+                                    isEqualOrInside(session.worktreeCwd!, entry.path),
+                                  )
+                                    ? { orphaned: true }
+                                    : {}),
+                                })
                               }
                               className={`flex h-7 w-full min-w-0 items-center gap-2 rounded-md px-2 text-left disabled:opacity-40 ${session.id === activeSessionId ? "bg-selection text-content" : "text-content/70 hover:bg-content/5"}`}
                             >

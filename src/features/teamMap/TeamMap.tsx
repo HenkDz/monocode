@@ -35,7 +35,7 @@ import {
   teamMapFeed,
   teamMapEdgePath,
 } from "./model";
-import { treeLayout, TREE_NODE_WIDTH as TEAM_MAP_NODE_WIDTH, TREE_NODE_HEIGHT as TEAM_MAP_NODE_HEIGHT } from "./treeLayout";
+import { treeLayout, TREE_MIN_READABLE_ZOOM, TREE_NODE_WIDTH as TEAM_MAP_NODE_WIDTH, TREE_NODE_HEIGHT as TEAM_MAP_NODE_HEIGHT } from "./treeLayout";
 import { fitTeamMap, focusTeamMap, teamMapCompact } from "./camera";
 import "./teamMap.css";
 import "./treeMap.css";
@@ -173,13 +173,20 @@ export function TreeMap({
     if (parent) activeEdges.add(`${parent}->${id}`);
   }
 
+  const listLayout = window.matchMedia("(max-width: 680px)").matches || size.width < map.width * TREE_MIN_READABLE_ZOOM + 48;
+  const listRef = useRef(listLayout);
+  listRef.current = listLayout;
+  const readableCamera = (width: number) => {
+    const zoom = Math.min(1, Math.max(TREE_MIN_READABLE_ZOOM, (width - 48) / map.width));
+    return { zoom, x: Math.max(24, (width - map.width * zoom) / 2), y: 24 };
+  };
   const projectIds = [...new Set([...order, ...roster.filter(mono => mono.role === "manager" && !mono.archivedAt).sort((a, b) => monoLook(a).name.localeCompare(monoLook(b).name) || a.id.localeCompare(b.id)).map(mono => mono.id)])];
   const fit = () => {
     if (!viewport.current) return;
     const { clientWidth: width, clientHeight: height } = viewport.current;
     setCamera(podBounds
       ? focusTeamMap(width, height, podBounds)
-      : { zoom: 1, x: Math.max(24, (width - map.width) / 2), y: 24 });
+      : readableCamera(width));
     viewport.current.scrollTo?.({ left: 0, top: 0 });
   };
   const showWholeOrg = () => {
@@ -228,10 +235,6 @@ export function TreeMap({
     buttons.current.get(id)?.focus({ preventScroll: true });
     buttons.current.get(id)?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "instant" });
   };
-  useEffect(() => {
-    if (!selectedMonoId) return;
-    buttons.current.get(selectedMonoId)?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "instant" });
-  }, [selectedMonoId, size]);
 
   useEffect(() => {
     const motion = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -266,10 +269,15 @@ export function TreeMap({
     return () => observer.disconnect();
   }, []);
   useEffect(() => { fit(); }, [map.width, map.height, map.nodes.length, size, focusedPod, podBounds?.x, podBounds?.y, podBounds?.width, podBounds?.height, collapsed, project, activeScope]);
+  // After fit() resets the scroll position, bring the selected card back into view.
+  useEffect(() => {
+    if (!selectedMonoId) return;
+    buttons.current.get(selectedMonoId)?.scrollIntoView({ block: listLayout ? "center" : "nearest", inline: "nearest", behavior: "instant" });
+  }, [selectedMonoId, size, listLayout]);
   useEffect(() => {
     const element = viewport.current!;
     const wheel = (event: WheelEvent) => {
-      if (window.matchMedia("(max-width: 680px)").matches || !event.deltaY || (!event.ctrlKey && !event.metaKey))
+      if (listRef.current || !event.deltaY || (!event.ctrlKey && !event.metaKey))
         return;
       event.preventDefault();
       zoomBy(event.deltaY < 0 ? 1.1 : 1 / 1.1);
@@ -302,6 +310,7 @@ export function TreeMap({
   return (
     <section
       className="team-map-shell tree-map"
+      data-layout={listLayout ? "list" : "tree"}
       aria-labelledby="team-map-title"
     >
       <header className="team-map-toolbar">
@@ -317,7 +326,27 @@ export function TreeMap({
         </div>
         <div className="team-map-filters">
           {onToggleView && <button type="button" onClick={onToggleView}>Orbit</button>}
-          <button type="button" title="Restore readable spacing and keep your project order" onClick={() => { setFocusedPod(undefined); setCamera({ zoom: 1, x: Math.max(24, (size.width - map.width) / 2), y: 24 }); viewport.current?.scrollTo?.({ left: 0, top: 0 }); }}>Arrange</button>
+          <button type="button" title="Restore readable spacing and keep your project order" onClick={() => { setFocusedPod(undefined); setCamera(readableCamera(size.width)); viewport.current?.scrollTo?.({ left: 0, top: 0 }); }}>Arrange</button>
+          {!listLayout && <div className="team-map-zoom">
+            <button
+              type="button"
+              aria-label="Zoom out"
+              onClick={() => zoomBy(1 / 1.2)}
+            >
+              <Minus className="size-3.5" />
+            </button>
+            <span>{Math.round(camera.zoom * 100)}%</span>
+            <button
+              type="button"
+              aria-label="Zoom in"
+              onClick={() => zoomBy(1.2)}
+            >
+              <Plus className="size-3.5" />
+            </button>
+            <button type="button" onClick={() => { setCamera(fitTeamMap(size.width, size.height, map.width, map.height)); viewport.current?.scrollTo?.({ left: 0, top: 0 }); }}>
+              Fit to view
+            </button>
+          </div>}
           <label>
             <span className="sr-only">Project</span>
             <select
@@ -356,10 +385,10 @@ export function TreeMap({
             {label}
           </span>
         ))}
-        <span>↓ assigned · ↑ reporting back · ↔ review</span>
-        <span className="team-map-hint">
-          Drag project headers to reorder · arrows to explore
-        </span>
+        <span>Lines: reports to · highlighted: selected chain · dashes: work moving</span>
+        {undoOrder
+          ? <span className="tree-reorder-toast team-map-hint" role="status">Project order updated <button type="button" onClick={() => { setOrder(undoOrder); saveOrbitPreferences({ ...loadOrbitPreferences(), order: undoOrder }); setUndoOrder(undefined); }}>Undo reorder</button></span>
+          : <span className="team-map-hint">Drag project headers to reorder · arrows to explore</span>}
       </div>
       <div
         ref={viewport}
@@ -367,7 +396,7 @@ export function TreeMap({
         onPointerDown={(event) => {
           if (
             event.button !== 0 ||
-            window.matchMedia("(max-width: 680px)").matches ||
+            listLayout ||
             (event.target as HTMLElement).closest("button, select")
           )
             return;
@@ -399,7 +428,7 @@ export function TreeMap({
         ) : (
           <div className="tree-map-stage" style={{ width: Math.max(size.width, camera.x + map.width * camera.zoom + 24), height: Math.max(size.height, camera.y + map.height * camera.zoom + 24) }}><div
             className="team-map-canvas"
-            data-compact={teamMapCompact(camera.zoom) && !window.matchMedia("(max-width: 680px)").matches}
+            data-compact={teamMapCompact(camera.zoom) && !listLayout}
             data-orientation={map.orientation}
             data-panning={Boolean(drag.current)}
             role="group"
@@ -418,7 +447,7 @@ export function TreeMap({
               width={map.width}
               height={map.height}
             >
-              {map.edges.map((edge) => {
+              {[...map.edges].sort((a, b) => Number(activeEdges.has(a.id)) - Number(activeEdges.has(b.id))).map((edge) => {
                 const target = nodeById.get(edge.target)!;
                 return (
                   <g
@@ -564,9 +593,7 @@ export function TreeMap({
                     onKeyDown={(event) => {
                       if (!event.key.startsWith("Arrow")) return;
                       event.preventDefault();
-                      const narrow =
-                        window.matchMedia("(max-width: 680px)").matches;
-                      const next = narrow
+                      const next = listLayout
                         ? map.nodes[
                             Math.max(
                               0,
@@ -655,26 +682,6 @@ export function TreeMap({
             })}
           </div></div>
         )}
-        <div className="team-map-zoom">
-          <button
-            type="button"
-            aria-label="Zoom out"
-            onClick={() => zoomBy(1 / 1.2)}
-          >
-            <Minus className="size-3.5" />
-          </button>
-          <span>{Math.round(camera.zoom * 100)}%</span>
-          <button
-            type="button"
-            aria-label="Zoom in"
-            onClick={() => zoomBy(1.2)}
-          >
-            <Plus className="size-3.5" />
-          </button>
-          <button type="button" onClick={() => { setCamera(fitTeamMap(size.width, size.height, map.width, map.height)); viewport.current?.scrollTo?.({ left: 0, top: 0 }); }}>
-            Fit to view
-          </button>
-        </div>
       </div>
       <footer className="team-map-timeline" aria-label="Recent crew events">
         <span className="team-map-feed-label">Crew feed</span>
@@ -715,7 +722,6 @@ export function TreeMap({
           <p>Delegations and reports will appear here as your team works.</p>
         )}
       </footer>
-      {undoOrder && <div className="tree-reorder-toast" role="status">Project order updated <button type="button" onClick={() => { setOrder(undoOrder); saveOrbitPreferences({ ...loadOrbitPreferences(), order: undoOrder }); setUndoOrder(undefined); }}>Undo reorder</button></div>}
     </section>
   );
 }

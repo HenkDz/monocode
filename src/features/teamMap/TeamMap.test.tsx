@@ -354,7 +354,7 @@ it("keeps both reporting edges marked while working and removes flow on finish, 
   expect(flows).toHaveLength(2);
   expect(flows.every(edge => edge.getAttribute("data-reduced-motion") === "true")).toBe(true);
   expect(flows.every(edge => edge.querySelector("path"))).toBe(true);
-  expect(host.textContent).toContain("↓ assigned · ↑ reporting back · ↔ review");
+  expect(host.textContent).toContain("Lines: reports to · highlighted: selected chain · dashes: work moving");
   expect(flows.every(edge => edge.querySelector("title")?.textContent?.includes("Current task"))).toBe(true);
   expect(flows.every(edge => edge.getAttribute("aria-label")?.includes("progress reports up"))).toBe(true);
   expect(flows.every(edge => edge.querySelector(".team-map-edge-hit"))).toBe(true);
@@ -366,4 +366,20 @@ it("keeps both reporting edges marked while working and removes flow on finish, 
     completionOutcome: "no-changes", lastDispatchId: "dispatch", acceptedDispatchId: "dispatch" }] }]);
   expect(host.querySelectorAll(".team-map-edge[data-flow]")).toHaveLength(0);
   expect(host.querySelectorAll(".team-map-edge")).toHaveLength(4);
+});
+
+it("keeps the tree readable and uncovered, switching to the list when the width cannot fit it", async () => {
+  const render = (selectedMonoId?: string) => act(async () => root.render(<TreeMap sessions={[]} runs={[]} statuses={new Map()} onOpenMono={open} onClose={close} selectedMonoId={selectedMonoId} onSelectMono={vi.fn()} />));
+  await render("backend");
+  const shell = host.querySelector(".tree-map")!;
+  expect(shell.getAttribute("data-layout")).toBe("tree");
+  expect(host.querySelector(".team-map-viewport .team-map-zoom")).toBeNull();
+  expect(host.querySelector(".team-map-toolbar .team-map-zoom")).not.toBeNull();
+  const edges = [...host.querySelectorAll(".team-map-edge")];
+  expect(edges[edges.length - 1]?.getAttribute("data-highlighted")).toBe("true");
+  expect(edges.findIndex(edge => edge.getAttribute("data-highlighted") === "true")).toBeGreaterThan(edges.findIndex(edge => edge.getAttribute("data-highlighted") === "false"));
+  viewportWidth = 500;
+  await act(async () => resize());
+  expect(shell.getAttribute("data-layout")).toBe("list");
+  expect(host.querySelector(".team-map-zoom")).toBeNull();
 });

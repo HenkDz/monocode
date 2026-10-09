@@ -1,7 +1,9 @@
 import type { buildTeamMap, TeamMapNode, TeamMapPoint, TeamMapPod } from "./model";
 
 export const TREE_NODE_WIDTH = 256;
-export const TREE_NODE_HEIGHT = 112;
+export const TREE_NODE_HEIGHT = 104;
+/** Below this zoom the tree stops being readable, so the map switches to the ordered list. */
+export const TREE_MIN_READABLE_ZOOM = 0.8;
 const columnWidth = 288;
 const columnGap = 16;
 const rowGap = 24;

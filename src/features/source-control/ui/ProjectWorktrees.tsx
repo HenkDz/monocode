@@ -228,6 +228,9 @@ export function ProjectWorktrees({
     [project, data, history, openSessions, managerRuns],
   );
   const agents = new Map(liveAgents.map((agent) => [agent.id, agent]));
+  // A task's harness is its latest assignment; a reassigned task's older
+  // sessions ran elsewhere, so prefer each session's own record.
+  const known = new Map([...history, ...openSessions].map((session) => [session.id, session]));
   const trees = data?.worktrees ?? [];
   const workers = useMemo(
     () => worktreeTaskSessions(project, data?.worktrees ?? [], managerRuns),
@@ -429,7 +432,9 @@ export function ProjectWorktrees({
               const sessions: SessionSummary[] = taskTree ? [
                 ...workerSessions.map(({ sessionId, task, startedAt }): SessionSummary => ({
                   id: sessionId, cwd: project, worktreeCwd: tree.path,
-                  title: task.title, harness: task.harness, model: task.model,
+                  title: task.title,
+                  harness: known.get(sessionId)?.harness ?? task.harness,
+                  model: known.get(sessionId)?.model ?? task.model,
                   runtimeMode: "supervised", createdAt: startedAt, updatedAt: startedAt,
                 })),
                 ...userSessions.filter(session => !workerIds.has(session.id)),

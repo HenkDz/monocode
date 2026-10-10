@@ -44,9 +44,9 @@ import {
   gitDiffIndex,
   gitDiscardAll,
   gitDiscardFile,
+  gitFetch,
   gitHeadMessage,
   gitPrCreate,
-  gitPrStatus,
   gitPull,
   gitPush,
   gitRangeContext,
@@ -77,6 +77,7 @@ import {
 import { invalidateWatchedFiles } from "../../files/model/fileWatch";
 import { MOD } from "../../../platform/tauri/platform";
 import { applyProjectDiffStats } from "../hooks/useProjectDiffStats";
+import { usePrStatus } from "../hooks/usePrStatus";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
 import { isRemoteProjectPath } from "../../projects/model/recents";
 
@@ -97,7 +98,6 @@ let changesView: ChangesView = loadChangesView();
 /** Folders the user collapsed in tree view, keyed `<kind>:<dir>`. */
 const collapsedDirs = new Set<string>();
 const indexByCwd = new Map<string, GitDiffIndex>();
-const prByCwd = new Map<string, GitPr | null>();
 
 type AmendTarget = { branch: string | null; head: string | null };
 
@@ -155,16 +155,17 @@ export function GitChangesPanel({
 
   const canPull = Boolean(index?.remote) && Boolean(index?.upstream);
 
-  const pull = async () => {
-    if (!canPull) return;
+  const refreshRemote = async (action: "pull" | "fetch") => {
+    if (busy || !index?.remote || (action === "pull" && !canPull)) return;
     setStatus(null);
-    setBusy("pull");
+    setBusy(action);
     try {
-      await gitPull(cwd);
+      if (action === "fetch") await gitFetch(cwd);
+      else await gitPull(cwd);
       reload();
       notifyGitChanged();
-      invalidateWatchedFiles();
-      setStatus("Pull complete");
+      if (action === "pull") invalidateWatchedFiles();
+      setStatus(action === "fetch" ? "Fetch complete" : "Pull complete");
     } catch (error) {
       window.alert(error instanceof Error ? error.message : String(error));
     } finally {
@@ -229,7 +230,7 @@ export function GitChangesPanel({
               onClick={() => setBranchMenuOpen((open) => !open)}
               className="grid size-5 shrink-0 place-items-center rounded-md text-content/50 hover:bg-content/10 hover:text-content disabled:opacity-40 aria-expanded:bg-content/10 aria-expanded:text-content"
             >
-              {busy === "pull" ? (
+              {busy === "pull" || busy === "fetch" ? (
                 <Loader className="size-3.5 animate-spin" strokeWidth={1.75} />
               ) : (
                 <MoreHorizontal className="size-4" strokeWidth={2} />
@@ -239,8 +240,26 @@ export function GitChangesPanel({
               <div
                 role="menu"
                 aria-label="Branch actions"
-                className="absolute top-full right-0 z-30 mt-1 min-w-36 rounded-md border border-content/10 bg-background-base py-1 shadow-lg"
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") {
+                    setBranchMenuOpen(false);
+                    branchMenuRef.current?.querySelector("button")?.focus();
+                  }
+                }}
+                className="absolute top-full right-0 z-30 mt-1 w-64 rounded-md border border-content/10 bg-background-base py-1 shadow-lg"
               >
+                <div className="border-b border-content/10 px-3 py-2 text-[11px] break-words text-content/60">
+                  <div>
+                    {!index.remote
+                      ? "No remote configured"
+                      : index.remoteBranch === undefined
+                        ? "Remote branch: unknown (update host)"
+                        : index.remoteBranch
+                          ? `Remote branch: ${index.remoteBranch} (cached)`
+                          : `Remote branch: not found on ${index.remote} (cached)`}
+                  </div>
+                  <div>Upstream: {index.upstream ?? "not configured"}</div>
+                </div>
                 <button
                   type="button"
                   role="menuitem"
@@ -250,7 +269,7 @@ export function GitChangesPanel({
                       ? undefined
                       : "This branch needs a remote and upstream before it can pull"
                   }
-                  onClick={() => void pull()}
+                  onClick={() => void refreshRemote("pull")}
                   className="flex h-7 w-full items-center gap-2 px-3 text-left text-[12px] text-content hover:bg-content/10 disabled:opacity-40"
                 >
                   {busy === "pull" ? (
@@ -262,6 +281,20 @@ export function GitChangesPanel({
                     <RefreshCw className="size-3.5" strokeWidth={1.75} />
                   )}
                   {busy === "pull" ? "Pulling…" : "Pull"}
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  disabled={busy !== null || !index.remote}
+                  title="Fetch remote branches and prune deleted refs; does not pull or set an upstream"
+                  onClick={() => void refreshRemote("fetch")}
+                  className="flex h-7 w-full items-center gap-2 px-3 text-left text-[12px] text-content hover:bg-content/10 disabled:opacity-40"
+                >
+                  <RefreshCw
+                    className={`size-3.5 ${busy === "fetch" ? "animate-spin" : ""}`}
+                    strokeWidth={1.75}
+                  />
+                  {busy === "fetch" ? "Fetching…" : "Fetch"}
                 </button>
               </div>
             ) : null}
@@ -394,7 +427,7 @@ function ChangedFiles({
     (index?.aheadOfDefault ?? 0) > 0 &&
     (index?.behind ?? 0) === 0;
   const canViewPr = hasOpenPr && !!pr?.url;
-  const canPublish = hasRemote && !index?.upstream;
+  const canPublish = hasRemote && Boolean(index?.branch) && !index?.upstream;
   const canSync =
     hasRemote &&
     Boolean(index?.upstream) &&
@@ -946,53 +979,6 @@ function ChangedFiles({
   );
 }
 
-export function usePrStatus(
-  cwd: string,
-  branch: string | null | undefined,
-): { pr: GitPr | null; reload: () => void } {
-  const [pr, setPr] = useState<GitPr | null>(() => cachedPr(cwd, branch));
-  const [nonce, setNonce] = useState(0);
-  const reload = useCallback(() => setNonce((value) => value + 1), []);
-
-  useEffect(() => {
-    if (!cwd || cwd === "~" || !branch) {
-      setPr(null);
-      return;
-    }
-    let cancelled = false;
-    const load = () => {
-      void gitPrStatus(cwd)
-        .then((next) => {
-          if (cancelled) return;
-          prByCwd.set(cwd, next);
-          setPr(next);
-        })
-        .catch(() => {
-          if (cancelled) return;
-          prByCwd.set(cwd, null);
-          setPr(null);
-        });
-    };
-    load();
-    const onResume = () => load();
-    window.addEventListener("focus", onResume);
-    return () => {
-      cancelled = true;
-      window.removeEventListener("focus", onResume);
-    };
-  }, [branch, cwd, nonce]);
-
-  return { pr, reload };
-}
-
-function cachedPr(
-  cwd: string,
-  branch: string | null | undefined,
-): GitPr | null {
-  if (!cwd || cwd === "~" || !branch) return null;
-  return prByCwd.get(cwd) ?? null;
-}
-
 function syncStatusLabel(index: GitDiffIndex): string {
   if (index.ahead > 0 && index.behind > 0) {
     return `Diverged from ${index.upstream ?? "upstream"}`;
@@ -1043,12 +1029,15 @@ export function GitSyncActions({
   const dest =
     index.upstream ?? `${index.remote ?? "origin"}/${index.branch ?? "HEAD"}`;
   const syncing = busy === "sync";
+  const publishLabel = index.remoteBranch
+    ? "Push & Set Upstream"
+    : "Publish Branch";
   const syncTitle = syncing
     ? "Synchronizing Changes..."
     : canPublish
-      ? index.branch
-        ? `Publish Branch "${index.branch}"`
-        : "Publish Branch"
+      ? index.remoteBranch
+        ? `Push to ${index.remoteBranch} and set it as upstream`
+        : `Publish Branch "${index.branch}" and set upstream`
       : behind > 0 && ahead > 0
         ? `Pull ${behind} and push ${ahead} commits between ${dest}`
         : behind > 0
@@ -1085,7 +1074,7 @@ export function GitSyncActions({
           ) : (
             <CloudUpload className="size-3.5 shrink-0" strokeWidth={1.75} />
           )}
-          <span className="min-w-0 truncate">Publish Branch</span>
+          <span className="min-w-0 truncate">{publishLabel}</span>
         </button>
       ) : canSync ? (
         <button
@@ -1656,6 +1645,7 @@ function useDiffIndex(
           files: next.files.length,
           additions: next.additions,
           deletions: next.deletions,
+          untracked: next.files.filter((file) => file.status === "untracked").length,
         });
         if (prev) {
           const paths = changedFilePaths(prev, next);
@@ -1738,6 +1728,7 @@ function sameIndex(prev: GitDiffIndex | null, next: GitDiffIndex): boolean {
     prev.files.length !== next.files.length ||
     prev.remote !== next.remote ||
     prev.upstream !== next.upstream ||
+    prev.remoteBranch !== next.remoteBranch ||
     prev.defaultBranch !== next.defaultBranch ||
     prev.ahead !== next.ahead ||
     prev.behind !== next.behind ||

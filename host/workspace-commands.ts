@@ -4,6 +4,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  readlink,
   realpath,
   rename,
   rm,
@@ -14,9 +15,12 @@ import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 
 import { tmpdir } from "node:os";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { createHash } from "node:crypto";
 import type { FileMtime, FsEntry, GitPr, ProjectFile } from "../src/platform/tauri/fs";
 import { hostWorktrees } from "./git-worktrees";
 import { createHostBranch, hostBranches, switchHostBranch } from "./git-branches";
+import { checkoutPrBranches, parsePrs, prCardActionArgs, prRepositories, trustedPrTarget } from "./git-prs";
+import { githubGateway } from "./github-gateway";
 import type { HostStore } from "./store";
 import {
   createHostPath,
@@ -50,6 +54,7 @@ export const WORKSPACE_COMMANDS = [
   "copy_path",
   "move_path",
   "git_diff_index",
+  "git_task_snapshot",
   "git_diff_files",
   "git_diff_stats",
   "git_file_diff",
@@ -65,8 +70,14 @@ export const WORKSPACE_COMMANDS = [
   "git_head_message",
   "git_push",
   "git_pull",
+  "git_fetch",
   "git_sync",
   "git_pr_status",
+  "git_pr_list",
+  "git_pr_status_by_url",
+  "git_pr_status_batch",
+  "github_api_budget",
+  "git_pr_action_by_url",
   "git_pr_create",
   "git_history",
   "git_commit_files",
@@ -144,13 +155,17 @@ export class WorkspaceCommands {
       case "move_path":
         return this.move(input.from, input.destParent);
       case "git_diff_index":
+        return this.gitIndex(input.cwd, input.checked === true);
       case "git_diff_files":
         return this.gitIndex(input.cwd);
+      case "git_task_snapshot":
+        return this.gitTaskSnapshot(input.cwd, input.base);
       case "git_diff_stats":
         return this.gitIndex(input.cwd).then((index) => ({
           files: index.files.length,
           additions: index.additions,
           deletions: index.deletions,
+          untracked: index.files.filter((file) => file.status === "untracked").length,
         }));
       case "git_file_diff":
         return this.gitFileDiff(input.cwd, input.relative, input.staged);
@@ -178,10 +193,22 @@ export class WorkspaceCommands {
         return this.gitAction(input.cwd, "push");
       case "git_pull":
         return this.gitCommand(input.cwd, ["pull", "--ff-only"]).then(() => undefined);
+      case "git_fetch":
+        return this.gitCommand(input.cwd, ["fetch", "--all", "--prune"]).then(() => undefined);
       case "git_sync":
         return this.gitSync(input.cwd);
       case "git_pr_status":
         return this.gitPrStatus(input.cwd);
+      case "git_pr_list":
+        return this.gitPrList(input.cwd, input.branches);
+      case "git_pr_status_by_url":
+        return this.gitPrStatusByUrl(input.cwd, input.url);
+      case "git_pr_status_batch":
+        return this.gitPrStatusBatch(input.cwd, input.urls);
+      case "github_api_budget":
+        return Promise.resolve(githubGateway.budget());
+      case "git_pr_action_by_url":
+        return this.gitPrActionByUrl(input.cwd, input.url, input.action, input.expectedHead, input.expectedBase);
       case "git_pr_create":
         return this.gitPrCreate(input.cwd, input.title, input.body, input.base, input.head);
       case "git_history":
@@ -466,8 +493,91 @@ export class WorkspaceCommands {
     return searchHostContent(await this.gitRoot(options.cwd), options);
   }
 
-  private async gitIndex(input: unknown) {
-    return hostGitIndex(await this.gitRoot(input));
+  private async gitIndex(input: unknown, checked = false) {
+    const root = await this.gitRoot(input);
+    if (checked) await this.gitCommand(root, ["status", "--porcelain", "--untracked-files=all"]);
+    const index = await hostGitIndex(root);
+    if (checked && index.branch) {
+      const configured = await this.gitCommand(root, ["config", "--get", `branch.${index.branch}.merge`]).catch(() => "");
+      if (index.upstream || configured.trim())
+        await this.gitCommand(root, ["rev-list", "--left-right", "--count", "HEAD...@{upstream}"]);
+    }
+    return index;
+  }
+
+  private async gitTaskSnapshot(cwd: unknown, base: unknown) {
+    const root = await this.gitRoot((await this.gitCommand(cwd, ["rev-parse", "--show-toplevel"])).trim());
+    const head = (await this.gitCommand(root, ["rev-parse", "--verify", "HEAD"])).trim();
+    const status = await this.gitCommand(root, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
+    const inheritedChangedPaths: string[] = [];
+    const entries = status.split("\0").filter(Boolean);
+    for (let i = 0; i < entries.length; i++) {
+      inheritedChangedPaths.push(entries[i].slice(3));
+      if (/[RC]/.test(entries[i].slice(0, 2))) inheritedChangedPaths.push(entries[++i]);
+    }
+    const index = new Map<string, string>();
+    for (const entry of (await this.gitCommand(root, ["ls-files", "--stage", "-z"])).split("\0").filter(Boolean)) {
+      const tab = entry.indexOf("\t");
+      const name = entry.slice(tab + 1);
+      index.set(name, (index.get(name) ?? "") + entry.slice(0, tab));
+    }
+    const untracked = await this.gitCommand(root, ["ls-files", "--others", "--exclude-standard", "-z"]);
+    const pathHashes: Record<string, string> = Object.create(null);
+    for (const name of new Set(inheritedChangedPaths)) {
+      const hash = createHash("sha256").update(index.get(name) ?? "");
+      const path = workspacePath(root, name);
+      try {
+        const info = await lstat(path);
+        if (process.platform !== "win32") {
+          const mode = Buffer.alloc(4);
+          mode.writeUInt32LE(info.mode & 0o777);
+          hash.update(mode);
+        }
+        if (info.isSymbolicLink()) hash.update("link").update(await readlink(path));
+        else if (info.isDirectory()) {
+          if (index.get(name)?.startsWith("160000 ") && resolve((await this.gitCommand(path, ["rev-parse", "--show-toplevel"])).trim()) === resolve(path)) {
+            const child: { fingerprint: string; pathHashes: Record<string, string> } = await this.gitTaskSnapshot(path, undefined);
+            hash.update(child.fingerprint).update(JSON.stringify(Object.fromEntries(Object.entries(child.pathHashes).sort(([a], [b]) => a.localeCompare(b)))));
+          }
+          hash.update(await this.gitCommand(root, ["diff", "HEAD", "--binary", "--no-ext-diff", "--no-textconv", "--", name]));
+        }
+        else hash.update("file").update(await readFile(await existingPath(root, name)));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        hash.update("missing");
+      }
+      pathHashes[name] = hash.digest("hex");
+    }
+    const hash = createHash("sha256");
+    const hashPart = (value: string | Buffer) => {
+      const bytes = typeof value === "string" ? Buffer.from(value) : value;
+      const size = Buffer.alloc(8);
+      size.writeBigUInt64LE(BigInt(bytes.length));
+      hash.update(size).update(bytes);
+    };
+    hashPart(head);
+    hashPart(status);
+    hashPart(await this.gitCommand(root, ["diff", "--binary", "--no-ext-diff", "--no-textconv"]));
+    hashPart(await this.gitCommand(root, ["diff", "--cached", "--binary", "--no-ext-diff", "--no-textconv"]));
+    for (const name of untracked.split("\0").filter(Boolean)) {
+      const path = workspacePath(root, name);
+      const info = await lstat(path);
+      hashPart(name);
+      hashPart(info.isSymbolicLink() ? await readlink(path) : await readFile(await existingPath(root, name)));
+    }
+    let commitsAhead = 0;
+    let baseDiff = false;
+    let headChangedPaths: string[] = [];
+    if (base != null) {
+      if (typeof base !== "string" || !base || base.length > 256 || base.startsWith("-") || /[\0\r\n]/.test(base))
+        throw new Error("Invalid task base");
+      const resolved = (await this.gitCommand(root, ["rev-parse", "--verify", "--end-of-options", `${base}^{commit}`])).trim();
+      commitsAhead = Number((await this.gitCommand(root, ["rev-list", "--count", `${resolved}..${head}`])).trim());
+      headChangedPaths = (await this.gitCommand(root, ["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--name-only", "-z", resolved, head, "--"])).split("\0").filter(Boolean);
+      baseDiff = headChangedPaths.length > 0;
+    }
+    return { head, fingerprint: hash.digest("hex"), clean: !status, commitsAhead, baseDiff,
+      pathHashes, inheritedChangedPaths: [...new Set(inheritedChangedPaths)].sort(), headChangedPaths };
   }
 
   private async gitFileDiff(cwd: unknown, relative: unknown, staged: unknown) {
@@ -578,27 +688,75 @@ export class WorkspaceCommands {
   }
 
   private async gitSync(cwd: unknown) {
-    await this.gitCommand(cwd, ["pull", "--ff-only"]);
+    const upstream = await this.gitCommand(cwd, ["rev-parse", "--abbrev-ref", "@{upstream}"]).catch(() => "");
+    if (upstream.trim()) await this.gitCommand(cwd, ["pull", "--ff-only"]);
     await this.gitAction(cwd, "push");
   }
 
   private async ghCommand(cwd: unknown, args: string[]): Promise<string> {
     const root = await this.gitRoot(cwd);
-    return (await exec("gh", args, {
-      cwd: root,
-      timeout: 30_000,
-      maxBuffer: 1024 * 1024,
-      encoding: "utf8",
-      env: { ...process.env, GH_PROMPT_DISABLED: "1", GIT_TERMINAL_PROMPT: "0" },
-    })).stdout.trim();
+    return githubGateway.run(root, args);
   }
 
   private async gitPrStatus(cwd: unknown) {
-    const output = await this.ghCommand(cwd, ["pr", "view", "--json", "number,title,url,state"])
-      .catch(() => "");
-    if (!output) return null;
-    const pr = JSON.parse(output) as GitPr;
-    return { ...pr, state: pr.state.toLowerCase() };
+    const [repository, current] = await Promise.all([
+      this.ghCommand(cwd, ["repo", "view", "--json", "url,parent"]),
+      this.gitCommand(cwd, ["symbolic-ref", "--quiet", "--short", "HEAD"]).catch(() => ""),
+    ]);
+    if (!current.trim()) return null;
+    const repo = prRepositories(repository)[0];
+    const [owner, name] = repo.pathname.replace(/^\/|\/$/g, "").split("/");
+    return parsePrs(JSON.stringify(await githubGateway.heads(String(cwd), repo.host, owner, name, [current.trim()], args => this.ghCommand(cwd, args))), owner)[0] ?? null;
+  }
+
+  private async gitPrList(cwd: unknown, inputBranches: unknown): Promise<GitPr[]> {
+    if (inputBranches != null && (!Array.isArray(inputBranches) || inputBranches.length > 100 || inputBranches.some(branch => typeof branch !== "string" || branch.length > 1024 || !branch || /^-|\s/.test(branch)))) throw new Error("Invalid pull request branches");
+    const [repository, current, reflog] = await Promise.all([
+      this.ghCommand(cwd, ["repo", "view", "--json", "url,parent"]),
+      this.gitCommand(cwd, ["symbolic-ref", "--quiet", "--short", "HEAD"]).catch(() => ""),
+      this.gitCommand(cwd, ["reflog", "show", "--format=%gs", "HEAD"]).catch(() => ""),
+    ]);
+    const repo = prRepositories(repository)[0];
+    const slug = repo.pathname.replace(/^\/|\/$/g, "");
+    const owner = slug.split("/")[0];
+    const branches = checkoutPrBranches(current.trim(), reflog, inputBranches as string[] ?? []);
+    if (!branches.length) return [];
+    const rows = await githubGateway.heads(String(cwd), repo.host, owner, slug.split("/")[1], branches, args => this.ghCommand(cwd, args));
+    return parsePrs(JSON.stringify(rows), owner);
+  }
+
+  private async gitPrStatusBatch(cwd: unknown, values: unknown): Promise<GitPr[]> {
+    if (!Array.isArray(values) || values.length > 100 || values.some(value => typeof value !== "string")) throw new Error("Invalid pull request URLs");
+    const repositories = prRepositories(await this.ghCommand(cwd, ["repo", "view", "--json", "url,parent"]));
+    const groups = new Map<string, number[]>();
+    for (const value of values) {
+      const target = trustedPrTarget(value, repositories);
+      if (target) groups.set(target.repo, [...groups.get(target.repo) ?? [], target.number]);
+    }
+    const rows = (await Promise.all([...groups].map(async ([repo, numbers]) => {
+      const [host, owner, name] = repo.split("/");
+      return githubGateway.summaries(String(cwd), host, owner, name, numbers, args => this.ghCommand(cwd, args));
+    }))).flat();
+    return parsePrs(JSON.stringify(rows)).filter(pr => {
+      const target = trustedPrTarget(pr.url, repositories);
+      return !!target && [...groups].some(([repo, numbers]) => repo.toLowerCase() === target.repo.toLowerCase() && numbers.includes(target.number) && pr.number === target.number);
+    });
+  }
+
+  private async gitPrStatusByUrl(cwd: unknown, value: unknown): Promise<GitPr | null> {
+    return (await this.gitPrStatusBatch(cwd, [value]))[0] ?? null;
+  }
+
+  private async gitPrActionByUrl(cwd: unknown, url: unknown, action: unknown, expectedHead: unknown, expectedBase: unknown): Promise<GitPr> {
+    if (githubGateway.budget().low) throw new Error("GitHub rate limit reached · showing last known data");
+    githubGateway.invalidate();
+    const current = await this.gitPrStatusByUrl(cwd, url);
+    if (!current) throw new Error("PR URL is not part of this checkout's forge repository");
+    await this.ghCommand(cwd, prCardActionArgs(current, action, expectedHead, expectedBase));
+    githubGateway.invalidate();
+    const next = await this.gitPrStatusByUrl(cwd, current.url);
+    if (!next) throw new Error("Could not verify the updated PR state");
+    return next;
   }
 
   private async gitPrCreate(cwd: unknown, title: unknown, body: unknown, base: unknown, head: unknown) {

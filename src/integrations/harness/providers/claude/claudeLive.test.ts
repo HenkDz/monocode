@@ -1,4 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { isTauri } from "@tauri-apps/api/core";
+import { registerHarness, resetHarnessIdlePark, sendHarnessTurn } from "../../core/registry";
+vi.mock("@tauri-apps/api/core", async original => ({
+  ...(await original<typeof import("@tauri-apps/api/core")>()),
+  isTauri: vi.fn(() => false),
+  invoke: vi.fn(async command => command === "app_cli_approval_policy" ? {
+    executable: "C:/preview/monocode-org.exe", tempDir: "C:/Temp", actions: ["goals.assign"],
+  } : undefined),
+}));
 import { applyHarnessEvent } from "../../core/apply";
 import { newSession } from "../../../../features/sessions/model/session";
 import {
@@ -43,6 +52,7 @@ const {
   restoreClaudeTaskLists,
   sendClaudeTurn,
   stopClaudeSession,
+  updateClaudeRuntimeMode,
   __claudeTestReset,
 } = await import("./claude");
 import type { HarnessEvent } from "../../core/types";
@@ -72,10 +82,14 @@ async function startTurn(
     runtimeMode?: RuntimeMode;
     intent?: TurnIntent;
     providerAccountId?: string;
+    orgMono?: boolean;
+    orgMonoId?: string;
   } = {},
 ) {
   const events: HarnessEvent[] = [];
-  const turn = sendClaudeTurn({
+  const send = options.orgMono || options.orgMonoId ? (input: Parameters<typeof sendClaudeTurn>[0]) =>
+    sendHarnessTurn({ ...input, harness: "claude", orgMono: true, orgMonoId: options.orgMonoId, monoSession: true }) : sendClaudeTurn;
+  const turn = send({
     sessionId,
     cwd: "/repo",
     model: "claude:claude-sonnet-5",
@@ -267,6 +281,53 @@ beforeEach(() => {
 afterEach(async () => {
   await stopClaudeSession("s1");
   __claudeTestReset();
+});
+
+describe("claude runtime mode changes", () => {
+  it("never grants MCP tools edit authority from a misleading display kind", async () => {
+    const { events, turn } = await startTurn("s1");
+    emit({ type: "control_request", request_id: "mcp-write", request: { subtype: "can_use_tool", tool_name: "mcp__finance__write", input: {} } });
+    await waitFor(() => events.some(e => e.type === "approval.requested"), "MCP permission");
+    await updateClaudeRuntimeMode("s1", "auto-accept-edits");
+    expect(parse().some(m => (m.response as Record<string, unknown>)?.request_id === "mcp-write")).toBe(false);
+    const request = events.find(e => e.type === "approval.requested");
+    if (request?.type !== "approval.requested") throw Error("Missing MCP approval");
+    expect(request.kind).toBe("edit"); // Presentation alone grants no authority.
+    respondClaudeApproval("s1", request.requestId, "deny");
+    await waitFor(() => parse().some(m => (m.response as Record<string, unknown>)?.request_id === "mcp-write"), "MCP denial");
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+  });
+  it.each(["full-access", "auto-accept-edits"] as const)("resolves eligible pending approvals and updates the same process: %s", async runtimeMode => {
+    const { events, turn } = await startTurn("s1");
+    for (const [id, tool] of [["shell", "Bash"], ["edit", "Edit"]] as const) {
+      emit({ type: "control_request", request_id: id, request: { subtype: "can_use_tool", tool_name: tool,
+        input: tool === "Bash" ? { command: "echo Edit is just a misleading title" } : { file_path: "/repo/file", old_string: "old", new_string: "new" } } });
+    }
+    await waitFor(() => events.filter(e => e.type === "approval.requested").length === 2, "pending edit and shell");
+    await updateClaudeRuntimeMode("s1", runtimeMode);
+    expect(parse().filter(m => m.type === "user")).toHaveLength(1);
+    const response = (id: string) => parse().find(m => (m.response as Record<string, unknown>)?.request_id === id);
+    await waitFor(() => !!response("edit"), "automatic pending edit");
+    expect(response("edit")).toMatchObject({ response: { response: { behavior: "allow" } } });
+    expect(parse()).toContainEqual(expect.objectContaining({ type: "control_request", request: { subtype: "set_permission_mode", mode: runtimeMode === "full-access" ? "bypassPermissions" : "default" } }));
+    if (runtimeMode === "full-access") {
+      await waitFor(() => !!response("shell"), "automatic pending shell");
+      expect(response("shell")).toMatchObject({ response: { response: { behavior: "allow" } } });
+    } else {
+      expect(response("shell")).toBeUndefined();
+      const request = events.find(e => e.type === "approval.requested" && e.kind === "execute");
+      if (request?.type !== "approval.requested") throw Error("Missing shell approval");
+      respondClaudeApproval("s1", request.requestId, "deny");
+      await waitFor(() => !!response("shell"), "manual shell denial");
+    }
+    const count = events.filter(e => e.type === "approval.requested").length;
+    emit({ type: "control_request", request_id: "next-edit", request: { subtype: "can_use_tool", tool_name: "Edit", input: { file_path: "/repo/file" } } });
+    await waitFor(() => !!response("next-edit"), "later edit in same turn");
+    expect(events.filter(e => e.type === "approval.requested")).toHaveLength(count);
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+  });
 });
 
 describe("claude streamed tool inputs", () => {
@@ -935,6 +996,53 @@ describe("claude legacy account resume", () => {
 });
 
 describe("claude subagents", () => {
+  it.each(["manager", "member"])("preserves saved permissions for %s chats and refreshed/Habit turns", async role => {
+    const saved = JSON.stringify([{ id: "org", role, projects: ["/repo"], mascot: "cat", color: "#abc" }]);
+    vi.stubGlobal("localStorage", { getItem: (key: string) => key === "monocode:mono-roster" ? saved : null, setItem: () => {} });
+    registerHarness({ id: "claude", live: true, sendTurn: sendClaudeTurn, respondApproval: respondClaudeApproval,
+      cancelTurn: cancelClaudeTurn, stopSession: stopClaudeSession, forgetSession: async () => {}, bindSession: () => {}, steerTurn: async () => {} });
+    try {
+      for (const sessionId of ["s1", "rotated-chat", "habit-run"]) {
+        sent.length = 0; spawned.length = 0;
+        const { events, turn } = await startTurn(sessionId, { orgMonoId: "org", runtimeMode: "full-access" });
+        expect(spawned[0]).toEqual(expect.arrayContaining(["--permission-mode", "bypassPermissions"]));
+        emit({ type: "control_request", request_id: "ordinary-write", request: { subtype: "can_use_tool", tool_name: "Write", input: { file_path: "/repo/file", content: "test" } } });
+        await waitFor(() => parse().some(message => (message.response as Record<string, unknown>)?.request_id === "ordinary-write"), "bypass write");
+        expect(events.some(event => event.type === "approval.requested")).toBe(false);
+        emit({ type: "result", subtype: "success", session_id: "sess_1" }); await turn;
+        await stopClaudeSession(sessionId);
+      }
+      sent.length = 0; spawned.length = 0;
+      const { turn } = await startTurn("s1", { orgMonoId: "org", runtimeMode: "supervised" });
+      expect(spawned[0]).toEqual(expect.arrayContaining(["--permission-mode", "default"]));
+      emit({ type: "result", subtype: "success", session_id: "sess_1" }); await turn;
+    } finally { vi.unstubAllGlobals(); resetHarnessIdlePark(); }
+  });
+  it("auto-approves an Orchestrator's direct goal assignment before any approval reaches the UI", async () => {
+    vi.mocked(isTauri).mockReturnValue(true);
+    registerHarness({ id: "claude", live: true, sendTurn: sendClaudeTurn,
+      respondApproval: respondClaudeApproval, cancelTurn: cancelClaudeTurn,
+      stopSession: stopClaudeSession, forgetSession: async () => {},
+      bindSession: () => {}, steerTurn: async () => {},
+    });
+    try {
+      const { events, turn } = await startTurn("s1", { orgMono: true, runtimeMode: "supervised" });
+      emit({ type: "control_request", request_id: "goal-assignment", request: {
+        subtype: "can_use_tool", tool_name: "Bash", tool_use_id: "assign",
+        input: { command: '"C:/preview/monocode-org.exe" app goals.assign --json \'{"projectId":"nou","goal":"Test"}\'' },
+      } });
+      await waitFor(() => parse().some(message =>
+        (message.response as Record<string, unknown>)?.request_id === "goal-assignment"), "automatic CLI approval");
+      expect(parse().find(message => (message.response as Record<string, unknown>)?.request_id === "goal-assignment"))
+        .toMatchObject({ response: { response: { behavior: "allow" } } });
+      expect(events.some(event => event.type === "approval.requested" || event.type === "approval.resolved")).toBe(false);
+      emit({ type: "result", subtype: "success", session_id: "sess_1" });
+      await turn;
+    } finally {
+      vi.mocked(isTauri).mockReturnValue(false);
+      resetHarnessIdlePark();
+    }
+  });
   it.each(["allow", "deny"] as const)(
     "routes a child permission decision: %s",
     async (decision) => {
@@ -1828,6 +1936,10 @@ describe("claude plan permissions", () => {
       runtimeMode: "auto",
       intent: "plan",
     });
+    await updateClaudeRuntimeMode("s1", "full-access");
+    expect(spawned[0]).toContain("--permission-mode");
+    expect(spawned[0][spawned[0].indexOf("--permission-mode") + 1]).toBe("plan");
+    expect(parse().some(m => (m.request as Record<string, unknown>)?.subtype === "set_permission_mode")).toBe(false);
 
     emit({
       type: "control_request",
@@ -1916,6 +2028,8 @@ describe("claude plan permissions", () => {
         ),
       "exit plan mode response",
     );
+    expect((parse().find(message =>
+      (message.response as Record<string, unknown>)?.request_id === "exit_1")?.response as Record<string, unknown>)?.response).toMatchObject({ behavior: "deny" });
     emit({ type: "result", subtype: "success", session_id: "sess_1" });
 
     // The turn must end for the session to stop being busy; until it does, the

@@ -4,7 +4,7 @@ import type { SessionRecord } from "./sessionStore";
 const invoke = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
 
-const { getSession } = await import("./sessionStore");
+const { getSession, sanitizeSessionForPersist } = await import("./sessionStore");
 
 /** A saved Codex session holding the one row this PR repairs. */
 function codexRecord(): SessionRecord {
@@ -37,6 +37,28 @@ function codexRecord(): SessionRecord {
 
 describe("restoring a session whose repair cannot be persisted", () => {
   beforeEach(() => invoke.mockReset());
+
+  it("restores managed read-only permissions before any orchestration engine is hydrated", async () => {
+    invoke.mockImplementation(async (command: string) => command === "session_get" ? {
+      ...codexRecord(), blocks: [], modelSettings: { reasoningEffort: "high", __monocodeReadOnly: "true" },
+    } : null);
+    const session = await getSession("s1");
+    expect(session?.readOnly).toBe(true);
+    expect(session?.modelSettings).toEqual({ reasoningEffort: "high" });
+    expect(sanitizeSessionForPersist(session!).modelSettings).toEqual({ reasoningEffort: "high", __monocodeReadOnly: "true" });
+  });
+
+  it("migrates duplicated legacy notifications out of the user outbox", async () => {
+    const event = { id: "event", text: "Manager needs a decision", attachments: [],
+      monoSessionCompletion: { sessionId: "manager", title: "Manager", status: "completed" } };
+    invoke.mockImplementation(async (cmd: string) => cmd === "session_get" ? {
+      ...codexRecord(), blocks: [], queuedMessages: [event, { ...event, id: "duplicate" },
+        { id: "user", text: "My follow-up", attachments: [] }],
+    } : null);
+    const session = await getSession("s1");
+    expect(session?.queuedMessages?.map(message => message.id)).toEqual(["user"]);
+    expect(session?.pendingMonoEvents?.map(message => message.id)).toEqual(["event"]);
+});
 
   it("restores sidebar visibility when a hidden session is opened by id", async () => {
     const record = codexRecord();

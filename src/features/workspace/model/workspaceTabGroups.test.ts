@@ -25,7 +25,21 @@ import {
   workspaceTabCwd,
   tabInWorktree,
   workspaceTabWorktree,
+  isManagerTab,
 } from "./workspaceTabGroups";
+
+it("does not swap or dock another chat into the standalone Manager", () => {
+  const manager = newTab("project-manager-root");
+  const worker = newTab("worker");
+  const tabs = [manager, worker];
+  expect(isManagerTab(manager)).toBe(true);
+  expect(isManagerTab(worker)).toBe(false);
+  expect(planWorkspaceTabClose({ tabs, sessions: [session(manager.focusedId, "/repo"), session("worker", "/repo")], closingTabId: worker.id, scope: "project" })).toEqual({ action: "keep" });
+  expect(switchSessionInTab(tabs, manager.id, manager.focusedId, "worker")).toBeNull();
+  expect(switchSessionInTab(tabs, worker.id, "worker", manager.focusedId)).toBeNull();
+  expect(applyPlaceTabOnPane({ tabs, sessions: [], sourceTabId: worker.id, targetId: manager.focusedId, edge: "right", replaceTarget: false })).toBeNull();
+  expect(applyPlaceSessionOnPane({ tabs, sessions: [], sessionId: "worker", targetId: manager.focusedId, edge: "right", replaceTarget: true, scope: "workspace", createReplacement: () => session("unused", "/repo") })).toBeNull();
+});
 
 function session(id: string, cwd: string): Session {
   return {

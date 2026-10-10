@@ -1,6 +1,18 @@
 import { GripVertical, X } from "../../../shared/ui/icons";
+import { isProjectManager } from "../../orchestration/model/projectManager";
+import {
+  focusManagerReview,
+  managerReviewTimeline,
+  managerReviewTurn,
+} from "../../orchestration/model/projectManagerTimeline";
+import { OrchestrationActions } from "../../orchestration/ui/OrchestrationActions";
+import {
+  ProjectManagerReview,
+  ProjectManagerStatus,
+} from "../../orchestration/ui/ProjectManagerReview";
 import {
   memo,
+  useContext,
   useCallback,
   useEffect,
   useMemo,
@@ -13,13 +25,16 @@ import {
 import { Composer } from "./Composer";
 import type { Worktree } from "../../source-control/model/worktrees";
 import {
-  orchestrationCheckoutCwd,
   orchestrator,
-  sameCheckout,
 } from "../../orchestration/model/orchestration";
 import { DiscussionEmpty } from "./DiscussionEmpty";
 import { LinkedWorkItemUpdateNotice } from "../../inbox/ui/LinkedWorkItemUpdateNotice";
 import { SessionReview } from "./SessionReview";
+import { usePullRequests } from "../../source-control/model/pullRequests";
+import { buildPullRequestRows } from "../../pullRequests/model/pullRequestView";
+import { listMonos } from "../../monos/model/mono";
+import { SessionPrSummary } from "./SessionPrSummary";
+import { chatPrTurns } from "../model/chatPullRequests";
 import { PromptOutline } from "./PromptOutline";
 import {
   canCompactHarnessContext,
@@ -48,6 +63,7 @@ import {
 import { sessionHasBtwThreads, supportsBtwHarness } from "../model/btw";
 import { BtwSheet, useBtwConversation } from "./BtwSheet";
 import { AgentTranscript } from "./AgentTranscript";
+import { NestedWorktreeWarning } from "../../source-control/ui/NestedWorktreeWarning";
 import { PooledTranscript, type TranscriptPool } from "./TranscriptPool";
 import { TranscriptFind } from "./TranscriptFind";
 import {
@@ -62,19 +78,24 @@ import {
 import { EmptySession } from "./EmptySession";
 import {
   monoForSession,
+  monoRuntimeMode,
+  findMono,
   monoLook,
+  monoState as sessionMonoState,
+  type MonoState,
   monosSnapshot,
   subscribeMonos,
 } from "../../monos/model/mono";
 import { MonoHeader } from "../../monos/ui/MonoHeader";
 import { MonoComposer } from "../../monos/ui/MonoComposer";
 import { MonoUsageLimitNotice } from "../../monos/ui/MonoUsageLimitNotice";
+import { MonoCodexStorageNotice } from "../../monos/ui/MonoCodexStorageNotice";
 import { QuestionForm } from "./QuestionForm";
+import { MemberWorkLog } from "../../monos/ui/MemberWorkLog";
 import {
   monoMessageDeliveries,
   monoPendingTranscriptBlocks,
 } from "../../monos/model/monoMessaging";
-import { MessageQueue } from "./MessageQueue";
 import { useMonoTranscript } from "../../monos/hooks/useMonoTranscript";
 import { MONO_PAGE_TURNS } from "../data/sessionStore";
 import { useComposerDockMotion } from "./useComposerDockMotion";
@@ -117,6 +138,7 @@ import { markLinkedSessionUpdateSeen } from "../../inbox/model/linkedSessionSeen
 import { RemoteSession } from "../../connections/ui/RemoteSession";
 import { isRemoteProjectPath } from "../../projects/model/recents";
 import type { HostSession } from "../../connections/model/protocol";
+import { SessionRightPanel } from "./SessionRightPanel";
 
 export type SessionPaneProps = {
   session: Session;
@@ -134,6 +156,7 @@ export type SessionPaneProps = {
     blocks: Block[],
   ) => void;
   monoActivityTurnId?: string;
+  monoState?: MonoState;
   onShowMonoSessions?: (
     sessionId: string,
     turnId: string,
@@ -189,6 +212,7 @@ export type SessionPaneProps = {
   onSteerQueuedMessage: (sessionId: string, messageId: string) => void;
   onResumeQueue: (sessionId: string) => void;
   onUsageLimitResume: (sessionId: string) => void;
+  onCodexStorageRepair?: (sessionId: string) => Promise<void>;
   onUsageLimitResumeAtReset: (sessionId: string, enabled: boolean) => void;
   onUsageLimitDismiss: (sessionId: string) => void;
   onUsageLimitAccountChange?: (sessionId: string, accountId: string) => void;
@@ -324,6 +348,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
   onSteerQueuedMessage,
   onResumeQueue,
   onUsageLimitResume,
+  onCodexStorageRepair,
   onUsageLimitResumeAtReset,
   onUsageLimitDismiss,
   onUsageLimitAccountChange,
@@ -343,6 +368,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
   onCommitChanges,
   onShowMonoActivity,
   monoActivityTurnId,
+  monoState,
   onShowMonoSessions,
   monoSessionsTurnId,
   onOpenPlan,
@@ -363,11 +389,19 @@ const LocalSessionPane = memo(function LocalSessionPane({
     orchestrator.snapshot,
     orchestrator.snapshot,
   );
-  const managed = orchestrationRuns.some(
+  const ownedRuns = orchestrationRuns.filter(
     (run) =>
-      (run.status === "active" || run.status === "paused") &&
-      sameCheckout(orchestrationCheckoutCwd(run), sessionWorkCwd(session)),
+      run.projectManager && (run.ownerSessionId ?? run.leadId) === session.id,
   );
+  const managed =
+    ownedRuns.length > 0 ||
+    isProjectManager(session.id) ||
+    orchestrationRuns.some(
+      (run) =>
+        (run.status === "active" || run.status === "paused") &&
+        (run.leadId === session.id || run.tasks.some(task => task.sessionId === session.id)),
+    );
+  const checkoutNotice = orchestrator.checkoutNotice(session.id, session);
   const title = sessionDisplayTitle(session.title, session.harness);
   const isEmpty = session.blocks.length === 0;
   const messageDeliveries = useMemo(
@@ -399,7 +433,14 @@ const LocalSessionPane = memo(function LocalSessionPane({
   // Renames, instructions and mascot picks re-render the agent's look.
   useSyncExternalStore(subscribeMonos, monosSnapshot);
   const mono = monoForSession(session.id);
+  const questionDelegated =
+    mono?.role === "manager" &&
+    !!mono.reportsTo &&
+    !!findMono(mono.reportsTo)?.sessionId;
   const agent = mono ? monoLook(mono) : undefined;
+  const memberTask = orchestrationRuns
+    .flatMap((run) => run.tasks)
+    .find((task) => task.sessionId === session.id && task.memberId);
   // A Mono shows only its own background, never the project's or the app's.
   const projectBackground = mono
     ? monoChatBackground(mono.id)
@@ -452,6 +493,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
   const quoteRequestId = useRef(0);
   const jumpVisibility = useTranscriptJumpVisibility();
   const [editingLastTurn, setEditingLastTurn] = useState(false);
+  const [sessionPanelOpen, setSessionPanelOpen] = useState(false);
   useEffect(() => {
     setEditingLastTurn(false);
   }, [session.id, editLastTurnSupported]);
@@ -545,6 +587,51 @@ const LocalSessionPane = memo(function LocalSessionPane({
     () => peekTranscriptJump(session.id),
     () => null,
   );
+  const reviewActions = useContext(OrchestrationActions);
+  const handledReview = useRef<number | undefined>(undefined);
+  const reviewVisible = useRef(visible);
+  reviewVisible.current = visible;
+  const reviewTimeline = managerReviewTimeline(
+    ownedRuns,
+    monoTranscript.blocks,
+  );
+  const sessionPrEntries = buildPullRequestRows(usePullRequests(), { sessions: [session], runs: orchestrationRuns, roster: listMonos() }).filter(row => row.sessionIds.includes(session.id)).map(row => row.entry);
+  const prTurns = chatPrTurns(monoTranscript.blocks, sessionPrEntries.filter(entry => !ownedRuns.some(run => run.tasks.some(task => task.prUrl === entry.pr.url))), session.linkedWorkItem?.repo);
+  const prTurnIds = [...prTurns.keys()];
+  const openReview = useCallback(
+    async (taskId: string) => {
+      const run = orchestrationRuns.find(
+        (run) =>
+          (run.ownerSessionId ?? run.leadId) === session.id &&
+          run.tasks.some((task) => task.id === taskId),
+      );
+      const task = run?.tasks.find((task) => task.id === taskId);
+      if (!run || !task) return;
+      const turnId = managerReviewTurn(run, task, monoTranscript.blocks);
+      if (turnId && (await navigateBlock(turnId)) && reviewVisible.current)
+        focusManagerReview(taskId);
+    },
+    [orchestrationRuns, session.id, monoTranscript.blocks, navigateBlock],
+  );
+  useEffect(() => {
+    if (!visible || !navigatorReady) return;
+    const jump = (event: Event) => {
+      void openReview((event as CustomEvent<{ taskId: string }>).detail.taskId);
+    };
+    window.addEventListener("monocode:manager-review", jump);
+    return () => window.removeEventListener("monocode:manager-review", jump);
+  }, [visible, navigatorReady, openReview]);
+  useEffect(() => {
+    if (!visible || !navigatorReady || !reviewActions?.reviewTarget) return;
+    const taskId = reviewActions.reviewTarget.taskId;
+    const revision = reviewActions.reviewTarget.revision;
+    if (handledReview.current === revision) return;
+    const frame = requestAnimationFrame(() => {
+      handledReview.current = revision;
+      void openReview(taskId);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [visible, navigatorReady, reviewActions?.reviewTarget, openReview]);
   useEffect(() => {
     if (!visible || !navigatorReady || !jumpRequest) return;
     let cancelled = false;
@@ -622,6 +709,8 @@ const LocalSessionPane = memo(function LocalSessionPane({
   const composerDockMotion = useComposerDockMotion(dockComposer);
   const draftRef = useRef<string | undefined>(getComposerDraft(session.id));
   const composer = (
+    <>
+    {checkoutNotice && <p role="status" className="px-3 py-1 text-xs text-content/55">{checkoutNotice}</p>}
     <Composer
       key={session.id}
       disabled={workspaceSwitchingSessionId === session.id}
@@ -643,6 +732,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
       compactSupported={canCompactHarnessContext(session.harness)}
       recents={recents}
       hideProjectPicker={
+        isProjectManager(session.id) ||
         !!session.inboxAsk ||
         (hideProjectPicker ? !showDeckProjectPicker : false)
       }
@@ -663,7 +753,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
       inboxCard={session.inboxCard}
       noteCard={session.noteCard}
       handoffCard={session.handoffCard}
-      question={session.pendingQuestion}
+      question={questionDelegated ? undefined : session.pendingQuestion}
       onQuoteRequestConsumed={acknowledgeQuote}
       onInboxCardDismiss={() => onInboxCardDismiss?.(session.id)}
       onNoteCardDismiss={() => onNoteCardDismiss?.(session.id)}
@@ -760,6 +850,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
       }}
       onEditingLastTurnChange={setEditingLastTurn}
     />
+    </>
   );
 
   return (
@@ -838,6 +929,24 @@ const LocalSessionPane = memo(function LocalSessionPane({
       ) : null}
       <div className="flex min-h-0 min-w-0 flex-1">
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+          {!agent && !session.inboxAsk && <button type="button" aria-label="Show session PRs" aria-expanded={sessionPanelOpen} onClick={() => setSessionPanelOpen(value => !value)} className="absolute right-3 top-2 z-10 rounded px-2 py-1 text-xs text-content/50 hover:bg-content/8 hover:text-content focus-visible:outline-accent">PRs</button>}
+          {ownedRuns.map((run) => (
+            <ProjectManagerStatus
+              key={run.leadId}
+              run={run}
+              needsUser={!!session.pendingQuestion}
+              onDecision={() => {
+                const question =
+                  transcriptScope.current?.parentElement?.querySelector<HTMLElement>(
+                    "[data-question-form]",
+                  );
+                question?.scrollIntoView({ block: "center" });
+                question
+                  ?.querySelector<HTMLElement>("button, input, textarea")
+                  ?.focus();
+              }}
+            />
+          ))}
           <div
             ref={transcriptScope}
             className={`@container relative min-h-0 flex-1${
@@ -875,10 +984,16 @@ const LocalSessionPane = memo(function LocalSessionPane({
                 }
               />
             ) : null}
+            <NestedWorktreeWarning cwd={workCwd} enabled={visible && !remoteSessionLoading} />
             {remoteSessionLoading ? null : isEmpty ? (
               agent ? (
                 <div className="scrollbar-none h-full min-h-0 overflow-y-auto">
-                  <MonoHeader agent={agent} greeting />
+                  <MonoHeader
+                    agent={agent}
+                    state={monoState ?? sessionMonoState(session)}
+                    greeting={mono?.role !== "member"}
+                  />
+                  {mono?.role === "member" && <MemberWorkLog member={mono} />}
                 </div>
               ) : session.inboxAsk ? (
                 <div className="scrollbar-none h-full min-h-0 overflow-y-auto">
@@ -910,6 +1025,11 @@ const LocalSessionPane = memo(function LocalSessionPane({
                   onMouseDown={focusPane}
                 >
                   <AgentTranscript
+                    managerProject={
+                      !agent && isProjectManager(session.id)
+                        ? session.cwd
+                        : undefined
+                    }
                     blocks={
                       agent && !monoTranscript.viewingOlderPage
                         ? monoPendingTranscriptBlocks(
@@ -934,19 +1054,27 @@ const LocalSessionPane = memo(function LocalSessionPane({
                     busy={!!session.busy && !monoTranscript.viewingOlderPage}
                     visible={visible}
                     cwd={workCwd}
-                    agentName={agent?.name}
+                    agentName={agent?.name ?? memberTask?.memberName}
+                    agentMascot={
+                      agent ??
+                      (memberTask?.memberMascot && memberTask.memberColor
+                        ? {
+                            name: memberTask.memberName ?? "Member",
+                            mascot: memberTask.memberMascot,
+                            color: memberTask.memberColor,
+                            projects: [],
+                          }
+                        : undefined)
+                    }
                     onOpenArtifact={
                       onOpenArtifact
                         ? (id) => onOpenArtifact(session.id, id)
                         : undefined
                     }
-                    agentMascot={agent}
                     bottomAligned={!!agent}
                     inlineWork={!!agent}
-                    messageDeliveries={agent ? messageDeliveries : undefined}
-                    onRetryMessage={
-                      agent ? () => onResumeQueue(session.id) : undefined
-                    }
+                    messageDeliveries={messageDeliveries}
+                    onRetryMessage={() => onResumeQueue(session.id)}
                     onShowWork={
                       agent && onShowMonoActivity
                         ? (turnId, blocks) =>
@@ -1024,6 +1152,23 @@ const LocalSessionPane = memo(function LocalSessionPane({
                     onJumpToBottomReady={onJumpToBottomReady}
                     onRevealReady={onRevealReady}
                     onNavigateReady={onNavigateReady}
+                    turnAccessories={
+                      new Map(
+                        [...new Set([...reviewTimeline.keys(), ...prTurnIds])].map((turnId) => [
+                          turnId,
+                          <>
+                            {(reviewTimeline.get(turnId) ?? []).map((run) => (
+                              <ProjectManagerReview
+                                key={run.leadId}
+                                run={run}
+                                historical
+                              />
+                            ))}
+                            {prTurns.has(turnId) && <div className="px-4 py-1"><SessionPrSummary turn={prTurns.get(turnId)!} /></div>}
+                          </>,
+                        ]),
+                      )
+                    }
                     onScrollerChange={setTranscriptScroller}
                     editingLastTurn={editingLastTurn}
                     onEditLastTurn={
@@ -1035,11 +1180,23 @@ const LocalSessionPane = memo(function LocalSessionPane({
                         : undefined
                     }
                     latestTurnAccessory={
-                      remote ||
-                      session.inboxAsk ||
-                      session.worktreeRemoved ||
-                      monoTranscript.viewingOlderPage ||
-                      draftBlock ? undefined : (
+                      mono?.role === "member" ? (
+                        <MemberWorkLog member={mono} />
+                      ) : ownedRuns.length ? (
+                        <>
+                          {ownedRuns.map((run) => (
+                            <ProjectManagerReview
+                              key={run.leadId}
+                              run={run}
+                              noticesOnly
+                            />
+                          ))}
+                        </>
+                      ) : remote ||
+                        session.inboxAsk ||
+                        session.worktreeRemoved ||
+                        monoTranscript.viewingOlderPage ||
+                        draftBlock ? undefined : (
                         <SessionReview
                           sessionId={session.id}
                           cwd={workCwd}
@@ -1101,6 +1258,11 @@ const LocalSessionPane = memo(function LocalSessionPane({
               </>
             )}
           </div>
+          {onCodexStorageRepair && (
+            <div className="mx-auto w-full max-w-4xl shrink-0">
+              <MonoCodexStorageNotice key={session.id} detail={session.codexStorageError} onRepair={() => onCodexStorageRepair(session.id)} />
+            </div>
+          )}
           {dockComposer ? (
             <div
               ref={composerDockMotion.dockedRef}
@@ -1110,19 +1272,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
             >
               {agent ? (
                 <>
-                  <MessageQueue
-                    messages={(session.queuedMessages ?? []).filter(
-                      (message) => !!message.monoSessionCompletion,
-                    )}
-                    status={session.queueStatus}
-                    sendingId={session.sendingQueuedMessageId}
-                    onDelete={(messageId) =>
-                      onDeleteQueuedMessage(session.id, messageId)
-                    }
-                    onResume={() => onResumeQueue(session.id)}
-                    variant="messages"
-                  />
-                  {session.pendingQuestion ? (
+                  {session.pendingQuestion && !questionDelegated ? (
                     <QuestionForm
                       prompt={session.pendingQuestion}
                       onReply={replyQuestion}
@@ -1152,6 +1302,10 @@ const LocalSessionPane = memo(function LocalSessionPane({
                   <MonoComposer
                     key={session.id}
                     sessionId={session.id}
+                    runtimeMode={monoRuntimeMode(mono, session.runtimeMode)}
+                    onRuntimeModeChange={(mode) =>
+                      onRuntimeModeChange(session.id, mode)
+                    }
                     name={agent.name}
                     enabled={visible}
                     quoteRequest={quoteRequest}
@@ -1189,6 +1343,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
             onOpenDiff={onOpenDiff}
           />
         </div>
+        {!agent && sessionPanelOpen && <SessionRightPanel key={session.id} session={session} onClose={() => setSessionPanelOpen(false)} />}
       </div>
     </div>
   );

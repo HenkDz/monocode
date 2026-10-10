@@ -23,11 +23,16 @@ vi.mock("../../../integrations/harness/core/availability", () => ({
   probeHarnessAvailability: async () => {},
   subscribeHarnessAvailability: () => () => {},
 }));
-vi.mock("../../../integrations/harness/core/registry", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../integrations/harness/core/registry")>()),
-  refreshHarnessCatalogs: async () => {},
-  isLiveHarness: () => true,
-}));
+vi.mock(
+  "../../../integrations/harness/core/registry",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("../../../integrations/harness/core/registry")
+    >()),
+    refreshHarnessCatalogs: async () => {},
+    isLiveHarness: () => true,
+  }),
+);
 vi.mock("../../sessions/ui/ModelPicker", () => ({ ModelPicker: () => null }));
 vi.mock("../../sessions/ui/SessionReview", () => ({
   SessionReview: ({ undoLocked }: { undoLocked: boolean }) =>
@@ -39,6 +44,7 @@ vi.mock("../model/orchestration", async (importOriginal) => ({
     subscribe: () => () => {},
     snapshot: () => emptyRuns,
     hydrate: async () => {},
+    checkoutNotice: () => null,
     waitingFor: () => undefined,
     resumeBlocker: vi.fn(() => undefined),
     resumeLeadBusy: vi.fn(() => false),
@@ -334,7 +340,16 @@ describe("orchestration composer and card", () => {
       );
     }
     await act(async () => root.render(createElement(Card)));
-    expect(container.textContent).toContain("Settings UI");
+    expect(container.textContent).toContain("Build settings");
+    expect(container.textContent).not.toContain("Settings UI");
+    await click(
+      document.querySelector(
+        '[data-orchestration-review] [aria-haspopup="dialog"]',
+      )!,
+    );
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain(
+      "Settings UI",
+    );
     expect(
       container.querySelector("[data-orchestration-review]"),
     ).not.toBeNull();
@@ -386,7 +401,9 @@ describe("orchestration composer and card", () => {
       document.querySelector('[aria-label="Search assignment models"]')!,
       "Enter",
     );
-    expect(container.textContent).toContain("Worker Two · Extra High");
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain(
+      "Worker Two · Extra High",
+    );
     // The pointer reaches the same rows.
     await click(
       document.querySelector('[aria-label="Model for Settings UI"]')!,
@@ -404,11 +421,13 @@ describe("orchestration composer and card", () => {
         (option) => option.textContent === "High",
       )!,
     );
-    expect(container.textContent).toContain("Worker Two · High");
-    expect(container.querySelector("textarea")).toBeNull();
-    await click(
-      document.querySelector('[aria-label="Details for Settings UI"]')!,
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain(
+      "Worker Two · High",
     );
+    expect(container.querySelector("textarea")).toBeNull();
+    expect(
+      document.querySelector('[aria-label="Instructions for task 1"]'),
+    ).not.toBeNull();
     await input(
       document.querySelector('[aria-label="Instructions for task 1"]')!,
       "Build the accessible form and check keyboard navigation",
@@ -567,7 +586,13 @@ describe("orchestration composer and card", () => {
         ),
       ),
     );
+    await click(
+      document.querySelector(
+        '[data-orchestration-review] [aria-haspopup="dialog"]',
+      )!,
+    );
     await click(button("View agents"));
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(open).not.toHaveBeenCalled();
     expect(openAgents).toHaveBeenCalledWith([
       {

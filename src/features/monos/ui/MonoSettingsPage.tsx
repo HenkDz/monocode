@@ -10,11 +10,14 @@ import {
   saveMonoName,
   subscribeMonos,
   updateMono,
+  setOrchestrator,
   type MonoLook,
 } from "../model/mono";
+import { lockMonoField, setTeamSizeCap } from "../model/monoTeam";
+import { MonoFieldLock } from "./MonoFieldLock";
 import { ColorPicker, MascotPicker, PageHeader } from "./monoPanelParts";
 
-export type SettingsPage = "habits" | "soul" | "memory" | "settings";
+export type SettingsPage = "habits" | "soul" | "memory" | "settings" | "team";
 
 /**
  * Who the Mono is: its face and name up top, then what it does, who it is,
@@ -38,6 +41,8 @@ export function MonoSettingsPage({
   children?: ReactNode;
 }) {
   const lock = useLockOverscroll<HTMLDivElement>();
+  const mono = findMono(monoId);
+  const [roleError, setRoleError] = useState<string>();
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-mono-settings>
       {onBack ? <PageHeader title="Settings" onBack={onBack} /> : null}
@@ -52,6 +57,7 @@ export function MonoSettingsPage({
             className="size-14 shrink-0"
           />
           <NameField key={monoId} monoId={monoId} fallback={agent.mascot} />
+          <MonoFieldLock monoId={monoId} field="name" />
         </div>
 
         <div className="flex flex-col gap-3 px-3 pb-4">
@@ -69,6 +75,35 @@ export function MonoSettingsPage({
         </div>
 
         {children}
+        {mono?.role === "manager" && <label className="flex items-center justify-between gap-2 border-t border-stroke px-4 py-3 text-xs">
+          Team size cap
+          <input aria-label="Team size cap" type="number" min={1} max={24} value={mono.teamSizeCap ?? 6} className="w-12 rounded bg-transparent text-right" onChange={event => {
+            try { setTeamSizeCap(monoId, Number(event.target.value)); setRoleError(undefined); }
+            catch (error) { setRoleError(String(error)); }
+          }} />
+        </label>}
+        {(!mono?.role || mono.role === "orchestrator") && (
+          <label className="flex items-center gap-2 px-4 py-3 text-xs">
+            <input
+              type="checkbox"
+              checked={mono?.role === "orchestrator"}
+              onChange={(event) => {
+                try {
+                  setOrchestrator(monoId, event.target.checked);
+                  setRoleError(undefined);
+                } catch (error) {
+                  setRoleError(String(error));
+                }
+              }}
+            />
+            Orchestrator · leads project Managers
+          </label>
+        )}
+        {roleError && (
+          <p role="alert" className="px-4 text-xs text-red-400">
+            {roleError}
+          </p>
+        )}
 
         <nav className="flex flex-col gap-px border-t border-stroke p-2">
           <NavRow
@@ -77,17 +112,26 @@ export function MonoSettingsPage({
             onClick={() => onOpen("soul")}
           />
           <NavRow
-            label="Habits"
-            description="Recurring tasks this bot runs on its own."
-            count={counts?.habits}
-            onClick={() => onOpen("habits")}
-          />
-          <NavRow
             label="Memory"
             description="Facts and preferences this bot remembers."
             count={counts?.memory}
             onClick={() => onOpen("memory")}
           />
+          {mono?.role !== "member" && (
+            <NavRow
+              label="Habits"
+              description="Recurring tasks this bot runs on its own."
+              count={counts?.habits}
+              onClick={() => onOpen("habits")}
+            />
+          )}
+          {(mono?.role === "manager" || mono?.role === "orchestrator") && (
+            <NavRow
+              label={mono.role === "orchestrator" ? "Managers" : "Team"}
+              description="Direct reports, roles and models."
+              onClick={() => onOpen("team")}
+            />
+          )}
         </nav>
         <div className="mt-auto p-2">
           <NavRow
@@ -118,12 +162,13 @@ function NavRow({
   return (
     <button
       type="button"
+      aria-label={label}
       onClick={onClick}
-      className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left hover:bg-content/5"
+      className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left hover:bg-content/5 focus-visible:outline-accent"
     >
       <span className="flex min-w-0 flex-1 flex-col">
         <span className="text-[13px] leading-5 text-content/90">{label}</span>
-        <span className="line-clamp-1 text-[12px] leading-5 text-content/40">
+        <span title={description} className="truncate text-[12px] leading-5 text-content/40">
           {description}
         </span>
       </span>
@@ -156,7 +201,7 @@ function NameField({ monoId, fallback }: { monoId: string; fallback: string }) {
   const placeholder = defaultMonoName(fallback);
   const save = () => {
     const name = draft.trim().slice(0, 40);
-    if (name !== saved()) saveMonoName(monoId, name);
+    if (name !== saved()) { saveMonoName(monoId, name); lockMonoField(monoId, "name"); }
     setDraft(name);
   };
   return (

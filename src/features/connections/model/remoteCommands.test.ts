@@ -14,11 +14,24 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeLocal }));
 
 import { runRemoteCommand } from "./remoteCommands";
 import { parseRemotePath, remotePath } from "./remoteProjects";
-import { gitCommit, gitLocateFiles, gitStagedContext, listDir, readBinaryFile, readTextFile, statFiles, writeTextFile } from "../../../platform/tauri/fs";
+import { gitCommit, gitFetch, gitLocateFiles, gitStagedContext, listDir, readBinaryFile, readTextFile, statFiles, writeTextFile } from "../../../platform/tauri/fs";
 
 beforeEach(() => {
   remoteRequest.mockReset();
   invokeLocal.mockReset();
+});
+
+it("routes fetch only to the machine that owns the checkout", async () => {
+  await gitFetch("/home/me/repo");
+  expect(invokeLocal).toHaveBeenCalledExactlyOnceWith("git_fetch", { cwd: "/home/me/repo" });
+  expect(remoteRequest).not.toHaveBeenCalled();
+  invokeLocal.mockClear();
+  await gitFetch("remote://env/home/me/repo");
+  expect(remoteRequest).toHaveBeenCalledExactlyOnceWith("machine", "workspace.run", {
+    command: "git_fetch",
+    args: { cwd: "/home/me/repo" },
+  });
+  expect(invokeLocal).not.toHaveBeenCalled();
 });
 
 it("keeps local writes local when their content mentions a remote path", async () => {

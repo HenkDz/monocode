@@ -2,7 +2,8 @@ import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { isImeComposition } from "../../../shared/lib/keyboard";
 import { ArrowUp, Plus } from "../../../shared/ui/icons";
 import { AttachmentChip } from "../../sessions/ui/AttachmentChip";
-import type { Attachment } from "../../sessions/model/session";
+import type { Attachment, RuntimeMode } from "../../sessions/model/session";
+import { AccessPicker } from "../../sessions/ui/AccessPicker";
 import {
   attachmentsFromFiles,
   filesFromClipboard,
@@ -31,6 +32,8 @@ const FIELD_CLASSES =
   "scrollbar-none block min-w-0 w-full resize-none bg-transparent py-1 text-[13px] leading-4.5 text-content outline-none placeholder:text-content/35";
 
 type Props = {
+  runtimeMode?: RuntimeMode;
+  onRuntimeModeChange?: (mode: RuntimeMode) => void;
   sessionId: string;
   name: string;
   enabled?: boolean;
@@ -49,10 +52,11 @@ type Props = {
 /**
  * A messaging app's input for the Mono: attach, type, send, whether or not
  * it is mid-reply; Escape stops a reply. Files dropped anywhere on the chat
- * attach here. The model, permissions and checkout
- * live in the details panel instead.
+ * attach here. Permissions sit beside attach in the bottom toolbar.
  */
 export function MonoComposer({
+  runtimeMode,
+  onRuntimeModeChange,
   sessionId,
   name,
   enabled = true,
@@ -86,7 +90,10 @@ export function MonoComposer({
     (text.trim().length > 0 || attachments.length > 0);
   // Attachments sit above the field like a second line of text, so the field
   // moves above the buttons for them too.
-  const stacked = multiline || attachments.length > 0;
+  const stacked =
+    multiline ||
+    attachments.length > 0 ||
+    !!(runtimeMode && onRuntimeModeChange);
 
   useLayoutEffect(() => {
     const el = field.current;
@@ -299,16 +306,6 @@ export function MonoComposer({
               className={`${FIELD_CLASSES} col-start-2 h-0 overflow-hidden`}
             />
           </div>
-          <button
-            type="button"
-            title="Attach files"
-            aria-label="Attach files"
-            disabled={!enabled || submitting}
-            onClick={() => readAttachments(pickAttachments)}
-            className={`col-start-1 grid size-6.5 place-items-center rounded-md bg-content/8 text-content/55 hover:bg-content/12 hover:text-content ${stacked ? "row-start-2" : "row-start-1"}`}
-          >
-            <Plus className="size-3.5" strokeWidth={1.75} />
-          </button>
           <textarea
             ref={field}
             rows={1}
@@ -339,15 +336,43 @@ export function MonoComposer({
             }}
             className={`${FIELD_CLASSES} row-start-1 ${stacked ? "col-span-3 col-start-1 px-1.5" : "col-start-2"}`}
           />
-          <button
-            type="submit"
-            aria-label="Send"
-            title={pendingReads ? "Reading attachments…" : "Send"}
-            disabled={!ready}
-            className={`primary-action col-start-3 grid size-6.5 place-items-center rounded-md transition-[background-color,color,transform] duration-150 active:scale-90 disabled:cursor-default ${stacked ? "row-start-2" : "row-start-1"}`}
+          <div
+            data-mono-composer-toolbar
+            className={
+              stacked
+                ? "col-span-3 row-start-2 flex min-w-0 items-center gap-1.5"
+                : "contents"
+            }
           >
-            <ArrowUp className="size-3.5" strokeWidth={2} />
-          </button>
+            <button
+              type="button"
+              title="Attach files"
+              aria-label="Attach files"
+              disabled={!enabled || submitting}
+              onClick={() => readAttachments(pickAttachments)}
+              className={`grid size-6.5 shrink-0 place-items-center rounded-md bg-content/8 text-content/55 hover:bg-content/12 hover:text-content ${stacked ? "" : "col-start-1 row-start-1"}`}
+            >
+              <Plus className="size-3.5" strokeWidth={1.75} />
+            </button>
+            {runtimeMode && onRuntimeModeChange && (
+              <div className="flex min-w-0 flex-1 items-center [&>div]:min-w-0 [&_button]:max-w-full">
+                <AccessPicker
+                  value={runtimeMode}
+                  onChange={onRuntimeModeChange}
+                  onClose={() => field.current?.focus()}
+                />
+              </div>
+            )}
+            <button
+              type="submit"
+              aria-label="Send"
+              title={pendingReads ? "Reading attachments…" : "Send"}
+              disabled={!ready}
+              className={`primary-action grid size-6.5 shrink-0 place-items-center rounded-md transition-[background-color,color,transform] duration-150 active:scale-90 disabled:cursor-default ${stacked ? "ml-auto" : "col-start-3 row-start-1"}`}
+            >
+              <ArrowUp className="size-3.5" strokeWidth={2} />
+            </button>
+          </div>
         </div>
       </div>
     </form>

@@ -132,10 +132,16 @@ function samePosition(a: PopoverPosition | null, b: PopoverPosition): boolean {
  */
 export function Popover(props: Props) {
   const host = useContext(NativePopupHost);
+  const inDialog = !!anchorElement(props.anchor)?.closest(
+    '[aria-modal="true"], [data-dialog-popover]',
+  );
+  const layer = inDialog
+    ? Math.max(props.layer ?? LAYER.popover, LAYER.dialogPopover)
+    : props.layer;
   return host ? (
-    <NativePopover {...props} host={host} />
+    <NativePopover {...props} data-dialog-popover={inDialog || undefined} host={host} />
   ) : (
-    <WebPopover {...props} />
+    <WebPopover {...props} layer={layer} data-dialog-popover={inDialog || undefined} />
   );
 }
 
@@ -276,9 +282,10 @@ function WebPopover({
     };
   }, [place]);
 
+  const positioned = position !== null;
   useEffect(() => {
-    if (autoFocus) surface.current?.focus();
-  }, [autoFocus]);
+    if (autoFocus && positioned) surface.current?.focus({ preventScroll: true });
+  }, [autoFocus, positioned]);
 
   useEffect(() => {
     if (!onDismiss) return;

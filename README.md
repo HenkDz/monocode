@@ -70,6 +70,25 @@ npm install
 npm run tauri dev
 ```
 
+For screenshots or other previews, build a separate preview executable/profile
+(with its own Tauri application identifier), then launch the executable by
+absolute path from a newly created empty temporary folder. Never launch a
+preview from a repository checkout: MonoCode registers its launch folder as a
+project. Keep the build and frontend server in the checkout; only the desktop
+process's working directory must be isolated.
+
+```powershell
+# Windows: use the absolute path to your separately built preview executable.
+$previewFolder = New-Item -ItemType Directory -Path (Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString()))
+Start-Process -FilePath 'C:\absolute\path\to\monocode-preview.exe' -WorkingDirectory $previewFolder.FullName -WindowStyle Hidden
+```
+
+```bash
+# macOS/Linux: use the absolute path to your separately built preview executable.
+preview_folder=$(mktemp -d)
+(cd "$preview_folder" && /absolute/path/to/monocode-preview)
+```
+
 ### Ubuntu / Debian packages
 
 On an Ubuntu/Debian workstation, the repository can install the native Tauri prerequisites and build distributable Linux packages directly:

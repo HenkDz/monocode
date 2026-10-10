@@ -112,11 +112,9 @@ it("lets the user choose every permission mode from Details and reflects the sav
   }
 });
 
-it("explains when permissions take effect while the Mono is working", async () => {
+it("keeps permissions editable while the Mono is working without claiming they are deferred", async () => {
   await render("auto", true);
-  expect(trigger().title).toContain("Changes apply to the next turn.");
+  expect(trigger().title).not.toContain("Changes apply to the next turn.");
   act(() => trigger().click());
-  expect(document.querySelector("[data-access-picker]")?.textContent).toContain(
-    "Access changes apply to the next turn. Stop and resend to apply them now.",
-  );
+  expect(document.querySelector("[data-access-picker]")?.textContent).not.toContain("Access changes apply to the next turn.");
 });

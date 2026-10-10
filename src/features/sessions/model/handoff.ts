@@ -1,3 +1,4 @@
+import { isUserMessage } from "./teamMessage";
 import { isEditTool } from "../../../integrations/harness/core/preview";
 import { compactCiRepairContext } from "../../inbox/model/ciRepair";
 import { limitSection } from "../../../shared/lib/jsonText";
@@ -221,7 +222,7 @@ export function userMessagesAfterHandoff(session: Session): string[] {
   if (start < 0) return [];
   return session.blocks
     .slice(start + 1)
-    .filter((block) => block.role === "user")
+    .filter(isUserMessage)
     .map((block) => (block.ciContext || block.text).trim())
     .filter(Boolean);
 }
@@ -308,7 +309,7 @@ function handoffParts(
 
   for (const block of session.blocks) {
     if (block.role === "handoff" || block.role === "reasoning") continue;
-    if (block.role === "user") {
+    if (isUserMessage(block)) {
       users.push(block);
       continue;
     }

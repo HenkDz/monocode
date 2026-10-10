@@ -5,6 +5,15 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { copyMessage } from "../../../platform/tauri/clipboard";
 import type { Block } from "../model/session";
+import {
+  appendUser,
+  stopStreaming,
+} from "../../../integrations/harness/core/apply";
+import { newSession } from "../model/session";
+import {
+  monoMessageDeliveries,
+  rejectMessageSend,
+} from "../../monos/model/monoMessaging";
 import { AgentTranscript, MonoActivityTrail } from "./AgentTranscript";
 import { WORD_FADE_MS } from "./wordFade";
 
@@ -92,6 +101,100 @@ function settleTicker() {
   act(() => vi.advanceTimersByTime(850));
   act(() => vi.advanceTimersByTime(340));
 }
+
+it("renders incoming team messages inline with sender identity, clamping and no user actions", () => {
+  const text = "Long investigation update. ".repeat(30);
+  render([{ id: "team", role: "user", text: "provider envelope", monoTeamMessage: { id: "sender", name: "Backend", mascot: "fox", color: "#abc", topic: "report", text } }], { onEditLastTurn: vi.fn(), onRetryMessage: vi.fn(), onSendDraft: vi.fn(), onRemoveDraft: vi.fn() });
+  const incoming = container.querySelector('[data-team-message="sender"]')!;
+  expect(incoming.className).toContain("mr-auto");
+  expect(incoming.textContent).toContain("Backend");
+  expect(incoming.textContent).toContain("Team message");
+  expect(incoming.querySelector("details")).toBeNull();
+  expect(incoming.textContent).toContain("Long investigation update.");
+  expect(incoming.querySelector(".line-clamp-4")).not.toBeNull();
+  const expand = incoming.querySelector<HTMLButtonElement>('button[aria-expanded]')!;
+  expect(expand.textContent).toBe("Show more");
+  act(() => expand.click());
+  expect(incoming.querySelector(".line-clamp-4")).toBeNull();
+  expect(expand.getAttribute("aria-expanded")).toBe("true");
+  expect(expand.textContent).toBe("Show less");
+  act(() => expand.click());
+  expect(incoming.querySelector(".line-clamp-4")).not.toBeNull();
+  expect(container.querySelector("[data-prompt-anchor]")).toBeNull();
+  expect(container.querySelector('[aria-label="Edit message"]')).toBeNull();
+  expect(container.textContent).not.toContain("provider envelope");
+});
+
+it.each(["C:/preview/monocode.exe app projects.list", "C:/preview/monocode-r5-cards.exe app projects.list"])("shows automatic approval reason in the inline chat card for %s", command => {
+  const onApproval = vi.fn();
+  const reason = "Not auto-approved: executable does not resolve to the running MonoCode app.";
+  const block: Block = { id: "pending", role: "tool", text: command, tool: { kind: "shell", title: command, status: "pending" }, approval: { requestId: 42, autoApprovalReason: reason } };
+  render([{ id: "user", role: "user", text: "Read project status" }, block], { busy: true, onApproval });
+  expect(container.querySelector('[aria-label="Automatic approval status"]')?.textContent).toBe(reason);
+  const allow = [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Allow")!;
+  act(() => allow.click());
+  expect(onApproval).toHaveBeenCalledWith(42, "allow");
+  render([block], { busy: true });
+  expect(container.querySelector('[aria-label="Automatic approval status"]')?.textContent).toBe(reason);
+  expect(container.textContent).not.toContain("Allow");
+  render([{ ...block, approval: { ...block.approval!, decided: "allow" } }]);
+  expect(container.querySelector('[aria-label="Automatic approval status"]')).toBeNull();
+});
+
+it.each([true, false])(
+  "renders a rejected turn as Not sent, not assistant work (Mono: %s)",
+  (mono) => {
+    const error =
+      "This checkout is controlled by an orchestrator. Stop that run before starting independent work.";
+    const attachments = [
+      {
+        id: "file",
+        name: "note.txt",
+        kind: "file" as const,
+        mimeType: "text/plain",
+        size: 12,
+        path: "/tmp/note.txt",
+      },
+    ];
+    const submitted = appendUser(
+      newSession("codex", "/tmp"),
+      "Inspect this",
+      attachments,
+    );
+    const blockId = submitted.blocks[0].id;
+    const session = stopStreaming(
+      rejectMessageSend(
+        submitted,
+        { id: blockId, blockId, text: "Inspect this", attachments },
+        error,
+      ),
+    );
+    const retry = vi.fn();
+    render(session.blocks, {
+      inlineWork: mono,
+      busy: session.busy,
+      ...(mono
+        ? { agentMascot: { mascot: "cat" as const, color: "#6ba" } }
+        : {}),
+      messageDeliveries: monoMessageDeliveries(session),
+      onRetryMessage: retry,
+    });
+    const bubble = container.querySelector("[data-prompt-anchor]")!;
+    expect(bubble.getAttribute("data-message-delivery")).toBe("failed");
+    expect(bubble.textContent).toContain("Inspect this");
+    expect(bubble.textContent).toContain("note.txt");
+    expect(bubble.querySelector('[role="alert"]')?.textContent).toBe(
+      `Not sent · ${error}`,
+    );
+    expect(container.querySelector("[data-mono-work]")).toBeNull();
+    expect(container.textContent).not.toMatch(/worked for/i);
+    const button = [
+      ...bubble.querySelectorAll<HTMLButtonElement>("button"),
+    ].find((button) => button.textContent === "Retry")!;
+    act(() => button.click());
+    expect(retry).toHaveBeenCalledWith(blockId);
+  },
+);
 
 it("shows a document below its reply in the originating turn and opens it", () => {
   const onOpenArtifact = vi.fn();

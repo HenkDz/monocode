@@ -2,7 +2,7 @@
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createMono } from "../../features/monos/model/mono";
+import { createMono, monoLook } from "../../features/monos/model/mono";
 import { MonoRailSection } from "./MonoRailSection";
 
 let root: Root;
@@ -46,6 +46,15 @@ const button = (label: string) =>
   [...document.body.querySelectorAll("button")].find(
     (entry) => entry.textContent === label,
   )!;
+
+it("names a Mono by its availability without exposing command paths", () => {
+  const mono = createMono();
+  render({ states: new Map([[mono.id, { status: "working", activity: "& 'C:\\Private\\monocode.exe' app --help" }]]) });
+  const row = container.querySelector(`[data-mono-status="working"] button`)!;
+  expect(row.getAttribute("aria-label")).toBe(`${monoLook(mono).name}, Working`);
+  expect(row.getAttribute("aria-label")).not.toContain("monocode.exe");
+  expect(row.getAttribute("aria-label")).not.toContain("Private");
+});
 
 it("offers a new mono in place of the list, and meets a new user beside it", () => {
   const onCreate = render({ introAvailable: true });

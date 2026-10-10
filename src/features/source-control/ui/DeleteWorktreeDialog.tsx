@@ -1,4 +1,5 @@
 import {
+  useEffect,
   useState,
   type ComponentType,
   type FormEvent,
@@ -7,6 +8,7 @@ import {
 import { prettyCwd } from "../../../shared/lib/paths";
 import { type Worktree } from "../model/worktrees";
 import { Modal } from "../../../shared/ui/Modal";
+import { gitDiffIndex, type GitDiffIndex } from "../../../platform/tauri/fs";
 import {
   CircleAlert,
   CloudUpload,
@@ -47,6 +49,9 @@ export function DeleteWorktreeDialog({
   onRemove,
   onClose,
   onDeleted,
+  onDeleteBranch,
+  onOpenChanges,
+  allowDeleteSessions = true,
 }: {
   cwd: string;
   tree: Worktree;
@@ -59,19 +64,44 @@ export function DeleteWorktreeDialog({
   ) => Promise<void>;
   onClose: () => void;
   onDeleted: () => void;
+  onDeleteBranch?: (force: boolean) => Promise<void>;
+  onOpenChanges?: (path: string) => void;
+  allowDeleteSessions?: boolean;
 }) {
   const [busy, setBusy] = useState(false);
   const [deleteSessions, setDeleteSessions] = useState(false);
+  const [deleteBranch, setDeleteBranch] = useState(false);
+  const [forceBranch, setForceBranch] = useState(false);
+  const [removed, setRemoved] = useState(false);
   const [error, setError] = useState<string>();
+  const [changes, setChanges] = useState<GitDiffIndex | null>();
+  useEffect(() => {
+    let cancelled = false;
+    setChanges(undefined);
+    void gitDiffIndex(tree.path, true).then(
+      (index) => { if (!cancelled) setChanges(index); },
+      () => { if (!cancelled) setChanges(null); },
+    );
+    return () => { cancelled = true; };
+  }, [tree.path]);
+  const files = changes?.files ?? [];
+  const modified = files.filter((file) => file.unstaged && file.status !== "untracked").length;
+  const untracked = files.filter((file) => file.status === "untracked").length;
+  const staged = files.filter((file) => file.staged).length;
+  const unpushed = changes?.upstream ? changes.ahead : 0;
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (busy) return;
+    if (busy || changes === undefined) return;
     setBusy(true);
     setError(undefined);
     try {
       // Confirmation covers the complete destructive action, including any
       // local changes that appeared after the last status refresh.
-      await onRemove(cwd, tree.path, true, deleteSessions);
+      if (!removed) {
+        await onRemove(cwd, tree.path, true, deleteSessions);
+        setRemoved(true);
+      }
+      if (deleteBranch) await onDeleteBranch?.(forceBranch);
       onDeleted();
     } catch (e) {
       setError(String(e));
@@ -83,6 +113,7 @@ export function DeleteWorktreeDialog({
     <Modal
       title="Delete worktree?"
       size="sm"
+      fitViewport
       onClose={() => {
         if (!busy) onClose();
       }}
@@ -114,15 +145,46 @@ export function DeleteWorktreeDialog({
                   : "kept. Select a branch or worktree to continue them."}
               </Consequence>
             )}
-            {tree.dirty && (
-              <Consequence icon={FileDiff} tone="warn">
-                All uncommitted and untracked changes here are discarded.
+            {changes === undefined && (
+              <Consequence icon={Loader}>
+                <span role="status">Checking changes and unpushed commits…</span>
               </Consequence>
             )}
-            {tree.dirty == null && (
+            {changes && files.length > 0 && (
+              <Consequence icon={FileDiff} tone="warn">
+                All uncommitted and untracked changes here are discarded.
+                <p className="mt-1 font-medium text-content">
+                  {[
+                    modified && `${modified} modified`,
+                    untracked && `${untracked} untracked`,
+                    staged && `${staged} staged`,
+                  ].filter(Boolean).join(" · ")}
+                </p>
+                <ul className="mt-1 space-y-0.5 font-mono text-[11px] text-content/60">
+                  {files.slice(0, 5).map((file) => (
+                    <li key={file.relative} className="break-all">{file.relative}</li>
+                  ))}
+                </ul>
+                {files.length > 5 && <p className="text-content/55">+{files.length - 5} more</p>}
+                {onOpenChanges && (
+                  <button
+                    type="button"
+                    disabled={busy || removed}
+                    className="mt-1 text-content underline underline-offset-2 disabled:opacity-40"
+                    onClick={() => { onOpenChanges(tree.path); onClose(); }}
+                  >
+                    Open changes
+                  </button>
+                )}
+              </Consequence>
+            )}
+            {changes && files.length === 0 && (
+              <Consequence icon={FileDiff}>No uncommitted or untracked changes.</Consequence>
+            )}
+            {changes === null && (
               <Consequence icon={CircleAlert} tone="warn">
                 Changes could not be checked. Anything uncommitted here is
-                discarded.
+                discarded. Unpushed commits could not be checked.
               </Consequence>
             )}
             <Consequence icon={GitBranch}>
@@ -132,21 +194,55 @@ export function DeleteWorktreeDialog({
                   <span className="font-medium text-content">
                     {tree.branch}
                   </span>{" "}
-                  branch and its commits are kept.
+                  {deleteBranch
+                    ? forceBranch
+                      ? "local branch will be force-deleted, even if unmerged. Commits not saved elsewhere may be lost. Remote branches are untouched."
+                      : "local branch will also be deleted if Git confirms it is merged. Remote branches are untouched."
+                    : "branch and its commits are kept."}
                 </>
               ) : (
-                "The branch is kept."
+                <>Detached commit <span className="font-mono text-content">{tree.head.slice(0, 7)}</span>. Commits not saved elsewhere may be lost.</>
               )}
             </Consequence>
-            {!!tree.unpushed && (
+            {!!unpushed && (
               <Consequence icon={CloudUpload}>
-                {tree.unpushed} commit{tree.unpushed === 1 ? " is" : "s are"}{" "}
-                not on a remote. They stay on the branch.
+                {unpushed} commit{unpushed === 1 ? "" : "s"} not pushed.{" "}
+                {deleteBranch
+                  ? "Branch deletion may lose access to these commits."
+                  : "They stay on the branch."}
               </Consequence>
             )}
           </ul>
         </div>
-        {sessionCount > 0 && (
+        {onDeleteBranch && tree.branch && (
+          <label className="flex gap-2">
+            <input
+              type="checkbox"
+              checked={deleteBranch}
+              disabled={busy || removed}
+              onChange={(e) => setDeleteBranch(e.target.checked)}
+            />
+            Also delete local branch
+          </label>
+        )}
+        {onDeleteBranch && deleteBranch && (
+          <label className="flex gap-2 text-red-400">
+            <input
+              type="checkbox"
+              checked={forceBranch}
+              disabled={busy}
+              onChange={(e) => setForceBranch(e.target.checked)}
+            />
+            Force delete unmerged branch — commits may be lost
+          </label>
+        )}
+        {removed && (
+          <p role="status">
+            Worktree removed; branch cleanup failed. Retry cleanup or close this
+            dialog. Sessions were {deleteSessions ? "deleted" : "retained"}.
+          </p>
+        )}
+        {sessionCount > 0 && allowDeleteSessions && (
           <div className="flex items-center justify-between gap-3 rounded-lg border border-content/10 p-3">
             <span
               id="delete-worktree-sessions-label"
@@ -159,7 +255,7 @@ export function DeleteWorktreeDialog({
               role="switch"
               aria-labelledby="delete-worktree-sessions-label"
               aria-checked={deleteSessions}
-              disabled={busy}
+              disabled={busy || removed}
               onClick={() => setDeleteSessions(!deleteSessions)}
               className={`relative h-5 w-9 shrink-0 rounded-full transition-colors disabled:opacity-40 ${deleteSessions ? "bg-red-500" : "bg-content/20"}`}
             >
@@ -185,11 +281,15 @@ export function DeleteWorktreeDialog({
           </button>
           <button
             type="submit"
-            disabled={busy}
+            disabled={busy || changes === undefined}
             className="inline-flex items-center gap-1.5 rounded-md bg-red-500/20 px-3 py-1.5 font-medium text-red-400 hover:bg-red-500/30 disabled:opacity-40 disabled:hover:bg-red-500/20 active:scale-[0.97]"
           >
             {busy && <Loader className="size-3.5 animate-spin" />}
-            {sessionCount && deleteSessions
+            {removed
+              ? forceBranch ? "Force delete branch" : "Retry branch cleanup"
+              : forceBranch && deleteBranch
+                ? "Delete worktree and force delete branch"
+                : sessionCount && deleteSessions
               ? `Delete worktree and session${sessionCount === 1 ? "" : "s"}`
               : "Delete worktree"}
           </button>

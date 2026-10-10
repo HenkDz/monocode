@@ -19,8 +19,10 @@ import {
 import {
   applyInboxFilters,
   inboxFetchState,
+  INBOX_FILTERS_CHANGE_EVENT,
   loadInboxFilters,
   pruneInboxFilters,
+  type InboxFilters,
 } from "../model/inboxFilters";
 import {
   inboxHasUnseenItems,
@@ -105,6 +107,7 @@ export function useInboxActivity(
   options?: { onAppeared?: (items: InboxItem[]) => void },
 ): InboxActivity {
   const [unseen, setUnseen] = useState(false);
+  const [filters, setFilters] = useState(loadInboxFilters);
   const [workItems, setWorkItems] = useState<
     ReadonlyMap<string, GithubWorkItem>
   >(() => new Map());
@@ -157,6 +160,14 @@ export function useInboxActivity(
   );
 
   useEffect(() => {
+    const onChange = (event: Event) => setFilters((event as CustomEvent<InboxFilters>).detail);
+    window.addEventListener(INBOX_FILTERS_CHANGE_EVENT, onChange);
+    return () => window.removeEventListener(INBOX_FILTERS_CHANGE_EVENT, onChange);
+  }, []);
+
+  useEffect(() => {
+    entriesRef.current = [];
+    applyUnseen();
     const projects = inboxProjectsForRail(recents, cwd);
     if (projects.length === 0) {
       entriesRef.current = [];
@@ -176,10 +187,11 @@ export function useInboxActivity(
       pulling = true;
       lastPulledAt.current = Date.now();
       const projectPaths = projects.map((project) => project.path);
-      const filters = pruneInboxFilters(loadInboxFilters(), projectPaths);
+      const activeFilters = pruneInboxFilters(filters, projectPaths);
       const query: InboxQuery = {
-        assignedToMe: filters.assignedToMe,
-        state: inboxFetchState(filters),
+        assignedToMe: activeFilters.assignedToMe,
+        includeGithubParents: activeFilters.includeGithubParents,
+        state: inboxFetchState(activeFilters),
         search: "",
         linearHiddenTeamIds: loadHiddenLinearTeamIds(),
         jiraHiddenProjectIds: loadHiddenJiraProjectIds(),
@@ -187,7 +199,7 @@ export function useInboxActivity(
       try {
         const listed = await listInboxItems(projects, query, { force });
         if (cancelled) return;
-        const visible = applyInboxFilters(listed.items, filters, "");
+        const visible = applyInboxFilters(listed.items, activeFilters, "");
         rememberNotificationProjects(
           listed.items.map(inboxNotificationProject),
         );
@@ -314,7 +326,7 @@ export function useInboxActivity(
       window.removeEventListener(JIRA_CHANGE_EVENT, onJiraChange);
       stopSelfActivity();
     };
-  }, [applyUnseen, cwd, recents]);
+  }, [applyUnseen, cwd, filters, recents]);
 
   const updates = useMemo(
     () => linkedSessionUpdates(sessions, workItems, linkedSessionSeenAt),

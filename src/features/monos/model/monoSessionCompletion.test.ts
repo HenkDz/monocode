@@ -15,6 +15,7 @@ import {
 import {
   dismissQueuedMonoSessionCompletion,
   enqueueMonoSessionCompletion,
+  coveredGoalDecision,
   monoSessionCompletionMessage,
   monoSessionCompletionResult,
   MonoSessionCompletionBatches,
@@ -58,6 +59,27 @@ function groupedMessage() {
 }
 
 describe("Mono session completion notifications", () => {
+  it("does not escalate both a goal status and its specific pending permission", () => {
+    const source = { ...newSession("claude", "/app"), blocks: [{ id: "permission", role: "assistant" as const, text: "Access", approval: { requestId: 1 } }] };
+    expect(coveredGoalDecision("needs-you", source)).toBe(true);
+    expect(coveredGoalDecision("blocked", source)).toBe(true);
+    expect(coveredGoalDecision("done", source)).toBe(false);
+    expect(coveredGoalDecision("ready", source)).toBe(false);
+    expect(coveredGoalDecision("blocked", { ...source, blocks: [] })).toBe(false);
+  });
+  it("delivers identical events once, never through the user's outbox", () => {
+    const event = monoSessionCompletionMessage(options);
+    let mono = enqueueMonoSessionCompletion(newSession("claude", options.project), event);
+    mono = enqueueMonoSessionCompletion(mono, { ...event, id: "duplicate-source" });
+    expect(mono.queuedMessages).toBeUndefined();
+    expect(mono.pendingMonoEvents).toHaveLength(1);
+    expect(queuedMessageForSubmit(mono, event.id, "dispatch")).toBe(event);
+    const delivered = dequeueQueuedMessage({ ...mono, blocks: [{ id: "receipt", role: "user", internal: true,
+      appRequestId: event.id, text: event.text }] }, event.id);
+    expect(delivered.pendingMonoEvents).toHaveLength(0);
+    expect(enqueueMonoSessionCompletion(delivered, event)).toBe(delivered);
+    expect(enqueueMonoSessionCompletion(delivered, { ...event, id: "another-source" })).toBe(delivered);
+  });
   it("accepts immediately, then queues completion behind chat without steering a busy Mono", async () => {
     let mono: Session = {
       ...newSession("codex", "/code/project"),
@@ -88,6 +110,8 @@ describe("Mono session completion notifications", () => {
     settle(options.outcome);
     expect(mono.queuedMessages?.map((message) => message.id)).toEqual([
       "chat",
+    ]);
+    expect(mono.pendingMonoEvents?.map((message) => message.id)).toEqual([
       "mono-completion-app-mono-request",
     ]);
     const next = dequeueQueuedMessage(mono, "chat");
@@ -240,6 +264,21 @@ describe("Mono session completion notifications", () => {
     expect(
       dismissQueuedMonoSessionCompletion(last, "completed").queuedMessages,
     ).toEqual([]);
+  });
+
+  it("dismisses internal events from the org queue without exposing them in the user outbox", () => {
+    const target = monoSessionCompletionMessage(options);
+    const other = monoSessionCompletionMessage({ ...options, requestId: "other", sessionId: "other" });
+    const chat = { id: "chat", text: "Explain the change", attachments: [] };
+    const mono: Session = {
+      ...newSession("codex", options.project),
+      queuedMessages: [chat],
+      pendingMonoEvents: [target, other],
+    };
+    const next = dismissQueuedMonoSessionCompletion(mono, "worker");
+    expect(next.queuedMessages).toEqual([chat]);
+    expect(next.pendingMonoEvents).toEqual([other]);
+    expect(dismissQueuedMonoSessionCompletion(next, "worker")).toBe(next);
   });
 
   it("leaves unrelated or unrecognized saved batches untouched", () => {

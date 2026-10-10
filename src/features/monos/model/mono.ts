@@ -1,4 +1,6 @@
 import { projectKey, projectName } from "../../../shared/lib/paths";
+import { validateMonoOrg, validateMonoOrgTransition, withDefaultTeam } from "./monoOrg";
+import { HARNESSES, RUNTIME_MODES, type RuntimeMode, type HarnessId } from "../../sessions/model/session";
 import {
   loadTabGroupColors,
   loadTabGroupCustomColors,
@@ -19,6 +21,7 @@ import {
   projectMascot,
 } from "../../projects/model/projectMascots";
 import { removeMonoBackground } from "./monoBackground";
+import type { TeamChange, TeamLockedField } from "./monoTeam";
 
 /** The project palette's colors, plus indigo for a Mono's ninth preset. */
 export const MONO_COLORS = [
@@ -33,6 +36,32 @@ export const MONO_COLORS = [
  */
 export type Mono = {
   id: string;
+  /** Project removal hides the team without discarding identity or history. */
+  archivedAt?: number;
+  role?: "orchestrator" | "manager" | "member";
+  reportsTo?: string;
+  specialty?: string;
+  teamInitialized?: boolean;
+  /** Project study and current team rationale, stored in the artifact system. */
+  teamPlanArtifactId?: string;
+  origin?: "starter" | "manager";
+  reviewer?: boolean;
+  userLockedFields?: TeamLockedField[];
+  teamSizeCap?: number;
+  /** Durable receipts and reversible team history, owned by this Manager. */
+  teamChanges?: TeamChange[];
+  workerProfile?: {
+    harness: HarnessId;
+    model: string;
+    modelSettings?: Record<string, string>;
+  };
+  lastUsedAt?: number;
+  /** Original Manager folder; its existing engine key is retained after migration. */
+  managerProject?: string;
+  /** Stable across lazy chat creation and chat resets; preserves migrated engines. */
+  managerEngineId?: string;
+  /** Retained engine folders, including folders removed from active assignments. */
+  workerProjects?: string[];
   /** Its conversation; absent until it is first opened. */
   sessionId?: string;
   /** Replaces the mascot's own name. */
@@ -55,6 +84,7 @@ export type Mono = {
 };
 
 const ROSTER_KEY = "monocode:mono-roster";
+const LEGACY_PERMISSIONS_KEY = "monocode:mono-permissions-migration";
 const MONOS_CHANGED = "monocode:monos-changed";
 export const HANDED_KEY = "monocode:mono-handed";
 
@@ -156,8 +186,63 @@ function parseMono(value: unknown): Mono | undefined {
   const name = text("name");
   const instructions = text("instructions");
   const legacyProject = text("legacyProject");
+  const profile = record(entry.workerProfile);
+  const settings = record(profile.modelSettings);
+  const workerProfile =
+    HARNESSES.includes(profile.harness as HarnessId) &&
+    typeof profile.model === "string" &&
+    profile.model.length > 0 &&
+    profile.model.length <= 256
+      ? {
+          harness: profile.harness as HarnessId,
+          model: profile.model,
+          modelSettings: Object.fromEntries(
+            Object.entries(settings).filter(
+              ([key, value]) =>
+                key.length <= 100 &&
+                typeof value === "string" &&
+                value.length <= 1000,
+            ),
+          ) as Record<string, string>,
+        }
+      : undefined;
   return {
     id: entry.id,
+    ...(typeof entry.archivedAt === "number" && Number.isFinite(entry.archivedAt)
+      ? { archivedAt: entry.archivedAt }
+      : {}),
+    ...(["orchestrator", "manager", "member"].includes(String(entry.role))
+      ? { role: entry.role as Mono["role"] }
+      : {}),
+    ...(text("reportsTo") ? { reportsTo: text("reportsTo") } : {}),
+    ...(text("specialty") ? { specialty: text("specialty") } : {}),
+    ...(entry.teamInitialized === true ? { teamInitialized: true } : {}),
+    ...(text("teamPlanArtifactId") ? { teamPlanArtifactId: text("teamPlanArtifactId") } : {}),
+    ...(entry.origin === "manager" || entry.origin === "starter"
+      ? { origin: entry.origin }
+      : entry.role === "member" ? { origin: "starter" as const } : {}),
+    ...(entry.reviewer === true ? { reviewer: true } : {}),
+    ...(Array.isArray(entry.userLockedFields) ? { userLockedFields: entry.userLockedFields.filter((field): field is TeamLockedField => ["name", "specialty", "soul", "harness", "model", "modelSettings"].includes(String(field))) } : {}),
+    ...(Number.isInteger(entry.teamSizeCap) && Number(entry.teamSizeCap) >= 1 && Number(entry.teamSizeCap) <= 24 ? { teamSizeCap: Number(entry.teamSizeCap) } : {}),
+    ...(Array.isArray(entry.teamChanges) ? { teamChanges: entry.teamChanges as TeamChange[] } : {}),
+    ...(workerProfile ? { workerProfile } : {}),
+    ...(typeof entry.lastUsedAt === "number" &&
+    Number.isFinite(entry.lastUsedAt)
+      ? { lastUsedAt: entry.lastUsedAt }
+      : {}),
+    ...(text("managerProject")
+      ? { managerProject: text("managerProject") }
+      : {}),
+    ...(text("managerEngineId") || (text("managerProject") && text("sessionId"))
+      ? { managerEngineId: text("managerEngineId") ?? text("sessionId") }
+      : {}),
+    ...(Array.isArray(entry.workerProjects)
+      ? {
+          workerProjects: entry.workerProjects.filter(
+            (path): path is string => typeof path === "string",
+          ),
+        }
+      : {}),
     ...(sessionId ? { sessionId } : {}),
     ...(name ? { name } : {}),
     mascot: text("mascot") ?? PROJECT_MASCOTS[0].name,
@@ -177,33 +262,244 @@ function parseMono(value: unknown): Mono | undefined {
 }
 
 /** Every Mono, in the order the rail shows them. */
-export function listMonos(): Mono[] {
+export function listMonos(includeArchived = false): Mono[] {
   migrateLegacyMonoStorage();
-  const parsed = readJson(ROSTER_KEY);
-  if (!Array.isArray(parsed)) return [];
-  return parsed.flatMap((entry) => parseMono(entry) ?? []);
+  const stored = readJson(ROSTER_KEY);
+  if (!Array.isArray(stored)) return [];
+  let parsed: unknown[] = stored;
+  const pending = record(readJson(LEGACY_PERMISSIONS_KEY));
+  if (parsed.some((value) => Object.prototype.hasOwnProperty.call(record(value), "runtimeMode"))) {
+    const clean = parsed.map((value) => {
+      const { runtimeMode, ...entry } = record(value);
+      if (typeof entry.id === "string" && RUNTIME_MODES.includes(runtimeMode as RuntimeMode) && !Object.prototype.hasOwnProperty.call(pending, entry.id))
+        pending[entry.id] = runtimeMode;
+      return entry;
+    });
+    try {
+      // Keep the migration input durable until its session has been saved.
+      localStorage.setItem(LEGACY_PERMISSIONS_KEY, JSON.stringify(pending));
+      localStorage.setItem(ROSTER_KEY, JSON.stringify(clean));
+      parsed = clean;
+    } catch {
+      // Retry when storage is available; never discard an unsaved choice.
+    }
+  }
+  return parsed.flatMap((entry) => {
+    const mono = parseMono(entry);
+    return mono && (includeArchived || mono.archivedAt == null) ? [mono] : [];
+  });
 }
 
-function saveRoster(roster: readonly Mono[]): void {
+function saveRoster(roster: readonly Mono[], strict = false, emptyTeamUndoManagerId?: string): void {
+  roster = withAssignedManagers(roster);
+  validateMonoOrg(roster);
+  validateMonoOrgTransition(listMonos(true), roster, emptyTeamUndoManagerId);
   try {
     localStorage.setItem(ROSTER_KEY, JSON.stringify(roster));
-  } catch {
+  } catch (error) {
+    if (strict) throw error;
     return;
   }
   window.dispatchEvent(new CustomEvent(MONOS_CHANGED));
+}
+
+function withAssignedManagers(roster: readonly Mono[]): Mono[] {
+  const next = [...roster];
+  const orchestrator = next.find(mono => mono.role === "orchestrator" && mono.archivedAt == null);
+  if (!orchestrator) return next;
+  for (const project of orchestrator.projects) {
+    const existing = next.findIndex(mono => mono.role === "manager" && monoWorksOn(mono, project));
+    if (existing >= 0) {
+      if (next[existing].archivedAt == null && next[existing].reportsTo !== orchestrator.id)
+        next[existing] = { ...next[existing], reportsTo: orchestrator.id };
+      continue;
+    }
+    const key = projectKey(project);
+    const seed = projectName(project);
+    next.push({
+      id: newMonoId(), role: "manager", reportsTo: orchestrator.id,
+      projects: [project], managerProject: project,
+      name: `${resolveTabGroupLabel(key, loadTabGroupLabels(), seed)} Manager`,
+      mascot: projectMascot(seed, resolveTabGroupMascot(key, loadTabGroupMascots())).name,
+      color: resolveTabGroupColor(key, loadTabGroupColors(), loadTabGroupCustomColors(), seed),
+    });
+  }
+  return next;
+}
+
+/** Migrate assigned projects without starting sessions or provider processes. */
+export function ensureAssignedManagers(): void {
+  const roster = listMonos(true);
+  const next = withAssignedManagers(roster);
+  if (next.length !== roster.length || next.some((mono, index) => mono !== roster[index])) saveRoster(next, true);
 }
 
 export function findMono(id: string): Mono | undefined {
   return listMonos().find((mono) => mono.id === id);
 }
 
+export function monoRuntimeMode(mono: Mono | undefined, fallback: RuntimeMode): RuntimeMode {
+  return (mono && legacyMonoRuntimeMode(mono.id)) ?? fallback;
+}
+
+export function monoDefaultRuntimeMode(mono: Mono): RuntimeMode {
+  return monoRuntimeMode(mono, mono.role === "manager" || mono.role === "member" ? "full-access" : "auto");
+}
+
+export function legacyMonoRuntimeMode(monoId: string): RuntimeMode | undefined {
+  const value = record(readJson(LEGACY_PERMISSIONS_KEY))[monoId];
+  return RUNTIME_MODES.includes(value as RuntimeMode) ? value as RuntimeMode : undefined;
+}
+
+export function finishMonoPermissionsMigration(monoId: string): void {
+  const pending = record(readJson(LEGACY_PERMISSIONS_KEY));
+  delete pending[monoId];
+  localStorage.setItem(LEGACY_PERMISSIONS_KEY, JSON.stringify(pending));
+}
+
+/** A user choice supersedes a pending legacy value before the chat is saved. */
+export function saveMonoRuntimeMode(monoId: string, runtimeMode: RuntimeMode): void {
+  if (!legacyMonoRuntimeMode(monoId)) return;
+  const pending = record(readJson(LEGACY_PERMISSIONS_KEY));
+  pending[monoId] = runtimeMode;
+  localStorage.setItem(LEGACY_PERMISSIONS_KEY, JSON.stringify(pending));
+}
+
 /** The Mono whose conversation this is. */
 export function monoForSession(sessionId: string): Mono | undefined {
-  return listMonos().find((mono) => mono.sessionId === sessionId);
+  return listMonos(true).find((mono) => mono.sessionId === sessionId);
 }
 
 export function isMonoSession(sessionId: string): boolean {
   return !!monoForSession(sessionId);
+}
+
+/** Only the dedicated Manager owns a project's sidebar slot. */
+export function dedicatedMono(
+  project: string,
+  roster = listMonos(),
+): Mono | undefined {
+  return roster
+    .filter(
+      (mono) =>
+        mono.role === "manager" &&
+        mono.projects.length === 1 &&
+        projectKey(mono.projects[0]) === projectKey(project),
+    )
+    .sort(
+      (a, b) =>
+        (b.lastUsedAt ?? 0) - (a.lastUsedAt ?? 0) || a.id.localeCompare(b.id),
+    )[0];
+}
+
+export function railMonos(roster = listMonos()): Mono[] {
+  return roster.filter((mono) => !mono.role || mono.role === "orchestrator");
+}
+
+/** Conversion keeps the conversation ID and all existing engine/worker references. */
+export function adoptManagerMono(
+  sessionId: string,
+  project: string,
+  at = Date.now(),
+  profile?: Mono["workerProfile"],
+): Mono {
+  const existing = monoForSession(sessionId);
+  if (existing?.role === "manager" && existing.teamInitialized) return existing;
+  const occupied = dedicatedMono(project);
+  if (occupied && occupied.sessionId !== sessionId)
+    throw Error("Another Manager already owns this project's conversation");
+  const key = projectKey(project);
+  const seed = projectName(project);
+  const mono: Mono = {
+    ...existing,
+    id: existing?.id ?? sessionId,
+    sessionId,
+    managerProject: project,
+    managerEngineId: existing?.managerEngineId ?? sessionId,
+    projects: [project],
+    lastUsedAt: at,
+    role: "manager",
+    reportsTo: listMonos().find((mono) => mono.role === "orchestrator")?.id,
+    workerProfile: existing?.workerProfile ?? profile,
+    name:
+      existing?.name ??
+      `${resolveTabGroupLabel(key, loadTabGroupLabels(), seed)} Manager`,
+    mascot:
+      existing?.mascot ??
+      projectMascot(seed, resolveTabGroupMascot(key, loadTabGroupMascots()))
+        .name,
+    color:
+      existing?.color ??
+      resolveTabGroupColor(
+        key,
+        loadTabGroupColors(),
+        loadTabGroupCustomColors(),
+        seed,
+      ),
+  };
+  // Migration must fail closed if storage is unavailable, not claim conversion succeeded.
+  const roster = withDefaultTeam(
+    [...listMonos(true).filter((entry) => entry.id !== mono.id), mono],
+    mono.id,
+  );
+  validateMonoOrg(roster);
+  localStorage.setItem(ROSTER_KEY, JSON.stringify(roster));
+  window.dispatchEvent(new CustomEvent(MONOS_CHANGED));
+  return roster.find((entry) => entry.id === mono.id)!;
+}
+
+export function setOrchestrator(id: string, enabled: boolean): void {
+  const roster = listMonos(true);
+  const target = roster.find((mono) => mono.id === id);
+  if (!target || target.role === "manager" || target.role === "member")
+    throw Error("Choose a plain Mono as Orchestrator");
+  if (!enabled && target.role !== "orchestrator") return;
+  const next = roster.map((mono) =>
+    mono.id === id
+      ? {
+          ...mono,
+          role: enabled ? ("orchestrator" as const) : undefined,
+          reportsTo: undefined,
+        }
+      : mono.role === "manager"
+        ? { ...mono, reportsTo: enabled ? id : undefined }
+        : mono,
+  );
+  validateMonoOrg(next);
+  saveRoster(next);
+}
+
+export function addTeamMember(
+  managerId: string,
+  name: string,
+  specialty: string,
+): Mono {
+  const manager = findMono(managerId);
+  if (manager?.role !== "manager") throw Error("Only a Manager owns a team");
+  if (listMonos().filter((mono) => mono.reportsTo === managerId && mono.role === "member").length >= (manager.teamSizeCap ?? 6))
+    throw Error("The team's size cap has been reached");
+  if (
+    !name.trim() ||
+    name.length > 80 ||
+    !specialty.trim() ||
+    specialty.length > 80
+  )
+    throw Error("Use a name and specialty under 80 characters");
+  const member: Mono = {
+    id: newMonoId(),
+    role: "member",
+    reportsTo: managerId,
+    name: name.trim(),
+    specialty: specialty.trim(),
+    origin: "manager",
+    projects: [...manager.projects],
+    ...nextMonoLook(),
+    color: manager.color,
+    workerProfile: manager.workerProfile,
+    instructions: `You are the ${specialty.trim()} specialist. Work only on assignments from your Manager, verify the result, and report facts, tests and blockers to your Manager. Never message teammates directly.`,
+  };
+  saveRoster([...listMonos(true), member]);
+  return member;
 }
 
 /**
@@ -229,7 +525,7 @@ export function nextMonoLook(
 
 /** A new Mono with the next look, starting with the projects given, if any. */
 export function createMono(projects: readonly string[] = []): Mono {
-  const roster = listMonos();
+  const roster = listMonos(true);
   const mono: Mono = {
     id: newMonoId(),
     ...nextMonoLook(roster),
@@ -273,7 +569,7 @@ export function updateMono(
   id: string,
   change: (mono: Mono) => Mono,
 ): Mono | undefined {
-  const roster = listMonos();
+  const roster = listMonos(true);
   const index = roster.findIndex((mono) => mono.id === id);
   if (index < 0) return undefined;
   const next = change(roster[index]);
@@ -285,14 +581,21 @@ export function updateMono(
   return next;
 }
 
+/** Team changes must fail visibly if durable storage is unavailable. */
+export function saveMonoTeamRoster(roster: readonly Mono[], emptyTeamUndoManagerId?: string): void {
+  saveRoster(roster, true, emptyTeamUndoManagerId);
+}
+
 /** Forgets the Mono and its background. Its folder of files stays on disk. */
 export function removeMono(id: string): void {
+  const next = listMonos(true).filter((mono) => mono.id !== id);
+  validateMonoOrg(next);
   removeMonoBackground(id);
-  saveRoster(listMonos().filter((mono) => mono.id !== id));
+  saveRoster(next);
 }
 
 export function reorderMonos(ids: readonly string[]): void {
-  const roster = listMonos();
+  const roster = listMonos(true);
   const order = new Map(ids.map((id, index) => [id, index]));
   saveRoster(
     [...roster].sort(
@@ -301,6 +604,13 @@ export function reorderMonos(ids: readonly string[]): void {
         (order.get(b.id) ?? Number.MAX_SAFE_INTEGER),
     ),
   );
+}
+
+/** Save a whole team's visibility in one storage write. */
+export function setMonoArchive(ids: ReadonlySet<string>, archivedAt?: number): void {
+  saveRoster(listMonos(true).map((mono) =>
+    ids.has(mono.id) ? { ...mono, archivedAt } : mono,
+  ), true);
 }
 
 export function saveMonoSessionId(monoId: string, sessionId: string): void {
@@ -415,6 +725,9 @@ export type MonoState = {
   status: MonoStatus;
   /** Short present-tense note while working or waiting. */
   activity?: string;
+  /** Descendant activity does not make this Mono busy. */
+  teamWorking?: number;
+  attentionLocation?: string;
 };
 
 export const MONO_STATUS_LABEL: Record<MonoStatus, string> = {
@@ -422,6 +735,12 @@ export const MONO_STATUS_LABEL: Record<MonoStatus, string> = {
   "needs-you": "Needs you",
   idle: "Idle",
 };
+
+export const monoStatusLabel = (state: MonoState) =>
+  `${MONO_STATUS_LABEL[state.status]}${state.status === "needs-you" && state.attentionLocation ? ` · in ${state.attentionLocation}` : ""}`;
+
+export const monoTeamWorkingLabel = (state: MonoState) =>
+  state.teamWorking ? `${state.teamWorking} working below` : undefined;
 
 /** The agent's state, with the step it is on or the call it is waiting for. */
 export function monoState(

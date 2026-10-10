@@ -1,5 +1,5 @@
 import { composerSeedForAddToChat, type AddToChatMode } from "./quoteDraft";
-import { newDefaultSession, newSessionLike, type Session } from "./session";
+import { newDefaultSession, type Session } from "./session";
 import {
   focusedFileTab,
   leafIds,
@@ -67,11 +67,10 @@ export function applyAddToChatRequest({
   let createdSession: Session | undefined;
 
   if (!tab) {
-    // Zero-tab fallback: seed one replacement chat from the last known
-    // session's harness/model/settings, but never its cwd.
+    // Zero-tab fallback starts in this project with its normal chat default.
     const donor = sessions[sessions.length - 1];
     createdSession = {
-      ...newSessionLike(donor, projectCwd),
+      ...newDefaultSession(projectCwd, donor?.runtimeMode ?? defaultRuntimeMode),
       composerSeed,
     };
     tab = newTab(createdSession.id);

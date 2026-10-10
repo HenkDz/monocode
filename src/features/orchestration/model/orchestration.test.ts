@@ -14,8 +14,18 @@ import { newSession } from "../../sessions/model/session";
 import type { OrchestrationProposal } from "./orchestrationPlan";
 import { normalizeOrchestrationRun } from "./orchestrationState";
 import { previewFromToolPart } from "../../../integrations/harness/providers/opencode/opencodeProtocol";
+import type { Artifact, OrgArtifactPurpose } from "../../artifacts/artifacts";
+import type { OrchestrationTask } from "./orchestrationState";
+
+it("includes GitHub quota guidance in every worker assignment", () => {
+  const prompt = workerTurnPrompt("Inspect the PR", ["src"]);
+  expect(prompt).toContain("gh pr view --json with only the fields needed");
+  expect(prompt).toContain("at most every 60 seconds");
+  expect(prompt).toContain("low or exhausted budget");
+});
 
 function setup() {
+  const documents = new Map<string, Artifact>();
   const saved = new Map<string, OrchestrationRun>();
   const store = {
     save: vi.fn(async (run: OrchestrationRun) => {
@@ -26,6 +36,7 @@ function setup() {
       async () => "/Applications/MonoCode.app/Contents/MacOS/monocode",
     ),
     disable: vi.fn(async () => {}),
+    attachOwner: vi.fn(async () => {}),
     scopes: vi.fn(async (cwd: string, files: string[]) =>
       files.map((file) => (file === "." ? cwd : `${cwd}/${file}`)),
     ),
@@ -36,6 +47,7 @@ function setup() {
   const sessions = [lead];
   const completions = new Map<string, (outcome: ControlOutcome) => void>();
   const host: OrchestrationHost = {
+    artifact: async id => documents.get(id) ?? null,
     session: (id) => sessions.find((session) => session.id === id),
     sessions: () => sessions,
     choices: () => [
@@ -109,14 +121,780 @@ function setup() {
     delegate,
     tasks,
     completions,
+    documents,
   };
 }
+
+async function saveTaskDocument(f: ReturnType<typeof setup>, task: OrchestrationTask, purpose: OrgArtifactPurpose, owner = "manager-mono") {
+  const artifact: Artifact = { id: `${purpose}-${task.id}`, kind: "document", title: `${purpose}: ${task.title}`,
+    body: "Verdict, findings and verification evidence", sourceSessionId: task.sessionId, sourceCwd: "/repo", createdAt: 1, updatedAt: 1,
+    scope: { projectId: "/repo", managerId: "manager-mono", ownerMonoId: owner, taskId: task.id,
+      dispatchId: task.activeDispatchId ?? task.lastDispatchId, purpose } };
+  f.documents.set(artifact.id, artifact);
+  await f.manager.recordOrgArtifact(artifact);
+  return artifact;
+}
+
+it("rejects an in-flight delegation whose goal was cancelled during async scope checks", async () => {
+  const f = setup();
+  await f.start();
+  let finish!: (scopes: string[]) => void;
+  let begun!: () => void;
+  const began = new Promise<void>(resolve => { begun = resolve; });
+  f.store.scopes.mockImplementationOnce(async () => {
+    begun();
+    return new Promise<string[]>(resolve => { finish = resolve; });
+  });
+  const delegation = f.delegate(["src"], { monoGoalId: "repair-goal" });
+  const blocked = expect(delegation).rejects.toThrow("goal was cancelled");
+  await began;
+  f.host.goalCancelled = id => id === "repair-goal";
+  finish(["/repo/src"]);
+  await blocked;
+  expect(f.tasks()).toHaveLength(0);
+  expect(f.host.createWorker).not.toHaveBeenCalled();
+});
+
+it("does not retry or message a cancelled goal's retained task", async () => {
+  const f = setup();
+  await f.start();
+  await f.delegate(["src"], { monoGoalId: "repair-goal" });
+  const task = f.tasks()[0];
+  await f.manager.cancelTask("lead", task.id);
+  f.host.goalCancelled = id => id === "repair-goal";
+  await expect(f.call("retry", { taskId: task.id, text: "Resume", files: ["src"] })).rejects.toThrow("goal was cancelled");
+  await expect(f.call("message", { taskId: task.id, text: "Resume" })).rejects.toThrow("goal was cancelled");
+  expect(f.tasks()[0].status).toBe("cancelled");
+});
+
+describe("delivery maintenance", () => {
+  it("hands the Reviewer's change summary to the implementer without starting a retry", async () => {
+    const f = setup();
+    f.host.reviewerFor = () => ({ id: "reviewer", name: "Reviewer" });
+    f.host.handoff = vi.fn(async () => {});
+    f.lead.busy = false;
+    f.manager.registerMonoEngine("lead", "lead", "manager-mono", "/repo");
+    await f.manager.start("lead", ["codex"], 2, undefined, true);
+    f.lead.busy = true;
+    await f.delegate(["src"], { member: "backend", memberName: "Backend", memberMascot: "ghost", memberColor: "#fff" });
+    await vi.waitFor(() => expect(f.completions.has(f.tasks()[0].sessionId)).toBe(true));
+    const implementer = f.tasks()[0];
+    f.completions.get(implementer.sessionId)!({ status: "completed", text: "Ready for review" });
+    await vi.waitFor(() => expect(f.tasks()[0].status).toBe("completed"));
+    await f.delegate(["."], { member: "reviewer", memberName: "Reviewer", memberMascot: "owl", memberColor: "#aaa", reviewTaskId: implementer.id });
+    await vi.waitFor(() => expect(f.completions.has(f.tasks()[1].sessionId)).toBe(true));
+    const reviewer = f.tasks()[1];
+    const artifact = await saveTaskDocument(f, reviewer, "review", "reviewer");
+    const verdict = { decision: "changes", notes: "Routing drops the query.\nPreserve repeated parameters.\nAdd the regression check.", artifactId: artifact.id };
+    await f.manager.recordReviewerResult(reviewer.sessionId, "changes", verdict);
+    await f.manager.recordReviewerResult(reviewer.sessionId, "changes", verdict);
+    expect(f.tasks()[0].handoffNote?.split("\n")).toHaveLength(5);
+    expect(f.tasks()[0].recoveryPrompt).toContain(verdict.notes);
+    expect(f.host.handoff).toHaveBeenCalledExactlyOnceWith(reviewer.sessionId, implementer.sessionId, f.tasks()[0].handoffNote);
+    expect(f.tasks()[0].status).toBe("completed");
+    expect(f.tasks()[0].accepted).toBe(false);
+  });
+  async function readyTask(trivial = false, accept = true) {
+    const f = setup();
+    f.lead.busy = false;
+    await f.manager.start("lead", ["codex"], 2, undefined, true);
+    f.lead.busy = true;
+    f.host.reviewedPullRequest = vi.fn(async () => "https://github.com/example/app/pull/1");
+    await f.delegate(["src"], { member: "backend", memberName: "Backend", memberMascot: "ghost", memberColor: "#fff", trivial });
+    await vi.waitFor(() => expect(f.completions.has(f.tasks()[0].sessionId)).toBe(true));
+    f.completions.get(f.tasks()[0].sessionId)!({ status: "completed", text: "Implemented routing\nChecks passed\nPR opened" });
+    await vi.waitFor(() => expect(f.tasks()[0].status).toBe("completed"));
+    if (accept) await f.call("review", { taskId: f.tasks()[0].id });
+    return f;
+  }
+  it("discovers an opened PR before review without approving or notifying", async () => {
+    const f = await readyTask(false, false);
+    f.host.notifyReady = vi.fn();
+    const task = f.tasks()[0];
+    task.baseBranch = "nour";
+    const pr = { url: "https://github.com/example/app/pull/1", state: "open", baseRefName: "nour", headRefName: task.workspace!.branch!, headOid: "opened" };
+    expect(await f.manager.discoverDeliveryPr("lead", task.id, { ...pr, baseRefName: "other" }, task.workspace!.branch!)).toBe(false);
+    expect(await f.manager.discoverDeliveryPr("lead", task.id, pr, "foreign-branch")).toBe(false);
+    expect(await f.manager.discoverDeliveryPr("lead", task.id, { ...pr, headRefName: "foreign-branch" }, task.workspace!.branch!)).toBe(false);
+    expect(await f.manager.discoverDeliveryPr("lead", task.id, pr, task.workspace!.branch!)).toBe(true);
+    expect(f.tasks()[0].prUrl).toBe(pr.url);
+    expect(f.tasks()[0].delivery?.state).toBe("watching");
+    expect(f.tasks()[0].accepted).toBe(false);
+    expect(f.host.notifyReady).not.toHaveBeenCalled();
+    await f.manager.maintainDelivery("lead", task.id, { head: "opened", ci: "fail", conflicts: false });
+    expect(f.tasks()[0].delivery?.state).toBe("fixing-ci");
+  });
+  it("queues CI repair to the original member once per failed head", async () => {
+    const f = await readyTask(true);
+    f.host.handoff = vi.fn(async () => {});
+    const id = f.tasks()[0].id;
+    const observation = { head: "a", ci: "fail" as const, conflicts: false };
+    await f.manager.maintainDelivery("lead", id, observation);
+    await f.manager.maintainDelivery("lead", id, observation);
+    expect(f.tasks()).toHaveLength(1);
+    expect(f.tasks()[0].memberId).toBe("backend");
+    expect(f.tasks()[0].delivery?.state).toBe("fixing-ci");
+    expect(f.tasks()[0].accepted).toBe(false);
+    expect(f.tasks()[0].handoffNote).toContain("Implemented routing");
+    expect(f.host.handoff).toHaveBeenCalledTimes(1);
+  });
+  it("marks an approval outdated and assigns an exact-head re-review once", async () => {
+    const f = await readyTask();
+    f.tasks()[0].reviewedHead = "old";
+    f.host.reviewerFor = () => ({ id: "reviewer", name: "Reviewer", harness: "codex", model: "codex:reviewer", mascot: "owl", color: "#123456" });
+    f.host.choices = () => [{ harness: "codex", models: [{ id: "codex:test", name: "Test" }, { id: "codex:reviewer", name: "Reviewer" }] }];
+    f.host.checkoutSnapshot = vi.fn(async () => ({ head: "base", fingerprint: "baseline", clean: true, commitsAhead: 0, baseDiff: false }));
+    const observation = { head: "new", ci: "pass" as const, conflicts: false };
+    await f.manager.maintainDelivery("lead", f.tasks()[0].id, observation);
+    await f.manager.maintainDelivery("lead", f.tasks()[0].id, observation);
+    expect(f.tasks()[0].accepted).toBe(false);
+    expect(f.tasks()[0].delivery?.state).toBe("review-outdated");
+    expect(f.tasks()).toHaveLength(2);
+    expect(f.tasks()[1].memberId).toBe("reviewer");
+    expect(f.tasks()[1].model).toBe("codex:reviewer");
+    expect(f.tasks()[1].memberMascot).toBe("owl");
+    expect(f.tasks()[1].readOnly).toBe(true);
+    expect(f.tasks()[1].prompt).toContain("new");
+  });
+  it("skips trivial reviews and keeps unknown mergeability out of ready", async () => {
+    const f = await readyTask(true);
+    expect(f.tasks()[0].reviewedBy).toBe("Not reviewed (trivial)");
+    await f.manager.maintainDelivery("lead", f.tasks()[0].id, { head: "new", ci: "pass", conflicts: false, mergeable: false });
+    expect(f.tasks()[0].delivery?.state).toBe("watching");
+    await f.manager.maintainDelivery("lead", f.tasks()[0].id, { head: "new", ci: "pass", conflicts: false, mergeable: true });
+    expect(f.tasks()[0].delivery?.state).toBe("ready");
+    expect(f.tasks()).toHaveLength(1);
+  });
+  it("treats legacy approvals without a reviewed commit as outdated on first observation", async () => {
+    const f = await readyTask();
+    f.tasks()[0].reviewedBy = "Reviewer";
+    f.tasks()[0].reviewedHead = undefined;
+    f.host.reviewerFor = () => ({ id: "reviewer", name: "Reviewer" });
+    f.host.checkoutSnapshot = vi.fn(async () => ({ head: "base", fingerprint: "baseline", clean: true, commitsAhead: 0, baseDiff: false }));
+    await f.manager.maintainDelivery("lead", f.tasks()[0].id, { head: "current", ci: "pass", conflicts: false, mergeable: true });
+    expect(f.tasks()[0].delivery?.state).toBe("review-outdated");
+    expect(f.tasks()[0].accepted).toBe(false);
+    expect(f.tasks()[0].acceptedDispatchId).toBeUndefined();
+    expect(f.tasks()[0].acceptedAt).toBeUndefined();
+    expect(f.tasks()[1].memberId).toBe("reviewer");
+  });
+});
 
 afterEach(() => {
   vi.useRealTimers();
 });
 
+it("detects a lost Team plan link and recovers the durable reference on the same artifact retry", async () => {
+  const f = setup();
+  const roster = await import("../../monos/model/mono");
+  let manager = { id: "manager-mono", role: "manager" as const, projects: ["/repo"] } as import("../../monos/model/mono").Mono;
+  let durable = false;
+  const find = vi.spyOn(roster, "findMono").mockImplementation(() => manager);
+  const update = vi.spyOn(roster, "updateMono").mockImplementation((_id, change) => {
+    const next = change(manager);
+    if (durable) manager = next;
+    return next;
+  });
+  const artifact: Artifact = { id: "plan", kind: "document", title: "Team plan: repo", body: "Plan",
+    createdAt: 1, updatedAt: 1, scope: { projectId: "/repo", managerId: manager.id, ownerMonoId: manager.id, purpose: "team-plan" } };
+  try {
+    await expect(f.manager.recordOrgArtifact(artifact)).rejects.toThrow("durable card link");
+    durable = true;
+    await f.manager.recordOrgArtifact(artifact);
+    expect(manager.teamPlanArtifactId).toBe(artifact.id);
+  } finally { find.mockRestore(); update.mockRestore(); }
+});
+
+function reportTaskFixture() {
+  const f = setup();
+  const snapshot = { head: "assignment-head", fingerprint: "baseline", clean: true, commitsAhead: 0, baseDiff: false,
+    pathHashes: { "existing.txt": "original" } as Record<string, string>, inheritedChangedPaths: [] as string[] };
+  f.host.checkoutSnapshot = vi.fn(async () => ({ ...snapshot }));
+  const create = f.host.createWorker;
+  f.host.createWorker = vi.fn(async (run, task) => {
+    const prepared = await create(run, task);
+    return task.workspacePolicy === "shared" ? {
+      ...prepared, workspace: { id: "checkout:/repo", projectCwd: "/repo", checkoutCwd: "/repo", kind: "main" as const },
+    } : prepared;
+  });
+  f.manager.bind(f.host);
+  const finish = async () => {
+    await vi.waitFor(() => expect(f.completions.has(f.tasks()[0].sessionId)).toBe(true));
+    f.completions.get(f.tasks()[0].sessionId)!({ status: "completed", text: "Investigation findings" });
+    await vi.waitFor(() => expect(f.tasks()[0].status).not.toBe("running"));
+  };
+  return { ...f, snapshot, finish };
+}
+
+it("accepts a report-only task after checkout verification without a PR or Reviewer", async () => {
+  const f = reportTaskFixture();
+  f.lead.busy = false;
+  await f.manager.start("lead", ["codex"], 2, undefined, true);
+  await f.delegate(["."]);
+  await f.finish();
+  expect(f.tasks()[0].accepted).toBe(false);
+  const acceptedAfter = Date.now();
+  await expect(f.call("review", { taskId: f.tasks()[0].id, outcome: "accept-no-changes" })).resolves.toMatchObject({ accepted: true, completionOutcome: "no-changes" });
+  expect(f.tasks()[0]).toMatchObject({ status: "completed", accepted: true, completionOutcome: "no-changes", acceptedDispatchId: f.tasks()[0].lastDispatchId });
+  expect(f.tasks()[0].acceptedAt).toBeGreaterThanOrEqual(acceptedAfter);
+  const acceptedAt = f.tasks()[0].acceptedAt;
+  await f.call("review", { taskId: f.tasks()[0].id, outcome: "accept-no-changes" });
+  expect(f.tasks()[0].acceptedAt).toBe(acceptedAt);
+  expect(f.host.integrateWorker).not.toHaveBeenCalled();
+  expect(f.host.cleanupWorker).not.toHaveBeenCalled();
+});
+
+it.each([
+  { clean: false, commitsAhead: 0, baseDiff: false },
+  { clean: true, commitsAhead: 1, baseDiff: false },
+  { clean: true, commitsAhead: 0, baseDiff: true },
+])("rejects no-change completion for dirty files or commits (including empty/reverted commits): %j", async changed => {
+  const f = reportTaskFixture();
+  await f.start();
+  await f.delegate(["."]);
+  await f.finish();
+  Object.assign(f.snapshot, changed);
+  f.snapshot.fingerprint = "changed";
+  await expect(f.call("review", { taskId: f.tasks()[0].id, outcome: "accept-no-changes" })).rejects.toThrow("changes or commits");
+  expect(f.tasks()[0].accepted).toBe(false);
+});
+
+it("accepts an isolated worker's inherited dirty edits and persists their dispatch baseline", async () => {
+  const f = reportTaskFixture();
+  f.snapshot.clean = false;
+  f.snapshot.inheritedChangedPaths = ["existing.txt"];
+  await f.start();
+  await f.delegate(["."]);
+  await f.finish();
+  expect(f.tasks()[0].checkoutBaseline).toMatchObject({ inheritedChangedPaths: ["existing.txt"], fingerprint: "baseline" });
+  expect(f.manager.run("lead")!.dispatches![0].checkoutBaseline).toMatchObject({ fingerprint: "baseline" });
+  await f.call("review", { taskId: f.tasks()[0].id, outcome: "accept-no-changes" });
+  expect(f.tasks()[0].completionOutcome).toBe("no-changes");
+});
+
+it("names only paths changed after dispatch and rejects an empty commit", async () => {
+  const f = reportTaskFixture();
+  f.snapshot.clean = false;
+  f.snapshot.inheritedChangedPaths = ["existing.txt"];
+  await f.start();
+  await f.delegate(["."]);
+  await f.finish();
+  f.snapshot.fingerprint = "changed";
+  f.snapshot.pathHashes = { ...f.snapshot.pathHashes, "new.txt": "new" };
+  await expect(f.call("review", { taskId: f.tasks()[0].id, outcome: "accept-no-changes" }))
+    .rejects.toThrow("Changed paths since the task started: new.txt");
+  f.snapshot.fingerprint = "baseline";
+  f.snapshot.pathHashes = { "existing.txt": "original" };
+  f.snapshot.head = "empty-commit";
+  await expect(f.call("review", { taskId: f.tasks()[0].id, outcome: "accept-no-changes" }))
+    .rejects.toThrow("HEAD changed");
+});
+
+it("rejects a changed path hash even when its legacy fingerprint is unchanged", async () => {
+  const f = reportTaskFixture();
+  f.snapshot.clean = false;
+  await f.start();
+  await f.delegate(["."]);
+  await f.finish();
+  f.snapshot.pathHashes = { "existing.txt": "changed-permissions" };
+  await expect(f.call("review", { taskId: f.tasks()[0].id, outcome: "accept-no-changes" }))
+    .rejects.toThrow("Changed paths since the task started: existing.txt");
+});
+
+it.each(["dispatch", "read-only", "unknown"] as const)("uses earliest recorded %s evidence for legacy report acceptance", async evidence => {
+  const f = reportTaskFixture();
+  f.snapshot.clean = false;
+  await f.start();
+  await f.delegate(["."], { readOnly: evidence === "read-only" });
+  await f.finish();
+  delete f.tasks()[0].checkoutBaseline;
+  if (evidence !== "dispatch") {
+    for (const dispatch of f.manager.run("lead")!.dispatches!) delete dispatch.checkoutBaseline;
+  }
+  await f.call("review", { taskId: f.tasks()[0].id, outcome: "accept-no-changes" });
+  expect(f.tasks()[0].completionOutcome).toBe(evidence === "unknown" ? "no-changes-baseline-unknown" : "no-changes");
+});
+
+it("keeps a legacy read-only retry's monitoring snapshot distinct from its unknown original baseline", async () => {
+  const f = reportTaskFixture();
+  await f.start();
+  await f.delegate(["."], { readOnly: true });
+  await f.finish();
+  delete f.tasks()[0].checkoutBaseline;
+  delete f.tasks()[0].readOnlyBaseline;
+  for (const dispatch of f.manager.run("lead")!.dispatches!) delete dispatch.checkoutBaseline;
+  f.completions.delete(f.tasks()[0].sessionId);
+  await f.call("message", { taskId: f.tasks()[0].id, text: "Continue the legacy report" });
+  await f.finish();
+  expect(f.tasks()[0].readOnlyBaseline).toBeDefined();
+  expect(f.tasks()[0].checkoutBaseline).toBeUndefined();
+  await f.call("review", { taskId: f.tasks()[0].id, outcome: "accept-no-changes" });
+  expect(f.tasks()[0].completionOutcome).toBe("no-changes-baseline-unknown");
+});
+
+it("runs read-only work in the project checkout and accepts an unchanged dirty baseline", async () => {
+  const f = reportTaskFixture();
+  f.snapshot.clean = false;
+  await f.start();
+  await f.delegate(["."], { readOnly: true });
+  await f.finish();
+  expect(f.tasks()[0]).toMatchObject({ readOnly: true, workspacePolicy: "shared", workspace: { checkoutCwd: "/repo", kind: "main" }, readOnlyBaseline: { fingerprint: "baseline" } });
+  expect(f.host.submit).toHaveBeenCalledWith(f.tasks()[0].sessionId, expect.stringContaining("read-only investigation"), expect.any(Function));
+  await f.call("review", { taskId: f.tasks()[0].id, outcome: "accept-no-changes" });
+  expect(f.tasks()[0].completionOutcome).toBe("no-changes");
+});
+
+it("runs read-only inspection alongside a writable worker with the same logical scope", async () => {
+  const f = setup();
+  await f.start();
+  await f.delegate(["src"], { readOnly: true });
+  await vi.waitFor(() => expect(f.tasks()[0].status).toBe("running"));
+  await f.delegate(["src"]);
+  await vi.waitFor(() => expect(f.tasks()[1].status).toBe("running"));
+});
+
+it("flags read-only content changes as blocked even when dirty status was already present", async () => {
+  const f = reportTaskFixture();
+  f.snapshot.clean = false;
+  await f.start();
+  await f.delegate(["."], { readOnly: true });
+  await vi.waitFor(() => expect(f.completions.has(f.tasks()[0].sessionId)).toBe(true));
+  f.snapshot.fingerprint = "new-content-at-existing-dirty-path";
+  await f.finish();
+  expect(f.tasks()[0]).toMatchObject({ status: "blocked", accepted: false });
+  expect(f.tasks()[0].error).toContain("read-only task modified files");
+  await expect(f.call("review", { taskId: f.tasks()[0].id, outcome: "accept-no-changes" })).rejects.toThrow("Only a completed result");
+});
+
+it("uses an explicit worktree fallback for a harness without enforced read-only permissions", async () => {
+  const f = reportTaskFixture();
+  f.host.choices = () => [{ harness: "pi", models: [{ id: "pi:test", name: "Pi" }] }];
+  f.manager.bind(f.host);
+  f.lead.busy = false;
+  await f.manager.start("lead", ["pi"], 2);
+  await f.call("delegate", { title: "Read-only", prompt: "Inspect", files: ["."], harness: "pi", readOnly: true });
+  await f.finish();
+  expect(f.tasks()[0]).toMatchObject({ readOnly: true, workspacePolicy: "isolated-child", workspace: { kind: "worktree" } });
+  expect(f.tasks()[0].readOnlyFallback).toContain("cannot enforce read-only");
+});
+
+it("validates read-only mode and documents report closure in the Manager prompt", async () => {
+  const f = reportTaskFixture();
+  f.lead.busy = false;
+  await f.manager.start("lead", ["codex"], 2, undefined, true);
+  await expect(f.delegate(["."], { readOnly: "true" })).rejects.toThrow("boolean");
+  await expect(f.delegate(["."], { readOnly: true, checkout: "worktree" })).rejects.toThrow("project checkout");
+  expect(f.manager.prompt("lead", "Goal")).toContain("readOnly:true");
+  expect(f.manager.prompt("lead", "Goal")).toContain("accept-no-changes");
+  expect(workerTurnPrompt("Inspect", ["."], undefined, true)).toContain("omit tooling chatter");
+});
+
+it("lets a Manager run investigations and code work without hiring a Reviewer", async () => {
+  const f = reportTaskFixture();
+  f.lead.busy = false;
+  f.manager.registerMonoEngine("lead", "lead", "manager-mono", "/repo");
+  await f.manager.start("lead", ["codex"], 2, undefined, true);
+  await f.delegate(["."]);
+  await f.call("cancel", { taskId: f.tasks()[0].id });
+  await f.delegate(["."], { readOnly: true });
+  await vi.waitFor(() => expect(f.completions.has(f.tasks()[1].sessionId)).toBe(true));
+  f.completions.get(f.tasks()[1].sessionId)!({ status: "completed", text: "Investigation findings" });
+  await vi.waitFor(() => expect(f.tasks()[1].status).toBe("completed"));
+  const task = f.tasks()[1];
+  await expect(f.call("review", { taskId: task.id, outcome: "accept-no-changes" })).rejects.toThrow("Save a report artifact");
+  const report = await saveTaskDocument(f, task, "report");
+  await f.call("review", { taskId: task.id, outcome: "accept-no-changes" });
+  expect(f.tasks()[1].accepted).toBe(true);
+  expect(f.tasks()[1].reportArtifactId).toBe(report.id);
+});
+
+it("keeps the original read-only baseline through retries instead of accepting a changed checkout", async () => {
+  const f = reportTaskFixture();
+  await f.start();
+  await f.delegate(["."], { readOnly: true });
+  await f.finish();
+  f.snapshot.fingerprint = "changed-after-report";
+  await f.call("message", { taskId: f.tasks()[0].id, text: "Continue investigation" });
+  await vi.waitFor(() => expect(f.tasks()[0].status).toBe("blocked"));
+  expect(f.tasks()[0].readOnlyBaseline?.fingerprint).toBe("baseline");
+  expect(f.tasks()[0].checkoutBaseline?.fingerprint).toBe("baseline");
+  expect(f.tasks()[0].error).toContain("read-only task modified files");
+});
+
+it("does not resurrect a cancelled task when read-only checkout verification returns late", async () => {
+  const f = reportTaskFixture();
+  await f.start();
+  await f.delegate(["."], { readOnly: true });
+  await vi.waitFor(() => expect(f.completions.has(f.tasks()[0].sessionId)).toBe(true));
+  let resolveSnapshot!: (value: typeof f.snapshot) => void;
+  const pending = vi.fn(() => new Promise<typeof f.snapshot>(resolve => { resolveSnapshot = resolve; }));
+  f.host.checkoutSnapshot = pending;
+  f.completions.get(f.tasks()[0].sessionId)!({ status: "completed", text: "Report" });
+  await vi.waitFor(() => expect(pending).toHaveBeenCalledOnce());
+  await f.call("cancel", { taskId: f.tasks()[0].id });
+  resolveSnapshot({ ...f.snapshot });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(f.tasks()[0].status).toBe("cancelled");
+  expect(f.tasks()[0].accepted).toBe(false);
+});
+
+it("does not treat pending Write metadata or Claude's external plan file as a project modification", async () => {
+  const f = reportTaskFixture();
+  await f.start();
+  await f.delegate(["."], { readOnly: true });
+  await vi.waitFor(() => expect(f.completions.has(f.tasks()[0].sessionId)).toBe(true));
+  f.manager.observe(f.tasks()[0].sessionId, { type: "tool.started", callId: "write", title: "Write", status: "pending", preview: { kind: "write", title: "Write" } });
+  f.manager.observe(f.tasks()[0].sessionId, { type: "tool.updated", callId: "write", status: "completed", preview: { kind: "write", title: "Write", path: "/home/user/.claude/plans/review.md" } });
+  await f.finish();
+  expect(f.tasks()[0].status).toBe("completed");
+  expect(f.host.stop).not.toHaveBeenCalledWith(f.tasks()[0].sessionId);
+});
+
+it("blocks actual read-only checkout modifications when a Write event arrives", async () => {
+  const f = reportTaskFixture();
+  await f.start();
+  await f.delegate(["."], { readOnly: true });
+  await vi.waitFor(() => expect(f.completions.has(f.tasks()[0].sessionId)).toBe(true));
+  f.snapshot.fingerprint = "actual-project-write";
+  f.manager.observe(f.tasks()[0].sessionId, { type: "tool.updated", callId: "write", status: "completed", preview: { kind: "write", title: "Write", path: "/repo/README.md" } });
+  await vi.waitFor(() => expect(f.tasks()[0].status).toBe("blocked"));
+  expect(f.tasks()[0].error).toContain("read-only task modified files");
+  expect(f.host.stop).toHaveBeenCalledWith(f.tasks()[0].sessionId);
+});
+
+it("fails closed when a read-only Write event cannot verify its checkout", async () => {
+  const f = reportTaskFixture();
+  await f.start();
+  await f.delegate(["."], { readOnly: true });
+  await vi.waitFor(() => expect(f.completions.has(f.tasks()[0].sessionId)).toBe(true));
+  f.host.checkoutSnapshot = vi.fn(async () => { throw Error("Git unavailable"); });
+  f.manager.observe(f.tasks()[0].sessionId, { type: "tool.started", callId: "write", title: "Write", preview: { kind: "write", title: "Write" } });
+  await vi.waitFor(() => expect(f.tasks()[0].status).toBe("blocked"));
+  expect(f.tasks()[0].error).toContain("Read-only verification failed: Git unavailable");
+});
+
+it("refreshes an idle Manager harness without requesting a user stop of its queued goal", async () => {
+  const f = setup();
+  f.lead.busy = false;
+  f.lead.queuedMessages = [{ id: "goal", text: "Implement the assigned goal", attachments: [] }];
+  f.lead.queueStatus = "active";
+  f.host.stop = vi.fn(async (_id, reason) => {
+    if (reason !== "refresh") f.lead.queueStatus = "paused";
+  });
+  f.manager.bind(f.host);
+  await f.manager.start("lead", ["codex"], 2, undefined, true);
+  expect(f.host.stop).toHaveBeenCalledWith("lead", "refresh");
+  expect(f.lead.queueStatus).toBe("active");
+  expect(f.lead.queuedMessages[0].id).toBe("goal");
+  await f.manager.pause("lead", "Delivery interrupted");
+  f.lead.queueStatus = "paused";
+  f.host.resumeQueue = vi.fn(() => { f.lead.queueStatus = "active"; return true; });
+  f.manager.bind(f.host);
+  await f.manager.continueManager("lead");
+  expect(f.host.resumeQueue).toHaveBeenCalledWith("lead");
+  expect(f.host.submit).not.toHaveBeenCalled();
+  expect(f.lead.queuedMessages).toHaveLength(1);
+});
+
+it("owns separate project engines from one Mono conversation and restores their owner", async () => {
+  const f = setup();
+  f.lead.busy = false;
+  f.manager.registerMonoEngine("engine-a", f.lead.id, "mono", "/repo/a");
+  f.manager.registerMonoEngine("engine-b", f.lead.id, "mono", "/repo/b");
+  await f.manager.start("engine-a", ["codex"], 2, undefined, true);
+  await f.manager.start("engine-b", ["codex"], 2, undefined, true);
+  expect(f.manager.run("engine-a")).toMatchObject({
+    cwd: "/repo/a",
+    ownerSessionId: "lead",
+    ownerMonoId: "mono",
+    projectManager: true,
+  });
+  expect(f.manager.run("engine-b")).toMatchObject({
+    cwd: "/repo/b",
+    ownerSessionId: "lead",
+    tasks: [],
+  });
+  expect(f.host.stop).toHaveBeenCalledWith("lead", "refresh");
+  expect(f.manager.submissionError("lead")).toBeNull();
+  const turn = await f.manager.beginManagerTurn("engine-a", true);
+  expect(f.store.attachOwner).toHaveBeenCalledWith("engine-a", "lead");
+  await f.manager.endManagerTurn("engine-a", turn, { status: "completed", text: "" });
+  const restored = new Orchestrator(f.store);
+  restored.bind(f.host);
+  await restored.hydrate("engine-a");
+  expect(restored.ownerSession("engine-a")).toBe("lead");
+  expect(restored.run("engine-a")?.cwd).toBe("/repo/a");
+  expect(() =>
+    restored.registerMonoEngine("engine-a", "other", "other", "/repo/a"),
+  ).toThrow("already belongs");
+});
+
+it("fails the Manager turn closed when its owner connection cannot attach", async () => {
+  const f = setup();
+  f.lead.busy = false;
+  f.manager.registerMonoEngine("engine", f.lead.id, "mono", "/repo");
+  await f.manager.start("engine", ["codex"], 2, undefined, true);
+  f.store.attachOwner.mockRejectedValueOnce(Error("Lead connection is inactive"));
+  await expect(f.manager.beginManagerTurn("engine", true)).rejects.toThrow("Lead connection is inactive");
+  expect(f.manager.run("engine")?.status).toBe("paused");
+  expect(f.host.submit).not.toHaveBeenCalled();
+});
+
+it("allows an owning Mono's habit without acquiring or ending its Manager turn", async () => {
+  const f = setup();
+  f.lead.busy = false;
+  f.manager.registerMonoEngine("lead", "lead", "manager-mono", "/repo");
+  await f.manager.start("lead", ["codex"], 2, undefined, true);
+  f.sessions.push({ ...newSession("codex", "/repo"), id: "habit" });
+  f.host.habitOwnerMono = (id) => (id === "habit" ? "manager-mono" : undefined);
+  expect(f.manager.submissionError("habit")).toBeNull();
+  expect(f.manager.run("lead")?.status).toBe("active");
+  expect(f.manager.run("lead")?.managerTurnId).toBeUndefined();
+  f.host.habitOwnerMono = () => "another-mono";
+  expect(f.manager.submissionError("habit")).toBeNull();
+});
+
+it("keeps storage-blocked Managers active without escalating a user decision", async () => {
+  const f = setup();
+  f.lead.busy = false;
+  f.lead.codexStorageError = "Codex storage needs repair: AGENTS.md";
+  f.manager.registerMonoEngine("lead", "lead", "manager-mono", "/repo");
+  await f.manager.start("lead", ["codex"], 2, undefined, true);
+  const turn = await f.manager.beginManagerTurn("lead", true);
+  await f.manager.endManagerTurn("lead", turn, { status: "failed", text: "", error: f.lead.codexStorageError });
+  expect(f.manager.run("lead")?.status).toBe("active");
+  expect(f.manager.run("lead")?.error).toBeUndefined();
+  expect(f.manager.submissionError("lead", true)).toBeNull();
+});
+
+it("keeps usage-limited Managers active but holds events for genuinely paused owners", async () => {
+  const f = setup();
+  f.lead.busy = false;
+  f.manager.registerMonoEngine("lead", "lead", "manager-mono", "/repo");
+  await f.manager.start("lead", ["codex"], 2, undefined, true);
+  const turn = await f.manager.beginManagerTurn("lead", true);
+  await f.manager.endManagerTurn("lead", turn, {
+    status: "failed",
+    text: "",
+    error: "Usage limit reached",
+  });
+  expect(f.manager.run("lead")?.status).toBe("active");
+  const failed = await f.manager.beginManagerTurn("lead", true);
+  await f.manager.endManagerTurn("lead", failed, {
+    status: "failed",
+    text: "",
+    error: "Provider crashed",
+  });
+  expect(f.manager.submissionError("lead", true)).toContain("Continue");
+});
+
+it("preflights independent launches in retained worker checkouts and nested folders", async () => {
+  const f = setup();
+  await f.start();
+  await f.delegate(["src"]);
+  await vi.waitFor(() => expect(f.tasks()[0].workspace).toBeDefined());
+  const checkout = f.tasks()[0].workspace!.checkoutCwd;
+  const createSession = vi.fn();
+  const launch = () => {
+    f.manager.assertCanLaunch("new", { cwd: "/repo", worktreeCwd: checkout });
+    createSession();
+    return true; // UI acceptance may otherwise mean only parked for Retry.
+  };
+  expect(launch).toThrow("Do not retry this launch");
+  try { launch(); } catch (error) { expect(error).toMatchObject({ retryable: false }); }
+  expect(createSession).not.toHaveBeenCalled();
+  expect(
+    f.manager.submissionError("new", false, {
+      cwd: "/repo",
+      worktreeCwd: checkout,
+    }),
+  ).toBeNull();
+  expect(
+    f.manager.submissionError("new", false, { cwd: `${checkout}/src` }),
+  ).toBeNull();
+  expect(f.manager.checkoutNotice("new", { cwd: `${checkout}/src` }))
+    .toBe("A teammate is working here; your changes may conflict");
+  expect(f.manager.checkoutNotice("new", { cwd: `${checkout}-other` })).toBeNull();
+  f.tasks()[0].status = "completed";
+  expect(f.manager.checkoutNotice("new", { cwd: checkout }))
+    .toBe("A teammate has work here; your changes may conflict");
+  expect(
+    f.manager.submissionError("new", false, { cwd: `${checkout}-other` }),
+  ).toBeNull();
+});
+
 describe("worker assignment prompts", () => {
+  it("rejects self-review both at assignment and verdict boundaries", async () => {
+    const f = setup();
+    f.host.reviewerFor = () => ({ id: "reviewer", name: "Reviewer" });
+    f.lead.busy = false;
+    await f.manager.start("lead", ["codex"], 2, undefined, true);
+    f.lead.busy = true;
+    const labels = { memberName: "Reviewer", memberMascot: "ghost", memberColor: "#aaaaaa" };
+    await f.delegate(["src"], { ...labels, member: "reviewer" });
+    const target = f.tasks()[0];
+    await vi.waitFor(() => expect(f.completions.has(target.sessionId)).toBe(true));
+    f.completions.get(target.sessionId)!({ status: "completed", text: "Implemented" });
+    await vi.waitFor(() => expect(f.tasks()[0].status).toBe("completed"));
+    await expect(f.delegate(["."], { ...labels, member: "reviewer", reviewTaskId: target.id })).rejects.toThrow("exact completed task");
+    // Simulate older persisted review evidence crossing the verdict trust boundary.
+    f.manager.run("lead")!.tasks[0].memberId = "backend";
+    await f.delegate(["."], { ...labels, member: "reviewer", reviewTaskId: target.id });
+    const review = f.tasks()[1];
+    await vi.waitFor(() => expect(f.completions.has(review.sessionId)).toBe(true));
+    f.manager.run("lead")!.tasks[0].memberId = "reviewer";
+    await expect(f.manager.recordReviewerResult(review.sessionId, "self", { decision: "approve", notes: "Self-approved" })).rejects.toThrow("independent Reviewer");
+  });
+  it("labels unreviewed work when a team has no Reviewer", async () => {
+    const f = setup();
+    f.lead.busy = false;
+    f.manager.registerMonoEngine("lead", "lead", "manager-mono", "/repo");
+    await f.manager.start("lead", ["codex"], 2, undefined, true);
+    f.lead.busy = true;
+    await f.delegate(["src"]);
+    await vi.waitFor(() => expect(f.completions.has(f.tasks()[0].sessionId)).toBe(true));
+    f.completions.get(f.tasks()[0].sessionId)!({ status: "completed", text: "Implemented" });
+    await vi.waitFor(() => expect(f.tasks()[0].status).toBe("completed"));
+    f.host.reviewerFor = () => undefined;
+    f.host.reviewedPullRequest = vi.fn(async () => "https://github.com/example/app/pull/1");
+    await saveTaskDocument(f, f.tasks()[0], "pr-summary");
+    await f.call("review", { taskId: f.tasks()[0].id });
+    expect(f.tasks()[0].reviewedBy).toBe("Not reviewed");
+  });
+  it("requires an authenticated Reviewer verdict on the latest dispatch before the PR gate", async () => {
+    const f = setup();
+    f.host.reviewerFor = () => ({ id: "reviewer", name: "Reviewer" });
+    f.host.reviewedPullRequest = vi.fn(
+      async () => "https://github.com/example/app/pull/1",
+    );
+    f.lead.busy = false;
+    f.manager.registerMonoEngine("lead", "lead", "manager-mono", "/repo");
+    await f.manager.start("lead", ["codex"], 2, undefined, true);
+    f.lead.busy = true;
+    await f.delegate(["src"], {
+      member: "backend",
+      memberName: "Backend",
+      memberMascot: "cat",
+      memberColor: "#aaaaaa",
+    });
+    const impl = f.tasks()[0];
+    await vi.waitFor(() =>
+      expect(f.completions.has(impl.sessionId)).toBe(true),
+    );
+    const write = vi.fn(async () => ({ added: true }));
+    await f.manager.recordMemberFact(
+      impl.sessionId,
+      "fact-1",
+      { fact: "Project uses UTC timestamps" },
+      write,
+    );
+    await f.manager.recordMemberFact(
+      impl.sessionId,
+      "fact-1",
+      { fact: "Project uses UTC timestamps" },
+      write,
+    );
+    expect(write).toHaveBeenCalledTimes(1);
+    await f.manager.recordMemberFact(
+      impl.sessionId,
+      "fact-2",
+      { fact: "Second fact" },
+      write,
+    );
+    await f.manager.recordMemberFact(
+      impl.sessionId,
+      "fact-3",
+      { fact: "Third fact" },
+      write,
+    );
+    await expect(
+      f.manager.recordMemberFact(
+        impl.sessionId,
+        "fact-4",
+        { fact: "Fourth fact" },
+        write,
+      ),
+    ).rejects.toThrow("three facts");
+    f.completions.get(impl.sessionId)!({
+      status: "completed",
+      text: "Implemented, tests passed",
+    });
+    await vi.waitFor(() => expect(f.tasks()[0].status).toBe("completed"));
+    await expect(f.call("review", { taskId: impl.id })).rejects.toThrow(
+      "Reviewer must approve",
+    );
+    await f.delegate(["."], {
+      member: "reviewer",
+      memberName: "Reviewer",
+      memberMascot: "ghost",
+      memberColor: "#aaaaaa",
+      reviewTaskId: impl.id,
+    });
+    const review = f.tasks()[1];
+    await vi.waitFor(() =>
+      expect(f.completions.has(review.sessionId)).toBe(true),
+    );
+    await expect(
+      f.manager.recordReviewerResult(impl.sessionId, "fake", {
+        decision: "approve",
+        notes: "Self approved",
+      }),
+    ).rejects.toThrow("Only this team's assigned Reviewer");
+    const reviewDocument = await saveTaskDocument(f, review, "review", "reviewer");
+    await expect(f.manager.recordReviewerResult(review.sessionId, "missing", { decision: "approve", notes: "Reviewed" })).rejects.toThrow("artifactId");
+    const originalScope = reviewDocument.scope!;
+    for (const corrupt of [{ ownerMonoId: "manager-mono" }, { dispatchId: "old" }, { taskId: impl.id }, { projectId: "/elsewhere" }]) {
+      f.documents.set(reviewDocument.id, { ...reviewDocument, scope: { ...originalScope, ...corrupt } });
+      await expect(f.manager.recordReviewerResult(review.sessionId, "wrong", { decision: "approve", notes: "Reviewed", artifactId: reviewDocument.id })).rejects.toThrow("exact assigned review dispatch");
+    }
+    f.documents.set(reviewDocument.id, reviewDocument);
+    const verdict = {
+      decision: "approve",
+      notes: "Exact diff and tests reviewed",
+      artifactId: reviewDocument.id,
+    };
+    await f.manager.recordReviewerResult(review.sessionId, "verdict", verdict);
+    await f.manager.recordReviewerResult(review.sessionId, "verdict", verdict);
+    expect(f.tasks()[0].reviewArtifactId).toBe(reviewDocument.id);
+    await expect(f.call("review", { taskId: impl.id })).rejects.toThrow(
+      "Reviewer must approve",
+    );
+    f.completions.get(review.sessionId)!({
+      status: "completed",
+      text: "Approved",
+    });
+    await vi.waitFor(() => expect(f.tasks()[1].status).toBe("completed"));
+    f.documents.delete(reviewDocument.id);
+    await expect(f.call("review", { taskId: impl.id })).rejects.toThrow("Save a review artifact");
+    f.documents.set(reviewDocument.id, reviewDocument);
+    await expect(f.call("review", { taskId: impl.id })).rejects.toThrow("Save a pr-summary artifact");
+    const summary = await saveTaskDocument(f, f.tasks()[0], "pr-summary");
+    await expect(f.call("review", { taskId: impl.id })).resolves.toMatchObject({
+      accepted: true,
+    });
+    expect(f.tasks()[0].reviewedBy).toBe("Reviewer");
+    const priorCompletion = f.completions.get(impl.sessionId);
+    await f.call("message", {
+      taskId: impl.id,
+      text: "Make one more correction",
+    });
+    await vi.waitFor(() => expect(f.tasks()[0].status).toBe("running"));
+    expect(f.tasks()[0].reviewArtifactId).toBeUndefined();
+    expect(f.tasks()[0].prSummaryArtifactId).toBeUndefined();
+    expect(f.documents.has(reviewDocument.id)).toBe(true);
+    expect(f.documents.has(summary.id)).toBe(true);
+    await vi.waitFor(() =>
+      expect(f.completions.get(impl.sessionId)).not.toBe(priorCompletion),
+    );
+    f.completions.get(impl.sessionId)!({
+      status: "completed",
+      text: "Corrected",
+    });
+    await vi.waitFor(() => expect(f.tasks()[0].status).toBe("completed"));
+    await expect(f.call("review", { taskId: impl.id })).rejects.toThrow(
+      "Reviewer must approve",
+    );
+  });
   it("keeps the task text and wraps it in the assignment envelope", () => {
     const sent = workerTurnPrompt("Review the branch.", ["src/App.tsx"]);
     expect(sent.startsWith("Review the branch.")).toBe(true);
@@ -129,9 +907,383 @@ describe("worker assignment prompts", () => {
     );
     expect(visibleUserPrompt(sent)).toBe("Review the branch.");
   });
+  it("asks workers for a plain-language ending with collapsed command evidence", () => {
+    const sent = workerTurnPrompt("Implement the change.", ["src/App.tsx"]);
+    expect(sent).toContain("End your final message with a short plain-language summary");
+    expect(sent).toContain("what changed (including changed files), what was verified, and what remains open");
+    expect(sent).toContain("<details><summary>Command output</summary>");
+    expect(sent).toContain("redact secrets");
+    expect(visibleUserPrompt(sent)).toBe("Implement the change.");
+  });
 });
 
 describe("local orchestration", () => {
+  it("stops an archived project's run without removing unchanged worker worktrees", async () => {
+    const f = setup();
+    await f.start();
+    await f.delegate(["brief.py"]);
+    await vi.waitFor(() => expect(f.tasks()[0].status).toBe("running"));
+    const worker = f.tasks()[0];
+    await f.manager.stopRun("lead", { retainWorktrees: true });
+    expect(f.host.stop).toHaveBeenCalledWith(worker.sessionId);
+    expect(f.manager.run("lead")?.status).toBe("stopped");
+    expect(f.tasks()[0].workspace).toEqual(worker.workspace);
+    expect(f.tasks()[0].status).toBe("cancelled");
+    expect(f.host.cleanupWorker).not.toHaveBeenCalled();
+  });
+  it("passively loads a saved Manager run for archival without recovering workers", async () => {
+    const f = setup();
+    await f.start();
+    await f.delegate(["brief.py"]);
+    await vi.waitFor(() => expect(f.saved.get("lead")?.tasks[0].workspace).toBeDefined());
+    f.saved.set("lead", { ...f.saved.get("lead")!, projectManager: true });
+    const restored = new Orchestrator(f.store);
+    restored.bind(f.host);
+    const enableCount = f.store.enable.mock.calls.length;
+    const submitCount = vi.mocked(f.host.submit).mock.calls.length;
+    await restored.stopRun("lead", { retainWorktrees: true });
+    expect(restored.run("lead")?.status).toBe("stopped");
+    expect(restored.run("lead")?.tasks[0].workspace).toEqual(f.tasks()[0].workspace);
+    expect(f.store.enable.mock.calls).toHaveLength(enableCount);
+    expect(vi.mocked(f.host.submit).mock.calls).toHaveLength(submitCount);
+    expect(f.host.cleanupWorker).not.toHaveBeenCalled();
+    expect(f.host.stop).toHaveBeenCalledWith(f.tasks()[0].sessionId);
+  });
+  it("reports failed archival persistence after stopping workers and disabling control", async () => {
+    const f = setup();
+    await f.start();
+    await f.delegate(["brief.py"]);
+    await vi.waitFor(() => expect(f.saved.get("lead")?.tasks[0].workspace).toBeDefined());
+    f.store.save.mockRejectedValue(new Error("Cannot save stopped run"));
+    await expect(f.manager.stopRun("lead", { retainWorktrees: true })).rejects.toThrow("Cannot save stopped run");
+    expect(f.host.stop).toHaveBeenCalledWith(f.tasks()[0].sessionId);
+    expect(f.store.disable).toHaveBeenCalledWith("lead");
+    expect(f.host.cleanupWorker).not.toHaveBeenCalled();
+  });
+  it("restores idle managers without pausing, but retains real manager interruptions", async () => {
+    const f = setup();
+    f.lead.busy = false;
+    await f.manager.start("lead", ["codex"], 2, undefined, true);
+    const restored = new Orchestrator(f.store);
+    restored.bind(f.host);
+    const states: string[] = [];
+    restored.subscribe(() => {
+      if (restored.run("lead")) states.push(restored.run("lead")!.status);
+    });
+    await restored.hydrate("lead");
+    expect(restored.run("lead")?.status).toBe("active");
+    expect(states).not.toContain("paused");
+    expect(f.host.submit).not.toHaveBeenCalled();
+    const turn = await restored.beginManagerTurn("lead", true);
+    expect(turn).toBeTruthy();
+    const crashed = new Orchestrator(f.store);
+    crashed.bind(f.host);
+    await crashed.hydrate("lead");
+    expect(crashed.run("lead")).toMatchObject({
+      status: "paused",
+      error: expect.stringContaining("Manager's last turn"),
+    });
+    expect(f.host.submit).not.toHaveBeenCalled();
+  });
+
+  it("automatically continues restart-interrupted workers once from their retained checkout", async () => {
+    const f = setup();
+    f.lead.harness = "codex";
+    f.lead.model = "codex:test";
+    f.lead.busy = false;
+    await f.manager.start("lead", ["codex"], 2, undefined, true);
+    f.lead.busy = true;
+    await f.delegate(["src"]);
+    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledOnce());
+    const original = structuredClone(f.tasks()[0]);
+    const restored = new Orchestrator(f.store);
+    restored.bind(f.host);
+    await restored.hydrate("lead");
+    await restored.hydrate("lead");
+    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledTimes(2));
+    expect(restored.run("lead")).toMatchObject({
+      status: "active",
+      recoveryNotice:
+        "Continued 1 worker after restart from retained checkouts.",
+    });
+    expect(restored.run("lead")!.tasks[0]).toMatchObject({
+      sessionId: original.sessionId,
+      workspace: original.workspace,
+      status: "running",
+    });
+    expect(f.host.submit).toHaveBeenLastCalledWith(
+      original.sessionId,
+      expect.stringContaining("Preserve completed work"),
+      expect.any(Function),
+    );
+  });
+
+  it("resets the continuation budget on user turns and exposes failed turns without replaying them", async () => {
+    const f = setup();
+    f.lead.busy = false;
+    await f.manager.start("lead", ["codex"], 2, undefined, true);
+    f.manager.run("lead")!.continuations = 20;
+    const turn = await f.manager.beginManagerTurn("lead", true);
+    expect(f.manager.run("lead")!.continuations).toBe(0);
+    await f.manager.endManagerTurn("lead", turn, {
+      status: "failed",
+      text: "",
+      error: "Provider unavailable",
+    });
+    expect(f.manager.run("lead")).toMatchObject({
+      status: "paused",
+      error: "Provider unavailable",
+    });
+    await f.manager.continueManager("lead");
+    expect(f.manager.run("lead")!.status).toBe("active");
+    expect(f.host.submit).toHaveBeenCalledOnce();
+  });
+
+  it("treats stopping a Manager as an interruption, preserving its workers for Continue", async () => {
+    const f = setup();
+    f.lead.busy = false;
+    await f.manager.start("lead", ["codex"], 2, undefined, true);
+    f.lead.busy = true;
+    await f.delegate(["src"]);
+    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledOnce());
+    await f.manager.stopForSession("lead");
+    expect(f.manager.run("lead")?.status).toBe("paused");
+    expect(f.tasks()[0].status).toBe("interrupted");
+    expect(f.tasks()[0].workspace).toBeDefined();
+    expect(f.host.stop).toHaveBeenCalledWith("lead");
+    expect(f.host.cleanupWorker).not.toHaveBeenCalled();
+  });
+
+  it("does not replay a saved safety/provider blocker and waits for provider discovery during recovery", async () => {
+    const f = setup();
+    f.lead.harness = "codex";
+    f.lead.model = "codex:test";
+    f.lead.busy = false;
+    await f.manager.start("lead", ["codex"], 2, undefined, true);
+    f.lead.busy = true;
+    await f.delegate(["src"]);
+    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledOnce());
+    let discovered!: () => void;
+    f.host.probeProviders = () =>
+      new Promise<void>((resolve) => {
+        discovered = resolve;
+      });
+    f.host.choices = () => [];
+    const restored = new Orchestrator(f.store);
+    restored.bind(f.host);
+    const loading = restored.hydrate("lead");
+    await vi.waitFor(() => expect(discovered).toBeTypeOf("function"));
+    expect(f.host.submit).toHaveBeenCalledOnce();
+    discovered();
+    await loading;
+    expect(restored.run("lead")).toMatchObject({
+      status: "paused",
+      recovering: undefined,
+      error: expect.stringContaining("provider is unavailable"),
+    });
+    const blocked = new Orchestrator(f.store);
+    blocked.bind(f.host);
+    await blocked.hydrate("lead");
+    expect(blocked.run("lead")?.status).toBe("paused");
+    expect(f.host.submit).toHaveBeenCalledOnce();
+  });
+
+  it("uses the folder display name and captures its branch for each assignment", async () => {
+    const f = setup();
+    f.lead.busy = false;
+    f.lead.cwd = "/worktrees/browser-link-4";
+    f.host.projectIdentity = vi.fn(async () => ({
+      name: "Browser Link 4",
+      branch: "v4",
+    }));
+    await f.manager.start("lead", ["codex"], 2, undefined, true);
+    f.lead.busy = true;
+    await f.delegate(["src"]);
+    expect(f.manager.prompt("lead", "Build")).toContain(
+      'Manager for "Browser Link 4"',
+    );
+    expect(f.manager.run("lead")!.workspace).toMatchObject({
+      checkoutCwd: f.lead.cwd,
+      branch: "v4",
+    });
+    expect(f.tasks()[0].baseBranch).toBe("v4");
+  });
+
+  it("defaults to the current Manager model and reassigns stopped workers without losing scope or checkout", async () => {
+    const f = setup();
+    f.lead.harness = "codex";
+    f.lead.model = "codex:test";
+    f.lead.busy = false;
+    await f.manager.start("lead", ["codex"], 2, undefined, true);
+    f.lead.busy = true;
+    await f.call("delegate", {
+      title: "Recover",
+      prompt: "Original scope",
+      files: ["src"],
+    });
+    await vi.waitFor(() => expect(f.tasks()[0].status).toBe("running"));
+    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledTimes(1));
+    const original = f.tasks()[0];
+    expect(original.model).toBe(f.lead.model);
+    await expect(
+      f.call("reassign", { taskId: original.id, reason: "quota" }),
+    ).rejects.toThrow("Cancel");
+    await f.call("cancel", { taskId: original.id });
+    await expect(
+      f.call("reassign", { taskId: original.id, reason: "safety" }),
+    ).rejects.toThrow("Safety refusals");
+    const input = { taskId: original.id, reason: "configuration" };
+    const result = await f.call("reassign", input, "replace-once");
+    expect(await f.call("reassign", input, "replace-once")).toEqual(result);
+    await vi.waitFor(() => expect(f.tasks()[0].status).toBe("running"));
+    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledTimes(2));
+    const replacement = f.tasks()[0];
+    expect(replacement.sessionId).not.toBe(original.sessionId);
+    expect(replacement.workspace).toEqual(original.workspace);
+    expect(replacement.files).toEqual(original.files);
+    expect(replacement.prompt).toBe(original.prompt);
+    expect(f.sessions.some((s) => s.id === original.sessionId)).toBe(true);
+    expect(f.host.cleanupWorker).not.toHaveBeenCalled();
+    expect(f.host.submit).toHaveBeenLastCalledWith(
+      replacement.sessionId,
+      expect.stringContaining("Original scope"),
+      expect.any(Function),
+    );
+    f.completions.get(original.sessionId)!({
+      status: "completed",
+      text: "Late old result",
+    });
+    expect(f.tasks()[0].status).toBe("running");
+  });
+
+  it("runs independent project goals concurrently, retains reviewed PR worktrees and preserves receipts", async () => {
+    const f = setup();
+    f.lead.busy = false;
+    await f.manager.start("lead", ["codex"], 2, undefined, true);
+    expect(f.manager.prompt("lead", "Goal")).toContain(
+      "Never rephrase, change models, or switch providers to bypass a refusal",
+    );
+    f.lead.busy = true;
+    const input = {
+      title: "Goal one",
+      prompt: "Implement",
+      harness: "codex",
+      files: ["."],
+    };
+    const first = await f.call("delegate", input, "stable-assignment");
+    expect(await f.call("delegate", input, "stable-assignment")).toEqual(first);
+    await f.delegate(["."], { title: "Goal two", checkout: "named-worktree" });
+    await vi.waitFor(() =>
+      expect(f.tasks().map((task) => task.status)).toEqual([
+        "running",
+        "running",
+      ]),
+    );
+    expect(f.tasks()[1].checkout).toBe("named-worktree");
+    const task = f.tasks()[0];
+    f.completions.get(task.sessionId)!({
+      status: "completed",
+      text: "Tests passed",
+    });
+    await vi.waitFor(() => expect(f.tasks()[0].status).toBe("completed"));
+    f.host.reviewedPullRequest = vi.fn(async () => {
+      throw new Error("No open PR");
+    });
+    await expect(f.call("review", { taskId: task.id })).rejects.toThrow(
+      "No open PR",
+    );
+    expect(f.tasks()[0].accepted).toBe(false);
+    f.host.reviewedPullRequest = vi.fn(
+      async () => "https://github.com/example/repo/pull/1",
+    );
+    f.host.notifyReady = vi.fn();
+    const reviewInput = {
+      taskId: task.id,
+      checks: "Diff reviewed; focused tests passed",
+    };
+    f.lead.blocks = [
+      {
+        id: "ready-turn",
+        role: "user",
+        text: "Implement goal one",
+        startedAt: 100,
+      },
+    ];
+    await f.call("review", reviewInput, "review-once");
+    const readyAt = f.tasks()[0].prReadyAt;
+    expect(readyAt).toEqual(expect.any(Number));
+    expect(f.tasks()[0].prReadyTurnId).toBe("ready-turn");
+    f.lead.blocks.push({
+      id: "next-turn",
+      role: "user",
+      text: "Start new work",
+      startedAt: 500,
+    });
+    await f.call("review", reviewInput, "review-once");
+    await f.call("review", reviewInput);
+    expect(f.tasks()[0]).toMatchObject({
+      prReadyAt: readyAt,
+      prReadyTurnId: "ready-turn",
+    });
+    expect(f.saved.get("lead")?.tasks[0]).toMatchObject({
+      prReadyAt: readyAt,
+      prReadyTurnId: "ready-turn",
+    });
+    expect(f.host.notifyReady).not.toHaveBeenCalled();
+    await f.manager.maintainDelivery("lead", task.id, { head: "ready-head", ci: "pass", conflicts: false, mergeable: true });
+    await f.manager.maintainDelivery("lead", task.id, { head: "ready-head", ci: "pass", conflicts: false, mergeable: true });
+    expect(f.host.notifyReady).toHaveBeenCalledTimes(1);
+    expect(f.tasks()[0].checksSummary).toBe(reviewInput.checks);
+    expect(f.tasks()[0]).toMatchObject({
+      accepted: true,
+      prUrl: "https://github.com/example/repo/pull/1",
+      acceptedDispatchId: f.tasks()[0].lastDispatchId,
+    });
+    expect(f.tasks()[0].workspace).toBeDefined();
+    expect(f.host.integrateWorker).not.toHaveBeenCalled();
+    expect(f.host.cleanupWorker).not.toHaveBeenCalled();
+    await f.call("message", {
+      taskId: task.id,
+      text: "Address review feedback",
+    });
+    await vi.waitFor(() => expect(f.tasks()[0].status).toBe("running"));
+    expect(f.tasks()[0].accepted).toBe(false);
+    expect(f.tasks()[0]).toMatchObject({
+      prReadyAt: readyAt,
+      prReadyTurnId: "ready-turn",
+    });
+    expect(f.saved.get("lead")?.tasks[0]).toMatchObject({
+      prReadyAt: readyAt,
+      prReadyTurnId: "ready-turn",
+    });
+  });
+
+  it("recovers a project manager without replaying workers until explicit resume", async () => {
+    const f = setup();
+    f.lead.busy = false;
+    await f.manager.start("lead", ["codex"], 2, undefined, true);
+    f.lead.busy = true;
+    await f.delegate(["src"]);
+    await vi.waitFor(() => expect(f.tasks()[0].status).toBe("running"));
+    const recovered = new Orchestrator(f.store);
+    await vi.waitFor(() =>
+      expect(f.completions.has(f.tasks()[0].sessionId)).toBe(true),
+    );
+    recovered.bind(f.host);
+    vi.mocked(f.host.submit).mockClear();
+    await recovered.hydrate("lead");
+    expect(recovered.run("lead")).toMatchObject({
+      projectManager: true,
+      status: "paused",
+    });
+    expect(recovered.run("lead")!.tasks[0]).toMatchObject({
+      status: "interrupted",
+      workspace: f.tasks()[0].workspace,
+    });
+    expect(f.host.submit).not.toHaveBeenCalled();
+    await recovered.start("lead", ["codex"], 2);
+    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledOnce());
+  });
   it("stops and forgets a deleted lead without persisting it again", async () => {
     const f = setup();
     await f.start();
@@ -516,6 +1668,7 @@ describe("local orchestration", () => {
     });
     await f.call("review", { taskId: task.id });
     expect(f.tasks()[0].acceptedDispatchId).toBe(dispatchId);
+    expect(f.tasks()[0].acceptedAt).toEqual(expect.any(Number));
     expect(f.host.integrateWorker).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ id: task.id }),
@@ -1065,6 +2218,63 @@ describe("local orchestration", () => {
     expect(f.store.disable).toHaveBeenCalledWith("lead");
     expect(f.host.submit).toHaveBeenCalledTimes(1);
   });
+  it("retains Manager events during storage preparation and classified rejection, then dispatches after repair", async () => {
+    const f = setup();
+    f.lead.busy = false;
+    await f.manager.start("lead", ["codex"], 2, undefined, true);
+    f.lead.busy = true;
+    await f.delegate(["a"]);
+    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledTimes(1));
+    f.lead.busy = false;
+    f.lead.codexStoragePreparing = true;
+    f.completions.get(f.tasks()[0].sessionId)!({ status: "completed", text: "Result retained" });
+    await vi.waitFor(() => expect(f.tasks()[0].status).toBe("completed"));
+    expect(f.tasks()[0].delivered).toBe(false);
+    expect(f.host.submit).toHaveBeenCalledTimes(1);
+    f.lead.codexStoragePreparing = undefined;
+    f.manager.sync();
+    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledTimes(2));
+    f.lead.codexStorageError = "Codex storage needs repair: preparation is already pending.";
+    f.completions.get("lead")!({ status: "failed", text: "", error: f.lead.codexStorageError });
+    await vi.waitFor(() => expect(f.tasks()[0].delivered).toBe(false));
+    expect(f.manager.run("lead")!.status).toBe("active");
+    expect(f.manager.run("lead")!.continuations).toBe(0);
+    f.manager.sync();
+    expect(f.host.submit).toHaveBeenCalledTimes(2);
+    f.lead.codexStorageError = undefined;
+    f.manager.sync();
+    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledTimes(3));
+    expect(vi.mocked(f.host.submit).mock.calls[2][1]).toContain("Result retained");
+  });
+
+  it("defers results when a user turn starts during continuation persistence", async () => {
+    const f = setup();
+    await f.start();
+    await f.delegate(["a"]);
+    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledTimes(1));
+    f.store.save.mockImplementation(async (run) => {
+      f.saved.set(run.leadId, structuredClone(run));
+      if (run.continuations === 1) f.lead.busy = true;
+    });
+    f.lead.busy = false;
+    f.completions.get(f.tasks()[0].sessionId)!({
+      status: "completed",
+      text: "Tests pass",
+    });
+    await vi.waitFor(() => {
+      expect(f.lead.busy).toBe(true);
+      expect(f.tasks()[0].delivered).toBe(false);
+      expect(f.manager.run("lead")!.continuations).toBe(0);
+    });
+    expect(f.manager.run("lead")!.status).toBe("active");
+    expect(f.host.submit).toHaveBeenCalledTimes(1);
+    f.store.save.mockImplementation(async (run) => {
+      f.saved.set(run.leadId, structuredClone(run));
+    });
+    f.lead.busy = false;
+    f.manager.sync();
+    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledTimes(2));
+  });
   it("returns worker output to an idle lead once", async () => {
     const f = setup();
     await f.start();
@@ -1429,7 +2639,7 @@ describe("local orchestration", () => {
       f.call("steer", { taskId: task.id, text: "Too late" }),
     ).rejects.toThrow(/Only a running agent can be steered.*message/s);
   });
-  it("blocks ordinary sessions while a run owns their checkout", async () => {
+  it("allows ordinary sessions while a run owns their checkout", async () => {
     const f = setup();
     await f.start();
     f.sessions.push({
@@ -1437,7 +2647,41 @@ describe("local orchestration", () => {
       id: "other",
       busy: false,
     });
-    expect(f.manager.submissionError("other")).toContain("active orchestrator");
+    expect(f.manager.submissionError("other")).toBeNull();
     expect(f.manager.submissionError("lead")).toBeNull();
   });
+  it("does not block a home-folder session containing a controlled checkout", async () => {
+    const f = setup();
+    await f.start();
+    f.sessions.push({ ...newSession("claude", "/"), id: "home", busy: false });
+    expect(f.manager.submissionError("home")).toBeNull();
+  });
+});
+
+it("does not reserve an org Manager's primary checkout or a read-only task checkout", async () => {
+  const f = reportTaskFixture();
+  f.lead.busy = false;
+  f.manager.registerMonoEngine("lead", "lead", "manager-mono", "/repo");
+  f.sessions.push({ ...newSession("codex", "/repo"), id: "user", busy: true });
+  await f.manager.start("lead", ["codex"], 2, undefined, true);
+  f.lead.busy = true;
+  expect(f.manager.submissionError("user")).toBeNull();
+  expect(() => f.manager.assertCanLaunch("new-agent", { cwd: "/repo" })).not.toThrow();
+  await f.delegate(["src"], { readOnly: true, memberName: "Native Core" });
+  await vi.waitFor(() => expect(f.tasks()[0].workspace).toBeDefined());
+  const checkout = f.tasks()[0].workspace!.checkoutCwd;
+  expect(f.manager.submissionError("user")).toBeNull();
+  expect(f.manager.checkoutNotice("user", { cwd: checkout })).toBeNull();
+  expect(() => f.manager.assertCanLaunch("new-agent", { cwd: checkout })).not.toThrow();
+});
+
+it("resumes a legacy project Manager while a user is working in the project checkout", async () => {
+  const f = setup();
+  f.lead.busy = false;
+  await f.manager.start("lead", ["codex"], 2, undefined, true);
+  await f.manager.pause("lead", "Paused by user");
+  f.sessions.push({ ...newSession("codex", "/repo"), id: "user", busy: true });
+  await f.manager.start("lead", ["codex"], 2);
+  expect(f.manager.run("lead")).toMatchObject({ status: "active", projectManager: true });
+  expect(f.manager.submissionError("user")).toBeNull();
 });

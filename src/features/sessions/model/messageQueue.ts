@@ -2,7 +2,7 @@ import { isPreparingHandoff } from "./handoff";
 import type { QueuedMessage, Session } from "./session";
 
 export function queuedHead(session: Session): QueuedMessage | undefined {
-  return session.queuedMessages?.[0];
+  return session.queuedMessages?.[0] ?? session.pendingMonoEvents?.[0];
 }
 
 /** Hold auto-dispatch only while the item about to send is being edited. */
@@ -20,8 +20,9 @@ export function dequeueQueuedMessage(
   );
   return {
     ...session,
+    pendingMonoEvents: session.pendingMonoEvents?.filter(message => message.id !== messageId),
     queuedMessages: queuedMessages.length > 0 ? queuedMessages : undefined,
-    queueStatus: queuedMessages.length > 0 ? session.queueStatus : undefined,
+    queueStatus: queuedMessages.length > 0 || session.pendingMonoEvents?.some(message => message.id !== messageId) ? session.queueStatus : undefined,
     editingQueuedMessageId:
       session.editingQueuedMessageId === messageId
         ? undefined
@@ -37,7 +38,7 @@ export function dequeueQueuedMessage(
 export function canDispatchQueuedHead(session: Session): boolean {
   if (session.busy) return false;
   if (session.worktreePreparing || session.worktreeRemoved) return false;
-  if (session.usageLimit) return false;
+  if (session.usageLimit || session.codexStorageError || session.codexStoragePreparing) return false;
   if (session.queueStatus === "paused" || session.queueStatus === "resuming") {
     return false;
   }
@@ -54,12 +55,15 @@ export function canSteerQueuedHead(session: Session): boolean {
   return (
     !!head &&
     !head.monoSessionCompletion &&
+    !head.monoSource &&
     !!session.busy &&
     !!session.turnReady &&
     !session.worktreePreparing &&
     !session.worktreeRemoved &&
     !session.pendingSwitch &&
     !session.usageLimit &&
+    !session.codexStorageError &&
+    !session.codexStoragePreparing &&
     !(
       session.pendingQuestion && session.pendingQuestion.autoResolveAt == null
     ) &&
@@ -78,11 +82,11 @@ export function queuedMessageForSubmit(
   messageId: string,
   mode: "dispatch" | "steer",
 ): QueuedMessage | undefined {
-  const message = session.queuedMessages?.find(
+  const message = [...(session.queuedMessages ?? []), ...(session.pendingMonoEvents ?? [])].find(
     (entry) => entry.id === messageId,
   );
   if (!message) return undefined;
-  if (mode === "steer") return message.monoSessionCompletion ? undefined : message;
+  if (mode === "steer") return message.monoSessionCompletion || message.monoSource ? undefined : message;
   if (queuedHead(session)?.id !== messageId) return undefined;
   if (!canDispatchQueuedHead(session)) return undefined;
   return message;

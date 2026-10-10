@@ -58,10 +58,49 @@ export type OrchestrationDispatch = {
   result?: string;
   error?: string;
   cleanupError?: string;
+  checkoutBaseline?: CheckoutBaseline;
+};
+
+export type CheckoutBaseline = {
+  head: string;
+  fingerprint: string;
+  pathHashes?: Record<string, string>;
+  inheritedChangedPaths?: string[];
 };
 
 export type OrchestrationTask = {
+  trivial?: boolean;
+  reviewedHead?: string;
+  delivery?: { head: string; ci: "pass" | "fail" | "pending" | "unknown"; conflicts: boolean; mergeable?: boolean; state: "watching" | "fixing-ci" | "resolving-conflicts" | "review-outdated" | "ready"; repairKey?: string };
+  handoffNote?: string;
+  readOnly?: boolean;
+  readOnlyFallback?: string;
+  /** Immutable assignment base; never compare against a moving branch alone. */
+  baseHead?: string;
+  readOnlyBaseline?: { head: string; fingerprint: string };
+  checkoutBaseline?: CheckoutBaseline;
+  completionOutcome?: "no-changes" | "no-changes-baseline-unknown";
+  /** A legacy retry's read-only guard is not evidence of its original dispatch state. */
+  checkoutBaselineUnknown?: boolean;
+  origin?: "user" | "manager";
   id: string;
+  monoGoalId?: string;
+  memberId?: string;
+  memberName?: string;
+  memberMascot?: string;
+  memberColor?: string;
+  reviewOf?: { taskId: string; dispatchId: string };
+  reviewVerdict?: {
+    headOid?: string;
+    decision: "approve" | "changes";
+    notes: string;
+    dispatchId: string;
+    artifactId?: string;
+  };
+  reviewArtifactId?: string;
+  reportArtifactId?: string;
+  prSummaryArtifactId?: string;
+  reviewedBy?: string;
   assignmentId?: string;
   sessionId: string;
   title: string;
@@ -78,6 +117,13 @@ export type OrchestrationTask = {
   dependsOn: string[];
   status: TaskStatus;
   accepted: boolean;
+  /** An open, non-draft PR confirmed at manager review time. */
+  prUrl?: string;
+  checksSummary?: string;
+  /** The project folder's branch when this assignment was created. */
+  baseBranch?: string;
+  /** Optional existing worktree explicitly named in an assignment. */
+  checkout?: string;
   result: string;
   error?: string;
   /** A retained worker can continue safely with this recovery turn. */
@@ -91,12 +137,19 @@ export type OrchestrationTask = {
   activeDispatchId?: string;
   lastDispatchId?: string;
   acceptedDispatchId?: string;
+  acceptedAt?: number;
+  /** First PR-ready event, retained when the worker receives corrections. */
+  prReadyAt?: number;
+  prReadyTurnId?: string;
 };
 
 export type OrchestrationRun = {
   /** Version 1 remains readable; every committed snapshot is migrated to 2. */
   version: 1 | 2;
   leadId: string;
+  /** A Mono may own multiple project engines while keeping one conversation. */
+  ownerSessionId?: string;
+  ownerMonoId?: string;
   /** Legacy project identity. Use workspace.checkoutCwd for filesystem work. */
   cwd: string;
   workspace?: OrchestrationWorkspace;
@@ -106,6 +159,13 @@ export type OrchestrationRun = {
   allowedModels?: OrchestrationChoice[];
   proposalId?: string;
   maxWorkers: number;
+  projectManager?: boolean;
+  projectName?: string;
+  /** Persisted before a manager turn; absence means an idle manager is safe to restore. */
+  managerTurnId?: string;
+  recoveryNotice?: string;
+  /** Restore is in progress, not a request for human intervention. */
+  recovering?: boolean;
   cli: string;
   tasks: OrchestrationTask[];
   dispatches?: OrchestrationDispatch[];
@@ -165,6 +225,10 @@ export function normalizeOrchestrationRun(
       task.error === legacyPauseError;
     return {
       ...task,
+      checkoutBaseline: task.checkoutBaseline ?? (run.dispatches ?? [])
+        .filter(dispatch => dispatch.taskId === task.id && dispatch.checkoutBaseline)
+        .sort((a, b) => a.startedAt - b.startedAt)[0]?.checkoutBaseline ??
+        (task.checkoutBaselineUnknown ? undefined : task.readOnlyBaseline),
       ...(legacyInterrupted
         ? {
             status:

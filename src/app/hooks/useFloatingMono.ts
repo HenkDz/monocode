@@ -3,7 +3,9 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { IS_MAC } from "../../platform/tauri/platform";
 import type { Session } from "../../features/sessions/model/session";
-import { findMono } from "../../features/monos/model/mono";
+import { findMono, listMonos } from "../../features/monos/model/mono";
+import { monoLiveState } from "../../features/monos/model/monoNavigation";
+import type { OrchestrationRun } from "../../features/orchestration/model/orchestrationState";
 import {
   loadMonoMenuBarIcon,
   subscribeMonoMenuBarIcon,
@@ -29,9 +31,10 @@ export function useFloatingMono(
   rosterKey: string,
   enabled: boolean,
   host: Host,
+  runs: readonly OrchestrationRun[] = [],
 ) {
-  const current = useRef({ sessions, enabled, host });
-  current.current = { sessions, enabled, host };
+  const current = useRef({ sessions, enabled, host, runs });
+  current.current = { sessions, enabled, host, runs };
   const active = useRef(new Set<string>());
   const syncing = useRef(Promise.resolve());
   const refresh = useRef<() => void>(() => {});
@@ -44,15 +47,18 @@ export function useFloatingMono(
     let again = false;
     let unlisten: (() => void) | undefined;
     const lastSessions = new Map<string, Session>();
+    const lastStates = new Map<string, string>();
     const publishSession = (monoId: string, fallback?: Session) => {
       const sessionId = findMono(monoId)?.sessionId;
       const session =
         current.current.sessions.find((s) => s.id === sessionId) ?? fallback;
       if (!session) return;
+      const state = monoLiveState(listMonos(), current.current.runs, current.current.sessions, monoId);
       lastSessions.set(monoId, session);
+      lastStates.set(monoId, JSON.stringify(state));
       void invoke("mono_chat_publish", {
         monoId,
-        session: floatingMonoSession(session),
+        session: floatingMonoSession(session, state),
       }).catch(console.error);
     };
     publish.current = () => {
@@ -61,12 +67,14 @@ export function useFloatingMono(
         if (!mono || !current.current.enabled) {
           active.current.delete(monoId);
           lastSessions.delete(monoId);
+          lastStates.delete(monoId);
           continue;
         }
         const session = current.current.sessions.find(
           (s) => s.id === mono.sessionId,
         );
-        if (session && session !== lastSessions.get(monoId)) {
+        const stateKey = JSON.stringify(monoLiveState(listMonos(), current.current.runs, current.current.sessions, monoId));
+        if (session && (session !== lastSessions.get(monoId) || stateKey !== lastStates.get(monoId))) {
           publishSession(monoId);
         }
       }
@@ -189,5 +197,5 @@ export function useFloatingMono(
   // This also keeps publishing when a hidden owner has no animation frames.
   useEffect(() => {
     publish.current();
-  }, [sessions]);
+  }, [sessions, runs, rosterKey]);
 }

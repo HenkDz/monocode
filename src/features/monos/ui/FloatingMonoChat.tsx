@@ -144,7 +144,7 @@ export function FloatingMonoChat({ onShown }: { onShown: () => void }) {
     [view.monoId],
   );
   const state = view.session
-    ? monoState(view.session)
+    ? view.session.monoLiveState ?? monoState(view.session)
     : { status: "idle" as const };
   const failure = error ?? view.error;
   const loading = !mono || !view.session;
@@ -161,10 +161,12 @@ export function FloatingMonoChat({ onShown }: { onShown: () => void }) {
       <MonoRail
         monos={view.monos}
         currentId={view.monoId}
+        covered={!!artifactId}
         onSwitch={(id) => void switchTo(id)}
         onCreate={() => action({ kind: "create" })}
       />
       <div className={CARD}>
+        <div inert={!!artifactId || undefined} className="flex min-h-0 flex-1 flex-col">
         <header
           data-tauri-drag-region
           className="flex shrink-0 items-center gap-2 border-b border-content/8 px-3 py-3"
@@ -188,6 +190,11 @@ export function FloatingMonoChat({ onShown }: { onShown: () => void }) {
                   className="truncate text-[13px] leading-4 font-semibold"
                 >
                   {mono.name}
+                  {mono.role ? (
+                    <span className="ml-1.5 text-[10px] font-normal capitalize text-content/45">
+                      {mono.role}
+                    </span>
+                  ) : null}
                 </h1>
                 <MonoStatus
                   state={state}
@@ -271,6 +278,7 @@ export function FloatingMonoChat({ onShown }: { onShown: () => void }) {
             />
           </>
         )}
+        </div>
         {artifactId && !loading ? (
           <ArtifactSheet
             key={artifactId}
@@ -278,7 +286,6 @@ export function FloatingMonoChat({ onShown }: { onShown: () => void }) {
             action={action}
             onClose={() => {
               setArtifactId(null);
-              setFocus((n) => n + 1);
             }}
           />
         ) : null}
@@ -294,11 +301,13 @@ export function FloatingMonoChat({ onShown }: { onShown: () => void }) {
 function MonoRail({
   monos,
   currentId,
+  covered,
   onSwitch,
   onCreate,
 }: {
   monos: FloatingMonoEntry[];
   currentId: string | null;
+  covered: boolean;
   onSwitch: (monoId: string) => void;
   onCreate: () => Promise<boolean>;
 }) {
@@ -306,6 +315,7 @@ function MonoRail({
   return (
     <nav
       aria-label="Monos"
+      inert={covered || undefined}
       data-floating-mono-rail
       data-tauri-drag-region
       // 17px puts the first mascot's center level with the header's: the
@@ -487,6 +497,8 @@ function FloatingConversation({
         <MonoComposer
           sessionId={`floating:${session.id}`}
           name={mono.name}
+          runtimeMode={session.runtimeMode}
+          onRuntimeModeChange={(mode) => void action({ kind: "runtimeMode", mode })}
           enabled={!session.worktreeRemoved}
           focusToken={focus}
           onSubmit={async (text, attachments) => {
@@ -526,6 +538,9 @@ function ArtifactSheet({
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const closing = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const panel = useRef<HTMLElement>(null);
+  const closeButton = useRef<HTMLButtonElement>(null);
+  const trigger = useRef(document.activeElement);
   const close = useCallback(() => {
     if (closing.current) return;
     setOpen(false);
@@ -540,8 +555,28 @@ function ArtifactSheet({
     };
   }, []);
   useEffect(() => {
+    closeButton.current?.focus();
+    return () => {
+      if (trigger.current instanceof HTMLElement && trigger.current.isConnected)
+        trigger.current.focus();
+    };
+  }, []);
+  useEffect(() => {
     const escape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (event.defaultPrevented || event.isComposing) return;
+      if (event.key === "Tab" && panel.current) {
+        const controls = [...panel.current.querySelectorAll<HTMLElement>(
+          'button:not(:disabled), a[href], input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex="-1"])',
+        )].filter(element => !element.closest('[hidden], [inert], [aria-hidden="true"]'));
+        const first = controls[0], last = controls[controls.length - 1];
+        if (!first || !panel.current.contains(document.activeElement) ||
+          (event.shiftKey ? document.activeElement === first : document.activeElement === last)) {
+          event.preventDefault();
+          (event.shiftKey ? last : first)?.focus();
+        }
+        return;
+      }
+      if (event.key !== "Escape") return;
       event.preventDefault();
       event.stopPropagation();
       close();
@@ -565,6 +600,7 @@ function ArtifactSheet({
         }`}
       />
       <section
+        ref={panel}
         role="dialog"
         aria-modal="true"
         aria-label={artifact?.title ?? label}
@@ -607,6 +643,7 @@ function ArtifactSheet({
           <button
             type="button"
             aria-label="Close document"
+            ref={closeButton}
             title="Close (Escape)"
             className={BUTTON}
             onClick={close}

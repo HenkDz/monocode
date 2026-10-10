@@ -1,6 +1,7 @@
 use tauri::Manager;
 
 mod account_identity;
+mod app_cli_inputs;
 mod artifacts;
 mod automations;
 mod azure_devops;
@@ -14,6 +15,7 @@ mod devin_config;
 mod devin_usage;
 mod external_editor;
 mod fs;
+mod github_gateway;
 mod gitlab;
 mod harness;
 mod harness_updates;
@@ -32,11 +34,14 @@ mod mono;
 #[cfg(target_os = "macos")]
 mod mono_chat;
 mod mono_transcript;
+mod nested_worktrees;
 mod notes;
 mod notifications;
+mod ntfy;
 mod pasteboard;
 mod pi_usage;
 mod project_logo;
+mod project_root;
 mod pty;
 #[cfg(target_os = "macos")]
 mod quick_composer;
@@ -248,6 +253,7 @@ pub fn run() {
         .manage(remote::RemoteConnections::default())
         .manage(window_transfer::WindowTransferState::new())
         .setup(|app| {
+            control_cli::init_trusted_launchers();
             harness::reap_orphaned_harness_processes();
             session_store::init(app.handle())?;
             control::init(app.handle())?;
@@ -292,15 +298,24 @@ pub fn run() {
             control::control_reply,
             control::control_save,
             control::control_load,
+            project_root::project_root,
+            project_root::resolve_project_add,
             control::control_scopes,
             control::control_write_path,
             control::control_attach_worker,
             control::control_authorize_turn,
             control::control_turn_finished,
             control::app_cli_path,
+            control_cli::app_cli_approval_policy,
+            control_cli::app_cli_input_is_temp,
+            control_cli::app_cli_executable_matches,
+            control_cli::app_cli_powershell_is_trusted,
             default_cwd,
             home_dir,
             notifications::notification_permission,
+            ntfy::ntfy_settings,
+            ntfy::ntfy_save,
+            ntfy::ntfy_send,
             notifications::request_notification_permission,
             notifications::show_notification,
             notifications::open_notification_settings,
@@ -346,9 +361,15 @@ pub fn run() {
             fs::git_staged_context,
             fs::git_push,
             fs::git_pull,
+            fs::git_fetch,
             fs::git_sync,
             fs::git_range_context,
             fs::git_pr_status,
+            fs::git_pr_list,
+            fs::git_pr_status_by_url,
+            fs::git_pr_status_batch,
+            fs::github_api_budget,
+            fs::git_pr_action_by_url,
             fs::git_pr_create,
             fs::git_github_status,
             fs::github_monocode_star_status,
@@ -403,13 +424,17 @@ pub fn run() {
             fs::git_create_branch,
             fs::git_stash,
             worktrees::git_worktrees,
+            worktrees::git_task_snapshot,
             worktrees::git_worktree_create,
+            nested_worktrees::git_nested_worktrees,
+            nested_worktrees::git_cleanup_nested_leftovers,
             worktrees::git_orchestration_worktree_create,
             worktrees::git_worktree_rename_branch,
             worktrees::git_worktree_check_remove,
             worktrees::git_worktree_remove,
             worktrees::git_orchestration_worktree_remove,
             worktrees::git_orchestration_branch_remove,
+            worktrees::git_worktree_branch_remove,
             fs::create_path,
             fs::rename_path,
             fs::delete_path,
@@ -460,6 +485,7 @@ pub fn run() {
             harness::harness_free_port,
             harness::harness_spawn,
             codex_mono_store::codex_mono_store_prepare,
+            codex_mono_store::codex_mono_store_info,
             codex_mono_store::codex_mono_store_copy,
             codex_mono_store::codex_mono_store_restore_agent_state,
             harness::harness_write,
@@ -495,6 +521,7 @@ pub fn run() {
             mono_transcript::mono_session_page,
             mono_transcript::mono_session_upsert,
             mono_transcript::mono_session_find,
+            mono_transcript::mono_session_event_delivered,
             session_store::session_delete,
             session_store::session_set_archived,
             session_store::session_set_pinned,

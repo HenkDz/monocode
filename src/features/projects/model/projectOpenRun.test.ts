@@ -107,7 +107,7 @@ describe("planning a run of folders", () => {
     });
   });
 
-  it("seeds every new session from the active session, not the first one", () => {
+  it("starts fresh projects with Codex instead of inheriting the active conversation's provider", () => {
     const state = workspace();
     const steps = planProjectOpenRun({
       ...state,
@@ -115,8 +115,8 @@ describe("planning a run of folders", () => {
     });
 
     expect(creates(steps).map((step) => step.session.harness)).toEqual([
-      "cursor",
-      "cursor",
+      "codex",
+      "codex",
     ]);
   });
 

@@ -96,6 +96,11 @@ export type HarnessEvent =
     }
   | {
       type: "approval.requested";
+      /** Full provider command, never a display title or permission pattern. */
+        command?: string | string[];
+        /** Provider-reported command cwd, when it differs from the session cwd. */
+        cwd?: string;
+      autoApprovalReason?: string;
       requestId: number;
       title: string;
       kind?: string;
@@ -165,6 +170,8 @@ export type HarnessSessionInput = {
   modelSettings?: Record<string, string>;
   providerAccountId?: string;
   runtimeMode: RuntimeMode;
+  /** Trusted task constraint; filesystem read-only does not imply a planning conversation. */
+  readOnly?: boolean;
   /** Keep provider context in memory; MonoCode owns the saved transcript. */
   ephemeral?: boolean;
   /** Persist Codex context in MonoCode's private Mono store. */
@@ -182,6 +189,12 @@ export type HarnessSessionInput = {
 };
 
 export type SendTurnInput = HarnessSessionInput & {
+  /** Trusted UI identity; never supplied by an agent CLI request. */
+  monoSession?: boolean;
+  /** Trusted app identity, not inferred from the prompt or provider output. */
+  orgMono?: boolean;
+  /** Trusted app identity for permission lookup on every launch/turn. */
+  orgMonoId?: string;
   text: string;
   attachments?: Attachment[];
   /** Called once the provider has accepted the user turn. */

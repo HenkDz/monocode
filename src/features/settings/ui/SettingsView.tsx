@@ -44,6 +44,7 @@ import { JiraSettings } from "./JiraSettings";
 import { GradientBlurBackground } from "./GradientBlurBackground";
 import { McpSettings } from "./McpSettings";
 import { InboxProviderMark } from "../../inbox/ui/InboxProviderMark";
+import { GithubBudgetUsage } from "../../inbox/ui/GithubBudgetNotice";
 import { RemoveProjectDialog } from "../../projects/ui/RemoveProjectDialog";
 import { WindowControls } from "../../../app/shell/WindowControls";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
@@ -192,7 +193,13 @@ import {
   projectName,
 } from "../../../shared/lib/paths";
 import { revealPath } from "../../../platform/tauri/fs";
-import { IS_LINUX, IS_MAC, IS_WIN } from "../../../platform/tauri/platform";
+import {
+  IS_LINUX,
+  IS_MAC,
+  IS_WIN,
+  MOD,
+  SHIFT,
+} from "../../../platform/tauri/platform";
 import {
   loadArchivedProjects,
   looksLikeProject,
@@ -317,6 +324,10 @@ import {
   loadClaudeHooks,
   loadCloseToTray,
   loadCollapsedProjectRailMode,
+  loadWorkspacePanelSide,
+  saveWorkspacePanelSide,
+  subscribeWorkspacePanelSide,
+  type WorkspacePanelSide,
   loadComposerRunner,
   loadDiffViewer,
   loadFileTabMode,
@@ -396,6 +407,7 @@ import {
 
 import { SkillsPage } from "../../skills/ui/SkillsPage";
 import { ProjectNotificationSettings } from "../../notifications/ui/ProjectNotificationSettings";
+import { NtfySettings } from "../../notifications/ui/NtfySettings";
 import { WorktreesPage } from "../../source-control/ui/WorktreesPage";
 import {
   removeWorktree,
@@ -427,6 +439,7 @@ type Props = {
   sessions: SessionSummary[];
   liveSessions?: Session[];
   onRemoveWorktree?: RemoveWorktree;
+  onOpenWorktreeChanges?: (project: string, path: string) => void;
   onCheckWorktreeRemoval?: RemoveWorktree;
   onDeleteWorktreeSessions?: (
     sessionIds: readonly string[],
@@ -455,6 +468,7 @@ export function SettingsView({
   sessions,
   liveSessions,
   onRemoveWorktree = removeWorktree,
+  onOpenWorktreeChanges,
   onCheckWorktreeRemoval,
   onDeleteWorktreeSessions,
   besideRail = false,
@@ -598,6 +612,10 @@ export function SettingsView({
                   recents={recents}
                   liveSessions={liveSessions}
                   onRemove={onRemoveWorktree}
+                  onOpenChanges={onOpenWorktreeChanges && ((project, path) => {
+                    onOpenWorktreeChanges(project, path);
+                    onClose();
+                  })}
                   onCheckRemove={onCheckWorktreeRemoval}
                   onDeleteSessions={onDeleteWorktreeSessions}
                 />
@@ -1199,6 +1217,7 @@ function InboxPage({
         id={settingDomId("project-notifications")}
         data-setting-id="project-notifications"
       >
+        <NtfySettings />
         <ProjectNotificationSettings
           cwd={cwd}
           recents={recents}
@@ -1217,7 +1236,7 @@ function InboxPage({
         }
         description="Pull requests, reviews, and issues, read through the GitHub CLI."
       >
-        <GithubSettings />
+        <GithubSettings cwd={cwd} />
       </Group>
 
       <Group
@@ -1278,7 +1297,7 @@ function InboxPage({
   );
 }
 
-function GithubSettings() {
+function GithubSettings({ cwd }: { cwd: string }) {
   const [status, setStatus] = useState<GithubStatus | null>(null);
   const [checking, setChecking] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -1322,6 +1341,7 @@ function GithubSettings() {
 
   return (
     <>
+      <GithubBudgetUsage cwd={cwd} />
       <Row label="Connection" description={description}>
         <span className="text-[12px] text-content/50">{label}</span>
         {!checking && !status?.installed ? (
@@ -2284,6 +2304,7 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
             onChange={appearance.onCollapsedProjectRailMode}
           />
         </Row>
+        <WorkspacePanelSideRow />
         <Row
           id="interface-scale"
           label="Interface scale"
@@ -4614,5 +4635,30 @@ function Select({
         </Popover>
       ) : null}
     </div>
+  );
+}
+
+function WorkspacePanelSideRow() {
+  const side = useSyncExternalStore(
+    subscribeWorkspacePanelSide,
+    loadWorkspacePanelSide,
+    loadWorkspacePanelSide,
+  );
+  return (
+    <Row
+      id="workspace-panel-side"
+      label="Workspace panel"
+      description={`Dock Explorer and Changes beside the project rail or on the right edge. Hide it with ${MOD}${SHIFT}B.`}
+    >
+      <Segmented
+        label="Workspace panel"
+        value={side}
+        options={[
+          { value: "left", label: "Left" },
+          { value: "right", label: "Right" },
+        ]}
+        onChange={(next: WorkspacePanelSide) => saveWorkspacePanelSide(next)}
+      />
+    </Row>
   );
 }

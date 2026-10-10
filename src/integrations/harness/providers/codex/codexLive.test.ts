@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { registerHarness, resetHarnessIdlePark, sendHarnessTurn } from "../../core/registry";
 
 const sent: string[] = [];
 let onLine: ((line: string) => void) | undefined;
@@ -58,6 +59,7 @@ const {
   rewindCodexLastTurn,
   sendCodexTurn,
   stopCodexSession,
+  updateCodexRuntimeMode,
   __codexTestReset,
 } = await import("./codex");
 import type { HarnessEvent } from "../../core/types";
@@ -118,6 +120,8 @@ async function startTurn(
     beforeThreadReply?: () => Promise<void>;
     onAccepted?: () => void;
     controlsAgents?: boolean;
+    orgMonoId?: string;
+    readOnly?: boolean;
     ephemeral?: boolean;
     codexStore?: "mono";
   } = {},
@@ -131,7 +135,8 @@ async function startTurn(
       options.resumeProviderAccountId,
     );
   }
-  const turn = sendCodexTurn({
+  const send = options.orgMonoId ? (input: Parameters<typeof sendCodexTurn>[0]) => sendHarnessTurn({ ...input, harness: "codex", orgMono: true, orgMonoId: options.orgMonoId }) : sendCodexTurn;
+  const turn = send({
     sessionId,
     cwd: "/repo",
     model: "codex:gpt-5.4",
@@ -142,6 +147,7 @@ async function startTurn(
     ephemeral: options.ephemeral,
     codexStore: options.codexStore,
     intent: options.intent,
+    readOnly: options.readOnly,
     text: "summarize the changelog",
     attachments: [],
     onAccepted: options.onAccepted,
@@ -176,6 +182,53 @@ async function startTurn(
 }
 
 describe("codex live turn sequence", () => {
+  it("labels only a rejected turn/start RPC without accepting or replacing its retained thread", async () => {
+    bindCodexSession("codex-live", "thr_1", "/repo");
+    const events: HarnessEvent[] = [];
+    const onAccepted = vi.fn();
+    const turn = sendCodexTurn({ sessionId: "codex-live", cwd: "/repo", model: "codex:gpt-5.4", runtimeMode: "supervised", codexStore: "mono", text: "Continue", onAccepted, onEvent: event => events.push(event) });
+    const rejected = expect(turn).rejects.toThrow("Codex turn/start: thread not loaded: thr_1");
+    await waitFor(() => parse().some(message => message.method === "initialize"), "initialize");
+    reply(parse().find(message => message.method === "initialize")!.id as number, {});
+    await waitFor(() => parse().some(message => message.method === "thread/resume"), "resume");
+    reply(parse().find(message => message.method === "thread/resume")!.id as number, { thread: { id: "thr_1" } });
+    await waitFor(() => parse().some(message => message.method === "turn/start"), "turn/start");
+    onLine!(JSON.stringify({ id: parse().find(message => message.method === "turn/start")!.id, error: { message: "thread not loaded: thr_1" } }));
+    await rejected;
+    expect(onAccepted).not.toHaveBeenCalled();
+    expect(parse().filter(message => message.method === "turn/start")).toHaveLength(1);
+    expect(parse().some(message => message.method === "thread/start")).toBe(false);
+    expect(events).toContainEqual({ type: "session.error", message: "Codex turn/start: thread not loaded: thr_1" });
+  });
+
+  it.each(["orchestrator", "manager", "member"])("preserves private context and permissions for %s across restart, rotation and Habit turns", async role => {
+    const saved = JSON.stringify([{ id: "org", role, projects: ["/repo"], mascot: "cat", color: "#abc" }]);
+    vi.stubGlobal("localStorage", { getItem: (key: string) => key === "monocode:mono-roster" ? saved : null, setItem: () => {} });
+    registerHarness({ id: "codex", live: true, sendTurn: sendCodexTurn, respondApproval: respondCodexApproval,
+      cancelTurn: cancelCodexTurn, stopSession: stopCodexSession, forgetSession: async () => {}, bindSession: () => {}, steerTurn: async () => {} });
+    try {
+      for (const [sessionId, resume] of [["codex-live", false], ["codex-live", true], ["rotated-chat", false], ["habit-run", false]] as const) {
+        sent.length = 0;
+        const { turn } = await startTurn(sessionId, { orgMonoId: "org", runtimeMode: "full-access", codexStore: "mono", resume });
+        expect(parse().find(message => message.method === (resume ? "thread/resume" : "thread/start"))?.params).toMatchObject({
+          approvalPolicy: "never", sandbox: "danger-full-access", config: { sqlite_home: "/private/mono" },
+          ...(resume ? { threadId: "thr_1" } : {}),
+        });
+        expect(prepareCodexMonoContext).toHaveBeenLastCalledWith(expect.objectContaining({ sessionId,
+          ...(resume ? { threadId: "thr_1" } : {}),
+        }));
+        expect(spawnChild.mock.calls.at(-1)?.[6]).toBe("mono");
+        if (resume) expect(restoreMonoCodexAgentState).toHaveBeenCalledWith(undefined, "thr_1");
+        expect(parse().find(message => message.method === "turn/start")?.params).toMatchObject({ approvalPolicy: "never", sandboxPolicy: { type: "dangerFullAccess" } });
+        notify("turn/completed", { turn: { id: "turn_1", status: "completed" } }); await turn;
+        await stopCodexSession(sessionId); __codexTestReset();
+      }
+      sent.length = 0;
+      const { turn } = await startTurn("codex-live", { orgMonoId: "org", runtimeMode: "supervised" });
+      expect(parse().find(message => message.method === "turn/start")?.params).toMatchObject({ approvalPolicy: "untrusted", sandboxPolicy: { type: "readOnly" } });
+      notify("turn/completed", { turn: { id: "turn_1", status: "completed" } }); await turn;
+    } finally { vi.unstubAllGlobals(); resetHarnessIdlePark(); }
+  });
   beforeEach(() => {
     sent.length = 0;
     onLine = undefined;
@@ -289,6 +342,22 @@ describe("codex live turn sequence", () => {
     expect(restoreMonoCodexAgentState).not.toHaveBeenCalled();
     notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
     await turn;
+  });
+
+  it("keeps a member's regular worker session in the ordinary Codex store", async () => {
+    const saved = JSON.stringify([{ id: "org", role: "member", projects: ["/repo"], mascot: "cat", color: "#abc" }]);
+    vi.stubGlobal("localStorage", { getItem: (key: string) => key === "monocode:mono-roster" ? saved : null, setItem: () => {} });
+    registerHarness({ id: "codex", live: true, sendTurn: sendCodexTurn, respondApproval: respondCodexApproval,
+      cancelTurn: cancelCodexTurn, stopSession: stopCodexSession, forgetSession: async () => {}, bindSession: () => {}, steerTurn: async () => {} });
+    try {
+      const { turn } = await startTurn("codex-live", { orgMonoId: "org", runtimeMode: "full-access", resume: true });
+      expect(parse().find(message => message.method === "thread/resume")?.params).toMatchObject({ threadId: "thr_1", sandbox: "danger-full-access" });
+      expect(prepareCodexMonoContext).not.toHaveBeenCalled();
+      expect(spawnChild.mock.calls[0][6]).toBeUndefined();
+      expect(restoreMonoCodexAgentState).not.toHaveBeenCalled();
+      notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+      await turn;
+    } finally { vi.unstubAllGlobals(); resetHarnessIdlePark(); }
   });
 
   it("persists Monos privately and resumes the same native thread after parking", async () => {
@@ -1153,7 +1222,7 @@ describe("codex live turn sequence", () => {
         ),
       )) {
         expect(message.params).toMatchObject({
-          approvalPolicy: "on-request",
+          approvalPolicy: "never",
           approvalsReviewer: "user",
         });
       }
@@ -1199,6 +1268,34 @@ describe("codex live turn sequence", () => {
     expect(parse().find((m) => m.id === 91)?.result).toEqual({
       decision: "decline",
     });
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+  });
+
+  it.each(["full-access", "auto-accept-edits"] as const)("changes a waiting turn's policy immediately: %s", async runtimeMode => {
+    const { events, turn } = await startTurn("codex-live");
+    for (const [id, method] of [[91, "item/commandExecution/requestApproval"], [92, "item/fileChange/requestApproval"]] as const) {
+      onLine!(JSON.stringify({ id, method, params: { itemId: `item-${id}`, command: "Write is only a misleading command title" } }));
+    }
+    await waitFor(() => events.filter(e => e.type === "approval.requested").length === 2, "pending edit and command");
+    updateCodexRuntimeMode("codex-live", runtimeMode);
+    expect(parse().filter(m => m.method === "turn/start")).toHaveLength(1);
+    await waitFor(() => parse().some(m => m.id === 92), "automatic pending edit");
+    expect(parse().find(m => m.id === 92)?.result).toEqual({ decision: "accept" });
+    if (runtimeMode === "full-access") {
+      await waitFor(() => parse().some(m => m.id === 91), "automatic pending command");
+      expect(parse().find(m => m.id === 91)?.result).toEqual({ decision: "accept" });
+    } else {
+      expect(parse().some(m => m.id === 91)).toBe(false);
+      const request = events.find(e => e.type === "approval.requested" && e.kind === "execute");
+      if (request?.type !== "approval.requested") throw Error("Missing command approval");
+      respondCodexApproval("codex-live", request.requestId, "deny");
+      await waitFor(() => parse().some(m => m.id === 91), "manual command denial");
+    }
+    const count = events.filter(e => e.type === "approval.requested").length;
+    onLine!(JSON.stringify({ id: 93, method: "item/fileChange/requestApproval", params: { itemId: "next-edit" } }));
+    await waitFor(() => parse().some(m => m.id === 93), "later edit in same turn");
+    expect(events.filter(e => e.type === "approval.requested")).toHaveLength(count);
     notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
     await turn;
   });
@@ -2036,7 +2133,7 @@ describe("codex live turn sequence", () => {
     );
     const next = parse().filter((m) => m.method === "turn/start")[1];
     expect(next.params).toMatchObject({
-      approvalPolicy: "on-request",
+      approvalPolicy: "never",
       approvalsReviewer: "user",
       sandboxPolicy: { type: "dangerFullAccess" },
     });
@@ -2106,6 +2203,10 @@ describe("codex live turn sequence", () => {
     const turnStart = parse().find(
       (message) => message.method === "turn/start",
     );
+    updateCodexRuntimeMode("codex-live", "full-access");
+    expect(parse().find(message => message.method === "thread/start")?.params).toMatchObject({
+      approvalPolicy: "never", sandbox: "read-only", sandboxPolicy: { type: "readOnly" },
+    });
     expect(turnStart?.params).toMatchObject({
       approvalPolicy: "never",
       sandboxPolicy: { type: "readOnly" },
@@ -2130,11 +2231,63 @@ describe("codex live turn sequence", () => {
     expect(parse().find((message) => message.id === 91)?.result).toEqual({
       decision: "decline",
     });
+    onLine!(JSON.stringify({ id: 92, method: "item/permissions/requestApproval", params: {
+      itemId: "permission_1", permissions: { fileSystem: { write: ["/repo"] } },
+    } }));
+    await waitFor(() => parse().some(message => message.id === 92), "read-only permission denial");
+    expect(parse().find(message => message.id === 92)?.result).toEqual({ permissions: {} });
 
     notify("turn/completed", {
       turn: { id: "turn_1", status: "completed" },
     });
     await turn;
+  });
+
+  it("enforces read-only task capabilities without imposing Plan conversations or allowing runtime upgrades", async () => {
+    const { events, turn } = await startTurn("codex-live", { runtimeMode: "full-access", readOnly: true, controlsAgents: true });
+    expect(parse().find(message => message.method === "thread/start")?.params).toMatchObject({
+      approvalPolicy: "never", sandbox: "read-only", sandboxPolicy: { type: "readOnly", networkAccess: true },
+    });
+    expect(parse().find(message => message.method === "turn/start")?.params).toMatchObject({
+      approvalPolicy: "never", sandboxPolicy: { type: "readOnly", networkAccess: true }, collaborationMode: { mode: "default" },
+    });
+    updateCodexRuntimeMode("codex-live", "full-access");
+    for (const [id, method, params] of [
+      [91, "item/fileChange/requestApproval", { itemId: "edit", reason: "Edit source" }],
+      [92, "item/permissions/requestApproval", { itemId: "permissions", permissions: { fileSystem: { write: ["/repo"] } } }],
+      [93, "mcpServer/elicitation/request", { message: "Confirm external action" }],
+    ] as const) onLine!(JSON.stringify({ id, method, params }));
+    await waitFor(() => parse().some(message => message.id === 93), "read-only denials");
+    expect(parse().find(message => message.id === 91)?.result).toEqual({ decision: "decline" });
+    expect(parse().find(message => message.id === 92)?.result).toEqual({ permissions: {} });
+    expect(parse().find(message => message.id === 93)?.result).toEqual({ action: "cancel", content: null, _meta: null });
+    expect(events.some(event => event.type === "approval.requested")).toBe(false);
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+  });
+
+  it("retains read-only restrictions through compaction, stopped-session binding and provider resume", async () => {
+    const { turn } = await startTurn("codex-live", { runtimeMode: "full-access", readOnly: true, controlsAgents: true });
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+    sent.length = 0;
+    const compact = compactCodexContext({ sessionId: "codex-live", cwd: "/repo", model: "codex:gpt-5.4",
+      runtimeMode: "full-access", controlsAgents: true, onEvent: () => {} });
+    await waitFor(() => parse().some(message => message.method === "thread/compact/start"), "read-only compact");
+    reply(parse().find(message => message.method === "thread/compact/start")!.id as number, {});
+    notify("turn/completed", { turn: { id: "compact", status: "completed" } });
+    await compact;
+    await stopCodexSession("codex-live");
+    sent.length = 0;
+    const resumed = await startTurn("codex-live", { resume: true, runtimeMode: "full-access", controlsAgents: true });
+    expect(parse().find(message => message.method === "thread/resume")?.params).toMatchObject({
+      approvalPolicy: "never", sandbox: "read-only", sandboxPolicy: { type: "readOnly", networkAccess: true },
+    });
+    expect(parse().find(message => message.method === "turn/start")?.params).toMatchObject({
+      approvalPolicy: "never", sandboxPolicy: { type: "readOnly", networkAccess: true }, collaborationMode: { mode: "default" },
+    });
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await resumed.turn;
   });
 
   it("uses thread/compact/start and waits for its turn to complete", async () => {

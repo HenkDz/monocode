@@ -106,6 +106,40 @@ describe("GitHub fork repositories", () => {
     ).toHaveLength(2);
   });
 
+  it("skips parent repositories when the inbox filter is disabled", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "git_github_repositories") {
+        return ["maya/web", "acme/web"] as never;
+      }
+      if (command === "git_github_work_items") return [] as never;
+      if (
+        command === "linear_status" ||
+        command === "jira_status" ||
+        command === "gitlab_status" ||
+        command === "azure_devops_status"
+      ) {
+        return { connected: false } as never;
+      }
+      throw new Error(`Unexpected command: ${command}`);
+    });
+
+    await listInboxItems(
+      [{ path: "/tmp/fork" }],
+      {
+        assignedToMe: false,
+        includeGithubParents: false,
+        state: "open",
+        search: "",
+      },
+    );
+
+    const repositories = vi
+      .mocked(invoke)
+      .mock.calls.filter(([command]) => command === "git_github_work_items")
+      .map(([, args]) => String((args as Record<string, unknown>).repo));
+    expect(repositories).toEqual(["maya/web", "maya/web"]);
+  });
+
   it("reports an error when repository discovery fails", async () => {
     vi.mocked(invoke).mockImplementation(async (command) => {
       if (command === "git_github_repositories") {

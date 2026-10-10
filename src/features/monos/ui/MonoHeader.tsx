@@ -8,7 +8,7 @@ import { MonoStatus } from "./MonoStatus";
 
 type Props = {
   agent: MonoLook;
-  state?: MonoState;
+  state: MonoState;
   /** Before the first message the header fills the pane and says hello. */
   greeting?: boolean;
 };
@@ -18,11 +18,7 @@ type Props = {
  * like a messaging app's group header, so the thread reads as a chat with
  * someone rather than another session.
  */
-export function MonoHeader({
-  agent,
-  state = { status: "idle" },
-  greeting = false,
-}: Props) {
+export function MonoHeader({ agent, state, greeting = false }: Props) {
   return (
     <header
       className={`flex flex-col items-center px-6 text-center font-sans ${

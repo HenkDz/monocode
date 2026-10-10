@@ -340,6 +340,12 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     keywords: "sidebar compact icons hidden navigation layout",
   },
   {
+    id: "workspace-panel-side",
+    section: "appearance",
+    label: "Workspace panel",
+    keywords: "sidebar explorer changes right left dock position layout hide",
+  },
+  {
     id: "show-excluded-files",
     section: "appearance",
     label: "Show excluded files",
@@ -657,6 +663,43 @@ export function loadTabAnimationsEnabled(): boolean {
 
 export function saveTabAnimationsEnabled(value: boolean) {
   writeFlag(TAB_ANIMATIONS_ENABLED_KEY, value);
+}
+
+const WORKSPACE_PANEL_SIDE_KEY = "monocode.workspacePanelSide";
+
+/** Which edge the workspace panel (Explorer, Changes) docks to. */
+export type WorkspacePanelSide = "left" | "right";
+
+export const WORKSPACE_PANEL_SIDE_DEFAULT: WorkspacePanelSide = "left";
+
+const WORKSPACE_PANEL_SIDE_CHANGE_EVENT = "monocode:workspace-panel-side-change";
+
+export function loadWorkspacePanelSide(): WorkspacePanelSide {
+  try {
+    const raw = localStorage.getItem(WORKSPACE_PANEL_SIDE_KEY);
+    return raw === "left" || raw === "right"
+      ? raw
+      : WORKSPACE_PANEL_SIDE_DEFAULT;
+  } catch {
+    return WORKSPACE_PANEL_SIDE_DEFAULT;
+  }
+}
+
+export function saveWorkspacePanelSide(value: WorkspacePanelSide) {
+  try {
+    localStorage.setItem(WORKSPACE_PANEL_SIDE_KEY, value);
+  } catch {
+    // private mode / quota
+  }
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new Event(WORKSPACE_PANEL_SIDE_CHANGE_EVENT));
+}
+
+export function subscribeWorkspacePanelSide(onStoreChange: () => void) {
+  if (typeof window === "undefined") return () => {};
+  window.addEventListener(WORKSPACE_PANEL_SIDE_CHANGE_EVENT, onStoreChange);
+  return () =>
+    window.removeEventListener(WORKSPACE_PANEL_SIDE_CHANGE_EVENT, onStoreChange);
 }
 
 export type CollapsedProjectRailMode = "compact" | "hidden";

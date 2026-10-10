@@ -983,6 +983,7 @@ async function handleEvent(
       }
       live.onEvent({
         type: "approval.requested",
+        command: permission === "bash" ? extractShellCommand(metadata.input) : undefined,
         requestId: uiId,
         title,
         kind,

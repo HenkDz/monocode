@@ -35,6 +35,8 @@ pub struct MonoEntry {
     mascot: String,
     color: String,
     session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    role: Option<String>,
     /// Drives the rail's status circle; the tray menu ignores it.
     #[serde(default)]
     status: String,
@@ -837,8 +839,17 @@ pub async fn mono_chat_action(
             | "openFile"
             | "openArtifact"
             | "resume"
+            | "runtimeMode"
     ) {
         return Err("Unknown chat action.".into());
+    }
+    if kind == "runtimeMode"
+        && !matches!(
+            action.get("mode").and_then(Value::as_str),
+            Some("supervised" | "auto-accept-edits" | "auto" | "full-access")
+        )
+    {
+        return Err("Unknown permission mode.".into());
     }
     if action.to_string().len() > 32 * 1024 * 1024 {
         return Err("That message is too large.".into());
@@ -919,6 +930,26 @@ pub fn window_closed(app: &AppHandle, label: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn floating_roster_preserves_org_roles_and_accepts_legacy_entries() {
+        let mut entry = json!({
+            "id": "mono", "name": "Mono", "mascot": "orbit", "color": "blue",
+            "sessionId": null
+        });
+        let legacy: MonoEntry = serde_json::from_value(entry.clone()).unwrap();
+        assert!(legacy.role.is_none());
+        assert!(legacy.status.is_empty());
+        assert!(serde_json::to_value(legacy).unwrap().get("role").is_none());
+        entry["status"] = json!("working");
+        for role in ["orchestrator", "manager", "member"] {
+            entry["role"] = json!(role);
+            let mono: MonoEntry = serde_json::from_value(entry.clone()).unwrap();
+            let published = serde_json::to_value(mono).unwrap();
+            assert_eq!(published["role"], role);
+            assert_eq!(published["status"], "working");
+        }
+    }
 
     #[test]
     fn menu_bar_mark_is_sixteen_points_inside_the_standard_eighteen_point_image() {

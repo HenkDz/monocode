@@ -19,6 +19,7 @@ export type InboxStatusFilter = {
 
 export type InboxFilters = {
   assignedToMe: boolean;
+  includeGithubParents: boolean;
   hiddenProjects: string[];
   /** Linear project ids to hide. `LINEAR_NO_PROJECT` stands for issues outside every project. */
   hiddenLinearProjects: string[];
@@ -47,6 +48,7 @@ export const DEFAULT_INBOX_STATUS_FILTER: InboxStatusFilter = {
 
 export const DEFAULT_INBOX_FILTERS: InboxFilters = {
   assignedToMe: false,
+  includeGithubParents: true,
   hiddenProjects: [],
   hiddenLinearProjects: [],
   hiddenKinds: [],
@@ -110,6 +112,7 @@ export function resolveInboxSource(
 }
 
 const FILTERS_KEY = "monocode.inboxFilters";
+export const INBOX_FILTERS_CHANGE_EVENT = "monocode:inbox-filters-change";
 const SOURCE_KEY = "monocode.inboxSource";
 const CONNECTIONS_KEY = "monocode.inboxConnections";
 
@@ -184,6 +187,7 @@ export function loadInboxFilters(): InboxFilters {
     const parsed = JSON.parse(raw) as Partial<InboxFilters>;
     return {
       assignedToMe: parsed.assignedToMe === true,
+      includeGithubParents: parsed.includeGithubParents !== false,
       hiddenProjects: Array.isArray(parsed.hiddenProjects)
         ? parsed.hiddenProjects.filter(
             (path): path is string =>
@@ -217,6 +221,9 @@ export function saveInboxFilters(filters: InboxFilters) {
   } catch {
     // private mode / quota
   }
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent(INBOX_FILTERS_CHANGE_EVENT, { detail: filters }));
+  }
 }
 
 export function pruneInboxFilters(
@@ -249,6 +256,7 @@ export function hasActiveInboxFilters(
       filters.status.merged;
   return (
     filters.assignedToMe ||
+    ((source === "github" || source === undefined) && !filters.includeGithubParents) ||
     (source === "linear" && hiddenLinearTeamIds.length > 0) ||
     (source === "jira" && hiddenJiraProjectIds.length > 0) ||
     (source === "linear"

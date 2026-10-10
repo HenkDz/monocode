@@ -25,6 +25,7 @@ import { LAYER } from "../../../shared/lib/layers";
 import { OrchestrationActions } from "./OrchestrationActions";
 import { HarnessIcon } from "../../sessions/ui/HarnessIcon";
 import { Popover } from "../../../shared/ui/Popover";
+import { Modal } from "../../../shared/ui/Modal";
 import {
   Check,
   ChevronDown,
@@ -464,8 +465,7 @@ export function OrchestrationPreview({
   );
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string>();
-  const [expanded, setExpanded] = useState<string[]>([]);
-  const [showAll, setShowAll] = useState(false);
+  const [open, setOpen] = useState(false);
   useEffect(() => {
     if (actions)
       void orchestrator
@@ -476,7 +476,6 @@ export function OrchestrationPreview({
     proposal.status === "ready" && !run && !pending && !busy && !!actions;
   const planning = proposal.status === "planning";
   const starting = pending || proposal.status === "starting";
-  const visible = showAll ? proposal.tasks : proposal.tasks.slice(0, 3);
   const perform = async (fn: () => Promise<void>) => {
     setPending(true);
     setError(undefined);
@@ -503,283 +502,299 @@ export function OrchestrationPreview({
     "w-full rounded-md border border-content/12 bg-background-base/40 px-2 py-1.5 text-[12px] leading-5 text-content outline-none placeholder:text-content/35 focus:border-content/30";
   const fieldLabel = "mb-1 block text-[11px] leading-tight text-content/45";
   return (
-    <div
-      className="mb-2 overflow-hidden rounded-xl border border-content/10 bg-content/3 font-sans"
+    <section
+      className="mb-2 min-w-0 rounded-xl border border-content/15 bg-content/3 p-3 font-sans text-xs"
       aria-label="Orchestration proposal"
       data-orchestration-review
     >
-      <div className="flex min-w-0 flex-wrap items-center gap-2.5 px-3 py-2.5">
-        <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-content/8 text-content/55">
-          {planning || proposal.status === "starting" ? (
-            <CircleDashed className="size-4 animate-spin" />
-          ) : (
-            <MessageMultiple className="size-4" strokeWidth={1.75} />
-          )}
+      <div className="flex min-w-0 items-center gap-2">
+        <span className="shrink-0 rounded-md bg-content/5 px-1.5 py-0.5 text-content/60">
+          {run?.status ?? proposal.status}
         </span>
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-[13px] font-medium leading-tight text-content/90">
-            {planning ? "Planning assignments…" : proposal.title}
-          </div>
-          <div className="mt-1 flex items-center gap-1.5 text-[11px] leading-tight text-content/45">
-            <HarnessIcon
-              harness={proposal.author.harness}
-              className="size-3 shrink-0"
-            />
-            <span
-              className="truncate"
-              title={HARNESS_TITLE[proposal.author.harness]}
-            >
-              Lead · {proposal.author.name}
-            </span>
-            {!!proposal.tasks.length && (
-              <span className="shrink-0">
-                · {proposal.tasks.length}{" "}
-                {proposal.tasks.length === 1 ? "task" : "tasks"}
-              </span>
-            )}
-          </div>
-        </div>
-        <div className="ml-auto flex shrink-0 items-center gap-0.5">
-          {!run && proposal.status === "invalid" && (
-            <button
-              className={secondary}
-              disabled={busy || !actions}
-              onClick={() => actions?.retry(proposal.leadId, block.id)}
-            >
-              Try again
-            </button>
-          )}
-          {!run && ["ready", "starting"].includes(proposal.status) && (
-            <button
-              className="flex h-7 items-center gap-1.5 rounded-md bg-content px-2.5 text-[11px] font-medium text-background-base hover:bg-content/80 disabled:opacity-40"
-              disabled={!editable}
-              onClick={() =>
-                void perform(() => actions!.confirm(proposal.leadId, block.id))
-              }
-            >
-              <Play className="size-3" strokeWidth={1.75} />
-              {starting ? "Starting…" : "Confirm & start"}
-            </button>
-          )}
-          {run && (
-            <button
-              className={secondary}
-              onClick={() =>
-                actions?.openAgents?.(
-                  run.tasks.map((task) => ({
-                    sessionId: task.sessionId,
-                    leadId: run.leadId,
-                    title: task.title,
-                    harness: task.harness,
-                  })),
-                )
-              }
-            >
-              View agents
-            </button>
-          )}
-        </div>
-      </div>
-      {planning && (
-        <p className="px-3 pb-2.5 text-[12px] leading-5 text-content/50">
-          {proposal.settings.choices.length
-            ? "Your lead is choosing tasks and worker models. Review the assignments here before starting."
-            : "Checking available harnesses and models…"}
-        </p>
-      )}
-      {!!proposal.tasks.length && (
-        <ul className="border-t border-stroke py-1">
-          {visible.map((task) => {
-            const index = proposal.tasks.indexOf(task);
-            const open = expanded.includes(task.id);
-            const taskChoice = proposal.settings.choices.find(
-              (choice) =>
-                choice.harness === task.harness && choice.model === task.model,
-            );
-            const taskModel = findModel(task.model);
-            const taskEffort =
-              taskModel?.harness === task.harness
-                ? modelEffortLabel(taskModel, task.modelSettings)
-                : undefined;
-            return (
-              <li key={task.id}>
-                <div className="flex min-h-9 min-w-0 flex-wrap items-center gap-x-2 gap-y-1 px-3 py-1 hover:bg-content/5">
-                  <button
-                    type="button"
-                    aria-label={`Details for ${task.title}`}
-                    aria-expanded={open}
-                    onClick={() =>
-                      setExpanded((prev) =>
-                        open
-                          ? prev.filter((id) => id !== task.id)
-                          : [...prev, task.id],
-                      )
-                    }
-                    className="flex min-w-0 flex-1 items-center gap-2 py-1 text-left text-content/65 hover:text-content"
-                  >
-                    {open ? (
-                      <ChevronDown className="size-3.5 shrink-0" />
-                    ) : (
-                      <ChevronRight className="size-3.5 shrink-0" />
-                    )}
-                    <span className="truncate text-[12px]" title={task.title}>
-                      {task.title}
-                    </span>
-                  </button>
-                  <div className="max-w-[60%] min-w-0">
-                    {editable ? (
-                      <AssignmentModel
-                        task={task}
-                        choices={proposal.settings.choices}
-                        onChange={(choice, modelSettings) =>
-                          change(task.id, {
-                            harness: choice.harness,
-                            model: choice.model,
-                            modelSettings,
-                          })
-                        }
-                      />
-                    ) : (
-                      <span
-                        className="flex min-w-0 items-center gap-1.5 text-[11px] text-content/50"
-                        title={HARNESS_TITLE[task.harness]}
-                      >
-                        <HarnessIcon
-                          harness={task.harness}
-                          className="size-3 shrink-0"
-                        />
-                        <span className="truncate">
-                          {taskChoice?.name ?? task.model}
-                          {taskEffort ? ` · ${taskEffort}` : ""}
-                        </span>
-                      </span>
-                    )}
-                  </div>
-                </div>
-                {open && (
-                  <div className="space-y-2.5 px-3 pb-3 pl-8 text-[11px] leading-4 text-content/45">
-                    {editable ? (
-                      <>
-                        <label className="block">
-                          <span className={fieldLabel}>Task</span>
-                          <input
-                            aria-label={`Title for task ${index + 1}`}
-                            className={field}
-                            value={task.title}
-                            onChange={(event) =>
-                              change(task.id, { title: event.target.value })
-                            }
-                          />
-                        </label>
-                        <label className="block">
-                          <span className={fieldLabel}>Instructions</span>
-                          <InstructionsField
-                            label={`Instructions for task ${index + 1}`}
-                            value={task.prompt}
-                            className={field}
-                            onChange={(prompt) => change(task.id, { prompt })}
-                          />
-                        </label>
-                      </>
-                    ) : (
-                      <p className="whitespace-pre-wrap text-[12px] leading-5 text-content/60">
-                        {task.prompt}
-                      </p>
-                    )}
-                    {!!task.dependsOn.length && (
-                      <p>
-                        After ·{" "}
-                        {task.dependsOn
-                          .map(
-                            (id) =>
-                              proposal.tasks.find((entry) => entry.id === id)
-                                ?.title ?? id,
-                          )
-                          .join(", ")}
-                      </p>
-                    )}
-                  </div>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-      )}
-      {proposal.tasks.length > 3 && (
+        <h3
+          className="min-w-0 flex-1 truncate text-sm font-medium"
+          title={proposal.title}
+        >
+          {planning ? "Planning assignments…" : proposal.title}
+        </h3>
         <button
           type="button"
-          aria-expanded={showAll}
-          onClick={() => setShowAll(!showAll)}
-          className="flex h-8 w-full items-center gap-1.5 border-t border-stroke px-3 text-left text-[11px] text-content/45 hover:bg-content/5 hover:text-content/70"
+          aria-haspopup="dialog"
+          className="shrink-0 rounded-md bg-content/8 px-2.5 py-1.5 font-medium hover:bg-content/10 focus-visible:outline-accent"
+          onClick={() => setOpen(true)}
         >
-          {showAll ? (
-            <ChevronDown className="size-3.5" />
-          ) : (
-            <ChevronRight className="size-3.5" />
-          )}
-          {showAll
-            ? "Show fewer tasks"
-            : `Show ${proposal.tasks.length - 3} more ${proposal.tasks.length === 4 ? "task" : "tasks"}`}
+          Open
         </button>
-      )}
+      </div>
+      <p className="mt-2 truncate text-content/60" title={proposal.author.name}>
+        Lead · {proposal.author.name} · {proposal.tasks.length}{" "}
+        {proposal.tasks.length === 1 ? "task" : "tasks"}
+      </p>
       {(error || proposal.error) && (
-        <p role="alert" className="px-3 py-2 text-[12px] text-red-400">
+        <p role="alert" className="mt-2 text-red-700 dark:text-red-400">
           {error ?? proposal.error}
         </p>
       )}
-      {!planning && (
-        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-stroke px-3 py-2 text-[11px] text-content/45">
-          <div className="flex items-center gap-1.5">
-            {editable ? (
-              <>
-                <span>Parallel workers</span>
-                <div
-                  role="radiogroup"
-                  aria-label="Parallel workers"
-                  className="flex items-center gap-0.5 rounded-md bg-content/5 p-0.5"
-                >
-                  {[1, 2, 3, 4].map((number) => (
-                    <button
-                      key={number}
-                      type="button"
-                      role="radio"
-                      aria-checked={proposal.settings.maxWorkers === number}
-                      onClick={() =>
-                        actions?.update(proposal.leadId, block.id, {
-                          ...proposal,
-                          settings: {
-                            ...proposal.settings,
-                            maxWorkers: number,
-                          },
-                        })
-                      }
-                      className={`grid size-5 place-items-center rounded-[5px] text-[11px] leading-none tabular-nums ${
-                        proposal.settings.maxWorkers === number
-                          ? "bg-selection-hover font-medium text-content"
-                          : "text-content/45 hover:bg-content/8 hover:text-content"
-                      }`}
-                    >
-                      {number}
-                    </button>
-                  ))}
+      {open && (
+        <Modal
+          title={proposal.title || "Orchestration proposal"}
+          fitViewport
+          onClose={() => setOpen(false)}
+        >
+          <div
+            className="min-w-0 font-sans"
+            aria-label="Orchestration proposal"
+          >
+            <div className="flex min-w-0 flex-wrap items-center gap-2.5 px-3 py-2.5">
+              <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-content/8 text-content/55">
+                {planning || proposal.status === "starting" ? (
+                  <CircleDashed className="size-4 animate-spin" />
+                ) : (
+                  <MessageMultiple className="size-4" strokeWidth={1.75} />
+                )}
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-[13px] font-medium leading-tight text-content/90">
+                  {planning ? "Planning assignments…" : proposal.title}
                 </div>
-              </>
-            ) : (
-              <span>{proposal.settings.maxWorkers} parallel</span>
+                <div className="mt-1 flex items-center gap-1.5 text-[11px] leading-tight text-content/45">
+                  <HarnessIcon
+                    harness={proposal.author.harness}
+                    className="size-3 shrink-0"
+                  />
+                  <span
+                    className="truncate"
+                    title={HARNESS_TITLE[proposal.author.harness]}
+                  >
+                    Lead · {proposal.author.name}
+                  </span>
+                  {!!proposal.tasks.length && (
+                    <span className="shrink-0">
+                      · {proposal.tasks.length}{" "}
+                      {proposal.tasks.length === 1 ? "task" : "tasks"}
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div className="ml-auto flex shrink-0 items-center gap-0.5">
+                {!run && proposal.status === "invalid" && (
+                  <button
+                    className={secondary}
+                    disabled={busy || !actions}
+                    onClick={() => actions?.retry(proposal.leadId, block.id)}
+                  >
+                    Try again
+                  </button>
+                )}
+                {!run && ["ready", "starting"].includes(proposal.status) && (
+                  <button
+                    className="flex h-7 items-center gap-1.5 rounded-md bg-content px-2.5 text-[11px] font-medium text-background-base hover:bg-content/80 disabled:opacity-40"
+                    disabled={!editable}
+                    onClick={() =>
+                      void perform(() =>
+                        actions!.confirm(proposal.leadId, block.id),
+                      )
+                    }
+                  >
+                    <Play className="size-3" strokeWidth={1.75} />
+                    {starting ? "Starting…" : "Confirm & start"}
+                  </button>
+                )}
+                {run && (
+                  <button
+                    className={secondary}
+                    onClick={() => {
+                      setOpen(false);
+                      actions?.openAgents?.(
+                        run.tasks.map((task) => ({
+                          sessionId: task.sessionId,
+                          leadId: run.leadId,
+                          title: task.title,
+                          harness: task.harness,
+                        })),
+                      );
+                    }}
+                  >
+                    View agents
+                  </button>
+                )}
+              </div>
+            </div>
+            {planning && (
+              <p className="px-3 pb-2.5 text-[12px] leading-5 text-content/50">
+                {proposal.settings.choices.length
+                  ? "Your lead is choosing tasks and worker models. Review the assignments here before starting."
+                  : "Checking available harnesses and models…"}
+              </p>
             )}
-            <WorkerHelp />
+            {!!proposal.tasks.length && (
+              <ul className="border-t border-stroke py-1">
+                {proposal.tasks.map((task) => {
+                  const index = proposal.tasks.indexOf(task);
+                  const taskChoice = proposal.settings.choices.find(
+                    (choice) =>
+                      choice.harness === task.harness &&
+                      choice.model === task.model,
+                  );
+                  const taskModel = findModel(task.model);
+                  const taskEffort =
+                    taskModel?.harness === task.harness
+                      ? modelEffortLabel(taskModel, task.modelSettings)
+                      : undefined;
+                  return (
+                    <li key={task.id}>
+                      <div className="flex min-h-9 min-w-0 flex-wrap items-center gap-x-2 gap-y-1 px-3 py-1 hover:bg-content/5">
+                        <div className="min-w-0 flex-1 py-1 font-medium text-content">
+                          <span
+                            className="truncate text-[12px]"
+                            title={task.title}
+                          >
+                            {task.title}
+                          </span>
+                        </div>
+                        <div className="max-w-[60%] min-w-0">
+                          {editable ? (
+                            <AssignmentModel
+                              task={task}
+                              choices={proposal.settings.choices}
+                              onChange={(choice, modelSettings) =>
+                                change(task.id, {
+                                  harness: choice.harness,
+                                  model: choice.model,
+                                  modelSettings,
+                                })
+                              }
+                            />
+                          ) : (
+                            <span
+                              className="flex min-w-0 items-center gap-1.5 text-[11px] text-content/50"
+                              title={HARNESS_TITLE[task.harness]}
+                            >
+                              <HarnessIcon
+                                harness={task.harness}
+                                className="size-3 shrink-0"
+                              />
+                              <span className="truncate">
+                                {taskChoice?.name ?? task.model}
+                                {taskEffort ? ` · ${taskEffort}` : ""}
+                              </span>
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="space-y-2.5 px-3 pb-3 text-[11px] leading-4 text-content/45">
+                        {editable ? (
+                          <>
+                            <label className="block">
+                              <span className={fieldLabel}>Task</span>
+                              <input
+                                aria-label={`Title for task ${index + 1}`}
+                                className={field}
+                                value={task.title}
+                                onChange={(event) =>
+                                  change(task.id, { title: event.target.value })
+                                }
+                              />
+                            </label>
+                            <label className="block">
+                              <span className={fieldLabel}>Instructions</span>
+                              <InstructionsField
+                                label={`Instructions for task ${index + 1}`}
+                                value={task.prompt}
+                                className={field}
+                                onChange={(prompt) =>
+                                  change(task.id, { prompt })
+                                }
+                              />
+                            </label>
+                          </>
+                        ) : (
+                          <p className="whitespace-pre-wrap text-[12px] leading-5 text-content/60">
+                            {task.prompt}
+                          </p>
+                        )}
+                        {!!task.dependsOn.length && (
+                          <p>
+                            After ·{" "}
+                            {task.dependsOn
+                              .map(
+                                (id) =>
+                                  proposal.tasks.find(
+                                    (entry) => entry.id === id,
+                                  )?.title ?? id,
+                              )
+                              .join(", ")}
+                          </p>
+                        )}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+            {(error || proposal.error) && (
+              <p role="alert" className="px-3 py-2 text-[12px] text-red-400">
+                {error ?? proposal.error}
+              </p>
+            )}
+            {!planning && (
+              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-stroke px-3 py-2 text-[11px] text-content/45">
+                <div className="flex items-center gap-1.5">
+                  {editable ? (
+                    <>
+                      <span>Parallel workers</span>
+                      <div
+                        role="radiogroup"
+                        aria-label="Parallel workers"
+                        className="flex items-center gap-0.5 rounded-md bg-content/5 p-0.5"
+                      >
+                        {[1, 2, 3, 4].map((number) => (
+                          <button
+                            key={number}
+                            type="button"
+                            role="radio"
+                            aria-checked={
+                              proposal.settings.maxWorkers === number
+                            }
+                            onClick={() =>
+                              actions?.update(proposal.leadId, block.id, {
+                                ...proposal,
+                                settings: {
+                                  ...proposal.settings,
+                                  maxWorkers: number,
+                                },
+                              })
+                            }
+                            className={`grid size-5 place-items-center rounded-[5px] text-[11px] leading-none tabular-nums ${
+                              proposal.settings.maxWorkers === number
+                                ? "bg-selection-hover font-medium text-content"
+                                : "text-content/45 hover:bg-content/8 hover:text-content"
+                            }`}
+                          >
+                            {number}
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  ) : (
+                    <span>{proposal.settings.maxWorkers} parallel</span>
+                  )}
+                  <WorkerHelp />
+                </div>
+                <span>
+                  {run?.status ??
+                    (proposal.status === "approved"
+                      ? "Approved"
+                      : proposal.status === "ready"
+                        ? "Awaiting confirmation"
+                        : "")}{" "}
+                  · Shared project folder
+                </span>
+              </div>
+            )}
           </div>
-          <span>
-            {run?.status ??
-              (proposal.status === "approved"
-                ? "Approved"
-                : proposal.status === "ready"
-                  ? "Awaiting confirmation"
-                  : "")}{" "}
-            · Shared project folder
-          </span>
-        </div>
+        </Modal>
       )}
-    </div>
+    </section>
   );
 }

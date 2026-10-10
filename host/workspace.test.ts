@@ -10,6 +10,8 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { HostStore } from "./store";
+import { WorkspaceCommands } from "./workspace-commands";
 import {
   createHostPath,
   hostFileDiff,
@@ -26,6 +28,165 @@ const roots: string[] = [];
 afterEach(() => {
   for (const root of roots.splice(0))
     rmSync(root, { recursive: true, force: true });
+});
+
+it("checks worktree discard status and upstream errors, including untracked files", async () => {
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "monocode-removal-status-")));
+  roots.push(root);
+  const store = new HostStore(":memory:");
+  store.addProject(root, "Removal status");
+  const commands = new WorkspaceCommands(store, async (_id, action) => action());
+  const git = (...args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
+  try {
+    await expect(commands.run("git_diff_index", { cwd: root, checked: true })).rejects.toThrow();
+    git("init", "-qb", "main");
+    git("config", "user.name", "Test");
+    git("config", "user.email", "test@example.test");
+    git("config", "commit.gpgsign", "false");
+    writeFileSync(join(root, "tracked.txt"), "base\n");
+    git("add", ".");
+    git("commit", "-qm", "base");
+    writeFileSync(join(root, "empty.txt"), "");
+    writeFileSync(join(root, "binary.bin"), Buffer.from([0, 1, 2]));
+    expect(await commands.run("git_diff_stats", { cwd: root })).toMatchObject({ files: 2, untracked: 2 });
+    expect(await commands.run("git_diff_index", { cwd: root, checked: true })).toMatchObject({ files: [expect.objectContaining({ status: "untracked" }), expect.objectContaining({ status: "untracked" })] });
+    git("config", "branch.main.remote", "origin");
+    git("config", "branch.main.merge", "refs/heads/main");
+    await expect(commands.run("git_diff_index", { cwd: root, checked: true })).rejects.toThrow();
+  } finally {
+    store.close();
+  }
+});
+
+it("task snapshots detect dirty content, untracked edits and commits with no diff", async () => {
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "monocode-task-snapshot-")));
+  roots.push(root);
+  const git = (...args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
+  git("init", "-qb", "main");
+  git("config", "user.name", "Test");
+  git("config", "user.email", "test@example.test");
+  git("config", "commit.gpgsign", "false");
+  writeFileSync(join(root, "tracked.txt"), "base\n");
+  git("add", ".");
+  git("commit", "-qm", "base");
+  const base = git("rev-parse", "HEAD");
+  const store = new HostStore(":memory:");
+  store.addProject(root, "Snapshot");
+  const commands = new WorkspaceCommands(store, async (_id, action) => action());
+  const snapshot = () => commands.run("git_task_snapshot", { cwd: root, base }) as Promise<{ fingerprint: string; clean: boolean; commitsAhead: number; baseDiff: boolean; pathHashes: Record<string, string>; inheritedChangedPaths: string[] }>;
+  try {
+    expect(await snapshot()).toMatchObject({ clean: true, commitsAhead: 0, baseDiff: false });
+    writeFileSync(join(root, "tracked.txt"), "dirty baseline\n");
+    const dirty = await snapshot();
+    expect(dirty.inheritedChangedPaths).toEqual(["tracked.txt"]);
+    expect((await snapshot()).pathHashes).toEqual(dirty.pathHashes);
+    writeFileSync(join(root, "tracked.txt"), "changed dirty baseline\n");
+    const changed = await snapshot();
+    expect(changed.fingerprint).not.toBe(dirty.fingerprint);
+    expect(changed.pathHashes["tracked.txt"]).not.toBe(dirty.pathHashes["tracked.txt"]);
+    git("add", "tracked.txt");
+    expect((await snapshot()).pathHashes["tracked.txt"]).not.toBe(changed.pathHashes["tracked.txt"]);
+    git("restore", "--staged", "tracked.txt");
+    git("restore", "tracked.txt");
+    writeFileSync(join(root, "new.txt"), "one");
+    const untracked = await snapshot();
+    expect(untracked.inheritedChangedPaths).toEqual(["new.txt"]);
+    writeFileSync(join(root, "new.txt"), "two");
+    expect((await snapshot()).fingerprint).not.toBe(untracked.fingerprint);
+    expect((await snapshot()).pathHashes["new.txt"]).not.toBe(untracked.pathHashes["new.txt"]);
+    rmSync(join(root, "new.txt"));
+    git("commit", "--allow-empty", "-qm", "empty change");
+    expect(await snapshot()).toMatchObject({ clean: true, commitsAhead: 1, baseDiff: false });
+    await expect(commands.run("git_task_snapshot", { cwd: root, base: "--help" })).rejects.toThrow("Invalid task base");
+    await expect(commands.run("git_task_snapshot", { cwd: tmpdir(), base })).rejects.toThrow("outside");
+  } finally {
+    store.close();
+  }
+});
+
+it("task snapshots detect edits within an already dirty submodule", async () => {
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "monocode-submodule-parent-")));
+  const child = realpathSync.native(mkdtempSync(join(tmpdir(), "monocode-submodule-child-")));
+  roots.push(root, child);
+  const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+  for (const cwd of [root, child]) {
+    git(cwd, "init", "-qb", "main");
+    git(cwd, "config", "user.name", "Test");
+    git(cwd, "config", "user.email", "test@example.test");
+    git(cwd, "config", "commit.gpgsign", "false");
+  }
+  writeFileSync(join(child, "file.txt"), "initial");
+  git(child, "add", ".");
+  git(child, "commit", "-qm", "child file");
+  git(root, "-c", "protocol.file.allow=always", "submodule", "add", child, "child");
+  git(root, "commit", "-qm", "submodule");
+  const store = new HostStore(":memory:");
+  store.addProject(root, "Submodule");
+  const commands = new WorkspaceCommands(store, async (_id, action) => action());
+  const snapshot = () => commands.run("git_task_snapshot", { cwd: root }) as Promise<{ fingerprint: string; pathHashes: Record<string, string> }>;
+  try {
+    writeFileSync(join(root, "child/file.txt"), "inherited");
+    const before = await snapshot();
+    writeFileSync(join(root, "child/file.txt"), "worker edit");
+    const after = await snapshot();
+    expect(after.fingerprint).toBe(before.fingerprint);
+    expect(after.pathHashes.child).not.toBe(before.pathHashes.child);
+  } finally { store.close(); }
+});
+
+it("fetch distinguishes remote existence from upstream and sync sets tracking safely", async () => {
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "monocode-publication-")));
+  const remote = realpathSync.native(mkdtempSync(join(tmpdir(), "monocode-publication-remote-")));
+  roots.push(root, remote);
+  const git = (...args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
+  git("init", "-qb", "main");
+  git("config", "user.name", "Test");
+  git("config", "user.email", "test@example.test");
+  git("config", "commit.gpgsign", "false");
+  git("config", "push.autoSetupRemote", "false");
+  git("config", "push.default", "simple");
+  git("commit", "--allow-empty", "-qm", "base");
+  git("clone", "--bare", root, remote);
+  git("remote", "add", "origin", remote);
+  git("checkout", "-qb", "feat/inbox-parent-toggle");
+  const store = new HostStore(":memory:");
+  store.addProject(root, "Test");
+  const commands = new WorkspaceCommands(store, async (_id, action) => action());
+  try {
+    await commands.run("git_fetch", { cwd: root });
+    expect(await hostGitIndex(root)).toMatchObject({ remoteBranch: null, upstream: null, headPushed: true });
+    // The branch is created remotely at the base SHA, without configuring tracking.
+    git("--git-dir", remote, "update-ref", "refs/heads/feat/inbox-parent-toggle", git("rev-parse", "HEAD"));
+    expect((await hostGitIndex(root)).remoteBranch).toBeNull();
+    const head = git("rev-parse", "HEAD");
+    writeFileSync(join(root, "untracked.txt"), "keep me");
+    const status = git("status", "--porcelain=v1");
+    await commands.run("git_fetch", { cwd: root });
+    expect(git("rev-parse", "HEAD")).toBe(head);
+    expect(git("status", "--porcelain=v1")).toBe(status);
+    expect(await hostGitIndex(root)).toMatchObject({ remoteBranch: "origin/feat/inbox-parent-toggle", upstream: null, ahead: 0, behind: 0 });
+    git("commit", "--allow-empty", "-qm", "local work");
+    expect(await hostGitIndex(root)).toMatchObject({ ahead: 1, headPushed: false });
+    await commands.run("git_sync", { cwd: root });
+    expect(await hostGitIndex(root)).toMatchObject({ upstream: "origin/feat/inbox-parent-toggle", ahead: 0, aheadOfDefault: 1, headPushed: true });
+    // Compare with the same-name remote branch, not main, when tracking is removed.
+    git("branch", "--unset-upstream");
+    expect(await hostGitIndex(root)).toMatchObject({ upstream: null, ahead: 0, aheadOfDefault: 1 });
+    git("remote", "add", "other", remote);
+    await commands.run("git_fetch", { cwd: root });
+    git("branch", "--set-upstream-to=other/feat/inbox-parent-toggle");
+    await commands.run("git_push", { cwd: root });
+    expect(git("config", "branch.feat/inbox-parent-toggle.remote")).toBe("other");
+    git("branch", "--unset-upstream");
+    git("--git-dir", remote, "update-ref", "-d", "refs/heads/feat/inbox-parent-toggle");
+    await commands.run("git_fetch", { cwd: root });
+    expect((await hostGitIndex(root)).remoteBranch).toBeNull();
+    git("remote", "set-url", "origin", join(remote, "missing"));
+    await expect(commands.run("git_fetch", { cwd: root })).rejects.toThrow();
+    await expect(commands.run("git_fetch", { cwd: remote })).rejects.toThrow("outside");
+  } finally {
+    store.db.close();
+  }
 });
 
 it("reports a broken Git index instead of searching ignored files", async () => {

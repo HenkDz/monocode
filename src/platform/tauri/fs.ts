@@ -177,6 +177,7 @@ export type GitDiffStats = {
   files: number;
   additions: number;
   deletions: number;
+  untracked?: number;
 };
 
 export function gitDiffStats(cwd: string): Promise<GitDiffStats> {
@@ -201,6 +202,9 @@ export type GitDiffIndex = {
   deletions: number;
   remote: string | null;
   upstream: string | null;
+  /** Same-name branch on the publication remote, from locally fetched refs.
+   * Absent on older hosts; null means no matching ref was found. */
+  remoteBranch?: string | null;
   defaultBranch: string | null;
   ahead: number;
   behind: number;
@@ -208,8 +212,8 @@ export type GitDiffIndex = {
   headPushed: boolean;
 };
 
-export function gitDiffIndex(cwd: string): Promise<GitDiffIndex> {
-  return invoke<GitDiffIndex>("git_diff_index", { cwd });
+export function gitDiffIndex(cwd: string, checked = false): Promise<GitDiffIndex> {
+  return invoke<GitDiffIndex>("git_diff_index", checked ? { cwd, checked } : { cwd });
 }
 
 /** File list and counts only, for diff content views that do not need sync data. */
@@ -358,6 +362,10 @@ export function gitPull(cwd: string): Promise<void> {
   return invoke<void>("git_pull", { cwd });
 }
 
+export function gitFetch(cwd: string): Promise<void> {
+  return invoke<void>("git_fetch", { cwd });
+}
+
 export function gitSync(cwd: string): Promise<void> {
   return invoke<void>("git_sync", { cwd });
 }
@@ -375,14 +383,42 @@ export function gitRangeContext(cwd: string): Promise<GitRangeContext> {
 }
 
 export type GitPr = {
+  additions?: number;
+  deletions?: number;
+  updatedAt?: string;
+  reviewDecision?: string;
+  mergeStateStatus?: string;
+  checksStatus?: "success" | "pending" | "failure" | "none" | "unknown";
+  headRefName?: string;
+  headOid?: string;
+  mergeable?: string;
+  baseRefName?: string;
   number: number;
   title: string;
   url: string;
   state: string;
+  isDraft?: boolean;
+  closedAt?: string | null;
 };
 
 export function gitPrStatus(cwd: string): Promise<GitPr | null> {
   return invoke<GitPr | null>("git_pr_status", { cwd });
+}
+
+export function gitPrList(cwd: string, branches?: string[]): Promise<GitPr[]> {
+  return invoke<GitPr[]>("git_pr_list", { cwd, branches });
+}
+
+export function gitPrStatusByUrl(cwd: string, url: string): Promise<GitPr | null> {
+  return invoke<GitPr | null>("git_pr_status_by_url", { cwd, url });
+}
+
+export function gitPrStatusBatch(cwd: string, urls: string[]): Promise<GitPr[]> {
+  return invoke<GitPr[]>("git_pr_status_batch", { cwd, urls });
+}
+
+export function gitPrActionByUrl(cwd: string, url: string, action: string, expectedHead?: string, expectedBase?: string): Promise<GitPr> {
+  return invoke<GitPr>("git_pr_action_by_url", { cwd, url, action, expectedHead, expectedBase });
 }
 
 export function gitPrCreate(

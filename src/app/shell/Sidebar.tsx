@@ -1,3 +1,6 @@
+import { createPortal } from "react-dom";
+import { TeamMapNav } from "../../features/teamMap/navigation";
+import { openPullRequests } from "../../features/pullRequests/model/pullRequestView";
 import { NO_BRANCH_LABEL } from "../../features/source-control/model/worktrees";
 import {
   type WorktreeFocus,
@@ -5,6 +8,7 @@ import {
   useWorktreeFocus,
 } from "../../features/source-control/model/worktreeFocus";
 import { SidebarWorktreeSwitcher } from "../../features/source-control/ui/SidebarWorktreeSwitcher";
+import { WorkspaceHeading } from "../../features/source-control/ui/WorkspaceHeading";
 import { OrchestrationSidebarAgents } from "../../features/orchestration/ui/OrchestrationSidebarAgents";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
@@ -128,7 +132,10 @@ import type {
 } from "../../features/sessions/model/session";
 import type { LiveAgent } from "../../features/sessions/model/liveAgents";
 import type { SessionSummary } from "../../features/sessions/data/sessionStore";
-import type { SettingsSectionId } from "../../features/settings/model/settings";
+import type {
+  SettingsSectionId,
+  WorkspacePanelSide,
+} from "../../features/settings/model/settings";
 import type { InstalledUpdate } from "../model/updateNotice";
 import { TAB_GROUP_COLORS } from "../../features/workspace/model/tabGroups";
 import { useDragResize } from "../../shared/hooks/useDragResize";
@@ -308,6 +315,11 @@ type Props = {
   liveAgents?: LiveAgent[];
   onSelectAgent?: (sessionId: string) => void;
   onSelectProject?: (path: string) => void;
+  onNewWorktree?: (project: string) => void;
+  renderProjectWorktrees?: ComponentProps<typeof ProjectRail>["renderProjectWorktrees"];
+  /** Where the panel docks; "right" renders it into `panelHost`. */
+  panelSide?: WorkspacePanelSide;
+  panelHost?: HTMLElement | null;
   onOpenProject?: () => void;
   onRemoveProject?: (path: string, options: { purgeData: boolean }) => void;
   onNew?: () => string | void;
@@ -317,9 +329,11 @@ type Props = {
   onOpenInboxItem?: (item: LinkedWorkItem, sessionId: string) => void;
   onOpenNotes?: () => void;
   onOpenAutomations?: () => void;
+  onOpenTeamMap?: () => void;
   onGoToFile?: () => void;
   searchActive?: boolean;
   inboxActive?: boolean;
+  pullRequestsActive?: boolean;
   notesActive?: boolean;
   automationsActive?: boolean;
   notesEnabled?: boolean;
@@ -405,6 +419,10 @@ function SidebarComponent({
   liveAgents = [],
   onSelectAgent,
   onSelectProject,
+  renderProjectWorktrees,
+  onNewWorktree,
+  panelSide = "left",
+  panelHost = null,
   onOpenProject,
   onRemoveProject,
   onNew,
@@ -413,9 +431,11 @@ function SidebarComponent({
   onOpenInboxItem,
   onOpenNotes,
   onOpenAutomations,
+  onOpenTeamMap,
   onGoToFile,
   searchActive = false,
   inboxActive = false,
+  pullRequestsActive = false,
   notesActive = false,
   automationsActive = false,
   notesEnabled = true,
@@ -439,7 +459,20 @@ function SidebarComponent({
   monoViewActive = false,
 }: Props) {
   const remoteProject = isRemoteProjectPath(cwd);
-  const tab: SidebarTabId = requestedTab;
+  // With the project rail open, its worktree tree is the one place to pick a
+  // worktree or a session. The Sessions tab and the workspace switcher would
+  // only repeat it, so the panel narrows to the focused worktree's context.
+  const railNavigatesWorktrees =
+    !!renderProjectWorktrees &&
+    !!onSelectProject &&
+    !!onOpenProject &&
+    !!projectRailOpen &&
+    !remoteProject &&
+    looksLikeProject(cwd);
+  const tab: SidebarTabId =
+    railNavigatesWorktrees && requestedTab === "sessions"
+      ? "files"
+      : requestedTab;
   const remote = useRemoteProjectSessions(cwd, remoteProject);
   const hostProject = remoteProject ? remoteProjectFor(cwd) : undefined;
   const remoteChange = async (
@@ -561,6 +594,7 @@ function SidebarComponent({
       ? remotePath(hostProject.environmentId, remoteExecutionCwd ?? hostProject.cwd)
       : gitCwd || cwd;
   const resize = useDragResize({
+    direction: panelSide === "right" ? "left" : "right",
     min: MIN_WIDTH,
     max: () => Math.min(MAX_WIDTH, Math.floor(window.innerWidth * 0.5)),
     defaultWidth: DEFAULT_WIDTH,
@@ -747,11 +781,13 @@ function SidebarComponent({
   const sessionListKey = `${cwd}\0${sessionFilters.showArchived}\0${sessionFilters.time}\0${sessionFilters.hiddenHarnesses.join(",")}\0${sessionFilters.status.working}\0${sessionFilters.status.needsApproval}\0${sessionFilters.status.done}\0${searchQuery}`;
   const sessionHarnesses = harnessesInSessions(projectSessions);
   const narrowedByUser = searchNarrowed || filtersActive;
-  const visibleTabs = tabOrder.filter((itemId) => itemId !== "inbox");
+  const hiddenTab = (itemId: SidebarTab) =>
+    itemId === "inbox" || (railNavigatesWorktrees && itemId === "sessions");
+  const visibleTabs = tabOrder.filter((itemId) => !hiddenTab(itemId));
   const sortable = useAnimatedReorder(visibleTabs, (ids) => {
     let index = 0;
     const next = tabOrder.map((itemId) =>
-      itemId === "inbox" ? itemId : ids[index++],
+      hiddenTab(itemId) ? itemId : ids[index++],
     );
     setTabOrder(next);
     saveSidebarTabOrder(next);
@@ -786,6 +822,7 @@ function SidebarComponent({
   const otherViewActive =
     searchActive ||
     inboxActive ||
+    pullRequestsActive ||
     notesActive ||
     automationsActive ||
     settingsOpen;
@@ -812,6 +849,8 @@ function SidebarComponent({
   const drawerRendered = drawerVisible || drawerClosing;
   const drawerAnimation = useRef<Animation | null>(null);
   const panelOpen = open || drawerVisible;
+  // The temporary drawer always slides out beside the compact rail.
+  const dockedRight = panelSide === "right" && !!panelHost && !drawerMode;
   // Keep the hidden explorer intact when a chat tab changes worktrees. Its
   // rows and file icons only need rebuilding when Files is actually shown.
   const explorer = useRef<{ cwd: string; rootLabel?: string } | null>(null);
@@ -1659,7 +1698,9 @@ function SidebarComponent({
       data-tauri-drag-region="deep"
     >
       <div className="flex min-w-0 flex-1 items-center">
-        {!remoteProject && cwd && cwd !== "~" ? (
+        {railNavigatesWorktrees ? (
+          <WorkspaceHeading cwd={cwd} pending={workspaceSwitchPending} />
+        ) : !remoteProject && cwd && cwd !== "~" ? (
           <SidebarWorktreeSwitcher
             cwd={cwd}
             tabStats={worktreeTabStats}
@@ -1673,14 +1714,16 @@ function SidebarComponent({
           </span>
         )}
       </div>
-      <WorkspaceTitleActions onSearch={onGoToFile} onNew={onNew} />
+      <WorkspaceTitleActions onSearch={onGoToFile} />
     </div>
   );
 
   const sidebarContent = (
     <aside
       ref={resize.setPaneRef}
-      className="body-glass relative flex h-full min-h-0 shrink-0 flex-col border-r border-stroke"
+      className={`body-glass relative flex h-full min-h-0 shrink-0 flex-col border-stroke ${
+        dockedRight ? "border-l" : "border-r"
+      }`}
     >
       {railVisible ? (
         <>
@@ -1728,8 +1771,10 @@ function SidebarComponent({
               onOpenNotificationSettings={onOpenNotificationSettings}
               onOpenNotes={notesEnabled ? onOpenNotes : undefined}
               onOpenAutomations={onOpenAutomations}
+              onOpenTeamMap={onOpenTeamMap}
               searchActive={searchActive}
               inboxActive={inboxActive}
+          pullRequestsActive={pullRequestsActive}
               notesActive={notesActive}
               automationsActive={automationsActive}
               inboxUnseen={inboxUnseen}
@@ -2212,7 +2257,7 @@ function SidebarComponent({
         aria-valuenow={resize.width}
         aria-valuemin={MIN_WIDTH}
         aria-valuemax={MAX_WIDTH}
-        className={`absolute inset-y-0 -right-px z-10 w-1.5 cursor-col-resize touch-none ${
+        className={`absolute inset-y-0 ${dockedRight ? "-left-px" : "-right-px"} z-10 w-1.5 cursor-col-resize touch-none ${
           resize.dragging ? "bg-content/15" : "hover:bg-content/10"
         }`}
         onPointerDown={resize.onPointerDown}
@@ -2246,11 +2291,13 @@ function SidebarComponent({
           searchActive={searchActive}
           onOpenInbox={onOpenInbox}
           inboxActive={inboxActive}
+          pullRequestsActive={pullRequestsActive}
           onOpenNotificationSettings={onOpenNotificationSettings}
           onOpenNotes={notesEnabled ? onOpenNotes : undefined}
           notesActive={notesActive}
           onOpenAutomations={onOpenAutomations}
           automationsActive={automationsActive}
+          onOpenTeamMap={onOpenTeamMap}
           onOpenSettings={onOpenSettings}
           onTogglePanel={onToggleProjectRail}
           onLeaveActive={onGoBack}
@@ -2260,7 +2307,10 @@ function SidebarComponent({
         />
       ) : null}
       {railMounted.current && onSelectProject && onOpenProject ? (
+        <div className={railVisible ? "flex min-h-0 flex-col [&>nav]:min-h-0 [&>nav]:flex-1" : "hidden"}>
+        {onOpenTeamMap && <TeamMapNav onOpen={onOpenTeamMap} />}
         <ProjectRail
+          sessions={sessions}
           visible={railVisible}
           cwd={cwd}
           recents={recents}
@@ -2277,6 +2327,7 @@ function SidebarComponent({
           searchActive={searchActive}
           onOpenInbox={onOpenInbox}
           inboxActive={inboxActive}
+          pullRequestsActive={pullRequestsActive}
           notesEnabled={notesEnabled}
           onOpenNotes={onOpenNotes}
           notesActive={notesActive}
@@ -2284,6 +2335,8 @@ function SidebarComponent({
           automationsActive={automationsActive}
           onTogglePanel={onToggleProjectRail}
           onSelectProject={onSelectProject}
+          renderProjectWorktrees={renderProjectWorktrees}
+                onNewWorktree={onNewWorktree}
           onOpenProject={onOpenProject}
           onRemoveProject={onRemoveProject}
           settingsOpen={settingsOpen}
@@ -2297,8 +2350,13 @@ function SidebarComponent({
           onDismissUpdate={onDismissUpdate}
           monos={railMonos}
         />
+        </div>
       ) : null}
-      {sidebarVisible ? sidebarContent : null}
+      {sidebarVisible
+        ? dockedRight
+          ? createPortal(sidebarContent, panelHost!)
+          : sidebarContent
+        : null}
       {drawerRendered ? (
         // Pinned to the right edge, so the sidebar slides in as the width grows.
         <div
@@ -2359,8 +2417,10 @@ function SidebarProjectPicker({
   onOpenNotificationSettings,
   onOpenNotes,
   onOpenAutomations,
+  onOpenTeamMap,
   searchActive = false,
   inboxActive = false,
+  pullRequestsActive = false,
   notesActive = false,
   automationsActive = false,
   inboxUnseen = false,
@@ -2377,8 +2437,10 @@ function SidebarProjectPicker({
   onOpenNotificationSettings?: (projectPath?: string) => void;
   onOpenNotes?: () => void;
   onOpenAutomations?: () => void;
+  onOpenTeamMap?: () => void;
   searchActive?: boolean;
   inboxActive?: boolean;
+  pullRequestsActive?: boolean;
   notesActive?: boolean;
   automationsActive?: boolean;
   inboxUnseen?: boolean;
@@ -2441,11 +2503,13 @@ function SidebarProjectPicker({
             </span>
           </IconButton>
         ) : null}
+        <IconButton label="Pull requests" active={pullRequestsActive} onClick={() => openPullRequests()}><GitPullRequest className="size-3.5" strokeWidth={1.75} /></IconButton>
         {onOpenNotes ? (
           <IconButton label="Notes" active={notesActive} onClick={onOpenNotes}>
             <StickyNote className="size-3.5" strokeWidth={1.75} />
           </IconButton>
         ) : null}
+        {onOpenTeamMap && <TeamMapNav compact onOpen={onOpenTeamMap} />}
         {onOpenAutomations ? (
           <IconButton
             label="Automations"
@@ -2489,10 +2553,12 @@ function CompactProjectRail({
   searchActive,
   onOpenInbox,
   inboxActive,
+  pullRequestsActive = false,
   onOpenNotificationSettings,
   onOpenNotes,
   notesActive,
   onOpenAutomations,
+  onOpenTeamMap,
   automationsActive,
   onOpenSettings,
   onTogglePanel,
@@ -2518,10 +2584,12 @@ function CompactProjectRail({
   searchActive: boolean;
   onOpenInbox?: () => void;
   inboxActive: boolean;
+  pullRequestsActive?: boolean;
   onOpenNotificationSettings?: (projectPath?: string) => void;
   onOpenNotes?: () => void;
   notesActive: boolean;
   onOpenAutomations?: () => void;
+  onOpenTeamMap?: () => void;
   automationsActive: boolean;
   onOpenSettings?: () => void;
   onTogglePanel?: () => void;
@@ -2562,6 +2630,7 @@ function CompactProjectRail({
   const workspaceActive =
     !searchActive &&
     !inboxActive &&
+    !pullRequestsActive &&
     !notesActive &&
     !automationsActive &&
     !monoViewActive;
@@ -2681,6 +2750,7 @@ function CompactProjectRail({
             setInboxMenu({ x, y });
           }}
         />
+        <CompactRailAction label="Pull requests" icon={GitPullRequest} active={pullRequestsActive} onClick={() => openPullRequests()} />
         {onOpenNotes ? (
           <CompactRailAction
             label="Notes"
@@ -2695,6 +2765,7 @@ function CompactProjectRail({
           active={automationsActive}
           onClick={action(automationsActive, onOpenAutomations)}
         />
+        {onOpenTeamMap && <TeamMapNav compact onOpen={onOpenTeamMap} />}
       </div>
       <div className="min-h-2 flex-1" />
       <div className="flex w-full flex-col items-center gap-1 py-1.5">

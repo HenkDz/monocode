@@ -10,6 +10,7 @@ export type Worktree = {
   path: string;
   branch: string | null;
   head: string;
+  headSubject?: string | null;
   isMain: boolean;
   locked: boolean;
   prunable: boolean;
@@ -20,6 +21,24 @@ export type Worktree = {
 };
 export type Worktrees = { worktrees: Worktree[]; defaultRoot: string };
 
+export type WorktreeSessionOptions = Partial<Pick<
+  Session, "harness" | "model" | "modelSettings" | "composerSeed" | "linkedWorkItem"
+>>;
+export type WorktreeCreationOptions = {
+  keepOpen: boolean;
+  session?: WorktreeSessionOptions;
+};
+
+/** Human names become Git refs; existing branch names must never be rewritten. */
+export function normalizeWorktreeBranch(name: string): string {
+  return name.normalize("NFKC").trim().toLowerCase()
+    .replace(/[^\p{L}\p{N}/._-]+/gu, "-")
+    .split("/")
+    .map((part) => part.replace(/\.{2,}/g, "-")
+      .replace(/^[.-]+|(?:\.lock|[.-])+$/g, ""))
+    .filter(Boolean).join("/");
+}
+
 export const listWorktrees = (cwd: string) =>
   invokeWorkspace<Worktrees>("git_worktrees", { cwd });
 
@@ -29,6 +48,8 @@ export async function createWorktree(
   base: string,
   existing: boolean,
 ) {
+  branch = existing ? branch.trim() : normalizeWorktreeBranch(branch);
+  if (!branch) throw new Error("Enter a worktree name containing letters or numbers.");
   const tree = await invoke<Worktree>("git_worktree_create", {
     cwd,
     branch,
@@ -42,10 +63,12 @@ export async function createWorktree(
 export async function createOrchestrationWorktree(
   cwd: string,
   branch: string,
+  taskId?: string,
 ) {
   const tree = await invoke<Worktree>("git_orchestration_worktree_create", {
     cwd,
     branch,
+    taskId,
   });
   notifyGitChanged();
   return tree;
@@ -75,16 +98,15 @@ export function temporaryWorktreeBranchName(
   return `mc/${token || Date.now().toString(36)}`;
 }
 
-export function orchestrationWorktreeBranchName(id: string): string {
+export function orchestrationWorktreeBranchName(id: string, title?: string): string {
+  if (title) return `mc/${normalizeWorktreeBranch(title).replace(/\//g, "-").slice(0, 48).replace(/(?:\.lock|[.-])+$/g, "") || "worker"}`;
   const token = id.replace(/[^a-zA-Z0-9]/g, "").slice(0, 12).toLowerCase();
   return `mc/orch-${token || Date.now().toString(36)}`;
 }
 
 export function namedWorktreeBranch(fragment: string): string | null {
-  const clean = fragment
-    .trim()
-    .replace(/^(?:mc|monocode)\/+/, "")
-    .replace(/^\/+|\/+$/g, "");
+  const clean = normalizeWorktreeBranch(fragment)
+    .replace(/^(?:mc|monocode)\/+/, "");
   return clean ? `mc/${clean}` : null;
 }
 

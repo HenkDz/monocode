@@ -1,3 +1,9 @@
+import { ManagerAvatar } from "../../orchestration/ui/ManagerAvatar";
+import { MonoChatCard } from "../../monos/ui/MonoChatCard";
+import { MonoTeamChangeCard } from "../../monos/ui/MonoTeamChangeCard";
+import { TeamMessage } from "./TeamMessage";
+import { ArtifactText } from "../../artifacts/ui/ArtifactReference";
+import { isUserMessage, teamMessage } from "../model/teamMessage";
 import {
   ArrowUp,
   Chatting,
@@ -181,6 +187,7 @@ const FIRST_PAINT_TURNS = 3;
 const TURN_PAGE_SIZE = 20;
 
 type Props = {
+  managerProject?: string;
   blocks: Block[];
   /** Archived messages render immediately, even when first loaded in this visit. */
   historicalBlockIds?: ReadonlySet<string>;
@@ -243,6 +250,8 @@ type Props = {
   ) => void;
   /** Session-level output shown after the latest reply and before its action row. */
   latestTurnAccessory?: ReactNode;
+  /** Event output stays with its original turn as newer turns arrive. */
+  turnAccessories?: ReadonlyMap<string, ReactNode>;
   /** False while another tab is in front; local transcript state is retained. */
   visible?: boolean;
   /** Kept mounted after its pane closed. Showing it again counts as a new visit. */
@@ -253,6 +262,7 @@ type Props = {
 };
 
 function AgentTranscriptComponent({
+  managerProject,
   blocks: sourceBlocks,
   historicalBlockIds,
   initialTurns = INITIAL_TURNS,
@@ -301,6 +311,7 @@ function AgentTranscriptComponent({
   onRevealReady,
   onNavigateReady,
   latestTurnAccessory,
+  turnAccessories,
 
   visible = true,
   parked = false,
@@ -1257,6 +1268,7 @@ function AgentTranscriptComponent({
             <TurnRow key="work-fold" folded={!showFoldLine}>
               {inlineWork ? (
                 <MonoTurnHeader
+                  managerProject={managerProject}
                   blocks={turn}
                   title={foldTitle}
                   name={turnModelName}
@@ -1286,6 +1298,7 @@ function AgentTranscriptComponent({
                 />
               ) : (
                 <WorkFoldLine
+                  managerProject={managerProject}
                   title={foldTitle}
                   kind={workKind(summarizedWork)}
                   harness={turnHarness}
@@ -1311,6 +1324,11 @@ function AgentTranscriptComponent({
               }`}
             >
               {stampAt != null ? <DaySeparator at={stampAt} /> : null}
+              {turn[0].monoSessionCompletion?.blocker && (
+                <div data-blocker-notice className="px-4 py-1 text-xs text-content/50">
+                  Decision requested · {turn[0].monoSessionCompletion.blocker.requests.length} requests
+                </div>
+              )}
               {items
                 .flatMap((item, itemIndex) => {
                   // The header carries the process; only approvals need a row
@@ -1416,6 +1434,7 @@ function AgentTranscriptComponent({
                 </div>
               ) : null}
               {/* The accessory keeps the pane's props, which go stale once parked. */}
+              {!parked ? turnAccessories?.get(turn[0].id) : null}
               {isLastTurn && latestTurnAccessory && !parked
                 ? latestTurnAccessory
                 : null}
@@ -1425,6 +1444,7 @@ function AgentTranscriptComponent({
                 (inlineWork && firstWork >= 0) ||
                 (spawnedSessions.length > 0 && onShowSessions)) ? (
                 <TurnDuration
+                  managerProject={managerProject}
                   elapsedMs={durationMs ?? null}
                   label={
                     standaloneReply ? (agentName ?? habit?.name) : undefined
@@ -1634,6 +1654,7 @@ function backgroundLabel(tasks: string[]): string {
  * to the last, so it is not repeated here.
  */
 function TurnDuration({
+  managerProject,
   elapsedMs,
   label: completionLabel,
   metrics,
@@ -1653,6 +1674,7 @@ function TurnDuration({
   onSecondOpinion,
   onHandoff,
 }: {
+  managerProject?: string;
   elapsedMs: number | null;
   label?: string;
   metrics?: TurnMetrics;
@@ -1742,7 +1764,7 @@ function TurnDuration({
         <span className="flex min-w-0 items-center gap-2.5">
           {dot}
           <span className="flex min-w-0 items-center gap-1.5">
-            {harness ? (
+            {managerProject ? <ManagerAvatar project={managerProject} /> : harness ? (
               <HarnessIcon harness={harness} className="size-3.5 shrink-0" />
             ) : null}
             <span className="min-w-0 truncate" title={label}>
@@ -2077,8 +2099,12 @@ const TranscriptBlock = memo(function TranscriptBlock({
   onEditLastTurn?: () => void;
   editing?: boolean;
 }) {
+  const incoming = teamMessage(block);
+  if (incoming) return <TeamMessage message={incoming} cwd={cwd} />;
   if (block.role === "user") {
     return (
+      <>
+      {block.monoSource && <div className="mb-1 flex items-center justify-end gap-2 text-xs text-content/60"><PixelMascot name={block.monoSource.mascot} color={block.monoSource.color} still className="size-5" />From {block.monoSource.name}</div>}
       <UserMessageBlock
         block={block}
         layout={layout}
@@ -2095,8 +2121,12 @@ const TranscriptBlock = memo(function TranscriptBlock({
         onSendDraft={onSendDraft}
         onRemoveDraft={onRemoveDraft}
       />
+      </>
     );
   }
+
+  if (block.monoTeamChange) return <MonoTeamChangeCard {...block.monoTeamChange} />;
+  if (block.monoCard && block.monoCardOwner) return <MonoChatCard card={block.monoCard} monoId={block.monoCardOwner} blockId={block.id} />;
 
   if (block.role === "image") {
     return block.image ? <GeneratedImage image={block.image} /> : null;
@@ -2184,7 +2214,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
     return (
       <div className={`${embedded ? "" : "px-4"} py-2 text-content/50`}>
         <pre className="min-w-0 whitespace-pre-wrap break-words">
-          {block.text}
+          <ArtifactText text={block.text} />
         </pre>
       </div>
     );
@@ -2679,6 +2709,7 @@ function turnItemKey(item: TurnItem): string {
  * prompt, answer, and a receipt for the work in between.
  */
 function WorkFoldLine({
+  managerProject,
   title,
   kind,
   harness,
@@ -2688,6 +2719,7 @@ function WorkFoldLine({
   open,
   onToggle,
 }: {
+  managerProject?: string;
   title: ReactNode;
   kind: ActivityPhaseKind;
   harness?: HarnessId;
@@ -2708,7 +2740,7 @@ function WorkFoldLine({
         />
       ) : (
         <>
-          {agentMascot ? (
+          {managerProject ? <ManagerAvatar project={managerProject} /> : agentMascot ? (
             <PixelMascot
               name={agentMascot.mascot}
               color={agentMascot.color}
@@ -3000,6 +3032,7 @@ function useLivePhaseScroll(
 
 /** The live ticker shares the identity line instead of adding a work row. */
 function MonoTurnHeader({
+  managerProject,
   blocks,
   title,
   name,
@@ -3013,6 +3046,7 @@ function MonoTurnHeader({
   workExpanded,
   searchCurrent,
 }: {
+  managerProject?: string;
   blocks: Block[];
   title: ReactNode;
   name?: string;
@@ -3043,7 +3077,9 @@ function MonoTurnHeader({
           : `Waiting for ${backgroundTasks.length} background tasks…`,
     };
   }
-  const mark = agentMascot ? (
+  const mark = managerProject ? (
+    <ManagerAvatar project={managerProject} />
+  ) : agentMascot ? (
     <PixelMascot
       name={agentMascot.mascot}
       color={agentMascot.color}
@@ -3166,7 +3202,8 @@ export function MonoActivityTrail({
   onApproval,
   onOpenFile,
   onOpenDiff,
-}: Omit<ActivityPhasesProps, "done" | "padded"> & { live?: boolean }) {
+  readOutput = false,
+}: Omit<ActivityPhasesProps, "done" | "padded"> & { live?: boolean; readOutput?: boolean }) {
   const steps = blocks.filter(
     (block) =>
       !block.internal &&
@@ -3233,7 +3270,9 @@ export function MonoActivityTrail({
                   aria-hidden="true"
                   className="absolute left-0 top-[10px] size-1.5 rounded-full bg-content/25"
                 />
-                {block.role === "plan" ||
+                {readOutput && !block.tool && !isSubagentBlock(block) && !block.plan && !block.taskList && !block.image ? (
+                  <AgentMarkdown text={block.text} cwd={cwd} onOpenFile={onOpenFile} className="mono-run-report" />
+                ) : block.role === "plan" ||
                 block.role === "tasks" ||
                 block.role === "image" ? (
                   <TranscriptBlock
@@ -3245,7 +3284,10 @@ export function MonoActivityTrail({
                   />
                 ) : (
                   <ActivityRow
-                    block={block}
+                    block={readOutput && block.tool && !needsApproval(block) ? {
+                      ...block,
+                      tool: { ...block.tool, detail: undefined, preview: block.tool.preview ? { ...block.tool.preview, output: undefined } : undefined },
+                    } : block}
                     live={live}
                     cwd={cwd}
                     onApproval={onApproval}
@@ -3253,6 +3295,9 @@ export function MonoActivityTrail({
                     onOpenDiff={onOpenDiff}
                   />
                 )}
+                {readOutput && block.tool && !needsApproval(block) && (block.tool.detail?.trim() || block.tool.preview?.output?.trim()) ? (
+                  <pre className="min-w-0 whitespace-pre-wrap break-words py-2 font-mono text-[12px] leading-5 text-content/65">{[...new Set([block.tool.detail?.trim(), block.tool.preview?.output?.trim()].filter(Boolean))].join("\n\n")}</pre>
+                ) : null}
               </div>
             ))}
           </li>
@@ -4678,9 +4723,11 @@ function ApprovalControls({
   onApproval?: (requestId: number, decision: ApprovalDecision) => void;
 }) {
   const approval = block.approval;
-  if (!approval || approval.decided || !onApproval) return null;
+  if (!approval || approval.decided) return null;
   return (
-    <div className="mt-1.5 flex gap-2">
+    <div className="mt-1.5">
+      {approval.autoApprovalReason && <p className="mb-1.5 break-words text-[11px] text-content/60" aria-label="Automatic approval status">{approval.autoApprovalReason}</p>}
+      {onApproval && <div className="flex gap-2">
       <button
         type="button"
         className="rounded-md bg-content px-2.5 py-0.5 text-[11px] hover:bg-content/80     text-background-base"
@@ -4695,6 +4742,7 @@ function ApprovalControls({
       >
         Deny
       </button>
+      </div>}
     </div>
   );
 }
@@ -4873,7 +4921,7 @@ function sumDurations(durations: (number | undefined)[]): number | undefined {
 
 function userTurnCount(blocks: Block[], managed = false): number {
   return blocks.filter(
-    (block) => block.role === "user" && (managed || !block.internal),
+    (block) => isUserMessage(block) && (managed || !block.internal),
   ).length;
 }
 

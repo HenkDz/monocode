@@ -1,3 +1,4 @@
+import { monoViewProject } from "../../monos/model/monoNavigation";
 import {
   markTurnInterrupted,
   type ResumedWorkspace,
@@ -342,7 +343,7 @@ export function hydrateWorkspaceSnapshot(
       memory: parseProjectReturnTargets(parsed.projectReturnTargets),
       tabs,
       sessions: [...sessions.values()],
-      activeTabId,
+      activeTabId: parsed.projectReturnTargets?.some(target => monoViewProject(target.tabId)) ? "" : activeTabId,
     }),
     lastDockSide: parsed.lastDockSide,
   };

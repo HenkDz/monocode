@@ -34,10 +34,20 @@ export function readHarnessTextFile(path: string): Promise<string> {
   });
 }
 
+export type MonoCodexStorageInfo = {
+  home: string;
+  sourceHome: string;
+  sourceKind: "account" | "CODEX_HOME" | "default";
+};
+
+export function monoCodexStorageInfo(providerAccountId?: string): Promise<MonoCodexStorageInfo> {
+  return invoke("codex_mono_store_info", { providerAccountId });
+}
+
 export function prepareMonoCodexStore(
   providerAccountId?: string,
   threadId?: string,
-): Promise<{ home: string; hasThread: boolean }> {
+): Promise<MonoCodexStorageInfo & { hasThread: boolean }> {
   return invoke("codex_mono_store_prepare", { providerAccountId, threadId });
 }
 

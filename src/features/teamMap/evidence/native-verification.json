@@ -1,0 +1,386 @@
+{
+  "native": {
+    "binary": "C:/Users/nooro/orca/workspaces/monocode/r14-team-map/target/r14-preview/monocode-r14-delivery.exe",
+    "sha256": "00954cb070612c5767687522cc7ae98c268e2d580209ca10372a5d53a850bbea",
+    "builtAt": "2026-10-08T10:02:17.619Z",
+    "identifier": "com.monocode.desktop.r14-team-map-test",
+    "embeddedFrontendAssets": [
+      "App-BcBqkQZz.js"
+    ],
+    "pid": 59924,
+    "loadedAssets": [
+      "http://tauri.localhost/assets/App-BcBqkQZz.js",
+      "http://tauri.localhost/assets/App-Cyh1QbY8.css"
+    ],
+    "launch": {
+      "pid": 59924,
+      "binary": "C:\\Users\\nooro\\orca\\workspaces\\monocode\\r14-team-map\\target\\r14-preview\\monocode-r14-delivery.exe",
+      "cwd": "C:\\Users\\nooro\\AppData\\Local\\Temp\\monocode-r14-empty-928a0ea65a2f4762b2d6b1e5da75c981",
+      "cdp": 9494,
+      "identifier": "com.monocode.desktop.r14-team-map-test",
+      "launchFolderEmptyBeforeLaunch": true,
+      "launchFolderOutsideGit": true
+    }
+  },
+  "seededOnly": [
+    "eight persisted Mono roster records",
+    "standalone Atlas and Beacon README fixtures"
+  ],
+  "realEventState": true,
+  "finalGoal": {
+    "id": "e6034577-6077-4546-8f5e-ce6cbd4dfd3a",
+    "state": "done",
+    "managerId": "mono-engine-45e6ac19103c748060adbbda98811c634aa2a73351a0c6d2c6f8265cc81c7d69"
+  },
+  "tasks": [
+    {
+      "managerId": "r14-atlas-manager",
+      "id": "c97406fc-729d-4612-978e-38b175e0f89c",
+      "memberId": "r14-atlas-engineer",
+      "status": "completed",
+      "readOnly": true,
+      "accepted": true,
+      "acceptedDispatchId": "2445913c-33b8-4d9a-a01a-53a6d7d74f66",
+      "lastDispatchId": "2445913c-33b8-4d9a-a01a-53a6d7d74f66",
+      "completionOutcome": "no-changes"
+    },
+    {
+      "managerId": "r14-atlas-manager",
+      "id": "85bb16b0-f092-4bf8-9928-631c764391b4",
+      "memberId": "r14-atlas-engineer",
+      "status": "completed",
+      "readOnly": true,
+      "accepted": true,
+      "acceptedDispatchId": "bb4f9df9-0296-4429-8259-1de3eedb8aef",
+      "lastDispatchId": "bb4f9df9-0296-4429-8259-1de3eedb8aef",
+      "completionOutcome": "no-changes"
+    },
+    {
+      "managerId": "r14-atlas-manager",
+      "id": "9e529c53-055b-47d6-b331-87c787b5e4af",
+      "memberId": "r14-atlas-engineer",
+      "status": "completed",
+      "readOnly": true,
+      "accepted": true,
+      "acceptedDispatchId": "3a862c96-7f45-4747-9daa-c0e413460fd1",
+      "lastDispatchId": "3a862c96-7f45-4747-9daa-c0e413460fd1",
+      "completionOutcome": "no-changes"
+    },
+    {
+      "managerId": "r14-atlas-manager",
+      "id": "57f31d23-614a-4f95-aecd-2e2af45c5d2a",
+      "memberId": "r14-atlas-engineer",
+      "status": "completed",
+      "readOnly": true,
+      "accepted": true,
+      "acceptedDispatchId": "acf4cb5e-f587-4ac3-9752-4305a56ab099",
+      "lastDispatchId": "acf4cb5e-f587-4ac3-9752-4305a56ab099",
+      "completionOutcome": "no-changes"
+    },
+    {
+      "managerId": "r14-atlas-manager",
+      "id": "95823cbb-3e3b-4b95-954a-dcf61a0b1a0a",
+      "memberId": "r14-atlas-engineer",
+      "status": "completed",
+      "readOnly": true,
+      "accepted": true,
+      "acceptedDispatchId": "06a1a354-f43b-468c-a944-3ed75fa44900",
+      "lastDispatchId": "06a1a354-f43b-468c-a944-3ed75fa44900",
+      "completionOutcome": "no-changes"
+    },
+    {
+      "managerId": "r14-beacon-manager",
+      "id": "27b5b978-0b57-4948-96f4-b5f0498f34cf",
+      "memberId": "r14-beacon-engineer",
+      "status": "completed",
+      "readOnly": true,
+      "accepted": true,
+      "acceptedDispatchId": "676923f6-d6a1-440d-8439-90f37fa67c42",
+      "lastDispatchId": "676923f6-d6a1-440d-8439-90f37fa67c42",
+      "completionOutcome": "no-changes"
+    }
+  ],
+  "repositoryChecks": [
+    {
+      "project": "Atlas",
+      "head": "485acfe1a851d6af752fdb5de4fb49edc75f36ec",
+      "clean": true,
+      "noRemotes": true,
+      "readmeUnchanged": true
+    },
+    {
+      "project": "Beacon",
+      "head": "b418f8e89ec425b2f000b5cfa7366b5c3e8ea556",
+      "clean": true,
+      "noRemotes": true,
+      "readmeUnchanged": true
+    }
+  ],
+  "sequences": [
+    {
+      "eventId": "goal:e6034577-6077-4546-8f5e-ce6cbd4dfd3a:start",
+      "label": "goal-down",
+      "path": "M 576 178 C 576 221, 304 221, 304 264",
+      "points": [
+        {
+          "file": "goal-down-1.png",
+          "at": "2026-10-08T10:03:32.198Z",
+          "opacity": 1,
+          "x": 501.5079468064505,
+          "y": 321.3855865059677
+        },
+        {
+          "file": "goal-down-2.png",
+          "at": "2026-10-08T10:03:32.663Z",
+          "opacity": 1,
+          "x": 429.1560570445672,
+          "y": 343.5286112469912
+        },
+        {
+          "file": "goal-down-3.png",
+          "at": "2026-10-08T10:03:33.131Z",
+          "opacity": 1,
+          "x": 356.1960614640557,
+          "y": 355.46884884803603
+        }
+      ]
+    },
+    {
+      "eventId": "06a1a354-f43b-468c-a944-3ed75fa44900:start",
+      "label": "dispatch-down",
+      "path": "M 304 394 C 304 437, 168 437, 168 480",
+      "points": [
+        {
+          "file": "dispatch-down-1.png",
+          "at": "2026-10-08T10:03:49.438Z",
+          "opacity": 1,
+          "x": 285.7526903152466,
+          "y": 488.3319972753525
+        },
+        {
+          "file": "dispatch-down-2.png",
+          "at": "2026-10-08T10:03:49.902Z",
+          "opacity": 1,
+          "x": 256.94360959042024,
+          "y": 514.1421212320929
+        },
+        {
+          "file": "dispatch-down-3.png",
+          "at": "2026-10-08T10:03:50.349Z",
+          "opacity": 1,
+          "x": 216.42629284808027,
+          "y": 527.6612349526513
+        }
+      ]
+    },
+    {
+      "eventId": "06a1a354-f43b-468c-a944-3ed75fa44900:end",
+      "label": "report-up",
+      "path": "M 168 480 C 168 437, 304 437, 304 394",
+      "points": [
+        {
+          "file": "report-up-1.png",
+          "at": "2026-10-08T10:04:08.536Z",
+          "opacity": 1,
+          "x": 205.0418762502277,
+          "y": 531.7710229193635
+        },
+        {
+          "file": "report-up-2.png",
+          "at": "2026-10-08T10:04:08.991Z",
+          "opacity": 1,
+          "x": 245.55881215862064,
+          "y": 518.2506561322698
+        },
+        {
+          "file": "report-up-3.png",
+          "at": "2026-10-08T10:04:09.468Z",
+          "opacity": 1,
+          "x": 282.3722853518393,
+          "y": 498.1891591809617
+        }
+      ]
+    }
+  ],
+  "visibilityStart": {
+    "sampleCount": 60,
+    "maximumStartDeltaSeconds": 0,
+    "minimumComputedOpacity": 1
+  },
+  "reducedMotion": {
+    "observedRealEvent": "goal:d4c9e0ef-f430-4e29-9c20-4746f1a9f265:start",
+    "reducedMotion": true,
+    "pulseIds": [
+      "goal:d4c9e0ef-f430-4e29-9c20-4746f1a9f265:start"
+    ],
+    "animateMotionCount": 0,
+    "staticCircleCount": 1,
+    "workingRingAnimations": [
+      "none",
+      "none"
+    ]
+  },
+  "interactions": [
+    "Zoom controls change camera",
+    "Native mouse drag pans canvas",
+    "Needs you dims idle nodes",
+    "Project filter hides unrelated team",
+    "Manager cluster collapses its members",
+    "Real crew event click highlights/focuses hierarchy",
+    "Narrow arrows follow depth-first tree list",
+    "Native Enter opens the focused Mono chat",
+    "Manager header scopes map to its three-node team",
+    "Team map navigation remains visible with project rail toggled"
+  ],
+  "gap": {
+    "emulated": {
+      "at": "2026-10-08T10:06:09.501Z",
+      "innerHeight": 800,
+      "innerWidth": 1280,
+      "outerHeight": 1038,
+      "outerWidth": 1280,
+      "documentClientHeight": 800,
+      "visualViewport": {
+        "height": 800,
+        "width": 1280,
+        "scale": 1
+      },
+      "devicePixelRatio": 1,
+      "nativeSize": {
+        "width": 1280,
+        "height": 1038
+      },
+      "dialog": {
+        "x": 16,
+        "y": 42,
+        "width": 1248,
+        "height": 742,
+        "top": 42,
+        "bottom": 784
+      },
+      "body": {
+        "x": 0,
+        "y": 0,
+        "width": 1280,
+        "height": 800,
+        "top": 0,
+        "bottom": 800
+      },
+      "root": {
+        "x": 0,
+        "y": 0,
+        "width": 1280,
+        "height": 800,
+        "top": 0,
+        "bottom": 800
+      },
+      "html": {
+        "x": 0,
+        "y": 0,
+        "width": 1280,
+        "height": 800,
+        "top": 0,
+        "bottom": 800
+      },
+      "css": {
+        "height": "742px",
+        "top": "42px",
+        "bottom": "16px",
+        "position": "fixed",
+        "boxSizing": "border-box"
+      },
+      "mapViewport": {
+        "x": 17,
+        "y": 147,
+        "width": 1246,
+        "height": 578,
+        "top": 147,
+        "bottom": 725
+      }
+    },
+    "restored": {
+      "at": "2026-10-08T10:06:09.609Z",
+      "innerHeight": 1038,
+      "innerWidth": 1280,
+      "outerHeight": 1038,
+      "outerWidth": 1280,
+      "documentClientHeight": 1038,
+      "visualViewport": {
+        "height": 1038,
+        "width": 1280,
+        "scale": 1
+      },
+      "devicePixelRatio": 1,
+      "nativeSize": {
+        "width": 1280,
+        "height": 1038
+      },
+      "dialog": {
+        "x": 16,
+        "y": 42,
+        "width": 1248,
+        "height": 980,
+        "top": 42,
+        "bottom": 1022
+      },
+      "body": {
+        "x": 0,
+        "y": 0,
+        "width": 1280,
+        "height": 1038,
+        "top": 0,
+        "bottom": 1038
+      },
+      "root": {
+        "x": 0,
+        "y": 0,
+        "width": 1280,
+        "height": 1038,
+        "top": 0,
+        "bottom": 1038
+      },
+      "html": {
+        "x": 0,
+        "y": 0,
+        "width": 1280,
+        "height": 1038,
+        "top": 0,
+        "bottom": 1038
+      },
+      "css": {
+        "height": "980px",
+        "top": "42px",
+        "bottom": "16px",
+        "position": "fixed",
+        "boxSizing": "border-box"
+      },
+      "mapViewport": {
+        "x": 17,
+        "y": 147,
+        "width": 1246,
+        "height": 816,
+        "top": 147,
+        "bottom": 963
+      }
+    }
+  },
+  "finalViewport": {
+    "innerHeight": 1038,
+    "nativeHeight": 1038,
+    "dialogBottom": 1022,
+    "bottomInset": 16,
+    "theme": "dark",
+    "forcedDeviceMetrics": false,
+    "forcedMediaPreferences": false
+  },
+  "cleanup": {
+    "cancelledOnlyManagerProbe": "fb0641ca-b4a1-4e48-95ce-d88107520f90",
+    "activeProviderTurns": 0,
+    "diagnosticHooksRestored": true,
+    "originalUserAppPidRetained": 88776
+  },
+  "limits": [
+    "No live PR state or Reviewer changes-request run; those mappings have unit coverage.",
+    "Narrow screenshot uses the native WebView at an emulated 600x800 viewport and immediately restores native dimensions."
+  ]
+}

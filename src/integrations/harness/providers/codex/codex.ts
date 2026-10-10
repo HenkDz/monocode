@@ -1,4 +1,5 @@
 import { TurnNotReadyError } from "../../core/types";
+import { IS_WIN } from "../../../../platform/tauri/platform";
 import { nativeModelId } from "../../../../features/sessions/model/models";
 import { sameProviderAccountId } from "../../../../features/providers/model/providerAccounts";
 import {
@@ -20,6 +21,7 @@ import {
 } from "../../core/child";
 import {
   asRecord,
+  codexAppServerArgs,
   buildThreadStartParams,
   buildTurnStartParams,
   buildTurnSteerParams,
@@ -94,6 +96,7 @@ type Live = {
   codexStore?: "mono";
   runtimeMode: RuntimeMode;
   planning: boolean;
+  readOnly: boolean;
   onEvent: (event: HarnessEvent) => void;
   approvals: Map<number, PendingApproval>;
   questions: Map<number, PendingQuestion>;
@@ -138,6 +141,7 @@ type Resume = {
   threadId: string;
   cwd: string;
   providerAccountId?: string;
+  readOnly?: boolean;
   ephemeral?: boolean;
   codexStore?: "mono";
 };
@@ -319,6 +323,17 @@ export function respondCodexApproval(
   pending.resolve(decision);
 }
 
+export function updateCodexRuntimeMode(sessionId: string, runtimeMode: RuntimeMode): void {
+  const live = liveByThread.get(sessionId);
+  if (!live) return;
+  live.runtimeMode = runtimeMode;
+  if (live.planning || live.readOnly || live.cancelled || live.muteUpdates) return;
+  for (const pending of live.approvals.values()) {
+    const decision = autoApproval(runtimeMode, pending.kind);
+    if (decision) pending.resolve(decision);
+  }
+}
+
 export function respondCodexQuestion(
   sessionId: string,
   requestId: number,
@@ -467,6 +482,7 @@ export function bindCodexSession(
     threadId: providerThreadId,
     cwd,
     providerAccountId,
+    readOnly: resumeByThread.get(threadId)?.readOnly,
   });
 }
 
@@ -496,6 +512,7 @@ export function hasLiveCodexSession(
 async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   const existing = liveByThread.get(input.sessionId);
   const controlsAgents = input.controlsAgents === true;
+  const readOnly = input.readOnly === true || existing?.readOnly === true || resumeByThread.get(input.sessionId)?.readOnly === true;
   const ephemeral =
     input.ephemeral ??
     existing?.ephemeral ??
@@ -513,6 +530,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       input.providerAccountId,
     ) &&
     existing.controlsAgents === controlsAgents &&
+    existing.readOnly === readOnly &&
     existing.ephemeral === ephemeral &&
     existing.codexStore === codexStore
   ) {
@@ -647,7 +665,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   await spawnChild(
     input.sessionId,
     path,
-    ["app-server"],
+    codexAppServerArgs(readOnly, IS_WIN),
     input.cwd,
     {
       provider: "codex",
@@ -690,6 +708,8 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
         const params = buildThreadStartParams({
           cwd: input.cwd,
           runtimeMode: input.runtimeMode,
+          intent: input.intent,
+          readOnly,
           controlsAgents: input.controlsAgents,
           model,
           serviceTier,
@@ -714,9 +734,10 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       } catch (error) {
         if (store?.hasThread)
           throw new Error(
-            "The saved Mono Codex context could not be resumed. Retry to keep its saved context.",
+            `The saved Mono Codex context could not be resumed. Retry to keep its saved context. Codex thread/resume: ${error instanceof Error ? error.message : String(error)}`,
           );
-        if (!isRecoverableThreadResumeError(error)) throw error;
+        if (!isRecoverableThreadResumeError(error))
+          throw new Error(`Codex thread/resume: ${error instanceof Error ? error.message : String(error)}`);
         threadId = undefined;
       }
     }
@@ -725,6 +746,8 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       const params = buildThreadStartParams({
         cwd: input.cwd,
         runtimeMode: input.runtimeMode,
+        intent: input.intent,
+        readOnly,
         controlsAgents: input.controlsAgents,
         model,
         serviceTier,
@@ -762,6 +785,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       codexStore,
       runtimeMode: input.runtimeMode,
       planning: input.intent === "plan",
+      readOnly,
       onEvent: input.onEvent,
       approvals: new Map(),
       questions: new Map(),
@@ -792,6 +816,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       threadId,
       cwd: input.cwd,
       providerAccountId: input.providerAccountId,
+      readOnly,
       ephemeral,
       codexStore,
     });
@@ -823,6 +848,7 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
     effort,
     serviceTier,
     intent: input.intent,
+    readOnly: live.readOnly,
   });
 
   if (Array.isArray(params.input) && params.input.length === 0) {
@@ -842,10 +868,12 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
   settlePendingTurn(live);
 
   try {
-    const response = await live.rpc.request<{ turn?: { id?: string } }>(
-      "turn/start",
-      params,
-    );
+    let response: { turn?: { id?: string } };
+    try {
+      response = await live.rpc.request("turn/start", params);
+    } catch (error) {
+      throw new Error(`Codex turn/start: ${error instanceof Error ? error.message : String(error)}`);
+    }
     input.onAccepted?.();
     const turnId = response.turn?.id ?? live.activeTurnId;
     // turn/completed can arrive before turn/start returns; don't resurrect a
@@ -1432,6 +1460,10 @@ async function handleServerRequest(
   }
 
   if (method === "mcpServer/elicitation/request") {
+    if (live.readOnly) {
+      await live.rpc.respond(id, { action: "cancel", content: null, _meta: null });
+      return;
+    }
     const confirmation = codexMcpConfirmation(params);
     if (!confirmation || live.cancelled || live.muteUpdates) {
       if (!live.cancelled && !live.muteUpdates)
@@ -1489,7 +1521,7 @@ async function handleServerRequest(
     return;
   }
 
-  if (live.planning || live.cancelled || live.muteUpdates) {
+  if (live.planning || live.readOnly || live.cancelled || live.muteUpdates) {
     // Plan turns run in a non-escalating read-only sandbox. If an older
     // app-server still asks for broader access, deny it silently instead of
     // leaking a Supervised approval prompt into the user's selected mode.

@@ -14,10 +14,16 @@ import {
 } from "./layout";
 import { projectName } from "../../../shared/lib/paths";
 import { sameProjectPath } from "../../projects/model/recents";
+import { isProjectManager } from "../../orchestration/model/projectManager";
 import {
   sessionWorkCwd,
   type Session,
 } from "../../sessions/model/session";
+
+/** Managers retain normal session persistence, but never join a worktree's tabs. */
+export function isManagerTab(tab: WorkspaceTab): boolean {
+  return leafIds(tab.layout).some(isProjectManager);
+}
 
 export function workspaceTabCwd(
   tab: WorkspaceTab,
@@ -113,6 +119,7 @@ export function switchSessionInTab(
   if (activeTab.focusedId !== currentSessionId) return null;
   if (!leafIds(activeTab.layout).includes(currentSessionId)) return null;
   if (currentSessionId === targetSessionId) return null;
+  if (isProjectManager(currentSessionId) || isProjectManager(targetSessionId)) return null;
 
   const targetTab = tabs.find((tab) =>
     leafIds(tab.layout).includes(targetSessionId),
@@ -220,6 +227,7 @@ export function planWorkspaceTabClose({
   }
   const closingWorktree = worktreeOf?.(tabs[closingIndex]) ?? null;
   const sameScope = (tab: WorkspaceTab) => {
+    if (isManagerTab(tab) !== isManagerTab(tabs[closingIndex])) return false;
     const cwd = workspaceTabCwd(tab, sessions);
     if (!cwd || !sameProjectPath(cwd, closingCwd)) return false;
     const worktree = closingWorktree && worktreeOf?.(tab);
@@ -272,6 +280,7 @@ export function applyPlaceSessionOnPane({
   activeTabId: string;
 } | null {
   if (sessionId === targetId) return null;
+  if (isProjectManager(sessionId) || isProjectManager(targetId)) return null;
   const targetIndex = tabs.findIndex((tab) =>
     leafIds(tab.layout).includes(targetId),
   );
@@ -358,6 +367,7 @@ export function applyPlaceTabOnPane({
   const source = tabs.find((tab) => tab.id === sourceTabId);
   const target = tabs.find((tab) => leafIds(tab.layout).includes(targetId));
   if (!source || !target || source.id === target.id) return null;
+  if (isManagerTab(source) || isManagerTab(target)) return null;
 
   const targetIds = new Set(leafIds(target.layout));
   if (leafIds(source.layout).some((id) => targetIds.has(id))) return null;

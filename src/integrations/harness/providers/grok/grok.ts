@@ -590,6 +590,7 @@ async function handlePermission(live: Live, id: number, params: unknown) {
 
   live.onEvent({
     type: "approval.requested",
+    command: request.command,
     requestId: id,
     title: request.title,
     kind: request.kind,

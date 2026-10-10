@@ -262,6 +262,7 @@ export type Attachment = {
 };
 
 export type MonoSessionCompletion = {
+  blocker?: { key: string; requests: string[] };
   sessionId: string;
   title: string;
   status: "completed" | "failed" | "cancelled";
@@ -270,6 +271,8 @@ export type MonoSessionCompletion = {
 };
 
 export type QueuedMessage = {
+  appRequestId?: string;
+  monoSource?: { id: string; name: string; mascot: string; color: string; goalId: string };
   id: string;
   /** User bubble already shown optimistically in a Mono's conversation. */
   blockId?: string;
@@ -336,6 +339,8 @@ export type Block = {
   intent?: Extract<TurnIntent, "plan" | "orchestrate">;
   /** Stable CLI request that submitted this turn, for safe retries. */
   appRequestId?: string;
+  monoSource?: QueuedMessage["monoSource"];
+  monoTeamMessage?: { id: string; name: string; mascot: string; color: string; topic: string; text: string };
   /** Provider-reported token metrics for this user turn, when available. */
   turnMetrics?: TurnMetrics;
   tool?: {
@@ -350,6 +355,7 @@ export type Block = {
   };
   approval?: {
     requestId: number;
+    autoApprovalReason?: string;
     decided?: "allow" | "deny" | "cancelled";
   };
   /** Inner activity of a delegated run. Present on Agent/Task tool blocks. */
@@ -390,6 +396,10 @@ export type Block = {
   monoHabit?: { id: string; name: string; at: number };
   /** A card a Mono put in its chat; see `features/monos/model/monoCards`. */
   monoCard?: import("../../monos/model/monoCards").MonoCard;
+  /** Set by the app, never accepted from card CLI input. */
+  monoCardOwner?: string;
+  /** Persisted team-change receipt, rendered in its Manager's timeline. */
+  monoTeamChange?: { managerId: string; changeId: string; changeIds?: string[] };
 };
 
 export type RuntimeMode =
@@ -430,6 +440,10 @@ export const RUNTIME_MODE_HINT: Record<RuntimeMode, string> = {
 export type WorkspaceMode = "current" | "worktree";
 
 export type Session = {
+  /** Managed investigations enforce non-escalating read-only filesystem permissions. */
+  readOnly?: boolean;
+  /** Durable receipts: a saved draft can be accepted only once. */
+  consumedDraftIds?: string[];
   /** Saved and accessible by id, but omitted from the normal session sidebar. */
   sidebarHidden?: boolean;
   /** Receipt for an acknowledged floating-composer handoff. */
@@ -460,6 +474,8 @@ export type Session = {
   backgroundTasks?: string[];
   /** Follow-ups retained until they have been delivered. */
   queuedMessages?: QueuedMessage[];
+  /** App-owned context; never editable user outbox entries. */
+  pendingMonoEvents?: QueuedMessage[];
   /** Paused after user stops current turn; resuming waits for continued turn. */
   queueStatus?: MessageQueueStatus;
   /** Prevent auto-dispatch while this queued row is being edited. In-memory only. */
@@ -468,6 +484,9 @@ export type Session = {
   sendingQueuedMessageId?: string;
   /** Last turn hit a provider usage limit; cleared by the next send. In-memory only. */
   usageLimit?: UsageLimit;
+  /** Storage preparation failed; hold automatic turns until Repair succeeds. */
+  codexStorageError?: string;
+  codexStoragePreparing?: boolean;
   /**
    * Lives only in memory: never saved, never listed with the project's chats.
    * A Mono's habit runs are, and disappear when the run ends.
@@ -561,13 +580,13 @@ export function harnessSupportsAttachments(id: HarnessId): boolean {
 }
 
 export function newSession(
-  harness: HarnessId = "claude",
+  harness: HarnessId = "codex",
   cwd = "~",
   model?: string,
   runtimeMode: RuntimeMode = DEFAULT_RUNTIME_MODE,
   modelSettings?: Record<string, string>,
 ): Session {
-  const resolved = resolveModel(harness, model ?? preferredModelId(harness));
+  const resolved = resolveModel(harness, model ?? (harness === "codex" ? defaultSessionChoice().model : preferredModelId(harness)));
   return {
     id: crypto.randomUUID(),
     harness,
@@ -580,7 +599,7 @@ export function newSession(
   };
 }
 
-/** New conversation using the Providers defaults. */
+/** New conversation using the stable default or an explicit project override. */
 export function newDefaultSession(
   cwd = "~",
   runtimeMode: RuntimeMode = DEFAULT_RUNTIME_MODE,
@@ -615,15 +634,14 @@ function projectSessionChoice(
 }
 
 /**
- * New conversation for a project. The project's default provider and model win
- * over the seed's; a provider the project has hidden is swapped for its first
- * enabled one.
+ * Fresh project conversations use the shared default or explicit project
+ * settings. An unrelated conversation does not choose their provider/model.
  */
 export function newSessionForProject(
   seed: Session | undefined,
   cwd: string,
 ): Session {
-  const { harness, model } = projectSessionChoice(seed, cwd);
+  const { harness, model } = defaultSessionChoice(cwd);
   const carriesSeed =
     model != null && model === seed?.model && harness === seed?.harness;
   return newSession(
@@ -738,6 +756,27 @@ export function sessionDraftBlock(
   session: Pick<Session, "blocks">,
 ): Block | undefined {
   return session.blocks.find((block) => block.role === "user" && block.draft);
+}
+
+/** Consume and enqueue together, before asynchronous Manager/provider setup. */
+export function sendDraftOnce(session: Session, text: string, attachments: Attachment[], draftId?: string, appRequestId?: string): Session | undefined {
+  const draft = session.blocks.find(block => block.role === "user" && block.draft &&
+    (draftId ? block.id === draftId : block.text === text && JSON.stringify(block.attachments ?? []) === JSON.stringify(attachments)));
+  const id = draftId ?? draft?.id;
+  if (!id) return;
+  const blocks = session.blocks.filter(block => !(block.id === id && block.draft));
+  if (session.consumedDraftIds?.includes(id)) return { ...session, blocks };
+  if (!draft) return;
+  return {
+    ...session,
+    blocks,
+    consumedDraftIds: [...(session.consumedDraftIds ?? []), id],
+    queuedMessages: [...(session.queuedMessages ?? []), {
+      id: `draft-${id}`, text, attachments, appRequestId: appRequestId ?? draft.appRequestId,
+      intent: draft.intent,
+    }],
+    queueStatus: session.queueStatus === "paused" ? "paused" : "active",
+  };
 }
 
 /** Remove one saved draft without disturbing the conversation before it. */

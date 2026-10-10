@@ -22,6 +22,7 @@ import { isReviewablePlan } from "../../../features/sessions/model/plan";
 import { resolveModel } from "../../../features/sessions/model/models";
 import type { HarnessEvent } from "./types";
 import { usageLimitFromError } from "../../../features/sessions/model/usageLimit";
+import { parseTeamMessage } from "../../../features/sessions/model/teamMessage";
 
 /** Apply one delivery batch without copying the transcript for every token. */
 export function applyHarnessEvents(
@@ -484,6 +485,7 @@ export function appendUser(
   extra?: UserTurnExtra,
 ): Session {
   session = settlePendingApprovals(session);
+  const incoming = parseTeamMessage(text);
   return appendBlock(
     { ...session, busy: true, turnReady: false },
     {
@@ -491,6 +493,7 @@ export function appendUser(
       role: "user",
       text,
       startedAt: Date.now(),
+      ...(incoming ? { monoTeamMessage: incoming } : {}),
       ...turnModelFields(session),
       ...(attachments.length > 0 ? { attachments } : {}),
       ...userTurnFields(extra),
@@ -505,6 +508,7 @@ export function appendSteerUser(
   attachments: Attachment[] = [],
   extra?: UserTurnExtra,
 ): Session {
+  const incoming = parseTeamMessage(text);
   return {
     ...session,
     busy: true,
@@ -515,6 +519,7 @@ export function appendSteerUser(
         role: "user",
         text,
         sentAt: Date.now(),
+        ...(incoming ? { monoTeamMessage: incoming } : {}),
         ...turnModelFields(session),
         ...(attachments.length > 0 ? { attachments } : {}),
         ...userTurnFields(extra),
@@ -884,7 +889,7 @@ function attachApproval(
               ...(preview ? { preview } : {}),
             }
           : prev.tool,
-      approval: { requestId: event.requestId },
+      approval: { requestId: event.requestId, autoApprovalReason: event.autoApprovalReason },
     };
     return { ...session, blocks };
   }
@@ -902,7 +907,7 @@ function attachApproval(
       kind: event.kind,
       ...(preview ? { preview } : {}),
     },
-    approval: { requestId: event.requestId },
+    approval: { requestId: event.requestId, autoApprovalReason: event.autoApprovalReason },
   });
 }
 

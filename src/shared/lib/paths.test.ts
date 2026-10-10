@@ -220,6 +220,61 @@ describe("parentPath and joinPath", () => {
 });
 
 describe("path relations", () => {
+  it.each([
+    "/",
+    "/repo",
+    "/repo/",
+    "/repo/src/a.ts",
+    "/tmp/a\\b.txt",
+  ])("includes the absolute Unix path %s inside /", (path) => {
+    expect(isEqualOrInside(path, "/")).toBe(true);
+  });
+
+  it.each([
+    "",
+    "repo",
+    "repo/src/a.ts",
+    "./repo",
+    "../repo",
+    "\\repo",
+    "C:repo",
+    "C:/repo",
+    "C:\\repo",
+    "C:/",
+    "D:\\",
+    "//server/share/src",
+    "\\\\server\\share\\src",
+  ])("excludes relative and Windows paths from /: %s", (path) => {
+    expect(isEqualOrInside(path, "/")).toBe(false);
+  });
+
+  it.each([
+    ["", true],
+    ["/", true],
+    ["/repo", false],
+    ["repo", false],
+    ["C:/repo", false],
+    ["//server/share", true],
+  ] as const)("preserves empty-root containment of %s: %s", (path, inside) => {
+    expect(isEqualOrInside(path, "")).toBe(inside);
+  });
+
+  it.each([
+    ["/repo/", "/repo", true],
+    ["/repo/src", "/repo/", true],
+    ["/repository", "/repo", false],
+    ["/Repo/src", "/repo", false],
+    ["repo/src", "/repo", false],
+    ["c:\\", "C:/", true],
+    ["C:/repository", "c:/repo", false],
+    ["D:/repo", "C:/", false],
+    ["\\\\SERVER\\Share\\src", "//server/share/", true],
+    ["//server/share-other", "//server/share", false],
+    ["//other/share/src", "//server/share", false],
+  ] as const)("preserves containment of %s in %s: %s", (path, root, inside) => {
+    expect(isEqualOrInside(path, root)).toBe(inside);
+  });
+
   it("treats backslash and slash as the same path", () => {
     expect(isEqualOrInside("C:\\Users\\me\\app\\src", "C:/Users/me/app")).toBe(
       true,

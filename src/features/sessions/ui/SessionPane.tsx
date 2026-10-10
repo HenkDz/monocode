@@ -29,12 +29,13 @@ import {
 } from "../../orchestration/model/orchestration";
 import { DiscussionEmpty } from "./DiscussionEmpty";
 import { LinkedWorkItemUpdateNotice } from "../../inbox/ui/LinkedWorkItemUpdateNotice";
-import { SessionReview } from "./SessionReview";
+import { SessionChangesButton, SessionReview } from "./SessionReview";
 import { usePullRequests } from "../../source-control/model/pullRequests";
 import { buildPullRequestRows } from "../../pullRequests/model/pullRequestView";
 import { listMonos } from "../../monos/model/mono";
 import { SessionPrSummary } from "./SessionPrSummary";
 import { chatPrTurns } from "../model/chatPullRequests";
+import { sessionEditPaths } from "../model/checkpointEdits";
 import { PromptOutline } from "./PromptOutline";
 import {
   canCompactHarnessContext,
@@ -404,6 +405,10 @@ const LocalSessionPane = memo(function LocalSessionPane({
   const checkoutNotice = orchestrator.checkoutNotice(session.id, session);
   const title = sessionDisplayTitle(session.title, session.harness);
   const isEmpty = session.blocks.length === 0;
+  const editedPaths = useMemo(
+    () => (session.busy ? undefined : sessionEditPaths(session.blocks)),
+    [session.blocks, session.busy],
+  );
   const messageDeliveries = useMemo(
     () => monoMessageDeliveries(session),
     [session.queuedMessages, session.queueStatus],
@@ -701,6 +706,12 @@ const LocalSessionPane = memo(function LocalSessionPane({
     return () => window.removeEventListener(ADD_TO_CHAT_EVENT, onAdd);
   }, [addSelectionToChat, addToChatTarget]);
   const workCwd = sessionWorkCwd(session);
+  const reviewHidden =
+    remote ||
+    !!session.inboxAsk ||
+    !!session.worktreeRemoved ||
+    monoTranscript.viewingOlderPage ||
+    !!draftBlock;
   const showDeckProjectPicker = isEmpty && !looksLikeProject(session.cwd);
   // The agent's input always sits at the bottom, like a chat.
   const dockComposer =
@@ -1179,6 +1190,18 @@ const LocalSessionPane = memo(function LocalSessionPane({
                           }
                         : undefined
                     }
+                    editTurnAction={
+                      reviewHidden || !agent ? undefined : (
+                        <SessionChangesButton
+                          sessionId={session.id}
+                          editedPaths={editedPaths}
+                          cwd={workCwd}
+                          enabled={visible}
+                          busy={!!session.busy}
+                          onOpenDiff={onOpenDiff}
+                        />
+                      )
+                    }
                     latestTurnAccessory={
                       mono?.role === "member" ? (
                         <MemberWorkLog member={mono} />
@@ -1192,13 +1215,10 @@ const LocalSessionPane = memo(function LocalSessionPane({
                             />
                           ))}
                         </>
-                      ) : remote ||
-                        session.inboxAsk ||
-                        session.worktreeRemoved ||
-                        monoTranscript.viewingOlderPage ||
-                        draftBlock ? undefined : (
+                      ) : reviewHidden || agent ? undefined : (
                         <SessionReview
                           sessionId={session.id}
+                          editedPaths={editedPaths}
                           cwd={workCwd}
                           enabled={visible}
                           busy={!!session.busy}

@@ -76,6 +76,7 @@ export function applyHarnessEvent(
         kind: event.kind,
         status: event.status,
         preview: event.preview,
+        paths: event.paths,
         streaming: true,
         agentModel: event.agentModel,
         ...(event.background ? { background: true } : {}),
@@ -88,6 +89,7 @@ export function applyHarnessEvent(
         status: event.status,
         detail: event.detail,
         preview: event.preview,
+        paths: event.paths,
         streaming: event.status !== "completed" && event.status !== "failed",
         agentModel: event.agentModel,
       });
@@ -951,6 +953,7 @@ function upsertTool(
     status?: string;
     detail?: string;
     preview?: ToolPreview;
+    paths?: string[];
     streaming: boolean;
     agentModel?: string;
     background?: boolean;
@@ -981,6 +984,7 @@ function upsertTool(
         status: patch.status,
         ...(detail ? { detail } : {}),
         ...(preview ? { preview } : {}),
+        ...(patch.paths ? { paths: patch.paths } : {}),
         ...(patch.background ? { background: true } : {}),
       },
     });
@@ -1001,6 +1005,7 @@ function upsertTool(
   );
   const kind = patch.kind ?? prev.tool?.kind;
   const status = patch.status ?? prev.tool?.status;
+  const paths = patch.paths ?? prev.tool?.paths;
   const agentName = prev.agentRun?.steps.length ? prev.agentRun.name : label;
   if (
     prev.text === label &&
@@ -1009,6 +1014,7 @@ function upsertTool(
     prev.tool?.kind === kind &&
     prev.tool?.status === status &&
     prev.tool?.detail === detail &&
+    prev.tool?.paths === paths &&
     (!patch.agentModel || prev.agentRun?.model === patch.agentModel) &&
     (!prev.agentRun || prev.agentRun.name === agentName) &&
     samePreview(prev.tool?.preview, preview)
@@ -1037,6 +1043,7 @@ function upsertTool(
       status,
       ...(detail ? { detail } : {}),
       ...(preview ? { preview } : {}),
+      ...(paths ? { paths } : {}),
       ...(prev.tool?.background ? { background: true } : {}),
     },
   };

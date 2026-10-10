@@ -435,7 +435,7 @@ function ChangedFiles({
   const canCommitPush =
     canCommit && hasRemote && !diverged && (!amend || !index?.headPushed);
   const canCommitPushPr = canCommitPush && !hasOpenPr && !onDefault;
-  const canEditMessage = (staged.length > 0 || amend) && !busy;
+  const canEditMessage = !busy;
 
   useEffect(() => {
     if (!amendTarget) return;
@@ -994,7 +994,7 @@ function syncStatusLabel(index: GitDiffIndex): string {
   return "No files";
 }
 
-function GitSyncActions({
+export function GitSyncActions({
   index,
   pr,
   busy,

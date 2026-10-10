@@ -79,6 +79,13 @@ it("keeps member settings inside Details and opens org tools as a subpage", asyn
     const specialty = container.querySelector<HTMLInputElement>('[aria-label="Member specialty"]')!;
     expect(specialty.title).toBe("Backend");
     expect(specialty.classList.contains("truncate")).toBe(true);
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Settings"]')!.click());
+    expect(container.querySelector('[data-mono-preferences]')).not.toBeNull();
+    const shown = container.querySelector<HTMLButtonElement>('[role="switch"]')!;
+    await act(async () => shown.click());
+    expect(JSON.parse(localStorage.getItem("monocode:mono-roster")!).find((entry: { id: string }) => entry.id === "member").showStartedSessionsInSidebar).toBe(false);
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-mono-preferences] [aria-label="Back"]')!.click());
+    expect(container.querySelector('[aria-label="Member specialty"]')).not.toBeNull();
     await act(async () => root.render(createElement(MonoDetails, { ...props, monoId: "m", tab: "activity", teamActivity: createElement("div", null, "Live team"), activity: { blocks: [], live: false } })));
     expect(container.textContent).toContain("Live team");
     expect(container.querySelector("details")).toBeNull();
@@ -102,6 +109,7 @@ it("opens Soul, Memory, Habits and Team as pages with a back action", async () =
       open: true, monoId: "manager", cwd: "/repo", agent, state: { status: "idle" },
       harness: "codex", model: "codex:gpt-5.4", modelSettings: {}, runtimeMode: "full-access",
       onRuntimeModeChange: noop, onModelChange: noop, onModelSettingsChange: noop, onClose: noop,
+      onReset: async () => {},
     })));
     const navigation = container.querySelector("nav")!;
     expect([...navigation.querySelectorAll("button")].map(button => button.getAttribute("aria-label"))).toEqual(["Soul", "Memory", "Habits", "Team"]);
@@ -114,6 +122,9 @@ it("opens Soul, Memory, Habits and Team as pages with a back action", async () =
       await act(async () => opened.querySelector<HTMLButtonElement>('[aria-label="Back"]')!.click());
       expect(navigation.closest("[inert]")).toBeNull();
     }
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Settings"]')!.click());
+    expect(container.querySelector('[data-mono-preferences]')?.textContent).toContain("Reset conversation");
+    expect(navigation.closest("[inert]")).not.toBeNull();
   } finally { localStorage.removeItem("monocode:mono-roster"); }
 });
 

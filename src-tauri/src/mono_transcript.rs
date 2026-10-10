@@ -320,7 +320,13 @@ pub fn mono_session_find(
     Ok(ids)
 }
 
-fn event_delivered(conn: &Connection, session_id: &str, event_id: &str, text: &str, blocker_key: Option<&str>) -> rusqlite::Result<bool> {
+fn event_delivered(
+    conn: &Connection,
+    session_id: &str,
+    event_id: &str,
+    text: &str,
+    blocker_key: Option<&str>,
+) -> rusqlite::Result<bool> {
     // ponytail: scan only this Mono's archived receipts; add a receipt index if long histories make this slow.
     conn.query_row(
         "SELECT EXISTS(SELECT 1 FROM mono_blocks WHERE session_id = ?1
@@ -335,12 +341,16 @@ fn event_delivered(conn: &Connection, session_id: &str, event_id: &str, text: &s
 
 #[tauri::command(async)]
 pub fn mono_session_event_delivered(
-    store: State<'_, SessionStore>, session_id: String, event_id: String, text: String,
+    store: State<'_, SessionStore>,
+    session_id: String,
+    event_id: String,
+    text: String,
     blocker_key: Option<String>,
 ) -> Result<bool, String> {
     session_store::validate_id(&session_id, "session")?;
     let conn = store.lock_conn()?;
-    event_delivered(&conn, &session_id, &event_id, &text, blocker_key.as_deref()).map_err(|e| e.to_string())
+    event_delivered(&conn, &session_id, &event_id, &text, blocker_key.as_deref())
+        .map_err(|e| e.to_string())
 }
 
 /// Replace only the changed suffix. Anchors prevent a partially loaded client
@@ -565,15 +575,48 @@ mod tests {
         session.blocks[0]["internal"] = json!(true);
         session.blocks[0]["appRequestId"] = json!("event-1");
         session.blocks[0]["text"] = json!("Manager needs a decision");
-        session.blocks[0]["monoSessionCompletion"] = json!({"blocker": {"key": "manager:permission", "requests": ["event-1"]}});
+        session.blocks[0]["monoSessionCompletion"] =
+            json!({"blocker": {"key": "manager:permission", "requests": ["event-1"]}});
         upsert(&conn, &session, None, None, true).unwrap();
-        assert!(!page(&conn, "mono-events", None, None).unwrap().blocks.iter().any(|b| b["appRequestId"] == "event-1"));
+        assert!(!page(&conn, "mono-events", None, None)
+            .unwrap()
+            .blocks
+            .iter()
+            .any(|b| b["appRequestId"] == "event-1"));
         assert!(event_delivered(&conn, "mono-events", "event-1", "different", None).unwrap());
-        assert!(event_delivered(&conn, "mono-events", "duplicate-id", "Manager needs a decision", None).unwrap());
-        assert!(!event_delivered(&conn, "other-mono", "event-1", "Manager needs a decision", None).unwrap());
+        assert!(event_delivered(
+            &conn,
+            "mono-events",
+            "duplicate-id",
+            "Manager needs a decision",
+            None
+        )
+        .unwrap());
+        assert!(!event_delivered(
+            &conn,
+            "other-mono",
+            "event-1",
+            "Manager needs a decision",
+            None
+        )
+        .unwrap());
         assert!(!event_delivered(&conn, "mono-events", "new", "new event", None).unwrap());
-        assert!(event_delivered(&conn, "mono-events", "new", "changed report", Some("manager:permission")).unwrap());
-        assert!(!event_delivered(&conn, "mono-events", "new", "changed report", Some("different blocker")).unwrap());
+        assert!(event_delivered(
+            &conn,
+            "mono-events",
+            "new",
+            "changed report",
+            Some("manager:permission")
+        )
+        .unwrap());
+        assert!(!event_delivered(
+            &conn,
+            "mono-events",
+            "new",
+            "changed report",
+            Some("different blocker")
+        )
+        .unwrap());
     }
 
     #[test]

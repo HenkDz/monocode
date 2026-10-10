@@ -29,6 +29,8 @@ export type SessionConfigOption = {
   category?: string;
   type?: string;
   currentValue?: string | boolean;
+  /** Select values the option advertises, when it lists them. */
+  choices?: string[];
 };
 
 export function antigravityPromptBlocks(
@@ -300,6 +302,7 @@ export function readConfigOptions(raw: unknown): SessionConfigOption[] {
     const rec = asRecord(item);
     const id = String(rec?.id ?? rec?.configId ?? "").trim();
     if (!id) return [];
+    const choices = configChoices(rec?.options).map((choice) => choice.value);
     return [
       {
         id,
@@ -310,6 +313,7 @@ export function readConfigOptions(raw: unknown): SessionConfigOption[] {
           typeof rec?.currentValue === "boolean"
             ? rec.currentValue
             : undefined,
+        ...(choices.length > 0 ? { choices } : {}),
       },
     ];
   });

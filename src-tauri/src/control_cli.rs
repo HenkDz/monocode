@@ -101,8 +101,8 @@ agent's process only. They are already in your environment; never print them.
 "#;
 
 const ACTIONS: [&str; 13] = [
-    "list", "delegate", "get", "steer", "message", "retry", "reassign", "cancel", "wait", "review", "finish",
-    "respond", "answer",
+    "list", "delegate", "get", "steer", "message", "retry", "reassign", "cancel", "wait", "review",
+    "finish", "respond", "answer",
 ];
 const APP_ACTIONS: [&str; 48] = [
     "tasks.request",
@@ -367,13 +367,19 @@ fn quoted(value: &str) -> String {
 /// Resolve on each call: restarted/renamed previews must never inherit another
 /// process's executable identity. Drop Windows device prefixes for shell argv.
 pub(crate) fn running_executable() -> Result<String, String> {
-    let path = std::env::current_exe().and_then(|path| path.canonicalize())
+    let path = std::env::current_exe()
+        .and_then(|path| path.canonicalize())
         .map_err(|error| error.to_string())?;
     let text = path.to_string_lossy();
     Ok(if cfg!(windows) {
-        if let Some(unc) = text.strip_prefix(r"\\?\UNC\") { format!(r"\\{unc}") }
-        else { text.trim_start_matches(r"\\?\").to_owned() }
-    } else { text.into_owned() })
+        if let Some(unc) = text.strip_prefix(r"\\?\UNC\") {
+            format!(r"\\{unc}")
+        } else {
+            text.trim_start_matches(r"\\?\").to_owned()
+        }
+    } else {
+        text.into_owned()
+    })
 }
 
 pub fn help() -> String {
@@ -391,18 +397,34 @@ pub fn app_help() -> String {
 }
 
 #[tauri::command]
-pub fn app_cli_approval_policy(app: tauri::AppHandle, cwd: Option<String>, session_id: String) -> Result<Value, String> {
-    let input_dir = app.path().app_data_dir().ok()
-        .and_then(|base| crate::app_cli_inputs::folder(&base.join("cli-inputs"), &session_id).ok());
+pub fn app_cli_approval_policy(
+    app: tauri::AppHandle,
+    cwd: Option<String>,
+    session_id: String,
+) -> Result<Value, String> {
+    let input_dir =
+        app.path().app_data_dir().ok().and_then(|base| {
+            crate::app_cli_inputs::folder(&base.join("cli-inputs"), &session_id).ok()
+        });
     Ok(approval_policy(cwd, input_dir.as_deref()))
 }
 
 fn approval_policy(cwd: Option<String>, input_dir: Option<&std::path::Path>) -> Value {
-    let mut shells: Vec<String> = TRUSTED_POWERSHELL.get().into_iter().flatten()
-        .map(|path| path.to_string_lossy().trim_start_matches(r"\\?\").to_string()).collect();
+    let mut shells: Vec<String> = TRUSTED_POWERSHELL
+        .get()
+        .into_iter()
+        .flatten()
+        .map(|path| {
+            path.to_string_lossy()
+                .trim_start_matches(r"\\?\")
+                .to_string()
+        })
+        .collect();
     if let Some(cwd) = cwd {
         for name in ["powershell", "powershell.exe", "pwsh", "pwsh.exe"] {
-            if app_cli_powershell_is_trusted(name.into(), cwd.clone()) { shells.push(name.into()); }
+            if app_cli_powershell_is_trusted(name.into(), cwd.clone()) {
+                shells.push(name.into());
+            }
         }
     }
     json!({
@@ -415,7 +437,8 @@ fn approval_policy(cwd: Option<String>, input_dir: Option<&std::path::Path>) -> 
 }
 
 static TRUSTED_RTK: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
-static TRUSTED_POWERSHELL: std::sync::OnceLock<Vec<std::path::PathBuf>> = std::sync::OnceLock::new();
+static TRUSTED_POWERSHELL: std::sync::OnceLock<Vec<std::path::PathBuf>> =
+    std::sync::OnceLock::new();
 
 pub fn init_trusted_launchers() {
     init_trusted_rtk();
@@ -430,18 +453,25 @@ pub fn init_trusted_launchers() {
                 let root = std::path::PathBuf::from(programs).join("PowerShell");
                 if let Ok(entries) = std::fs::read_dir(&root) {
                     for entry in entries.flatten() {
-                        if entry.path().is_dir() { candidates.push((entry.path().join("pwsh.exe"), root.clone())); }
+                        if entry.path().is_dir() {
+                            candidates.push((entry.path().join("pwsh.exe"), root.clone()));
+                        }
                     }
                 }
             }
         }
-        candidates.into_iter().filter_map(|(path, root)| {
-            let root = root.canonicalize().ok()?;
-            let path = path.canonicalize().ok()?;
-            let temp = std::env::temp_dir().canonicalize().ok()?;
-            (path.is_file() && rtk_install_path_allowed(&path, &[root], &temp)
-                && !path.ancestors().any(|parent| parent.join(".git").exists())).then_some(path)
-        }).collect()
+        candidates
+            .into_iter()
+            .filter_map(|(path, root)| {
+                let root = root.canonicalize().ok()?;
+                let path = path.canonicalize().ok()?;
+                let temp = std::env::temp_dir().canonicalize().ok()?;
+                (path.is_file()
+                    && rtk_install_path_allowed(&path, &[root], &temp)
+                    && !path.ancestors().any(|parent| parent.join(".git").exists()))
+                .then_some(path)
+            })
+            .collect()
     });
 }
 
@@ -449,29 +479,75 @@ pub fn init_trusted_launchers() {
 /// Do not run the shell or execute a PATH shim in order to discover identity.
 #[tauri::command]
 pub fn app_cli_powershell_is_trusted(path: String, cwd: String) -> bool {
-    let Some(trusted) = TRUSTED_POWERSHELL.get() else { return false; };
-    let paths: Vec<_> = std::env::var_os("PATH").map(|path| std::env::split_paths(&path).collect()).unwrap_or_default();
+    let Some(trusted) = TRUSTED_POWERSHELL.get() else {
+        return false;
+    };
+    let paths: Vec<_> = std::env::var_os("PATH")
+        .map(|path| std::env::split_paths(&path).collect())
+        .unwrap_or_default();
     powershell_is_trusted(&path, std::path::Path::new(&cwd), &paths, trusted)
 }
 
-fn powershell_is_trusted(path: &str, cwd: &std::path::Path, search: &[std::path::PathBuf], trusted: &[std::path::PathBuf]) -> bool {
-    let matches = |path: &std::path::Path| path.canonicalize().ok().is_some_and(|canonical|
-        canonical.is_file() && trusted.iter().any(|trusted| canonical.to_string_lossy().eq_ignore_ascii_case(&trusted.to_string_lossy())));
-    if std::path::Path::new(path).is_absolute() { return matches(std::path::Path::new(path)); }
+fn powershell_is_trusted(
+    path: &str,
+    cwd: &std::path::Path,
+    search: &[std::path::PathBuf],
+    trusted: &[std::path::PathBuf],
+) -> bool {
+    let matches = |path: &std::path::Path| {
+        path.canonicalize().ok().is_some_and(|canonical| {
+            canonical.is_file()
+                && trusted.iter().any(|trusted| {
+                    canonical
+                        .to_string_lossy()
+                        .eq_ignore_ascii_case(&trusted.to_string_lossy())
+                })
+        })
+    };
+    if std::path::Path::new(path).is_absolute() {
+        return matches(std::path::Path::new(path));
+    }
     let name = path.to_ascii_lowercase();
-    if !["powershell", "powershell.exe", "pwsh", "pwsh.exe"].contains(&name.as_str()) { return false; }
-    if !cwd.is_absolute() || !cwd.is_dir() { return false; }
-    let Ok(entries) = std::fs::read_dir(cwd) else { return false; };
+    if !["powershell", "powershell.exe", "pwsh", "pwsh.exe"].contains(&name.as_str()) {
+        return false;
+    }
+    if !cwd.is_absolute() || !cwd.is_dir() {
+        return false;
+    }
+    let Ok(entries) = std::fs::read_dir(cwd) else {
+        return false;
+    };
     for entry in entries {
-        let Ok(entry) = entry else { return false; };
+        let Ok(entry) = entry else {
+            return false;
+        };
         let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
-        if name == "powershell" || name == "pwsh" || name.starts_with("powershell.") || name.starts_with("pwsh.") { return false; }
+        if name == "powershell"
+            || name == "pwsh"
+            || name.starts_with("powershell.")
+            || name.starts_with("pwsh.")
+        {
+            return false;
+        }
     }
     let stem = name.trim_end_matches(".exe");
-    if search.iter().any(|dir| !dir.is_absolute()) { return false; }
-    let mut extensions = vec![".exe".to_string(), ".com".into(), ".cmd".into(), ".bat".into(), ".ps1".into()];
+    if search.iter().any(|dir| !dir.is_absolute()) {
+        return false;
+    }
+    let mut extensions = vec![
+        ".exe".to_string(),
+        ".com".into(),
+        ".cmd".into(),
+        ".bat".into(),
+        ".ps1".into(),
+    ];
     if let Some(extra) = std::env::var_os("PATHEXT") {
-        extensions.extend(extra.to_string_lossy().split(';').map(str::to_ascii_lowercase));
+        extensions.extend(
+            extra
+                .to_string_lossy()
+                .split(';')
+                .map(str::to_ascii_lowercase),
+        );
     }
     for dir in search {
         let entries = match std::fs::read_dir(dir) {
@@ -481,14 +557,24 @@ fn powershell_is_trusted(path: &str, cwd: &std::path::Path, search: &[std::path:
         };
         let mut found = false;
         for entry in entries {
-            let Ok(entry) = entry else { return false; };
+            let Ok(entry) = entry else {
+                return false;
+            };
             let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
-            if name == stem || name.strip_prefix(stem).is_some_and(|suffix| extensions.iter().any(|extension| suffix == extension)) {
-                if !matches(&entry.path()) { return false; }
+            if name == stem
+                || name
+                    .strip_prefix(stem)
+                    .is_some_and(|suffix| extensions.iter().any(|extension| suffix == extension))
+            {
+                if !matches(&entry.path()) {
+                    return false;
+                }
                 found = true;
             }
         }
-        if found { return true; }
+        if found {
+            return true;
+        }
     }
     false
 }
@@ -500,44 +586,115 @@ pub fn init_trusted_rtk() {
         let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })?;
         let home = std::path::PathBuf::from(home);
         let mut roots = vec![home.join(".cargo"), home.join(".local/bin")];
-        if let Some(programs) = std::env::var_os("ProgramFiles") { roots.push(std::path::PathBuf::from(programs).join("rtk")); }
-        if !cfg!(windows) { roots.extend(["/usr/bin", "/usr/local/bin"].map(std::path::PathBuf::from)); }
-        let roots: Vec<_> = roots.into_iter().filter_map(|root| root.canonicalize().ok()).collect();
+        if let Some(programs) = std::env::var_os("ProgramFiles") {
+            roots.push(std::path::PathBuf::from(programs).join("rtk"));
+        }
+        if !cfg!(windows) {
+            roots.extend(["/usr/bin", "/usr/local/bin"].map(std::path::PathBuf::from));
+        }
+        let roots: Vec<_> = roots
+            .into_iter()
+            .filter_map(|root| root.canonicalize().ok())
+            .collect();
         let binary = if cfg!(windows) { "rtk.exe" } else { "rtk" };
-        let mut candidates: Vec<_> = std::env::var_os("PATH").map(|path| std::env::split_paths(&path).filter(|dir| dir.is_absolute()).map(|dir| dir.join(binary)).collect()).unwrap_or_default();
-        candidates.extend([home.join(".cargo/bin").join(binary), home.join(".local/bin").join(binary)]);
+        let mut candidates: Vec<_> = std::env::var_os("PATH")
+            .map(|path| {
+                std::env::split_paths(&path)
+                    .filter(|dir| dir.is_absolute())
+                    .map(|dir| dir.join(binary))
+                    .collect()
+            })
+            .unwrap_or_default();
+        candidates.extend([
+            home.join(".cargo/bin").join(binary),
+            home.join(".local/bin").join(binary),
+        ]);
         // Cargo supports versioned --root installs; do not execute or parse rtk.cmd.
         if let Ok(entries) = std::fs::read_dir(home.join(".cargo")) {
-            let mut installs: Vec<_> = entries.flatten().filter(|entry| entry.file_name().to_string_lossy().starts_with("rtk-")).map(|entry| entry.path().join("bin").join(binary)).collect();
-            installs.sort(); installs.reverse(); candidates.extend(installs);
+            let mut installs: Vec<_> = entries
+                .flatten()
+                .filter(|entry| entry.file_name().to_string_lossy().starts_with("rtk-"))
+                .map(|entry| entry.path().join("bin").join(binary))
+                .collect();
+            installs.sort();
+            installs.reverse();
+            candidates.extend(installs);
         }
-        candidates.into_iter().find_map(|candidate| trusted_rtk_candidate(&candidate, &roots, &std::env::temp_dir()))
+        candidates
+            .into_iter()
+            .find_map(|candidate| trusted_rtk_candidate(&candidate, &roots, &std::env::temp_dir()))
     });
 }
 
-fn trusted_rtk_candidate(path: &std::path::Path, roots: &[std::path::PathBuf], temp: &std::path::Path) -> Option<std::path::PathBuf> {
-    if !path.is_absolute() { return None; }
+fn trusted_rtk_candidate(
+    path: &std::path::Path,
+    roots: &[std::path::PathBuf],
+    temp: &std::path::Path,
+) -> Option<std::path::PathBuf> {
+    if !path.is_absolute() {
+        return None;
+    }
     let canonical = path.canonicalize().ok()?;
-    if !canonical.is_file() || !rtk_install_path_allowed(&canonical, roots, &temp.canonicalize().ok()?) { return None; }
-    if canonical.ancestors().any(|parent| parent.join(".git").exists()) { return None; }
+    if !canonical.is_file()
+        || !rtk_install_path_allowed(&canonical, roots, &temp.canonicalize().ok()?)
+    {
+        return None;
+    }
+    if canonical
+        .ancestors()
+        .any(|parent| parent.join(".git").exists())
+    {
+        return None;
+    }
     let expected = if cfg!(windows) { "rtk.exe" } else { "rtk" };
-    if !canonical.file_name()?.to_string_lossy().eq_ignore_ascii_case(expected) { return None; }
+    if !canonical
+        .file_name()?
+        .to_string_lossy()
+        .eq_ignore_ascii_case(expected)
+    {
+        return None;
+    }
     Some(canonical)
 }
 
-fn rtk_install_path_allowed(path: &std::path::Path, roots: &[std::path::PathBuf], temp: &std::path::Path) -> bool {
-    roots.iter().any(|root| path.starts_with(root)) && !path.starts_with(temp) &&
-        !path.components().any(|part| ["workspaces", "worktrees", "scratch", "temp", "tmp"].contains(&part.as_os_str().to_string_lossy().to_ascii_lowercase().as_str()))
+fn rtk_install_path_allowed(
+    path: &std::path::Path,
+    roots: &[std::path::PathBuf],
+    temp: &std::path::Path,
+) -> bool {
+    roots.iter().any(|root| path.starts_with(root))
+        && !path.starts_with(temp)
+        && !path.components().any(|part| {
+            ["workspaces", "worktrees", "scratch", "temp", "tmp"].contains(
+                &part
+                    .as_os_str()
+                    .to_string_lossy()
+                    .to_ascii_lowercase()
+                    .as_str(),
+            )
+        })
 }
 
 #[tauri::command]
 pub fn app_cli_executable_matches(path: String) -> bool {
     let candidate = std::path::Path::new(&path);
-    if !candidate.is_absolute() { return false; }
-    let (Ok(candidate), Ok(current)) = (candidate.canonicalize(), std::env::current_exe().and_then(|p| p.canonicalize())) else { return false; };
+    if !candidate.is_absolute() {
+        return false;
+    }
+    let (Ok(candidate), Ok(current)) = (
+        candidate.canonicalize(),
+        std::env::current_exe().and_then(|p| p.canonicalize()),
+    ) else {
+        return false;
+    };
     // Windows canonicalization expands 8.3 paths and resolves junctions.
-    if cfg!(windows) { candidate.to_string_lossy().eq_ignore_ascii_case(&current.to_string_lossy()) }
-    else { candidate == current }
+    if cfg!(windows) {
+        candidate
+            .to_string_lossy()
+            .eq_ignore_ascii_case(&current.to_string_lossy())
+    } else {
+        candidate == current
+    }
 }
 
 #[tauri::command]
@@ -547,7 +704,9 @@ pub fn app_cli_input_is_temp(path: String, session_id: String) -> bool {
 
 #[cfg(test)]
 fn temp_input_within(path: &std::path::Path, root: &std::path::Path) -> bool {
-    let (Ok(path), Ok(root)) = (path.canonicalize(), root.canonicalize()) else { return false; };
+    let (Ok(path), Ok(root)) = (path.canonicalize(), root.canonicalize()) else {
+        return false;
+    };
     path != root && path.starts_with(root) && path.is_file()
 }
 
@@ -556,13 +715,26 @@ enum Parsed {
     Call(String, Value, String),
 }
 
-pub(crate) fn validate_app_request(action: &str, input: &Value, request_id: &str) -> Result<(), String> {
-    if !APP_ACTIONS.contains(&action) { return Err(format!("Unknown app action: {action}")); }
-    if request_id.is_empty() || request_id.len() > 128 || !request_id.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')) {
+pub(crate) fn validate_app_request(
+    action: &str,
+    input: &Value,
+    request_id: &str,
+) -> Result<(), String> {
+    if !APP_ACTIONS.contains(&action) {
+        return Err(format!("Unknown app action: {action}"));
+    }
+    if request_id.is_empty()
+        || request_id.len() > 128
+        || !request_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
         return Err("App request IDs may contain only letters, digits, - and _".into());
     }
     if action.starts_with("team.") && action != "team.answer" {
-        if request_id.len() > 120 { return Err("Team request ID exceeds 120 characters".into()); }
+        if request_id.len() > 120 {
+            return Err("Team request ID exceeds 120 characters".into());
+        }
         validate_team_input(action, input)?;
     }
     Ok(())
@@ -574,17 +746,40 @@ pub(crate) fn validate_team_input(action: &str, input: &Value) -> Result<(), Str
     let fields: &[&str] = match action {
         "team.list" => &[],
         "team.message" => &["memberId", "text", "topic", "requiresReply"],
-        "team.hire" => &["name", "specialty", "soul", "harness", "model", "modelSettings", "mascot", "color", "memory", "reviewer"],
-        "team.update" => &["memberId", "name", "specialty", "soul", "harness", "model", "modelSettings"],
+        "team.hire" => &[
+            "name",
+            "specialty",
+            "soul",
+            "harness",
+            "model",
+            "modelSettings",
+            "mascot",
+            "color",
+            "memory",
+            "reviewer",
+        ],
+        "team.update" => &[
+            "memberId",
+            "name",
+            "specialty",
+            "soul",
+            "harness",
+            "model",
+            "modelSettings",
+        ],
         "team.memory.add" => &["memberId", "facts"],
         "team.memory.forget" => &["memberId", "factIds"],
         "team.retire" => &["memberId", "reason"],
         _ => return Err("Unknown team action".into()),
     };
     let object = input.as_object().ok_or("Input must be a JSON object")?;
-    if input.to_string().len() > 64 * 1024 { return Err("Team input exceeds 64 KiB".into()); }
+    if input.to_string().len() > 64 * 1024 {
+        return Err("Team input exceeds 64 KiB".into());
+    }
     for key in object.keys() {
-        if !fields.contains(&key.as_str()) { return Err(format!("Unknown field: {key}")); }
+        if !fields.contains(&key.as_str()) {
+            return Err(format!("Unknown field: {key}"));
+        }
     }
     let required: &[&str] = match action {
         "team.hire" => &["name", "specialty", "soul"],
@@ -596,51 +791,109 @@ pub(crate) fn validate_team_input(action: &str, input: &Value) -> Result<(), Str
         _ => &[],
     };
     for field in required {
-        if !object.contains_key(*field) { return Err(format!("{field} is required")); }
+        if !object.contains_key(*field) {
+            return Err(format!("{field} is required"));
+        }
     }
     if action == "team.hire" {
         let reviewer = object.get("reviewer").and_then(Value::as_bool) == Some(true)
-            || object.get("specialty").and_then(Value::as_str).is_some_and(|value| value.trim().eq_ignore_ascii_case("reviewer"));
+            || object
+                .get("specialty")
+                .and_then(Value::as_str)
+                .is_some_and(|value| value.trim().eq_ignore_ascii_case("reviewer"));
         let harness = object.contains_key("harness");
         let model = object.contains_key("model");
         if harness != model || (!reviewer && !harness) {
             return Err("team.hire requires harness and model; Reviewer may omit both for the Codex GPT-6.1-Sol default".into());
         }
     }
-    if action == "team.update" && object.len() == 1 { return Err("Supply a field to update".into()); }
+    if action == "team.update" && object.len() == 1 {
+        return Err("Supply a field to update".into());
+    }
     for (key, value) in object {
         match key.as_str() {
             "memory" | "facts" | "factIds" => {
-                let list = value.as_array().ok_or_else(|| format!("{key} must be an array"))?;
-                if list.len() > 50 || list.is_empty() { return Err(format!("{key} must contain 1-50 entries")); }
+                let list = value
+                    .as_array()
+                    .ok_or_else(|| format!("{key} must be an array"))?;
+                if list.len() > 50 || list.is_empty() {
+                    return Err(format!("{key} must contain 1-50 entries"));
+                }
                 let mut bytes = 0;
                 for entry in list {
-                    let fact = entry.as_str().ok_or_else(|| format!("{key} entries must be strings"))?;
-                    if fact.trim().is_empty() || fact.chars().count() > if key == "factIds" { 256 } else { 1000 } {
+                    let fact = entry
+                        .as_str()
+                        .ok_or_else(|| format!("{key} entries must be strings"))?;
+                    if fact.trim().is_empty()
+                        || fact.chars().count() > if key == "factIds" { 256 } else { 1000 }
+                    {
                         return Err(format!("Invalid {key} entry"));
                     }
                     bytes += fact.len();
                 }
-                if bytes > 24 * 1024 { return Err(format!("{key} exceeds 24 KiB")); }
+                if bytes > 24 * 1024 {
+                    return Err(format!("{key} exceeds 24 KiB"));
+                }
             }
             "modelSettings" => {
                 let settings = value.as_object().ok_or("modelSettings must be an object")?;
-                if settings.len() > 16 { return Err("Too many model settings".into()); }
+                if settings.len() > 16 {
+                    return Err("Too many model settings".into());
+                }
                 for (setting, value) in settings {
-                    if setting.is_empty() || setting.chars().count() > 100 || value.as_str().is_none_or(|v| v.chars().count() > 1000) {
+                    if setting.is_empty()
+                        || setting.chars().count() > 100
+                        || value.as_str().is_none_or(|v| v.chars().count() > 1000)
+                    {
                         return Err("modelSettings must contain bounded string values".into());
                     }
                 }
             }
-            "reviewer" | "requiresReply" => { if !value.is_boolean() { return Err(format!("{key} must be a boolean")); } }
-            _ => {
-                let text = value.as_str().ok_or_else(|| format!("{key} must be a string"))?;
-                let max = match key.as_str() { "soul" => 8192, "name" | "specialty" => 80, "memberId" | "model" => 256, "reason" => 500, "text" => 6000, "topic" => 120, "color" => 100, _ => 128 };
-                let length = if key == "soul" { text.len() } else { text.chars().count() };
-                if length > max || text.trim().is_empty() {
-                    return Err(format!("{key} must contain at most {max} {}", if key == "soul" { "bytes" } else { "characters" }));
+            "reviewer" | "requiresReply" => {
+                if !value.is_boolean() {
+                    return Err(format!("{key} must be a boolean"));
                 }
-                if key == "harness" && !["claude", "codex", "cursor", "grok", "opencode", "pi", "omp", "fx", "hermes", "antigravity"].contains(&text) {
+            }
+            _ => {
+                let text = value
+                    .as_str()
+                    .ok_or_else(|| format!("{key} must be a string"))?;
+                let max = match key.as_str() {
+                    "soul" => 8192,
+                    "name" | "specialty" => 80,
+                    "memberId" | "model" => 256,
+                    "reason" => 500,
+                    "text" => 6000,
+                    "topic" => 120,
+                    "color" => 100,
+                    _ => 128,
+                };
+                let length = if key == "soul" {
+                    text.len()
+                } else {
+                    text.chars().count()
+                };
+                if length > max || text.trim().is_empty() {
+                    return Err(format!(
+                        "{key} must contain at most {max} {}",
+                        if key == "soul" { "bytes" } else { "characters" }
+                    ));
+                }
+                if key == "harness"
+                    && ![
+                        "claude",
+                        "codex",
+                        "cursor",
+                        "grok",
+                        "opencode",
+                        "pi",
+                        "omp",
+                        "fx",
+                        "hermes",
+                        "antigravity",
+                    ]
+                    .contains(&text)
+                {
                     return Err("Unknown harness; run models.list".into());
                 }
             }
@@ -907,7 +1160,9 @@ fn parse_args_for(args: &[String], app_mode: bool) -> Result<Parsed, String> {
         return Err("App request IDs may contain only letters, digits, - and _".into());
     }
     let input = input.unwrap_or_else(|| json!({}));
-    if app_mode { validate_app_request(&action, &input, &request_id)?; }
+    if app_mode {
+        validate_app_request(&action, &input, &request_id)?;
+    }
     Ok(Parsed::Call(action, input, request_id))
 }
 
@@ -956,21 +1211,53 @@ mod tests {
     fn team_actions_share_strict_bounded_validation_and_approval_allowlist() {
         for (action, input) in [
             ("team.list", json!({})),
-            ("team.message", json!({"memberId":"member", "text":"Which scope?"})),
-            ("team.message", json!({"memberId":"member", "text":"Please decide", "requiresReply":true})),
-            ("team.message", json!({"memberId":"member", "text":"Closure complete", "requiresReply":false})),
-            ("team.hire", json!({"name":"Backend", "specialty":"Backend", "soul":"Use cargo test", "harness":"codex", "model":"codex:installed", "memory":["Rust project"]})),
-            ("team.hire", json!({"name":"Reviewer", "specialty":"Reviewer", "soul":"Review independently"})),
-            ("team.hire", json!({"name":"Audit", "specialty":"Audit", "reviewer":true, "soul":"Review independently"})),
-            ("team.update", json!({"memberId":"member", "soul":"New instructions"})),
-            ("team.memory.add", json!({"memberId":"member", "facts":["Rust project"]})),
-            ("team.memory.forget", json!({"memberId":"member", "factIds":["fact-1"]})),
-            ("team.retire", json!({"memberId":"member", "reason":"Task completed"})),
+            (
+                "team.message",
+                json!({"memberId":"member", "text":"Which scope?"}),
+            ),
+            (
+                "team.message",
+                json!({"memberId":"member", "text":"Please decide", "requiresReply":true}),
+            ),
+            (
+                "team.message",
+                json!({"memberId":"member", "text":"Closure complete", "requiresReply":false}),
+            ),
+            (
+                "team.hire",
+                json!({"name":"Backend", "specialty":"Backend", "soul":"Use cargo test", "harness":"codex", "model":"codex:installed", "memory":["Rust project"]}),
+            ),
+            (
+                "team.hire",
+                json!({"name":"Reviewer", "specialty":"Reviewer", "soul":"Review independently"}),
+            ),
+            (
+                "team.hire",
+                json!({"name":"Audit", "specialty":"Audit", "reviewer":true, "soul":"Review independently"}),
+            ),
+            (
+                "team.update",
+                json!({"memberId":"member", "soul":"New instructions"}),
+            ),
+            (
+                "team.memory.add",
+                json!({"memberId":"member", "facts":["Rust project"]}),
+            ),
+            (
+                "team.memory.forget",
+                json!({"memberId":"member", "factIds":["fact-1"]}),
+            ),
+            (
+                "team.retire",
+                json!({"memberId":"member", "reason":"Task completed"}),
+            ),
         ] {
             assert!(APP_ACTIONS.contains(&action));
             assert!(app_help().contains(action));
             assert!(validate_app_request(action, &input, "retry-1").is_ok());
-            assert!(matches!(parse_args_for(&args(&[action, "--json", &input.to_string(), "--request-id", "retry-1"]), true), Ok(Parsed::Call(_, _, id)) if id == "retry-1"));
+            assert!(
+                matches!(parse_args_for(&args(&[action, "--json", &input.to_string(), "--request-id", "retry-1"]), true), Ok(Parsed::Call(_, _, id)) if id == "retry-1")
+            );
             let mut injected = input.clone();
             injected["project"] = json!("another project");
             assert!(validate_app_request(action, &injected, "retry-1").is_err());
@@ -979,13 +1266,33 @@ mod tests {
             assert!(validate_app_request(action, &injected, "retry-1").is_err());
             assert!(parse_args_for(&args(&[action]), false).is_err());
         }
-        for input in [json!({}), json!({"memberId":"member"}), json!({"memberId":"member", "name":null}), json!({"memberId":"member", "modelSettings":{"effort":3}})] {
+        for input in [
+            json!({}),
+            json!({"memberId":"member"}),
+            json!({"memberId":"member", "name":null}),
+            json!({"memberId":"member", "modelSettings":{"effort":3}}),
+        ] {
             assert!(validate_team_input("team.update", &input).is_err());
         }
-        assert!(validate_team_input("team.update", &json!({"memberId":"member", "soul":"é".repeat(4097)})).is_err());
-        assert!(validate_team_input("team.memory.add", &json!({"memberId":"member", "facts":[]})).is_err());
-        assert!(validate_team_input("team.memory.add", &json!({"memberId":"member", "facts":vec!["x"; 51]})).is_err());
-        assert!(validate_team_input("team.memory.add", &json!({"memberId":"member", "facts":vec!["x".repeat(1000); 25]})).is_err());
+        assert!(validate_team_input(
+            "team.update",
+            &json!({"memberId":"member", "soul":"é".repeat(4097)})
+        )
+        .is_err());
+        assert!(
+            validate_team_input("team.memory.add", &json!({"memberId":"member", "facts":[]}))
+                .is_err()
+        );
+        assert!(validate_team_input(
+            "team.memory.add",
+            &json!({"memberId":"member", "facts":vec!["x"; 51]})
+        )
+        .is_err());
+        assert!(validate_team_input(
+            "team.memory.add",
+            &json!({"memberId":"member", "facts":vec!["x".repeat(1000); 25]})
+        )
+        .is_err());
         for requires_reply in [json!(null), json!("false"), json!(0), json!({})] {
             assert!(validate_team_input("team.message", &json!({"memberId":"member", "text":"Closure complete", "requiresReply":requires_reply})).is_err());
         }
@@ -995,35 +1302,85 @@ mod tests {
 
     #[test]
     fn powershell_bare_names_reject_cwd_and_path_shadowing() {
-        let root = std::env::temp_dir().join(format!("monocode-shell-trust-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("monocode-shell-trust-{}", uuid::Uuid::new_v4()));
         let install = root.join("install");
         let cwd = root.join("project");
         let earlier = root.join("earlier");
-        for dir in [&root, &install, &cwd, &earlier] { std::fs::create_dir(dir).unwrap(); }
+        for dir in [&root, &install, &cwd, &earlier] {
+            std::fs::create_dir(dir).unwrap();
+        }
         let binary = install.join("powershell.exe");
         std::fs::write(&binary, "fixture, never executed").unwrap();
         let trusted = vec![binary.canonicalize().unwrap()];
         let search = vec![earlier.clone(), install.clone()];
         assert!(powershell_is_trusted("powershell", &cwd, &search, &trusted));
-        assert!(powershell_is_trusted("powershell.exe", &cwd, &search, &trusted));
+        assert!(powershell_is_trusted(
+            "powershell.exe",
+            &cwd,
+            &search,
+            &trusted
+        ));
         #[cfg(windows)]
-        assert!(powershell_is_trusted(&binary.to_string_lossy().replace('\\', "\\\\"), &cwd, &search, &trusted));
-        assert!(!powershell_is_trusted("powershell", &cwd, &[std::path::PathBuf::from("tools"), install.clone()], &trusted));
-        for name in ["powershell.exe", "powershell.cmd", "pwsh.ps1", "PoWeRsHeLl.anything"] {
+        assert!(powershell_is_trusted(
+            &binary.to_string_lossy().replace('\\', "\\\\"),
+            &cwd,
+            &search,
+            &trusted
+        ));
+        assert!(!powershell_is_trusted(
+            "powershell",
+            &cwd,
+            &[std::path::PathBuf::from("tools"), install.clone()],
+            &trusted
+        ));
+        for name in [
+            "powershell.exe",
+            "powershell.cmd",
+            "pwsh.ps1",
+            "PoWeRsHeLl.anything",
+        ] {
             let shadow = cwd.join(name);
             std::fs::write(&shadow, "untrusted").unwrap();
-            assert!(!powershell_is_trusted("powershell", &cwd, &search, &trusted));
-            assert!(!powershell_is_trusted(&shadow.to_string_lossy(), &cwd, &search, &trusted));
-            assert!(powershell_is_trusted(&binary.to_string_lossy(), &cwd, &search, &trusted));
+            assert!(!powershell_is_trusted(
+                "powershell",
+                &cwd,
+                &search,
+                &trusted
+            ));
+            assert!(!powershell_is_trusted(
+                &shadow.to_string_lossy(),
+                &cwd,
+                &search,
+                &trusted
+            ));
+            assert!(powershell_is_trusted(
+                &binary.to_string_lossy(),
+                &cwd,
+                &search,
+                &trusted
+            ));
             std::fs::remove_file(shadow).unwrap();
         }
         let shadow = earlier.join("powershell.cmd");
         std::fs::write(&shadow, "untrusted").unwrap();
-        assert!(!powershell_is_trusted("powershell", &cwd, &search, &trusted));
-        assert!(!powershell_is_trusted("powershell", &root.join("missing"), &search, &trusted));
+        assert!(!powershell_is_trusted(
+            "powershell",
+            &cwd,
+            &search,
+            &trusted
+        ));
+        assert!(!powershell_is_trusted(
+            "powershell",
+            &root.join("missing"),
+            &search,
+            &trusted
+        ));
         std::fs::remove_file(shadow).unwrap();
         std::fs::remove_file(binary).unwrap();
-        for dir in [&cwd, &earlier, &install, &root] { std::fs::remove_dir(dir).unwrap(); }
+        for dir in [&cwd, &earlier, &install, &root] {
+            std::fs::remove_dir(dir).unwrap();
+        }
     }
 
     #[cfg(windows)]
@@ -1050,17 +1407,46 @@ $result = foreach ($sample in $samples) {
 }
 ConvertTo-Json -InputObject @($result) -Compress -Depth 4
 "#;
-        let output = std::process::Command::new(shell).args(["-NoProfile", "-NonInteractive", "-Command", script]).output().unwrap();
+        let output = std::process::Command::new(shell)
+            .args(["-NoProfile", "-NonInteractive", "-Command", script])
+            .output()
+            .unwrap();
         assert!(output.status.success(), "PowerShell parser probe failed");
         let parsed: Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(parsed[0]["errors"], 0);
         assert_eq!(parsed[0]["commands"], 1);
-        assert_eq!(parsed[0]["values"], json!(["C:/Mono Code/monocode.exe", "app", "projects.list", "--input", "C:/Temp/with spaces/input.json", "--request-id", "retry-1"]));
+        assert_eq!(
+            parsed[0]["values"],
+            json!([
+                "C:/Mono Code/monocode.exe",
+                "app",
+                "projects.list",
+                "--input",
+                "C:/Temp/with spaces/input.json",
+                "--request-id",
+                "retry-1"
+            ])
+        );
         assert_eq!(parsed[1]["errors"], 0);
-        assert_eq!(parsed[1]["values"], json!(["C:/MonoCode/monocode.exe", "app", "projects.list"]));
-        assert!(parsed[2]["errors"].as_u64().unwrap() > 0, "A quoted executable needs the call operator");
+        assert_eq!(
+            parsed[1]["values"],
+            json!(["C:/MonoCode/monocode.exe", "app", "projects.list"])
+        );
+        assert!(
+            parsed[2]["errors"].as_u64().unwrap() > 0,
+            "A quoted executable needs the call operator"
+        );
         assert_eq!(parsed[3]["errors"], 0);
-        assert_eq!(parsed[3]["values"], json!([r"C:\\Mono Code\\monocode.exe", "app", "projects.list", "--input", r"C:\\Temp\\with spaces\\input.json"]));
+        assert_eq!(
+            parsed[3]["values"],
+            json!([
+                r"C:\\Mono Code\\monocode.exe",
+                "app",
+                "projects.list",
+                "--input",
+                r"C:\\Temp\\with spaces\\input.json"
+            ])
+        );
     }
 
     #[test]
@@ -1068,40 +1454,70 @@ ConvertTo-Json -InputObject @($result) -Compress -Depth 4
         const CHILD_PATH: &str = "MONOCODE_TEST_RENAMED_EXECUTABLE";
         if let Some(expected) = std::env::var_os(CHILD_PATH) {
             let injected = crate::control::app_cli_path().unwrap();
-            assert_eq!(std::path::Path::new(&injected).canonicalize().unwrap(), std::path::PathBuf::from(expected).canonicalize().unwrap());
+            assert_eq!(
+                std::path::Path::new(&injected).canonicalize().unwrap(),
+                std::path::PathBuf::from(expected).canonicalize().unwrap()
+            );
             assert_eq!(approval_policy(None, None)["executable"], injected);
             assert!(app_help().contains(&quoted(&injected)));
             assert!(help().contains(&quoted(&injected)));
             assert!(app_cli_executable_matches(injected.clone()));
-            assert!(!app_cli_executable_matches(std::path::Path::new(&injected).with_file_name("original.exe").to_string_lossy().into_owned()));
+            assert!(!app_cli_executable_matches(
+                std::path::Path::new(&injected)
+                    .with_file_name("original.exe")
+                    .to_string_lossy()
+                    .into_owned()
+            ));
             assert!(!app_cli_executable_matches("monocode.exe".into()));
-            #[cfg(windows)] assert!(!injected.starts_with(r"\\?\"));
+            #[cfg(windows)]
+            assert!(!injected.starts_with(r"\\?\"));
             return;
         }
-        let root = std::env::temp_dir().join(format!("monocode-renamed-preview-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("monocode-renamed-preview-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&root).unwrap();
         let original = root.join("original.exe");
         let renamed = root.join("monocode-r5-renamed-preview.exe");
         std::fs::copy(std::env::current_exe().unwrap(), &original).unwrap();
         std::fs::copy(&original, &renamed).unwrap();
-        let output = std::process::Command::new(&renamed).args(["--exact", "control_cli::tests::renamed_preview_reports_its_own_running_executable", "--nocapture"])
-            .env(CHILD_PATH, &renamed).output().unwrap();
+        let output = std::process::Command::new(&renamed)
+            .args([
+                "--exact",
+                "control_cli::tests::renamed_preview_reports_its_own_running_executable",
+                "--nocapture",
+            ])
+            .env(CHILD_PATH, &renamed)
+            .output()
+            .unwrap();
         std::fs::remove_file(renamed).unwrap();
         std::fs::remove_file(original).unwrap();
         std::fs::remove_dir(root).unwrap();
-        assert!(output.status.success(), "renamed preview identity failed: {}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+        assert!(
+            output.status.success(),
+            "renamed preview identity failed: {}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
         assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
     }
 
     #[test]
     fn approval_policy_uses_cli_actions_and_real_temp_files() {
-        assert!(app_cli_executable_matches(std::env::current_exe().unwrap().to_string_lossy().into_owned()));
+        assert!(app_cli_executable_matches(
+            std::env::current_exe()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned()
+        ));
         assert!(!app_cli_executable_matches("monocode.exe".into()));
-        assert!(!app_cli_executable_matches(std::env::temp_dir().to_string_lossy().into_owned()));
+        assert!(!app_cli_executable_matches(
+            std::env::temp_dir().to_string_lossy().into_owned()
+        ));
         let policy = approval_policy(None, None);
         assert_eq!(policy["tempDir"], ""); // No private root means no automatic --input.
         assert_eq!(policy["actions"], json!(APP_ACTIONS.as_slice()));
-        let root = std::env::temp_dir().join(format!("monocode-cli-approval-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("monocode-cli-approval-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&root).unwrap();
         let input = root.join("input.json");
         std::fs::write(&input, "{}").unwrap();
@@ -1109,7 +1525,8 @@ ConvertTo-Json -InputObject @($result) -Compress -Depth 4
         assert!(!temp_input_within(&root, &root));
         assert!(!temp_input_within(&root.join("missing.json"), &root));
         assert!(!temp_input_within(&input, &root.join("other")));
-        #[cfg(unix)] {
+        #[cfg(unix)]
+        {
             let escape = root.join("escape");
             std::os::unix::fs::symlink(std::env::current_exe().unwrap(), &escape).unwrap();
             assert!(!temp_input_within(&escape, &root));
@@ -1121,12 +1538,26 @@ ConvertTo-Json -InputObject @($result) -Compress -Depth 4
 
     #[test]
     fn rtk_trust_is_bounded_to_install_roots_not_names_or_path_search() {
-        let home = std::path::PathBuf::from(if cfg!(windows) { "C:/Users/test" } else { "/home/test" });
+        let home = std::path::PathBuf::from(if cfg!(windows) {
+            "C:/Users/test"
+        } else {
+            "/home/test"
+        });
         let root = home.join(".cargo");
         let temp = home.join("AppData/Local/Temp");
         let roots = vec![root.clone()];
-        assert!(rtk_install_path_allowed(&root.join("rtk-1/bin/rtk.exe"), &roots, &temp));
-        for path in [home.join("repo/rtk.exe"), temp.join("rtk.exe"), root.join("workspaces/a/rtk.exe"), root.join("scratch/rtk.exe"), root.join("worktrees/a/rtk.exe")] {
+        assert!(rtk_install_path_allowed(
+            &root.join("rtk-1/bin/rtk.exe"),
+            &roots,
+            &temp
+        ));
+        for path in [
+            home.join("repo/rtk.exe"),
+            temp.join("rtk.exe"),
+            root.join("workspaces/a/rtk.exe"),
+            root.join("scratch/rtk.exe"),
+            root.join("worktrees/a/rtk.exe"),
+        ] {
             assert!(!rtk_install_path_allowed(&path, &roots, &temp));
         }
         assert!(trusted_rtk_candidate(std::path::Path::new("rtk"), &roots, &temp).is_none());

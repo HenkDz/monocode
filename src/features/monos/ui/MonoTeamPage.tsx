@@ -19,6 +19,7 @@ import { usePrStatusCache } from "../../source-control/hooks/usePrStatus";
 import { managerTaskLifecycle, taskPrStatus } from "../../orchestration/model/projectManager";
 import { MemoryPage, SoulPage } from "./MonoFilePages";
 import { MonoSettingsPage } from "./MonoSettingsPage";
+import { MonoPreferencesPage } from "./MonoPreferencesPage";
 import { useMonoFiles } from "./MonoDetails";
 import { orchestrator } from "../../orchestration/model/orchestration";
 import { cardSessionsSnapshot, openCardSession, subscribeCardSessions } from "../model/monoCards";
@@ -207,6 +208,14 @@ export function MemberDetails({
   const sessions = useSyncExternalStore(subscribeCardSessions, cardSessionsSnapshot);
   const session = member.sessionId ? sessions.get(member.sessionId) : undefined;
   const permissionMode = runtimeMode ?? session?.runtimeMode ?? (member.sessionId ? undefined : monoDefaultRuntimeMode(member));
+  if (page === "settings")
+    return (
+      <MonoPreferencesPage
+        monoId={member.id}
+        agent={look}
+        onBack={() => setPage("details")}
+      />
+    );
   if (page === "soul")
     return (
       <SoulPage

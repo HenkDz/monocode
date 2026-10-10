@@ -2090,12 +2090,26 @@ mod tests {
         upsert_session(&conn, &sample("worker", "/repo", "Worker")).unwrap();
         let scope = json!({ "projectId":"/repo", "managerId":"manager", "ownerMonoId":"member",
             "taskId":"task", "dispatchId":"dispatch", "purpose":"report" });
-        crate::notes::upsert_content(&conn, &crate::notes::NoteUpsert {
-            id: "report-doc".into(), title: "Report: Task".into(), body: "Findings".into(),
-            tags: vec![], source_session_id: Some("worker".into()), source_cwd: Some("/repo".into()),
-            finalize_slug: false,
-        }, "artifact", Some("document")).unwrap();
-        conn.execute("UPDATE notes SET artifact_scope_json = ?1 WHERE id = 'report-doc'", [scope.to_string()]).unwrap();
+        crate::notes::upsert_content(
+            &conn,
+            &crate::notes::NoteUpsert {
+                id: "report-doc".into(),
+                title: "Report: Task".into(),
+                body: "Findings".into(),
+                tags: vec![],
+                source_session_id: Some("worker".into()),
+                source_cwd: Some("/repo".into()),
+                finalize_slug: false,
+            },
+            "artifact",
+            Some("document"),
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE notes SET artifact_scope_json = ?1 WHERE id = 'report-doc'",
+            [scope.to_string()],
+        )
+        .unwrap();
         delete_session(&conn, "worker").unwrap();
         let (body, source, retained): (String, String, String) = conn.query_row(
             "SELECT body, source_session_id, artifact_scope_json FROM notes WHERE id = 'report-doc'",

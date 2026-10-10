@@ -21,6 +21,7 @@ import { memoryLines } from "../model/monoMemory";
 import { HabitPage } from "./HabitPage";
 import { NewHabitPage } from "./NewHabitPage";
 import { MonoProjects } from "./MonoProjects";
+import { MonoPreferencesPage } from "./MonoPreferencesPage";
 import { MonoSettingsPage } from "./MonoSettingsPage";
 import { MonoTeamPage, MemberDetails } from "./MonoTeamPage";
 import { findMono, listMonos } from "../model/mono";
@@ -43,7 +44,7 @@ import type { PullRequestContext } from "../../pullRequests/model/pullRequestVie
 
 /** A page opened directly from Details, or one habit inside its list. */
 type Route =
-  | { kind: "habits" | "soul" | "memory" | "new-habit" | "team" }
+  | { kind: "habits" | "soul" | "memory" | "new-habit" | "team" | "settings" | "settings" }
   | { kind: "habit" | "archive"; id: string };
 
 type Props = {
@@ -78,7 +79,7 @@ type Props = {
 
 /**
  * The Mono's profile, model, permissions and projects in one panel. Its habits,
- * soul and memory open directly as pages that slide over it.
+ * soul, memory and settings open directly as pages that slide over it.
  */
 export function MonoDetails({
   sessions,
@@ -195,6 +196,20 @@ export function MonoDetails({
           node: <MemoryPage monoId={monoId} files={files} onBack={back} />,
         },
       ];
+    if (route.kind === "settings")
+      return [
+        {
+          key: "settings",
+          node: (
+            <MonoPreferencesPage
+              monoId={monoId}
+              agent={agent}
+              onBack={back}
+              onReset={onReset}
+            />
+          ),
+        },
+      ];
     if (route.kind === "new-habit")
       return [
         {
@@ -287,7 +302,6 @@ export function MonoDetails({
               monoId={monoId}
               agent={agent}
               onOpen={(page) => push({ kind: page })}
-              onReset={onReset}
               counts={{
                 habits: habits?.length,
                 memory: files ? memoryLines(files.memory).length : undefined,

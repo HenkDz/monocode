@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { GITHUB_AGENT_GUIDANCE } from "../../inbox/model/githubAgentGuidance";
 import { approvedMemberReview } from "./memberReview";
 import { memberContinuity } from "./memberContinuity";
+import { addManagerWakeEvent, ManagerWakeScheduler, reconcileManagerWake, type ManagerWakeEvent, type ManagerWakeReceipt } from "./managerWake";
 import type { Artifact } from "../../artifacts/artifacts";
 import { usageLimitFromError } from "../../sessions/model/usageLimit";
 import { isCodexStorageError } from "../../monos/model/monoCodexStorage";
@@ -81,6 +82,7 @@ function currentDispatchBaseline(run: OrchestrationRun, taskId: string) {
     .sort((a, b) => a.startedAt - b.startedAt)[0]?.checkoutBaseline;
 }
 export type OrchestrationHost = {
+  acceptManagerDigest?(id: string, receipt: ManagerWakeReceipt): Promise<boolean>;
   goalCancelled?(goalId: string): boolean;
   artifact?(id: string): Promise<Artifact | null>;
   checkoutSnapshot?(cwd: string, base?: string): Promise<CheckoutSnapshot>;
@@ -383,6 +385,13 @@ export class Orchestrator {
     { signature: string; promise: Promise<unknown> }
   >();
   private host: OrchestrationHost | null = null;
+  private managerWakes = new ManagerWakeScheduler({
+    run: id => this.run(id),
+    session: id => this.host?.session(id),
+    save: run => this.commit(run),
+    accept: (id, receipt) => this.host?.acceptManagerDigest?.(this.ownerSession(id), receipt) ?? Promise.resolve(false),
+    limit: id => this.pause(id, "Manager reached its automatic follow-up limit. Review progress, then Continue or send a new message."),
+  });
   private monoOwners = new Map<
     string,
     { sessionId: string; monoId: string; project: string }
@@ -419,6 +428,17 @@ export class Orchestrator {
     return (
       this.monoOwners.get(id)?.sessionId ?? this.run(id)?.ownerSessionId ?? id
     );
+  }
+  queueManagerMessage(leadId: string, event: ManagerWakeEvent): Promise<void> {
+    const result = this.actions.catch(() => undefined).then(async () => {
+      const run = this.run(leadId);
+      if (!run?.projectManager || !["active", "paused"].includes(run.status)) throw Error("Manager needs Continue before accepting team updates");
+      const wakeState = addManagerWakeEvent(run.wakeState, event);
+      if (wakeState !== run.wakeState) await this.commit({ ...run, wakeState });
+      this.sync();
+    });
+    this.actions = result.catch(() => undefined);
+    return result;
   }
   assertCanDeleteOwner(id: string) {
     if (this.runs.some((run) => run.ownerSessionId === id && run.tasks.length))
@@ -698,6 +718,7 @@ export class Orchestrator {
       dispatch.dispatchedAt != null && dispatch.stage === "settled" && dispatch.finishedAt == null
         ? { ...dispatch, ...dispatchTurnSnapshot(dispatch, this.host?.session(dispatch.sessionId)), finishedAt: Date.now() }
         : dispatch) };
+    run = { ...run, wakeState: reconcileManagerWake(run, this.run(run.leadId), Date.now()) };
     this.runs = [
       ...this.runs.filter((entry) => entry.leadId !== run.leadId),
       run,
@@ -712,6 +733,7 @@ export class Orchestrator {
     this.saves = saved;
     try {
       await saved;
+      if (run.wakeState) this.managerWakes.sync(this.run(run.leadId)!);
     } catch (error) {
       const current = this.run(run.leadId)!;
       const running = current.tasks.filter(activeTask);
@@ -1370,6 +1392,7 @@ export class Orchestrator {
         projectManager: projectManager || previous?.projectManager,
         projectName: identity?.name ?? previous?.projectName,
         recoveryNotice: previous?.recoveryNotice,
+        wakeState: previous?.wakeState,
         tasks:
           approved?.tasks ??
           (previous?.status === "paused"
@@ -1607,6 +1630,7 @@ export class Orchestrator {
     ) => {
       const current = this.run(run.leadId)!;
       const goalId = current.tasks.find(task => task.id === id)?.monoGoalId;
+      if (patch.status === "queued") patch = { ...patch, managerWakeTurnId: current.managerTurnId };
       if (patch.status === "queued" && goalId && this.host?.goalCancelled?.(goalId))
         throw new Error("This goal was cancelled; retain its worktrees and files.");
       return record(
@@ -1863,6 +1887,7 @@ export class Orchestrator {
           id: crypto.randomUUID(),
           origin: input.origin === "user" ? "user" : "manager",
           managerTurnBlockId: managerSession?.blocks[currentTurnIndex(managerSession)]?.id,
+          managerWakeTurnId: run.managerTurnId,
           ...(input.member == null
             ? {}
             : {
@@ -3062,6 +3087,28 @@ export class Orchestrator {
       }
     }
     for (const run of this.runs) {
+      if (run.wakeState) {
+        const pending = run.tasks.flatMap(task => {
+          const ask = this.pendingInput(task);
+          const id = ask && `ask:${task.activeDispatchId ?? task.lastDispatchId ?? task.id}:${ask.requestId}`;
+          return ask && id && !run.wakeState!.events.some(event => event.id === id) ? [{ id, at: Date.now(),
+            kind: ask.kind === "approval" ? "approval" as const : "question" as const, taskId: task.id,
+            dispatchId: task.activeDispatchId, goalId: task.monoGoalId, requestId: String(ask.requestId),
+            text: `${task.title} needs ${ask.kind === "approval" ? "an approval (respond)" : "an answer (answer)"} (requestId ${ask.requestId}): ${ask.label}\n${ask.detail?.slice(0, 2000) ?? ""}${ask.questions ? `\n${JSON.stringify(ask.questions)}` : ""}` }] : [];
+        });
+        if (pending.length) {
+          const result = this.actions.catch(() => undefined).then(async () => {
+            const latest = this.run(run.leadId);
+            if (!latest?.wakeState || latest.status !== "active") return;
+            let wakeState = latest.wakeState;
+            for (const event of pending) if (!wakeState.events.some(entry => entry.id === event.id)) wakeState = addManagerWakeEvent(wakeState, event);
+            if (wakeState !== latest.wakeState) await this.commit({ ...latest, wakeState });
+          });
+          this.actions = result.catch(console.error);
+        }
+        this.managerWakes.sync(run);
+        continue;
+      }
       if (
         run.status !== "active" ||
         run.managerTurnId ||
@@ -3236,6 +3283,13 @@ export class Orchestrator {
     const firstToken = isFirstTokenEvent(event);
     if (event.type === "turn.started" || firstToken) {
       const now = Date.now();
+      for (const run of this.runs) {
+        const session = this.host?.session(run.leadId);
+        const receipt = run.wakeState?.receipt;
+        if (this.ownerSession(run.leadId) === id && receipt && session?.blocks[currentTurnIndex(session)]?.appRequestId === receipt.id)
+          this.pendingReports.set(run.leadId, run.wakeState!.events.filter(entry => entry.id.startsWith("report:") && receipt.eventIds.includes(entry.id))
+            .flatMap(entry => entry.dispatchId ? [entry.dispatchId] : []));
+      }
       for (const [leadId, dispatchIds] of this.pendingReports) {
         if (this.ownerSession(leadId) !== id) continue;
         this.pendingReports.delete(leadId);

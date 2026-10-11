@@ -1,5 +1,6 @@
 import type { Session } from "../../sessions/model/session";
 import type { OrchestrationRun, OrchestrationTask } from "../../orchestration/model/orchestrationState";
+import type { ManagerWakeState } from "../../orchestration/model/managerWake";
 import { currentTurnIndex } from "./turnMetrics";
 
 export type AgentLiveStatus =
@@ -10,7 +11,7 @@ export type AgentLiveStatus =
 export type AgentLiveState = {
   status: AgentLiveStatus;
   reason?: "storage" | "usage-limit" | "approval" | "decision" | "error"
-    | "preparing-storage" | "paused" | "editing" | "handoff" | "worktree" | "dependency";
+    | "preparing-storage" | "paused" | "editing" | "handoff" | "worktree" | "dependency" | "held-updates";
   detail?: string;
   waitingOn?: string;
 };
@@ -27,6 +28,7 @@ export type AgentLiveContext = {
   tasks?: readonly OrchestrationTask[];
   runStatus?: OrchestrationRun["status"];
   pauseReason?: string;
+  wakeStates?: readonly ManagerWakeState[];
 };
 
 function plainLine(text: string): string {
@@ -112,6 +114,17 @@ export function selectAgentLiveState(session?: AgentLiveSession, context: AgentL
   if (task?.status === "cancelled") return { status: "done", detail: "Cancelled" };
   if (context.runStatus === "paused")
     return { status: "needs-you", reason: "decision", detail: context.pauseReason || "Orchestration paused" };
+  const deliveryError = context.wakeStates?.find(state => state.delivery?.error)?.delivery?.error;
+  if (deliveryError) return { status: "blocked", reason: "storage", detail: deliveryError };
+  const held = context.wakeStates?.reduce((count, state) => count + state.events.filter(event => event.acknowledgedAt == null).length, 0) ?? 0;
+  const waitingDispatches = new Set(context.wakeStates?.flatMap(state => state.waves
+    .filter(wave => wave.retiredAt == null && wave.completedAt == null).flatMap(wave => wave.dispatchIds)));
+  const waiting = context.tasks?.filter(candidate => ["running", "cancelling"].includes(candidate.status)
+    && waitingDispatches.has(candidate.activeDispatchId ?? candidate.lastDispatchId ?? "")).length ?? 0;
+  if (held || waiting) return {
+    status: "waiting-on-member", reason: "held-updates",
+    detail: `${waiting ? `Waiting for ${waiting} worker${waiting === 1 ? "" : "s"} · ` : ""}${held} update${held === 1 ? "" : "s"} held`,
+  };
   const active = context.tasks?.filter(candidate => ["queued", "running", "cancelling"].includes(candidate.status)) ?? [];
   const review = active.find(candidate => candidate.reviewOf);
   if (review) return { status: "waiting-review", waitingOn: review.memberName, detail: `Waiting on ${review.memberName || "Reviewer"}` };
@@ -123,6 +136,7 @@ export function selectAgentLiveState(session?: AgentLiveSession, context: AgentL
 }
 
 export function agentLiveStateLabel(state: AgentLiveState): string {
+  if (state.reason === "held-updates" && state.detail) return state.detail;
   switch (state.status) {
     case "thinking": return "Thinking";
     case "running-tool": return "Running tool";

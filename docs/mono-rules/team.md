@@ -12,11 +12,11 @@ Before the first goal that needs workers, or when asked to set up your team, stu
 
 ## Org boundaries
 
-This current org chart overrides generic session-delegation advice. Do not use sessions.start/send/draft. Use roles as helpful defaults: Orchestrators coordinate Managers and Managers coordinate members. Ask teammates directly with app team.message; cross-team questions are routed through Managers. Use requiresReply:false on app team.message for acknowledgements, closure notices and informational reports that need no decision or action. They appear in the feed without starting a recipient turn. Do not reply to a pure acknowledgement or a message saying no reply is needed. Real questions, escalations and requests for action require a reply; omit requiresReply or set it true. Keep the user informed and only interrupt for real decisions. Never impersonate another agent or merge; destructive operations require the user. Reports are not permission for new goals. Respect all user limits, including no push or publishing.
+This current org chart overrides generic session-delegation advice. Do not use sessions.start/send/draft. Use roles as helpful defaults: Orchestrators coordinate Managers and Managers coordinate members. Ask teammates directly with app team.message; cross-team questions are routed through Managers. Label progress, acknowledgements, closure notices and informational reports with kind:info or requiresReply:false when they need no decision or action. They appear in the feed without starting a recipient turn. Do not reply to a pure acknowledgement or a message saying no reply is needed. Label real questions kind:question, decisions kind:decision and escalations kind:escalation; omit requiresReply or set it true when action is needed. Keep the user informed and only interrupt for real decisions. Never impersonate another agent or merge; destructive operations require the user. Reports are not permission for new goals. Respect all user limits, including no push or publishing.
 
 ## Teammate messages
 
-Use requiresReply:false on app team.message for acknowledgements, closure notices and informational reports that need no decision or action. They appear in the feed without starting a recipient turn. Do not reply to a pure acknowledgement or a message saying no reply is needed. Real questions, escalations and requests for action require a reply; omit requiresReply or set it true.
+Label progress, acknowledgements, closure notices and informational reports with kind:info or requiresReply:false when they need no decision or action. They appear in the feed without starting a recipient turn. Do not reply to a pure acknowledgement or a message saying no reply is needed. Use kind:question, kind:decision or kind:escalation for messages needing action, and omit requiresReply or set it true. Legacy messages with both fields omitted still require action. Manager-bound questions are coalesced into a digest; routine updates wait for a permitted Manager wake.
 
 ## Team command reference
 
@@ -30,7 +30,7 @@ tasks.request  {"title":"...","prompt":"...","files":["src"]} Member chat only, 
   team.answer    Direct boss only. {monoId,requestId,answers} or {monoId,requestId,skip:true}.
                   For a permission: {monoId,requestId,decision:"allow"|"deny"}.
                   Never allow beyond the user's existing authority.
-  team.message   {memberId,text,topic?,requiresReply?} Ask a teammate; use requiresReply:false for informational feed messages without a recipient turn.
+  team.message   {memberId,text,topic?,kind?,requiresReply?} kind:info|question|decision|escalation; use kind:info or requiresReply:false for informational feed messages without a recipient turn.
                   After a few exchanges, a hint suggests involving your Manager.
   team.list      Manager only, own team. {} Members, profiles, soul summary,
                   memory count, tasks and user-locked fields.

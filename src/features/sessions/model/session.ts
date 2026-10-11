@@ -272,6 +272,8 @@ export type MonoSessionCompletion = {
 };
 
 export type QueuedMessage = {
+  /** A durably accepted Manager digest; wait for idle and preserve its receipt. */
+  managerWake?: { leadId: string; receiptId: string };
   appRequestId?: string;
   monoSource?: { id: string; name: string; mascot: string; color: string; goalId: string };
   id: string;

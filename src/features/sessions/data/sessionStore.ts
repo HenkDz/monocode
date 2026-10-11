@@ -58,6 +58,8 @@ import type { OrchestrationSummary } from "../../orchestration/model/orchestrati
 // never see this storage marker after hydration.
 const READ_ONLY_SETTING = "__monocodeReadOnly";
 const EFFORT_SOURCE_SETTING = "__monocodeEffortSource";
+const APP_REQUEST_ID = /^[A-Za-z0-9_-]{1,512}$/;
+const LEGACY_MANAGER_DIGEST_ID = /^manager-digest:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export type SessionSummary = {
   sidebarHidden?: boolean;
@@ -238,9 +240,17 @@ function sanitizeQueuedMessages(value: unknown): QueuedMessage[] {
   return value.flatMap((entry) => {
     if (!entry || typeof entry !== "object") return [];
     const message = entry as QueuedMessage;
+    const managerWake = message.managerWake;
+    if (managerWake !== undefined && (
+      !managerWake || typeof managerWake !== "object" || Array.isArray(managerWake) ||
+      typeof managerWake.leadId !== "string" || !APP_REQUEST_ID.test(managerWake.leadId) ||
+      typeof managerWake.receiptId !== "string" || managerWake.receiptId !== message.id ||
+      message.appRequestId !== message.id ||
+      (!APP_REQUEST_ID.test(managerWake.receiptId) && !LEGACY_MANAGER_DIGEST_ID.test(managerWake.receiptId))
+    )) return [];
     if (
       typeof message.id !== "string" ||
-      !isPersistableId(message.id) ||
+      (!isPersistableId(message.id) && !(managerWake && LEGACY_MANAGER_DIGEST_ID.test(message.id))) ||
       seen.has(message.id) ||
       typeof message.text !== "string"
     )
@@ -302,6 +312,10 @@ function sanitizeQueuedMessages(value: unknown): QueuedMessage[] {
           ? { blockId: message.blockId }
           : {}),
         text: message.text,
+        ...(managerWake ? { managerWake: { leadId: managerWake.leadId, receiptId: managerWake.receiptId } } : {}),
+        ...(typeof message.appRequestId === "string" &&
+          (APP_REQUEST_ID.test(message.appRequestId) || (managerWake && LEGACY_MANAGER_DIGEST_ID.test(message.appRequestId)))
+          ? { appRequestId: message.appRequestId } : {}),
         ...(sanitizeMonoSource(message.monoSource) ? { monoSource: sanitizeMonoSource(message.monoSource) } : {}),
         attachments,
         ...(noteCard ? { noteCard } : {}),
@@ -949,7 +963,7 @@ function sanitizeBlock(
   if (
     block.role === "user" &&
     typeof block.appRequestId === "string" &&
-    /^[A-Za-z0-9_-]{1,512}$/.test(block.appRequestId)
+    (APP_REQUEST_ID.test(block.appRequestId) || (block.internal && LEGACY_MANAGER_DIGEST_ID.test(block.appRequestId)))
   )
     next.appRequestId = block.appRequestId;
   if (

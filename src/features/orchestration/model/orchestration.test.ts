@@ -2322,33 +2322,41 @@ describe("local orchestration", () => {
     expect(f.store.disable).toHaveBeenCalledWith("lead");
     expect(f.host.submit).toHaveBeenCalledTimes(1);
   });
-  it("retains Manager events during storage preparation and classified rejection, then dispatches after repair", async () => {
+  it("retains Manager digest events during storage preparation and durable rejection, then accepts after repair", async () => {
     const f = setup();
+    const accept = vi.fn(async () => false);
+    f.host.acceptManagerDigest = accept;
+    f.manager.bind(f.host);
     f.lead.busy = false;
     await f.manager.start("lead", ["codex"], 2, undefined, true);
+    const turnId = await f.manager.beginManagerTurn("lead", true);
     f.lead.busy = true;
     await f.delegate(["a"]);
     await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledTimes(1));
     f.lead.busy = false;
     f.lead.codexStoragePreparing = true;
+    await f.manager.endManagerTurn("lead", turnId, { status: "completed", text: "Dispatched" });
     f.completions.get(f.tasks()[0].sessionId)!({ status: "completed", text: "Result retained" });
     await vi.waitFor(() => expect(f.tasks()[0].status).toBe("completed"));
     expect(f.tasks()[0].delivered).toBe(false);
     expect(f.host.submit).toHaveBeenCalledTimes(1);
     f.lead.codexStoragePreparing = undefined;
     f.manager.sync();
-    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(accept).toHaveBeenCalledOnce());
     f.lead.codexStorageError = "Codex storage needs repair: preparation is already pending.";
-    f.completions.get("lead")!({ status: "failed", text: "", error: f.lead.codexStorageError });
-    await vi.waitFor(() => expect(f.tasks()[0].delivered).toBe(false));
+    expect(f.tasks()[0].delivered).toBe(false);
     expect(f.manager.run("lead")!.status).toBe("active");
     expect(f.manager.run("lead")!.continuations).toBe(0);
     f.manager.sync();
-    expect(f.host.submit).toHaveBeenCalledTimes(2);
+    expect(accept).toHaveBeenCalledOnce();
     f.lead.codexStorageError = undefined;
+    accept.mockResolvedValue(true);
     f.manager.sync();
-    await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledTimes(3));
-    expect(vi.mocked(f.host.submit).mock.calls[2][1]).toContain("Result retained");
+    await vi.waitFor(() => expect(f.tasks()[0].delivered).toBe(true));
+    expect(accept).toHaveBeenCalledTimes(2);
+    expect(accept.mock.calls[0]).toEqual(accept.mock.calls[1]);
+    expect(f.manager.run("lead")!.wakeState?.receipt?.body).toContain("Result retained");
+    expect(f.manager.run("lead")!.continuations).toBe(1);
   });
 
   it("defers results when a user turn starts during continuation persistence", async () => {

@@ -124,6 +124,7 @@ it("actual App compaction clears initial oversized-input deferral without saving
     compactHarnessContext: async (input: { onEvent: (event: unknown) => void }) => input.onEvent({ type: "context", used: 0, window: 1_000_000 }),
     supportsProviderAccounts: () => false, selectedProviderAccountId: () => undefined,
     isMonoSession: () => true, operatorEnabledInThread: () => false, orchestrator: { run: () => undefined },
+    monoSkillsForSession: () => ({ codexStore: "mono" as const, skillsRole: "manager", skillsPolicy: { mode: "role" as const } }),
     enqueueHarnessEvent: (_id: string, event: Parameters<typeof applyHarnessEvent>[1]) => { sessionsRef.current = [applyHarnessEvent(sessionsRef.current[0], event) as typeof previous]; },
     flushHarnessEvents: vi.fn(),
   };

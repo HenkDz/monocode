@@ -37,6 +37,14 @@ preserves its internal submitted-turn request identity. Negative cases simulate
 successful native saves that lose the queue or marker; acceptance rejects and
 never acknowledges pending sources.
 
+CC5DG replaces the verification callback's normal loader with
+`readPersistedSession`. It hydrates the durable queue and internal receipt fields
+without replacing the active Mono's suffix-write cache or running provider repairs.
+The normal chat loader still initializes its cache and repairs restored transcripts.
+The real-store regression covers 10, 11 and 25 user turns, queue and consumed-receipt
+replay, and a later user turn. Successful storage that changes the body or request
+ID is rejected alongside missing queues and markers.
+
 ## Recovery and dependency decisions
 
 An active run can deliver a retained report whose only wave is retired. This
@@ -62,6 +70,18 @@ kind, task/request identity when present, summary and full-report reference.
 Saved reports keep artifact links; other task evidence uses `app sessions.read`.
 Full team-message envelopes remain in `wakeState.events`, available through
 `control list` for the assigned project.
+
+CC5DG bounds the project label to 100 characters and includes the stable Manager
+ID. The lookup is `control list {} -> run.wakeState.events`: the authenticated
+Manager owns one project, so no executable path is abbreviated. Long Windows paths
+no longer consume the header budget. Both separator variants retain complete event
+IDs, action priority, continuation pages and full source envelopes.
+
+The coordinator's storage-preparation/rejection regression now uses fake timers
+instead of polling against the one-second retry deadline. It checks every original
+assertion, advances through the deadline while storage is blocked, then verifies
+one successful acceptance after repair. Preparation also explicitly prevents
+acceptance. Production retry timing is unchanged.
 
 Action items precede routine updates. Overflow becomes another durable receipt;
 only represented events and timeout lines are acknowledged. A persisted
@@ -116,3 +136,7 @@ No new dependency, database, event bus, classifier, approval bypass, review-fork
 automation or unrelated UI was added. Broader native/browser checks and equal-work
 live latency measurement remain outside this round. Existing dependency audit and
 build warnings were recorded without dependency or build-policy changes.
+
+CC5DG's current validation, source boundary and evidence are recorded in
+`docs/cc5dg-manager-wake-readback.md` and
+`C:/Users/nooro/AppData/Local/Temp/monocode-cc/cc5dg/REPORT.md`.

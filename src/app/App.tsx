@@ -163,7 +163,7 @@ import { ProviderSignInDialog } from "../features/sessions/ui/ProviderSignInDial
 import { TitleBar, type Tab as TitleTab } from "./shell/TitleBar";
 import { WindowControls } from "./shell/WindowControls";
 import { MonoDetails } from "../features/monos/ui/MonoDetails";
-import { MonoCodexStorageRecovery, isCodexStorageError, parseCodexStorageConflict, type CodexStorageResolution, type CodexStorageComparison } from "../features/monos/model/monoCodexStorage";
+import { MonoCodexStorageRecovery, isCodexStorageError, parseCodexStorageConflict, parseCodexStorageRecoveryConflict, type CodexStorageResolution, type CodexStorageComparison } from "../features/monos/model/monoCodexStorage";
 import { codexStorageAccountId, monoCodexStorageIssues } from "../features/monos/model/monoCodexStorageIssues";
 import { prepareMonoCodexStore } from "../integrations/harness/core/child";
 import { handleMonoTeam, isTeamReviewer, lockMonoField } from "../features/monos/model/monoTeam";
@@ -10068,9 +10068,10 @@ function Workspace({
   const onCodexStorageReveal = useCallback(async (sessionId: string) => {
     const session = sessionsRef.current.find(entry => entry.id === sessionId);
     const conflict = parseCodexStorageConflict(session?.codexStorageError);
-    if (!session || !conflict) throw new Error("The storage issue is no longer available.");
+    const recovery = parseCodexStorageRecoveryConflict(session?.codexStorageError);
+    if (!session || (!conflict && !recovery)) throw new Error("The storage issue is no longer available.");
     await invoke("codex_mono_store_reveal", {
-      providerAccountId: codexStorageAccountId(session, selectedProviderAccountId("codex", session.cwd)), entry: conflict.entry,
+      providerAccountId: codexStorageAccountId(session, selectedProviderAccountId("codex", session.cwd)), entry: recovery ? ".monocode-recovery" : conflict!.entry,
     });
   }, []);
 

@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import ts from "typescript";
 import { expect, it, vi } from "vitest";
-import { MonoCodexStorageRecovery, isCodexStorageError, parseCodexStorageConflict } from "../features/monos/model/monoCodexStorage";
+import { MonoCodexStorageRecovery, isCodexStorageError, parseCodexStorageConflict, parseCodexStorageRecoveryConflict } from "../features/monos/model/monoCodexStorage";
 import { codexStorageAccountId } from "../features/monos/model/monoCodexStorageIssues";
 
 const app = ts.createSourceFile("App.tsx", readFileSync(new URL("./App.tsx", import.meta.url), "utf8"),
@@ -27,6 +27,24 @@ function evaluate(source: string, context: Record<string, unknown>) {
   }).outputText;
   return runInNewContext(output, { ...context, Error });
 }
+
+it("reveals recovery storage for the held account without forwarding recovery paths", async () => {
+  const sessionsRef = { current: [{ id: "recovery", cwd: "/synthetic/repo", providerAccountId: "new-account",
+    codexStorageAccountId: "held-account", codexStorageError: `Codex storage needs repair: ${JSON.stringify({
+      recovery: true, reason: "Both versions were preserved", paths: ["/untrusted/recovery/path"],
+    })}` }] };
+  const invoke = vi.fn();
+  const reveal = evaluate(appCallback("onCodexStorageReveal").getText(app), {
+    sessionsRef, parseCodexStorageConflict, parseCodexStorageRecoveryConflict, codexStorageAccountId,
+    selectedProviderAccountId: () => "selected-account", invoke,
+  });
+  await reveal("recovery");
+  expect(invoke).toHaveBeenCalledExactlyOnceWith("codex_mono_store_reveal", {
+    providerAccountId: "held-account", entry: ".monocode-recovery",
+  });
+  await expect(reveal("missing")).rejects.toThrow("The storage issue is no longer available.");
+  expect(invoke).toHaveBeenCalledTimes(1);
+});
 
 const submission = appCallback("submitSession");
 if (!ts.isBlock(submission.body)) throw new Error("App submission body missing");

@@ -54,6 +54,48 @@ const conflictDetail = (value = hooksConflict) => `Codex storage needs repair: $
 const buttonNamed = (name: string) => Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
   .find(button => button.textContent?.startsWith(name))!;
 
+it("shows preserved recovery paths with refresh and reveal while withholding version choices", async () => {
+  const recovery = { recovery: true, reason: "A new file appeared during an interrupted repair; both files are preserved.", paths: ["C:/synthetic/mono/AGENTS.md", "C:/synthetic/mono/.monocode-claim-id"] };
+  const detail = `Codex storage needs repair: ${JSON.stringify(recovery)}`;
+  const repair = vi.fn(async () => { throw new Error(detail); });
+  const resolve = vi.fn();
+  const compare = vi.fn();
+  const reveal = vi.fn(async () => {});
+  await act(async () => root.render(
+    <MonoCodexStorageNotice detail={detail} onRepair={repair} onResolve={resolve} onCompare={compare} onReveal={reveal} />,
+  ));
+  expect(container.querySelector('[role="status"]')?.getAttribute("aria-label")).toBe("Codex recovery files preserved");
+  expect(container.textContent).toContain(recovery.reason);
+  expect(Array.from(container.querySelectorAll('[aria-label="Preserved recovery paths"] li')).map(path => path.textContent)).toEqual(recovery.paths);
+  for (const name of ["Use ~/.codex version", "Keep MonoCode version", "Compare"])
+    expect(buttonNamed(name)).toBeUndefined();
+  await act(async () => buttonNamed("Show in folder").click());
+  expect(reveal).toHaveBeenCalledOnce();
+  await act(async () => buttonNamed("Refresh issue").click());
+  expect(repair).toHaveBeenCalledOnce();
+  expect(container.querySelector('[role="alert"]')?.textContent).toBe(recovery.reason);
+  expect(container.textContent).not.toContain("Codex storage repaired");
+  expect(resolve).not.toHaveBeenCalled();
+  expect(compare).not.toHaveBeenCalled();
+});
+
+it("switches between ordinary and recovery conflicts when refresh reports preserved files", async () => {
+  const recovery = { recovery: true, reason: "The interrupted claim is preserved.", paths: ["C:/synthetic/mono/.monocode-claim-id"] };
+  const repair = vi.fn(async () => { throw new Error(conflictDetail()); });
+  const resolve = vi.fn(async () => { throw new Error(`Codex storage needs repair: ${JSON.stringify(recovery)}`); });
+  await act(async () => root.render(
+    <MonoCodexStorageNotice detail={conflictDetail()} onRepair={repair} onResolve={resolve} onCompare={vi.fn()} onReveal={vi.fn()} />,
+  ));
+  await act(async () => buttonNamed("Use ~/.codex version").click());
+  expect(container.textContent).toContain("Codex recovery files preserved");
+  expect(buttonNamed("Keep MonoCode version")).toBeUndefined();
+  expect(buttonNamed("Compare")).toBeUndefined();
+  await act(async () => buttonNamed("Refresh issue").click());
+  expect(container.textContent).toContain("Codex hooks file got out of sync");
+  expect(container.querySelector('[aria-label="Preserved recovery paths"]')).toBeNull();
+  expect(buttonNamed("Keep MonoCode version")).toBeDefined();
+});
+
 it("offers explicit account and Mono choices with a plain title, held message context, and collapsed diagnostics", async () => {
   const resolve = vi.fn(async () => {});
   const reveal = vi.fn(async () => {});

@@ -28,6 +28,18 @@ CC0F builds on CC0 through a local merge in `HenkDz/cc0f-storage-fixes`. The ind
 
 The committed regressions use synchronized external writers, actual NTFS aliases, the real App callback and submission preflight, and rendered notice actions. All fixtures use synthetic temporary homes. Shared-hooks regressions opt in explicitly, preserving their original safety coverage under the new default.
 
+## Crash safety
+
+CC0G adds create-new, fsynced `.monocode-txn-<uuid>.json` journals before an entry moves to `.monocode-claim-<uuid>`. The record identifies the original entry, Keep/Use account/hooks-isolation/relink intent, entry identity and fingerprints, staged replacement, and any verified independent archive. Keep retains its journal until its private-override snapshot is committed. Completed transactions remove their journal only after restoring, independently preserving, or disposing of the claim.
+
+Preparation and explicit resolution reconcile journals first under the existing storage lock. A missing original is restored without replacement, and interrupted shared-file choices disable automatic healing until a fresh choice. A verified published replacement can finish when its identity and preserved archive still match. Concurrently recreated originals, changed staged files, unreadable journals, and legacy claims without journals remain preserved and block preparation. Their structured recovery notice lists paths and offers Refresh issue and Show in folder; it does not guess a filename or offer a version choice for ambiguous recovery files.
+
+Corrupt-snapshot transactions publish a durable invalid marker before moving the corrupt claim to its preserved sibling. Restart completes or rolls back that transaction without losing the explicit-choice guard. A missing snapshot with a preserved `*.corrupt-*` sibling from the older implementation also recreates an invalid marker; an explicit Keep or Use account decision writes resolved metadata while retaining the corrupt bytes.
+
+Committed native tests terminate a child through the OS process API and prepare again in a fresh process. The 28 cases cover journal creation, claiming, verified archiving, before/after publication, Keep restoration, ordinary relinking, hardlink and symlink hook migration, and the corrupt-snapshot move. They verify recoverable private bytes, independent archives, unchanged account files, explicit corrupt-metadata choices, and no leftover claims, stages or journals after successful recovery. Additional tests reject ambiguous, changed and forged recovery records and preserve a concurrently replaced stage.
+
+Evidence and final validation are recorded in `docs/cc0g-crash-safe-storage.md` and `C:/Users/nooro/AppData/Local/Temp/monocode-cc/cc0g/REPORT.md`. These checks cover Windows process termination, not operating-system power loss. The storage lock remains process-local; Unix concurrent writer/path exclusion remains limited, as documented in the source. Ambiguous legacy recovery files need inspection rather than automatic deletion.
+
 ## Hooks policy addendum
 
 The owner chose isolated Mono hooks. Missing `hooks.json` gets a create-new private `{"hooks":{}}` file. Existing real private hooks stay intact and cannot conflict with account hooks. Existing file symlinks or hardlinks are claimed, their referenced bytes archived into an independent real file, and their active entry replaced with the empty private default. Account hooks are never modified by this migration. The account's hooks snapshot is ignored in isolated mode, so a stale or corrupt sharing snapshot cannot block preparation. Busy or unreadable links are preserved and produce an actionable IO error.

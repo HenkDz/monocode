@@ -28,9 +28,13 @@ for (const theme of ["dark", "light"]) {
       await expect(
         log.getByRole("heading", { name: "Assignments", exact: true }),
       ).toBeVisible();
-      await expect(log.getByRole("tab", { name: "Current", exact: true })).toHaveAttribute("aria-selected", "true");
+      await expect(
+        log.getByRole("tab", { name: "Current", exact: true }),
+      ).toHaveAttribute("aria-selected", "true");
       await expect(log.locator("[data-member-task]")).toHaveCount(2);
-      await expect(log.locator('[data-member-task="queued"]')).toContainText("Queued");
+      await expect(log.locator('[data-member-task="queued"]')).toContainText(
+        "Queued",
+      );
       const composer = page.getByRole("textbox", {
         name: "Message Reviewer",
         exact: true,
@@ -42,9 +46,19 @@ for (const theme of ["dark", "light"]) {
           name: "Conversation couldn’t start",
         });
         await expect(notice).toBeInViewport();
-        await expect(page.getByText("Message will queue until storage is repaired.", { exact: true })).toHaveCount(1);
-        await expect(page.getByText("Message will queue until storage is repaired.", { exact: true })).toBeInViewport();
-        await expect(page.locator('header [data-agent-state="blocked"] .agent-state-cue')).toHaveCount(1);
+        await expect(
+          page.getByText("Message will queue until storage is repaired.", {
+            exact: true,
+          }),
+        ).toHaveCount(1);
+        await expect(
+          page.getByText("Message will queue until storage is repaired.", {
+            exact: true,
+          }),
+        ).toBeInViewport();
+        await expect(
+          page.locator('header [data-agent-state="blocked"] .agent-state-cue'),
+        ).toHaveCount(1);
         await expect(
           page
             .getByRole("region", { name: "Message queue" })
@@ -64,11 +78,11 @@ for (const theme of ["dark", "light"]) {
         );
       }
       if (scenario === "long-log") {
-        await log
-          .getByRole("tab", { name: "History", exact: true })
-          .click();
+        await log.getByRole("tab", { name: "History", exact: true }).click();
         await expect(log.locator("[data-member-task]")).toHaveCount(5);
-        await expect(log.getByRole("navigation", { name: "Assignment pages" })).toContainText("1 / 6");
+        await expect(
+          log.getByRole("navigation", { name: "Assignment pages" }),
+        ).toContainText("1 / 6");
         const scroller = page.locator("[data-member-work]");
         expect(
           await scroller.evaluate(
@@ -135,11 +149,15 @@ for (const scenario of ["blocked", "long-log"]) {
       page.getByRole("textbox", { name: "Message Reviewer", exact: true }),
     ).toBeInViewport();
     if (scenario === "blocked") {
-      await page.getByRole("button", { name: /^Work · Needs attention$/ }).click();
+      await page
+        .getByRole("button", { name: /^Work · Needs attention$/ })
+        .click();
       await expect(
         page.getByRole("status", { name: "Conversation couldn’t start" }),
       ).toBeInViewport();
-      await page.getByRole("button", { name: "Close work", exact: true }).click();
+      await page
+        .getByRole("button", { name: "Close work", exact: true })
+        .click();
     }
     if (scenario === "blocked") {
       const queue = page.getByRole("region", { name: "Message queue" });
@@ -150,7 +168,9 @@ for (const scenario of ["blocked", "long-log"]) {
       await expect(
         queue.getByRole("button", { name: "Edit queued message" }).first(),
       ).toBeInViewport();
-      await expect(page.getByRole("button", { name: /^Work · Needs attention$/ })).toBeInViewport();
+      await expect(
+        page.getByRole("button", { name: /^Work · Needs attention$/ }),
+      ).toBeInViewport();
     }
     expect(
       await page.evaluate(() => document.documentElement.scrollWidth),

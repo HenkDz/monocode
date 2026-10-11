@@ -92,7 +92,11 @@ createRoot(document.getElementById("root")!).render(
         hideTurnMetrics
       />
     </div>
-    <div data-fixture-work className="shrink-0 overflow-y-auto" style={{ maxHeight: "min(30dvh, 256px)" }}>
+    <div
+      data-fixture-work
+      className="shrink-0 overflow-y-auto"
+      style={{ maxHeight: "min(30dvh, 256px)" }}
+    >
       <MemberWorkLog member={member} />
     </div>
     <div className="mx-auto w-full max-w-4xl shrink-0 p-4">

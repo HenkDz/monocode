@@ -45,9 +45,14 @@ for (const [width, height, mode] of [
     await expect
       .poll(() => scroller.evaluate((el) => el.scrollTop))
       .toBeGreaterThan(100);
-    const next = log.getByRole("button", { name: "Next assignments", exact: true });
+    const next = log.getByRole("button", {
+      name: "Next assignments",
+      exact: true,
+    });
     for (let i = 1; i < 24; i++) await next.click();
-    await expect(log.getByRole("navigation", { name: "Assignment pages" })).toContainText("24 / 24");
+    await expect(
+      log.getByRole("navigation", { name: "Assignment pages" }),
+    ).toContainText("24 / 24");
     await expect(next).toBeDisabled();
     const finalCard = log.locator(
       '[data-member-task="Completed assignment 0"]',

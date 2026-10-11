@@ -333,7 +333,7 @@ export function MonoComposer({
     if (goalRouting && goalChoice.mode === "goal") {
       const signature = JSON.stringify([
         goalRouting.ownerId,
-        message,
+        draft,
         files.map((file) => file.id),
         goalChoice,
       ]);
@@ -342,7 +342,7 @@ export function MonoComposer({
         goalRequest.current.rejected
       ) {
         const route = decideMonoGoalRoute({
-          text: message,
+          text: draft,
           attachmentCount: files.length,
           choice: goalChoice,
           context: goalRouting,
@@ -381,7 +381,7 @@ export function MonoComposer({
       goal = goalRequest.current.submission;
     }
     const result = goal
-      ? onSubmit(message, files, goal)
+      ? onSubmit(draft, files, goal)
       : onSubmit(message, files);
     if (result instanceof Promise) {
       submittingRef.current = true;
@@ -490,7 +490,7 @@ export function MonoComposer({
               retainedGoalRoute?.signature ===
               JSON.stringify([
                 goalRouting.ownerId,
-                text.trim(),
+                text,
                 attachments.map((file) => file.id),
                 goalChoice,
               ])

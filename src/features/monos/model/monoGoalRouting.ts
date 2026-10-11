@@ -97,11 +97,15 @@ export function decideMonoGoalRoute(input: {
   context: MonoGoalRoutingContext;
 }): MonoGoalRouteDecision {
   const grand = (reason: string): MonoGoalRouteDecision => ({ kind: "grand", reason });
-  const { text, attachmentCount, choice, context } = input;
+  const { text: rawText, attachmentCount, choice, context } = input;
   if (choice.mode !== "goal") return grand("Chat stays with Grand Orchestrator");
   if (choice.override === "grand") return grand("Grand Orchestrator selected");
   if (attachmentCount) return grand("Attachments need the full Grand submission");
-  if (!text.trim() || text.length > 8000) return grand("Goals must contain 1–8,000 characters");
+  const specialCharacters = /[^\t\n\r\x20-\x7e]/;
+  if (specialCharacters.test(rawText))
+    return grand("Contains non-English or special characters, so Grand Orch will route it.");
+  const text = rawText.trim();
+  if (!text || text.length > 8000) return grand("Goals must contain 1–8,000 characters");
   const hasPaths = (text.match(/[^\s"'`()\[\]{}<>]+/g) ?? []).some(token =>
     /[/\\]|^[a-z]:|^\.{1,2}$|^\.[\p{L}\p{N}_-]|[\p{L}\p{N}_-]\.[\p{L}\p{N}_-]/iu.test(token));
   if (hasPaths && choice.override !== "manager")
@@ -111,12 +115,6 @@ export function decideMonoGoalRoute(input: {
   const foldedText = foldProjectText(text);
   if (/[<>]|&(?:#(?:x[0-9a-f]+|\d+)|[a-z][a-z0-9]*);|\]\s*\(/i.test(foldedText))
     return grand("Markup needs Grand Orchestrator");
-  if (choice.override !== "manager" && /(?=[^a-z])\p{L}/u.test(foldedText))
-    return grand("Non-ASCII letters: choose a project or send to Grand Orchestrator");
-  // A mixed-letter token can hide a second name even when a project chip is selected.
-  if ((foldedText.match(/[\p{L}\p{N}\p{Cf}]+/gu) ?? []).some(token =>
-    /[a-z]/.test(token) && /(?=[^a-z])\p{L}/u.test(token)))
-    return grand("Mixed-script letters need Grand Orchestrator");
   const matches = mentions(foldedText, context.projects);
   const selected = choice.override === "manager" ? choice.projectId : matches[0]?.id;
   if (!selected) return grand("Choose a project or mention its exact name");
@@ -130,6 +128,8 @@ export function decideMonoGoalRoute(input: {
   const project = context.projects.find(project => project.id === selected);
   if (!project?.available || !project.managerMonoId)
     return grand("Project has no available local Manager");
+  if (specialCharacters.test(project.name))
+    return grand("Project name contains non-English or special characters, so Grand Orch will route it.");
   return { kind: "manager", project,
     reason: hasPaths ? `Contains file paths: routed to ${project.name} because you selected it`
       : choice.override === "manager" ? "Project selected" : "Exact project name" };

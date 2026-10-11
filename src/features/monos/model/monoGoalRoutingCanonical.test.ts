@@ -229,9 +229,9 @@ describe("canonical project conflict routing", () => {
     const decisions = sample.map(text => ({ text, decision: decide(text, auto, ctx) }));
     expect(decisions).toHaveLength(20);
     expect(decisions.filter(row => row.decision.kind === "manager").length).toBeGreaterThanOrEqual(14);
-    expect(decisions.filter(row => row.decision.kind === "manager")).toHaveLength(16);
+    expect(decisions.filter(row => row.decision.kind === "manager")).toHaveLength(14);
     expect(decisions.filter(row => row.decision.kind === "grand").map(row => row.text))
-      .toEqual([sample[5], sample[6], sample[12], sample[18]]);
+      .toEqual([sample[0], sample[5], sample[6], sample[11], sample[12], sample[18]]);
     for (const row of decisions)
       if (row.decision.kind === "manager") expect(row.text).toContain(row.decision.project.name);
   });

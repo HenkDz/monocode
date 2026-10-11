@@ -34,6 +34,15 @@ const projectSetGoals = [
   "Fix Atlas and all our repositories",
   "Fix Atlas and every project",
   "Fix Atlas and every registered repository",
+  "Fix Atlas and other registered projects",
+  "Apply Atlas changes to other repositories too",
+  "Fix Atlas and any other registered repo",
+  "Fix Atlas and another project",
+  "Fix Atlas and any registered project",
+  "Fix Atlas and the rest of our repositories",
+  "Additional registered projects need the Atlas fix",
+  "Fix Atlas and other workspaces",
+  "Fix Atlas and another codebase",
 ];
 
 describe("exact project routes", () => {
@@ -60,24 +69,45 @@ describe("exact project routes", () => {
       expect(decide(text, { choice: { mode: "goal", override, projectId: "c:/code/atlas" } }))
         .toEqual({ kind: "grand", reason: "Comparison or cross-project goal" });
   });
-  it.each(["across", "all", "both", "multiple", "between", "every", "each", "remaining"])(
+  it.each(["across", "all", "both", "multiple", "between", "every", "each", "remaining",
+    "other", "another", "any", "rest", "additional", "42", ""])(
     "keeps %s project sets at Grand regardless of order, qualifiers or formatting", quantifier => {
       for (const ctx of [context(), monoGoalRoutingContext(owner, roster, projects, ["C:/code/Beacon"]),
         monoGoalRoutingContext(owner, roster.filter(member => member.id !== "beacon-manager"), projects)])
         for (const override of ["auto", "manager"] as const)
-          for (const noun of ["project", "projects", "repository", "repositories", "repo", "repos"])
+          for (const noun of ["project", "projects", "repository", "repositories", "repo", "repos", "workspace", "workspaces", "codebase", "codebases"])
             for (const qualifier of ["", "registered", "one of our widely separated", "**our**\tregistered\r\n"])
               for (const text of [`Fix Atlas: _${quantifier}_ ${qualifier} ${noun}`,
                 `Fix Atlas and ${noun}; ${qualifier} **${quantifier.toUpperCase()}**`])
                 expect(decide(text, { context: ctx, choice: { mode: "goal", override, projectId: "c:/code/atlas" } }), text)
                   .toEqual({ kind: "grand", reason: "Comparison or cross-project goal" });
     });
-  it.each(["Fix Atlas project sidebar", "Fix Atlas all login checks", "Fix Atlas repository allocations"])(
+  it.each(["Fix Atlas all login checks", "Fix Atlas allocations", "Fix Atlas restoring minimized windows"])(
     "keeps healthy single-project ASCII control %s", text => {
       for (const override of ["auto", "manager"] as const)
         expect(decide(text, { choice: { mode: "goal", override, projectId: "c:/code/atlas" } }))
           .toMatchObject({ kind: "manager", project: { managerMonoId: "atlas-manager" } });
     });
+  it.each(["Fix Atlas project sidebar", "Fix Atlas repository allocations", "Fix Atlas workspace color",
+    "Fix Atlas codebase startup", "Fix Atlas reports"])("deliberately over-blocks singular/prefix scope %s", text => {
+    for (const override of ["auto", "manager"] as const)
+      expect(decide(text, { choice: { mode: "goal", override, projectId: "c:/code/atlas" } }))
+        .toEqual({ kind: "grand", reason: "Comparison or cross-project goal" });
+  });
+  it("keeps registered compound names and split unavailable literal conflicts safe", () => {
+    for (const name of ["Atlas Project", "Atlas Workspace", "Atlas-Codebase", "Atlas Repo"])
+      for (const override of ["auto", "manager"] as const) {
+        const ctx = context();
+        ctx.projects[0].name = name;
+        ctx.projects[1] = { ...ctx.projects[1], name: "BeaconAPI", available: false };
+        expect(decide(`Fix ${name} login`, { context: ctx, choice: { mode: "goal", override, projectId: ctx.projects[0].id } }))
+          .toMatchObject({ kind: "grand" });
+        ctx.projects[0].name = "Atlas";
+        expect(decide("Fix Atlas and Beacon**API** login", { context: ctx,
+          choice: { mode: "goal", override, projectId: ctx.projects[0].id } }))
+          .toEqual({ kind: "grand", reason: "More than one project mentioned" });
+      }
+  });
   it.each(["Fix Atlas and Beacon.", "Fix Atlas. Update Beacon", "Fix Atlas... and Beacon"])("keeps sentence conflict %s at Grand", text => {
     for (const override of ["auto", "manager"] as const)
       for (const ctx of [context(), monoGoalRoutingContext(owner, roster, projects, ["C:/code/Beacon"]),

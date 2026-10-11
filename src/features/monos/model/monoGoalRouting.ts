@@ -110,10 +110,10 @@ export function decideMonoGoalRoute(input: {
     /[/\\]|^[a-z]:|^\.{1,2}$|^\.[\p{L}\p{N}_-]|[\p{L}\p{N}_-]\.[\p{L}\p{N}_-]/iu.test(token));
   if (hasPaths && choice.override !== "manager")
     return grand("Contains file paths: choose a project or send to Grand Orchestrator");
-  // Scope words can be reordered or separated by qualifiers and ASCII formatting.
+  // Scope wording requires Grand even for benign singular phrases.
   const scopeText = text.replace(/[^a-z]/gi, " ");
   if (/\b(compare|compares|compared|comparing|comparisons?|versus|vs\.?|cross[- ]project)\b/i.test(text) ||
-      /\b(across|all|both|multiple|between|every|each|remaining)\b/i.test(scopeText) && /\b(project|repo)/i.test(scopeText))
+      /\b(project|repo|workspace|codebase)/i.test(scopeText))
     return grand("Comparison or cross-project goal");
   const foldedText = foldProjectText(text);
   if (/[<>]|&(?:#(?:x[0-9a-f]+|\d+)|[a-z][a-z0-9]*);|\]\s*\(/i.test(foldedText))

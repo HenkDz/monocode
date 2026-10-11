@@ -237,6 +237,15 @@ for (const explicit of [false, true]) {
     "Fix Atlas and every **registered** project",
     "Fix Atlas and all,\tremaining repositories",
     "Fix Atlas and the remaining projects",
+    "Fix Atlas and other registered projects",
+    "Apply Atlas changes to other repositories too",
+    "Fix Atlas and any other registered repo",
+    "Fix Atlas and another project",
+    "Fix Atlas and the rest of our repositories",
+    "Additional registered projects need the Atlas fix",
+    "Fix Atlas workspace startup",
+    "Fix Atlas codebase startup",
+    "Fix Atlas and 42 repositories",
   ])("retains Mission Grand scope and retry identity for %s (explicit " + explicit + ")", async text => {
     const f = fixture();
     f.host.grand.mockReturnValueOnce(false);

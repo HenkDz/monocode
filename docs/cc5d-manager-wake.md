@@ -29,7 +29,9 @@ accepted child. Acceptance means persisted dispatch authority, before preparatio
 or provider submission. A timeout reports remaining work once and leaves tools
 running. Restart recovery carries the original deadline across retained-checkout
 dispatch replacement. Pause/stop retire waves, and cancelling every child retires
-its wave without a completion wake. Evidence remains stored.
+its wave without a completion wake. Evidence remains stored. CC5DF releases
+undelivered reports from retired waves when the run becomes active again;
+cancelled reports remain quiet.
 
 Runs and dispatches without a recorded Manager turn retain the existing report
 delivery behavior until an explicitly tracked wave is created. Creating an info
@@ -43,6 +45,8 @@ A successful prerequisite that needs Manager acceptance to unlock queued work is
 a decision, so dependency gates cannot deadlock behind other workers. Explicit
 decisions, escalations, failures and pending approvals have no deliberate delay.
 Questions share a 250 ms window. The planner never classifies message prose.
+CC5DF upgrades an unfrozen report when a dependency arrives after completion,
+or adds one stable decision event when the report receipt is already frozen.
 
 `team.message` validates optional `kind: info|question|decision|escalation` in both
 the native CLI and frontend. `kind:info` and `requiresReply:false` remain quiet;
@@ -54,7 +58,9 @@ is recorded. The 500-entry crew feed remains a display feed.
 
 Before target delivery, the run stores an immutable digest receipt with a stable
 ID, event IDs and body. The receipt advances only after the target queue has been
-saved. Queue acceptance is serialized per owning conversation, including different
+saved and read back with its managed marker and request ID. New IDs use
+`manager-digest-<uuid>`; exact legacy colon IDs remain readable as validated
+managed receipts. Queue acceptance is serialized per owning conversation, including different
 project engines sharing that conversation. A concurrent user update is rebased
 before publication; existing queued message identities and metadata are retained.
 Digest messages cannot steer into an active turn or bypass a pending approval.
@@ -68,7 +74,7 @@ delivery. Acknowledging an earlier question digest rearms remaining wave deadlin
 
 Digests contain short result sections, task/goal/request identities and supported
 artifact links to full reports. Without a saved report artifact, they include the
-exact existing `app sessions.conversation` lookup for the retained worker chat.
+supported `app sessions.read` lookup for the retained worker chat.
 All sections remain untrusted evidence and confer no new goal or merge authority.
 CC4 delivery timestamps advance only when the matching digest turn starts; an
 unrelated user turn cannot stamp worker reports as delivered.
@@ -133,3 +139,17 @@ retain acknowledged evidence as well as pending evidence; any later archival mus
 preserve durable request signatures and never remove unacknowledged events.
 CC5-F review-fork automation and CC5-E rotation/task-sizing changes remain outside
 this round.
+
+## CC5DF corrections
+
+CC5DF fixes all five CC5DR findings: persisted queue markers and receipt IDs,
+Continue releasing held reports, autonomous backoff after target save/lookup
+failure, acceptance decisions for late dependencies, and bounded digest pages.
+The third delivery failure appears through CC4's existing storage blocker; retry
+state follows the selected immutable receipt across stale snapshots. New digest
+pages contain at most 4,000 characters, put action items first, retain full-message
+references through `control list`, and acknowledge only represented evidence.
+
+Current combined validation, exact commits and evidence are documented in
+[`cc5df-manager-wake-fixes.md`](cc5df-manager-wake-fixes.md). The validation numbers
+above describe the original CC5D build, before CC5DR identified these defects.

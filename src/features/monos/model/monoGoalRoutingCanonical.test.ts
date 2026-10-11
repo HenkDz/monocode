@@ -57,7 +57,49 @@ const cases = [
   { label: "invisible unavailable identity", text: "Fix Atlas and Bea\u200bcon login", unavailable: true },
 ];
 
+// All CC5CI-R resolver probes, including its safe controls.
+const reviewCases = [
+  { label: "RLO reversed whole second name", text: "Fix Atlas and \u202enocaeB\u202c login" },
+  { label: "RLO reversed second-name suffix", text: "Fix Atlas and Bea\u202enoc\u202c login" },
+  { label: "RLO unavailable second identity", text: "Fix Atlas and \u202enocaeB\u202c login", unavailable: true },
+  { label: "fullwidth digits", name: "Beacon2", text: "Fix Atlas and Beacon\uFF12 login" },
+  { label: "circled digit", name: "Beacon2", text: "Fix Atlas and Beacon\u2461 login" },
+  { label: "mathematical double-struck digit", name: "Beacon2", text: "Fix Atlas and Beacon\u{1D7DA} login" },
+  { label: "ASCII digit name", name: "Beacon2", text: "Fix Atlas and Beacon2 login" },
+  { label: "overlapping Atlas and Atlas2", name: "Atlas2", text: "Fix Atlas2 login" },
+  { label: "overlapping numeric name with fullwidth digit", name: "Atlas2", text: "Fix Atlas and Atlas\uFF12 login" },
+  { label: "emoji split", text: "Fix Atlas and Bea\u{1F680}con login" },
+  { label: "registered emoji name", name: "Beacon\u{1F680}", text: "Fix Atlas and Beacon\u{1F680} login" },
+  { label: "CRLF inside second name", text: "Fix Atlas and Bea\r\ncon login" },
+  { label: "CRLF between names", text: "Fix Atlas\r\nand Beacon login" },
+  { label: "very long normal conflict within limit", text: "Fix Atlas " + "x ".repeat(3900) + "and Beacon login" },
+  { label: "very long RLO conflict within limit", text: "Fix Atlas " + "x ".repeat(3900) + "and \u202enocaeB\u202c login" },
+  { label: "above maximum length", text: "Fix Atlas " + "x ".repeat(4100) + "and \u202enocaeB\u202c login" },
+  { label: "RLI ordinary direction control", text: "Fix Atlas and \u2067Beacon\u2069 login" },
+  { label: "RLO logical forward control", text: "Fix Atlas and \u202eBeacon\u202c login" },
+  { label: "fullwidth second name", text: "Fix Atlas and \uFF22\uFF45\uFF41\uFF43\uFF4F\uFF4E login" },
+  { label: "nested substring names", first: "Beacon", name: "Beacon API", text: "Fix Beacon API login" },
+  { label: "overlapping numeric name with Arabic Indic digit", name: "Atlas2", text: "Fix Atlas and Atlas\u0662 login" },
+  { label: "whole Cyrillic lookalike Ace", name: "Ace", text: "Fix Atlas and \u0410\u0441\u0435 login" },
+  { label: "whole Cyrillic lookalike COO", name: "COO", text: "Fix Atlas and \u0421\u041E\u041E login" },
+  { label: "whole Cyrillic lookalike ACCESS", name: "ACCESS", text: "Fix Atlas and \u0410\u0421\u0421\u0415\u0405\u0405 login" },
+];
+for (const [label, zero] of [
+  ["Arabic Indic", 0x660], ["Extended Arabic Indic", 0x6f0], ["Devanagari", 0x966], ["Bengali", 0x9e6],
+  ["Gurmukhi", 0xa66], ["Gujarati", 0xae6], ["Oriya", 0xb66], ["Tamil", 0xbe6], ["Telugu", 0xc66],
+  ["Kannada", 0xce6], ["Malayalam", 0xd66], ["Thai", 0xe50], ["Lao", 0xed0], ["Tibetan", 0xf20],
+] as const) reviewCases.push({ label: `${label} decimal digit`, name: "Beacon2",
+  text: `Fix Atlas and Beacon${String.fromCodePoint(zero + 2)} login` });
+
 describe("canonical project conflict routing", () => {
+  for (const choice of [auto, selected])
+    it.each(reviewCases)(`CC5CI-R ${choice.override}: $label`, ({ text, name, first, unavailable }) => {
+      const ctx = { ...context, projects: context.projects.map(project => project.id === "beacon"
+        ? { ...project, name: name ?? project.name, available: !unavailable }
+        : { ...project, name: first ?? project.name }) };
+      expect(decide(text, choice, ctx)).toMatchObject({ kind: "grand" });
+    });
+
   for (const choice of [auto, selected])
     it.each(cases)(`safe ${choice.override}: $label`, ({ text, name, unavailable }) => {
       const ctx = { ...context, projects: context.projects.map(project => project.id === "beacon"
@@ -77,8 +119,9 @@ describe("canonical project conflict routing", () => {
   });
 
   it.each(["Fix Ａｔｌａｓ login", "Fix Átlas login", "Fix A\u0301tlas login"])(
-    "normalizes exact positive project names before comparing %s", text => {
-      expect(decide(text)).toMatchObject({ kind: "manager", project: { id: "atlas" } });
+    "keeps non-ASCII positive project mentions at Grand: %s", text => {
+      for (const choice of [auto, selected])
+        expect(decide(text, choice)).toMatchObject({ kind: "grand" });
     });
 
   it("folds sharp s in both names and text", () => {
@@ -101,15 +144,42 @@ describe("canonical project conflict routing", () => {
   });
 
   it.each(["修复登录", "إصلاح الدخول", "Исправить вход"])(
-    "requires an explicit chip for separate non-English prose: %s", text => {
-      expect(decide(`Atlas ${text}`)).toMatchObject({ kind: "grand" });
-      expect(decide(`Atlas ${text}`, selected)).toMatchObject({ kind: "manager", project: { id: "atlas" } });
+    "keeps separate non-English prose at Grand in both modes: %s", text => {
+      for (const choice of [auto, selected])
+        expect(decide(`Atlas ${text}`, choice)).toMatchObject({ kind: "grand" });
     });
 
   it.each(["Beac\u043en", "Beac\u200b\u043en", "Beac\u2060\u043en"])(
     "keeps mixed-letter tokens at Grand even with an explicit chip: %s", name => {
       expect(decide(`Fix Atlas and ${name} login`, selected)).toMatchObject({ kind: "grand" });
     });
+
+  it.each(["Átlas", "Ａｔｌａｓ", "Atlas\u{1F680}", "Atlas\u0000", "بوابة"])(
+    "keeps a selected non-ASCII or control-bearing registered name at Grand: %s", name => {
+      const ctx = { ...context, projects: [{ ...context.projects[0], name }] };
+      for (const choice of [auto, selected])
+        expect(decide("Fix Atlas login", choice, ctx)).toMatchObject({ kind: "grand" });
+    });
+
+  it.each([auto, selected])("rejects every non-ASCII code point anywhere in a generated goal ($override)", choice => {
+    let seed = 0xcc5c5;
+    const prefix = "Fix Atlas login";
+    for (let codePoint = 0x80; codePoint <= 0x10ffff; codePoint++) {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+      const position = seed % (prefix.length + 1);
+      const text = prefix.slice(0, position) + String.fromCodePoint(codePoint) + prefix.slice(position);
+      const route = decide(text, choice);
+      if (route.kind !== "grand") throw Error(`Direct Manager route for U+${codePoint.toString(16)}: ${JSON.stringify(text)}`);
+    }
+  });
+
+  it.each([auto, selected])("rejects ASCII controls except ordinary whitespace ($override)", choice => {
+    for (const codePoint of [...Array(32).keys(), 127]) {
+      if ([9, 10, 13].includes(codePoint)) continue;
+      expect(decide(`Fix Atlas login${String.fromCodePoint(codePoint)}`, choice)).toMatchObject({ kind: "grand" });
+    }
+    expect(decide(" \t\r\nFix Atlas login\t\r\n ", choice)).toMatchObject({ kind: "manager", project: { id: "atlas" } });
+  });
 
   it.each([auto, selected])("never routes randomized two-project insertions to one Manager ($override)", choice => {
     let seed = 0xcc5c1;
@@ -159,6 +229,7 @@ describe("canonical project conflict routing", () => {
     const decisions = sample.map(text => ({ text, decision: decide(text, auto, ctx) }));
     expect(decisions).toHaveLength(20);
     expect(decisions.filter(row => row.decision.kind === "manager").length).toBeGreaterThanOrEqual(14);
+    expect(decisions.filter(row => row.decision.kind === "manager")).toHaveLength(16);
     for (const row of decisions)
       if (row.decision.kind === "manager") expect(row.text).toContain(row.decision.project.name);
   });
@@ -191,6 +262,15 @@ describe("reviewer Composer/adapter/ledger regressions", () => {
     { label: "homoglyph Auto", text: "Fix Atlas and Beac\u043en login", explicit: false },
     { label: "markup Auto", text: "Fix Atlas and Bea<!--comment-->con login", explicit: false },
     { label: "markup explicit chip", text: "Fix Atlas and Bea<b>con</b> login", explicit: true },
+    { label: "RLO Auto", text: "Fix Atlas and \u202enocaeB\u202c login", explicit: false },
+    { label: "RLO explicit", text: "Fix Atlas and \u202enocaeB\u202c login", explicit: true },
+    { label: "Arabic Indic digit Auto", text: "Fix Atlas and Beacon\u0662 login", secondName: "Beacon2", explicit: false },
+    { label: "Arabic Indic digit explicit", text: "Fix Atlas and Beacon\u0662 login", secondName: "Beacon2", explicit: true },
+    { label: "whole Cyrillic lookalike explicit", text: "Fix Atlas and \u0410\u0441\u0435 login", secondName: "Ace", explicit: true },
+    ...["\u00a0", "\ufeff", "\u2028"].flatMap(mark => [false, true].flatMap(explicit => [
+      { label: `leading ${JSON.stringify(mark)} ${explicit ? "explicit" : "Auto"}`, text: `${mark}Fix Atlas login`, explicit },
+      { label: `trailing ${JSON.stringify(mark)} ${explicit ? "explicit" : "Auto"}`, text: `Fix Atlas login${mark}`, explicit },
+    ])),
   ])("sends $label safely through the real Composer", async ({ text, explicit, secondName }) => {
     const ctx = { ...context, projects: context.projects.map(project => project.id === "beacon"
       ? { ...project, name: secondName ?? project.name } : project) };
@@ -205,6 +285,7 @@ describe("reviewer Composer/adapter/ledger regressions", () => {
     const grand = vi.fn(() => true);
     const captured: MonoGoalSubmission[] = [];
     const onSubmit = async (prompt: string, attachments: unknown[], submission?: MonoGoalSubmission) => {
+      expect(prompt).toBe(text);
       captured.push(submission!);
       return submitMonoGoal({ text: prompt, attachmentCount: attachments.length, origin: "user", submission: submission! }, {
         context: () => ctx, ledger, goals, resolve: async target => projects.find(project => project.id === target.id),
@@ -225,6 +306,9 @@ describe("reviewer Composer/adapter/ledger regressions", () => {
     expect(container.querySelector('[data-mono-goal-route] [role="status"]')?.textContent).toContain("Send to Grand Orch");
     await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Send"]')!.click());
     expect(captured[0].projectId).toBeUndefined();
+    expect(captured[0].managerMonoId).toBeUndefined();
+    if (/[^\t\n\r\x20-\x7e]/.test(text))
+      expect(captured[0].reason).toBe("Contains non-English or special characters, so Grand Orch will route it.");
     expect(grand).toHaveBeenCalledOnce();
     expect(deliver).not.toHaveBeenCalled();
     expect(ledger.goals("grand")).toHaveLength(0);

@@ -586,6 +586,9 @@ async function startLive(
       INIT_TIMEOUT_MS,
     );
     bindState(flavor, input.sessionId, live, stateFrame.data);
+    if (fork && !live.providerSessionId) {
+      throw new Error(`${flavor.label} did not expose the relocated session`);
+    }
     await applyModel(flavor, live, input);
     if (live.providerSessionId) {
       live.onEvent({

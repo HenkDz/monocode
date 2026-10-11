@@ -22,6 +22,13 @@ only the permission lock; model, soul and other locks remain intact. A Team
 profile without a chat can reset directly; a saved chat opens its authoritative
 permission controls.
 
+CC6I routes both the permission picker and role reset through
+`saveMonoRuntimeMode`. That supersedes pending legacy migration data before
+first-open/task preparation, persists ownership and changes only the permission
+lock. The committed regression clicks the real chatless worker reset and
+immediately prepares a named worker through App's actual callback; its Codex
+request uses on-request / workspace-write.
+
 ## Resolution and persistence
 
 `monoRolePermissions.ts` resolves role defaults and freezes worker permission
@@ -31,8 +38,10 @@ snapshots take precedence over later roster changes, including retries and
 hydration. Anonymous workers no longer inherit full access from a coordinator.
 Read-only tasks remain supervised and retain the independent read-only flag.
 Automatic re-reviews retain prior Reviewer permissions instead of copying the
-implementation's engine choice. Preparation rereads the resident choice after
-awaited checkout work; a cancelled or replaced dispatch still cannot resurrect.
+implementation's engine choice. Preparation resolves a role-owned resident's
+mode from current member ownership after awaited checkout work. Saved task
+snapshots and legacy/user-owned residents retain their existing precedence;
+a cancelled or replaced dispatch still cannot resurrect.
 
 Mono roster parsing validates source, mode, engine and locks. Session storage
 uses the existing private model-settings markers, strips them on hydration and
@@ -68,6 +77,17 @@ using full access for read-only tasks, bypassing CC6G's elevated guard and
 adding a new database schema. Source, UI, provider and native guard tests use
 synthetic storage and fixtures.
 
+CC6I also replaces the account-wide repair label with **Use unelevated sandbox
+for Monos**. The action backs up and changes only the selected account's
+private Mono base config through the existing private override. It detaches a
+linked config before publishing the private file; it never writes or backs up
+the source account config, including `~/.codex/config.toml`. It keeps the idle
+account-server check/restart and held-message recovery. Explicit elevated
+choices still take precedence and stay blocked; Plan and read-only restrictions
+remain. The native regression uses a synthetic `.codex` source and checks its
+exact bytes before and after repair and subsequent preparation. See
+`docs/cc6i-permission-fixes.md` for the corrections' validation and evidence.
+
 The optional live checks used isolated direct stock Codex app-server transport,
 not a native GUI preview. Exact Auto requests came from the production builders
 and retained `auto_review`; effective unelevated over a synthetic elevated
@@ -86,6 +106,9 @@ performed. Evidence is under
 the branch, commits, validation results and deliberately omitted checks.
 
 ## Validation
+
+The following results record CC6H. CC6I's current results are recorded in
+`docs/cc6i-permission-fixes.md` and `cc6i/REPORT.md` in the program folder.
 
 Windows, Node 26.5.0, Vitest 3.2.7; all web checks used process-local
 `NODE_OPTIONS=--no-experimental-webstorage`. No timeout or skip was increased.

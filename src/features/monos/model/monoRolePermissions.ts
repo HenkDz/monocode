@@ -38,7 +38,8 @@ export function snapshotMonoWorkerPermissions(
   session?: Pick<Session, "id" | "runtimeMode" | "runtimeModeSource" | "windowsSandbox">,
 ) {
   const savedWorker = session && (!task.sessionId || task.sessionId === session.id) ? session : undefined;
-  const memberChoice = member?.runtimeMode && (member.runtimeModeSource === "user" || member.userLockedFields?.includes("runtimeMode")) ? resolveMonoRolePermissions(member) : undefined;
+  const memberChoice = member && (session?.runtimeModeSource === "role" ||
+    (member.runtimeMode && (member.runtimeModeSource === "user" || member.userLockedFields?.includes("runtimeMode")))) ? resolveMonoRolePermissions(member) : undefined;
   const chosen = savedWorker ?? (task.runtimeMode ? task : memberChoice ?? session);
   const permissions = chosen?.runtimeMode
     ? { runtimeMode: chosen.runtimeMode, runtimeModeSource: chosen.runtimeModeSource }

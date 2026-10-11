@@ -55,7 +55,7 @@ describe("Attention queue", () => {
     expect(rows()[0].querySelector('[aria-label="Sandbox setup command"]')?.textContent).toBe(setupCommand);
     expect(rows()[0].querySelector("[data-attention-details]")).toBeNull();
     expect(calls.repair).not.toHaveBeenCalled();
-    await act(async () => button("Switch this account to unelevated").click());
+    await act(async () => button("Use unelevated sandbox for Monos").click());
     expect(calls.repair).toHaveBeenCalledExactlyOnceWith("storage", "use_unelevated_sandbox");
   });
 

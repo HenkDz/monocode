@@ -26,7 +26,7 @@ export function MissionCommandBar({ goalRouting, onSubmit, open = true }: {
     signature: string; submission: MonoGoalSubmission; route: MonoGoalRouteDecision; rejected: boolean;
   } | null>(null);
   const [retained, setRetained] = useState<{ signature: string; route: MonoGoalRouteDecision }>();
-  const signature = JSON.stringify([goalRouting?.ownerId, text.trim(), choice]);
+  const signature = JSON.stringify([goalRouting?.ownerId, text, choice]);
 
   useEffect(() => {
     if (!open) return;
@@ -51,7 +51,7 @@ export function MissionCommandBar({ goalRouting, onSubmit, open = true }: {
       let submission: MonoGoalSubmission | undefined;
       if (choice.mode === "goal") {
         if (request.current?.signature !== signature || request.current.rejected) {
-          const route = decideMonoGoalRoute({ text: message, attachmentCount: 0, choice, context: goalRouting });
+          const route = decideMonoGoalRoute({ text, attachmentCount: 0, choice, context: goalRouting });
           const previous = request.current?.signature === signature ? request.current.submission : undefined;
           const project = route.kind === "manager" ? route.project : undefined;
           const sameRoute = previous?.reason === route.reason && previous.projectId === project?.id &&
@@ -70,7 +70,7 @@ export function MissionCommandBar({ goalRouting, onSubmit, open = true }: {
         setRetained(request.current);
         submission = request.current.submission;
       }
-      const accepted = await onSubmit(message, submission);
+      const accepted = await onSubmit(submission ? text : message, submission);
       if (!accepted) {
         if (request.current) request.current.rejected = true;
         setRetained(undefined);

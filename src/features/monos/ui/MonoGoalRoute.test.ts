@@ -79,6 +79,14 @@ it("previews the same trimmed goal text that Send submits", () => {
   );
 });
 
+it.each(["auto", "manager"] as const)("checks raw special whitespace before trimming (%s)", override => {
+  render({ text: "\ufeffFix DZDistro checkout\u00a0", choice: { mode: "goal", override, projectId: "dzdistro" } });
+  expect(container.querySelector('[role="status"]')?.textContent).toContain("Send to Grand Orch");
+  expect(container.querySelector('[role="status"]')?.textContent).toContain(
+    "Contains non-English or special characters, so Grand Orch will route it.",
+  );
+});
+
 it("offers Grand and explicit project overrides through the existing picker", async () => {
   const onChange = vi.fn();
   render({ onChange });

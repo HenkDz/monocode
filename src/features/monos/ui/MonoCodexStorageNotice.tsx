@@ -116,7 +116,7 @@ export function MonoCodexStorageNotice({
               void copyText(sandbox.setupCommand).then(() => setCopyStatus("Copied setup command"), reason => setCopyStatus(`Could not copy command: ${String(reason)}`));
             }}>Copy setup command</SecondaryButton>
             {copyStatus && <p className="mt-1">{copyStatus}</p>}
-            <p className="mt-2">Switching this account to unelevated saves a config backup beside the config. Restore that backup to undo the change. Full access applies to this Mono; Plan stays restricted.</p>
+            <p className="mt-2">Unelevated applies to this account's Monos and saves a backup of their private config. Your own Codex config stays unchanged. Restore the private backup to undo the change. Full access applies to this Mono; Plan stays restricted.</p>
           </div>}
           {conflict && (
             <p className="mt-1 text-xs text-content/70">
@@ -136,7 +136,7 @@ export function MonoCodexStorageNotice({
             {sandbox ? <>
               <SecondaryButton disabled={!!busy} onClick={() => void run("repair", onRepair)}>{busy === "repair" ? "Checking…" : "Check setup again"}</SecondaryButton>
               {onResolve && <>
-                <SecondaryButton disabled={!!busy} onClick={() => void run("repair", () => onResolve("use_unelevated_sandbox"))}>Switch this account to unelevated</SecondaryButton>
+                <SecondaryButton disabled={!!busy} onClick={() => void run("repair", () => onResolve("use_unelevated_sandbox"))}>Use unelevated sandbox for Monos</SecondaryButton>
                 <SecondaryButton disabled={!!busy} onClick={() => void run("repair", () => onResolve("use_mono_full_access"))}>Use full access for this Mono</SecondaryButton>
               </>}
             </> : conflict && onResolve ? (

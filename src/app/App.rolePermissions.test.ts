@@ -1,11 +1,19 @@
+// @vitest-environment happy-dom
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
+import { act, createElement } from "react";
+import { createRoot } from "react-dom/client";
 import ts from "typescript";
 import { expect, it, vi } from "vitest";
-import { snapshotMonoWorkerPermissions } from "../features/monos/model/monoRolePermissions";
+import { snapshotMonoWorkerPermissions, resolveMonoRolePermissions } from "../features/monos/model/monoRolePermissions";
+import { findMono, listMonos, legacyMonoRuntimeMode, monoForSession, monoRuntimeMode } from "../features/monos/model/mono";
+import { ensureMonoSession } from "../features/monos/model/monoWorkspace";
+import { MonoPermissions } from "../features/monos/ui/MonoPermissions";
+import { newSession } from "../features/sessions/model/session";
+import { buildTurnStartParams } from "../integrations/harness/providers/codex/codexProtocol";
 import type { Session } from "../features/sessions/model/session";
 
-const source = ts.createSourceFile("App.tsx", readFileSync(new URL("./App.tsx", import.meta.url), "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+const source = ts.createSourceFile("App.tsx", readFileSync("src/app/App.tsx", "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 function appFunction(name: string) {
   let found: ts.ArrowFunction | undefined;
   const walk = (node: ts.Node) => {
@@ -21,6 +29,53 @@ function evaluate(name: string, context: Record<string, unknown>) {
   return runInNewContext(ts.transpileModule(`(${appFunction(name)})`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
 }
 const session = (id: string, runtimeMode: Session["runtimeMode"], extra = {}): Session => ({ id, harness: "codex", model: "model", modelSettings: {}, cwd: "/repo", title: id, blocks: [], runtimeMode, ...extra });
+
+it("dispatches Auto immediately after resetting a chatless legacy worker through the real control", async () => {
+  const stored = new Map<string, string>();
+  vi.stubGlobal("localStorage", { getItem: (key: string) => stored.get(key) ?? null, setItem: (key: string, value: string) => stored.set(key, value), removeItem: (key: string) => stored.delete(key) });
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const manager = { id: "manager", role: "manager", projects: ["/repo"], mascot: "cat", color: "#abc" };
+  stored.set("monocode:mono-roster", JSON.stringify([manager, { ...manager, id: "worker", role: "member", reportsTo: "manager", specialty: "Builder", runtimeMode: "full-access", userLockedFields: ["model", "runtimeMode"] }]));
+  listMonos();
+  const before = findMono("worker")!;
+  expect(before.sessionId).toBeUndefined();
+  expect(legacyMonoRuntimeMode("worker")).toBe("full-access");
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(createElement(MonoPermissions, { mono: before, harness: "codex", ...resolveMonoRolePermissions(before) })));
+    const reset = [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Use role default (Auto)")!;
+    expect(reset).toBeDefined();
+    await act(async () => reset.click());
+    expect(findMono("worker")).toMatchObject({ runtimeMode: "auto", runtimeModeSource: "role", userLockedFields: ["model"] });
+    const sessionsRef = { current: [session("lead", "full-access")] };
+    const create = evaluate("createWorker", {
+      sessionsRef, ensureMonoSession, homeDir: async () => "/empty-temp-home", ensureOpenSession: async () => undefined,
+      saveMonoPermissions: async () => true, sessionDefaults: {}, newDefaultSession: (cwd: string) => newSession("codex", cwd, "model"),
+      upsertSession: vi.fn(async () => undefined),
+      orchestrationProjectCwd: () => "/repo", orchestrationCheckoutCwd: () => "/repo",
+      workspaceIdentity: () => ({ id: "workspace", projectCwd: "/repo", checkoutCwd: "/repo", kind: "project" }),
+      sameProjectPath: (a: string, b: string) => a === b, invoke: vi.fn(async () => "/scratch"),
+      orchestrator: { checkoutNotice: () => undefined }, getSession: vi.fn(async () => undefined), findMono,
+      snapshotMonoWorkerPermissions, snapshotMonoWorkerEffort: () => ({ modelSettings: {}, effortSource: "role" }), newSession,
+      setSessions: (next: Session[]) => { sessionsRef.current = next; },
+    });
+    const prepared = await create({ leadId: "lead" }, { id: "task", sessionId: "task-worker", memberId: "worker", harness: "codex", model: "model", title: "Echo", workspacePolicy: "shared" });
+    const taskWorker = sessionsRef.current.find(entry => entry.id === "task-worker")!;
+    expect(monoForSession(taskWorker.id)).toBeUndefined();
+    const mode = monoRuntimeMode(monoForSession(taskWorker.id), taskWorker.runtimeMode, taskWorker.runtimeModeSource);
+    expect(buildTurnStartParams({ threadId: "synthetic-thread", runtimeMode: mode, prompt: "Synthetic request; never sent" }))
+      .toMatchObject({ approvalPolicy: "on-request", sandboxPolicy: { type: "workspaceWrite" } });
+    expect(prepared).toMatchObject({ runtimeMode: "auto", runtimeModeSource: "role" });
+    expect(sessionsRef.current.find(entry => entry.id === findMono("worker")!.sessionId)).toMatchObject({ runtimeMode: "auto", runtimeModeSource: "role" });
+    expect(legacyMonoRuntimeMode("worker")).toBeUndefined();
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+    vi.unstubAllGlobals();
+  }
+});
 
 it.each([{ readOnly: false, member: false }, { readOnly: true, member: false }, { readOnly: false, member: true }])("App resolves worker permissions after preparation (readOnly=$readOnly, member=$member)", async ({ readOnly, member }) => {
   const resident = session("resident", "auto", { runtimeModeSource: "role" });

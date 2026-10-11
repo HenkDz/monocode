@@ -131,4 +131,11 @@ describe.each(providers)("$name Mono working folder migration", provider => {
     if (forks) expect(mock.spawn.mock.calls.at(-1)?.[2]).toEqual(expect.arrayContaining(["--fork", "saved"]));
     else expect(mock.sent.find(request => ["session/load", "session/resume"].includes(request.method))?.params).toMatchObject({ sessionId: "saved", cwd: "/mono/workspace" });
   });
+
+  if (forks) it("rejects relocation before prompting when the fork's native identity is unavailable", async () => {
+    provider.bind(input.sessionId, "saved", input.cwd, "work");
+    mock.spawn.mockImplementation(async () => { mock.nativeIds.delete(input.sessionId); });
+    await expect(provider.send({ ...input, cwd: "/mono/workspace" })).rejects.toThrow("relocated session");
+    expect(mock.sent.some(request => (request as { type?: string }).type === "prompt")).toBe(false);
+  });
 });

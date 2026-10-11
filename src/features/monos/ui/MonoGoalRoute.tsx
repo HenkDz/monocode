@@ -26,7 +26,7 @@ export function MonoGoalRoute({
   const route =
     retainedRoute ??
     decideMonoGoalRoute({
-      text: text.trim(),
+      text,
       attachmentCount,
       choice,
       context,

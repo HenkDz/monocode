@@ -60,7 +60,9 @@ describe("exact project routes", () => {
     ctx.projects[1].name = name;
     for (const override of ["auto", "manager"] as const)
       expect(decide(text, { context: ctx, choice: { mode: "goal", override, projectId: "c:/code/atlas" } }))
-        .toMatchObject({ kind: "grand", reason: "More than one project mentioned" });
+        .toMatchObject({ kind: "grand", reason: /[^\t\n\r\x20-\x7e]/.test(text)
+          ? "Contains non-English or special characters, so Grand Orch will route it."
+          : "More than one project mentioned" });
   });
   it("keeps duplicate and empty normalized names conservative", () => {
     const ctx = context();
@@ -83,7 +85,9 @@ describe("exact project routes", () => {
           const text = `Fix ${before}${first}${after} and ${after}${second}${before}`;
           const route = decide(text, { context: ctx, choice: { mode: "goal", override, projectId: ctx.projects[0].id } });
           expect(route, JSON.stringify({ text, override })).toMatchObject({ kind: "grand" });
-          if (override === "manager") expect(route.reason).toBe("More than one project mentioned");
+          if (override === "manager") expect(route.reason).toBe(/[^\t\n\r\x20-\x7e]/.test(text)
+            ? "Contains non-English or special characters, so Grand Orch will route it."
+            : "More than one project mentioned");
         }
     }
   });
@@ -98,11 +102,15 @@ describe("exact project routes", () => {
     ".env", ".gitignore", ".", "..", "/", "\\", "`src/index.ts`", '".env"',
   ])("requires explicit selection for path-like token %s", path => {
     for (const text of [`Update ${path}`, `Update Atlas and ${path}`])
-      expect(decide(text)).toMatchObject({ kind: "grand", reason: "Contains file paths: choose a project or send to Grand Orchestrator" });
+      expect(decide(text)).toMatchObject({ kind: "grand", reason: /[^\t\n\r\x20-\x7e]/.test(path)
+        ? "Contains non-English or special characters, so Grand Orch will route it."
+        : "Contains file paths: choose a project or send to Grand Orchestrator" });
     const selected = decide(`Update ${path}`, {
       choice: { mode: "goal", override: "manager", projectId: "c:/code/atlas" },
     });
-    expect(selected).toMatchObject(path.toLowerCase().includes("beacon")
+    expect(selected).toMatchObject(/[^\t\n\r\x20-\x7e]/.test(path)
+      ? { kind: "grand", reason: "Contains non-English or special characters, so Grand Orch will route it." }
+      : path.toLowerCase().includes("beacon")
       ? { kind: "grand", reason: path.toLowerCase().includes("atlas")
         ? "More than one project mentioned" : "Selected project differs from the text" }
       : { kind: "manager", project: { name: "Atlas" },

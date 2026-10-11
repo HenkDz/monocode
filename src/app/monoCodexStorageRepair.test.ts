@@ -152,7 +152,7 @@ function sandboxRepairFixture(extra: Partial<Session> = {}) {
   const retry = vi.fn<() => boolean | Promise<boolean>>(() => true), peerRetry = vi.fn(() => true), otherRetry = vi.fn(() => true);
   recovery.hold("clicked", retry); recovery.hold("peer", peerRetry); recovery.hold("other", otherRetry);
   const stop = vi.fn(async (_harness: string, _sessionId: string) => {}), prepare = vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}), persist = vi.fn(async () => {}), saveMode = vi.fn();
-  const invoke = vi.fn(async () => ({ configPath: "/synthetic/account/config.toml", backupPaths: ["/synthetic/account/config.backup", "/synthetic/private/config.backup"] }));
+  const invoke = vi.fn(async () => ({ configPath: "/synthetic/private/config.toml", backupPaths: ["/synthetic/private/config.backup"] }));
   const context = {
     sessionsRef, codexStorageRecovery: { current: recovery }, codexStorageAccountId, isCodexStorageError,
     parseCodexStorageConflict, parseCodexSandboxBlocker, codexSandboxRepairSettings, IS_WIN: true,
@@ -171,7 +171,7 @@ function sandboxRepairFixture(extra: Partial<Session> = {}) {
   return { ...context, repair, recovery, retry, peerRetry, otherRetry, stop, prepare, persist, saveMode };
 }
 
-it("switches the selected account only on explicit choice, stops idle servers and exposes both backups", async () => {
+it("switches the account's private Mono sandbox only on explicit choice, stops idle servers and exposes its backup", async () => {
   const fixture = sandboxRepairFixture();
   expect(fixture.invoke).not.toHaveBeenCalled();
   await fixture.repair("clicked", "use_unelevated_sandbox");
@@ -179,7 +179,8 @@ it("switches the selected account only on explicit choice, stops idle servers an
   expect(fixture.invoke).toHaveBeenCalledExactlyOnceWith("codex_mono_use_unelevated_sandbox", { providerAccountId: "account" });
   expect(fixture.stop.mock.invocationCallOrder[1]).toBeLessThan(fixture.invoke.mock.invocationCallOrder[0]);
   const clicked = fixture.sessionsRef.current.find(session => session.id === "clicked")!;
-  expect(clicked.blocks[0].text).toContain("/synthetic/account/config.backup");
+  expect(clicked.blocks[0].text).toContain("Your own Codex config is unchanged");
+  expect(clicked.blocks[0].text).not.toContain("/synthetic/account/");
   expect(clicked.blocks[0].text).toContain("/synthetic/private/config.backup");
   expect(clicked.runtimeMode).toBe("supervised");
   expect(fixture.retry).toHaveBeenCalledOnce();
@@ -226,9 +227,9 @@ it("keeps a held Plan restricted after an explicit Mono full-access choice", asy
   expect(fixture.retry).not.toHaveBeenCalled(); expect(fixture.recovery.hasPending("clicked")).toBe(true);
 });
 
-it("holds prompts and returns backup paths after a partial explicit account-config write fails", async () => {
+it("holds prompts and returns the private backup path after an explicit Mono-config write fails", async () => {
   const fixture = sandboxRepairFixture();
-  fixture.invoke.mockRejectedValueOnce(new Error("Private config is busy; backups preserved at /synthetic/account/config.backup, /synthetic/private/config.backup"));
+  fixture.invoke.mockRejectedValueOnce(new Error("Private config is busy; backup preserved at /synthetic/private/config.backup"));
   await expect(fixture.repair("clicked", "use_unelevated_sandbox")).rejects.toThrow("/synthetic/private/config.backup");
   expect(fixture.prepare).not.toHaveBeenCalled(); expect(fixture.retry).not.toHaveBeenCalled();
   expect(fixture.peerRetry).not.toHaveBeenCalled(); expect(fixture.recovery.hasPending("clicked")).toBe(true);

@@ -185,7 +185,7 @@ import { TitleBar, type Tab as TitleTab } from "./shell/TitleBar";
 import { WindowControls } from "./shell/WindowControls";
 import { MonoDetails } from "../features/monos/ui/MonoDetails";
 import { changeMonoWorkingDirectory, isMonoHomeDirectory, migrateMonoWorkingDirectory } from "../features/monos/model/monoWorkingDirectory";
-import { acceptMonoWorkingDirectoryMigration } from "../features/monos/model/monoWorkingDirectoryMigration";
+import { acceptMonoWorkingDirectoryMigration, monoWorkingDirectoryMigrationPending } from "../features/monos/model/monoWorkingDirectoryMigration";
 import { MonoCodexStorageRecovery, isCodexStorageError, parseCodexStorageConflict, parseCodexStorageRecoveryConflict, parseCodexSandboxBlocker, codexSandboxRepairSettings, type CodexStorageResolution, type CodexStorageComparison } from "../features/monos/model/monoCodexStorage";
 import { codexStorageAccountId, monoCodexStorageIssues } from "../features/monos/model/monoCodexStorageIssues";
 import { prepareMonoCodexStore, resolveCodexBinary } from "../integrations/harness/core/child";
@@ -552,6 +552,7 @@ import { shouldGenerateSessionTitle } from "../features/sessions/model/sessionTi
 import {
   DEFAULT_PROVIDER_ACCOUNT_ID,
   providerAccountExists,
+  sameProviderAccountId,
   selectedProviderAccountId,
   supportsProviderAccounts,
   type ProviderAccountProvider,
@@ -8853,6 +8854,14 @@ function Workspace({
               attachments: turnAttachments,
               prepareText: async provider => {
                 contextProvider = provider;
+                if (provider && monoWorkingDirectoryMigrationPending(sessionId)) {
+                  const saved = await upsertSession(current, session => {
+                    if (session.harness !== current.harness || !sameProviderAccountId(session.providerAccountId, current.providerAccountId))
+                      throw new Error("The conversation's provider changed before its relocated context could be saved. Retry the turn.");
+                    return { ...session, providerSessionId: provider };
+                  });
+                  if (!saved) throw new Error("The relocated conversation could not be saved. Retry before sending a turn.");
+                }
                 const preparedText = prepareContext ? await prepareContext(text, provider) : text;
                 if (loadMonoRotation(sessionId) === null) throw new Error(MONO_ROTATION_READ_ERROR);
                 return preparedText;
@@ -10201,11 +10210,11 @@ function Workspace({
         if (resolution === "use_unelevated_sandbox") {
           const accountSessions = sessionsRef.current.filter(entry => entry.harness === "codex" && !remoteProjectFor(entry.cwd) &&
             codexStorageAccountId(entry, selectedProviderAccountId("codex", entry.cwd)) === accountId);
-          if (accountSessions.some(entry => entry.busy || entry.codexStoragePreparing)) throw new Error("Wait for this account's current turns and storage preparations to finish before switching its sandbox.");
+          if (accountSessions.some(entry => entry.busy || entry.codexStoragePreparing)) throw new Error("Wait for this account's current turns and storage preparations to finish before changing its Mono sandbox.");
           for (const entry of accountSessions) await stopHarnessSession("codex", entry.id);
           const changed = await invoke<{ configPath: string; backupPaths: string[] }>("codex_mono_use_unelevated_sandbox", { providerAccountId: accountId });
           flushSync(() => setSessions(previous => previous.map(entry => entry.id === sessionId ? { ...entry, blocks: [...entry.blocks,
-            { id: crypto.randomUUID(), role: "system", text: `This account now uses the unelevated Codex sandbox. Config: ${changed.configPath}\nBackups: ${changed.backupPaths.join("\n")}\nRestore each backup over its config to undo this choice, then restart the account's idle conversations.` }] } : entry)));
+            { id: crypto.randomUUID(), role: "system", text: `Monos on this account now use the unelevated Codex sandbox. Your own Codex config is unchanged. Private config: ${changed.configPath}\nBackups: ${changed.backupPaths.join("\n")}\nRestore the private backup over its config to undo this choice, then restart the account's idle Mono conversations.` }] } : entry)));
         } else if (resolution === "use_mono_full_access") {
           await stopHarnessSession("codex", sessionId);
           const mono = monoForSession(sessionId);

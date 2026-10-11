@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { beforeEach, expect, it, vi } from "vitest";
-import { acceptMonoWorkingDirectoryMigration, monoWorkingDirectoryNeedsResume, rememberMonoWorkingDirectoryMigration } from "./monoWorkingDirectoryMigration";
+import { acceptMonoWorkingDirectoryMigration, monoWorkingDirectoryMigrationPending, monoWorkingDirectoryNeedsResume, rememberMonoWorkingDirectoryMigration } from "./monoWorkingDirectoryMigration";
 
 beforeEach(() => localStorage.clear());
 
@@ -11,8 +11,10 @@ it("retains the old native identity across a restart until an actual turn accept
   expect(restarted.monoWorkingDirectoryNeedsResume("chat", "old-native")).toBe(true);
   expect(restarted.monoWorkingDirectoryNeedsResume("other-chat", "old-native")).toBe(false);
   expect(restarted.monoWorkingDirectoryNeedsResume("chat", "new-native")).toBe(false);
+  expect(restarted.monoWorkingDirectoryMigrationPending("chat")).toBe(true);
   restarted.acceptMonoWorkingDirectoryMigration("chat");
   expect(restarted.monoWorkingDirectoryNeedsResume("chat", "old-native")).toBe(false);
+  expect(restarted.monoWorkingDirectoryMigrationPending("chat")).toBe(false);
 });
 
 it("keeps other pending conversations and never records a new conversation", () => {
@@ -22,6 +24,8 @@ it("keeps other pending conversations and never records a new conversation", () 
   acceptMonoWorkingDirectoryMigration("chat");
   expect(monoWorkingDirectoryNeedsResume("other", "other-native")).toBe(true);
   expect(monoWorkingDirectoryNeedsResume("new")).toBe(false);
+  expect(monoWorkingDirectoryMigrationPending("new")).toBe(false);
+  expect(monoWorkingDirectoryMigrationPending("other")).toBe(true);
   expect(localStorage.getItem("monocode:mono-working-directory-migration:other")).toBe("other-native");
   expect(localStorage.getItem("monocode:mono-working-directory-migration:chat")).toBeNull();
 });

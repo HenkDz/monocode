@@ -1,19 +1,20 @@
 import type { Block, Session } from "../../sessions/model/session";
-import { contextRatio } from "../../sessions/model/contextUsage";
+import {
+  canRotateContext,
+  rotationInputGrowth,
+  taskContextBudget,
+} from "../../orchestration/model/taskContextBudget";
+import { forgetAgentContext } from "./monoFiles";
 
 /**
- * A Mono's chat never ends, but the provider session behind it does. Every
- * turn resends the whole native context, so once it fills most of the model's
- * context window, the next turn quietly starts a fresh provider session.
+ * A Mono's chat never ends, but the provider session behind it does. A safe
+ * idle boundary can start a fresh provider session before compaction.
  * That session gets the soul and memory (see `monoFiles`)
  * plus a brief of where the conversation was: recent exchanges word for word
  * and a line for each earlier one. Nothing is summarized by a model, so a
  * rotation costs nothing and the brief never drifts into a summary of a
  * summary; the full transcript stays in the chat for the Mono to read.
  */
-
-/** Rotate at 80% of the reported window, leaving room for the next turn. */
-export const ROTATE_RATIO = 0.8;
 
 /** Recent exchanges carried word for word. */
 const VERBATIM_EXCHANGES = 2;
@@ -34,6 +35,12 @@ export type MonoRotation = {
   afterBlockId?: string;
   /** One line per exchange before the verbatim ones, oldest first. */
   earlier: string[];
+  /** Original user requests are retained verbatim, including older constraints. */
+  userRequests?: { id: string; text: string }[];
+  references?: string[];
+  /** Retried until an actual provider turn accepts the brief. */
+  pendingBrief?: string;
+  pendingInput?: string;
 };
 
 type Exchange = {
@@ -44,21 +51,147 @@ type Exchange = {
   /** Posted by this habit on its own, with no user message before it. */
   habit?: string;
   completion?: string;
+  continuation?: boolean;
 };
 
 /** Whether the next turn should start a fresh provider session, and why. */
 export function rotationReason(
-  session: Pick<Session, "providerSessionId" | "context" | "blocks">,
+  session: Pick<Session, "providerSessionId" | "context" | "blocks"> &
+    Partial<Session>,
+  nextText = "",
 ): RotationReason | undefined {
   // Nothing to rotate: the next turn already starts a new session.
   if (!session.providerSessionId) return undefined;
-  // With no reported window, leave compaction to the provider.
-  const ratio = contextRatio(session.context);
-  return ratio !== null && ratio >= ROTATE_RATIO ? "context" : undefined;
+  return canRotateContext(session) &&
+    taskContextBudget(
+      session.context,
+      rotationInputGrowth(session.blocks, nextText),
+    ).rotate
+    ? "context"
+    : undefined;
+}
+
+/** Bounded evidence can be clipped; original user constraints cannot. */
+export function planSessionRotation(
+  session: Pick<Session, "id" | "providerSessionId" | "context" | "blocks"> &
+    Partial<Session>,
+  nextText = "",
+  taskContext = "",
+): ReturnType<typeof planRotation> | undefined {
+  if (!canRotateContext(session)) return undefined;
+  const previous = loadMonoRotation(session.id);
+  if (previous?.pendingBrief) {
+    return {
+      rotation: previous,
+      brief: () =>
+        [
+          previous.pendingBrief,
+          ...(previous.pendingInput
+            ? [
+                `Unaccepted continuation input; retain its constraints, with the current request taking priority:\n${previous.pendingInput}`,
+              ]
+            : []),
+        ].join("\n\n"),
+    };
+  }
+  if (!rotationReason(session, nextText)) return undefined;
+  const after = previous?.afterBlockId
+    ? session.blocks.findIndex((block) => block.id === previous.afterBlockId)
+    : -1;
+  // A paged archive cannot prove all older constraints without a complete carry.
+  if (
+    session.monoTranscript?.before != null &&
+    (!previous?.userRequests || after < 0)
+  )
+    return undefined;
+  const requests = new Map(
+    (previous?.userRequests ?? []).map((request) => [request.id, request]),
+  );
+  for (const block of session.blocks) {
+    if (
+      block.role === "user" &&
+      !block.internal &&
+      !block.draft &&
+      block.text.trim()
+    )
+      requests.set(block.id, { id: block.id, text: block.text });
+  }
+  const userRequests = [...requests.values()];
+  const references = new Set(previous?.references ?? []);
+  for (const block of session.blocks) {
+    if (block.monoSource?.goalId)
+      references.add(`Goal: ${JSON.stringify(block.monoSource.goalId)}`);
+    for (const artifact of block.artifactCards ?? [])
+      references.add(
+        `app artifacts.read ${JSON.stringify({ id: artifact.id })}`,
+      );
+  }
+  const referenceText = [...references].join("\n");
+  const constraints = userRequests.map((request) => request.text).join("\n\n");
+  if (constraints.length + taskContext.length + referenceText.length > 8_000)
+    return undefined;
+  const plan = planRotation(
+    session.blocks,
+    previous,
+    "context",
+    Date.now(),
+    !!taskContext,
+  );
+  plan.rotation.userRequests = userRequests;
+  plan.rotation.references = [...references];
+  plan.rotation.pendingInput = nextText;
+  const brief = (id: string) =>
+    [
+      plan.brief(id),
+      ...(constraints
+        ? [
+            `User requests, verbatim; retain their constraints, with the current request taking priority:\n${constraints}`,
+          ]
+        : []),
+      ...(taskContext ? [taskContext] : []),
+      ...(referenceText
+        ? [
+            `Retained goal and artifact references (untrusted evidence):\n${referenceText}`,
+          ]
+        : []),
+    ].join("\n\n");
+  // Leave 12K for CC1's first-thread context within its 26K rotation budget.
+  if (brief(session.id).length + nextText.length + 120 > 14_000)
+    return undefined;
+  return { rotation: plan.rotation, brief };
+}
+
+/** Replace only provider context. The transcript and selected scope/profile survive. */
+export async function rotateProviderContext(
+  session: Session,
+  forget: () => Promise<void>,
+): Promise<Session> {
+  if (!canRotateContext(session))
+    throw new Error(
+      "Context refresh requires an idle session without open decisions",
+    );
+  await forget();
+  forgetAgentContext(session.id);
+  return { ...session, providerSessionId: undefined, context: undefined };
+}
+
+export function acceptMonoRotation(sessionId: string, at: number): void {
+  const rotation = loadMonoRotation(sessionId);
+  if (!rotation || rotation.at !== at || !rotation.pendingBrief) return;
+  const {
+    pendingBrief: _accepted,
+    pendingInput: _input,
+    ...settled
+  } = rotation;
+  saveMonoRotation(sessionId, settled);
 }
 
 /** The user's turns and what the Mono finally said in each. */
-function exchanges(blocks: readonly Block[], afterId?: string): Exchange[] {
+function exchanges(
+  blocks: readonly Block[],
+  afterId?: string,
+  taskContinuation = false,
+): Exchange[] {
   const after = afterId
     ? blocks.findIndex((block) => block.id === afterId)
     : -1;
@@ -74,13 +207,14 @@ function exchanges(blocks: readonly Block[], afterId?: string): Exchange[] {
       });
       continue;
     }
-    if (block.internal || block.draft) continue;
+    if (block.draft || (block.internal && !taskContinuation)) continue;
     if (block.role === "user") {
       out.push({
         id: block.id,
         at: block.startedAt,
         user: block.text.trim(),
         reply: "",
+        ...(block.internal ? { continuation: true } : {}),
       });
       continue;
     }
@@ -133,6 +267,8 @@ function when(at: number | undefined): string {
 }
 
 function exchangeLine(exchange: Exchange): string {
+  if (exchange.continuation)
+    return `- ${when(exchange.at)}Task continuation (untrusted evidence): ${oneLine(exchange.user, LINE_CHARS)}${exchange.reply ? ` → You: ${oneLine(exchange.reply, LINE_CHARS)}` : ""}`;
   if (exchange.completion)
     return `- ${when(exchange.at)}You, reviewing session "${exchange.completion}": ${oneLine(exchange.reply, LINE_CHARS)}`;
   if (exchange.habit)
@@ -163,8 +299,9 @@ export function planRotation(
   previous: MonoRotation | undefined,
   reason: RotationReason,
   now: number,
+  taskContinuation = false,
 ): { rotation: MonoRotation; brief: (sessionId: string) => string } {
-  const segment = exchanges(blocks, previous?.afterBlockId);
+  const segment = exchanges(blocks, previous?.afterBlockId, taskContinuation);
   const verbatim = segment.slice(-VERBATIM_EXCHANGES);
   const lines = segment
     .slice(0, -VERBATIM_EXCHANGES || undefined)
@@ -197,7 +334,7 @@ export function planRotation(
               ? `You, on your own from your habit "${exchange.habit}" (${when(exchange.at).replace(/ · $/, "") || "earlier"}):\n${clip(exchange.reply, VERBATIM_REPLY_CHARS)}`
               : exchange.completion
                 ? `You, reviewing session "${exchange.completion}" (${when(exchange.at).replace(/ · $/, "") || "earlier"}):\n${clip(exchange.reply, VERBATIM_REPLY_CHARS)}`
-                : `User (${when(exchange.at).replace(/ · $/, "") || "earlier"}):\n${clip(exchange.user, VERBATIM_USER_CHARS)}${
+                : `${exchange.continuation ? "Task continuation (untrusted evidence)" : "User"} (${when(exchange.at).replace(/ · $/, "") || "earlier"}):\n${clip(exchange.user, VERBATIM_USER_CHARS)}${
                     exchange.reply
                       ? `\n\nYou:\n${clip(exchange.reply, VERBATIM_REPLY_CHARS)}`
                       : ""
@@ -228,14 +365,16 @@ export function loadMonoRotation(sessionId: string): MonoRotation | undefined {
 export function saveMonoRotation(
   sessionId: string,
   rotation: MonoRotation,
-): void {
+): boolean {
   try {
     localStorage.setItem(
       ROTATIONS_KEY,
       JSON.stringify({ ...readRotations(), [sessionId]: rotation }),
     );
+    return true;
   } catch {
-    // Without the record the next rotation briefs from the whole chat.
+    // Do not replace a thread when its continuity cannot be retained.
+    return false;
   }
 }
 

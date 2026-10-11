@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import {
   contextRatio,
   contextTooltip,
+  formatTokens,
   type ContextUsage,
 } from "../model/contextUsage";
 import { Popover } from "../../../shared/ui/Popover";
@@ -21,26 +22,35 @@ function ringClass(ratio: number): string {
 /**
  * Circular gauge for how full the model context window is.
  *
- * Renders nothing until the harness reports both halves — Cursor's ACP stream
- * carries no usage at all, and a ring guessing at a number is worse than no
- * ring.
+ * Unknown limits stay in words, without a guessed percentage ring.
  */
 export function ContextMeter({
   usage,
   onCompact,
   compactDisabled = false,
+  rotationScheduled = false,
 }: {
   usage?: ContextUsage;
   onCompact?: () => void;
   compactDisabled?: boolean;
+  rotationScheduled?: boolean;
 }) {
   const [hovered, setHovered] = useState(false);
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const ratio = contextRatio(usage);
-  if (!usage || ratio === null) return null;
+  if (!usage || !Number.isFinite(usage.used) || usage.used < 0) return null;
 
   const { headline, detail } = contextTooltip(usage);
+  const threshold = usage.effectiveCompactionThreshold;
+  const thresholdLabel =
+    threshold != null && Number.isFinite(threshold) && threshold > 0
+      ? `Context refresh threshold: ${formatTokens(threshold)} tokens`
+      : "Context refresh threshold unknown";
+  const rotationLabel = rotationScheduled
+    ? "Will refresh context before next turn"
+    : undefined;
+  const label = `${headline}, ${detail}. ${thresholdLabel}${rotationLabel ? `. ${rotationLabel}` : ""}`;
   const actionsOpen = open && onCompact != null;
 
   return (
@@ -49,20 +59,35 @@ export function ContextMeter({
       className="relative shrink-0"
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
+      onFocus={() => setHovered(true)}
+      onBlur={() => setHovered(false)}
     >
       {onCompact ? (
         <button
           type="button"
           title="Context usage"
-          aria-label={`${headline}, ${detail}. Open context actions`}
+          aria-label={`${label}. Open context actions`}
           aria-expanded={actionsOpen}
           onClick={() => setOpen((value) => !value)}
           className="-m-1 grid rounded-sm p-1 outline-none focus-visible:ring-1 focus-visible:ring-accent"
         >
-          <MeterRing ratio={ratio} />
+          {ratio === null ? (
+            <span className="text-[11px] text-content/50">{headline}</span>
+          ) : (
+            <MeterRing ratio={ratio} />
+          )}
         </button>
+      ) : ratio === null ? (
+        <span
+          className="text-[11px] text-content/50"
+          title={label}
+          role="img"
+          aria-label={label}
+        >
+          {headline}
+        </span>
       ) : (
-        <MeterRing ratio={ratio} label={`${headline}, ${detail}`} />
+        <MeterRing ratio={ratio} label={label} />
       )}
       {hovered || actionsOpen ? (
         <Popover
@@ -74,6 +99,14 @@ export function ContextMeter({
         >
           <div className="text-[12px] leading-4 text-content">{headline}</div>
           <div className="text-[11px] leading-4 text-content/50">{detail}</div>
+          <div className="text-[11px] leading-4 text-content/50">
+            {thresholdLabel}
+          </div>
+          {rotationLabel ? (
+            <div className="text-[11px] leading-4 text-content">
+              {rotationLabel}
+            </div>
+          ) : null}
           {actionsOpen ? (
             <button
               type="button"

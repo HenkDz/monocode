@@ -154,7 +154,7 @@ export type HarnessEvent =
       streaming?: boolean;
     }
   /** Context-window level after the harness's latest request. */
-  | { type: "context"; used?: number; window?: number }
+  | { type: "context"; used?: number; window?: number; effectiveCompactionThreshold?: number }
   /** Provider history was compacted; standing app context must be handed again. */
   | { type: "context.compacted" }
   /** Provider token accounting for the active user turn. */

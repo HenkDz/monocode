@@ -23,6 +23,8 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { Composer } from "./Composer";
+import { planSessionRotation } from "../../monos/model/monoRotation";
+import { retainedTaskContext } from "../../orchestration/model/memberContinuity";
 import type { Worktree } from "../../source-control/model/worktrees";
 import {
   orchestrator,
@@ -757,6 +759,11 @@ const LocalSessionPane = memo(function LocalSessionPane({
       hideBranchPicker={!!session.inboxAsk || managed}
       hideTopBar={!!session.inboxAsk}
       context={session.context}
+      rotationScheduled={!remote && !!(mono || memberTask) && (() => {
+        const run = orchestrationRuns.find(entry => entry.tasks.some(task => task.sessionId === session.id));
+        const taskContext = memberTask && run ? retainedTaskContext(run, memberTask) : "";
+        return taskContext != null && !!planSessionRotation(session, "", taskContext);
+      })()}
       quoteRequest={quoteRequest}
       initialDraft={
         draftRef.current ??

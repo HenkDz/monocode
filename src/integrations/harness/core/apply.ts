@@ -7,7 +7,7 @@ import type {
   TaskListItem,
   ToolPreview,
 } from "../../../features/sessions/model/session";
-import { mergeContextUsage } from "../../../features/sessions/model/contextUsage";
+import { dropContextWindow, mergeContextUsage } from "../../../features/sessions/model/contextUsage";
 import { displayPath } from "../../../shared/lib/paths";
 import {
   composeToolTitle,
@@ -140,6 +140,7 @@ export function applyHarnessEvent(
         context: mergeContextUsage(session.context, {
           used: event.used,
           window: event.window,
+          effectiveCompactionThreshold: event.effectiveCompactionThreshold,
         }),
       };
     case "turn.metrics":
@@ -195,6 +196,9 @@ export function applyHarnessEvent(
     case "session.configChanged":
       return {
         ...session,
+        ...((event.model && event.model !== session.model) ||
+          (event.modelSettings && Object.entries(event.modelSettings).some(([key, value]) => session.modelSettings[key] !== value))
+          ? { context: dropContextWindow(session.context) } : {}),
         ...(event.model ? { model: event.model } : {}),
         ...(event.modelSettings
           ? {

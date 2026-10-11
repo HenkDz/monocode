@@ -41,7 +41,7 @@ function findNode(predicate: (node: ts.Node) => boolean): ts.Node {
   if (!found) throw Error("App callback was not found");
   return found;
 }
-const helpers = ["withHarnessChoice", "withPlanBuildTarget"].map(name =>
+const helpers = ["sameSettings", "withHarnessChoice", "withPlanBuildTarget"].map(name =>
   findNode(node => ts.isFunctionDeclaration(node) && node.name?.text === name).getText(source),
 ).join("\n");
 const withPlanBuildTarget = new Function("resolveModel", "mergeModelSettings", "modelEffortSetting", "planComposerSwitch", "HARNESS_LABEL", "formatSessionTitle", "sessionDisplayTitle", "dropContextWindow",

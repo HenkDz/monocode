@@ -9,6 +9,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { findMono, monoForSession, updateMono } from "../features/monos/model/mono";
 import { switchMonoRoleEffort } from "../features/monos/model/monoRoleEffort";
 import { lockMonoField } from "../features/monos/model/monoTeam";
+import { dropContextWindow } from "../features/sessions/model/contextUsage";
 import {
   modelEffortSetting,
   resetHarnessModelOverlays,
@@ -92,18 +93,21 @@ async function renderResident(model: AgentModel, modelSettings: Record<string, s
   const end = source.indexOf("  const onRuntimeModeChange = useCallback(", start);
   expect(start).toBeGreaterThan(-1);
   expect(end).toBeGreaterThan(start);
+  const settingsHelper = ts.createSourceFile("App.tsx", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX).statements
+    .find(node => ts.isFunctionDeclaration(node) && node.name?.text === "sameSettings")!;
   // Exercise the private App callback without exporting it or booting the workspace.
-  const compiled = ts.transpile(source.slice(start, end), {
+  const compiled = ts.transpile(`${settingsHelper.getText()}\n${source.slice(start, end)}`, {
     target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None,
   });
   const handler = new Function(
     "useCallback", "sessionsRef", "monoForSession", "modelEffortSetting", "resolveModel",
-    "updateMono", "lockMonoField", "saveLastModelSettings", "setSessions",
+    "updateMono", "lockMonoField", "saveLastModelSettings", "setSessions", "dropContextWindow",
     `${compiled}\nreturn onModelSettingsChange;`,
   )(
     (callback: unknown) => callback, sessionsRef, monoForSession, modelEffortSetting,
     resolveModel, updateMono, lockMonoField, vi.fn(),
     (update: (previous: Resident[]) => Resident[]) => { state = update(state); },
+    dropContextWindow,
   ) as (sessionId: string, settings: Record<string, string>, settingId?: string) => void;
   const picked = vi.fn((settings: Record<string, string>, settingId?: string) =>
     handler("resident", settings, settingId),

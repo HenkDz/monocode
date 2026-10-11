@@ -134,12 +134,52 @@ test("200 percent zoom preserves question controls and horizontal reflow", async
   await expect(row(page, "question").getByRole("button", { name: "Continue", exact: true })).toBeEnabled();
 });
 
+for (const theme of ["dark", "light"]) {
+  test(`panel reflow and keyboard storage evidence without accordions ${theme}`, async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 1000 });
+    await page.goto(`/?theme=${theme}&presentation=panel`);
+    await expect(page.getByRole("heading", { name: "Attention", exact: true, level: 2 })).toBeVisible();
+    const headingBounds = await page.getByRole("heading", { name: "Attention", exact: true, level: 2 }).boundingBox();
+    const closeBounds = await page.locator(".aq-toolbar").getByRole("button", { name: "Close", exact: true }).boundingBox();
+    expect(headingBounds).not.toBeNull(); expect(closeBounds).not.toBeNull();
+    expect(closeBounds!.x).toBeGreaterThan(headingBounds!.x + headingBounds!.width);
+    expect(Math.abs((headingBounds!.y + headingBounds!.height / 2) - (closeBounds!.y + closeBounds!.height / 2))).toBeLessThan(4);
+    await expect(page.getByText("Command center", { exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Back to conversation" })).toHaveCount(0);
+    await expect(page.locator("details, summary")).toHaveCount(0);
+    const widths = await page.locator(".aq-scroll").evaluate(element => ({ client: element.clientWidth, scroll: element.scrollWidth }));
+    expect(widths.scroll).toBeLessThanOrEqual(widths.client + 1);
+    const directory = join(evidence, "screenshots"); mkdirSync(directory, { recursive: true });
+    await page.screenshot({ path: join(directory, `panel-${theme}-390.png`), fullPage: true });
+    await filter(page, "Blockers");
+    const trigger = row(page, "storage").getByRole("button", { name: "Evidence", exact: true });
+    await trigger.focus(); await page.keyboard.press("Enter");
+    const dialog = page.getByRole("dialog", { name: "Storage evidence" });
+    await expect(dialog).toBeVisible(); await expect(dialog).toBeFocused();
+    await expect(dialog).toContainText("C:/synthetic/mono/AGENTS.md");
+    await expect(page.locator("details, summary")).toHaveCount(0);
+    const bounds = await dialog.boundingBox();
+    expect(bounds).not.toBeNull(); expect(bounds!.x).toBeGreaterThanOrEqual(0);
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390);
+    await page.screenshot({ path: join(directory, `storage-evidence-${theme}-390.png`), fullPage: true });
+    await page.keyboard.press("Tab");
+    await expect(dialog.getByRole("button", { name: "Close evidence" })).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0); await expect(trigger).toBeFocused();
+    await expect(page.getByRole("heading", { name: "Attention", exact: true, level: 2 })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("heading", { name: "Attention closed" })).toBeVisible();
+    await expect(page.getByTestId("close-count")).toHaveText("1");
+  });
+}
+
 for (const variant of [{ name: "dark-1440", theme: "dark", width: 1440 }, { name: "light-1440", theme: "light", width: 1440 }, { name: "dark-390", theme: "dark", width: 390 }, { name: "light-390", theme: "light", width: 390 }]) {
   test(`capture actual queue states ${variant.name}`, async ({ page }) => {
     const pageErrors: string[] = [];
     page.on("pageerror", error => pageErrors.push(error.message));
     await page.setViewportSize({ width: variant.width, height: 1000 });
     await page.goto(`/?theme=${variant.theme}`);
+    await expect(page.locator("details, summary")).toHaveCount(0);
     const capture = async (state: string) => {
       const directory = join(evidence, "screenshots"); mkdirSync(directory, { recursive: true });
       await page.screenshot({ path: join(directory, `${state}-${variant.name}.png`), fullPage: true });

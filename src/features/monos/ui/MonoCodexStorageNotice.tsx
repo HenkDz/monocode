@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { copyText } from "../../../platform/tauri/clipboard";
 import { SecondaryButton } from "../../../shared/ui/SecondaryButton";
 import {
@@ -16,6 +16,7 @@ export function MonoCodexStorageNotice({
   onResolve,
   onCompare,
   onReveal,
+  renderDetails,
 }: {
   onRepair: () => Promise<void>;
   detail?: string;
@@ -23,6 +24,7 @@ export function MonoCodexStorageNotice({
   onResolve?: (resolution: CodexStorageResolution) => Promise<void>;
   onCompare?: () => Promise<CodexStorageComparison>;
   onReveal?: () => Promise<void>;
+  renderDetails?: (content: ReactNode) => ReactNode;
 }) {
   const [busy, setBusy] = useState<"repair" | "compare" | "reveal">();
   const [error, setError] = useState<string>();
@@ -70,6 +72,20 @@ export function MonoCodexStorageNotice({
   }
 
   if (!details && !busy && !success) return null;
+  const detailContent = <>
+    <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-all">{details}</pre>
+    <div className="mt-2">
+      <SecondaryButton onClick={() => {
+        void copyText(details ?? "").then(
+          () => setCopyStatus("Copied details"),
+          reason => setCopyStatus(
+            `Could not copy details: ${reason instanceof Error ? reason.message : String(reason)}`,
+          ),
+        );
+      }}>Copy details</SecondaryButton>
+    </div>
+    {copyStatus && <p className="mt-1">{copyStatus}</p>}
+  </>;
   return (
     <section
       role="status"
@@ -159,23 +175,12 @@ export function MonoCodexStorageNotice({
             </div>
           )}
           {error && <p role="alert" className="mt-2 break-all text-xs text-content/70">{parseCodexStorageRecoveryConflict(error)?.reason ?? (parseCodexStorageConflict(error) ? "The file changed again. Review the latest versions before choosing." : error)}</p>}
-          {details && (
+          {details && (renderDetails ? renderDetails(detailContent) : (
             <details className="mt-2 text-xs text-content/70">
               <summary className="cursor-pointer select-none rounded focus-visible:outline-accent">Details</summary>
-              <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-all">{details}</pre>
-              <div className="mt-2">
-                <SecondaryButton onClick={() => {
-                  void copyText(details).then(
-                    () => setCopyStatus("Copied details"),
-                    reason => setCopyStatus(
-                      `Could not copy details: ${reason instanceof Error ? reason.message : String(reason)}`,
-                    ),
-                  );
-                }}>Copy details</SecondaryButton>
-              </div>
-              {copyStatus && <p className="mt-1">{copyStatus}</p>}
+              {detailContent}
             </details>
-          )}
+          ))}
         </>
       )}
     </section>

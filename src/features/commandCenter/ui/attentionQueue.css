@@ -1,7 +1,7 @@
-.attention-queue { container: attention / inline-size; display: flex; flex: 1; min-width: 0; min-height: 0; flex-direction: column; background: var(--color-background-base); color: var(--color-content); font-size: 13px; }
+.attention-queue { container: attention / inline-size; display: flex; flex: 1; min-width: 0; min-height: 0; flex-direction: column; background: var(--color-background-base); color: var(--color-content); font-size: 13px; font-variant-numeric: tabular-nums; }
 .attention-queue[hidden] { display: none; }
 .aq-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 24px 28px; border-bottom: 1px solid var(--color-stroke); }
-.aq-toolbar h1 { font-size: 25px; font-weight: 600; letter-spacing: -.04em; margin: 4px 0; }
+.aq-title { font-size: 25px; font-weight: 600; letter-spacing: -.04em; margin: 4px 0; }
 .aq-toolbar p, .aq-coverage, .aq-owner, .aq-time, .aq-footer { color: color-mix(in srgb, var(--color-content) 75%, transparent); }
 .aq-toolbar .aq-eyebrow { font-size: 10px; letter-spacing: .1em; text-transform: uppercase; font-weight: 600; }
 .aq-scroll { flex: 1; min-height: 0; overflow: auto; padding: 24px 28px; scrollbar-gutter: stable; }
@@ -10,7 +10,7 @@
 .aq-actions > button, .aq-filters button { padding: 7px 11px; border: 1px solid var(--color-stroke); border-radius: 6px; background: color-mix(in srgb, var(--color-content) 5%, var(--color-background-base)); }
 .aq-actions > .aq-primary, .aq-filters button[aria-pressed="true"] { background: var(--color-content); color: var(--color-background-base); }
 .attention-queue button:disabled { opacity: .5; cursor: wait; }
-.attention-queue button:focus-visible, .attention-queue summary:focus-visible, .attention-queue input:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
+.attention-queue button:focus-visible, .attention-queue input:focus-visible, .aq-detail-popover button:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
 .aq-coverage { margin: 12px 0 20px; font-size: 12px; }
 .aq-item { display: grid; grid-template-columns: 26px minmax(0, 1fr) auto; gap: 16px; padding: 24px 0; border-top: 1px solid var(--color-stroke); overflow-wrap: anywhere; }
 .aq-symbol { display: grid; place-items: center; height: 26px; border: 1px solid var(--color-stroke); border-radius: 5px; font-size: 16px; }
@@ -28,6 +28,14 @@
 .aq-receipt[role="alert"] { font-weight: 600; }
 .aq-footer { border-top: 1px solid var(--color-stroke); margin-top: 20px; padding: 16px 0; font-size: 12px; }
 .aq-empty { padding: 32px 0; }
+.aq-details { margin-top: 12px; }
+.aq-details > button, .aq-detail-popover > header > button { padding: 6px 10px; border: 1px solid var(--color-stroke); border-radius: 6px; font: inherit; cursor: pointer; }
+.aq-detail-popover { padding: 16px; overflow: auto; background: var(--color-background-base); color: var(--color-content); font-size: 12px; font-variant-numeric: tabular-nums; }
+.aq-detail-popover > header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.aq-detail-popover h3 { font-size: 13px; font-weight: 600; }
+.attention-queue[data-presentation="panel"] .aq-toolbar { flex-direction: row; align-items: center; gap: 12px; padding: 16px; }
+.attention-queue[data-presentation="panel"] .aq-title { font-size: 19px; }
+.attention-queue[data-presentation="panel"] .aq-scroll { padding: 16px; }
 @container attention (max-width: 620px) {
   .aq-toolbar { flex-direction: column; align-items: flex-start; padding: 20px 16px; gap: 12px; }
   .aq-scroll { padding: 16px; }

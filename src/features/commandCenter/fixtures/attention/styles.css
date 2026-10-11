@@ -1,7 +1,10 @@
 @import "../../../../styles/index.css";
 @source "./main.tsx";
 @source "../../ui/AttentionQueue.tsx";
+@source "../../ui/AttentionDetails.tsx";
 @source "../../../sessions/ui/QuestionForm.tsx";
 @source "../../../sessions/ui/UsageLimitNotice.tsx";
 @source "../../../monos/ui/MonoCodexStorageNotice.tsx";
 @source "../../../../shared/ui/SecondaryButton.tsx";
+@source "../../../../shared/ui/Popover.tsx";
+@source "../../../../app/shell/GlassBackdrop.tsx";

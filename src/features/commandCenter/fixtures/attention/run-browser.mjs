@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 
 const evidence = process.env.CC7D_EVIDENCE_DIR ?? "C:/Users/nooro/AppData/Local/Temp/monocode-cc/cc7d/evidence";
 mkdirSync(evidence, { recursive: true });
-const sourceFiles = ["../../model/attention.ts", "../../ui/AttentionQueue.tsx", "../../ui/attentionQueue.css", "../../../sessions/ui/QuestionForm.tsx", "../../../sessions/ui/UsageLimitNotice.tsx", "../../../monos/ui/MonoCodexStorageNotice.tsx"];
+const sourceFiles = ["../../model/attention.ts", "../../ui/AttentionQueue.tsx", "../../ui/AttentionDetails.tsx", "../../ui/attentionQueue.css", "../../../sessions/ui/QuestionForm.tsx", "../../../sessions/ui/UsageLimitNotice.tsx", "../../../monos/ui/MonoCodexStorageNotice.tsx", "../../../../shared/ui/Popover.tsx"];
 const sourceHashes = () => Object.fromEntries(sourceFiles.map(path => [path, createHash("sha256").update(readFileSync(new URL(path, import.meta.url))).digest("hex")]));
 const sourcesBefore = sourceHashes();
 const launchDirectory = mkdtempSync(join(tmpdir(), "monocode-cc7d-browser-"));

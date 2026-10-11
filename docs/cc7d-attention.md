@@ -68,10 +68,45 @@ No Inbox view, GoalChain, agent UI or orchestration implementation is edited.
 The existing approval-navigation callback now returns its original navigation
 promise, so failed opens reach the queue's receipt without changing routing.
 
-The view uses the app's theme tokens, native buttons/disclosures, labelled
+The view uses the app's theme tokens, filter chips, an evidence popover, labelled
 regions and existing accessible question fields. It wraps at 390 px, supports
 keyboard actions and 200% text zoom, and stops its age timer while hidden.
 Only the visible queue claims Escape before the shell's Stop handler.
+
+## Coordinator feedback and CC7-M hosting
+
+The user wants the command center clean, modern, practical and flexible, with
+no disclosure triangles or accordions. Attention uses chips for Open/History
+and categories; it renders no `details` or `summary` elements. Storage evidence
+opens the existing house Popover through an **Evidence** button, with copy,
+keyboard focus and explicit Close. Escape dismisses the popover and restores
+its trigger before a second Escape can close the queue. Counts and ages use
+tabular numbers.
+
+The shared CC0 notice gains only an optional `renderDetails` presentation slot.
+Attention supplies `AttentionDetails`; all recovery, file choices, comparison,
+copying and error handling remain in the original CC0 component. Other callers
+keep their existing presentation until their owners update them.
+
+CC7-M's Mission control v2 can host the self-contained `AttentionQueueView`
+inside a panel or drawer using the exported `AttentionQueueViewProps` type:
+
+```tsx
+<AttentionQueueView
+  presentation="panel"
+  input={attentionInput}
+  callbacks={attentionCallbacks}
+  readInput={readCurrentAttentionInput}
+  open={attentionOpen}
+  onClose={closeAttentionPanel}
+/>
+```
+
+The controlled view gets data and existing actions through props. Panel mode
+uses a compact h2/Close header, omits page breadcrumbs/navigation and reflows
+inside its own container. The default page mode preserves the current shell
+hook. CC7-M owns the surrounding drawer and cross-view integration; it is not
+implemented by this round.
 
 ## Validation and evidence
 
@@ -80,33 +115,39 @@ The full Windows / Node 26.5.0 checks use
 
 | Check | Final result |
 | --- | --- |
-| Full Vitest | 570 files passed, 2 skipped, 0 failed; 6,514 tests passed, 13 skipped, 0 failed, 0 todo; 572 files / 6,527 tests total |
-| Focused model / rendered UI | 66 / 21 passed, 0 failed or skipped |
+| Full Vitest | 570 files passed, 2 skipped, 0 failed; 6,520 tests passed, 13 skipped, 0 failed, 0 todo; 572 files / 6,533 tests total |
+| Focused model / rendered UI | 66 / 27 passed, 0 failed or skipped |
+| Focused Attention / CC0 / Popover integration | 127 tests passed in 5 files, 0 failed or skipped |
 | `npx tsc --noEmit` | Passed, exit 0 |
 | `npm run build` | Passed, exit 0 |
 | `git diff --check` and staged diff check | Passed |
 | Focused Cargo | Not required: native and host files unchanged |
 
-Final full-suite command time is 95.483 seconds; TypeScript 13.877 seconds and
-build 29.618 seconds. The 13 skips are the two existing Antigravity real-provider
+Final full-suite command time is 133.417 seconds; TypeScript 24.536 seconds and
+build 65.164 seconds. The 13 skips are the two existing Antigravity real-provider
 and soak suites. Build retains the existing two CSS `::highlight` warnings and
-large-chunk advisory. All 1,307 captured source/config hashes match before and
+large-chunk advisory. All 1,308 captured source/config hashes match before and
 after final validation. Earlier checks do not contribute to these totals.
 
-Focused acceptance includes 66 model tests and 21 rendered UI tests. The isolated
-Chromium harness passes 14 checks and captures 24 screenshots: approvals,
+Focused acceptance includes 66 model tests and 27 rendered UI tests. The isolated
+Chromium harness passes 16 checks and captures 28 screenshots: approvals,
 decisions, storage/usage blockers, failures, action pending and action error,
-each in dark/light at 1440 px and dark/light at 390 px. The harness uses real
+each in dark/light at 1440 px and dark/light at 390 px, plus panel and evidence
+popover captures in both themes at 390 px. Tests assert no accordions, popover
+focus/Escape ordering, and cleanup when the host hides the queue. The harness uses real
 controls and synthetic callbacks, an empty temporary launch directory, an
 isolated fixture identifier and temporary browser contexts. `CODEX_HOME` and
 every `ORCA_*` variable are removed; its preview port is closed after checks.
 
 Evidence root:
 `C:/Users/nooro/AppData/Local/Temp/monocode-cc/cc7d/evidence/`.
-See `attention-model-vitest.json`, `ui-vitest.log`, `browser-report.md`,
+See `attention-model-vitest.json`, `ui-vitest-hidden.log`, `browser-report.md`,
 `browser-results.json`, `browser-launch.json`, `browser-shutdown.txt`,
 `screenshots/`, `validate.ps1`, `validation-summary.json` and
-`validation-20261011-153550-159/` (raw JSON/logs, exit/time receipts and hashes).
+`validation-20261011-160236-850/` (focused/full JSON/logs, exit/time receipts and hashes).
+The original `940d18f` acceptance is retained in `before-details/` and
+`browser-before-details/`; the passing `155626` run is prefinal because sources
+changed for the hidden-popup regression.
 The initial browser history-race failure and earlier model-contract regression
 run are retained as superseded evidence, not final acceptance.
 

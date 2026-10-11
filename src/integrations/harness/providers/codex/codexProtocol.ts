@@ -368,6 +368,13 @@ export type MappedCodexNotification = {
   rateLimits?: Record<string, unknown>;
 };
 
+type CodexCodeModeCell = { callId: string; shell: boolean; silentMs: number; lastOutputAt: number };
+
+export type CodexCodeModeState = {
+  cells: Map<string, CodexCodeModeCell>;
+  calls: Map<string, CodexCodeModeCell>;
+};
+
 /**
  * Translate a Codex app-server notification into MonoCode HarnessEvents.
  * Unknown methods return empty events (non-fatal).
@@ -375,6 +382,7 @@ export type MappedCodexNotification = {
 export function mapCodexNotification(
   method: string,
   params: unknown,
+  codeMode?: CodexCodeModeState,
 ): MappedCodexNotification {
   const rec = asRecord(params);
   if (!rec) return { events: [] };
@@ -388,21 +396,58 @@ export function mapCodexNotification(
   if (method === "rawResponseItem/completed") {
     const item = asRecord(rec.item);
     const type = item && stringField(item, "type");
-    if (!item || (type !== "custom_tool_call" && type !== "custom_tool_call_output")) return { events: [] };
+    if (!item) return { events: [] };
     const id = stringField(item, "call_id");
     const thread = stringField(rec, "threadId");
     const turn = stringField(rec, "turnId");
     if (!id || !thread || !turn) return { events: [] };
-    const callId = `raw:${thread}:${turn}:${id}`;
+    const scope = `raw:${thread}:${turn}:`;
+    const callId = `${scope}${id}`;
+    if (type === "function_call" && ["wait", "functions.wait"].includes(stringField(item, "name") ?? "")) {
+      try {
+        const args = asRecord(JSON.parse(stringField(item, "arguments") ?? ""));
+        const cellId = stringField(args, "cell_id");
+        const cell = cellId && codeMode?.cells.get(`${scope}${cellId}`);
+        if (cell) codeMode?.calls.set(callId, cell);
+      } catch { /* Malformed wait arguments have no known cell to update. */ }
+      return { events: [] };
+    }
     if (type === "custom_tool_call") {
       const name = stringField(item, "name") ?? "Tool";
+      const exec = name === "exec" || name === "functions.exec";
+      // shortcut: nested exec events are unavailable; use code text until Codex reports them.
+      const shell = exec && /\btools\.exec_command\s*\(/.test(stringField(item, "input") ?? "");
+      codeMode?.calls.set(callId, { callId, shell, silentMs: 0, lastOutputAt: Date.now() });
       return { events: [{ type: "tool.started", callId,
-        title: name === "exec" || name === "functions.exec" ? "Run tools" : name,
+        title: shell ? "Run shell command" : exec ? "Run tools" : name,
         kind: "execute", status: "in_progress" }] };
     }
+    const cell = codeMode?.calls.get(callId) ?? { callId, shell: false, silentMs: 0, lastOutputAt: Date.now() };
+    if (type !== "custom_tool_call_output" && !(type === "function_call_output" && codeMode?.calls.has(callId))) return { events: [] };
     const output = typeof item.output === "string" ? item.output : Array.isArray(item.output)
       ? item.output.map(part => stringField(asRecord(part) ?? {}, "text") ?? "").filter(Boolean).join("\n") : undefined;
-    return { events: [{ type: "tool.updated", callId, kind: "execute", status: "completed", ...(output ? { detail: output } : {}) }] };
+    const running = item.is_error !== true && /^Script running with cell ID (\S+)\r?\n/.exec(output ?? "");
+    if (running) {
+      const progress = /^Script running with cell ID \S+\r?\nWall time (\d+(?:\.\d+)?) seconds\r?\nOutput:\r?\n([\s\S]*)$/.exec(output ?? "");
+      if (progress) {
+        if (progress[2].trim()) {
+          cell.silentMs = 0;
+          cell.lastOutputAt = Date.now();
+        } else {
+          cell.silentMs = Math.max(cell.silentMs + Number(progress[1]) * 1000, Date.now() - cell.lastOutputAt);
+        }
+      }
+      codeMode?.cells.set(`${scope}${running[1]}`, cell);
+    }
+    else if (codeMode) {
+      for (const [key, pending] of codeMode.cells) if (pending.callId === cell.callId) codeMode.cells.delete(key);
+    }
+    codeMode?.calls.delete(callId);
+    const blocked = running && cell.shell && cell.silentMs >= 60_000;
+    const detail = blocked ? `${output}\nShell command has returned no output for 60 seconds. It may still be running. Check pending approvals or the Windows sandbox; Stop to retry.` : output;
+    return { events: [{ type: "tool.updated", callId: cell.callId, kind: "execute",
+      status: item.is_error === true ? "failed" : blocked ? "blocked" : running ? "in_progress" : "completed",
+      ...(detail ? { detail } : {}) }] };
   }
 
   if (method === "item/agentMessage/delta") {

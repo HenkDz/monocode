@@ -69,6 +69,7 @@ import {
   type TurnIntent,
 } from "../../../../features/sessions/model/session";
 import { applyHarnessEvent } from "../../core/apply";
+import { selectAgentLiveState } from "../../../../features/agents/model/agentLiveState";
 
 function parse() {
   return sent.map((line) => JSON.parse(line) as Record<string, unknown>);
@@ -182,6 +183,41 @@ async function startTurn(
 }
 
 describe("codex live turn sequence", () => {
+  it("surfaces a silent yielded shell cell without hiding its approval and settles the original row", async () => {
+    const { events, turn } = await startTurn("codex-yielded-shell");
+    const raw = (item: Record<string, unknown>) => notify("rawResponseItem/completed", {
+      threadId: "thr_1", turnId: "turn_1", item,
+    });
+    const running = (seconds: number) => `Script running with cell ID 1\nWall time ${seconds.toFixed(1)} seconds\nOutput:\n`;
+    raw({ type: "custom_tool_call", call_id: "exec", name: "exec",
+      input: 'text(await tools.exec_command({cmd:"echo hi",login:false}));' });
+    raw({ type: "custom_tool_call_output", call_id: "exec", output: running(31) });
+    raw({ type: "function_call", call_id: "wait", name: "wait", arguments: '{"cell_id":"1","yield_time_ms":30000}' });
+    raw({ type: "function_call_output", call_id: "wait", output: running(30) });
+    const session = () => events.reduce(applyHarnessEvent, {
+      ...newSession("codex", "/repo"), busy: true,
+      blocks: [{ id: "user", role: "user" as const, text: "run echo hi" }],
+    });
+    expect(selectAgentLiveState(session())).toMatchObject({ status: "blocked", reason: "tool" });
+    expect(session().blocks.filter(block => block.tool)).toHaveLength(1);
+    onLine!(JSON.stringify({ id: 91, method: "item/commandExecution/requestApproval",
+      params: { threadId: "thr_1", itemId: "cmd", command: "echo hi" } }));
+    expect(selectAgentLiveState(session())).toMatchObject({ status: "needs-you", reason: "approval" });
+    raw({ type: "function_call", call_id: "finish", name: "wait", arguments: '{"cell_id":"1"}' });
+    raw({ type: "function_call_output", call_id: "finish", output: "Script completed\nWall time 0.1 seconds\nOutput:\nhi\n" });
+    expect(session().blocks.find(block => block.tool?.callId === "raw:thr_1:turn_1:exec")?.tool?.status).toBe("completed");
+    expect(selectAgentLiveState(session())).toMatchObject({ status: "needs-you", reason: "approval" });
+    respondCodexApproval("codex-yielded-shell", 1, "allow");
+    await waitFor(() => events.some(event => event.type === "approval.resolved"), "approval resolution");
+    expect(selectAgentLiveState(session())).toMatchObject({ status: "thinking" });
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+    const count = events.length;
+    raw({ type: "function_call", call_id: "late-wait", name: "wait", arguments: '{"cell_id":"1"}' });
+    raw({ type: "function_call_output", call_id: "late-wait", output: running(120) });
+    expect(events).toHaveLength(count);
+  });
+
   it("keeps compaction signals scoped to the parent thread and ignores child notifications", async () => {
     const { events, turn } = await startTurn("codex-compact-signal");
     notify("thread/compacted", { threadId: "unrelated", turnId: "turn_1" });

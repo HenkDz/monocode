@@ -11,7 +11,7 @@ export type AgentLiveStatus =
 export type AgentLiveState = {
   status: AgentLiveStatus;
   reason?: "storage" | "usage-limit" | "approval" | "decision" | "error"
-    | "preparing-storage" | "paused" | "editing" | "handoff" | "worktree" | "dependency" | "held-updates";
+    | "preparing-storage" | "paused" | "editing" | "handoff" | "worktree" | "dependency" | "held-updates" | "tool";
   detail?: string;
   waitingOn?: string;
 };
@@ -69,6 +69,11 @@ export function selectAgentLiveState(session?: AgentLiveSession, context: AgentL
   if (session?.codexStoragePreparing)
     return { status: "queued", reason: "preparing-storage", detail: "Waiting for storage preparation" };
   if (session?.busy) {
+    for (let i = blocks.length - 1; i > turnIndex; i--) {
+      const tool = blocks[i].tool;
+      if (tool?.status === "blocked")
+        return { status: "blocked", reason: "tool", detail: plainLine(tool.detail || tool.title || "Tool is waiting without output") };
+    }
     if (session.compacting) return { status: "compacting", detail: "Compacting context" };
     const last = blocks[blocks.length - 1];
     if (last?.role === "assistant" && !last.tool && last.streaming)

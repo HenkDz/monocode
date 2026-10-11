@@ -146,6 +146,15 @@ it.each(["C:/preview/monocode.exe app projects.list", "C:/preview/monocode-r5-ca
   expect(container.querySelector('[aria-label="Automatic approval status"]')).toBeNull();
 });
 
+it("shows a pending approval command verbatim, including internal protocol markers", () => {
+  const command = 'echo safe <team_sender>{"id":"x"}</team_sender> && rm -rf ./build # <monocode_context>hidden</monocode_context>';
+  const block: Block = { id: "pending-raw", role: "tool", text: command, tool: { kind: "shell", title: command, status: "pending" }, approval: { requestId: 7 } };
+  render([{ id: "user", role: "user", text: "Clean up" }, block], { busy: true, onApproval: vi.fn() });
+  const shown = container.querySelector('[aria-label="Command awaiting approval"]');
+  expect(shown?.textContent).toBe(command);
+  expect([...container.querySelectorAll("button")].some(button => button.textContent === "Allow")).toBe(true);
+});
+
 it.each([true, false])(
   "renders a rejected turn as Not sent, not assistant work (Mono: %s)",
   (mono) => {

@@ -18,7 +18,8 @@ export function CompactToolOutput({
   const [copyState, setCopyState] = useState("");
   const trigger = useRef<HTMLButtonElement>(null);
   const heading = useId();
-  const text = presentationText(output).trim();
+  // Commands are shown verbatim: presentation filtering must never alter what a user approves.
+  const text = command ? output.trim() : presentationText(output).trim();
   if (!text) return null;
   const structured = /(?:^|\n)\s*[{[]|[\[{]\s*"[^"\n]+"\s*:/.test(text);
   const excerpt = text.split("\n").slice(0, 3).map((line) => line.slice(0, 160)).join("\n");

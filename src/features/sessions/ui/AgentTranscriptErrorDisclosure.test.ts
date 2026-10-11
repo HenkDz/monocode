@@ -143,7 +143,8 @@ describe("tool approval command details", () => {
       { id: "pending", role: "tool", text: "Run", tool: { kind: "shell", title: "Run worker", status: "pending", detail: "Previous output", preview: { kind: "shell", title: command, output: "Previous output" } }, approval: { requestId: 42 } },
     ];
     act(() => root.render(createElement(AgentTranscript, { blocks, busy: true, onApproval })));
-    expect(container.textContent).not.toContain(command);
+    // The exact command is shown once, verbatim, in the approval block.
+    expect(container.querySelector('[aria-label="Command awaiting approval"]')?.textContent).toBe(command);
     const trigger = Array.from(container.querySelectorAll("button")).find(button => button.textContent === "View command")!;
     expect(trigger).toBeDefined();
     act(() => trigger.click());

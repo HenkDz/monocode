@@ -436,6 +436,40 @@ describe("codex live turn sequence", () => {
     await second.turn;
   });
 
+  it.each(["supervised", "auto", "auto-accept-edits"] as const)("checks provisioning before a full-access Mono switches to %s", async runtimeMode => {
+    const first = await startTurn("codex-live", { codexStore: "mono", runtimeMode: "full-access" });
+    expect(prepareCodexMonoContext).toHaveBeenLastCalledWith(expect.objectContaining({ sandboxRequired: false }));
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await first.turn;
+    sent.length = 0;
+    prepareCodexMonoContext.mockRejectedValueOnce(new Error("Mono Windows sandbox is not provisioned"));
+    await expect(sendCodexTurn({
+      sessionId: "codex-live", codexStore: "mono", cwd: "/repo", model: "codex:gpt-5.4", runtimeMode,
+      text: "Continue", onEvent() {},
+    })).rejects.toThrow("not provisioned");
+    expect(prepareCodexMonoContext).toHaveBeenLastCalledWith(expect.objectContaining({ sandboxRequired: true, threadId: "thr_1" }));
+    expect(spawnChild).toHaveBeenCalledTimes(1);
+    expect(parse().some(message => message.method === "thread/start" || message.method === "turn/start")).toBe(false);
+  });
+
+  it("lets an active Mono turn finish before checking a queued sandbox-mode change", async () => {
+    const first = await startTurn("codex-live", { codexStore: "mono", runtimeMode: "full-access" });
+    prepareCodexMonoContext.mockRejectedValueOnce(new Error("Mono Windows sandbox is not provisioned"));
+    const queued = sendCodexTurn({
+      sessionId: "codex-live", codexStore: "mono", cwd: "/repo", model: "codex:gpt-5.4", runtimeMode: "supervised",
+      text: "Continue", onEvent() {},
+    });
+    const rejected = expect(queued).rejects.toThrow("not provisioned");
+    await new Promise(resolve => setTimeout(resolve, 10));
+    expect(prepareCodexMonoContext).toHaveBeenCalledTimes(1);
+    expect(hasLiveCodexSession("codex-live")).toBe(true);
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await first.turn;
+    await rejected;
+    expect(prepareCodexMonoContext).toHaveBeenCalledTimes(2);
+    expect(spawnChild).toHaveBeenCalledTimes(1);
+  });
+
   describe("instruction-home context receipts", () => {
     const files = { soulHash: "same-soul", memoryHash: "same-memory" };
     const chart = "standing org context";

@@ -82,6 +82,15 @@ it("sends an isolated Codex skills context only on the selected Mono launch", as
   expect(mocks.invoke.mock.calls.at(-1)?.[1]).not.toHaveProperty("codexSkillsContext");
 });
 
+it("forwards effective sandbox requirements separately from skill selection", async () => {
+  const child = await loadChild();
+  mocks.invoke.mockResolvedValue({ hasThread: false });
+  await child.prepareMonoCodexStore("account", "thread", { skillsRole: "manager", projectPath: "/synthetic", sandboxRequired: true });
+  expect(mocks.invoke).toHaveBeenCalledExactlyOnceWith("codex_mono_store_prepare", {
+    providerAccountId: "account", threadId: "thread", skillsRole: "manager", projectPath: "/synthetic", sandboxRequired: true,
+  });
+});
+
 describe("child bridge", () => {
   it("waits until every listener is installed", async () => {
     const pending = deferred<UnlistenFn>();

@@ -293,6 +293,7 @@ it("launches a Mono side question in its isolated skills context and keeps ordin
   const skillsContextId = "d".repeat(64);
   prepareCodexMonoContext.mockResolvedValueOnce({ config: { sqlite_home: "/private/mono" }, hasThread: true, skillsContextId });
   await runCodexTextPrompt({ cwd: "/repo", ephemeral: false, codexStore: "mono", prompt: "Mono question" });
+  expect(prepareCodexMonoContext).toHaveBeenLastCalledWith(expect.objectContaining({ sandboxRequired: true }));
   expect(spawnChild.mock.calls.at(-1)?.[8]).toBe(skillsContextId);
   await runCodexTextPrompt({ cwd: "/repo", prompt: "Ordinary helper" });
   expect(spawnChild.mock.calls.at(-1)?.[8]).toBeUndefined();

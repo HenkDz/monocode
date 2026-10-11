@@ -99,6 +99,7 @@ type Live = {
   runtimeMode: RuntimeMode;
   planning: boolean;
   readOnly: boolean;
+  sandboxRequired: boolean;
   onEvent: (event: HarnessEvent) => void;
   approvals: Map<number, PendingApproval>;
   questions: Map<number, PendingQuestion>;
@@ -520,6 +521,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   const existing = liveByThread.get(input.sessionId);
   const controlsAgents = input.controlsAgents === true;
   const readOnly = input.readOnly === true || existing?.readOnly === true || resumeByThread.get(input.sessionId)?.readOnly === true;
+  const sandboxRequired = readOnly || input.runtimeMode !== "full-access";
   const ephemeral =
     input.ephemeral ??
     existing?.ephemeral ??
@@ -539,6 +541,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     ) &&
     existing.controlsAgents === controlsAgents &&
     existing.readOnly === readOnly &&
+    (codexStore !== "mono" || existing.sandboxRequired === sandboxRequired) &&
     existing.ephemeral === ephemeral &&
     existing.codexStore === codexStore && existing.skillsSignature === skillsSignature
   ) {
@@ -546,6 +549,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     return existing;
   }
   if (existing) {
+    if (codexStore === "mono") await existing.turns.catch(() => undefined);
     // Codex may retain the thread's sandbox network policy across turns.
     // Switch it when this session gains /operator access or loses agent
     // control, so its local CLI socket matches the current policy.
@@ -585,6 +589,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
           providerAccountId: input.providerAccountId,
           skillsRole: input.skillsRole,
           skillsPolicy: input.skillsPolicy,
+          sandboxRequired,
           threadId: canResume ? resume?.threadId : undefined,
         })
       : undefined;
@@ -802,6 +807,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       ephemeral,
       codexStore,
       skillsSignature,
+      sandboxRequired,
       runtimeMode: input.runtimeMode,
       planning: input.intent === "plan",
       readOnly,

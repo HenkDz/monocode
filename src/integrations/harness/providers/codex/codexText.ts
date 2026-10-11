@@ -299,6 +299,7 @@ async function startLive(
           providerAccountId,
           skillsRole: skillsContext.skillsRole,
           skillsPolicy: skillsContext.skillsPolicy,
+          sandboxRequired: true,
           threadId: requestedThreadId,
         })
       : undefined;
@@ -411,6 +412,7 @@ async function openThread(
         providerAccountId: session.providerAccountId,
         skillsRole: session.skillsContext?.skillsRole,
         skillsPolicy: session.skillsContext?.skillsPolicy,
+        sandboxRequired: true,
         threadId: requestedThreadId,
       }));
     session.storeConfig = store.config;

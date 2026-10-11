@@ -117,7 +117,7 @@ it("offers Grand and explicit project overrides through the existing picker", as
 
 it.each([
   { attachmentCount: 1, reason: "Attachments" },
-  { text: "No registered project here", reason: "Choose a project" },
+  { text: "No registered name here", reason: "Choose a project" },
   { text: "x".repeat(8001), reason: "8,000" },
   {
     context: {
@@ -134,6 +134,12 @@ it.each([
   expect(container.querySelector('[role="status"]')?.textContent).toContain(
     reason,
   );
+});
+
+it.each(["auto", "manager"] as const)("shows the scope-noun fallback before Send (%s)", override => {
+  render({ text: "No registered project here", choice: { mode: "goal", override, projectId: "dzdistro" } });
+  expect(container.querySelector('[role="status"]')?.textContent).toContain("Send to Grand Orch");
+  expect(container.querySelector('[role="status"]')?.textContent).toContain("Comparison or cross-project goal");
 });
 
 it("disables mode and route choices while delivery is pending", async () => {

@@ -264,8 +264,8 @@ it("keeps default failed task cards and their readers free of raw storage errors
     await act(async () => root.render(<MemberWorkLog member={member} />));
     expect(host.textContent).not.toContain(task.error);
     expect(
-      host.querySelector('[data-transcript-error="storage"]'),
-    ).not.toBeNull();
+      host.querySelector('[data-task-reason]')?.textContent,
+    ).toBe("Storage launch mismatch");
     await act(async () =>
       [...host.querySelectorAll<HTMLButtonElement>("button")]
         .find((button) => button.textContent === "Open")!

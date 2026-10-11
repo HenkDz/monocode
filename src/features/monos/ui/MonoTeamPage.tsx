@@ -15,6 +15,7 @@ import { ModelPicker, ModelSettingRows } from "../../sessions/ui/ModelPicker";
 import { getModelSnapshot, isEffortSettingId, modelEffortSetting, subscribeModels, type EffortSource } from "../../sessions/model/models";
 import { useModelSource } from "../../sessions/ui/modelSource";
 import { MonoCodexStorageSource } from "./MonoCodexStorageSource";
+import { MonoSkillsSettings } from "./MonoSkillsSettings";
 import { RUNTIME_MODE_LABEL, type RuntimeMode } from "../../sessions/model/session";
 import { AccessPicker } from "../../sessions/ui/AccessPicker";
 import { usePrStatusCache } from "../../source-control/hooks/usePrStatus";
@@ -317,6 +318,7 @@ export function MemberDetails({
           <MonoFieldLock monoId={member.id} field="specialty" />
         </Property>
       </dl>
+      <MonoSkillsSettings monoId={member.id} harness={profile.harness} providerAccountId={providerAccountId} cwd={member.projects[0] ?? ""} />
       {error && <p role="alert" className="px-4 text-xs text-red-500">{error}</p>}
       <section className="border-t border-stroke px-4 py-3" aria-label="Member tasks">
         <h3 className="mb-2 text-xs text-content/60">Recent tasks</h3>

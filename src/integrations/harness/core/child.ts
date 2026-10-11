@@ -4,6 +4,7 @@ import {
   runtimeProviderBinaryPath,
   type ConfigurableBinaryProvider,
 } from "../../../features/providers/model/providerBinaryPaths";
+import type { MonoSkillsCatalog, MonoSkillsContext } from "../../../features/monos/model/monoSkills";
 
 /** Process I/O is supplied by the desktop or a headless host. Provider
  * protocols never need to know which process owns their children. */
@@ -49,11 +50,16 @@ export function setMonoCodexHooksShared(providerAccountId: string, shared: boole
   return invoke("codex_mono_store_set_hooks_shared", { providerAccountId, shared });
 }
 
+export function monoCodexSkillsCatalog(providerAccountId?: string, projectPath?: string): Promise<MonoSkillsCatalog> {
+  return invoke("codex_mono_skills_catalog", { providerAccountId, projectPath });
+}
+
 export function prepareMonoCodexStore(
   providerAccountId?: string,
   threadId?: string,
-): Promise<MonoCodexStorageInfo & { hasThread: boolean }> {
-  return invoke("codex_mono_store_prepare", { providerAccountId, threadId });
+  skills?: MonoSkillsContext & { projectPath?: string },
+): Promise<MonoCodexStorageInfo & { hasThread: boolean; skillsConfig?: Record<string, unknown>; skillArgs?: string[]; skillsContextId?: string; threadPath?: string }> {
+  return invoke("codex_mono_store_prepare", { providerAccountId, threadId, ...skills });
 }
 
 export function copyMonoCodexThreads(
@@ -61,7 +67,7 @@ export function copyMonoCodexThreads(
   threadId: string,
   paths: string[],
   sqliteHome?: string,
-): Promise<void> {
+): Promise<string> {
   return invoke("codex_mono_store_copy", {
     providerAccountId,
     threadId,
@@ -356,6 +362,7 @@ export async function spawnChild(
   codexStore?: "mono",
   /** `devin acp` only: start with an approval rule for every edit. */
   devinAskEdits?: boolean,
+  codexSkillsContext?: string,
 ): Promise<void> {
   livePid.delete(sessionId);
   pendingExit.delete(sessionId);
@@ -373,6 +380,7 @@ export async function spawnChild(
     binaryPath,
     ...(codexStore ? { codexStore } : {}),
     ...(devinAskEdits ? { devinAskEdits } : {}),
+    ...(codexSkillsContext ? { codexSkillsContext } : {}),
   });
   if (typeof pid !== "number" || pid <= 0) return;
   livePid.set(sessionId, pid);

@@ -11,11 +11,11 @@ const mock = vi.hoisted(() => ({
   release: vi.fn(),
   spawn: vi.fn(async (..._args: unknown[]) => undefined),
   kill: vi.fn(async (_id: string) => undefined),
-  prepare: vi.fn(async (..._args: unknown[]) => ({
+  prepare: vi.fn(async (..._args: unknown[]): Promise<{ home: string; hasThread: boolean; skillsContextId?: string; threadPath?: string }> => ({
     home: "/mono/default",
     hasThread: false,
   })),
-  copy: vi.fn(async (..._args: unknown[]) => undefined),
+  copy: vi.fn(async (..._args: unknown[]): Promise<string | undefined> => undefined),
 }));
 
 vi.mock("../../core/child", () => ({
@@ -162,6 +162,36 @@ it("uses the account's resolved settings with an isolated SQLite home", async ()
   expect(mock.release).toHaveBeenCalledOnce();
   expect(mock.kill).toHaveBeenCalledOnce();
   expect(mock.handlers.size).toBe(0);
+});
+
+it("passes the runtime discovery context separately while SQLite remains in the base Mono home", async () => {
+  const skillsContextId = "b".repeat(64);
+  mock.prepare.mockResolvedValueOnce({ home: "/mono/default", hasThread: false, skillsContextId });
+  expect(await prepareCodexMonoContext(input)).toMatchObject({ config: { sqlite_home: "/mono/default" }, skillsContextId });
+  expect(mock.spawn.mock.calls[0]).toHaveLength(6);
+});
+
+it.each(["base", "prior-context"])("retains the native validated %s rollout path independently from SQLite", async location => {
+  const threadPath = `/mono/${location}/sessions/rollout-root.jsonl`;
+  mock.prepare.mockResolvedValueOnce({ home: "/mono/default", hasThread: true, threadPath });
+  expect(await prepareCodexMonoContext({ ...input, threadId: "root" })).toMatchObject({ config: { sqlite_home: "/mono/default" }, hasThread: true, threadPath });
+});
+
+it("retains the rooted copied rollout path after the initial account migration", async () => {
+  const threadPath = "/mono/default/archived_sessions/rollout-root.jsonl";
+  mock.copy.mockResolvedValueOnce(threadPath);
+  expect(await prepareCodexMonoContext({ ...input, threadId: "root" })).toMatchObject({ hasThread: true, threadPath });
+});
+
+it("replaces inherited skill and plugin enablement while preserving account paths and other settings", () => {
+  expect(codexConfigOverrides({
+    model: "account-model", skills: { config: [{ path: "/account/global", enabled: true }], extra: "retained" },
+    plugins: { "ponytail@test": { enabled: true, cache_path: "/account/plugins/ponytail" }, "other@test": { enabled: false } },
+  }, "/mono", { skills: { config: [{ path: "/account/global", enabled: false }], bundled: { enabled: false } }, plugins: { "ponytail@test": { enabled: false } } })).toEqual({
+    model: "account-model", sqlite_home: "/mono",
+    skills: { config: [{ path: "/account/global", enabled: false }], extra: "retained", bundled: { enabled: false } },
+    plugins: { "ponytail@test": { enabled: false, cache_path: "/account/plugins/ponytail" }, "other@test": { enabled: false } },
+  });
 });
 
 it("archives the old root and retains all native descendants before resuming privately", async () => {

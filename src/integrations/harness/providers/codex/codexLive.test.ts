@@ -21,7 +21,7 @@ const restoreMonoCodexAgentState = vi.hoisted(() =>
   vi.fn(async (..._args: unknown[]) => undefined),
 );
 const prepareCodexMonoContext = vi.hoisted(() =>
-  vi.fn(async (_input: unknown) => ({
+  vi.fn(async (_input: unknown): Promise<{ config: Record<string, unknown>; hasThread: boolean; skillArgs?: string[]; skillsContextId?: string; threadPath?: string }> => ({
     config: {
       sqlite_home: "/private/mono",
       instructions: "Account instructions",
@@ -124,6 +124,8 @@ async function startTurn(
     readOnly?: boolean;
     ephemeral?: boolean;
     codexStore?: "mono";
+    skillsRole?: import("../../../../features/monos/model/monoSkills").MonoSkillsRole;
+    skillsPolicy?: import("../../../../features/monos/model/monoSkills").MonoSkillsPolicy;
   } = {},
 ) {
   const events: HarnessEvent[] = [];
@@ -146,6 +148,8 @@ async function startTurn(
     controlsAgents: options.controlsAgents,
     ephemeral: options.ephemeral,
     codexStore: options.codexStore,
+    skillsRole: options.skillsRole,
+    skillsPolicy: options.skillsPolicy,
     intent: options.intent,
     readOnly: options.readOnly,
     text: "summarize the changelog",
@@ -408,6 +412,33 @@ describe("codex live turn sequence", () => {
     expect(restoreMonoCodexAgentState).toHaveBeenCalledWith(undefined, "thr_1");
     notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
     await next.turn;
+  });
+
+  it("restarts a warm Mono server on the next turn after its skills or plugin policy changes", async () => {
+    const skillArgs = ["-c", 'plugins={"ponytail@test"={enabled=false}}'];
+    const skillsContextId = "a".repeat(64);
+    prepareCodexMonoContext.mockResolvedValueOnce({ config: { sqlite_home: "/private/mono", plugins: { "ponytail@test": { enabled: false } } }, hasThread: true, skillArgs, skillsContextId });
+    const first = await startTurn("codex-live", { codexStore: "mono", skillsRole: "manager", skillsPolicy: { mode: "role" } });
+    expect(spawnChild.mock.calls.at(-1)?.[2]).toEqual(expect.arrayContaining(skillArgs));
+    expect(spawnChild.mock.calls.at(-1)?.[8]).toBe(skillsContextId);
+    expect(parse().find(message => message.method === "thread/start")?.params).toMatchObject({ config: { plugins: { "ponytail@test": { enabled: false } } } });
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await first.turn;
+    sent.length = 0;
+    const second = await startTurn("codex-live", { codexStore: "mono", skillsRole: "manager", skillsPolicy: { mode: "all", plugins: ["ponytail@test"] }, expectResume: true });
+    expect(spawnChild).toHaveBeenCalledTimes(2);
+    expect(prepareCodexMonoContext).toHaveBeenLastCalledWith(expect.objectContaining({ skillsRole: "manager", skillsPolicy: { mode: "all", plugins: ["ponytail@test"] }, threadId: "thr_1" }));
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await second.turn;
+  });
+
+  it.each(["base", "prior-context"])("resumes a saved %s Mono by its native rollout path", async location => {
+    const threadPath = `/private/mono/${location}/sessions/rollout-thr_1.jsonl`;
+    prepareCodexMonoContext.mockResolvedValueOnce({ config: { sqlite_home: "/private/mono" }, hasThread: true, threadPath });
+    const { turn } = await startTurn("codex-live", { codexStore: "mono", resume: true });
+    expect(parse().find(message => message.method === "thread/resume")?.params).toMatchObject({ threadId: "thr_1", path: threadPath, config: { sqlite_home: "/private/mono" } });
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
   });
 
   it("resumes a saved Mono after restart without rebuilding its context", async () => {

@@ -186,6 +186,7 @@ import { MonoDetails } from "../features/monos/ui/MonoDetails";
 import { MonoCodexStorageRecovery, isCodexStorageError, parseCodexStorageConflict, parseCodexStorageRecoveryConflict, type CodexStorageResolution, type CodexStorageComparison } from "../features/monos/model/monoCodexStorage";
 import { codexStorageAccountId, monoCodexStorageIssues } from "../features/monos/model/monoCodexStorageIssues";
 import { prepareMonoCodexStore } from "../integrations/harness/core/child";
+import { monoSkillsForSession } from "./model/monoSkillsForSession";
 import { handleMonoTeam, isTeamReviewer, lockMonoField } from "../features/monos/model/monoTeam";
 import { monoTeamHost, registerTeamCards } from "../features/monos/model/monoTeamRuntime";
 import { appendTeamChangeCard } from "../features/monos/model/monoTeamCards";
@@ -1984,6 +1985,7 @@ function Workspace({
               threadId,
               cwd,
               providerAccountId: session.providerAccountId,
+              ...monoSkillsForSession(session.id),
             });
           }
         } catch (error) {
@@ -7369,7 +7371,7 @@ function Workspace({
         flushSync(() => setSessions(previous => previous.map(session => session.id === sessionId
           ? { ...session, codexStoragePreparing: true, codexStorageAccountId: providerAccountId ?? "default" } : session)));
         return codexStorageRecovery.current.prepare(sessionId,
-          () => prepareMonoCodexStore(providerAccountId, remote.providerSessionId),
+          () => prepareMonoCodexStore(providerAccountId, remote.providerSessionId, { ...monoSkillsForSession(sessionId), projectPath: sessionWorkCwd(remote) }),
           () => submitSessionRef.current(sessionId, text, attachments, { ...options, codexStoragePrepared: true }),
           error => {
             console.error("Mono Codex storage preparation failed", error);
@@ -8638,7 +8640,7 @@ function Workspace({
                 runtimeMode: current.runtimeMode,
                 readOnly: current.readOnly === true,
                 ephemeral: current.ephemeral === true,
-                codexStore: mono ? "mono" : undefined,
+                ...monoSkillsForSession(sessionId),
                 controlsAgents:
                   operatorAccess ||
                   orchestrator.run(sessionId)?.status === "active",
@@ -8698,7 +8700,7 @@ function Workspace({
               providerAccountId,
               runtimeMode: current.runtimeMode,
               ephemeral: current.ephemeral === true,
-              codexStore: mono ? "mono" : undefined,
+              ...monoSkillsForSession(sessionId),
               intent: intent === "orchestrate" ? "plan" : intent,
               readOnly: !!readOnlyTask,
               monoSession: isMonoSession(sessionId),
@@ -8766,6 +8768,7 @@ function Workspace({
                 threadId: current.providerSessionId,
                 cwd: workCwd,
                 providerAccountId,
+                ...monoSkillsForSession(sessionId),
               });
             }
             if (turnGen.current.get(sessionId) !== gen) return;
@@ -10058,7 +10061,7 @@ function Workspace({
           if (!conflict) throw new Error("Refresh the storage issue before choosing a version.");
           await invoke("codex_mono_store_resolve", { providerAccountId: accountId, conflict, resolution });
         }
-        await prepareMonoCodexStore(accountId, session.providerSessionId);
+        await prepareMonoCodexStore(accountId, session.providerSessionId, { ...monoSkillsForSession(sessionId), projectPath: sessionWorkCwd(session) });
       }, resumingId => {
         if (!affectedIds.includes(resumingId)) affectedIds.push(resumingId);
         // Keep the dispatcher held until the saved submissions have resumed.
@@ -10448,7 +10451,7 @@ function Workspace({
         model: model || undefined,
         modelSettings: input.thread.modelSettings ?? input.source.modelSettings,
         ephemeral: false,
-        codexStore: isMonoSession(input.source.id) ? "mono" : undefined,
+        ...monoSkillsForSession(input.source.id),
         threadId: input.thread.providerThreadId,
         onThreadId: (providerThreadId) => {
           if (controller.signal.aborted) return;
@@ -10984,7 +10987,7 @@ function Workspace({
             runtimeMode: current.runtimeMode,
             readOnly: current.readOnly === true,
             ephemeral: current.ephemeral === true,
-            codexStore: isMonoSession(sessionId) ? "mono" : undefined,
+            ...monoSkillsForSession(sessionId),
             controlsAgents:
               isMonoSession(sessionId) ||
               operatorEnabledInThread(current.blocks) ||

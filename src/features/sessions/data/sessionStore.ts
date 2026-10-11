@@ -637,15 +637,20 @@ export function findMonoTranscript(
   return invoke("mono_session_find", { sessionId, query });
 }
 
-export async function getSession(sessionId: string): Promise<Session | null> {
+/** Verify durable state without changing the live transcript cache or repairing stored blocks. */
+export async function readPersistedSession(sessionId: string): Promise<Session | null> {
   const record = await invoke<SessionRecord | null>(
     isMonoSession(sessionId) ? "mono_session_get" : "session_get",
     {
       sessionId,
     },
   );
-  if (!record) return null;
-  const session = recordToSession(record);
+  return record ? recordToSession(record) : null;
+}
+
+export async function getSession(sessionId: string): Promise<Session | null> {
+  const session = await readPersistedSession(sessionId);
+  if (!session) return null;
   if (session.monoTranscript) monoSavedBlocks.set(sessionId, session.blocks);
   if (session.harness === "claude" && session.providerSessionId) {
     const toolIds = shellPlaceholderIds(session.blocks);

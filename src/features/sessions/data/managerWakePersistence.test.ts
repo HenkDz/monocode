@@ -39,7 +39,7 @@ async function accept(mono: boolean, id?: string) {
   const accepted = await acceptManagerWakeQueue(digest, current.id, {
     session: () => current, delivered: async () => false,
     save: async next => { const saved = await store.upsertSession(next); if (!saved) throw Error("Save unavailable"); },
-    load: () => store.getSession(current.id),
+    load: () => store.readPersistedSession(current.id),
     publish: next => { current = next; },
   });
   return { accepted, current, digest, restored: await store.getSession(current.id) };
@@ -76,7 +76,7 @@ describe.each([
     }).toEqual({ dispatchWithQuestion: false, dispatchWithApproval: false, steer: false });
   });
 
-  it.each(["queue", "marker"])("rejects successful storage that drops the persisted %s before source acknowledgment", async dropped => {
+  it.each(["queue", "marker", "body", "request"])("rejects successful storage that changes the persisted %s before source acknowledgment", async dropped => {
     const current: Session = { ...newSession("codex", "C:/synthetic/cc5df-storage-loss"),
       id: `${mono ? "mono" : "ordinary"}-cc5df-storage-loss`,
       blocks: [{ id: "user-1", role: "user", text: "Existing request" }] };
@@ -88,9 +88,13 @@ describe.each([
       save: async next => {
         expect(await store.upsertSession(next)).not.toBeNull();
         if (dropped === "queue") delete persisted!.queuedMessages;
-        else for (const message of persisted!.queuedMessages as Record<string, unknown>[]) delete message.managerWake;
+        else for (const message of persisted!.queuedMessages as Record<string, unknown>[]) {
+          if (dropped === "marker") delete message.managerWake;
+          else if (dropped === "body") message.text = "Different evidence";
+          else message.appRequestId = "different-receipt";
+        }
       },
-      load: () => store.getSession(current.id), publish,
+      load: () => store.readPersistedSession(current.id), publish,
     }).then(accepted => { if (accepted) acknowledge(); });
     await expect(acceptance).rejects.toThrow("Manager digest is missing from the persisted queue");
     expect(publish).not.toHaveBeenCalled();
@@ -116,7 +120,7 @@ describe.each([
     const save = vi.fn(async (next: Session) => restartedStore.upsertSession(next));
     expect(await acceptManagerWakeQueue(digest, current.id, {
       session: () => restarted, delivered: async () => false,
-      save, load: () => restartedStore.getSession(current.id), publish: next => { restarted = next; },
+      save, load: () => restartedStore.readPersistedSession(current.id), publish: next => { restarted = next; },
     })).toBe(true);
     expect(save).not.toHaveBeenCalled();
     expect(restarted.queuedMessages).toHaveLength(1);

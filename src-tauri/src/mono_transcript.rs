@@ -531,6 +531,55 @@ mod tests {
     }
 
     #[test]
+    fn digest_readback_preserves_the_full_live_transcript_anchor() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let conn = store.lock_conn().unwrap();
+        let mut session = sample("mono-digest-readback", 25);
+        upsert(&conn, &session, None, None, true).unwrap();
+        session.queued_messages = vec![json!({
+            "id":"manager-digest-1", "text":"Decision", "attachments":[]
+        })];
+        session.queue_status = Some("active".into());
+        upsert(&conn, &session, None, None, false).unwrap();
+
+        let stored = session_store::get_session_metadata(&conn, &session.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.queued_messages, session.queued_messages);
+        assert_eq!(stored.queue_status.as_deref(), Some("active"));
+        let readback = page(&conn, &session.id, None, None).unwrap();
+        assert_eq!(readback.blocks.len(), 20);
+        assert_eq!(readback.blocks[0]["id"], "u15");
+
+        let anchor = session.blocks.as_array().unwrap().last().unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert_eq!(anchor, "a24");
+        session.blocks = json!([
+            {"id":"u25", "role":"user", "text":"Question 25"},
+            {"id":"a25", "role":"assistant", "text":"Answer 25"}
+        ]);
+        upsert(&conn, &session, Some(&anchor), None, true).unwrap();
+        let latest = page(&conn, &session.id, None, None).unwrap();
+        assert_eq!(latest.blocks.last().unwrap()["id"], "a25");
+        let earlier = page(&conn, &session.id, latest.before, None).unwrap();
+        let oldest = page(&conn, &session.id, earlier.before, None).unwrap();
+        assert_eq!(oldest.before, None);
+        let mut blocks = oldest.blocks;
+        blocks.extend(earlier.blocks);
+        blocks.extend(latest.blocks);
+        assert_eq!(json!(blocks), sample(&session.id, 26).blocks);
+        assert_eq!(
+            session_store::get_session_metadata(&conn, &session.id)
+                .unwrap()
+                .unwrap()
+                .queued_messages,
+            session.queued_messages
+        );
+    }
+
+    #[test]
     fn migrates_only_the_requested_mono_and_pages_ten_complete_turns() {
         let store = SessionStore::open_in_memory().unwrap();
         let conn = store.lock_conn().unwrap();

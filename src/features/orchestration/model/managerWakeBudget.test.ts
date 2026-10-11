@@ -29,12 +29,57 @@ describe("Manager digest budget", () => {
     for (let i = 0; i < 20; i++) expect(receipt.body).toContain(`Update ${i}:`);
     expect(prepared.events).toEqual(originals);
     expect(receipt.body.length).toBeLessThanOrEqual(4000);
-    expect(receipt.body).toContain("control list");
-    expect(receipt.body).toContain(run.cwd);
+    expect(receipt.body).toContain(`for ${run.projectName} (Manager ${run.leadId})`);
+    expect(receipt.body).toContain("control list {} -> run.wakeState.events");
     const acknowledged = acknowledgeManagerWake(prepared, receipt.id, 10_251);
     expect(acknowledged.events).toHaveLength(21);
     expect(acknowledged.events.map(({ acknowledgedAt: _at, ...event }) => event)).toEqual(originals);
     expect(acknowledged.events.every(event => event.acknowledgedAt === 10_251)).toBe(true);
+  });
+
+  it.each(["/", "\\"])("delivers and pages evidence for a valid long Windows path using %s separators", separator => {
+    const components = Array.from({ length: 19 }, (_, i) => `p${i}-${"a".repeat(198)}`);
+    let run: OrchestrationRun = { ...fresh(), projectName: undefined,
+      leadId: `mono-engine-${"1".repeat(64)}`, cwd: ["C:", "synthetic", ...components].join(separator) };
+    expect(run.cwd.length).toBeGreaterThan(3700);
+    expect(components.every(component => component.length <= 255)).toBe(true);
+    for (let i = 0; i < 150; i++) run = { ...run, wakeState: addManagerWakeEvent(run.wakeState, {
+      id: `update:${i}`, kind: "info", at: 10_000, text: `Update ${i}: ${"Detail".repeat(1200)}`,
+    }) };
+    const requestId = "r".repeat(128);
+    const questionId = `11111111-1111-1111-1111-111111111111:${requestId}`;
+    run = { ...run, wakeState: addManagerWakeEvent(run.wakeState, {
+      id: questionId, requestId, kind: "question", at: 10_000, text: `Question action: ${"Q".repeat(6000)}`,
+    }) };
+    const originals = structuredClone(run.wakeState!.events);
+    const seen = new Set<string>();
+    expect(managerWakePlan(run, 10_249).ready).toBe(false);
+    let pages = 0;
+    while (managerWakePlan(run, 10_250).ready) {
+      const prepared = prepareManagerWake(run, 10_250);
+      const receipt = prepared.receipt!;
+      expect(receipt.body).toContain(`for ${components.at(-1)!.slice(0, 100)} (Manager ${run.leadId})`);
+      expect(receipt.body).toContain("control list {} -> run.wakeState.events");
+      expect(receipt.body).not.toContain(run.cwd);
+      expect(receipt.body.length).toBeLessThanOrEqual(4000);
+      expect(receipt.eventIds.length).toBeGreaterThan(0);
+      if (!pages) {
+        expect(receipt.eventIds[0]).toBe(questionId);
+        expect(receipt.body).toContain(`request ${requestId}: Question action:`);
+      }
+      for (const id of receipt.eventIds) {
+        expect(seen.has(id)).toBe(false);
+        seen.add(id);
+        expect(receipt.body).toContain(`[${id}]`);
+      }
+      run = { ...run, wakeState: acknowledgeManagerWake(prepared, receipt.id, 10_251) };
+      expect(run.wakeState!.events.filter(event => event.acknowledgedAt != null).map(event => event.id))
+        .toEqual(originals.filter(event => seen.has(event.id)).map(event => event.id));
+      expect(++pages).toBeLessThanOrEqual(originals.length);
+    }
+    expect(pages).toBeGreaterThan(1);
+    expect([...seen]).toEqual([questionId, ...originals.slice(0, 150).map(event => event.id)]);
+    expect(run.wakeState!.events.map(({ acknowledgedAt: _at, ...event }) => event)).toEqual(originals);
   });
 
   it("pages 150 action items within the budget and only acknowledges represented events", () => {

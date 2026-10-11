@@ -28,6 +28,7 @@ function GoalRow({ view, onOpenTarget }: { view: GoalView; onOpenTarget: (target
     </header>
     {view.rosterIssue && <p className="mc-roster-issue">{view.rosterIssue}</p>}
     <GoalChain view={view} onOpenTarget={onOpenTarget} />
+    <a className="mc-link" style={{ display: "inline-block", margin: "0 20px 16px" }} href={`#goal-timeline-${encodeURIComponent(view.goal.id)}`} data-goal-timeline={view.goal.id}>View timeline →</a>{/* CC7E route hook */}
   </article>;
 }
 

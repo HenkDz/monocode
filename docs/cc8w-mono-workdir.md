@@ -46,6 +46,17 @@ reset deletes that conversation. A marker write failure stops the folder
 transaction. A marker left after a failed save conservatively retains the
 old context for the next attempt.
 
+CC8X closes the acceptance crash gap: `prepareText` awaits the confirmed
+native binding through that same serialized writer before the first relocated
+turn can be sent. The save uses the latest transcript, queue and profile; a
+failed or rejected save stops submission and retains recovery. A pending
+receipt keeps this save gate active even after an event publishes the fork ID
+in memory; an unreadable receipt stops submission as well. Acceptance still
+clears the receipt. A provider/account change while saving stops the pending
+turn without restoring its old native binding onto the new choice. Pi/OMP
+refuse a relocation whose fork does not expose a native ID. Both queued-event
+and pending-save restart windows have committed regression tests.
+
 CC1 standing and organization receipts are invalidated after a successful
 save and are recorded again only on acceptance. Codex's instruction-home
 signature also includes cwd. CC5-E rotation retains the new cwd and existing
@@ -91,6 +102,15 @@ and does not seed or overwrite soul, memory, topics or habits. The frontend
 loads Mono files first so legacy identity-folder adoption happens before the
 scratch directory creates the Mono folder. Scratch is a child directory,
 separate from `SOUL.md`, `MEMORY.md` and `memory/`.
+
+CC8X validates existing controlled components before identity initialization
+can write or legacy adoption can rename: app-data, monos, ID, memory, workspace,
+identity/topic files and their atomic temporary files. Legacy roots, index
+files and the indexed source folder use the same link/reparse checks. Adoption
+still happens before creating an absent ID folder. Complete preparation tests
+use real Windows junctions and require their external targets to remain empty.
+The CC8X changes and fresh validation are recorded in
+[`cc8x-workdir-fixes.md`](cc8x-workdir-fixes.md).
 
 The App CLI authorizes project operations using the Mono's project assignments
 and explicit project paths, independently of its shell cwd. Existing tests

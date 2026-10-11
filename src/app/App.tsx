@@ -183,7 +183,7 @@ import { TitleBar, type Tab as TitleTab } from "./shell/TitleBar";
 import { WindowControls } from "./shell/WindowControls";
 import { MonoDetails } from "../features/monos/ui/MonoDetails";
 import { changeMonoWorkingDirectory, isMonoHomeDirectory, migrateMonoWorkingDirectory } from "../features/monos/model/monoWorkingDirectory";
-import { acceptMonoWorkingDirectoryMigration } from "../features/monos/model/monoWorkingDirectoryMigration";
+import { acceptMonoWorkingDirectoryMigration, monoWorkingDirectoryMigrationPending } from "../features/monos/model/monoWorkingDirectoryMigration";
 import { MonoCodexStorageRecovery, isCodexStorageError, parseCodexStorageConflict, parseCodexStorageRecoveryConflict, type CodexStorageResolution, type CodexStorageComparison } from "../features/monos/model/monoCodexStorage";
 import { codexStorageAccountId, monoCodexStorageIssues } from "../features/monos/model/monoCodexStorageIssues";
 import { prepareMonoCodexStore } from "../integrations/harness/core/child";
@@ -549,6 +549,7 @@ import { shouldGenerateSessionTitle } from "../features/sessions/model/sessionTi
 import {
   DEFAULT_PROVIDER_ACCOUNT_ID,
   providerAccountExists,
+  sameProviderAccountId,
   selectedProviderAccountId,
   supportsProviderAccounts,
   type ProviderAccountProvider,
@@ -8805,6 +8806,14 @@ function Workspace({
               attachments: turnAttachments,
               prepareText: async provider => {
                 contextProvider = provider;
+                if (provider && monoWorkingDirectoryMigrationPending(sessionId)) {
+                  const saved = await upsertSession(current, session => {
+                    if (session.harness !== current.harness || !sameProviderAccountId(session.providerAccountId, current.providerAccountId))
+                      throw new Error("The conversation's provider changed before its relocated context could be saved. Retry the turn.");
+                    return { ...session, providerSessionId: provider };
+                  });
+                  if (!saved) throw new Error("The relocated conversation could not be saved. Retry before sending a turn.");
+                }
                 return prepareContext ? prepareContext(text, provider) : text;
               },
               onAccepted: () => {

@@ -11,6 +11,11 @@ export function monoWorkingDirectoryNeedsResume(sessionId: string, providerSessi
   catch { return false; }
 }
 
+/** A binding save must retry even if an event has already published the new ID. */
+export function monoWorkingDirectoryMigrationPending(sessionId: string): boolean {
+  return !!localStorage.getItem(KEY + sessionId);
+}
+
 /** Only an accepted provider turn proves that the saved context reached its new folder. */
 export function acceptMonoWorkingDirectoryMigration(sessionId: string): void {
   try { localStorage.removeItem(KEY + sessionId); }

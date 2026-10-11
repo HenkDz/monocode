@@ -724,6 +724,7 @@ import {
   acceptMonoRotation,
   discardMonoRotationPendingInputs,
   loadMonoRotation,
+  assertMonoRotationCurrent,
   MONO_ROTATION_READ_ERROR,
   sessionRotationStatus,
   rotateProviderContext,
@@ -7917,7 +7918,7 @@ function Workspace({
             };
           },
           steer: (prepared) => {
-            if (loadMonoRotation(sessionId) === null) throw new Error(MONO_ROTATION_READ_ERROR);
+            assertMonoRotationCurrent(sessionId, savedRotation);
             return steerHarnessTurn({
               harness: current.harness,
               sessionId,
@@ -8053,7 +8054,7 @@ function Workspace({
               sessionId,
               cwd: initialWorkCwd,
             });
-            if (loadMonoRotation(sessionId) === null) throw new Error(MONO_ROTATION_READ_ERROR);
+            assertMonoRotationCurrent(sessionId, savedRotation);
             await steerHarnessTurn({
               harness: current.harness,
               sessionId,
@@ -8147,6 +8148,7 @@ function Workspace({
       const rotationStatus = (mono || rotationTask || pendingRotation) && !pendingSwitch && !editedResend
         ? sessionRotationStatus(current, harnessText, taskContext) : undefined;
       const monoRotation = rotationStatus?.plan;
+      let rotationReceipt = monoRotation?.expected ?? rotation;
       if (rotation === null || rotationStatus?.deferredReason === MONO_ROTATION_READ_ERROR || (pendingRotation && !monoRotation)) {
         const message = rotation === null ? MONO_ROTATION_READ_ERROR : rotationStatus?.deferredReason ?? "Context refresh is pending. Finish pending operations or decisions before retrying.";
         editedResend?.reject();
@@ -8566,7 +8568,7 @@ function Workspace({
             }
           : queuedHandoff;
         if (pendingSwitch) {
-          if (loadMonoRotation(sessionId) === null) throw new Error(MONO_ROTATION_READ_ERROR);
+          assertMonoRotationCurrent(sessionId, rotationReceipt);
           let agentText = "";
           if (
             shouldAskOutgoingAgent(current) &&
@@ -8589,7 +8591,7 @@ function Workspace({
           if (turnGen.current.get(sessionId) !== gen) return;
           const latest = sessionsRef.current.find((s) => s.id === sessionId);
           const brief = chooseHandoffBrief(agentText, latest ?? current, text);
-          if (loadMonoRotation(sessionId) === null) throw new Error(MONO_ROTATION_READ_ERROR);
+          assertMonoRotationCurrent(sessionId, rotationReceipt);
           await forgetHarnessSession(pendingSwitch.from, sessionId);
           if (turnGen.current.get(sessionId) !== gen) return;
           wrap = { from: pendingSwitch.from, to: current.harness, text: brief };
@@ -8742,7 +8744,7 @@ function Workspace({
           const earlier = queuedHandoff
             ? userMessagesAfterHandoff(current)
             : [];
-          if (loadMonoRotation(sessionId) === null) throw new Error(MONO_ROTATION_READ_ERROR);
+          assertMonoRotationCurrent(sessionId, rotationReceipt);
           if (editedResend && canRewindHarnessLastTurn(current.harness)) {
             try {
               await rewindHarnessLastTurn({
@@ -8807,7 +8809,7 @@ function Workspace({
           const sendTurn = async (text: string, turnAttachments = prepared) => {
             contextProvider = undefined;
             const fallbackText = prepareContext ? await prepareContext(text) : text;
-            if (loadMonoRotation(sessionId) === null) throw new Error(MONO_ROTATION_READ_ERROR);
+            assertMonoRotationCurrent(sessionId, rotationReceipt);
             return sendHarnessTurn({
               harness: current.harness,
               sessionId,
@@ -8844,7 +8846,7 @@ function Workspace({
               prepareText: async provider => {
                 contextProvider = provider;
                 const preparedText = prepareContext ? await prepareContext(text, provider) : text;
-                if (loadMonoRotation(sessionId) === null) throw new Error(MONO_ROTATION_READ_ERROR);
+                assertMonoRotationCurrent(sessionId, rotationReceipt);
                 return preparedText;
               },
               onAccepted: () => {
@@ -8861,6 +8863,9 @@ function Workspace({
                 }, {
                   ...monoRotation.rotation, pendingBrief: monoRotation.rotation.pendingBrief ?? monoRotation.brief(sessionId),
                 });
+                if (monoRotation) rotationReceipt = {
+                  ...monoRotation.rotation, pendingBrief: undefined, pendingInput: undefined, pendingInputs: undefined,
+                };
                 if (editedResend) acceptEditedResend();
               },
               onEvent: event => {
@@ -8887,7 +8892,8 @@ function Workspace({
             if (turnGen.current.get(sessionId) !== gen) return;
             if (!saveMonoRotation(sessionId, {
               ...monoRotation.rotation, pendingBrief: monoRotation.rotation.pendingBrief ?? monoRotation.brief(sessionId),
-            })) throw new Error("The context refresh brief could not be saved. Try again when storage is available.");
+            }, monoRotation.expected)) throw new Error("The context refresh brief could not be saved. Retry when storage is available to include its latest constraints.");
+            rotationReceipt = { ...monoRotation.rotation, pendingBrief: monoRotation.rotation.pendingBrief ?? monoRotation.brief(sessionId) };
             if (mono && current.harness === "codex" && current.providerSessionId) {
               await migrateMonoCodexSession({
                 sessionId,
@@ -9944,6 +9950,8 @@ function Workspace({
                       ? {
                           ...entry,
                           queueStatus: "paused",
+                          pendingMonoEvents: entry.pendingMonoEvents?.map((message) =>
+                            message.id === head.id ? { ...message, error: "Delivery is unavailable. Retry when the agent is ready." } : message),
                           queuedMessages: entry.queuedMessages?.map(
                             (message) =>
                               message.id === head.id
@@ -9969,6 +9977,8 @@ function Workspace({
                   ? {
                       ...entry,
                       queueStatus: "paused",
+                      pendingMonoEvents: entry.pendingMonoEvents?.map((message) =>
+                        message.id === head.id ? { ...message, error: error instanceof Error ? error.message : String(error) } : message),
                       queuedMessages: entry.queuedMessages?.map((message) =>
                         message.id === head.id
                           ? {
@@ -10089,11 +10099,11 @@ function Workspace({
         !session ||
         (session.busy && !monoForSession(sessionId)) ||
         session.queueStatus !== "paused" ||
-        !session.queuedMessages?.length
+        !queuedHead(session)
       ) {
         return;
       }
-      if (monoForSession(sessionId) || session.queuedMessages[0].error) {
+      if (monoForSession(sessionId) || queuedHead(session)?.error) {
         setSessions((prev) =>
           prev.map((entry) =>
             entry.id === sessionId
@@ -10102,6 +10112,10 @@ function Workspace({
                 : {
                     ...entry,
                     queueStatus: "active",
+                    pendingMonoEvents: entry.pendingMonoEvents?.map((message) => ({
+                      ...message,
+                      error: undefined,
+                    })),
                     queuedMessages: entry.queuedMessages?.map((message) => ({
                       ...message,
                       error: undefined,
@@ -11823,7 +11837,7 @@ function Workspace({
       },
       resumeQueue: (id) => {
         const session = sessionsRef.current.find(entry => entry.id === id);
-        if (!session || session.busy || !session.queuedMessages?.length) return false;
+        if (!session || session.busy || !queuedHead(session)) return false;
         onResumeQueue(id);
         return session.queueStatus === "paused" || session.queueStatus === "active";
       },

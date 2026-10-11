@@ -56,6 +56,7 @@ const {
 } = await import("../integrations/harness/providers/opencode/opencode");
 const {
   acceptMonoRotation,
+  assertMonoRotationCurrent,
   forgetMonoRotation,
   loadMonoRotation,
   MONO_ROTATION_READ_ERROR,
@@ -72,6 +73,11 @@ const { deliverQueuedFollowUp } = await import("../features/sessions/model/queue
 const { acknowledgeMonoMessage } = await import("../features/monos/model/monoMessaging");
 const { displayAttachments } = await import("../features/sessions/model/attachments");
 const { inboxAskPrompt } = await import("../features/inbox/model/inboxAsk");
+const { canDispatchQueuedHead, canSteerQueuedHead, queuedHead, dequeueQueuedMessage } = await import("../features/sessions/model/messageQueue");
+const { enqueueMonoSessionCompletion } = await import("../features/monos/model/monoSessionCompletion");
+const { resumeMonoUsageLimit } = await import("../features/monos/model/monoUsageLimit");
+const { MonoCodexStorageRecovery } = await import("../features/monos/model/monoCodexStorage");
+const { codexStorageAccountId } = await import("../features/monos/model/monoCodexStorageIssues");
 
 // Run the real App guards and prompt carry without launching a native workspace.
 const app = ts.createSourceFile("App.tsx", readFileSync("src/app/App.tsx", "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
@@ -93,15 +99,15 @@ const preflight = new Function("sessionId", "options", "loadMonoRotation", "MONO
 const carrySource = findNode(node => ts.isIfStatement(node) && node.expression.getText(app) === "monoRotation" && node.getText(app).includes("appContext.push"));
 const carry = new Function("monoRotation", "appContext", "sessionId", ts.transpile(carrySource.getText(app), { target: ts.ScriptTarget.ES2022 }));
 const rewindPreparationAt = app.text.indexOf("const earlier = queuedHandoff", savedRotation.getStart(app));
-const beforeRewind = findNode(node => ts.isIfStatement(node) && node.expression.getText(app) === "loadMonoRotation(sessionId) === null" && node.getStart(app) > rewindPreparationAt);
-const afterPreparation = new Function("sessionId", "loadMonoRotation", "MONO_ROTATION_READ_ERROR", "rewind", "dispatch",
-  ts.transpile(`return (async () => { ${beforeRewind.getText(app)} await rewind(); await dispatch(); })();`, { target: ts.ScriptTarget.ES2022 }));
+const beforeRewind = findNode(node => ts.isExpressionStatement(node) && node.expression.getText(app) === "assertMonoRotationCurrent(sessionId, rotationReceipt)" && node.getStart(app) > rewindPreparationAt);
+const afterPreparation = new Function("assertMonoRotationCurrent", "sessionId", "loadMonoRotation", "MONO_ROTATION_READ_ERROR", "rewind", "dispatch",
+  ts.transpile(`const rotationReceipt = loadMonoRotation(sessionId); return (async () => { ${beforeRewind.getText(app)} await rewind(); await dispatch(); })();`, { target: ts.ScriptTarget.ES2022 })).bind(null, assertMonoRotationCurrent);
 const providerPreparation = findNode(node => ts.isPropertyAssignment(node) && node.name.getText(app) === "prepareText" && node.getText(app).includes("const preparedText")) as ts.PropertyAssignment;
-const prepareForProvider = new Function("sessionId", "loadMonoRotation", "MONO_ROTATION_READ_ERROR", "prepareContext", "text",
-  ts.transpile(`let contextProvider; return ${providerPreparation.initializer.getText(app)};`, { target: ts.ScriptTarget.ES2022 }));
+const prepareForProvider = new Function("assertMonoRotationCurrent", "sessionId", "loadMonoRotation", "MONO_ROTATION_READ_ERROR", "prepareContext", "text",
+  ts.transpile(`const rotationReceipt = loadMonoRotation(sessionId); let contextProvider; return ${providerPreparation.initializer.getText(app)};`, { target: ts.ScriptTarget.ES2022 })).bind(null, assertMonoRotationCurrent);
 const sendTurn = findNode(node => ts.isVariableDeclaration(node) && node.name.getText(app) === "sendTurn") as ts.VariableDeclaration;
-const sendAfterContext = new Function("sessionId", "loadMonoRotation", "MONO_ROTATION_READ_ERROR", "prepareContext", "sendHarnessTurn",
-  ts.transpile(`let contextProvider; return ${sendTurn.initializer!.getText(app)};`, { target: ts.ScriptTarget.ES2022 }));
+const sendAfterContext = new Function("assertMonoRotationCurrent", "sessionId", "loadMonoRotation", "MONO_ROTATION_READ_ERROR", "prepareContext", "sendHarnessTurn",
+  ts.transpile(`const rotationReceipt = loadMonoRotation(sessionId); let contextProvider; return ${sendTurn.initializer!.getText(app)};`, { target: ts.ScriptTarget.ES2022 })).bind(null, assertMonoRotationCurrent);
 const queuedSteer = findNode(node => ts.isCallExpression(node) && node.expression.getText(app) === "deliverQueuedFollowUp");
 const directSteer = findNode(node => ts.isArrowFunction(node) && node.modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.AsyncKeyword) === true &&
   ts.isBlock(node.body) && node.body.statements.some(statement => ts.isTryStatement(statement) && statement.getText(app).includes("await steerHarnessTurn") && statement.getText(app).includes("initialWorkCwd")));
@@ -371,6 +377,35 @@ it("actual OpenCode prompt preparation refuses an outage that begins while provi
   await recover(fresh);
 });
 
+it.each(["fallback", "provider"])("refuses newer protected continuity written during awaited %s preparation", async window => {
+  const original = originalSession();
+  const first = sessionRotationStatus(original, firstRequest, assignment).plan!;
+  const receipt = persist(first);
+  const fresh = await rotateProviderContext(original, () => forgetOpenCodeSession(id));
+  const restriction = "Never publish the synthetic package; keep every result local.";
+  const newer = { ...receipt, pendingInputs: [restriction] };
+  const prepareContext = vi.fn(async () => {
+    await Promise.resolve();
+    expect(saveMonoRotation(id, newer)).toBe(true);
+    return prepare(first, firstRequest);
+  });
+  const accepted = vi.fn();
+  const dispatched = vi.fn();
+  rejectPrompt = false;
+  const attempt = window === "provider"
+    ? sendOpenCodeTurn({ ...input(fresh), text: firstRequest,
+        prepareText: prepareForProvider(id, loadMonoRotation, MONO_ROTATION_READ_ERROR, prepareContext, firstRequest), onAccepted: accepted })
+    : sendAfterContext(id, loadMonoRotation, MONO_ROTATION_READ_ERROR, prepareContext, dispatched)(firstRequest, []);
+  await expect(attempt).rejects.toThrow("carry changed");
+  expect(prepareContext).toHaveBeenCalledOnce();
+  expect(accepted).not.toHaveBeenCalled();
+  expect(dispatched).not.toHaveBeenCalled();
+  expect(texts).toEqual([]);
+  expect(loadMonoRotation(id)).toEqual(newer);
+  await recover(fresh);
+  expect(texts[texts.length - 1]).toContain(restriction);
+});
+
 it("actual App send callback stops before adapter dispatch if fallback context preparation loses readable storage", async () => {
   const original = originalSession();
   const first = sessionRotationStatus(original, firstRequest, assignment).plan!;
@@ -427,6 +462,7 @@ it("actual queued follow-up callback refuses steering after preparation loses st
     turnGen: { current: new Map([[id, 1]]) }, gen: 1, upsertSession: vi.fn(async () => undefined),
     prepareAttachments: vi.fn(async () => []), attachments: [], preparePrompt, harnessText: replacement,
     current: active, initialWorkCwd: active.cwd, loadMonoRotation, MONO_ROTATION_READ_ERROR,
+    assertMonoRotationCurrent, savedRotation: loadMonoRotation(id),
     steerHarnessTurn, inboxAskPrompt, rawCommand: false, acknowledgeMonoMessage,
     change: (update: (session: Session) => Session) => { sessionsRef.current = sessionsRef.current.map(update); },
     submittedText: replacement, displayAttachments, userTurnCards: () => undefined, noteCard: undefined,
@@ -454,6 +490,7 @@ it("actual direct busy-steer callback refuses an outage during preparation witho
   const scope = {
     prepareAttachments: vi.fn(async () => []), attachments: [], preparePrompt, harnessText: replacement,
     current: active, sessionId: id, initialWorkCwd: active.cwd, loadMonoRotation, MONO_ROTATION_READ_ERROR,
+    assertMonoRotationCurrent, savedRotation: loadMonoRotation(id),
     steerHarnessTurn, inboxAskPrompt, rawCommand: false,
     enqueueHarnessEvent: (_id: string, event: HarnessEvent) => events.push(event), flushHarnessEvents: vi.fn(),
   };
@@ -486,6 +523,7 @@ it.each(["before handoff", "after handoff"])("actual provider-switch branch refu
   const scope = {
     pendingSwitch: { from: "opencode", fromModel: current.model, fromSettings: current.modelSettings },
     loadMonoRotation, MONO_ROTATION_READ_ERROR, current, shouldAskOutgoingAgent: () => true,
+    assertMonoRotationCurrent, rotationReceipt: loadMonoRotation(id),
     isLiveHarness: () => true, requestOutgoingHandoff, sessionId: id, workCwd: current.cwd, text: replacement,
     turnGen: { current: new Map([[id, 1]]) }, gen: 1, sessionsRef: { current: [current] },
     chooseHandoffBrief: (agentText: string) => agentText, forgetHarnessSession, dispatch,
@@ -506,4 +544,47 @@ it("keeps the actual App preflight before edited preparation, rewind and provide
   for (const marker of ["createEditedResendAttempt(current", "await prepareAttachments(attachments)", "await rewindHarnessLastTurn(", "return sendHarnessTurn("])
     expect(app.text.indexOf(marker, preflightAt), marker).toBeGreaterThan(pendingEdit.end);
   expect(beforeRewind.getStart(app)).toBeLessThan(app.text.indexOf("await rewindHarnessLastTurn(", preflightAt));
+});
+
+it.each(["refusal", "exception"])("completion-only queues preserve retryable %s errors and resume after recovery", async failure => {
+  const completion = { id: "completion", text: "Parser tests completed.", attachments: [],
+    monoSessionCompletion: { sessionId: "member", title: "Parser tests", status: "completed" as const } };
+  const session = enqueueMonoSessionCompletion(originalSession(), completion);
+  const sessionsRef = { current: [session] };
+  const setSessions = (update: (previous: Session[]) => Session[]) => { sessionsRef.current = update(sessionsRef.current); };
+  const callbacks: (() => Promise<void>)[] = [];
+  const dispatch = vi.fn();
+  const fault = failure === "refusal" ? readFault("throws") : undefined;
+  const effect = findNode(node => ts.isCallExpression(node) && node.expression.getText(app) === "useEffect" &&
+    node.getText(app).includes("const queued = [...(session.queuedMessages") && node.getText(app).includes("queueDispatchingRef")) as ts.CallExpression;
+  const scope = {
+    sessions: sessionsRef.current, sessionsRef, setSessions, monoForSession: () => ({ id: "mono" }),
+    canDispatchQueuedHead, canSteerQueuedHead, queuedHead, dequeueQueuedMessage,
+    codexStorageRecovery: { current: new MonoCodexStorageRecovery() }, codexStorageAccountId,
+    selectedProviderAccountId: () => undefined, canSteerHarness: () => false, consumeOperatorCommand: () => ({ matched: false }),
+    queueDispatchingRef: { current: new Set<string>() }, setQueueDispatchVersion: vi.fn(), invoke: vi.fn(),
+    window: { setTimeout: (callback: () => Promise<void>) => { callbacks.push(callback); return callbacks.length; }, clearTimeout: vi.fn() },
+    submitSession: () => {
+      if (failure === "exception") throw Error("synthetic preparation failure");
+      return submit({}, async () => { dispatch(); }).result;
+    },
+  };
+  new Function(...Object.keys(scope), ts.transpile(`return (${effect.arguments[0].getText(app)})();`, { target: ts.ScriptTarget.ES2022 }))(...Object.values(scope));
+  expect(callbacks).toHaveLength(1);
+  await callbacks[0]();
+  expect(dispatch).not.toHaveBeenCalled();
+  expect(sessionsRef.current[0].queueStatus).toBe("paused");
+  expect(sessionsRef.current[0].queuedMessages).toBeUndefined();
+  expect(sessionsRef.current[0].pendingMonoEvents).toEqual([{
+    ...completion, error: failure === "exception" ? "synthetic preparation failure" : "Delivery is unavailable. Retry when the agent is ready.",
+  }]);
+  fault?.mockRestore();
+  const resume = findNode(node => ts.isVariableDeclaration(node) && node.name.getText(app) === "onResumeQueue") as ts.VariableDeclaration;
+  const resumeScope = { sessionsRef, setSessions, queuedHead, monoForSession: scope.monoForSession,
+    resumeMonoUsageLimit, onSubmit: dispatch, CONTINUE_PROMPT: "Continue" };
+  new Function(...Object.keys(resumeScope), ts.transpile(`return ${(resume.initializer as ts.CallExpression).arguments[0].getText(app)};`, { target: ts.ScriptTarget.ES2022 }))(...Object.values(resumeScope))(id);
+  expect(sessionsRef.current[0].queueStatus).toBe("active");
+  expect(sessionsRef.current[0].pendingMonoEvents).toEqual([{ ...completion, error: undefined }]);
+  expect(canDispatchQueuedHead(sessionsRef.current[0])).toBe(true);
+  expect(dispatch).not.toHaveBeenCalled();
 });

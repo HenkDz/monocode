@@ -4,8 +4,7 @@ import { SearchableSelect } from "../../../shared/ui/SearchableSelect";
 import { codexWindowsSandbox } from "../../../integrations/harness/providers/codex/codexProtocol";
 import { RUNTIME_MODE_LABEL, type RuntimeMode, type Session } from "../../sessions/model/session";
 import { AccessPicker } from "../../sessions/ui/AccessPicker";
-import { updateMono, type Mono } from "../model/mono";
-import { lockMonoField } from "../model/monoTeam";
+import { saveMonoRuntimeMode, updateMono, type Mono } from "../model/mono";
 import { openCardSession } from "../model/monoCards";
 import { monoRoleRuntimeMode, resetMonoRolePermissions } from "../model/monoRolePermissions";
 import { Property } from "./monoPanelParts";
@@ -37,15 +36,14 @@ export function MonoPermissions({
   const desired = monoRoleRuntimeMode(role);
   const changeMode = (mode: RuntimeMode) => {
     if (mono) {
-      updateMono(mono.id, value => ({ ...value, runtimeMode: mode, runtimeModeSource: "user" }));
-      lockMonoField(mono.id, "runtimeMode");
+      saveMonoRuntimeMode(mono.id, mode);
       onRuntimeModeChange?.(mode, "user");
     } else onRuntimeModeChange?.(mode);
   };
   const reset = () => {
     if (!mono) return;
     const next = resetMonoRolePermissions(mono);
-    updateMono(mono.id, value => ({ ...value, ...next }));
+    saveMonoRuntimeMode(mono.id, next.runtimeMode, next.runtimeModeSource);
     onRuntimeModeChange?.(next.runtimeMode, next.runtimeModeSource);
   };
   const engine = runtimeMode ? codexWindowsSandbox({ codexStore: "mono", runtimeMode, windowsSandbox, readOnly }, IS_WIN) : undefined;

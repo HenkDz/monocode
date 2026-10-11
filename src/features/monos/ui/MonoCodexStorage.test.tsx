@@ -68,7 +68,8 @@ it("shows the sandbox reason and exact manual command inline without auto-changi
   expect(repair).not.toHaveBeenCalled();
   await act(async () => buttonNamed("Copy setup command").click());
   expect(native.copy).toHaveBeenCalledWith(sandbox.setupCommand);
-  await act(async () => buttonNamed("Switch this account to unelevated").click());
+  expect(container.textContent).toContain("Your own Codex config stays unchanged");
+  await act(async () => buttonNamed("Use unelevated sandbox for Monos").click());
   expect(resolve).toHaveBeenCalledExactlyOnceWith("use_unelevated_sandbox");
   expect(container.textContent).toContain("Codex sandbox choice applied");
 });
@@ -81,7 +82,7 @@ it("requests full access only on explicit click and disables sandbox choices whi
   expect(resolve).not.toHaveBeenCalled();
   await act(async () => { buttonNamed("Use full access for this Mono").click(); });
   expect(resolve).toHaveBeenCalledExactlyOnceWith("use_mono_full_access");
-  expect(buttonNamed("Switch this account to unelevated").disabled).toBe(true);
+  expect(buttonNamed("Use unelevated sandbox for Monos").disabled).toBe(true);
   expect(buttonNamed("Checking").disabled).toBe(true);
   await act(async () => finish());
 });
@@ -90,7 +91,7 @@ it("retains inline sandbox choices after a failed explicit config change", async
   const detail = `Codex storage needs repair: ${JSON.stringify({ sandbox: true, reason: "Sandbox account is missing", setupCommand: "codex sandbox -P :workspace -- echo ready" })}`;
   const resolve = vi.fn(async () => { throw new Error("The account is busy; config was not changed"); });
   await act(async () => root.render(<MonoCodexStorageNotice detail={detail} onRepair={vi.fn()} onResolve={resolve} />));
-  await act(async () => buttonNamed("Switch this account to unelevated").click());
+  await act(async () => buttonNamed("Use unelevated sandbox for Monos").click());
   expect(container.querySelector('[role="alert"]')?.textContent).toContain("config was not changed");
   expect(container.textContent).toContain("Sandbox account is missing");
   expect(buttonNamed("Use full access for this Mono").disabled).toBe(false);

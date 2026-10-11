@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Read, Write};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -108,107 +108,148 @@ fn unelevated_config(text: &str) -> Result<String, String> {
     Ok(updated)
 }
 
-fn change_configs(source: &Path, home: Option<&Path>) -> Result<SandboxConfigChange, String> {
-    let config_path = source.join("config.toml");
-    let mut paths = vec![config_path.clone()];
-    if let Some(home) = home {
-        let private = home.join("config.toml");
-        if std::fs::symlink_metadata(&private).is_ok() && !super::same_entry(&config_path, &private)
-        {
-            paths.push(private);
+fn change_configs(source: &Path, home: &Path) -> Result<SandboxConfigChange, String> {
+    super::transactions::reconcile(home)?;
+    let config_path = home.join("config.toml");
+    let source_path = source.join("config.toml");
+    let existing = match std::fs::symlink_metadata(&config_path) {
+        Ok(metadata) => {
+            if !metadata.is_file() && !metadata.file_type().is_symlink() {
+                return Err("Mono Codex config must be a real file or an account file link".into());
+            }
+            true
         }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => return Err(error.to_string()),
+    };
+    let linked = existing && super::replaceable_link(&config_path)?;
+    if linked && !super::same_entry(&source_path, &config_path) {
+        return Err("Linked Mono Codex config no longer matches the selected account".into());
     }
-    // Pin every original before validation; Windows excludes external writers and deletion.
-    let mut edits = paths
-        .iter()
-        .map(|path| {
-            let mut options = std::fs::OpenOptions::new();
-            options.read(true).write(true);
-            #[cfg(windows)]
-            {
-                use std::os::windows::fs::OpenOptionsExt;
-                use windows_sys::Win32::Storage::FileSystem::{
-                    FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ,
-                };
-                options
-                    .share_mode(FILE_SHARE_READ)
-                    .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
-            }
-            let mut file = options.open(path).map_err(|error| {
-                format!(
-                    "Could not exclusively open Codex config {}: {error}",
-                    path.display()
-                )
-            })?;
-            let metadata = std::fs::symlink_metadata(path).map_err(|error| error.to_string())?;
-            #[cfg(windows)]
-            let is_reparse = super::handle_file_info(&file)?.dwFileAttributes
-                & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT
-                != 0;
-            #[cfg(not(windows))]
-            let is_reparse = metadata.file_type().is_symlink();
-            if !metadata.is_file() || metadata.file_type().is_symlink() || is_reparse {
-                return Err(
-                    "Codex account config must be a real file before switching its sandbox".into(),
-                );
-            }
-            let mut original = String::new();
-            file.read_to_string(&mut original)
-                .map_err(|error| format!("Could not read Codex config: {error}"))?;
-            let updated = unelevated_config(&original)?;
-            Ok((
-                path,
-                original,
-                updated,
-                metadata.permissions(),
-                path.with_file_name(format!(
-                    "config.toml.monocode-sandbox-backup-{}",
-                    uuid::Uuid::new_v4()
-                )),
-                file,
-            ))
-        })
-        .collect::<Result<Vec<_>, String>>()?;
-    let write_new =
-        |target: &Path, bytes: &[u8], permissions: std::fs::Permissions| -> Result<(), String> {
-            #[cfg(test)]
-            if FAIL_NEXT_BACKUP_WRITE.with(|flag| flag.replace(false)) {
-                return Err("Synthetic backup write failure".into());
-            }
-            let mut file = std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(target)
-                .map_err(|error| error.to_string())?;
-            std::fs::set_permissions(target, permissions).map_err(|error| error.to_string())?;
-            file.write_all(bytes).map_err(|error| error.to_string())?;
-            file.sync_all().map_err(|error| error.to_string())
+    let original_path = if !existing || linked {
+        &source_path
+    } else {
+        &config_path
+    };
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE, FILE_SHARE_READ,
         };
+        // A private hardlink must be claimable without granting writes to the account file.
+        options
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_DELETE)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let mut original_file = options.open(original_path).map_err(|error| {
+        format!(
+            "Could not open Codex config {}: {error}",
+            original_path.display()
+        )
+    })?;
+    let metadata = original_file
+        .metadata()
+        .map_err(|error| error.to_string())?;
+    #[cfg(windows)]
+    let is_reparse = super::handle_file_info(&original_file)?.dwFileAttributes
+        & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT
+        != 0;
+    #[cfg(not(windows))]
+    let is_reparse = std::fs::symlink_metadata(original_path)
+        .map_err(|error| error.to_string())?
+        .file_type()
+        .is_symlink();
+    if !metadata.is_file() || is_reparse {
+        return Err("Codex config must be a real file before switching the Mono sandbox".into());
+    }
+    let mut original = String::new();
+    original_file
+        .read_to_string(&mut original)
+        .map_err(|error| format!("Could not read Codex config: {error}"))?;
+    let updated = unelevated_config(&original)?;
+    let original_id = super::file_identity(&original_file)?;
+    let fingerprint = super::fingerprint_file(&mut original_file)?;
+    super::snapshot_path(home, "config.toml")?;
+    let temp = home.join(format!(".monocode-link-{}", uuid::Uuid::new_v4()));
+    let mut staged = None;
     let mut backups = Vec::new();
     let result = (|| {
-        for (_, original, _, permissions, backup, _) in &edits {
-            write_new(backup, original.as_bytes(), permissions.clone()).map_err(|error| format!(
-                "Could not finish config backup at {}: {error}; original config files are unchanged", backup.display()
-            ))?;
-            backups.push(crate::fs::path_to_js(backup));
-        }
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)
+            .map_err(|error| error.to_string())?;
+        file.write_all(updated.as_bytes())
+            .map_err(|error| error.to_string())?;
+        file.sync_all().map_err(|error| error.to_string())?;
+        std::fs::set_permissions(&temp, metadata.permissions())
+            .map_err(|error| error.to_string())?;
+        drop(file);
+        staged = Some(super::transactions::RecordedEntry::new(&temp)?);
+        let stage = staged.as_ref().unwrap();
         #[cfg(test)]
         super::before_claim();
-        // In-place writes preserve pinned identities; complete backups cover failures and crashes.
-        for (path, _, updated, _, _, file) in &mut edits {
-            file.seek(SeekFrom::Start(0))
-                .and_then(|_| file.write_all(updated.as_bytes()))
-                .and_then(|_| file.set_len(updated.len() as u64))
-                .and_then(|_| file.sync_all())
-                .map_err(|error| {
-                    format!(
-                        "Could not finish config update at {}: {error}",
-                        path.display()
-                    )
-                })?;
+        let mut claimed = if existing {
+            Some(super::ClaimedEntry::new(
+                &config_path,
+                super::ClaimIntent::UseAccount,
+                Some(stage),
+            )?)
+        } else {
+            None
+        };
+        let result = (|| {
+            if let Some(claimed) = &claimed {
+                let current =
+                    std::fs::File::open(&claimed.path).map_err(|error| error.to_string())?;
+                if super::file_identity(&current)? != original_id
+                    || super::fingerprint_file(&mut original_file)? != fingerprint
+                {
+                    return Err(
+                        "Mono Codex config changed during sandbox repair; retry the action".into(),
+                    );
+                }
+            }
+            #[cfg(test)]
+            if FAIL_NEXT_BACKUP_WRITE.with(|flag| flag.replace(false)) {
+                return Err("Could not finish config backup: Synthetic backup write failure; original config files are unchanged".into());
+            }
+            let backup = super::archive_file(home, "config.toml", &mut original_file, &fingerprint)
+                .map_err(|error| format!("Could not finish config backup: {error}; original config files are unchanged"))?;
+            backups.push(crate::fs::path_to_js(&backup));
+            std::fs::set_permissions(&backup, metadata.permissions())
+                .map_err(|error| error.to_string())?;
+            if let Some(claimed) = &mut claimed {
+                claimed.journal.verify(Some(&backup))?;
+            }
+            stage.publish(&temp, &config_path)?;
+            super::write_snapshot(
+                home,
+                "config.toml",
+                &super::LinkSnapshot {
+                    fingerprint: super::fingerprint(&config_path)?,
+                    private_override: true,
+                    invalid: false,
+                },
+            )?;
+            if let Some(claimed) = &mut claimed {
+                claimed.discard()?;
+            }
+            Ok(())
+        })();
+        match claimed {
+            Some(mut claimed) => claimed.finish(result),
+            None => result,
         }
-        Ok(())
     })();
+    if let Some(staged) = staged {
+        staged.cleanup(&temp)?;
+    } else if temp.exists() {
+        std::fs::remove_file(&temp).map_err(|error| error.to_string())?;
+    }
     result.map_err(|error: String| {
         let saved = if backups.is_empty() {
             "No complete config backups were saved.".to_string()
@@ -236,12 +277,62 @@ pub fn codex_mono_use_unelevated_sandbox(
         .lock()
         .unwrap_or_else(|error| error.into_inner());
     let (source, home) = super::storage_roots(&source, &home)?;
-    change_configs(&source, Some(&home))
+    change_configs(&source, &home)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fixture() -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+        let root =
+            std::env::temp_dir().join(format!("monocode-sandbox-config-{}", uuid::Uuid::new_v4()));
+        let source = root.join(".codex");
+        let home = root.join("codex-monos/default");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        (root, source, home)
+    }
+
+    #[test]
+    fn sandbox_config_repair_preserves_synthetic_codex_source_bytes() {
+        let root = std::env::temp_dir().join(format!(
+            "monocode-sandbox-source-preserved-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let source = root.join(".codex");
+        let home = root.join("codex-monos/default");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        let original = b"# synthetic ordinary Codex account\r\nmodel = 'account-model'\r\n[windows]\r\nsandbox = 'elevated' # preserve source bytes\r\n";
+        let source_path = source.join("config.toml");
+        let private_path = home.join("config.toml");
+        std::fs::write(&source_path, original).unwrap();
+        super::super::create_link(&source_path, &private_path).unwrap();
+        println!("synthetic sandbox repair fixture: {}", root.display());
+
+        let changed = change_configs(&source, &home).unwrap();
+
+        assert_eq!(std::fs::read(&source_path).unwrap(), original);
+        assert_eq!(std::fs::read_dir(&source).unwrap().count(), 1);
+        assert_eq!(changed.config_path, crate::fs::path_to_js(&private_path));
+        assert_eq!(changed.backup_paths.len(), 1);
+        assert_eq!(std::fs::read(&changed.backup_path).unwrap(), original);
+        assert!(!super::super::same_entry(&source_path, &private_path));
+        let private = std::fs::read_to_string(&private_path).unwrap();
+        assert!(private.contains("sandbox = \"unelevated\""));
+        assert!(private.contains("model = 'account-model'"));
+        assert!(
+            super::super::read_snapshot(&home, "config.toml")
+                .unwrap()
+                .unwrap()
+                .private_override
+        );
+        super::super::prepare_files(&source, &home).unwrap();
+        assert_eq!(std::fs::read(&source_path).unwrap(), original);
+        assert_eq!(std::fs::read_to_string(&private_path).unwrap(), private);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn sandbox_config_preserves_comments_other_settings_and_inactive_profiles() {
@@ -281,13 +372,11 @@ mod tests {
 
     #[test]
     fn sandbox_config_is_explicit_and_reversible_with_exact_original_backup() {
-        let source =
-            std::env::temp_dir().join(format!("monocode-sandbox-choice-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir(&source).unwrap();
-        let path = source.join("config.toml");
+        let (root, source, home) = fixture();
+        let path = home.join("config.toml");
         let original = "# synthetic account\n[windows]\nsandbox = 'elevated'\n";
         std::fs::write(&path, original).unwrap();
-        let changed = change_configs(&source, None).unwrap();
+        let changed = change_configs(&source, &home).unwrap();
         assert_eq!(
             std::fs::read_to_string(&changed.backup_path).unwrap(),
             original
@@ -297,67 +386,69 @@ mod tests {
             .contains("unelevated"));
         std::fs::copy(&changed.backup_path, &path).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
-        std::fs::remove_dir_all(source).unwrap();
+        assert_eq!(std::fs::read_dir(&source).unwrap().count(), 0);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn sandbox_config_invalid_config_is_preserved_without_a_backup_or_write() {
-        let source =
-            std::env::temp_dir().join(format!("monocode-sandbox-invalid-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir(&source).unwrap();
+        let (root, source, home) = fixture();
         std::fs::write(source.join("config.toml"), "[broken").unwrap();
-        assert!(change_configs(&source, None).is_err());
+        assert!(change_configs(&source, &home).is_err());
         assert_eq!(
             std::fs::read_to_string(source.join("config.toml")).unwrap(),
             "[broken"
         );
         assert_eq!(std::fs::read_dir(&source).unwrap().count(), 1);
-        std::fs::remove_dir_all(source).unwrap();
+        assert_eq!(std::fs::read_dir(&home).unwrap().count(), 0);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn sandbox_config_validates_both_account_and_private_config_before_writing() {
-        let source = std::env::temp_dir().join(format!(
-            "monocode-sandbox-two-configs-{}",
-            uuid::Uuid::new_v4()
-        ));
-        let home = source.join("private");
-        std::fs::create_dir_all(&home).unwrap();
+    fn sandbox_config_validates_and_preserves_existing_private_settings() {
+        let (root, source, home) = fixture();
         let original = "[windows]\nsandbox = 'elevated'\n";
         std::fs::write(source.join("config.toml"), original).unwrap();
         std::fs::write(home.join("config.toml"), "[broken").unwrap();
-        assert!(change_configs(&source, Some(&home)).is_err());
+        assert!(change_configs(&source, &home).is_err());
         assert_eq!(
             std::fs::read_to_string(source.join("config.toml")).unwrap(),
             original
         );
-        assert_eq!(std::fs::read_dir(&source).unwrap().count(), 2);
-        std::fs::write(home.join("config.toml"), original).unwrap();
-        let changed = change_configs(&source, Some(&home)).unwrap();
-        assert_eq!(changed.backup_paths.len(), 2);
+        assert_eq!(std::fs::read_dir(&source).unwrap().count(), 1);
+        assert_eq!(std::fs::read_dir(&home).unwrap().count(), 1);
+        let private = "model = 'private-model'\n[windows]\nsandbox = 'elevated'\n";
+        std::fs::write(home.join("config.toml"), private).unwrap();
+        let changed = change_configs(&source, &home).unwrap();
+        assert_eq!(changed.backup_paths.len(), 1);
         for path in &changed.backup_paths {
-            assert_eq!(std::fs::read_to_string(path).unwrap(), original);
+            assert_eq!(std::fs::read_to_string(path).unwrap(), private);
         }
-        for dir in [&source, &home] {
-            assert!(std::fs::read_to_string(dir.join("config.toml"))
-                .unwrap()
-                .contains("unelevated"));
-        }
-        std::fs::remove_dir_all(source).unwrap();
+        let changed = std::fs::read_to_string(home.join("config.toml")).unwrap();
+        assert!(changed.contains("unelevated"));
+        assert!(changed.contains("private-model"));
+        assert_eq!(
+            std::fs::read_to_string(source.join("config.toml")).unwrap(),
+            original
+        );
+        assert_eq!(std::fs::read_dir(&source).unwrap().count(), 1);
+        super::super::prepare_files(&source, &home).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(home.join("config.toml")).unwrap(),
+            changed
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn sandbox_config_failed_backup_never_claims_saved_backups_or_changes_config() {
-        let source = std::env::temp_dir().join(format!(
-            "monocode-sandbox-backup-failure-{}",
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::create_dir(&source).unwrap();
+        let (root, source, home) = fixture();
         let original = "[windows]\nsandbox = 'elevated'\n";
         std::fs::write(source.join("config.toml"), original).unwrap();
+        super::super::create_link(&source.join("config.toml"), &home.join("config.toml")).unwrap();
         FAIL_NEXT_BACKUP_WRITE.with(|flag| flag.set(true));
-        let error = change_configs(&source, None).err().unwrap();
-        assert!(error.contains("Could not finish config backup at"));
+        let error = change_configs(&source, &home).err().unwrap();
+        assert!(error.contains("Could not finish config backup"));
         assert!(error.contains("original config files are unchanged"));
         assert!(error.contains("No complete config backups were saved"));
         assert!(!error.contains("Config backups preserved at"));
@@ -366,60 +457,134 @@ mod tests {
             original
         );
         assert_eq!(std::fs::read_dir(&source).unwrap().count(), 1);
-        std::fs::remove_dir_all(source).unwrap();
+        assert!(super::super::same_entry(
+            &source.join("config.toml"),
+            &home.join("config.toml")
+        ));
+        assert!(!home.join(".monocode-conflicts").exists());
+        assert!(!std::fs::read_dir(&home).unwrap().any(|entry| entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".monocode-claim-")));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[cfg(windows)]
     #[test]
-    fn sandbox_config_pins_both_originals_against_external_writes_and_deletion() {
-        let source =
-            std::env::temp_dir().join(format!("monocode-sandbox-pinned-{}", uuid::Uuid::new_v4()));
-        let home = source.join("private");
-        std::fs::create_dir_all(&home).unwrap();
+    fn sandbox_config_pins_private_original_against_external_writes() {
+        let (root, source, home) = fixture();
         let original = "[windows]\nsandbox = 'elevated'\n";
         let paths = vec![source.join("config.toml"), home.join("config.toml")];
         for path in &paths {
             std::fs::write(path, original).unwrap();
         }
-        let pinned_paths = paths.clone();
+        let pinned = home.join("config.toml");
         super::super::BEFORE_CLAIM.with(|hook| {
             *hook.borrow_mut() = Some(Box::new(move || {
                 std::thread::spawn(move || {
-                    for path in &pinned_paths {
-                        assert_eq!(
-                            std::fs::write(path, "concurrent newer config")
-                                .unwrap_err()
-                                .raw_os_error(),
-                            Some(32)
-                        );
-                        assert_eq!(
-                            std::fs::remove_file(path).unwrap_err().raw_os_error(),
-                            Some(32)
-                        );
-                        assert_eq!(
-                            std::fs::rename(path, path.with_extension("moved"))
-                                .unwrap_err()
-                                .raw_os_error(),
-                            Some(32)
-                        );
-                        assert_eq!(std::fs::read_to_string(path).unwrap(), original);
-                    }
+                    assert_eq!(
+                        std::fs::write(&pinned, "concurrent newer config")
+                            .unwrap_err()
+                            .raw_os_error(),
+                        Some(32)
+                    );
+                    assert_eq!(std::fs::read_to_string(&pinned).unwrap(), original);
                 })
                 .join()
                 .unwrap();
             }))
         });
-        let changed = change_configs(&source, Some(&home)).unwrap();
-        assert_eq!(changed.backup_paths.len(), 2);
+        let changed = change_configs(&source, &home).unwrap();
+        assert_eq!(changed.backup_paths.len(), 1);
         for backup in changed.backup_paths {
             assert_eq!(std::fs::read_to_string(backup).unwrap(), original);
         }
-        for path in paths {
-            assert!(std::fs::read_to_string(&path)
-                .unwrap()
-                .contains("unelevated"));
-            std::fs::write(&path, original).unwrap();
+        assert_eq!(std::fs::read_to_string(&paths[0]).unwrap(), original);
+        assert!(std::fs::read_to_string(&paths[1])
+            .unwrap()
+            .contains("unelevated"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn sandbox_config_detaches_hardlinks_without_writing_the_account() {
+        let (root, source, home) = fixture();
+        let source_path = source.join("config.toml");
+        let private = home.join("config.toml");
+        let original = "model='account-model'\n[windows]\nsandbox='elevated'\n";
+        std::fs::write(&source_path, original).unwrap();
+        std::fs::hard_link(&source_path, &private).unwrap();
+        let changed = change_configs(&source, &home).unwrap();
+        assert_eq!(std::fs::read_to_string(&source_path).unwrap(), original);
+        assert_eq!(std::fs::read_dir(&source).unwrap().count(), 1);
+        assert_eq!(changed.backup_paths.len(), 1);
+        assert!(!super::super::same_entry(&source_path, &private));
+        assert!(!super::super::replaceable_link(&private).unwrap());
+        assert!(std::fs::read_to_string(&private)
+            .unwrap()
+            .contains("unelevated"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn sandbox_config_creates_missing_private_config_without_changing_source_readonly_attribute() {
+        let (root, source, home) = fixture();
+        let path = source.join("config.toml");
+        let original = "model='account-model'\n[windows]\nsandbox='elevated'\n";
+        std::fs::write(&path, original).unwrap();
+        let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(&path, permissions.clone()).unwrap();
+        let changed = change_configs(&source, &home).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        assert!(std::fs::metadata(&path).unwrap().permissions().readonly());
+        assert_eq!(std::fs::read_dir(&source).unwrap().count(), 1);
+        assert_eq!(
+            changed.config_path,
+            crate::fs::path_to_js(&home.join("config.toml"))
+        );
+        for private in [
+            &path,
+            &home.join("config.toml"),
+            Path::new(&changed.backup_path),
+        ] {
+            let mut permissions = std::fs::metadata(private).unwrap().permissions();
+            permissions.set_readonly(false);
+            std::fs::set_permissions(private, permissions).unwrap();
         }
-        std::fs::remove_dir_all(source).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn sandbox_config_rejects_concurrent_private_replacement_without_overwriting_it() {
+        let (root, source, home) = fixture();
+        let original = "[windows]\nsandbox='elevated'\n";
+        std::fs::write(source.join("config.toml"), original).unwrap();
+        std::fs::write(home.join("config.toml"), original).unwrap();
+        let private = home.join("config.toml");
+        super::super::BEFORE_CLAIM.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move || {
+                std::fs::rename(&private, private.with_extension("old")).unwrap();
+                std::fs::write(&private, "model='concurrent-model'\n").unwrap();
+            }))
+        });
+        let error = change_configs(&source, &home).err().unwrap();
+        assert!(error.contains("config changed during sandbox repair"));
+        assert_eq!(
+            std::fs::read_to_string(source.join("config.toml")).unwrap(),
+            original
+        );
+        assert_eq!(
+            std::fs::read_to_string(home.join("config.toml")).unwrap(),
+            "model='concurrent-model'\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(home.join("config.old")).unwrap(),
+            original
+        );
+        assert!(!home.join(".monocode-conflicts").exists());
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

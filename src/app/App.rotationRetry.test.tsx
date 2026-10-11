@@ -4,6 +4,7 @@ import ts from "typescript";
 import { beforeEach, expect, it, vi } from "vitest";
 import {
   loadMonoRotation,
+  MONO_ROTATION_READ_ERROR,
   planSessionRotation,
   saveMonoRotation,
   sessionRotationStatus,
@@ -26,8 +27,9 @@ function guard(text: string): string {
   return ts.transpile(found.getText(source), { target: ts.ScriptTarget.ES2022 });
 }
 const persist = new Function("monoRotation", "sessionId", "saveMonoRotation", guard("!saveMonoRotation("));
-const rejectDeferred = new Function("rotationStatus", "pendingRotation", "sessionId", "editedResend", "enqueueHarnessEvent", "flushHarnessEvents", "options", `const monoRotation = rotationStatus?.plan; ${guard("pendingRotation && !monoRotation")}`);
-const rejectPendingEdit = new Function("sessionId", "loadMonoRotation", "enqueueHarnessEvent", "flushHarnessEvents", "options", guard("options?.resendEdited && loadMonoRotation"));
+const rejectDeferred = new Function("MONO_ROTATION_READ_ERROR", "rotationStatus", "pendingRotation", "sessionId", "editedResend", "enqueueHarnessEvent", "flushHarnessEvents", "options", `const rotation = undefined; const monoRotation = rotationStatus?.plan; ${guard("rotation === null")}`).bind(null, MONO_ROTATION_READ_ERROR);
+const editPreflight = `const savedRotation = loadMonoRotation(sessionId); ${guard("savedRotation === null")} ${guard("options?.resendEdited && savedRotation")}`;
+const rejectPendingEdit = new Function("MONO_ROTATION_READ_ERROR", "sessionId", "loadMonoRotation", "enqueueHarnessEvent", "flushHarnessEvents", "options", editPreflight).bind(null, MONO_ROTATION_READ_ERROR);
 
 beforeEach(() => localStorage.clear());
 
@@ -72,7 +74,7 @@ it("rejects oversized B before committing its user block so short C can retry A"
   const third = sessionRotationStatus(fresh, "Retry").plan!;
   expect(third.brief(session.id)).toContain("Keep the parser scope.");
   expect(third.rotation.pendingInputs).toEqual(["Keep the parser scope.", "Retry"]);
-  const rejection = source.text.indexOf("if (pendingRotation && !monoRotation)");
+  const rejection = source.text.indexOf("if (rotation === null");
   expect(rejection).toBeLessThan(source.text.indexOf("const gen =", rejection));
   expect(rejection).toBeLessThan(source.text.indexOf("flushSync(commitSubmittedTurn)", rejection));
 });
@@ -95,8 +97,8 @@ it.each(["preparation", "rewind"])("blocks pending edits before failed %s can st
   const options = { resendEdited: true, onResendRejected: rejected, onSettled: settled };
   const prepare = vi.fn(() => { if (failure === "preparation") throw Error("preparation failed"); });
   const rewind = vi.fn(() => { throw Error("rewind failed"); });
-  const attempt = new Function("sessionId", "loadMonoRotation", "enqueueHarnessEvent", "flushHarnessEvents", "options", "prepare", "rewind",
-    `${guard("options?.resendEdited && loadMonoRotation")} prepare(); rewind();`);
+  const attempt = new Function("MONO_ROTATION_READ_ERROR", "sessionId", "loadMonoRotation", "enqueueHarnessEvent", "flushHarnessEvents", "options", "prepare", "rewind",
+    `${editPreflight} prepare(); rewind();`).bind(null, MONO_ROTATION_READ_ERROR);
   expect(attempt(session.id, loadMonoRotation, events, vi.fn(), options, prepare, rewind)).toBe(false);
   expect(prepare).not.toHaveBeenCalled();
   expect(rewind).not.toHaveBeenCalled();
@@ -109,7 +111,7 @@ it.each(["preparation", "rewind"])("blocks pending edits before failed %s can st
   const retry = planSessionRotation({ ...session, providerSessionId: undefined, context: undefined }, "Retry")!;
   expect(retry.rotation.pendingInputs).toEqual(["Do not publish.", "Retry"]);
   expect(retry.brief(session.id)).not.toContain("Use account B.");
-  const preflight = source.text.indexOf("if (options?.resendEdited && loadMonoRotation");
+  const preflight = source.text.indexOf("if (options?.resendEdited && savedRotation");
   expect(preflight).toBeLessThan(source.text.indexOf("codexStorageRecovery.current.prepare(", preflight));
   expect(preflight).toBeLessThan(source.text.indexOf("createEditedResendAttempt(current", preflight));
   expect(preflight).toBeLessThan(source.text.indexOf("await rewindHarnessLastTurn(", preflight));

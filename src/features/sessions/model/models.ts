@@ -11,6 +11,8 @@ export type ModelSettingChoice = {
   label: string;
 };
 
+export type EffortSource = "role" | "user";
+
 export type ModelSetting = {
   id: string;
   label: string;

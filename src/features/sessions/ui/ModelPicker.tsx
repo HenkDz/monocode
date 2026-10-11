@@ -71,7 +71,7 @@ type Props = {
   /** Action label for recovery surfaces that open the same model chooser. */
   triggerLabel?: string;
   onChange: (harness: HarnessId, model: string) => void;
-  onSettingsChange: (settings: Record<string, string>) => void;
+  onSettingsChange: (settings: Record<string, string>, settingId?: string) => void;
   onClose?: () => void;
 };
 
@@ -541,7 +541,7 @@ export function ModelPicker({
   }, [hotkeys, source]);
 
   const setSetting = (setting: ModelSetting, value: string) => {
-    onSettingsChange({ ...values, [setting.id]: value });
+    onSettingsChange({ ...values, [setting.id]: value }, setting.id);
   };
 
   const pickModel = (item: AgentModel) => {
@@ -1110,7 +1110,8 @@ export function ModelSettingRows({
   side = "top",
   onSettingsChange,
   row,
-}: Pick<Props, "harness" | "model" | "values" | "side" | "onSettingsChange"> & {
+}: Pick<Props, "harness" | "model" | "values" | "side"> & {
+  onSettingsChange: (settings: Record<string, string>, settingId?: string) => void;
   row: (setting: {
     id: string;
     label: string;
@@ -1137,7 +1138,7 @@ export function ModelSettingRows({
                   setting={setting}
                   values={values}
                   variant="plain"
-                  onSettingsChange={onSettingsChange}
+                  onSettingsChange={(settings) => onSettingsChange(settings, setting.id)}
                 />
               ) : (
                 <SelectPill
@@ -1145,7 +1146,7 @@ export function ModelSettingRows({
                   values={values}
                   variant="plain"
                   side={side}
-                  onSettingsChange={onSettingsChange}
+                  onSettingsChange={(settings) => onSettingsChange(settings, setting.id)}
                 />
               ),
           })}
@@ -1164,11 +1165,11 @@ function TogglePill({
   setting: ModelSetting;
   values: Record<string, string>;
   variant?: "pill" | "plain";
-  onSettingsChange: (settings: Record<string, string>) => void;
+  onSettingsChange: (settings: Record<string, string>, settingId?: string) => void;
 }) {
   const on = settingValue(setting, values) === "true";
   const toggle = () =>
-    onSettingsChange({ ...values, [setting.id]: on ? "false" : "true" });
+    onSettingsChange({ ...values, [setting.id]: on ? "false" : "true" }, setting.id);
   if (variant === "plain") {
     // A compact switch, short enough to keep its row the height of the rest.
     return (
@@ -1226,7 +1227,7 @@ function SelectPill({
   values: Record<string, string>;
   variant?: "pill" | "plain";
   side?: "top" | "bottom";
-  onSettingsChange: (settings: Record<string, string>) => void;
+  onSettingsChange: (settings: Record<string, string>, settingId?: string) => void;
   onClose?: () => void;
   additionalSettings?: ModelSetting[];
 }) {
@@ -1260,7 +1261,7 @@ function SelectPill({
     setOpen(true);
   };
   const pick = (pickedSetting: ModelSetting, optionValue: string) => {
-    onSettingsChange({ ...values, [pickedSetting.id]: optionValue });
+    onSettingsChange({ ...values, [pickedSetting.id]: optionValue }, pickedSetting.id);
     dismiss(true);
   };
 

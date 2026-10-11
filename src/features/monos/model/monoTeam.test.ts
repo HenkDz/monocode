@@ -1,8 +1,10 @@
 // @vitest-environment happy-dom
 import { webcrypto } from "node:crypto";
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { addTeamMemory, assertTeamManager, assertTeamMember, defaultReviewerProfile, forgetTeamMemory, handleMonoTeam, lockMonoField, setTeamSizeCap, teamMemoryFacts, undoMonoTeamChange, undoMonoTeamChanges, unlockMonoField, validateTeamSoul, type TeamHost } from "./monoTeam";
-import { listMonos, updateMono, type Mono } from "./mono";
+import { addTeamMember, listMonos, updateMono, type Mono } from "./mono";
+import { resetHarnessModelOverlays, resolveModel, setHarnessModels, type AgentModel } from "../../sessions/model/models";
+import { resolveMonoRoleEffort, switchMonoRoleEffort } from "./monoRoleEffort";
 
 const disk = vi.hoisted(() => new Map<string, string>());
 const hooks = vi.hoisted(() => ({ write: undefined as undefined | (() => void), fail: false }));
@@ -23,6 +25,8 @@ vi.mock("./monoFiles", () => ({
 const node = (id: string, role: Mono["role"], project = "/app", reportsTo?: string): Mono => ({ id, role, reportsTo, projects: [project], mascot: "cat", color: "#abcdef", specialty: role === "member" ? "Reviewer" : undefined, name: id, workerProfile: { harness: "codex", model: "installed" } });
 const host = (): TeamHost => ({ availableProfiles: [{ harness: "codex", models: ["installed", "second", "codex:gpt-6.1-sol"] }], cancelMemberTasks: vi.fn(async () => {}), postChange: vi.fn(async () => {}) });
 const hire = { name: "Database specialist", specialty: "Backend", soul: "Use the repository tests; report evidence.", harness: "codex", model: "installed", memory: ["Build with npm run build", "token=super-secret-value", "Build with npm run build"] };
+const codexEffortModel: AgentModel = { harness: "codex", id: "codex:synthetic", name: "Synthetic Codex", settings: [{ id: "reasoningEffort", label: "Reasoning", kind: "select", value: "high", options: ["low", "medium", "high", "xhigh"].map(value => ({ value, label: value })) }] };
+const liveEffortModel: AgentModel = { harness: "grok", id: "grok:live", name: "Live Grok", settings: [{ id: "reasoning", label: "Reasoning", kind: "select", value: "low", options: ["low", "high", "xhigh"].map(value => ({ value, label: value })) }] };
 
 it("defaults reviewers to Codex 6.1 Sol and honors user locks", () => {
   const builder = { harness: "codex" as const, model: "codex:gpt-6.1-sol", modelSettings: { effort: "high" } };
@@ -35,11 +39,159 @@ it("defaults reviewers to Codex 6.1 Sol and honors user locks", () => {
 
 beforeEach(() => {
   localStorage.clear();
+  resetHarnessModelOverlays();
   disk.clear();
   hooks.write = undefined;
   hooks.fail = false;
   Object.defineProperty(globalThis, "crypto", { value: webcrypto, configurable: true });
   localStorage.setItem("monocode:mono-roster", JSON.stringify([node("manager", "manager"), node("reviewer", "member", "/app", "manager"), node("other", "manager", "/other"), node("other-member", "member", "/other", "other"), node("leader", "orchestrator")]));
+});
+afterEach(() => resetHarnessModelOverlays());
+
+it("preserves a locked user xhigh through a Team provider switch and Undo", async () => {
+  setHarnessModels("codex", [codexEffortModel]);
+  updateMono("reviewer", mono => ({ ...mono, effortSource: "user", userLockedFields: ["modelSettings"], workerProfile: { harness: "codex", model: codexEffortModel.id, modelSettings: { reasoningEffort: "xhigh" } } }));
+  const previous = listMonos().find(mono => mono.id === "reviewer")!;
+  const target = resolveModel("grok", "grok:grok-4.6");
+  expect(switchMonoRoleEffort(previous, codexEffortModel, target, previous.workerProfile!.modelSettings!).modelSettings.effort).toBe("xhigh");
+  const bridge = host();
+  bridge.availableProfiles = [{ harness: "codex", models: [codexEffortModel.id] }, { harness: "grok", models: [target.id] }];
+  const result = await handleMonoTeam("manager", "provider-switch", "team.update", { memberId: "reviewer", harness: "grok", model: target.id }, bridge) as { changeId: string };
+  const changed = listMonos().find(mono => mono.id === "reviewer")!;
+  expect(changed).toMatchObject({ effortSource: "user", userLockedFields: ["modelSettings"], workerProfile: { harness: "grok", model: target.id, modelSettings: { effort: "xhigh" } } });
+  expect(changed.workerProfile!.modelSettings).not.toHaveProperty("reasoningEffort");
+  expect(resolveMonoRoleEffort(changed, target, changed.workerProfile!.modelSettings).modelSettings.effort).toBe("xhigh");
+  await undoMonoTeamChange("manager", result.changeId, bridge);
+  expect(listMonos().find(mono => mono.id === "reviewer")).toEqual(previous);
+});
+
+it.each(["user", undefined, "role"] as const)("uses both live advertised effort IDs while retaining %s ownership", async effortSource => {
+  setHarnessModels("codex", [codexEffortModel]);
+  setHarnessModels("grok", [liveEffortModel]);
+  updateMono("reviewer", mono => ({ ...mono, effortSource, userLockedFields: effortSource === "role" ? [] : ["modelSettings"], workerProfile: { harness: "codex", model: codexEffortModel.id, modelSettings: { reasoningEffort: "xhigh" } } }));
+  const bridge = host();
+  bridge.availableProfiles = [{ harness: "codex", models: [codexEffortModel.id] }, { harness: "grok", models: [liveEffortModel.id] }];
+  await handleMonoTeam("manager", "live-switch", "team.update", { memberId: "reviewer", harness: "grok", model: liveEffortModel.id }, bridge);
+  const changed = listMonos().find(mono => mono.id === "reviewer")!;
+  expect(changed.effortSource).toBe(effortSource);
+  expect(changed.userLockedFields).toEqual(effortSource === "role" ? [] : ["modelSettings"]);
+  expect(changed.workerProfile!.modelSettings).toEqual({ reasoning: effortSource === "role" ? "high" : "xhigh" });
+});
+
+it("translates effort on a model-only Team switch within the same harness", async () => {
+  const target: AgentModel = { ...liveEffortModel, harness: "codex", id: "codex:live" };
+  setHarnessModels("codex", [codexEffortModel, target]);
+  updateMono("reviewer", mono => ({ ...mono, effortSource: "user", userLockedFields: ["modelSettings"], workerProfile: { harness: "codex", model: codexEffortModel.id, modelSettings: { reasoningEffort: "xhigh" } } }));
+  const bridge = host();
+  bridge.availableProfiles = [{ harness: "codex", models: [codexEffortModel.id, target.id] }];
+  await handleMonoTeam("manager", "model-only-switch", "team.update", { memberId: "reviewer", model: target.id }, bridge);
+  expect(listMonos().find(mono => mono.id === "reviewer")).toMatchObject({ effortSource: "user", userLockedFields: ["modelSettings"], workerProfile: { harness: "codex", model: target.id, modelSettings: { reasoning: "xhigh" } } });
+});
+
+it("keeps explicit Team settings authoritative and rejects an explicit write to locked settings", async () => {
+  setHarnessModels("codex", [codexEffortModel]);
+  setHarnessModels("grok", [liveEffortModel]);
+  updateMono("reviewer", mono => ({ ...mono, effortSource: "role", workerProfile: { harness: "codex", model: codexEffortModel.id, modelSettings: { reasoningEffort: "high" } } }));
+  lockMonoField("reviewer", "modelSettings");
+  const bridge = host();
+  bridge.availableProfiles = [{ harness: "codex", models: [codexEffortModel.id] }, { harness: "grok", models: [liveEffortModel.id] }];
+  const input = { memberId: "reviewer", harness: "grok", model: liveEffortModel.id, modelSettings: { reasoning: "low" } };
+  await expect(handleMonoTeam("manager", "locked-explicit-switch", "team.update", input, bridge)).rejects.toThrow("modelSettings is set by the user and locked");
+  unlockMonoField("reviewer", "modelSettings");
+  await handleMonoTeam("manager", "explicit-switch", "team.update", input, bridge);
+  const changed = listMonos().find(mono => mono.id === "reviewer")!;
+  expect(changed.effortSource).toBeUndefined();
+  expect(changed.workerProfile!.modelSettings).toEqual({ reasoning: "low" });
+});
+
+it.each(["new settings lock", "settings edit"])("retains a concurrent %s while a Team provider switch saves", async edit => {
+  setHarnessModels("codex", [codexEffortModel]);
+  setHarnessModels("grok", [liveEffortModel]);
+  updateMono("reviewer", mono => ({ ...mono, effortSource: "user", userLockedFields: edit === "settings edit" ? ["modelSettings"] : [], workerProfile: { harness: "codex", model: codexEffortModel.id, modelSettings: { reasoningEffort: "xhigh" } } }));
+  const bridge = host();
+  bridge.availableProfiles = [{ harness: "codex", models: [codexEffortModel.id] }, { harness: "grok", models: [liveEffortModel.id] }];
+  hooks.write = () => edit === "new settings lock" ? lockMonoField("reviewer", "modelSettings") : updateMono("reviewer", mono => ({ ...mono, workerProfile: { ...mono.workerProfile!, modelSettings: { reasoningEffort: "low" } } }));
+  await expect(handleMonoTeam("manager", "concurrent-switch", "team.update", { memberId: "reviewer", harness: "grok", model: liveEffortModel.id, soul: "New duties" }, bridge)).rejects.toThrow(edit === "new settings lock" ? "locked" : "member changed");
+  expect(listMonos().find(mono => mono.id === "reviewer")).toMatchObject({ userLockedFields: ["modelSettings"], workerProfile: { harness: "codex", model: codexEffortModel.id, modelSettings: { reasoningEffort: edit === "settings edit" ? "low" : "xhigh" } } });
+});
+
+it("rejects Undo when settings were newly locked after a Team provider switch", async () => {
+  setHarnessModels("codex", [codexEffortModel]);
+  setHarnessModels("grok", [liveEffortModel]);
+  updateMono("reviewer", mono => ({ ...mono, effortSource: "user", workerProfile: { harness: "codex", model: codexEffortModel.id, modelSettings: { reasoningEffort: "xhigh" } } }));
+  const bridge = host();
+  bridge.availableProfiles = [{ harness: "codex", models: [codexEffortModel.id] }, { harness: "grok", models: [liveEffortModel.id] }];
+  const result = await handleMonoTeam("manager", "switch-before-lock", "team.update", { memberId: "reviewer", harness: "grok", model: liveEffortModel.id }, bridge) as { changeId: string };
+  lockMonoField("reviewer", "modelSettings");
+  await expect(undoMonoTeamChange("manager", result.changeId, bridge)).rejects.toThrow("user-locked");
+  expect(listMonos().find(mono => mono.id === "reviewer")).toMatchObject({ userLockedFields: ["modelSettings"], workerProfile: { harness: "grok", model: liveEffortModel.id, modelSettings: { reasoning: "xhigh" } } });
+});
+
+it.each(["new settings lock", "new model lock", "settings edit"])("retains a concurrent %s while a Team provider switch Undo saves", async edit => {
+  setHarnessModels("codex", [codexEffortModel]);
+  setHarnessModels("grok", [liveEffortModel]);
+  updateMono("reviewer", mono => ({ ...mono, effortSource: "user", userLockedFields: edit === "new settings lock" ? [] : ["modelSettings"], workerProfile: { harness: "codex", model: codexEffortModel.id, modelSettings: { reasoningEffort: "xhigh" } } }));
+  const bridge = host();
+  bridge.availableProfiles = [{ harness: "codex", models: [codexEffortModel.id] }, { harness: "grok", models: [liveEffortModel.id] }];
+  const result = await handleMonoTeam("manager", "switch-before-undo", "team.update", { memberId: "reviewer", harness: "grok", model: liveEffortModel.id, soul: "New duties" }, bridge) as { changeId: string };
+  hooks.write = () => edit === "settings edit" ? updateMono("reviewer", mono => ({ ...mono, workerProfile: { ...mono.workerProfile!, modelSettings: { reasoning: "low" } } })) : lockMonoField("reviewer", edit === "new model lock" ? "model" : "modelSettings");
+  await expect(undoMonoTeamChange("manager", result.changeId, bridge)).rejects.toThrow(edit === "settings edit" ? "newer edit" : "user-locked");
+  expect(listMonos().find(mono => mono.id === "reviewer")).toMatchObject({ userLockedFields: edit === "new model lock" ? ["modelSettings", "model"] : ["modelSettings"], workerProfile: { harness: "grok", model: liveEffortModel.id, modelSettings: { reasoning: edit === "settings edit" ? "low" : "xhigh" } } });
+});
+
+it("restores a locked choice when grouped Undo returns to the same model after an unsupported effort fallback", async () => {
+  setHarnessModels("codex", [codexEffortModel]);
+  setHarnessModels("grok", [{ ...liveEffortModel, settings: liveEffortModel.settings!.map(setting => ({ ...setting, value: "high", options: setting.options.filter(option => option.value !== "xhigh") })) }]);
+  updateMono("reviewer", mono => ({ ...mono, effortSource: "user", userLockedFields: ["modelSettings"], workerProfile: { harness: "codex", model: codexEffortModel.id, modelSettings: { reasoningEffort: "xhigh" } } }));
+  const previous = listMonos().find(mono => mono.id === "reviewer")!;
+  const bridge = host();
+  bridge.availableProfiles = [{ harness: "codex", models: [codexEffortModel.id] }, { harness: "grok", models: [liveEffortModel.id] }];
+  const first = await handleMonoTeam("manager", "away-switch", "team.update", { memberId: "reviewer", harness: "grok", model: liveEffortModel.id }, bridge) as { changeId: string };
+  const second = await handleMonoTeam("manager", "back-switch", "team.update", { memberId: "reviewer", harness: "codex", model: codexEffortModel.id }, bridge) as { changeId: string };
+  expect(listMonos().find(mono => mono.id === "reviewer")!.workerProfile!.modelSettings).toEqual({ reasoningEffort: "high" });
+  await undoMonoTeamChanges("manager", [first.changeId, second.changeId], bridge);
+  expect(listMonos().find(mono => mono.id === "reviewer")).toEqual(previous);
+});
+
+it("marks a new member's inherited coordinator profile as a role choice", () => {
+  updateMono("manager", mono => ({ ...mono, effortSource: "user", workerProfile: { harness: "codex", model: "installed", modelSettings: { reasoningEffort: "medium", serviceTier: "fast" } } }));
+  const member = addTeamMember("manager", "Builder", "Backend");
+  expect(member.effortSource).toBe("role");
+  expect(listMonos().find(mono => mono.id === member.id)?.effortSource).toBe("role");
+  expect(member.workerProfile?.modelSettings?.serviceTier).toBe("fast");
+  expect(listMonos().find(mono => mono.id === "manager")?.effortSource).toBe("user");
+});
+
+it("marks inferred hires as role effort while retaining an explicitly supplied effort", async () => {
+  updateMono("manager", mono => ({ ...mono, workerProfile: { harness: "codex", model: "installed", modelSettings: { reasoningEffort: "medium" } } }));
+  const inferred = await handleMonoTeam("manager", "inferred-effort", "team.hire", hire, host()) as { member: Mono };
+  expect(inferred.member.effortSource).toBe("role");
+  expect(listMonos().find(mono => mono.id === inferred.member.id)?.effortSource).toBe("role");
+  const explicit = await handleMonoTeam("manager", "explicit-effort", "team.hire", { ...hire, modelSettings: { reasoningEffort: "low" } }, host()) as { member: Mono };
+  expect(explicit.member.effortSource).toBeUndefined();
+  expect(listMonos().find(mono => mono.id === explicit.member.id)?.workerProfile?.modelSettings).toEqual({ reasoningEffort: "low" });
+});
+
+it("allows coordinator model-settings locks without extending other member-only locks", () => {
+  for (const id of ["manager", "leader"]) {
+    lockMonoField(id, "modelSettings");
+    lockMonoField(id, "model");
+    lockMonoField(id, "name");
+    expect(listMonos().find(mono => mono.id === id)?.userLockedFields).toEqual(["modelSettings"]);
+    unlockMonoField(id, "modelSettings");
+    expect(listMonos().find(mono => mono.id === id)?.userLockedFields).toEqual([]);
+  }
+});
+
+it("retains an explicit team effort update and restores its role ownership on Undo", async () => {
+  updateMono("reviewer", mono => ({ ...mono, effortSource: "role", workerProfile: { harness: "codex", model: "installed", modelSettings: { reasoningEffort: "high" } } }));
+  const bridge = host();
+  const result = await handleMonoTeam("manager", "update-effort", "team.update", { memberId: "reviewer", modelSettings: { reasoningEffort: "low" } }, bridge) as { changeId: string };
+  const changed = listMonos().find(mono => mono.id === "reviewer")!;
+  expect(changed.effortSource).not.toBe("role");
+  expect(changed.workerProfile?.modelSettings).toEqual({ reasoningEffort: "low" });
+  await undoMonoTeamChange("manager", result.changeId, bridge);
+  expect(listMonos().find(mono => mono.id === "reviewer")).toMatchObject({ effortSource: "role", workerProfile: { modelSettings: { reasoningEffort: "high" } } });
 });
 
 it("enforces manager identity and own-project member scope", async () => {

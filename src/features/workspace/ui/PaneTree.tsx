@@ -92,6 +92,7 @@ type Shared = {
   onModelSettingsChange: (
     sessionId: string,
     settings: Record<string, string>,
+    settingId?: string,
   ) => void;
   onRuntimeModeChange: (sessionId: string, mode: RuntimeMode) => void;
   onSubmit: (

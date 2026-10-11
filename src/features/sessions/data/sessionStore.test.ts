@@ -20,6 +20,18 @@ import {
   shouldPersistSession,
 } from "./sessionStore";
 
+it.each(["role", "user"] as const)("persists %s effort ownership without mutating provider settings", effortSource => {
+  const session = { ...newSession("codex", "/tmp"), effortSource, modelSettings: { reasoningEffort: "high" } };
+  expect(sanitizeSessionForPersist(session).modelSettings).toEqual({ reasoningEffort: "high", __monocodeEffortSource: effortSource });
+  expect(session.modelSettings).toEqual({ reasoningEffort: "high" });
+  expect(persistFingerprint(session)).not.toBe(persistFingerprint({ ...session, effortSource: undefined }));
+});
+
+it("leaves legacy effort settings without ownership metadata", () => {
+  const session = { ...newSession("codex", "/tmp"), modelSettings: { reasoningEffort: "xhigh" } };
+  expect(sanitizeSessionForPersist(session).modelSettings).toEqual(session.modelSettings);
+});
+
 it("persists internal events without adding them to the user outbox", () => {
   const session = newSession("claude", "/tmp");
   const event = { id: "event", text: "Manager needs a decision", attachments: [],

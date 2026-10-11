@@ -6,6 +6,7 @@ import {
   updateMono,
 } from "../features/monos/model/mono";
 import { monoEngineId } from "../features/monos/model/monoEngines";
+import { resolveMonoRoleEffort, snapshotMonoWorkerEffort, switchMonoRoleEffort } from "../features/monos/model/monoRoleEffort";
 import { archiveMonoConversation, archiveProjectMonos, offerProjectMonoRestore, projectMonoTeam } from "../features/monos/model/monoArchive";
 import { loadMonoView, saveMonoView, monoForView, monoViewProject, memberDetailsView, selectedOrgMono, monoLiveState } from "../features/monos/model/monoNavigation";
 import { MonoTeamActivity } from "../features/monos/ui/MonoTeamActivity";
@@ -163,7 +164,7 @@ import { MonoDetails } from "../features/monos/ui/MonoDetails";
 import { MonoCodexStorageRecovery, isCodexStorageError, parseCodexStorageConflict, type CodexStorageResolution, type CodexStorageComparison } from "../features/monos/model/monoCodexStorage";
 import { codexStorageAccountId, monoCodexStorageIssues } from "../features/monos/model/monoCodexStorageIssues";
 import { prepareMonoCodexStore } from "../integrations/harness/core/child";
-import { handleMonoTeam, isTeamReviewer } from "../features/monos/model/monoTeam";
+import { handleMonoTeam, isTeamReviewer, lockMonoField } from "../features/monos/model/monoTeam";
 import { monoTeamHost, registerTeamCards } from "../features/monos/model/monoTeamRuntime";
 import { appendTeamChangeCard } from "../features/monos/model/monoTeamCards";
 import type { MonoPanelTab } from "../features/monos/ui/monoPanelParts";
@@ -445,11 +446,13 @@ import {
 } from "../features/search/model/search";
 import {
   mergeModelSettings,
+  modelEffortSetting,
   nativeModelId,
   preferredModelSettings,
   resolveModel,
   saveLastModelSettings,
   saveRecentModelChoice,
+  type EffortSource,
 } from "../features/sessions/model/models";
 
 import {
@@ -1056,6 +1059,10 @@ function withPlanBuildTarget(
     resolved.id,
     modelSettings,
   );
+  const effortSetting = modelEffortSetting(resolved);
+  if (effortSetting && target.modelSettings?.[effortSetting.id] !== undefined) {
+    next.effortSource = "user";
+  }
 
   if (plan.kind === "arm") {
     return { ...next, pendingSwitch: plan.pending };
@@ -1976,10 +1983,10 @@ function Workspace({
         prev.map((session) => {
           if (!isLiveHarness(session.harness)) return session;
           const resolved = resolveModel(session.harness, session.model);
-          const modelSettings = mergeModelSettings(
-            resolved,
-            session.modelSettings,
-          );
+          const mono = monoForSession(session.id);
+          const modelSettings = mono?.role && session.effortSource === "role"
+            ? resolveMonoRoleEffort({ ...mono, effortSource: "role" }, resolved, session.modelSettings).modelSettings
+            : mergeModelSettings(resolved, session.modelSettings);
           if (
             resolved.id === session.model &&
             sameSettings(modelSettings, session.modelSettings)
@@ -2939,6 +2946,7 @@ function Workspace({
           active.modelSettings,
         ),
         providerAccountId: accountId,
+        ...(active.effortSource || monoForSession(active.id)?.role ? { modelSettings: { ...active.modelSettings }, effortSource: active.effortSource } : {}),
       };
       const tab = newTab(session.id);
       setSessions((current) => [...current, session]);
@@ -7119,14 +7127,15 @@ function Workspace({
       if (!current) return;
       if (isPreparingHandoff(current)) return;
       const resolved = resolveModel(harness, model);
+      const mono = monoForSession(sessionId);
       saveRecentModelChoice(resolved.harness, resolved.id);
-      if (current.modelSettings) {
+      if (!mono?.role && current.modelSettings) {
         saveLastModelSettings(current.modelSettings, "fill");
       }
-      const modelSettings = preferredModelSettings(
-        resolved,
-        current.modelSettings,
-      );
+      const effort = mono?.role ? switchMonoRoleEffort({ ...mono, effortSource: current.effortSource }, resolveModel(current.harness, current.model), resolved, current.modelSettings) : undefined;
+      const modelSettings = effort?.modelSettings ?? preferredModelSettings(resolved, current.modelSettings);
+      if (mono?.role) updateMono(mono.id, latest => ({ ...latest, effortSource: effort?.effortSource,
+        workerProfile: { harness, model: resolved.id, modelSettings } }));
       const plan = planComposerSwitch(current, harness);
       const recoverLimit =
         !current.busy &&
@@ -7135,10 +7144,10 @@ function Workspace({
       if (plan.kind === "empty") {
         void forgetHarnessSession(plan.forget, sessionId);
       }
-      setSessions((prev) =>
-        prev.map((s) => {
+      const applyChoice = (s: Session) => {
           if (s.id !== sessionId) return s;
           let next = withHarnessChoice(s, harness, resolved.id, modelSettings);
+          if (effort) next = { ...next, effortSource: effort.effortSource };
           if (plan.kind === "arm") {
             next = { ...next, pendingSwitch: plan.pending };
           } else if (plan.kind === "revert") {
@@ -7160,18 +7169,29 @@ function Workspace({
               ? resumeMonoUsageLimit(next)
               : resumeUsageLimitedSession(next)
             : next;
-        }),
-      );
+        };
+      sessionsRef.current = sessionsRef.current.map(applyChoice);
+      setSessions(prev => prev.map(applyChoice));
     },
     [],
   );
 
   const onModelSettingsChange = useCallback(
-    (sessionId: string, modelSettings: Record<string, string>) => {
-      saveLastModelSettings(modelSettings);
-      setSessions((prev) =>
-        prev.map((s) => (s.id === sessionId ? { ...s, modelSettings } : s)),
-      );
+    (sessionId: string, modelSettings: Record<string, string>, settingId?: string, effortSource?: EffortSource) => {
+      const current = sessionsRef.current.find(session => session.id === sessionId);
+      const mono = monoForSession(sessionId);
+      const setting = current && modelEffortSetting(resolveModel(current.harness, current.model));
+      const effortChanged = !!setting && modelSettings[setting.id] !== current?.modelSettings[setting.id];
+      const effortSelected = effortChanged || (!!setting && settingId === setting.id);
+      const source = effortSource ?? (mono?.role && effortSelected ? "user" : current?.effortSource);
+      if (mono?.role && current) {
+        updateMono(mono.id, latest => ({ ...latest, effortSource: source,
+          workerProfile: { harness: current.harness, model: current.model, modelSettings } }));
+        if (source === "user" && (effortSelected || effortSource === "user")) lockMonoField(mono.id, "modelSettings");
+      } else saveLastModelSettings(modelSettings);
+      const applySettings = (s: Session) => s.id === sessionId ? { ...s, modelSettings, effortSource: source } : s;
+      sessionsRef.current = sessionsRef.current.map(applySettings);
+      setSessions(prev => prev.map(applySettings));
     },
     [],
   );
@@ -7391,7 +7411,7 @@ function Workspace({
                 harness: current.harness,
                 model: current.model,
                 modelSettings: current.modelSettings,
-              });
+              }, current.effortSource);
             if (!priorMono) void onOpenMono(mono.id);
             for (const project of mono.projects) {
               if (remoteProjectFor(project)) continue;
@@ -8094,6 +8114,12 @@ function Workspace({
 
       dismissNoticesForContinuedSession(sessionId);
       const commitSubmittedTurn = () => {
+        const mono = monoForSession(sessionId);
+        if (options?.buildTarget && mono?.role && current.effortSource === "user") {
+          updateMono(mono.id, latest => ({ ...latest, effortSource: "user",
+            workerProfile: { harness: current.harness, model: current.model, modelSettings: current.modelSettings } }));
+          lockMonoField(mono.id, "modelSettings");
+        }
         setSessions((prev) =>
           prev.map((s) => {
             if (s.id !== sessionId) return s;
@@ -11201,7 +11227,9 @@ function Workspace({
             isTeamReviewer(mono),
         );
         return reviewer && { id: reviewer.id, name: monoLook(reviewer).name,
-          ...reviewer.workerProfile, mascot: monoLook(reviewer).mascot, color: monoLook(reviewer).color };
+          ...reviewer.workerProfile,
+          ...(reviewer.workerProfile ? resolveMonoRoleEffort(reviewer, resolveModel(reviewer.workerProfile.harness, reviewer.workerProfile.model), reviewer.workerProfile.modelSettings) : {}),
+          mascot: monoLook(reviewer).mascot, color: monoLook(reviewer).color };
       },
       probeProviders: probeHarnessAvailability,
       artifact: getArtifact,
@@ -11351,7 +11379,7 @@ function Workspace({
           );
           sessionsRef.current = next;
           setSessions(next);
-          return { scratchDir, workspace };
+          return { scratchDir, workspace, modelSettings: { ...synced.modelSettings }, effortSource: synced.effortSource ?? "user" };
         }
         const restored = await getSession(task.sessionId);
         if (
@@ -11361,19 +11389,13 @@ function Workspace({
           throw new Error(
             "The saved worker no longer matches its approved model. Create a new assignment.",
           );
+        const effort = snapshotMonoWorkerEffort(task, task.memberId ? findMono(task.memberId) : undefined);
         const fresh = {
           ...newSession(task.harness, projectCwd, task.model, workerMode),
+          ...effort,
           ...(sameProjectPath(projectCwd, checkoutCwd)
             ? {}
             : { worktreeCwd: checkoutCwd, branch: workspace.branch }),
-          ...(task.modelSettings
-            ? {
-                modelSettings: mergeModelSettings(
-                  resolveModel(task.harness, task.model),
-                  task.modelSettings,
-                ),
-              }
-            : {}),
         };
         const base = restored
           ? {
@@ -11414,7 +11436,7 @@ function Workspace({
         sessionsRef.current = next;
         setSessions(next);
         // Workers belong to the lead's agent panel; no workspace tab is created.
-        return { scratchDir, workspace };
+        return { scratchDir, workspace, modelSettings: { ...worker.modelSettings }, effortSource: worker.effortSource ?? "user" };
       },
       reviewedPullRequest: async (task) => {
         const pr = await gitPrStatus(task.workspace!.checkoutCwd);
@@ -11800,6 +11822,7 @@ function Workspace({
               id,
               title: "Manager",
             };
+        if (!stored) Object.assign(session, resolveMonoRoleEffort({ role: "manager" }, resolveModel(session.harness, session.model)));
         if (stored && (stored.cwd !== folder || stored.worktreeCwd))
           await upsertSession(session);
         if (session.providerSessionId)
@@ -12097,7 +12120,7 @@ function Workspace({
           harness: session.harness,
           model: session.model,
           modelSettings: session.modelSettings,
-        });
+        }, session.effortSource);
       }
       if (mono.id !== owner.id || mono.role !== "manager")
         assertDirectReport(listMonos(), mono.id, owner.id, "goal");
@@ -12212,6 +12235,7 @@ function Workspace({
                 harness: session.harness,
                 model: session.model,
               };
+              const effort = resolveMonoRoleEffort(member, resolveModel(profile.harness, profile.model), profile.modelSettings);
               const look = monoLook(member);
               payload.input = {
                 ...payload.input,
@@ -12221,7 +12245,7 @@ function Workspace({
                 memberColor: look.color,
                 harness: profile.harness,
                 model: profile.model,
-                modelSettings: profile.modelSettings,
+                ...effort,
               };
             } else if (
               ["message", "steer", "cancel", "retry", "reassign"].includes(
@@ -12249,7 +12273,7 @@ function Workspace({
                     ...payload.input,
                     harness: profile.harness,
                     model: profile.model,
-                    modelSettings: profile.modelSettings,
+                    ...resolveMonoRoleEffort(member, resolveModel(profile.harness, profile.model), profile.modelSettings),
                   };
                 }
               }
@@ -12430,7 +12454,9 @@ function Workspace({
                 throw new Error("The project team was archived");
               }
               if (orchestrator.run(id)?.status !== "active") throw new Error("Manager needs Continue before new work can start");
-              return orchestrator.handle(id, requestId, "delegate", input);
+              const profile = member.workerProfile!;
+              return orchestrator.handle(id, requestId, "delegate", { ...input,
+                ...resolveMonoRoleEffort(member, resolveModel(profile.harness, profile.model), profile.modelSettings) });
             },
             notify: async (manager, member, receipt, requestId) => {
               const id = findMono(manager.id)?.sessionId;
@@ -14661,13 +14687,14 @@ function Workspace({
         harness={monoViewSession.harness}
         model={monoViewSession.model}
         modelSettings={monoViewSession.modelSettings}
+        effortSource={monoViewSession.effortSource}
         runtimeMode={monoViewSession.runtimeMode}
         busy={!!monoViewSession.busy}
         onModelChange={(harness, model) =>
           onModelChange(monoViewSession.id, harness, model)
         }
-        onModelSettingsChange={(settings) =>
-          onModelSettingsChange(monoViewSession.id, settings)
+        onModelSettingsChange={(settings, source) =>
+          onModelSettingsChange(monoViewSession.id, settings, undefined, source)
         }
         onRuntimeModeChange={(mode) =>
           onRuntimeModeChange(monoViewSession.id, mode)

@@ -6,6 +6,7 @@ import {
   type Block,
   type Session,
 } from "../../features/sessions/model/session";
+import { mergeModelSettings, resolveModel } from "../../features/sessions/model/models";
 import {
   findMono,
   listMonos,
@@ -185,6 +186,10 @@ export function useMonoHabits(host: MonoHabitHost, enabled = true) {
           record.role ? mono.runtimeMode : "full-access",
           mono.modelSettings,
         ),
+        ...(record.role ? {
+          modelSettings: mergeModelSettings(resolveModel(mono.harness, mono.model), mono.modelSettings),
+          effortSource: mono.effortSource,
+        } : {}),
         title: `${look.name} · ${habit.name}`,
         ephemeral: true,
       };

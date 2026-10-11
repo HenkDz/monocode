@@ -257,7 +257,7 @@ type Props = {
   onManageWorktrees?: () => void;
   onNewTerminal?: () => void;
   onModelChange: (harness: HarnessId, model: string) => void;
-  onModelSettingsChange?: (settings: Record<string, string>) => void;
+  onModelSettingsChange?: (settings: Record<string, string>, settingId?: string) => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
   onQuoteRequestConsumed?: (id: number) => void;
   onInboxCardDismiss?: () => void;
@@ -2355,8 +2355,8 @@ export function Composer({
                   hideSettings={controlsBeside}
                   hotkeys={hotkeys && enabled}
                   onChange={onModelChange}
-                  onSettingsChange={(settings) =>
-                    onModelSettingsChange?.(settings)
+                  onSettingsChange={(settings, settingId) =>
+                    onModelSettingsChange?.(settings, settingId)
                   }
                   onClose={() => ref.current?.focus()}
                 />
@@ -2365,8 +2365,8 @@ export function Composer({
                     harness={harness}
                     model={model}
                     values={modelSettings}
-                    onSettingsChange={(settings) =>
-                      onModelSettingsChange?.(settings)
+                    onSettingsChange={(settings, settingId) =>
+                      onModelSettingsChange?.(settings, settingId)
                     }
                     onClose={() => ref.current?.focus()}
                   />

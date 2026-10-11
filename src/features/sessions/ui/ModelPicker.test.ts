@@ -220,7 +220,7 @@ describe("model picker", () => {
     ].find((button) => button.textContent === "Extra High")!;
     act(() => extraHigh.click());
 
-    expect(onSettingsChange).toHaveBeenCalledWith({ effort: "xhigh" });
+    expect(onSettingsChange).toHaveBeenCalledWith({ effort: "xhigh" }, "effort");
     expect(onChange).not.toHaveBeenCalled();
   });
 
@@ -454,7 +454,7 @@ describe("model picker", () => {
     expect(effortMenu).not.toBeNull();
     keyDown(effortMenu, "ArrowUp");
     keyDown(effortMenu, "Enter");
-    expect(onSettingsChange).toHaveBeenCalledWith({ effort: "xhigh" });
+    expect(onSettingsChange).toHaveBeenCalledWith({ effort: "xhigh" }, "effort");
   });
 
   it("opens the model list with no intermediate menu when settings live beside the picker", () => {
@@ -516,7 +516,7 @@ describe("model picker", () => {
     )!;
     expect(fastPill.getAttribute("aria-pressed")).toBe("false");
     act(() => fastPill.click());
-    expect(onSettingsChange).toHaveBeenCalledWith({ fast: "true" });
+    expect(onSettingsChange).toHaveBeenCalledWith({ fast: "true" }, "fast");
   });
 
   it("focuses the model search when the models submenu opens", async () => {
@@ -867,10 +867,10 @@ describe("model picker", () => {
       (button) => button.textContent === "Fast",
     )!;
     act(() => fast.click());
-    expect(onSettingsChange).toHaveBeenCalledWith({
-      reasoningEffort: "high",
-      serviceTier: "fast",
-    });
+    expect(onSettingsChange).toHaveBeenCalledWith(
+      { reasoningEffort: "high", serviceTier: "fast" },
+      "serviceTier",
+    );
   });
 
   it("groups fast mode inside the effort popover", () => {
@@ -938,10 +938,10 @@ describe("model picker", () => {
       (button) => button.textContent === "On",
     )!;
     act(() => on.click());
-    expect(onSettingsChange).toHaveBeenCalledWith({
-      effort: "high",
-      fast: "true",
-    });
+    expect(onSettingsChange).toHaveBeenCalledWith(
+      { effort: "high", fast: "true" },
+      "fast",
+    );
   });
 
   it("opens the model list directly when settings live beside the picker", async () => {

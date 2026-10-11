@@ -57,6 +57,7 @@ import type { OrchestrationSummary } from "../../orchestration/model/orchestrati
 // Keep managed permissions in the existing durable settings JSON; providers
 // never see this storage marker after hydration.
 const READ_ONLY_SETTING = "__monocodeReadOnly";
+const EFFORT_SOURCE_SETTING = "__monocodeEffortSource";
 
 export type SessionSummary = {
   sidebarHidden?: boolean;
@@ -165,9 +166,11 @@ function persistableMeta(
     cwd: normalizeProjectPath(session.cwd),
     harness: session.harness,
     model: session.model,
-    modelSettings: session.readOnly
-      ? { ...session.modelSettings, [READ_ONLY_SETTING]: "true" }
-      : session.modelSettings,
+    modelSettings: {
+      ...session.modelSettings,
+      ...(session.readOnly ? { [READ_ONLY_SETTING]: "true" } : {}),
+      ...(session.effortSource ? { [EFFORT_SOURCE_SETTING]: session.effortSource } : {}),
+    },
     runtimeMode: session.runtimeMode,
     title: session.title,
     ...(session.sidebarHidden === true ? { sidebarHidden: true } : {}),
@@ -1444,7 +1447,7 @@ function normalizeSummary(summary: SessionSummary): SessionSummary {
 }
 
 function recordToSession(record: SessionRecord): Session {
-  const { [READ_ONLY_SETTING]: readOnly, ...modelSettings } =
+  const { [READ_ONLY_SETTING]: readOnly, [EFFORT_SOURCE_SETTING]: effortSource, ...modelSettings } =
     record.modelSettings && typeof record.modelSettings === "object" ? record.modelSettings : {};
   const blocks = Array.isArray(record.blocks)
     ? record.blocks
@@ -1464,6 +1467,7 @@ function recordToSession(record: SessionRecord): Session {
     harness: asHarness(record.harness),
     model: record.model,
     modelSettings,
+    ...(effortSource === "role" || effortSource === "user" ? { effortSource } : {}),
     ...(readOnly === "true" ? { readOnly: true } : {}),
     runtimeMode: asRuntimeMode(record.runtimeMode),
     title: record.title,

@@ -59,6 +59,8 @@ export type ControlOutcome = {
 export type WorkerPreparation = {
   scratchDir?: string;
   workspace: OrchestrationWorkspace;
+  modelSettings?: OrchestrationTask["modelSettings"];
+  effortSource?: OrchestrationTask["effortSource"];
 };
 export type CheckoutSnapshot = {
   head: string;
@@ -82,7 +84,7 @@ export type OrchestrationHost = {
   checkoutSnapshot?(cwd: string, base?: string): Promise<CheckoutSnapshot>;
   handoff?(fromSessionId: string, toSessionId: string, note: string): Promise<void>;
   habitOwnerMono?(sessionId: string): string | undefined;
-  reviewerFor?(run: OrchestrationRun): { id: string; name: string; harness?: HarnessId; model?: string; modelSettings?: Record<string, string>; mascot?: string; color?: string } | undefined;
+  reviewerFor?(run: OrchestrationRun): { id: string; name: string; harness?: HarnessId; model?: string; modelSettings?: Record<string, string>; effortSource?: OrchestrationTask["effortSource"]; mascot?: string; color?: string } | undefined;
   probeProviders?(): Promise<void>;
   projectIdentity?(cwd: string): Promise<{ name: string; branch: string }>;
   session(id: string): Session | undefined;
@@ -268,6 +270,7 @@ const FIELDS = new Map<string, string[]>([
       "harness",
       "model",
       "modelSettings",
+      "effortSource",
       "prompt",
       "files",
       "dependsOn",
@@ -287,7 +290,7 @@ const FIELDS = new Map<string, string[]>([
   ["get", ["taskId"]],
   ["message", ["taskId", "text"]],
   ["retry", ["taskId", "text", "files"]],
-  ["reassign", ["taskId", "harness", "model", "modelSettings", "reason"]],
+  ["reassign", ["taskId", "harness", "model", "modelSettings", "effortSource", "reason"]],
   ["cancel", ["taskId"]],
   ["wait", ["timeoutSeconds"]],
   ["review", ["taskId", "checks", "outcome", "trivial"]],
@@ -1731,6 +1734,9 @@ export class Orchestrator {
           throw new Error("modelSettings must contain short string settings");
         const modelSettings = input.modelSettings as
           Record<string, string> | undefined;
+        if (input.effortSource != null && input.effortSource !== "role" && input.effortSource !== "user")
+          throw new Error("effortSource must be role or user");
+        const effortSource = input.effortSource as OrchestrationTask["effortSource"];
         const harness = text(
           input.harness ?? lead?.harness,
           "harness",
@@ -1776,6 +1782,7 @@ export class Orchestrator {
               harness,
               model,
               modelSettings,
+              effortSource,
               status: "queued",
               accepted: false,
               completionOutcome: undefined,
@@ -1886,6 +1893,7 @@ export class Orchestrator {
           harness,
           model,
           modelSettings,
+          effortSource,
           status: "queued",
           accepted: false,
           result: "",
@@ -2431,6 +2439,7 @@ export class Orchestrator {
           tasks.push({ ...(previous ?? task), memberId: reviewer.id, memberName: reviewer.name,
             harness: reviewer.harness ?? (previous ?? task).harness, model: reviewer.model ?? (previous ?? task).model,
             modelSettings: reviewer.modelSettings ?? previous?.modelSettings,
+            effortSource: reviewer.effortSource ?? previous?.effortSource,
             memberMascot: reviewer.mascot ?? previous?.memberMascot, memberColor: reviewer.color ?? previous?.memberColor,
             readOnly: true, workspacePolicy: supportsReadOnlyTasks(reviewer.harness ?? (previous ?? task).harness) ? "shared" : "isolated-child",
             id: crypto.randomUUID(), sessionId: crypto.randomUUID(), title: `Re-review ${task.title}`,
@@ -2558,14 +2567,18 @@ export class Orchestrator {
                 ?.status !== "running"
             )
               continue;
-            const preparedRun = this.run(run.leadId)!;
-            const checkoutBaseline = task.checkoutBaseline ?? currentDispatchBaseline(preparedRun, task.id) ??
-              (task.checkoutBaselineUnknown ? undefined : task.readOnlyBaseline) ?? (!task.lastDispatchId &&
-                preparedRun.dispatches?.filter(dispatch => dispatch.taskId === task.id).length === 1 ? snapshot : undefined);
             const writeScopes = await this.store.scopes(
               prepared.workspace.checkoutCwd,
               task.files,
             );
+            const preparedRun = this.run(run.leadId);
+            const preparedTask = preparedRun?.tasks.find((entry) => entry.id === task.id);
+            if (!preparedRun || preparedRun.status !== "active" ||
+                preparedTask?.status !== "running" || preparedTask.activeDispatchId !== dispatchId)
+              continue;
+            const checkoutBaseline = preparedTask.checkoutBaseline ?? currentDispatchBaseline(preparedRun, task.id) ??
+              (preparedTask.checkoutBaselineUnknown ? undefined : preparedTask.readOnlyBaseline) ?? (!preparedTask.lastDispatchId &&
+                preparedRun.dispatches?.filter(dispatch => dispatch.taskId === task.id).length === 1 ? snapshot : undefined);
             await this.commit({
               ...preparedRun,
               tasks: preparedRun.tasks.map((entry) =>
@@ -2574,6 +2587,7 @@ export class Orchestrator {
                       ...entry,
                       workspace: prepared.workspace,
                       scratchDir: prepared.scratchDir,
+                      ...(prepared.modelSettings ? { modelSettings: { ...prepared.modelSettings }, effortSource: prepared.effortSource } : {}),
                       writeScopes,
                       checkoutBaseline,
                       checkoutBaselineUnknown: !checkoutBaseline || undefined,
@@ -2598,7 +2612,9 @@ export class Orchestrator {
             if (
               this.run(run.leadId)?.status !== "active" ||
               this.run(run.leadId)?.tasks.find((entry) => entry.id === task.id)
-                ?.status !== "running"
+                ?.status !== "running" ||
+              this.run(run.leadId)?.tasks.find((entry) => entry.id === task.id)
+                ?.activeDispatchId !== dispatchId
             )
               continue;
             const prompt = workerTurnPrompt(

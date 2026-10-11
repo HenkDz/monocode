@@ -348,6 +348,24 @@ it("shows a worker checkout notice while keeping the user's composer send enable
   expect(pane.onSubmit).toHaveBeenCalledWith("chat", "Continue my work", [], undefined);
 });
 
+it.each(["reasoningEffort", "serviceTier"])(
+  "forwards the Composer's %s setting ID with the session ID",
+  (settingId) => {
+    probes.mono = false;
+    const pane = props();
+    pane.onModelSettingsChange = vi.fn();
+    render(pane);
+    const settings = { reasoningEffort: "high", serviceTier: "fast" };
+    const composer = probes.composer.mock.calls.at(-1)![0];
+    act(() => composer.onModelSettingsChange(settings, settingId));
+    expect(pane.onModelSettingsChange).toHaveBeenCalledWith(
+      "chat",
+      settings,
+      settingId,
+    );
+  },
+);
+
 it("routes a previously blocked user's failed-send Retry through the existing queue", () => {
   probes.mono = false;
   const pane = props();

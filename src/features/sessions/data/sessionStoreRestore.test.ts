@@ -38,6 +38,26 @@ function codexRecord(): SessionRecord {
 describe("restoring a session whose repair cannot be persisted", () => {
   beforeEach(() => invoke.mockReset());
 
+  it.each(["role", "user"] as const)("restores %s effort ownership and strips its storage marker from provider settings", async effortSource => {
+    invoke.mockImplementation(async (command: string) => command === "session_get" ? {
+      ...codexRecord(), blocks: [], modelSettings: { reasoningEffort: "high", __monocodeReadOnly: "true", __monocodeEffortSource: effortSource },
+    } : null);
+    const session = await getSession("s1");
+    expect(session?.effortSource).toBe(effortSource);
+    expect(session?.readOnly).toBe(true);
+    expect(session?.modelSettings).toEqual({ reasoningEffort: "high" });
+    expect(sanitizeSessionForPersist(session!).modelSettings).toEqual({ reasoningEffort: "high", __monocodeReadOnly: "true", __monocodeEffortSource: effortSource });
+  });
+
+  it.each([undefined, "invalid"])("does not infer effort ownership from a legacy or malformed marker (%s)", async effortSource => {
+    invoke.mockImplementation(async (command: string) => command === "session_get" ? {
+      ...codexRecord(), blocks: [], modelSettings: { reasoningEffort: "xhigh", ...(effortSource ? { __monocodeEffortSource: effortSource } : {}) },
+    } : null);
+    const session = await getSession("s1");
+    expect(session?.effortSource).toBeUndefined();
+    expect(session?.modelSettings).toEqual({ reasoningEffort: "xhigh" });
+  });
+
   it("restores managed read-only permissions before any orchestration engine is hydrated", async () => {
     invoke.mockImplementation(async (command: string) => command === "session_get" ? {
       ...codexRecord(), blocks: [], modelSettings: { reasoningEffort: "high", __monocodeReadOnly: "true" },

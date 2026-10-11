@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type ComponentProps,
 } from "react";
 import { findMono, monoLook, type Mono } from "../model/mono";
 import { memberTasks } from "../model/monoNavigation";
@@ -35,9 +36,26 @@ import {
 } from "../../agents/ui/TaskMetricsLine";
 import { AgentDetailTooltip } from "../../agents/ui/AgentDetailTooltip";
 import { selectTaskMetrics } from "../../agents/model/agentMetrics";
+import { MonoActivityTrail } from "../../sessions/ui/AgentTranscript";
+import { TranscriptError } from "../../sessions/ui/TranscriptError";
+import { transcriptError } from "../../sessions/model/transcriptError";
+import { presentationText } from "../../sessions/model/transcriptPresentation";
+import {
+  memberActivityEvents,
+  type ActivityFilter,
+} from "../model/memberActivity";
 
 /** Task snapshots are the durable work log; never copy streaming worker prose into another session. */
-export function MemberWorkLog({ member }: { member: Mono }) {
+export function MemberWorkLog({
+  member,
+  activity,
+}: {
+  member: Mono;
+  activity?: {
+    filter: ActivityFilter;
+    trail: ComponentProps<typeof MonoActivityTrail>;
+  };
+}) {
   const runs = useSyncExternalStore(
     orchestrator.subscribe,
     orchestrator.snapshot,
@@ -45,14 +63,21 @@ export function MemberWorkLog({ member }: { member: Mono }) {
   );
   const statuses = usePrStatusCache();
   const actions = useContext(OrchestrationActions);
-  const [openedTask, setOpenedTask] = useState<string>();
+  const [openedTask, setOpenedTask] = useState<{
+    id: string;
+    leadId?: string;
+  }>();
   const [pendingTask, setPendingTask] = useState<string>();
   const [actionError, setActionError] = useState<{
     memberId: string;
     message: string;
   }>();
-  const [filter, setFilter] = useState<"current" | "history" | "all">("current");
+  const [filter, setFilter] = useState<"current" | "history" | "all">(
+    "current",
+  );
   const [page, setPage] = useState(0);
+  const [activityLimit, setActivityLimit] = useState(80);
+  useEffect(() => setActivityLimit(80), [member.id, activity?.filter]);
   const panelId = useId();
   const taskToggleRef = useRef<HTMLButtonElement>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
@@ -62,18 +87,20 @@ export function MemberWorkLog({ member }: { member: Mono }) {
     setOpenedTask(undefined);
     setActionError(undefined);
   }, [member.id]);
-  useEffect(() => { if (scrollerRef.current) scrollerRef.current.scrollTop = 0; }, [filter, page]);
+  useEffect(() => {
+    if (scrollerRef.current) scrollerRef.current.scrollTop = 0;
+  }, [filter, page]);
   const [, refresh] = useState(0);
   useEffect(
     () => subscribeCardSessions(() => refresh((value) => value + 1)),
     [],
   );
   const taskRuns = new Map(
-    runs.flatMap((run) => run.tasks.map((task) => [task.id, run] as const)),
+    runs.flatMap((run) => run.tasks.map((task) => [task, run] as const)),
   );
   const tasks = memberTasks(runs, member.id)
     .map((task) => {
-      const run = taskRuns.get(task.id);
+      const run = taskRuns.get(task);
       const session = cardSession(task.sessionId);
       const needsYou =
         !["completed", "cancelled", "failed"].includes(task.status) &&
@@ -114,6 +141,11 @@ export function MemberWorkLog({ member }: { member: Mono }) {
           reason: "decision",
           detail: "Waiting for your decision",
         };
+      if (
+        task.error &&
+        ["failed", "blocked", "interrupted"].includes(task.status)
+      )
+        state = { ...state, detail: transcriptError(task.error).title };
       return {
         task,
         run,
@@ -135,16 +167,12 @@ export function MemberWorkLog({ member }: { member: Mono }) {
     .sort((a, b) => a.rank - b.rank);
   const current = tasks.filter(({ rank }) => rank !== 3);
   const history = tasks.filter(({ rank }) => rank === 3);
-  const filtered = filter === "current" ? current : filter === "history" ? history : tasks;
+  const filtered =
+    filter === "current" ? current : filter === "history" ? history : tasks;
   const pageCount = Math.max(1, Math.ceil(filtered.length / 5));
   const visiblePage = Math.min(page, pageCount - 1);
   const visibleTasks = filtered.slice(visiblePage * 5, visiblePage * 5 + 5);
   const attention = tasks.filter(({ rank }) => rank === 0).length;
-  const dispatches = new Map(
-    runs
-      .flatMap((run) => run.dispatches ?? [])
-      .map((dispatch) => [dispatch.id, dispatch]),
-  );
   const manager = findMono(member.reportsTo ?? ""),
     look = manager && monoLook(manager);
   const button =
@@ -159,8 +187,9 @@ export function MemberWorkLog({ member }: { member: Mono }) {
     links,
   }: (typeof tasks)[number]) => {
     const [label] = managerTaskLifecycle(task, pr, needsYou);
-    const dispatch = dispatches.get(
-      task.activeDispatchId ?? task.lastDispatchId ?? "",
+    const dispatch = run?.dispatches?.find(
+      (dispatch) =>
+        dispatch.id === (task.activeDispatchId ?? task.lastDispatchId),
     );
     const at = dispatch?.updatedAt ?? dispatch?.startedAt ?? task.prReadyAt;
     const metrics =
@@ -175,7 +204,7 @@ export function MemberWorkLog({ member }: { member: Mono }) {
         : undefined;
     return (
       <article
-        key={task.id}
+        key={JSON.stringify([run?.leadId, task.id])}
         data-member-task={task.id}
         data-state={state.status}
         className="agent-state-surface min-w-0 overflow-hidden rounded-lg border border-stroke bg-content/2 font-sans text-xs"
@@ -184,9 +213,9 @@ export function MemberWorkLog({ member }: { member: Mono }) {
           <span className="flex min-w-0 flex-1 basis-52 items-center gap-2">
             <strong
               className="min-w-0 flex-1 truncate text-sm font-medium"
-              title={task.title}
+              title={presentationText(task.title)}
             >
-              {task.title}
+              {presentationText(task.title)}
             </strong>
             <span
               data-task-status
@@ -249,29 +278,48 @@ export function MemberWorkLog({ member }: { member: Mono }) {
               type="button"
               aria-haspopup="dialog"
               className={`${button} shrink-0 bg-content/8 font-medium`}
-              onClick={() => setOpenedTask(task.id)}
+              onClick={() =>
+                setOpenedTask({ id: task.id, leadId: run?.leadId })
+              }
             >
               Open
             </button>
           </AgentDetailTooltip>
         </div>
         <div className="px-3 pb-2">
-          {dispatch && ["queued", "workspace_prepared", "session_prepared"].includes(dispatch.stage) && dispatch.turnStartedAt === undefined ?
-            <p data-task-metrics className="text-[10px] text-content/65">Conversation not started · Tokens unavailable</p> : <TaskMetricsLine
-            metrics={metrics}
-            state={state}
-            startedAt={dispatch?.turnStartedAt ?? dispatch?.startedAt}
-            endedAt={
-              dispatch?.finishedAt ??
-              (!["running", "queued", "cancelling"].includes(task.status)
-                ? dispatch?.updatedAt
-                : undefined)
-            }
-          />}
-          {state.detail && (
-            <p data-task-reason className="mt-1 break-words text-content/75">
-              {state.detail}
+          {dispatch &&
+          ["queued", "workspace_prepared", "session_prepared"].includes(
+            dispatch.stage,
+          ) &&
+          dispatch.turnStartedAt === undefined ? (
+            <p data-task-metrics className="text-[10px] text-content/65">
+              Conversation not started · Tokens unavailable
             </p>
+          ) : (
+            <TaskMetricsLine
+              metrics={metrics}
+              state={state}
+              startedAt={dispatch?.turnStartedAt ?? dispatch?.startedAt}
+              endedAt={
+                dispatch?.finishedAt ??
+                (!["running", "queued", "cancelling"].includes(task.status)
+                  ? dispatch?.updatedAt
+                  : undefined)
+              }
+            />
+          )}
+          {task.error &&
+          ["failed", "blocked", "interrupted"].includes(task.status) ? (
+            <TranscriptError
+              error={task.error}
+              title={`Couldn't complete ${presentationText(task.title)}`}
+            />
+          ) : (
+            state.detail && (
+              <p data-task-reason className="mt-1 break-words text-content/75">
+                {presentationText(state.detail)}
+              </p>
+            )
           )}
           <OrgArtifactLinks monoId={member.id} links={links} />
           {task.status === "queued" && (
@@ -316,12 +364,15 @@ export function MemberWorkLog({ member }: { member: Mono }) {
       </article>
     );
   };
-  const selected = tasks.find(({ task }) => task.id === openedTask);
+  const selected = tasks.find(
+    ({ task, run }) =>
+      task.id === openedTask?.id && run?.leadId === openedTask?.leadId,
+  );
   const renderDetails = ({ task, links }: (typeof tasks)[number]) => {
     const cwd = task.workspace?.checkoutCwd;
     return (
       <Modal
-        title={task.title}
+        title={presentationText(task.title)}
         fitViewport
         onClose={() => {
           setOpenedTask(undefined);
@@ -358,10 +409,17 @@ export function MemberWorkLog({ member }: { member: Mono }) {
               {task.readOnlyFallback ? ` · ${task.readOnlyFallback}` : ""}
             </p>
           )}
+          {task.error &&
+            ["failed", "blocked", "interrupted"].includes(task.status) && (
+              <TranscriptError
+                error={task.error}
+                title={`Couldn't complete ${presentationText(task.title)}`}
+              />
+            )}
           <div>
             <h3 className="font-medium text-content/60">Assignment</h3>
             <p className="mt-2 whitespace-pre-wrap break-words">
-              {task.prompt}
+              {presentationText(task.prompt)}
             </p>
           </div>
           {task.result && !task.reportArtifactId && (
@@ -369,7 +427,7 @@ export function MemberWorkLog({ member }: { member: Mono }) {
               <div className="mb-2 text-content/60">Report</div>
               <AgentMarkdown
                 className="agent-chat-bubble-md mono-run-report"
-                text={task.result}
+                text={presentationText(task.result)}
                 streaming={false}
                 cwd={cwd}
               />
@@ -413,47 +471,176 @@ export function MemberWorkLog({ member }: { member: Mono }) {
       </Modal>
     );
   };
+  if (activity) {
+    const events = memberActivityEvents(
+      runs,
+      member.id,
+      activity.trail.blocks,
+    ).filter(
+      (event) => activity.filter === "all" || event.kind === activity.filter,
+    );
+    return (
+      <div className="min-w-0">
+        {events.length > activityLimit && (
+          <button
+            type="button"
+            className={`${button} mb-3 text-xs text-content/60`}
+            onClick={() => setActivityLimit((value) => value + 80)}
+          >
+            Show earlier events
+          </button>
+        )}
+        <ol
+          aria-label="Member activity in chronological order"
+          className="flex min-w-0 flex-col gap-3"
+        >
+          {events.slice(-activityLimit).map((event) => (
+            <li
+              key={event.id}
+              data-member-activity={event.kind}
+              className="relative min-w-0 border-l border-content/12 pl-4"
+            >
+              <span
+                aria-hidden
+                className="absolute -left-[3px] top-2 size-1.5 rounded-full bg-content/30"
+              />
+              {event.block ? (
+                <MonoActivityTrail {...activity.trail} blocks={[event.block]} />
+              ) : (
+                <>
+                  <div className="flex min-w-0 items-center gap-2">
+                    <button
+                      type="button"
+                      aria-haspopup="dialog"
+                      className="min-w-0 truncate text-left text-xs font-medium hover:text-accent focus-visible:outline-accent"
+                      onClick={() =>
+                        setOpenedTask({
+                          id: event.task.id,
+                          leadId: taskRuns.get(event.task)?.leadId,
+                        })
+                      }
+                    >
+                      {event.label}
+                    </button>
+                    <span className="shrink-0 text-[11px] text-content/70">
+                      {event.at === undefined ? (
+                        "Time not recorded"
+                      ) : (
+                        <time dateTime={new Date(event.at).toISOString()}>
+                          {formatRelativeTime(new Date(event.at).toISOString())}
+                        </time>
+                      )}
+                    </span>
+                  </div>
+                  {event.error ? (
+                    <div className="mt-2">
+                      <TranscriptError
+                        error={event.error}
+                        title={`Couldn't complete ${presentationText(event.task.title)}`}
+                      />
+                      <button
+                        type="button"
+                        className={`${button} mt-1 text-xs text-content/75`}
+                        onClick={() =>
+                          actions
+                            ? actions.open(event.task.sessionId)
+                            : openCardSession(event.task.sessionId)
+                        }
+                      >
+                        Open worker session
+                      </button>
+                    </div>
+                  ) : null}
+                </>
+              )}
+            </li>
+          ))}
+        </ol>
+        {!events.length && (
+          <p className="px-1 py-3 text-xs text-content/60">
+            No {activity.filter === "all" ? "activity" : activity.filter} yet.
+          </p>
+        )}
+        {selected && renderDetails(selected)}
+      </div>
+    );
+  }
   return (
-    <section
-      aria-label="Member work log"
-      className="cc7u-assignments min-w-0"
-    >
+    <section aria-label="Member work log" className="cc7u-assignments min-w-0">
       <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs">
         <h2 className="text-[13px] font-medium">Assignments</h2>
-        <span className="ml-auto text-content/60">{current.length} current · {history.length} past</span>
+        <span className="ml-auto text-content/60">
+          {current.length} current · {history.length} past
+        </span>
         {attention > 0 && (
           <span className="text-amber-700 dark:text-amber-400">
             Needs attention ({attention})
           </span>
         )}
       </div>
-      <div role="tablist" aria-label="Assignment filter" className="cc7u-segments">
-        {(["current", "history", "all"] as const).map((value, index, values) => (
-          <button key={value} ref={filter === value ? taskToggleRef : undefined} type="button"
-            id={`${panelId}-${value}`} role="tab" aria-selected={filter === value}
-            aria-controls={`${panelId}-tasks`} tabIndex={filter === value ? 0 : -1}
-            onClick={() => { setFilter(value); setPage(0); }}
-            onKeyDown={(event) => {
-              if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-              event.preventDefault();
-              const next = event.key === "Home" ? "current" : event.key === "End" ? "all"
-                : values[(index + (event.key === "ArrowRight" ? 1 : 2)) % 3];
-              setFilter(next); setPage(0);
-              document.getElementById(`${panelId}-${next}`)?.focus();
-            }}>
-            {value === "current" ? "Current" : value === "history" ? "History" : "All"}
-          </button>
-        ))}
+      <div
+        role="tablist"
+        aria-label="Assignment filter"
+        className="cc7u-segments"
+      >
+        {(["current", "history", "all"] as const).map(
+          (value, index, values) => (
+            <button
+              key={value}
+              ref={filter === value ? taskToggleRef : undefined}
+              type="button"
+              id={`${panelId}-${value}`}
+              role="tab"
+              aria-selected={filter === value}
+              aria-controls={`${panelId}-tasks`}
+              tabIndex={filter === value ? 0 : -1}
+              onClick={() => {
+                setFilter(value);
+                setPage(0);
+              }}
+              onKeyDown={(event) => {
+                if (
+                  !["ArrowLeft", "ArrowRight", "Home", "End"].includes(
+                    event.key,
+                  )
+                )
+                  return;
+                event.preventDefault();
+                const next =
+                  event.key === "Home"
+                    ? "current"
+                    : event.key === "End"
+                      ? "all"
+                      : values[
+                          (index + (event.key === "ArrowRight" ? 1 : 2)) % 3
+                        ];
+                setFilter(next);
+                setPage(0);
+                document.getElementById(`${panelId}-${next}`)?.focus();
+              }}
+            >
+              {value === "current"
+                ? "Current"
+                : value === "history"
+                  ? "History"
+                  : "All"}
+            </button>
+          ),
+        )}
       </div>
       {actionError?.memberId === member.id && (
         <p
           role="alert"
           className="px-2.5 py-1 text-xs text-red-700 dark:text-red-400"
         >
-          {actionError.message}
+          {presentationText(actionError.message)}
         </p>
       )}
-      <div id={`${panelId}-tasks`} role="tabpanel" aria-labelledby={`${panelId}-${filter}`}>
+      <div
+        id={`${panelId}-tasks`}
+        role="tabpanel"
+        aria-labelledby={`${panelId}-${filter}`}
+      >
         <div
           ref={scrollerRef}
           role="region"
@@ -462,16 +649,48 @@ export function MemberWorkLog({ member }: { member: Mono }) {
           className="cc7u-task-list space-y-2 rounded-md focus-visible:outline-accent"
         >
           {visibleTasks.map(renderTask)}
-          {!filtered.length && <div className="cc7u-empty-work">
-            <h3>{!tasks.length ? "No assignments yet" : filter === "history" ? "No past assignments" : "No current assignment"}</h3>
-            <p>{!tasks.length ? `${look?.name ?? "Your Manager"} assigns work here.` : filter === "current" ? "Past work is available in History." : "Finished work will appear here."}</p>
-          </div>}
+          {!filtered.length && (
+            <div className="cc7u-empty-work">
+              <h3>
+                {!tasks.length
+                  ? "No assignments yet"
+                  : filter === "history"
+                    ? "No past assignments"
+                    : "No current assignment"}
+              </h3>
+              <p>
+                {!tasks.length
+                  ? `${look?.name ?? "Your Manager"} assigns work here.`
+                  : filter === "current"
+                    ? "Past work is available in History."
+                    : "Finished work will appear here."}
+              </p>
+            </div>
+          )}
         </div>
-        {pageCount > 1 && <nav aria-label="Assignment pages" className="cc7u-paging">
-          <button type="button" disabled={visiblePage === 0} onClick={() => setPage(visiblePage - 1)} aria-label="Previous assignments">Previous</button>
-          <span aria-live="polite">{visiblePage + 1} / {pageCount}</span>
-          <button type="button" disabled={visiblePage === pageCount - 1} onClick={() => setPage(visiblePage + 1)} aria-label="Next assignments">Next</button>
-        </nav>}
+        {pageCount > 1 && (
+          <nav aria-label="Assignment pages" className="cc7u-paging">
+            <button
+              type="button"
+              disabled={visiblePage === 0}
+              onClick={() => setPage(visiblePage - 1)}
+              aria-label="Previous assignments"
+            >
+              Previous
+            </button>
+            <span aria-live="polite">
+              {visiblePage + 1} / {pageCount}
+            </span>
+            <button
+              type="button"
+              disabled={visiblePage === pageCount - 1}
+              onClick={() => setPage(visiblePage + 1)}
+              aria-label="Next assignments"
+            >
+              Next
+            </button>
+          </nav>
+        )}
       </div>
       {selected && renderDetails(selected)}
     </section>

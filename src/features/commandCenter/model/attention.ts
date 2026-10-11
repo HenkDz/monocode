@@ -2,7 +2,7 @@ import { selectAgentLiveState, type AgentLiveState } from "../../agents/model/ag
 import { currentTurnIndex } from "../../agents/model/turnMetrics";
 import type { Mono } from "../../monos/model/mono";
 import { monoCodexStorageIssues } from "../../monos/model/monoCodexStorageIssues";
-import type { CodexStorageComparison, CodexStorageResolution } from "../../monos/model/monoCodexStorage";
+import { parseCodexSandboxBlocker, type CodexStorageComparison, type CodexStorageResolution } from "../../monos/model/monoCodexStorage";
 import type { MonoManagerGoal } from "../../monos/model/monoManagerGoals";
 import { teamDecisions } from "../../monos/model/monoTeamActivity";
 import type { OrchestrationRun } from "../../orchestration/model/orchestrationState";
@@ -121,7 +121,7 @@ export function selectAttention(input: AttentionInput): AttentionItem[] {
     const session = sessions.find(session => session.id === issue.sessionIds[0])!;
     const id = identity("storage", issue.accountId);
     add({ ...base(session), id, revision: identity(id, ...issue.sessionIds.flatMap(id => [id, sessions.find(session => session.id === id)?.codexStorageError])),
-      sessionIds: issue.sessionIds, source: "storage", category: "blocker", title: "Codex storage needs repair", detail: issue.detail,
+      sessionIds: issue.sessionIds, source: "storage", category: "blocker", title: parseCodexSandboxBlocker(issue.detail) ? "Codex sandbox needs setup" : "Codex storage needs repair", detail: issue.detail,
       goals: [...new Set(issue.sessionIds.flatMap(id => base(sessions.find(session => session.id === id)!).goals))],
       state: { status: "blocked", reason: "storage", detail: issue.blockedContext } });
   }

@@ -32,6 +32,14 @@ it("leaves legacy effort settings without ownership metadata", () => {
   expect(sanitizeSessionForPersist(session).modelSettings).toEqual(session.modelSettings);
 });
 
+it.each(["role", "user"] as const)("persists %s permissions and an explicit engine without mutating provider settings", runtimeModeSource => {
+  const session = { ...newSession("codex", "/tmp"), runtimeModeSource, windowsSandbox: "elevated" as const, modelSettings: { reasoningEffort: "high" } };
+  expect(sanitizeSessionForPersist(session).modelSettings).toEqual({ reasoningEffort: "high", __monocodeRuntimeModeSource: runtimeModeSource, __monocodeWindowsSandbox: "elevated" });
+  expect(session.modelSettings).toEqual({ reasoningEffort: "high" });
+  expect(persistFingerprint(session)).not.toBe(persistFingerprint({ ...session, runtimeModeSource: undefined }));
+  expect(persistFingerprint(session)).not.toBe(persistFingerprint({ ...session, windowsSandbox: undefined }));
+});
+
 it("persists internal events without adding them to the user outbox", () => {
   const session = newSession("claude", "/tmp");
   const event = { id: "event", text: "Manager needs a decision", attachments: [],

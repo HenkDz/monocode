@@ -8,6 +8,7 @@ import { TitleBar } from "../../../app/shell/TitleBar";
 import type { MonoPanelTab } from "./monoPanelParts";
 import { resetHarnessModelOverlays, setHarnessModels } from "../../sessions/model/models";
 import { pickFolders } from "../../../platform/tauri/fs";
+import { IS_WIN } from "../../../platform/tauri/platform";
 
 vi.mock("../../../platform/tauri/fs", async original => ({ ...await original<object>(), pickFolders: vi.fn() }));
 
@@ -95,7 +96,7 @@ it("shows and edits the agent's permission mode in Details", async () => {
   expect(picker).not.toBeNull();
   const settings = picker.closest("dl")!;
   expect([...settings.querySelectorAll("dt")].map(row => row.textContent)).toEqual([
-    "Model", "Reasoning", "Service Tier", "Permissions", "Projects",
+    "Model", "Reasoning", "Service Tier", "Permissions", ...(IS_WIN ? ["Sandbox engine"] : []), "Projects",
   ]);
   expect(container.querySelector('[data-mono-settings]')!.contains(settings)).toBe(true);
   expect(container.querySelectorAll('[data-access-picker-trigger]')).toHaveLength(1);
@@ -122,7 +123,7 @@ it("keeps member settings inside Details and opens org tools as a subpage", asyn
     const permissions = container.querySelector('[data-access-picker-trigger]')!;
     const memberSettings = container.querySelector('[data-mono-settings]')!;
     expect(memberSettings.contains(permissions)).toBe(true);
-    expect([...permissions.closest("dl")!.querySelectorAll("dt")].map(row => row.textContent)).toEqual(["Model", "Reasoning", "Service Tier", "Permissions", "Specialty"]);
+    expect([...permissions.closest("dl")!.querySelectorAll("dt")].map(row => row.textContent)).toEqual(["Model", "Reasoning", "Service Tier", "Permissions", ...(IS_WIN ? ["Sandbox engine"] : []), "Specialty"]);
     const specialty = container.querySelector<HTMLInputElement>('[aria-label="Member specialty"]')!;
     expect(specialty.title).toBe("Backend");
     expect(specialty.classList.contains("truncate")).toBe(true);
@@ -175,7 +176,7 @@ it("opens Soul, Memory, Habits and Team as pages with a back action", async () =
   } finally { localStorage.removeItem("monocode:mono-roster"); }
 });
 
-it("opens full command output in one reader without inline error disclosures", async () => {
+it("keeps diagnostics in details and command output in a separate reader", async () => {
   await act(async () => root.render(createElement(MonoActivityContent, {
     blocks: [
       { id: "failed", role: "tool", text: "npm run dev", tool: { kind: "shell", status: "failed", detail: "Error: listen EPERM\n    at Server.setupListenHandle", preview: { kind: "shell", output: "Error: listen EPERM\n    at Server.setupListenHandle" } } },
@@ -183,14 +184,17 @@ it("opens full command output in one reader without inline error disclosures", a
     ], live: false,
   })));
   expect(container.textContent).not.toContain("Server.setupListenHandle");
-  await act(async () => container.querySelector<HTMLButtonElement>("button")!.click());
+  await act(async () => [...container.querySelectorAll<HTMLButtonElement>('[data-mono-activity-block="failed"] button')].find(button => button.textContent === "Open details")!.click());
   const reader = document.querySelector('[role="dialog"]')!;
   expect(reader.textContent).toContain("Server.setupListenHandle");
-  expect(reader.querySelector('[data-mono-activity-block="failed"] pre')?.textContent).toBe("Error: listen EPERM\n    at Server.setupListenHandle");
-  expect(reader.textContent).toContain("On branch main");
-  expect(reader.querySelector('[data-mono-activity-block="success"] pre')?.textContent).toBe("git status --short\n\nOn branch main\nWorking tree clean");
+  expect(reader.querySelector("pre")?.textContent).toBe("Error: listen EPERM\n    at Server.setupListenHandle");
+  await act(async () => reader.querySelector<HTMLButtonElement>('[aria-label="Close"]')!.click());
+  await act(async () => [...container.querySelectorAll<HTMLButtonElement>('[data-mono-activity-block="success"] button')].find(button => button.textContent === "View full output")!.click());
+  const output = document.querySelector('[role="dialog"]')!;
+  expect(output.querySelector("pre")?.textContent).toBe("git status --short\n\nOn branch main\nWorking tree clean");
   expect(reader.querySelector('[aria-expanded]')).toBeNull();
-  expect(container.querySelectorAll("button")).toHaveLength(1);
+  expect(container.querySelector('[aria-expanded]')).toBeNull();
+  expect(container.querySelectorAll('[aria-label="Filter activity"] button')).toHaveLength(6);
 });
 
 it("keeps pending approvals actionable before opening the work reader", async () => {
@@ -306,10 +310,9 @@ it("switches Details and Activity in one sidebar and reopens the last-used tab",
   expect(tabButton("Details").getAttribute("aria-selected")).toBe("true");
   act(() => tabButton("Activity").click());
   expect(container.textContent).toContain("Working");
-  expect(container.querySelector('[data-mono-activity-block="call"]')).toBeNull();
-  act(() => [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Show work")!.click());
+  expect(container.querySelector('[data-mono-activity-block="call"]')).not.toBeNull();
   expect(
-    document.querySelector('[role="dialog"] [data-mono-activity-block="call"]'),
+    container.querySelector('[data-mono-activity-block="turn"]'),
   ).not.toBeNull();
   act(() =>
     container
@@ -352,9 +355,8 @@ it("keeps the last activity readable after the turn ends and supports keyboard t
   await render(false);
   expect(tabButton("Activity").getAttribute("aria-selected")).toBe("true");
   expect(container.textContent).toContain("Finished");
-  act(() => [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Show work")!.click());
   expect(
-    document.querySelector('[role="dialog"] [data-mono-activity-block="call"]'),
+    container.querySelector('[data-mono-activity-block="call"]'),
   ).not.toBeNull();
   expect(
     container

@@ -360,7 +360,7 @@ fn canonical_skill_path(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
-fn read_config(source: &Path) -> Result<toml::Value, String> {
+pub(super) fn read_config(source: &Path) -> Result<toml::Value, String> {
     let path = source.join("config.toml");
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
@@ -585,12 +585,23 @@ pub(super) fn prepare_context_files(source: &Path, base: &Path, home: &Path) -> 
             let temp = home.join(format!(".monocode-link-{}", uuid::Uuid::new_v4()));
             let mut options = std::fs::OpenOptions::new();
             options.create_new(true).write(true);
+            // shortcut: Unix named allocations survive a pre-journal kill; add native lifetime cleanup for Unix recovery.
             #[cfg(windows)]
             {
                 use std::os::windows::fs::OpenOptionsExt;
-                options.share_mode(windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ);
+                use windows_sys::Win32::{
+                    Foundation::GENERIC_WRITE,
+                    Storage::FileSystem::{DELETE, FILE_FLAG_DELETE_ON_CLOSE, FILE_SHARE_READ},
+                };
+                // The OS cleans a killed allocation until the durable journal owns recovery.
+                options
+                    .access_mode(GENERIC_WRITE | DELETE)
+                    .share_mode(FILE_SHARE_READ)
+                    .custom_flags(FILE_FLAG_DELETE_ON_CLOSE);
             }
             let mut copy = options.open(&temp).map_err(|e| e.to_string())?;
+            #[cfg(all(test, windows))]
+            crash_tests::checkpoint("skills-hooks-after-stage-create");
             let staged = transactions::RecordedEntry::new(&temp)?;
             let mut journal = match transactions::ClaimJournal::clone_hooks(&target, &staged) {
                 Ok(journal) => journal,
@@ -601,6 +612,10 @@ pub(super) fn prepare_context_files(source: &Path, base: &Path, home: &Path) -> 
                 }
             };
             let result: Result<(), String> = (|| {
+                #[cfg(all(test, windows))]
+                crash_tests::checkpoint("skills-hooks-after-stage-journal");
+                #[cfg(windows)]
+                journal.keep_clone_on_close(&copy)?;
                 #[cfg(test)]
                 crash_tests::checkpoint("skills-hooks-before-copy");
                 std::io::copy(&mut original, &mut copy).map_err(|e| e.to_string())?;
@@ -649,73 +664,6 @@ pub(super) fn prepare_context_files(source: &Path, base: &Path, home: &Path) -> 
             link_entry(&entry, &home.join(name))?;
         }
     }
-    Ok(())
-}
-
-pub(super) fn validate_sandbox(base: &Path) -> Result<(), String> {
-    #[cfg(windows)]
-    {
-        if read_config(base)?
-            .get("windows")
-            .and_then(|value| value.get("sandbox"))
-            .and_then(toml::Value::as_str)
-            != Some("elevated")
-        {
-            return Ok(());
-        }
-        #[derive(Deserialize)]
-        struct Marker {
-            version: u32,
-            offline_username: String,
-            online_username: String,
-            #[serde(default)]
-            created_at: Option<String>,
-            #[serde(default)]
-            proxy_ports: Vec<u16>,
-            #[serde(default)]
-            allow_local_binding: bool,
-        }
-        #[derive(Deserialize)]
-        struct User {
-            username: String,
-            password: String,
-        }
-        #[derive(Deserialize)]
-        struct Users {
-            version: u32,
-            offline: User,
-            online: User,
-        }
-        let marker = std::fs::read(base.join(".sandbox/setup_marker.json"))
-            .ok()
-            .and_then(|bytes| serde_json::from_slice::<Marker>(&bytes).ok());
-        let users = std::fs::read(base.join(".sandbox-secrets/sandbox_users.json"))
-            .ok()
-            .and_then(|bytes| serde_json::from_slice::<Users>(&bytes).ok());
-        // shortcut: Codex 0.162.1 uses setup version 5; recheck this guard when upgrading its sandbox schema.
-        if marker.is_none_or(|marker| {
-            let _ = (
-                marker.created_at,
-                marker.proxy_ports,
-                marker.allow_local_binding,
-            );
-            marker.version != 5
-                || marker.offline_username.is_empty()
-                || marker.online_username.is_empty()
-        }) || users.is_none_or(|users| {
-            users.version != 5
-                || users.offline.username.is_empty()
-                || users.online.username.is_empty()
-                || users.offline.password.is_empty()
-                || users.online.password.is_empty()
-        }) || !base.join(".sandbox-bin").is_dir()
-            || !std::fs::read(base.join("cap_sid")).is_ok_and(|bytes| !bytes.is_empty())
-        {
-            return Err("The existing Mono Windows sandbox is missing or incompatible; skill changes cannot run fresh or elevated setup. Use full access or repair the original sandbox explicitly.".into());
-        }
-    }
-    #[cfg(not(windows))]
-    let _ = base;
     Ok(())
 }
 

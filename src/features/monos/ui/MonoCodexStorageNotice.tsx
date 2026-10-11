@@ -5,6 +5,7 @@ import {
   codexStorageIssueTitle,
   parseCodexStorageConflict,
   parseCodexStorageRecoveryConflict,
+  parseCodexSandboxBlocker,
   type CodexStorageComparison,
   type CodexStorageResolution,
 } from "../model/monoCodexStorage";
@@ -35,6 +36,7 @@ export function MonoCodexStorageNotice({
   const [comparison, setComparison] = useState<CodexStorageComparison>();
   const [conflict, setConflict] = useState(() => parseCodexStorageConflict(detail));
   const [recovery, setRecovery] = useState(() => parseCodexStorageRecoveryConflict(detail));
+  const sandbox = parseCodexSandboxBlocker(error) ?? parseCodexSandboxBlocker(detail);
   useEffect(() => {
     setConflict(parseCodexStorageConflict(detail));
     setRecovery(parseCodexStorageRecoveryConflict(detail));
@@ -47,7 +49,7 @@ export function MonoCodexStorageNotice({
   }, [detail]);
 
   const details = error ?? detail;
-  const title = success ? "Codex storage repaired" : recovery ? "Codex recovery files preserved" : conflict ? codexStorageIssueTitle(conflict) : workbench ? "Conversation couldn’t start" : "Codex storage needs repair";
+  const title = success ? sandbox ? "Codex sandbox choice applied" : "Codex storage repaired" : sandbox ? "Codex sandbox needs setup" : recovery ? "Codex recovery files preserved" : conflict ? codexStorageIssueTitle(conflict) : workbench ? "Conversation couldn’t start" : "Codex storage needs repair";
   async function run(action: "repair" | "compare" | "reveal", operation: () => Promise<unknown>) {
     if (busy) return;
     setBusy(action);
@@ -104,8 +106,18 @@ export function MonoCodexStorageNotice({
         </div>
       ) : (
         <>
-          {workbench && !conflict && !recovery && <p className="mt-2 text-xs leading-relaxed text-content/70">Codex couldn’t open its conversation store. Work is waiting; your messages are still here.</p>}
+          {workbench && !sandbox && !conflict && !recovery && <p className="mt-2 text-xs leading-relaxed text-content/70">Codex couldn’t open its conversation store. Work is waiting; your messages are still here.</p>}
           {blockedContext && <p className="mt-1 text-xs text-content/70">{blockedContext}</p>}
+          {sandbox && <div className="mt-2 text-xs text-content/70">
+            <p>{sandbox.reason}</p>
+            <p className="mt-2">Run setup yourself in PowerShell, then check again:</p>
+            <pre className="mt-1 overflow-auto whitespace-pre-wrap break-all" aria-label="Sandbox setup command">{sandbox.setupCommand}</pre>
+            <SecondaryButton disabled={!!busy} onClick={() => {
+              void copyText(sandbox.setupCommand).then(() => setCopyStatus("Copied setup command"), reason => setCopyStatus(`Could not copy command: ${String(reason)}`));
+            }}>Copy setup command</SecondaryButton>
+            {copyStatus && <p className="mt-1">{copyStatus}</p>}
+            <p className="mt-2">Switching this account to unelevated saves a config backup beside the config. Restore that backup to undo the change. Full access applies to this Mono; Plan stays restricted.</p>
+          </div>}
           {conflict && (
             <p className="mt-1 text-xs text-content/70">
               Choose the file this Codex account should use. Both versions will be preserved.
@@ -121,7 +133,13 @@ export function MonoCodexStorageNotice({
             </div>
           )}
           <div className="mt-2 flex flex-wrap items-center gap-2">
-            {conflict && onResolve ? (
+            {sandbox ? <>
+              <SecondaryButton disabled={!!busy} onClick={() => void run("repair", onRepair)}>{busy === "repair" ? "Checking…" : "Check setup again"}</SecondaryButton>
+              {onResolve && <>
+                <SecondaryButton disabled={!!busy} onClick={() => void run("repair", () => onResolve("use_unelevated_sandbox"))}>Switch this account to unelevated</SecondaryButton>
+                <SecondaryButton disabled={!!busy} onClick={() => void run("repair", () => onResolve("use_mono_full_access"))}>Use full access for this Mono</SecondaryButton>
+              </>}
+            </> : conflict && onResolve ? (
               <>
                 <SecondaryButton
                   disabled={!!busy}
@@ -178,7 +196,7 @@ export function MonoCodexStorageNotice({
             </div>
           )}
           {error && <p role="alert" className="mt-2 break-all text-xs text-content/70">{parseCodexStorageRecoveryConflict(error)?.reason ?? (parseCodexStorageConflict(error) ? "The file changed again. Review the latest versions before choosing." : error)}</p>}
-          {details && (renderDetails ? renderDetails(detailContent) : (
+          {details && !sandbox && (renderDetails ? renderDetails(detailContent) : (
             <details className="mt-2 text-xs text-content/70">
               <summary className="cursor-pointer select-none rounded focus-visible:outline-accent">Details</summary>
               {detailContent}

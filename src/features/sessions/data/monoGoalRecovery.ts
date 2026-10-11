@@ -1,5 +1,32 @@
 import type { Block, Session } from "../model/session";
-import { getMonoTranscriptPage } from "./sessionStore";
+import { getMonoTranscriptPage, resetMonoSessionWriteBaseline } from "./sessionStore";
+import { appendMonoGoalOrigin, type MonoGoalSubmission } from "../../monos/model/monoGoalRouting";
+
+/** Publish a proven origin before another writer can replace the unacknowledged suffix. */
+export async function reconcileMonoGoalOrigin(
+  sessionId: string, submission: MonoGoalSubmission, text: string,
+  current: () => Session | undefined, publish: (session: Session) => void,
+): Promise<void> {
+  let history: Block[];
+  try {
+    history = await getMonoGoalRecoveryBlocks(sessionId);
+  } catch {
+    throw Error("Checking previous send… Retry original when storage is available.");
+  }
+  if (!history.some(block => block.id === submission.userMessageId)) return;
+  const live = current();
+  if (!live) throw Error("The originating chat is unavailable");
+  appendMonoGoalOrigin({ ...live, blocks: history }, submission, text);
+  const historicalIds = new Set(history.map(block => block.id));
+  const anchored = { ...live, monoTranscript: {
+    before: live.monoTranscript?.before ?? null,
+    firstBlockId: live.blocks.find(block => historicalIds.has(block.id))?.id ?? submission.userMessageId,
+  } };
+  const next = monoGoalRecoveryLiveSession(anchored, mergeMonoGoalRecoverySession(anchored, history), history);
+  // The failed save may have committed past the cached suffix, including an empty baseline.
+  resetMonoSessionWriteBaseline(sessionId);
+  publish(next);
+}
 
 /** Recovery checks the durable history without changing the viewer's loaded page. */
 export async function getMonoGoalRecoveryBlocks(sessionId: string): Promise<Block[]> {

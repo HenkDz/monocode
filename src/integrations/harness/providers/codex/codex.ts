@@ -12,6 +12,7 @@ import {
   type UserQuestionReply,
 } from "../../../../features/sessions/model/userQuestion";
 import {
+  checkMonoCodexSandbox,
   killChild,
   resolveCodexBinary,
   restoreMonoCodexAgentState,
@@ -22,6 +23,7 @@ import {
 import {
   asRecord,
   codexAppServerArgs,
+  codexWindowsSandbox,
   buildThreadStartParams,
   buildTurnStartParams,
   buildTurnSteerParams,
@@ -97,10 +99,13 @@ type Live = {
   ephemeral: boolean;
   codexStore?: "mono";
   skillsSignature?: string;
+  skillsContextId?: string;
+  storeConfig?: Record<string, unknown>;
   runtimeMode: RuntimeMode;
   planning: boolean;
   readOnly: boolean;
   sandboxRequired: boolean;
+  windowsSandbox?: "elevated" | "unelevated";
   onEvent: (event: HarnessEvent) => void;
   approvals: Map<number, PendingApproval>;
   questions: Map<number, PendingQuestion>;
@@ -533,6 +538,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     input.codexStore ??
     existing?.codexStore ??
     resumeByThread.get(input.sessionId)?.codexStore;
+  const windowsSandbox = codexWindowsSandbox({ ...input, codexStore, readOnly }, IS_WIN);
   const skillsSignature = codexStore === "mono" ? JSON.stringify([input.skillsRole, input.skillsPolicy]) : undefined;
   if (
     existing &&
@@ -543,6 +549,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     ) &&
     existing.controlsAgents === controlsAgents &&
     existing.readOnly === readOnly &&
+    existing.windowsSandbox === windowsSandbox &&
     (codexStore !== "mono" || existing.sandboxRequired === sandboxRequired) &&
     existing.ephemeral === ephemeral &&
     existing.codexStore === codexStore && existing.skillsSignature === skillsSignature
@@ -592,6 +599,8 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
           skillsRole: input.skillsRole,
           skillsPolicy: input.skillsPolicy,
           sandboxRequired,
+          windowsSandbox,
+          sandboxNetworkAccess: controlsAgents,
           threadId: canResume ? resume?.threadId : undefined,
         })
       : undefined;
@@ -687,7 +696,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   await spawnChild(
     input.sessionId,
     path,
-    [...codexAppServerArgs(readOnly, IS_WIN), ...(store?.skillArgs ?? [])],
+    [...codexAppServerArgs(readOnly, IS_WIN, windowsSandbox), ...(store?.skillArgs ?? [])],
     input.cwd,
     {
       provider: "codex",
@@ -809,7 +818,10 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       ephemeral,
       codexStore,
       skillsSignature,
+      skillsContextId: store?.skillsContextId,
+      storeConfig,
       sandboxRequired,
+      windowsSandbox,
       runtimeMode: input.runtimeMode,
       planning: input.intent === "plan",
       readOnly,
@@ -862,6 +874,16 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
 }
 
 async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
+  if (live.codexStore === "mono") {
+    await checkMonoCodexSandbox({
+      providerAccountId: live.providerAccountId,
+      sandboxRequired: live.sandboxRequired,
+      windowsSandbox: live.windowsSandbox,
+      sandboxNetworkAccess: live.controlsAgents,
+      skillsContextId: live.skillsContextId,
+      sandboxConfig: live.storeConfig,
+    });
+  }
   const text = input.prepareText ? await input.prepareText(live.threadId) : input.text;
   if (live.cancelled || live.muteUpdates) return;
   const model = nativeModelId(input.model);

@@ -58,6 +58,8 @@ import type { OrchestrationSummary } from "../../orchestration/model/orchestrati
 // never see this storage marker after hydration.
 const READ_ONLY_SETTING = "__monocodeReadOnly";
 const EFFORT_SOURCE_SETTING = "__monocodeEffortSource";
+const RUNTIME_MODE_SOURCE_SETTING = "__monocodeRuntimeModeSource";
+const WINDOWS_SANDBOX_SETTING = "__monocodeWindowsSandbox";
 const APP_REQUEST_ID = /^[A-Za-z0-9_-]{1,512}$/;
 const LEGACY_MANAGER_DIGEST_ID = /^manager-digest:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -172,6 +174,8 @@ function persistableMeta(
       ...session.modelSettings,
       ...(session.readOnly ? { [READ_ONLY_SETTING]: "true" } : {}),
       ...(session.effortSource ? { [EFFORT_SOURCE_SETTING]: session.effortSource } : {}),
+      ...(session.runtimeModeSource ? { [RUNTIME_MODE_SOURCE_SETTING]: session.runtimeModeSource } : {}),
+      ...(session.windowsSandbox ? { [WINDOWS_SANDBOX_SETTING]: session.windowsSandbox } : {}),
     },
     runtimeMode: session.runtimeMode,
     title: session.title,
@@ -386,6 +390,7 @@ export function sanitizeSessionForPersist(
  * write concurrently.
  */
 const sessionWriteQueues = new Map<string, Promise<unknown>>();
+const sessionWriteReconciliations = new Map<string, () => Promise<void>>();
 const sessionWriteLeadById = new Map<string, string>();
 const deletedSessionIds = new Set<string>();
 
@@ -411,15 +416,31 @@ function enqueueSessionWrite<T>(
 
 type MonoRecoveryWrite = { monoBaseline: readonly Block[]; monoLiveBlocks: Block[] };
 
+export function retainSessionWrite(sessionId: string, reconcile: () => Promise<void>): void {
+  sessionWriteReconciliations.set(sessionId, reconcile);
+}
+
+export function sessionWriteNeedsReconciliation(sessionId: string): boolean {
+  return sessionWriteReconciliations.has(sessionId);
+}
+
 /** Keep snapshot construction and publication inside the same boundary as every save. */
 export function writeSession<T>(
   sessionId: string,
   operation: (save: typeof saveSessionSnapshot) => Promise<T>,
 ): Promise<T> {
-  return enqueueSessionWrite(sessionId, () => operation((session, recovery) => {
-    if (session.id !== sessionId) throw Error("The session identity changed before saving");
-    return saveSessionSnapshot(session, recovery);
-  }));
+  return enqueueSessionWrite(sessionId, async () => {
+    const reconcile = sessionWriteReconciliations.get(sessionId);
+    if (reconcile) {
+      await reconcile();
+      if (sessionWriteReconciliations.get(sessionId) === reconcile)
+        sessionWriteReconciliations.delete(sessionId);
+    }
+    return operation((session, recovery) => {
+      if (session.id !== sessionId) throw Error("The session identity changed before saving");
+      return saveSessionSnapshot(session, recovery);
+    });
+  });
 }
 
 export function upsertSession(
@@ -624,6 +645,9 @@ export function cancelSessionSearch(searchOwner: string): Promise<void> {
 }
 
 const monoSavedBlocks = new Map<string, Block[]>();
+export function resetMonoSessionWriteBaseline(sessionId: string): void {
+  monoSavedBlocks.delete(sessionId);
+}
 const monoBlockPayloads = new WeakMap<Block, Block | null>();
 function monoPersistedBlock(block: Block): Block | null {
   if (monoBlockPayloads.has(block)) return monoBlockPayloads.get(block)!;
@@ -840,6 +864,7 @@ export async function deleteSession(
     );
     forgetSessionPullRequests(sessionId);
     monoSavedBlocks.delete(sessionId);
+    sessionWriteReconciliations.delete(sessionId);
     const tombstone = setTimeout(
       () => deletedSessionIds.delete(sessionId),
       60_000,
@@ -859,6 +884,7 @@ export async function discardDraftSessionRecord(
     invoke<void>("session_delete", { sessionId, imagePaths: [] }),
   );
   monoSavedBlocks.delete(sessionId);
+  sessionWriteReconciliations.delete(sessionId);
 }
 
 export async function setSessionArchived(
@@ -1549,7 +1575,8 @@ function normalizeSummary(summary: SessionSummary): SessionSummary {
 }
 
 function recordToSession(record: SessionRecord): Session {
-  const { [READ_ONLY_SETTING]: readOnly, [EFFORT_SOURCE_SETTING]: effortSource, ...modelSettings } =
+  const { [READ_ONLY_SETTING]: readOnly, [EFFORT_SOURCE_SETTING]: effortSource,
+    [RUNTIME_MODE_SOURCE_SETTING]: runtimeModeSource, [WINDOWS_SANDBOX_SETTING]: windowsSandbox, ...modelSettings } =
     record.modelSettings && typeof record.modelSettings === "object" ? record.modelSettings : {};
   const blocks = Array.isArray(record.blocks)
     ? record.blocks
@@ -1570,6 +1597,8 @@ function recordToSession(record: SessionRecord): Session {
     model: record.model,
     modelSettings,
     ...(effortSource === "role" || effortSource === "user" ? { effortSource } : {}),
+    ...(runtimeModeSource === "role" || runtimeModeSource === "user" ? { runtimeModeSource } : {}),
+    ...(windowsSandbox === "elevated" || windowsSandbox === "unelevated" ? { windowsSandbox } : {}),
     ...(readOnly === "true" ? { readOnly: true } : {}),
     runtimeMode: asRuntimeMode(record.runtimeMode),
     title: record.title,

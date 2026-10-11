@@ -1,6 +1,6 @@
 import { projectKey, projectName } from "../../../shared/lib/paths";
 import { validateMonoOrg, validateMonoOrgTransition, withDefaultTeam } from "./monoOrg";
-import { HARNESSES, RUNTIME_MODES, type RuntimeMode, type HarnessId } from "../../sessions/model/session";
+import { HARNESSES, RUNTIME_MODES, type RuntimeMode, type RuntimeModeSource, type HarnessId } from "../../sessions/model/session";
 import {
   loadTabGroupColors,
   loadTabGroupCustomColors,
@@ -20,6 +20,7 @@ import { removeMonoBackground } from "./monoBackground";
 import type { TeamChange, TeamLockedField } from "./monoTeam";
 import type { EffortSource } from "../../sessions/model/models";
 import { parseMonoSkillsPolicy, type MonoSkillsPolicy } from "./monoSkills";
+import { resolveMonoRolePermissions } from "./monoRolePermissions";
 
 /** The project palette's colors, plus indigo for a Mono's ninth preset. */
 export const MONO_COLORS = [
@@ -46,6 +47,9 @@ export type Mono = {
   reviewer?: boolean;
   userLockedFields?: TeamLockedField[];
   effortSource?: EffortSource;
+  runtimeMode?: RuntimeMode;
+  runtimeModeSource?: RuntimeModeSource;
+  windowsSandbox?: "elevated" | "unelevated";
   teamSizeCap?: number;
   /** Absent inherits the direct team's choice, then the curated role default. */
   skillsPolicy?: MonoSkillsPolicy;
@@ -225,9 +229,14 @@ function parseMono(value: unknown): Mono | undefined {
       : entry.role === "member" ? { origin: "starter" as const } : {}),
     ...(entry.reviewer === true ? { reviewer: true } : {}),
     ...(entry.effortSource === "role" || entry.effortSource === "user" ? { effortSource: entry.effortSource } : {}),
+    ...(entry.runtimeModeSource === "role" || entry.runtimeModeSource === "user" ? {
+      runtimeModeSource: entry.runtimeModeSource,
+      ...(RUNTIME_MODES.includes(entry.runtimeMode as RuntimeMode) ? { runtimeMode: entry.runtimeMode as RuntimeMode } : {}),
+    } : {}),
+    ...(entry.windowsSandbox === "elevated" || entry.windowsSandbox === "unelevated" ? { windowsSandbox: entry.windowsSandbox } : {}),
     ...(parseMonoSkillsPolicy(entry.skillsPolicy) ? { skillsPolicy: parseMonoSkillsPolicy(entry.skillsPolicy) } : {}),
     ...(parseMonoSkillsPolicy(entry.teamSkillsPolicy) ? { teamSkillsPolicy: parseMonoSkillsPolicy(entry.teamSkillsPolicy) } : {}),
-    ...(Array.isArray(entry.userLockedFields) ? { userLockedFields: entry.userLockedFields.filter((field): field is TeamLockedField => ["name", "specialty", "soul", "harness", "model", "modelSettings"].includes(String(field))) } : {}),
+    ...(Array.isArray(entry.userLockedFields) ? { userLockedFields: entry.userLockedFields.filter((field): field is TeamLockedField => ["name", "specialty", "soul", "harness", "model", "modelSettings", "runtimeMode"].includes(String(field))) } : {}),
     ...(Number.isInteger(entry.teamSizeCap) && Number(entry.teamSizeCap) >= 1 && Number(entry.teamSizeCap) <= 24 ? { teamSizeCap: Number(entry.teamSizeCap) } : {}),
     ...(Array.isArray(entry.teamChanges) ? { teamChanges: entry.teamChanges as TeamChange[] } : {}),
     ...(workerProfile ? { workerProfile } : {}),
@@ -273,8 +282,9 @@ export function listMonos(includeArchived = false): Mono[] {
   if (!Array.isArray(stored)) return [];
   let parsed: unknown[] = stored;
   const pending = record(readJson(LEGACY_PERMISSIONS_KEY));
-  if (parsed.some((value) => Object.prototype.hasOwnProperty.call(record(value), "runtimeMode"))) {
+  if (parsed.some((value) => Object.prototype.hasOwnProperty.call(record(value), "runtimeMode") && !["role", "user"].includes(String(record(value).runtimeModeSource)))) {
     const clean = parsed.map((value) => {
+      if (["role", "user"].includes(String(record(value).runtimeModeSource))) return value;
       const { runtimeMode, ...entry } = record(value);
       if (typeof entry.id === "string" && RUNTIME_MODES.includes(runtimeMode as RuntimeMode) && !Object.prototype.hasOwnProperty.call(pending, entry.id))
         pending[entry.id] = runtimeMode;
@@ -323,6 +333,7 @@ function withAssignedManagers(roster: readonly Mono[]): Mono[] {
     const seed = projectName(project);
     next.push({
       id: newMonoId(), role: "manager", reportsTo: orchestrator.id,
+      runtimeModeSource: "role",
       projects: [project], managerProject: project,
       name: `${resolveTabGroupLabel(key, loadTabGroupLabels(), seed)} Manager`,
       mascot: projectMascot(seed, resolveTabGroupMascot(key, loadTabGroupMascots())).name,
@@ -343,12 +354,13 @@ export function findMono(id: string): Mono | undefined {
   return listMonos().find((mono) => mono.id === id);
 }
 
-export function monoRuntimeMode(mono: Mono | undefined, fallback: RuntimeMode): RuntimeMode {
-  return (mono && legacyMonoRuntimeMode(mono.id)) ?? fallback;
+export function monoRuntimeMode(mono: Mono | undefined, fallback: RuntimeMode, runtimeModeSource?: RuntimeModeSource): RuntimeMode {
+  return (mono && legacyMonoRuntimeMode(mono.id)) ?? (mono && runtimeModeSource === "role"
+    ? resolveMonoRolePermissions({ ...mono, runtimeModeSource }, fallback).runtimeMode : fallback);
 }
 
 export function monoDefaultRuntimeMode(mono: Mono): RuntimeMode {
-  return monoRuntimeMode(mono, mono.role === "manager" || mono.role === "member" ? "full-access" : "auto");
+  return resolveMonoRolePermissions(mono).runtimeMode;
 }
 
 export function legacyMonoRuntimeMode(monoId: string): RuntimeMode | undefined {
@@ -363,11 +375,17 @@ export function finishMonoPermissionsMigration(monoId: string): void {
 }
 
 /** A user choice supersedes a pending legacy value before the chat is saved. */
-export function saveMonoRuntimeMode(monoId: string, runtimeMode: RuntimeMode): void {
-  if (!legacyMonoRuntimeMode(monoId)) return;
-  const pending = record(readJson(LEGACY_PERMISSIONS_KEY));
-  pending[monoId] = runtimeMode;
-  localStorage.setItem(LEGACY_PERMISSIONS_KEY, JSON.stringify(pending));
+export function saveMonoRuntimeMode(monoId: string, runtimeMode: RuntimeMode, runtimeModeSource: RuntimeModeSource = "user"): void {
+  if (legacyMonoRuntimeMode(monoId)) {
+    const pending = record(readJson(LEGACY_PERMISSIONS_KEY));
+    pending[monoId] = runtimeMode;
+    localStorage.setItem(LEGACY_PERMISSIONS_KEY, JSON.stringify(pending));
+  }
+  updateMono(monoId, mono => ({ ...mono, runtimeMode, runtimeModeSource,
+    userLockedFields: runtimeModeSource === "user"
+      ? [...new Set([...(mono.userLockedFields ?? []), "runtimeMode" as const])]
+      : (mono.userLockedFields ?? []).filter(field => field !== "runtimeMode"),
+  }));
 }
 
 /** The Mono whose conversation this is. */
@@ -408,6 +426,7 @@ export function adoptManagerMono(
   at = Date.now(),
   profile?: Mono["workerProfile"],
   effortSource?: EffortSource,
+  runtimeModeSource?: RuntimeModeSource,
 ): Mono {
   const existing = monoForSession(sessionId);
   if (existing?.role === "manager" && existing.teamInitialized) return existing;
@@ -428,6 +447,7 @@ export function adoptManagerMono(
     reportsTo: listMonos().find((mono) => mono.role === "orchestrator")?.id,
     workerProfile: existing?.workerProfile ?? profile,
     effortSource: existing?.effortSource ?? effortSource,
+    runtimeModeSource: existing?.runtimeModeSource ?? runtimeModeSource,
     name:
       existing?.name ??
       `${resolveTabGroupLabel(key, loadTabGroupLabels(), seed)} Manager`,
@@ -496,6 +516,7 @@ export function addTeamMember(
     id: newMonoId(),
     role: "member",
     effortSource: "role",
+    runtimeModeSource: "role",
     reportsTo: managerId,
     name: name.trim(),
     specialty: specialty.trim(),
@@ -536,6 +557,7 @@ export function createMono(projects: readonly string[] = []): Mono {
   const roster = listMonos(true);
   const mono: Mono = {
     id: newMonoId(),
+    runtimeModeSource: "role",
     ...nextMonoLook(roster),
     projects: uniqueProjects(projects),
   };

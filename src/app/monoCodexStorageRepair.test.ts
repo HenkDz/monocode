@@ -2,8 +2,10 @@ import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import ts from "typescript";
 import { expect, it, vi } from "vitest";
-import { MonoCodexStorageRecovery, isCodexStorageError, parseCodexStorageConflict, parseCodexStorageRecoveryConflict } from "../features/monos/model/monoCodexStorage";
+import { MonoCodexStorageRecovery, isCodexStorageError, parseCodexStorageConflict, parseCodexStorageRecoveryConflict, parseCodexSandboxBlocker, codexSandboxRepairSettings } from "../features/monos/model/monoCodexStorage";
+import type { Session } from "../features/sessions/model/session";
 import { codexStorageAccountId } from "../features/monos/model/monoCodexStorageIssues";
+import { sessionWriteNeedsReconciliation } from "../features/sessions/data/sessionStore";
 
 const app = ts.createSourceFile("App.tsx", readFileSync(new URL("./App.tsx", import.meta.url), "utf8"),
   ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
@@ -87,8 +89,10 @@ it.each(["relink", "first replay"])("unblocks a late account member during %s be
     return true;
   });
   const context = {
+    sessionWriteNeedsReconciliation,
     sessionsRef, codexStorageRecovery: { current: recovery }, codexStorageAccountId,
-    isCodexStorageError, parseCodexStorageConflict,
+    isCodexStorageError, parseCodexStorageConflict, parseCodexSandboxBlocker, codexSandboxRepairSettings, IS_WIN: true,
+    orchestrator: { forSession: () => undefined },
     monoSkillsForSession: () => ({ skillsRole: "manager", skillsPolicy: { mode: "role" } }),
     sessionWorkCwd: (session: { cwd: string }) => session.cwd,
     remoteProjectFor: () => undefined, selectedProviderAccountId: () => "account",
@@ -132,4 +136,104 @@ it.each(["relink", "first replay"])("unblocks a late account member during %s be
   expect(recovery.hasPending("other")).toBe(true);
   expect(sessionsRef.current.find(session => session.id === "other")?.codexStorageError).toBe(error);
   expect(recovery.isRepairingAccount("account")).toBe(false);
+});
+
+const sandboxDetail = `Codex storage needs repair: ${JSON.stringify({ sandbox: true, reason: "Sandbox machine account is disabled", setupCommand: "codex sandbox -P :workspace -- echo ready" })}`;
+function sandboxRepairFixture(extra: Partial<Session> = {}) {
+  const session = (id: string, accountId: string): Session => ({ id, harness: "codex", cwd: "/synthetic/repo", model: "synthetic", modelSettings: {},
+    title: id, blocks: [], runtimeMode: "supervised", providerAccountId: accountId, codexStorageAccountId: accountId, codexStorageError: sandboxDetail });
+  const sessionsRef = { current: [{ ...session("clicked", "account"), ...extra }, session("peer", "account"), session("other", "other-account")] };
+  const recovery = new MonoCodexStorageRecovery();
+  const retry = vi.fn<() => boolean | Promise<boolean>>(() => true), peerRetry = vi.fn(() => true), otherRetry = vi.fn(() => true);
+  recovery.hold("clicked", retry); recovery.hold("peer", peerRetry); recovery.hold("other", otherRetry);
+  const stop = vi.fn(async (_harness: string, _sessionId: string) => {}), prepare = vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}), persist = vi.fn(async () => {}), saveMode = vi.fn();
+  const invoke = vi.fn(async () => ({ configPath: "/synthetic/account/config.toml", backupPaths: ["/synthetic/account/config.backup", "/synthetic/private/config.backup"] }));
+  const context = {
+    sessionsRef, codexStorageRecovery: { current: recovery }, codexStorageAccountId, isCodexStorageError,
+    parseCodexStorageConflict, parseCodexSandboxBlocker, codexSandboxRepairSettings, IS_WIN: true,
+    monoSkillsForSession: () => ({ skillsRole: "manager", skillsPolicy: { mode: "role" } }),
+    sessionWorkCwd: (current: Session) => current.cwd, orchestrator: { forSession: () => undefined },
+    remoteProjectFor: (cwd: string) => cwd.startsWith("remote:") ? {} : undefined,
+    selectedProviderAccountId: () => "account", queuedHead: () => undefined,
+    monoForSession: (id: string) => ({ id: `mono-${id}` }), saveMonoRuntimeMode: saveMode,
+    stopHarnessSession: stop, upsertSession: persist, crypto: { randomUUID: () => "sandbox-choice-receipt" },
+    flushSync: (action: () => void) => action(),
+    setSessions: (update: (sessions: Session[]) => Session[]) => { sessionsRef.current = update(sessionsRef.current); },
+    setQueueDispatchVersion: vi.fn(), setCodexStorageRepaired: vi.fn(), prepareMonoCodexStore: prepare,
+    prepareCodexMonoContext: prepare, resolveCodexBinary: async () => ({ path: "/synthetic/codex.exe" }), invoke,
+  };
+  const repair = evaluate(appCallback("onCodexStorageRepair").getText(app), context);
+  return { ...context, repair, recovery, retry, peerRetry, otherRetry, stop, prepare, persist, saveMode };
+}
+
+it("switches the selected account only on explicit choice, stops idle servers and exposes both backups", async () => {
+  const fixture = sandboxRepairFixture();
+  expect(fixture.invoke).not.toHaveBeenCalled();
+  await fixture.repair("clicked", "use_unelevated_sandbox");
+  expect(fixture.stop.mock.calls).toEqual([["codex", "clicked"], ["codex", "peer"]]);
+  expect(fixture.invoke).toHaveBeenCalledExactlyOnceWith("codex_mono_use_unelevated_sandbox", { providerAccountId: "account" });
+  expect(fixture.stop.mock.invocationCallOrder[1]).toBeLessThan(fixture.invoke.mock.invocationCallOrder[0]);
+  const clicked = fixture.sessionsRef.current.find(session => session.id === "clicked")!;
+  expect(clicked.blocks[0].text).toContain("/synthetic/account/config.backup");
+  expect(clicked.blocks[0].text).toContain("/synthetic/private/config.backup");
+  expect(clicked.runtimeMode).toBe("supervised");
+  expect(fixture.retry).toHaveBeenCalledOnce();
+  expect(fixture.peerRetry).toHaveBeenCalledOnce();
+  expect(fixture.otherRetry).not.toHaveBeenCalled();
+});
+
+it("uses full access and resumes only the clicked Mono, leaving account peers held and restricted", async () => {
+  const fixture = sandboxRepairFixture();
+  await fixture.repair("clicked", "use_mono_full_access");
+  expect(fixture.invoke).not.toHaveBeenCalled();
+  expect(fixture.stop).toHaveBeenCalledExactlyOnceWith("codex", "clicked");
+  expect(fixture.saveMode).toHaveBeenCalledExactlyOnceWith("mono-clicked", "full-access");
+  expect(fixture.sessionsRef.current.find(session => session.id === "clicked")?.runtimeMode).toBe("full-access");
+  expect(fixture.sessionsRef.current.find(session => session.id === "peer")).toMatchObject({ runtimeMode: "supervised", codexStorageError: sandboxDetail });
+  expect(fixture.prepare.mock.calls[0][0]).toMatchObject({ sandboxRequired: false, sessionId: "clicked", path: "/synthetic/codex.exe" });
+  expect(fixture.retry).toHaveBeenCalledOnce();
+  expect(fixture.peerRetry).not.toHaveBeenCalled();
+  expect(fixture.recovery.hasPending("peer")).toBe(true);
+});
+
+it("rejects an account switch while a peer turn is running without changing config or replaying prompts", async () => {
+  const fixture = sandboxRepairFixture();
+  fixture.sessionsRef.current = fixture.sessionsRef.current.map(session => session.id === "peer" ? { ...session, busy: true } : session);
+  await expect(fixture.repair("clicked", "use_unelevated_sandbox")).rejects.toThrow("current turns");
+  expect(fixture.invoke).not.toHaveBeenCalled(); expect(fixture.stop).not.toHaveBeenCalled();
+  expect(fixture.retry).not.toHaveBeenCalled(); expect(fixture.peerRetry).not.toHaveBeenCalled();
+  expect(fixture.recovery.hasPending("clicked")).toBe(true);
+  expect(fixture.sessionsRef.current.find(session => session.id === "clicked")?.codexStorageError).toBe(sandboxDetail);
+});
+
+it("rejects full-access escalation for read-only investigations", async () => {
+  const fixture = sandboxRepairFixture({ readOnly: true });
+  await expect(fixture.repair("clicked", "use_mono_full_access")).rejects.toThrow("filesystem restrictions");
+  expect(fixture.stop).not.toHaveBeenCalled(); expect(fixture.invoke).not.toHaveBeenCalled();
+  expect(fixture.saveMode).not.toHaveBeenCalled(); expect(fixture.retry).not.toHaveBeenCalled();
+});
+
+it("keeps a held Plan restricted after an explicit Mono full-access choice", async () => {
+  const fixture = sandboxRepairFixture({ queuedMessages: [{ id: "plan", text: "Plan", attachments: [], intent: "plan" }] });
+  fixture.prepare.mockRejectedValueOnce(new Error(sandboxDetail));
+  await expect(fixture.repair("clicked", "use_mono_full_access")).rejects.toThrow("Codex storage needs repair");
+  expect(fixture.prepare.mock.calls[0][0]).toMatchObject({ sandboxRequired: true });
+  expect(fixture.retry).not.toHaveBeenCalled(); expect(fixture.recovery.hasPending("clicked")).toBe(true);
+});
+
+it("holds prompts and returns backup paths after a partial explicit account-config write fails", async () => {
+  const fixture = sandboxRepairFixture();
+  fixture.invoke.mockRejectedValueOnce(new Error("Private config is busy; backups preserved at /synthetic/account/config.backup, /synthetic/private/config.backup"));
+  await expect(fixture.repair("clicked", "use_unelevated_sandbox")).rejects.toThrow("/synthetic/private/config.backup");
+  expect(fixture.prepare).not.toHaveBeenCalled(); expect(fixture.retry).not.toHaveBeenCalled();
+  expect(fixture.peerRetry).not.toHaveBeenCalled(); expect(fixture.recovery.hasPending("clicked")).toBe(true);
+  expect(fixture.sessionsRef.current.find(session => session.id === "clicked")?.codexStorageError).toBe(sandboxDetail);
+});
+
+it("retains a failed full-access retry without resuming any account peer", async () => {
+  const fixture = sandboxRepairFixture();
+  fixture.retry.mockRejectedValueOnce(new Error("Transport unavailable"));
+  await expect(fixture.repair("clicked", "use_mono_full_access")).rejects.toThrow("Transport unavailable");
+  expect(fixture.recovery.hasPending("clicked")).toBe(true);
+  expect(fixture.peerRetry).not.toHaveBeenCalled(); expect(fixture.otherRetry).not.toHaveBeenCalled();
 });

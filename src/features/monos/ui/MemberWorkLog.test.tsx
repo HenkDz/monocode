@@ -683,9 +683,13 @@ it("keeps current work, queued assignments and review on current pages, separate
         ?.textContent,
     ).toBe("Waiting for an available worker");
     expect(
-      host.querySelector('[data-member-task="blocked"] [data-task-reason]')
-        ?.textContent,
-    ).toBe("Worker lost its connection");
+      host.querySelector(
+        '[data-member-task="blocked"] [data-transcript-error="transport"]',
+      )?.textContent,
+    ).toContain("provider connection interrupted");
+    expect(
+      host.querySelector('[data-member-task="blocked"]')?.textContent,
+    ).not.toContain("Worker lost its connection");
     expect(
       host.querySelector('[data-member-task="review"] [data-task-metrics]')
         ?.textContent,

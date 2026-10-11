@@ -4,6 +4,8 @@ import { MonoTeamChangeCard } from "../../monos/ui/MonoTeamChangeCard";
 import { TeamMessage } from "./TeamMessage";
 import { ArtifactText } from "../../artifacts/ui/ArtifactReference";
 import { isUserMessage, teamMessage } from "../model/teamMessage";
+import { presentationDigest, presentationTeamMessage, presentationText } from "../model/transcriptPresentation";
+import { transcriptError } from "../model/transcriptError";
 import {
   ArrowUp,
   Check,
@@ -46,6 +48,8 @@ import { settleWordFades } from "./wordFade";
 import { FilePreview } from "../../files/ui/FilePreview";
 import { FileTypeIcon } from "../../files/ui/FileTypeIcon";
 import { ToolDiffPreview } from "./ToolDiffPreview";
+import { CompactToolOutput } from "./CompactToolOutput";
+import { TranscriptError } from "./TranscriptError";
 import { PlanPreview } from "./PlanPreview";
 import { OrchestrationPreview } from "../../orchestration/ui/OrchestrationPreview";
 import { TaskListPreview } from "./TaskListPreview";
@@ -59,7 +63,8 @@ import { TerminalSpinner } from "./TerminalSpinner";
 import { Popover } from "../../../shared/ui/Popover";
 import { ProjectMascot } from "../../projects/ui/ProjectMascot";
 import { PixelMascot } from "../../projects/ui/PixelMascot";
-import type { MonoLook } from "../../monos/model/mono";
+import { listMonos, monoLook, type MonoLook } from "../../monos/model/mono";
+import { projectKey } from "../../../shared/lib/paths";
 import {
   monoSpawnedSessions,
   type LaunchedSessionView,
@@ -75,8 +80,6 @@ import {
 } from "../../../integrations/harness/core/authSupport";
 import {
   isEditTool,
-  isReadTool,
-  isSearchTool,
   stubFilePreview,
 } from "../../../integrations/harness/core/preview";
 import { copyMessage } from "../../../platform/tauri/clipboard";
@@ -156,6 +159,7 @@ import {
 import { lastUserTurnBlock } from "../model/editLastTurn";
 import {
   monoCodeToolCall,
+  monoCodeToolSummary,
   monoCodeWorkSummary,
   type MonoCodeToolCall,
 } from "../model/monocodeToolCall";
@@ -1630,13 +1634,13 @@ function AgentTranscriptComponent({
                         ? startedAt + (durationMs ?? 0)
                         : undefined)
                   }
-                  copyText={turnCopyText(
+                  copyText={presentationText(turnCopyText(
                     inlineWork
                       ? items.flatMap((item) =>
                           item.type === "block" ? [item.block] : [],
                         )
                       : turn,
-                  )}
+                  ))}
                   onSaveNote={onSaveNote}
                   onShowWork={
                     inlineWork && onShowWork
@@ -2258,8 +2262,10 @@ const TranscriptBlock = memo(function TranscriptBlock({
   editLastTurnDisabledReason?: string;
   editing?: boolean;
 }) {
-  const incoming = teamMessage(block);
+  const incoming = teamMessage(block) ?? (block.role === "user" ? presentationTeamMessage(block.text) : undefined);
   if (incoming) return <TeamMessage message={incoming} cwd={cwd} />;
+  const digest = presentationDigest(block.text);
+  if (digest) return <div data-transcript-digest className="my-2 rounded-xl border border-content/10 bg-content/4 p-3 font-sans text-sm"><strong className="font-medium">{digest.title}</strong><ul className="mt-2 space-y-1 text-xs text-content/70">{digest.items.map((item, index) => <li key={index}><ArtifactText text={item} /></li>)}</ul></div>;
   if (block.role === "user") {
     return (
       <>
@@ -2371,10 +2377,11 @@ const TranscriptBlock = memo(function TranscriptBlock({
     if (block.interjection) {
       return <InterjectionDivider block={block} />;
     }
+    if (block.notice === "error") return <div className={embedded ? "" : "px-4"}><TranscriptError error={block.text} /></div>;
     return (
       <div className={`${embedded ? "" : "px-4"} py-2 text-content/50`}>
         <pre className="min-w-0 whitespace-pre-wrap break-words">
-          <ArtifactText text={block.text} />
+          <ArtifactText text={presentationText(block.text)} />
         </pre>
       </div>
     );
@@ -2464,7 +2471,7 @@ function UserMessageBlock({
   const text =
     card && card.kind !== "handoff"
       ? ""
-      : visibleUserPrompt(monocode ? operatorUserPrompt(block) : block.text);
+      : presentationText(visibleUserPrompt(monocode ? operatorUserPrompt(block) : block.text));
   const messageLink = text ? parseUserMessageLink(text) : null;
   const displayText = messageLink
     ? `${messageLink.beforeText}${messageLink.afterText}`
@@ -2570,10 +2577,12 @@ function UserMessageBlock({
   };
 
   const deliveryControl =
-    delivery && delivery.status !== "pending" ? (
+    delivery?.status === "failed" && delivery.error && transcriptError(delivery.error).family !== "other" ? (
+      <div className="max-w-full px-3 pt-1"><TranscriptError error={delivery.error} title="Message not sent" onRetry={onRetryMessage ? () => onRetryMessage(block.id) : undefined} /></div>
+    ) : delivery && delivery.status !== "pending" ? (
       <div className="flex max-w-full items-center gap-2 px-3 pt-1 font-sans text-xs text-content/50">
         <span role={delivery.error && delivery.status !== "storage-blocked" ? "alert" : "status"}>
-          {delivery.status === "storage-blocked" ? "Waiting for storage repair" : delivery.error ? `Not sent · ${delivery.error}` : "Not sent"}
+          {delivery.status === "storage-blocked" ? "Waiting for storage repair" : delivery.error ? `Not sent · ${presentationText(delivery.error)}` : "Not sent"}
         </span>
         {onRetryMessage && delivery.status !== "storage-blocked" ? (
           <button
@@ -3467,18 +3476,18 @@ export function MonoActivityTrail({
     (block) =>
       !block.internal &&
       !block.draft &&
-      block.role !== "user" &&
       block.role !== "handoff" &&
-      (block.text.trim() ||
+      (presentationText(block.monoTeamMessage?.text ?? block.text).trim() ||
         block.tool ||
         block.image ||
+        block.attachments?.length ||
         block.taskList ||
         block.plan),
   );
   // What it said reads as text; the work between hangs on a short timeline.
   const segments: { prose: boolean; blocks: Block[] }[] = [];
   for (const block of steps) {
-    const prose = isProseBlock(block);
+    const prose = isProseBlock(block) || block.role === "user";
     const last = segments[segments.length - 1];
     if (last && !prose && !last.prose) last.blocks.push(block);
     else segments.push({ prose, blocks: [block] });
@@ -3497,12 +3506,12 @@ export function MonoActivityTrail({
               data-mono-activity-block={first.id}
               className="min-w-0 px-1 text-content/80"
             >
-              <AgentMarkdown
-                text={first.text}
+              {first.role === "user" ? <TranscriptBlock block={first} layout="full" stickyIndex={steps.indexOf(first)} embedded cwd={cwd} onOpenFile={onOpenFile} /> : <AgentMarkdown
+                text={presentationText(first.text)}
                 cwd={cwd}
                 onOpenFile={onOpenFile}
                 className="mono-run-report"
-              />
+              />}
             </li>
           );
         return (
@@ -3529,8 +3538,8 @@ export function MonoActivityTrail({
                   aria-hidden="true"
                   className="absolute left-0 top-[10px] size-1.5 rounded-full bg-content/25"
                 />
-                {readOutput && !block.tool && !isSubagentBlock(block) && !block.plan && !block.taskList && !block.image ? (
-                  <AgentMarkdown text={block.text} cwd={cwd} onOpenFile={onOpenFile} className="mono-run-report" />
+                {readOutput && block.role !== "system" && block.role !== "tool" && block.role !== "approval" && !block.tool && !isSubagentBlock(block) && !block.plan && !block.taskList && !block.image ? (
+                  <AgentMarkdown text={presentationText(block.text)} cwd={cwd} onOpenFile={onOpenFile} className="mono-run-report" />
                 ) : block.role === "plan" ||
                 block.role === "tasks" ||
                 block.role === "image" ? (
@@ -3543,10 +3552,7 @@ export function MonoActivityTrail({
                   />
                 ) : (
                   <ActivityRow
-                    block={readOutput && block.tool && !needsApproval(block) ? {
-                      ...block,
-                      tool: { ...block.tool, detail: undefined, preview: block.tool.preview ? { ...block.tool.preview, output: undefined } : undefined },
-                    } : block}
+                    block={block}
                     live={live}
                     cwd={cwd}
                     onApproval={onApproval}
@@ -3554,9 +3560,6 @@ export function MonoActivityTrail({
                     onOpenDiff={onOpenDiff}
                   />
                 )}
-                {readOutput && block.tool && !needsApproval(block) && (block.tool.detail?.trim() || block.tool.preview?.output?.trim()) ? (
-                  <pre className="min-w-0 whitespace-pre-wrap break-words py-2 font-mono text-[12px] leading-5 text-content/65">{[...new Set([block.tool.detail?.trim(), block.tool.preview?.output?.trim()].filter(Boolean))].join("\n\n")}</pre>
-                ) : null}
               </div>
             ))}
           </li>
@@ -4232,13 +4235,15 @@ function ActivityRow({
 
 /** A status row folded into the trail: one muted line, nothing to open. */
 function ActivityStatusRow({ block }: { block: Block }) {
+  if (block.notice === "error") return <TranscriptError error={block.text} />;
+  const text = presentationText(block.text);
   return (
     <div className="flex min-w-0 items-center gap-1.5 py-1">
       <span
-        title={block.text}
+        title={text}
         className="min-w-0 flex-1 truncate font-sans text-sm text-content/50"
       >
-        {block.text.trim()}
+        {text.trim()}
       </span>
     </div>
   );
@@ -4254,7 +4259,7 @@ function ActivityInterjectionRow({ block }: { block: Block }) {
   const meta = block.interjection;
   if (!meta) return null;
   const chrome = interjectionChrome(meta);
-  const summary = proseSummary(block.text);
+  const summary = proseSummary(presentationText(block.text));
   const label = (
     <span className="min-w-0 flex-1 truncate font-sans text-sm">
       <span className="text-content/55">{chrome.label}</span>
@@ -4299,7 +4304,7 @@ function ActivityInterjectionRow({ block }: { block: Block }) {
       </button>
       {open ? (
         <div className="min-w-0 pb-2">
-          <pre className={INTERJECTION_BODY}>{block.text}</pre>
+          <pre className={INTERJECTION_BODY}>{presentationText(block.text)}</pre>
         </div>
       ) : null}
     </div>
@@ -4325,7 +4330,7 @@ function ActivityThinkingRow({
   onOpenFile?: (path: string) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const text = proseSummary(block.text) || "Thinking";
+  const text = proseSummary(presentationText(block.text)) || "Thinking";
   // In a group the rail is the bullet, so there is nothing to breathe while
   // reasoning streams in — the line itself does.
   const pulse = block.streaming ? "zen-thinking-pulse" : "";
@@ -4408,7 +4413,7 @@ function ActivityNoteRow({
   onOpenFile?: (path: string) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const text = proseSummary(block.text);
+  const text = proseSummary(presentationText(block.text));
   const icon = bare ? null : (
     <Minus className="size-3.5 shrink-0 text-content/50" strokeWidth={1.75} />
   );
@@ -4450,6 +4455,21 @@ function ActivityNoteRow({
   );
 }
 
+function displayedToolLabel(block: Block, cwd?: string): string {
+  const label = presentationText(toolCallLabel(block, cwd));
+  return label.length > 160 || /\r?\n|[{}]|(?:^|\s)\[/.test(label)
+    ? block.tool?.preview?.kind === "shell" || block.tool?.kind === "shell" ? "Run shell command" : "Tool call"
+    : label || "Tool call";
+}
+
+function toolOutput(block: Block): string {
+  return [...new Set([block.tool?.detail?.trim(), block.tool?.preview?.output?.trim(), !block.tool && (block.role === "tool" || block.role === "approval") ? block.text.trim() : undefined].filter(Boolean))].join("\n\n");
+}
+
+function toolCommand(block: Block): string {
+  return (block.tool?.preview?.kind === "shell" ? block.tool.preview.title : undefined) || block.tool?.title || block.text;
+}
+
 function ActivityToolRow({
   block,
   cwd,
@@ -4467,18 +4487,17 @@ function ActivityToolRow({
   onOpenFile?: (path: string) => void;
   onOpenDiff?: (path: string) => void;
 }) {
-  const [errorOpen, setErrorOpen] = useState(false);
   const appCall = monoCodeToolCall(block);
   if (appCall) {
     return (
       <MonoCodeCallRow block={block} call={appCall} onApproval={onApproval} />
     );
   }
-  const label = toolCallLabel(block, cwd);
+  const label = displayedToolLabel(block, cwd);
   const state = toolCallState(block);
   const pending = needsApproval(block);
-  const errorDetail =
-    !pending && state === "rejected" ? block.tool?.detail?.trim() : undefined;
+  const output = toolOutput(block);
+  const errorDetail = !pending && state === "rejected" ? output || "Tool call failed" : undefined;
   const summary = (
     <ToolCallSummary
       label={label}
@@ -4494,52 +4513,21 @@ function ActivityToolRow({
 
   return (
     <div className="flex min-w-0 flex-col">
-      {errorDetail ? (
-        <div
-          aria-label={`Failed tool call: ${label}`}
-          className="group flex min-w-0 items-center gap-1.5 py-1"
-        >
-          {bare ? null : <ActivityToolIcon state={state} live={live} />}
-          <div
-            className="flex min-w-0 flex-1 cursor-pointer"
-            onClick={() => setErrorOpen((value) => !value)}
-          >
-            {summary}
-          </div>
-          <ToolCallStatusIcon state={state} />
-          <button
-            type="button"
-            aria-expanded={errorOpen}
-            aria-label={`${errorOpen ? "Hide" : "Show"} error details for ${label}`}
-            onClick={() => setErrorOpen((value) => !value)}
-            className="-m-1 shrink-0 rounded p-1"
-          >
-            <ChevronRight
-              className={`size-3.5 text-red-400/60 transition-transform ${errorOpen ? "rotate-90" : ""}`}
-              strokeWidth={1.75}
-            />
-          </button>
-        </div>
-      ) : (
-        <div
-          aria-label={`Tool call: ${label}`}
-          className="flex min-w-0 items-center gap-1.5 py-1"
-        >
-          {bare ? null : <ActivityToolIcon state={state} live={live} />}
-          {summary}
-          {pending ? null : <ToolCallStatusIcon state={state} />}
-        </div>
-      )}
+      <div
+        aria-label={`${errorDetail ? "Failed tool call" : "Tool call"}: ${label}`}
+        className="flex min-w-0 items-center gap-1.5 py-1"
+      >
+        {bare ? null : <ActivityToolIcon state={state} live={live} />}
+        {summary}
+        {pending ? null : <ToolCallStatusIcon state={state} />}
+      </div>
       {pending ? (
-        <ApprovalControls block={block} onApproval={onApproval} />
+        <>
+          <CompactToolOutput output={toolCommand(block)} title={label} preview={false} command />
+          <ApprovalControls block={block} onApproval={onApproval} />
+        </>
       ) : null}
-      {errorOpen && errorDetail ? (
-        <pre
-          className={`min-w-0 whitespace-pre-wrap break-words py-1 font-mono text-[12px] leading-5 text-red-400/80 ${bare ? "" : "pl-5"}`}
-        >
-          {errorDetail}
-        </pre>
-      ) : null}
+      {errorDetail ? <TranscriptError error={errorDetail} /> : output && !pending ? <CompactToolOutput output={output} title={label} /> : null}
     </div>
   );
 }
@@ -4548,7 +4536,7 @@ function MonoCodeMark({ className = "size-4" }: { className?: string }) {
   return <img src="/monocode.png" alt="" className={`shrink-0 ${className}`} />;
 }
 
-/** MonoCode commands read like the other activity rows; failures expose their output. */
+/** App receipts stay compact; details never expand the conversation. */
 function MonoCodeCallRow({
   block,
   call,
@@ -4559,64 +4547,26 @@ function MonoCodeCallRow({
   onApproval?: (requestId: number, decision: ApprovalDecision) => void;
 }) {
   const state = toolCallState(block);
-  const output =
-    block.tool?.detail?.trim() || block.tool?.preview?.output?.trim();
-  const [errorOpen, setErrorOpen] = useState(false);
-  const hasError = state === "rejected" && !!output;
+  const output = toolOutput(block);
+  const detail = block.tool?.detail?.trim();
+  const receipt = detail === toolCommand(block) ? block.tool?.preview?.output : detail || block.tool?.preview?.output;
   const pendingApproval = needsApproval(block);
-  const command = `monocode app ${call.action}`;
-  const verb = pendingApproval
-    ? "Run"
-    : state === "pending"
-      ? "Running"
-      : "Ran";
-  const summary = (
-    <>
-      <span
-        className={`shrink-0 font-sans text-sm ${state === "rejected" ? "text-red-400" : "text-content/50"}`}
-      >
-        {verb}
-      </span>
-      <span
-        className={`flex min-w-0 max-w-full items-center gap-1 rounded bg-content/6 px-1 font-mono text-[13px] ${state === "rejected" ? "text-red-400" : "text-content/70"}`}
-        title={command}
-      >
-        <MonoCodeMark className="size-3.5" />
-        <span className="min-w-0 truncate">{command}</span>
-      </span>
-      <ToolCallStatusIcon state={state} />
-      {hasError ? (
-        <ChevronRight
-          className={`size-3.5 shrink-0 text-red-400/60 transition-transform ${errorOpen ? "rotate-90" : ""}`}
-          strokeWidth={1.75}
-        />
-      ) : null}
-    </>
-  );
+  const roster = ["sessions.read", "sessions.send", "team.message", "goals.assign"].includes(call.action) ? listMonos() : [];
+  const summary = monoCodeToolSummary(call, receipt, state === "accepted", id => {
+    const target = roster.find(mono => mono.id === id || mono.sessionId === id || mono.role === "manager" && mono.projects.some(project => projectKey(project) === projectKey(id)));
+    return target ? monoLook(target).name : undefined;
+  });
   return (
-    <div data-monocode-tool-call={call.action} className="min-w-0">
-      {hasError ? (
-        <button
-          type="button"
-          aria-expanded={errorOpen}
-          aria-label={`${errorOpen ? "Hide" : "Show"} error details for MonoCode: ${call.label}`}
-          onClick={() => setErrorOpen((value) => !value)}
-          className="flex w-full min-w-0 items-center gap-1.5 py-1 text-left"
-        >
-          {summary}
-        </button>
-      ) : (
-        <div className="flex min-w-0 items-center gap-1.5 py-1">{summary}</div>
-      )}
-      {errorOpen && hasError ? (
-        <pre className="min-w-0 whitespace-pre-wrap break-words py-1 pl-5 font-mono text-[12px] leading-5 text-red-400/80">
-          {output}
-        </pre>
-      ) : null}
+    <div data-monocode-tool-call={call.action} className="min-w-0 rounded-xl border border-content/7 bg-content/3 px-3 py-2">
+      <div className="flex min-w-0 items-center gap-2">
+        <MonoCodeMark className="size-3.5" />
+        <span className="min-w-0 truncate text-sm text-content/75">{summary}</span>
+        {state === "pending" && !pendingApproval ? <span className="text-xs text-content/45">Running</span> : null}
+        <ToolCallStatusIcon state={state} />
+      </div>
+      {state === "rejected" && !pendingApproval ? <TranscriptError error={output || "App command failed"} /> : output && !pendingApproval ? <CompactToolOutput output={output} title={summary} preview={false} /> : null}
       {pendingApproval ? (
-        <pre className="max-h-32 min-w-0 overflow-auto whitespace-pre-wrap break-all py-1 pl-5 font-mono text-[12px] leading-5 text-content/70">
-          {call.command}
-        </pre>
+        <CompactToolOutput output={call.command} title={call.label} preview={false} command />
       ) : null}
       <ApprovalControls block={block} onApproval={onApproval} />
     </div>
@@ -4732,11 +4682,9 @@ function ToolCall({
   onOpenDiff?: (path: string) => void;
   embedded?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
   const preview = block.tool?.preview;
-  const label = toolCallLabel(block, cwd);
-  const detail = block.tool?.detail?.trim();
-  const expanded = detail && detail !== label ? detail : label;
+  const label = displayedToolLabel(block, cwd);
+  const detail = toolOutput(block);
   const state = toolCallState(block);
   const stateLabel =
     state === "accepted"
@@ -4749,11 +4697,6 @@ function ToolCall({
     block.text || block.tool?.title,
     preview,
   );
-  const compact =
-    isReadTool(block.tool?.kind, label, preview) ||
-    isSearchTool(block.tool?.kind, label, preview);
-  const expandable = !compact && !!detail && detail !== label;
-
   const frame = embedded ? "py-0.5" : "px-4 py-1";
 
   const appCall = monoCodeToolCall(block);
@@ -4789,6 +4732,7 @@ function ToolCall({
             />
           </div>
         )}
+        {state === "rejected" && !needsApproval(block) ? <TranscriptError error={detail || "File operation failed"} /> : detail && !needsApproval(block) ? <CompactToolOutput output={detail} title={label} /> : null}
         <ApprovalControls block={block} onApproval={onApproval} />
       </div>
     );
@@ -4798,47 +4742,20 @@ function ToolCall({
 
   return (
     <div className={frame}>
-      {expandable ? (
-        <button
-          type="button"
-          aria-expanded={open}
-          aria-label={`${stateLabel} tool call: ${label}`}
-          onClick={() => setOpen((value) => !value)}
-          className="flex w-full min-w-0 items-center gap-2 rounded-lg py-1.5 text-left"
-        >
-          <ToolCallIcon state={state} />
-          <ToolCallSummary
-            label={label}
-            preview={preview}
-            cwd={cwd}
-            failed={state === "rejected"}
-            onOpenFile={onOpenFile}
-          />
-          <ChevronRight
-            className={`size-3.5 shrink-0 text-content/35 transition-transform ${open ? "rotate-90" : ""}`}
-            strokeWidth={1.75}
-          />
-        </button>
-      ) : (
-        <div
-          aria-label={`${stateLabel} tool call: ${label}`}
-          className="flex w-full min-w-0 items-center gap-2"
-        >
-          <ToolCallIcon state={state} />
-          <ToolCallSummary
-            label={label}
-            preview={preview}
-            cwd={cwd}
-            failed={state === "rejected"}
-            onOpenFile={onOpenFile}
-          />
-        </div>
-      )}
-      {open && expandable ? (
-        <pre className="mt-1.5 min-w-0 whitespace-pre-wrap break-words px-2.5 font-mono text-[12px] leading-5 text-content/55">
-          {expanded}
-        </pre>
-      ) : null}
+      <div
+        aria-label={`${stateLabel} tool call: ${label}`}
+        className="flex w-full min-w-0 items-center gap-2"
+      >
+        <ToolCallIcon state={state} />
+        <ToolCallSummary
+          label={label}
+          preview={preview}
+          cwd={cwd}
+          failed={state === "rejected"}
+          onOpenFile={onOpenFile}
+        />
+      </div>
+      {needsApproval(block) ? <CompactToolOutput output={toolCommand(block)} title={label} preview={false} command /> : state === "rejected" ? <TranscriptError error={detail || "Tool call failed"} /> : detail && detail !== label ? <CompactToolOutput output={detail} title={label} /> : null}
       <ApprovalControls block={block} onApproval={onApproval} />
     </div>
   );
@@ -5131,7 +5048,7 @@ function InterjectionDivider({ block }: { block: Block }) {
             ref={textRef}
             className={`${INTERJECTION_BODY} ${expanded ? "" : "line-clamp-2"}`}
           >
-            {block.text}
+            {presentationText(block.text)}
           </pre>
           {overflows ? (
             <button

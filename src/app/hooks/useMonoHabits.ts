@@ -189,6 +189,8 @@ export function useMonoHabits(host: MonoHabitHost, enabled = true) {
         ...(record.role ? {
           modelSettings: mergeModelSettings(resolveModel(mono.harness, mono.model), mono.modelSettings),
           effortSource: mono.effortSource,
+          runtimeModeSource: mono.runtimeModeSource,
+          windowsSandbox: mono.windowsSandbox,
         } : {}),
         title: `${look.name} · ${habit.name}`,
         ephemeral: true,

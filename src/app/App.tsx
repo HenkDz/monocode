@@ -9,6 +9,7 @@ import {
 } from "../features/monos/model/mono";
 import { monoEngineId } from "../features/monos/model/monoEngines";
 import { resolveMonoRoleEffort, snapshotMonoWorkerEffort, switchMonoRoleEffort } from "../features/monos/model/monoRoleEffort";
+import { resolveMonoRolePermissions, snapshotMonoWorkerPermissions } from "../features/monos/model/monoRolePermissions";
 import { archiveMonoConversation, archiveProjectMonos, offerProjectMonoRestore, projectMonoTeam } from "../features/monos/model/monoArchive";
 import { loadMonoView, saveMonoView, monoForView, monoViewProject, memberDetailsView, selectedOrgMono, monoLiveState } from "../features/monos/model/monoNavigation";
 import { MonoTeamActivity } from "../features/monos/ui/MonoTeamActivity";
@@ -59,6 +60,7 @@ import {
   getMonoGoalRecoveryBlocks,
   mergeMonoGoalRecoverySession,
   monoGoalRecoveryLiveSession,
+  reconcileMonoGoalOrigin,
 } from "../features/sessions/data/monoGoalRecovery";
 import {
   resumeMonoUsageLimit,
@@ -184,9 +186,9 @@ import { WindowControls } from "./shell/WindowControls";
 import { MonoDetails } from "../features/monos/ui/MonoDetails";
 import { changeMonoWorkingDirectory, isMonoHomeDirectory, migrateMonoWorkingDirectory } from "../features/monos/model/monoWorkingDirectory";
 import { acceptMonoWorkingDirectoryMigration } from "../features/monos/model/monoWorkingDirectoryMigration";
-import { MonoCodexStorageRecovery, isCodexStorageError, parseCodexStorageConflict, parseCodexStorageRecoveryConflict, type CodexStorageResolution, type CodexStorageComparison } from "../features/monos/model/monoCodexStorage";
+import { MonoCodexStorageRecovery, isCodexStorageError, parseCodexStorageConflict, parseCodexStorageRecoveryConflict, parseCodexSandboxBlocker, codexSandboxRepairSettings, type CodexStorageResolution, type CodexStorageComparison } from "../features/monos/model/monoCodexStorage";
 import { codexStorageAccountId, monoCodexStorageIssues } from "../features/monos/model/monoCodexStorageIssues";
-import { prepareMonoCodexStore } from "../integrations/harness/core/child";
+import { prepareMonoCodexStore, resolveCodexBinary } from "../integrations/harness/core/child";
 import { monoSkillsForSession } from "./model/monoSkillsForSession";
 import { handleMonoTeam, isTeamReviewer, lockMonoField } from "../features/monos/model/monoTeam";
 import { monoTeamHost, registerTeamCards } from "../features/monos/model/monoTeamRuntime";
@@ -255,7 +257,7 @@ import {
   loadProjectSidebarTab,
   saveProjectSidebarTab,
 } from "../features/settings/model/projectSidebarTab";
-import { HAS_NATIVE_GLASS, IS_MAC } from "../platform/tauri/platform";
+import { HAS_NATIVE_GLASS, IS_MAC, IS_WIN } from "../platform/tauri/platform";
 import {
   applyUiScale,
   loadUiScale,
@@ -414,6 +416,7 @@ import {
   type UserQuestionReply,
 } from "../integrations/harness";
 import { supportsHarnessLogin } from "../integrations/harness/core/authSupport";
+import { prepareCodexMonoContext } from "../integrations/harness/providers/codex/codexStore";
 import { bindTurnContextProfile } from "../integrations/harness/core/contextProfile";
 import {
   appendPreparingHandoff,
@@ -623,6 +626,8 @@ import {
   setSessionLinkedWorkItem,
   setSessionPinned,
   shouldPersistSession,
+  retainSessionWrite,
+  sessionWriteNeedsReconciliation,
   writeSession,
   flushSessionWrites,
   type SessionSummary,
@@ -2966,6 +2971,8 @@ function Workspace({
           active.modelSettings,
         ),
         providerAccountId: accountId,
+        runtimeModeSource: active.runtimeModeSource,
+        windowsSandbox: active.windowsSandbox,
         ...(active.effortSource || monoForSession(active.id)?.role ? { modelSettings: { ...active.modelSettings }, effortSource: active.effortSource } : {}),
       };
       const tab = newTab(session.id);
@@ -5022,7 +5029,7 @@ function Workspace({
 
   /** A Mono's conversation is a view over the existing workspace tabs. */
   const saveMonoPermissions = useCallback(async (session: Session) => {
-    return upsertSession(session, current => ({ ...current, runtimeMode: session.runtimeMode }));
+    return upsertSession(session, current => ({ ...current, runtimeMode: session.runtimeMode, runtimeModeSource: session.runtimeModeSource, windowsSandbox: session.windowsSandbox }));
   }, []);
 
   const onOpenMono = useCallback(
@@ -7251,11 +7258,11 @@ function Workspace({
   );
 
   const onRuntimeModeChange = useCallback(
-    (sessionId: string, runtimeMode: RuntimeMode) => {
+    (sessionId: string, runtimeMode: RuntimeMode, runtimeModeSource: Session["runtimeModeSource"] = "user") => {
       const mono = monoForSession(sessionId);
-      if (mono) saveMonoRuntimeMode(mono.id, runtimeMode);
+      if (mono) saveMonoRuntimeMode(mono.id, runtimeMode, runtimeModeSource);
       const targets = new Set(monoPermissionSessionIds(mono?.id, sessionId, sessionsRef.current, orchestrator.snapshot()));
-      sessionsRef.current = sessionsRef.current.map(s => targets.has(s.id) ? { ...s, runtimeMode } : s);
+      sessionsRef.current = sessionsRef.current.map(s => targets.has(s.id) ? { ...s, runtimeMode, ...(mono || s.orchestrationLeadId ? { runtimeModeSource } : {}) } : s);
       setSessions(sessionsRef.current);
       for (const updated of sessionsRef.current.filter(s => targets.has(s.id))) {
         void upsertSession(updated).catch(console.error);
@@ -7384,6 +7391,17 @@ function Workspace({
       attachments: Attachment[] = [],
       options?: SubmitOptions,
     ): SubmissionAcceptance => {
+      if (sessionWriteNeedsReconciliation(sessionId)) {
+        const message = "Checking previous send… Retry Chat after reconciliation finishes.";
+        enqueueHarnessEvent(sessionId, { type: "status", text: message });
+        flushHarnessEvents();
+        void writeSession(sessionId, async () => {}).catch(error => {
+          enqueueHarnessEvent(sessionId, { type: "status", text: String(error) });
+          flushHarnessEvents();
+        });
+        options?.onSettled?.({ status: "failed", text: "", error: message });
+        return false;
+      }
       const owner = monoForSession(sessionId) ?? listMonos(true).find((mono) =>
         mono.id === (habitRunMono(sessionId) ?? orchestrator.forSession(sessionId)?.ownerMonoId),
       );
@@ -7512,7 +7530,7 @@ function Workspace({
                 harness: current.harness,
                 model: current.model,
                 modelSettings: current.modelSettings,
-              }, current.effortSource);
+              }, current.effortSource, current.runtimeModeSource);
             if (!priorMono) void onOpenMono(mono.id);
             for (const project of mono.projects) {
               if (remoteProjectFor(project)) continue;
@@ -7688,7 +7706,7 @@ function Workspace({
       let current = options?.buildTarget
         ? withPlanBuildTarget(draftCleared, options.buildTarget)
         : draftCleared;
-      current = { ...current, runtimeMode: monoRuntimeMode(monoForSession(sessionId) ?? findMono(habitRunMono(sessionId) ?? ""), current.runtimeMode) };
+      current = { ...current, runtimeMode: monoRuntimeMode(monoForSession(sessionId) ?? findMono(habitRunMono(sessionId) ?? ""), current.runtimeMode, current.readOnly ? undefined : current.runtimeModeSource) };
       if (options?.codexStoragePrepared) current = { ...current, codexStoragePreparing: undefined };
       const editedResend = options?.resendEdited
         ? createEditedResendAttempt(current, options.onResendRejected)
@@ -8721,6 +8739,7 @@ function Workspace({
                 readOnly: current.readOnly === true,
                 ephemeral: current.ephemeral === true,
                 ...monoSkillsForSession(sessionId),
+                windowsSandbox: current.windowsSandbox,
                 controlsAgents:
                   operatorAccess ||
                   orchestrator.run(sessionId)?.status === "active",
@@ -8781,6 +8800,7 @@ function Workspace({
               runtimeMode: current.runtimeMode,
               ephemeral: current.ephemeral === true,
               ...monoSkillsForSession(sessionId),
+              windowsSandbox: current.windowsSandbox,
               intent: intent === "orchestrate" ? "plan" : intent,
               readOnly: !!readOnlyTask,
               monoSession: isMonoSession(sessionId),
@@ -10136,25 +10156,58 @@ function Workspace({
     const session = sessionsRef.current.find(entry => entry.id === sessionId);
     if (!session) throw new Error("The conversation is no longer available. Reopen it before repairing Codex storage.");
     if (session.busy) throw new Error("The conversation is busy. Wait for its current turn to finish, then try Repair again.");
+    if (remoteProjectFor(session.cwd)) throw new Error("Repair this sandbox on its remote host.");
     const accountId = codexStorageAccountId(session, selectedProviderAccountId("codex", session.cwd));
-    const affectedIds = sessionsRef.current.filter(entry => entry.harness === "codex" && (entry.codexStorageError || entry.codexStoragePreparing) &&
+    const sandboxChoice = resolution === "use_unelevated_sandbox" || resolution === "use_mono_full_access";
+    if (sandboxChoice && codexStorageRecovery.current.isRepairingAccount(accountId)) throw new Error("This account already has a recovery action pending. Wait for it to finish.");
+    if (sandboxChoice && !parseCodexSandboxBlocker(session.codexStorageError)) throw new Error("Refresh the sandbox issue before choosing an engine or access mode.");
+    if (resolution === "use_mono_full_access" && session.readOnly) throw new Error("Read-only investigations must retain their filesystem restrictions.");
+    const affectedIds = resolution === "use_mono_full_access" ? [sessionId] : sessionsRef.current.filter(entry => entry.harness === "codex" && (entry.codexStorageError || entry.codexStoragePreparing) &&
       !remoteProjectFor(entry.cwd) && codexStorageAccountId(entry, selectedProviderAccountId("codex", entry.cwd)) === accountId).map(entry => entry.id);
     if (!affectedIds.includes(sessionId)) affectedIds.push(sessionId);
     try {
-      await codexStorageRecovery.current.repairAccount(accountId, affectedIds, async () => {
+      const relink = async () => {
         await codexStorageRecovery.current.waitForPreparations(affectedIds);
-        if (resolution) {
+        if (resolution === "use_unelevated_sandbox") {
+          const accountSessions = sessionsRef.current.filter(entry => entry.harness === "codex" && !remoteProjectFor(entry.cwd) &&
+            codexStorageAccountId(entry, selectedProviderAccountId("codex", entry.cwd)) === accountId);
+          if (accountSessions.some(entry => entry.busy || entry.codexStoragePreparing)) throw new Error("Wait for this account's current turns and storage preparations to finish before switching its sandbox.");
+          for (const entry of accountSessions) await stopHarnessSession("codex", entry.id);
+          const changed = await invoke<{ configPath: string; backupPaths: string[] }>("codex_mono_use_unelevated_sandbox", { providerAccountId: accountId });
+          flushSync(() => setSessions(previous => previous.map(entry => entry.id === sessionId ? { ...entry, blocks: [...entry.blocks,
+            { id: crypto.randomUUID(), role: "system", text: `This account now uses the unelevated Codex sandbox. Config: ${changed.configPath}\nBackups: ${changed.backupPaths.join("\n")}\nRestore each backup over its config to undo this choice, then restart the account's idle conversations.` }] } : entry)));
+        } else if (resolution === "use_mono_full_access") {
+          await stopHarnessSession("codex", sessionId);
+          const mono = monoForSession(sessionId);
+          if (mono) saveMonoRuntimeMode(mono.id, "full-access");
+          flushSync(() => setSessions(previous => previous.map(entry => entry.id === sessionId ? { ...entry, runtimeMode: "full-access", runtimeModeSource: "user" } : entry)));
+          const updated = sessionsRef.current.find(entry => entry.id === sessionId)!;
+          await upsertSession(updated);
+        } else if (resolution) {
           const conflict = parseCodexStorageConflict(session.codexStorageError);
           if (!conflict) throw new Error("Refresh the storage issue before choosing a version.");
           await invoke("codex_mono_store_resolve", { providerAccountId: accountId, conflict, resolution });
         }
-        await prepareMonoCodexStore(accountId, session.providerSessionId, { ...monoSkillsForSession(sessionId), projectPath: sessionWorkCwd(session) });
-      }, resumingId => {
+        const latest = sessionsRef.current.find(entry => entry.id === sessionId)!;
+        if (parseCodexSandboxBlocker(session.codexStorageError)) {
+          await prepareCodexMonoContext({ sessionId, path: (await resolveCodexBinary()).path, cwd: sessionWorkCwd(session),
+            providerAccountId: accountId, threadId: session.providerSessionId, ...monoSkillsForSession(sessionId),
+            ...codexSandboxRepairSettings(latest, IS_WIN, orchestrator.forSession(sessionId)?.status === "active") });
+        } else {
+          await prepareMonoCodexStore(accountId, session.providerSessionId, { ...monoSkillsForSession(sessionId), projectPath: sessionWorkCwd(session) });
+        }
+      };
+      const beforeResume = (resumingId: string) => {
         if (!affectedIds.includes(resumingId)) affectedIds.push(resumingId);
         // Keep the dispatcher held until the saved submissions have resumed.
         flushSync(() => setSessions(previous => previous.map(entry => entry.id === resumingId
           ? { ...entry, codexStorageError: undefined, codexStoragePreparing: true } : entry)));
-      });
+      };
+      if (resolution === "use_mono_full_access") {
+        await codexStorageRecovery.current.repair(sessionId, async () => { await relink(); beforeResume(sessionId); });
+      } else {
+        await codexStorageRecovery.current.repairAccount(accountId, affectedIds, relink, beforeResume);
+      }
       const failure = sessionsRef.current.find(entry => affectedIds.includes(entry.id) && entry.codexStorageError)?.codexStorageError;
       if (failure) throw new Error(failure);
       setCodexStorageRepaired(true);
@@ -10162,7 +10215,7 @@ function Workspace({
       const storageFailure = isCodexStorageError(error);
       flushSync(() => setSessions(previous => previous.map(entry => affectedIds.includes(entry.id) &&
         (storageFailure || codexStorageRecovery.current.hasPending(entry.id))
-        ? { ...entry, codexStorageError: storageFailure ? String(error) :
+        ? { ...entry, codexStorageError: storageFailure ? String(error) : parseCodexSandboxBlocker(entry.codexStorageError) ? entry.codexStorageError :
           `Codex storage needs repair: The files are ready, but a held message could not resume. Try Repair again. ${String(error)}`,
           codexStorageAccountId: accountId } : entry)));
       throw error;
@@ -10539,6 +10592,7 @@ function Workspace({
         modelSettings: input.thread.modelSettings ?? input.source.modelSettings,
         ephemeral: false,
         ...monoSkillsForSession(input.source.id),
+        windowsSandbox: input.source.windowsSandbox,
         threadId: input.thread.providerThreadId,
         onThreadId: (providerThreadId) => {
           if (controller.signal.aborted) return;
@@ -11087,6 +11141,7 @@ function Workspace({
             readOnly: current.readOnly === true,
             ephemeral: current.ephemeral === true,
             ...monoSkillsForSession(sessionId),
+            windowsSandbox: current.windowsSandbox,
             controlsAgents:
               isMonoSession(sessionId) ||
               operatorEnabledInThread(current.blocks) ||
@@ -11426,7 +11481,6 @@ function Workspace({
           create: path => newDefaultSession(path, sessionDefaults?.runtimeMode),
           add: session => { sessionsRef.current = [...sessionsRef.current, session]; setSessions(sessionsRef.current); },
         }) : undefined;
-        const workerMode = task.readOnly ? "supervised" : memberSession?.runtimeMode ?? (run.projectManager ? "full-access" : lead.runtimeMode);
         if (
           run.projectManager &&
           !task.workspace &&
@@ -11499,8 +11553,7 @@ function Workspace({
             throw new Error(
               "This worker's configuration changed. Restore its approved harness, model and project before retrying.",
             );
-          // The lead's runtime mode governs its agents, including across a
-          // change mid-run: auto stays auto, supervised asks the lead.
+          let retainedPermissions = snapshotMonoWorkerPermissions(task, undefined, existing);
           const synced = {
             ...existing,
             cwd: projectCwd,
@@ -11509,16 +11562,19 @@ function Workspace({
               : checkoutCwd,
             branch: workspace.branch,
             worktreeRemoved: false,
-            runtimeMode: workerMode,
+            ...retainedPermissions,
             readOnly: task.readOnly,
             orchestrationLeadId: run.leadId,
           };
-          await upsertSession(existing, current => ({ ...current,
-            cwd: synced.cwd, worktreeCwd: synced.worktreeCwd, branch: synced.branch,
-            worktreeRemoved: false, runtimeMode: workerMode, readOnly: task.readOnly,
-            orchestrationLeadId: run.leadId,
-          }));
-          return { scratchDir, workspace, modelSettings: { ...synced.modelSettings }, effortSource: synced.effortSource ?? "user" };
+          await upsertSession(existing, current => {
+            retainedPermissions = snapshotMonoWorkerPermissions(task, undefined, current);
+            return { ...current,
+              cwd: synced.cwd, worktreeCwd: synced.worktreeCwd, branch: synced.branch,
+              worktreeRemoved: false, ...retainedPermissions, readOnly: task.readOnly,
+              orchestrationLeadId: run.leadId,
+            };
+          });
+          return { scratchDir, workspace, modelSettings: { ...synced.modelSettings }, effortSource: synced.effortSource ?? "user", ...retainedPermissions };
         }
         const restored = await getSession(task.sessionId);
         if (
@@ -11529,9 +11585,12 @@ function Workspace({
             "The saved worker no longer matches its approved model. Create a new assignment.",
           );
         const effort = snapshotMonoWorkerEffort(task, task.memberId ? findMono(task.memberId) : undefined);
+        const permissions = snapshotMonoWorkerPermissions(task, task.memberId ? findMono(task.memberId) : undefined,
+          sessionsRef.current.find(session => session.id === memberSession?.id) ?? memberSession);
         const fresh = {
-          ...newSession(task.harness, projectCwd, task.model, workerMode),
+          ...newSession(task.harness, projectCwd, task.model, permissions.runtimeMode),
           ...effort,
+          ...permissions,
           ...(sameProjectPath(projectCwd, checkoutCwd)
             ? {}
             : { worktreeCwd: checkoutCwd, branch: workspace.branch }),
@@ -11548,7 +11607,7 @@ function Workspace({
                 ? undefined
                 : workspace.branch,
               worktreeRemoved: false,
-              runtimeMode: workerMode,
+              ...snapshotMonoWorkerPermissions(task, undefined, restored),
             }
           : {
               ...fresh,
@@ -11575,7 +11634,7 @@ function Workspace({
         sessionsRef.current = next;
         setSessions(next);
         // Workers belong to the lead's agent panel; no workspace tab is created.
-        return { scratchDir, workspace, modelSettings: { ...worker.modelSettings }, effortSource: worker.effortSource ?? "user" };
+        return { scratchDir, workspace, modelSettings: { ...worker.modelSettings }, effortSource: worker.effortSource ?? "user", runtimeMode: worker.runtimeMode, runtimeModeSource: worker.runtimeModeSource, windowsSandbox: worker.windowsSandbox };
       },
       reviewedPullRequest: async (task) => {
         const pr = await gitPrStatus(task.workspace!.checkoutCwd);
@@ -11972,7 +12031,7 @@ function Workspace({
               id,
               title: "Manager",
             };
-        if (!stored) Object.assign(session, resolveMonoRoleEffort({ role: "manager" }, resolveModel(session.harness, session.model)));
+        if (!stored) Object.assign(session, resolveMonoRoleEffort({ role: "manager" }, resolveModel(session.harness, session.model)), resolveMonoRolePermissions({ role: "manager", runtimeModeSource: "role" }));
         if (stored && (stored.cwd !== folder || stored.worktreeCwd))
           await upsertSession(session);
         if (session.providerSessionId)
@@ -12294,7 +12353,7 @@ function Workspace({
           harness: session.harness,
           model: session.model,
           modelSettings: session.modelSettings,
-        }, session.effortSource);
+        }, session.effortSource, session.runtimeModeSource);
       }
       if (mono.id !== owner.id || mono.role !== "manager")
         assertDirectReport(listMonos(), mono.id, owner.id, "goal");
@@ -12373,8 +12432,18 @@ function Workspace({
         const next = change(session);
         if (next === session) return;
         const nextLive = history ? monoGoalRecoveryLiveSession(live, next, history) : next;
-        if (!await save(next, history ? { monoBaseline: history, monoLiveBlocks: nextLive.blocks } : undefined))
-          throw Error("The originating chat could not be saved");
+        try {
+          if (!await save(next, history ? { monoBaseline: history, monoLiveBlocks: nextLive.blocks } : undefined))
+            throw Error("The originating chat could not be saved");
+        } catch (error) {
+          retainSessionWrite(sessionId, () => reconcileMonoGoalOrigin(sessionId, submission, text,
+            () => sessionsRef.current.find(entry => entry.id === sessionId),
+            reconciled => {
+              sessionsRef.current = sessionsRef.current.map(entry => entry.id === sessionId ? reconciled : entry);
+              setSessions(sessionsRef.current);
+            }));
+          throw error;
+        }
         sessionsRef.current = sessionsRef.current.map(entry => entry.id === sessionId
           ? history
             ? monoGoalRecoveryLiveSession(entry, change(mergeMonoGoalRecoverySession(entry, history)), history)
@@ -13577,6 +13646,9 @@ function Workspace({
           liveState: state.liveState,
           taskMetrics: taskMetrics.get(session.id),
           runtimeMode: session.runtimeMode,
+          runtimeModeSource: session.runtimeModeSource,
+          windowsSandbox: session.windowsSandbox,
+          readOnly: session.readOnly,
         };
       }),
       (id) => {
@@ -13736,7 +13808,7 @@ function Workspace({
           title: task.title,
           harness: task.harness,
           model: task.model,
-          runtimeMode: "full-access",
+          runtimeMode: task.runtimeMode ?? (task.readOnly ? "supervised" : "auto"),
           createdAt: dispatch?.startedAt ?? 0,
           updatedAt: dispatch?.updatedAt ?? 0,
         });
@@ -14966,6 +15038,9 @@ function Workspace({
         modelSettings={monoViewSession.modelSettings}
         effortSource={monoViewSession.effortSource}
         runtimeMode={monoViewSession.runtimeMode}
+        runtimeModeSource={monoViewSession.runtimeModeSource}
+        windowsSandbox={monoViewSession.windowsSandbox}
+        readOnly={monoViewSession.readOnly}
         busy={!!monoViewSession.busy}
         onWorkingDirectoryChange={async cwd => {
           const current = sessionsRef.current.find(session => session.id === monoViewSession.id);
@@ -14983,9 +15058,17 @@ function Workspace({
         onModelSettingsChange={(settings, source) =>
           onModelSettingsChange(monoViewSession.id, settings, undefined, source)
         }
-        onRuntimeModeChange={(mode) =>
-          onRuntimeModeChange(monoViewSession.id, mode)
+        onRuntimeModeChange={(mode, source) =>
+          onRuntimeModeChange(monoViewSession.id, mode, source)
         }
+        onWindowsSandboxChange={async windowsSandbox => {
+          const current = sessionsRef.current.find(session => session.id === monoViewSession.id);
+          if (!current || current.busy) throw new Error("Wait for the current turn to finish before changing its sandbox engine.");
+          await stopHarnessSession("codex", current.id);
+          await upsertSession(current, latest => ({ ...latest, windowsSandbox }));
+          sessionsRef.current = sessionsRef.current.map(session => session.id === current.id ? { ...session, windowsSandbox } : session);
+          setSessions(sessionsRef.current);
+        }}
         onClose={() => { setMonoDetailsOpen(false); setMonoActivity(null); }}
         onReset={() => onResetMono(monoViewSession.id)}
         windowControls={monoCovers && !IS_MAC ? <WindowControls /> : undefined}

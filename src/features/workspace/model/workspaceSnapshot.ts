@@ -49,6 +49,8 @@ export type WorkspaceSessionStub = {
   model: string;
   modelSettings: Record<string, string>;
   effortSource?: Session["effortSource"];
+  runtimeModeSource?: Session["runtimeModeSource"];
+  windowsSandbox?: Session["windowsSandbox"];
   runtimeMode: RuntimeMode;
   title: string;
   providerSessionId?: string;
@@ -359,6 +361,8 @@ function sessionStub(session: Session): WorkspaceSessionStub | null {
     model: session.model,
     modelSettings: { ...session.modelSettings },
     ...(session.effortSource ? { effortSource: session.effortSource } : {}),
+    ...(session.runtimeModeSource ? { runtimeModeSource: session.runtimeModeSource } : {}),
+    ...(session.windowsSandbox ? { windowsSandbox: session.windowsSandbox } : {}),
     runtimeMode: session.runtimeMode,
     title: session.title,
     ...(session.inboxAsk ? { inboxAsk: session.inboxAsk } : {}),
@@ -390,6 +394,8 @@ function sessionFromStub(stub: WorkspaceSessionStub): Session {
     model: stub.model || session.model,
     modelSettings: { ...stub.modelSettings },
     ...(stub.effortSource ? { effortSource: stub.effortSource } : {}),
+    ...(stub.runtimeModeSource ? { runtimeModeSource: stub.runtimeModeSource } : {}),
+    ...(stub.windowsSandbox ? { windowsSandbox: stub.windowsSandbox } : {}),
     title: stub.title,
     ...(stub.inboxAsk ? { inboxAsk: stub.inboxAsk } : {}),
     ...(stub.providerSessionId
@@ -431,6 +437,8 @@ function sanitizeStub(raw: unknown): WorkspaceSessionStub | null {
     model: typeof value.model === "string" ? value.model : "",
     modelSettings,
     ...(value.effortSource === "role" || value.effortSource === "user" ? { effortSource: value.effortSource } : {}),
+    ...(value.runtimeModeSource === "role" || value.runtimeModeSource === "user" ? { runtimeModeSource: value.runtimeModeSource } : {}),
+    ...(value.windowsSandbox === "elevated" || value.windowsSandbox === "unelevated" ? { windowsSandbox: value.windowsSandbox } : {}),
     runtimeMode,
     title: typeof value.title === "string" ? value.title : "",
     ...(value.inboxAsk && typeof value.inboxAsk === "object"

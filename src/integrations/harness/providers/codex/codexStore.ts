@@ -1,4 +1,5 @@
 import {
+  checkMonoCodexSandbox,
   acquireHarnessBridge,
   copyMonoCodexThreads,
   killChild,
@@ -8,7 +9,7 @@ import {
   watchChild,
 } from "../../core/child";
 import { JsonRpcClient } from "../../core/jsonRpc";
-import { isRecoverableThreadResumeError } from "./codexProtocol";
+import { asRecord, isRecoverableThreadResumeError } from "./codexProtocol";
 import type { MonoSkillsContext } from "../../../../features/monos/model/monoSkills";
 
 type Thread = { id: string; path?: string | null };
@@ -58,10 +59,12 @@ export function prepareCodexMonoContext(input: MonoSkillsContext & {
   threadId?: string;
   migrationOnly?: boolean;
   sandboxRequired?: boolean;
+  windowsSandbox?: "elevated" | "unelevated";
+  sandboxNetworkAccess?: boolean;
 }): Promise<PreparedContext> {
   const key = `${input.providerAccountId ?? "default"}:${input.sessionId}`;
   const pending = inFlight.get(key);
-  const skills = JSON.stringify([input.cwd, input.skillsRole, input.skillsPolicy, input.sandboxRequired]);
+  const skills = JSON.stringify([input.cwd, input.skillsRole, input.skillsPolicy, input.sandboxRequired, input.windowsSandbox, input.sandboxNetworkAccess]);
   if (pending) {
     if (
       pending.threadId === input.threadId &&
@@ -88,7 +91,8 @@ async function prepare(
   const store = await prepareMonoCodexStore(
     input.providerAccountId,
     input.threadId,
-    { skillsRole: input.skillsRole, skillsPolicy: input.skillsPolicy, projectPath: input.cwd, sandboxRequired: input.sandboxRequired },
+    // config/read supplies the effective project settings before any thread or turn RPC.
+    { skillsRole: input.skillsRole, skillsPolicy: input.skillsPolicy, projectPath: input.cwd, sandboxRequired: false, windowsSandbox: input.windowsSandbox, sandboxNetworkAccess: input.sandboxNetworkAccess },
   );
   if (input.migrationOnly && store.hasThread)
     return { config: {}, hasThread: true, ...(store.threadPath ? { threadPath: store.threadPath } : {}) };
@@ -148,6 +152,19 @@ async function prepare(
       { cwd: input.cwd },
     );
     const config = codexConfigOverrides(settings.config, store.home, store.skillsConfig);
+    if (input.windowsSandbox) {
+      config.windows = { ...asRecord(config.windows), sandbox: input.windowsSandbox };
+    }
+    if (input.sandboxRequired) {
+      await checkMonoCodexSandbox({
+        providerAccountId: input.providerAccountId,
+        sandboxRequired: true,
+        windowsSandbox: input.windowsSandbox,
+        sandboxNetworkAccess: input.sandboxNetworkAccess ?? false,
+        skillsContextId: store.skillsContextId,
+        sandboxConfig: config,
+      });
+    }
     const skillArgs = {
       ...(store.skillArgs ? { skillArgs: store.skillArgs } : {}),
       ...(store.skillsContextId ? { skillsContextId: store.skillsContextId } : {}),

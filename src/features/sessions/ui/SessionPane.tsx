@@ -1412,6 +1412,28 @@ const LocalSessionPane = memo(function LocalSessionPane({
                     member={workbenchMember}
                   />
                 )}
+                {isMember && !!memberMessages.length && (
+                    <section
+                      aria-label="Message queue"
+                      className="cc7u-message-queue"
+                    >
+                      <h3 className="mb-1 text-xs font-medium">Messages</h3>
+                      <MessageQueue
+                        messages={memberMessages}
+                        status={session.queueStatus}
+                        liveState={conversationLiveState}
+                        variant="messages"
+                        onDelete={(id) => onDeleteQueuedMessage(session.id, id)}
+                        onEdit={(id, text) =>
+                          onEditQueuedMessage(session.id, id, text)
+                        }
+                        onEditingChange={(id) =>
+                          onQueuedMessageEditingChange(session.id, id)
+                        }
+                        onResume={() => onResumeQueue(session.id)}
+                      />
+                    </section>
+                  )}
               </section>
             )}
             <div
@@ -1483,28 +1505,6 @@ const LocalSessionPane = memo(function LocalSessionPane({
                       Session details
                     </button>
                   </div>
-                {isMember && !!memberMessages.length && (
-                    <section
-                      aria-label="Message queue"
-                      className="cc7u-message-queue"
-                    >
-                      <h3 className="mb-1 text-xs font-medium">Messages</h3>
-                      <MessageQueue
-                        messages={memberMessages}
-                        status={session.queueStatus}
-                        liveState={conversationLiveState}
-                        variant="messages"
-                        onDelete={(id) => onDeleteQueuedMessage(session.id, id)}
-                        onEdit={(id, text) =>
-                          onEditQueuedMessage(session.id, id, text)
-                        }
-                        onEditingChange={(id) =>
-                          onQueuedMessageEditingChange(session.id, id)
-                        }
-                        onResume={() => onResumeQueue(session.id)}
-                      />
-                    </section>
-                  )}
                 </>
               )}
               {!workbench && !agent && !session.inboxAsk && (

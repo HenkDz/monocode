@@ -717,3 +717,90 @@ test("flat historical session Conversation keeps its saved dispatch and queue af
     header.getByRole("button", { name: "Details", exact: true }),
   ).toBeFocused();
 });
+
+
+for (const width of [1440, 1100]) {
+  for (const theme of ["dark", "light"]) {
+    for (const scenario of ["failed", "long-history"]) {
+      test(`pending Work queue keeps the initial request readable at ${width}px ${theme} ${scenario}`, async ({
+        page,
+      }) => {
+        await page.setViewportSize({ width, height: 1000 });
+        await page.goto(
+          `/tests/browser/cc7u-workbench.html?scenario=${scenario}&theme=${theme}`,
+          { waitUntil: "commit" },
+        );
+        await expect(page.locator("[data-workbench-header]")).toBeVisible({
+          timeout: 90_000,
+        });
+        const transcript = page.getByRole("tabpanel", {
+          name: "Conversation",
+          exact: true,
+        });
+        const request = transcript.locator('[data-chat-message="turn"]');
+        await expect(request).toContainText(
+          "Check restore and foreground focus. Keep the review tied to the saved change, and show me what still needs a real Windows check.",
+        );
+        await expect(request).toBeInViewport({ ratio: 1 });
+        const reader = transcript.locator(".agent-transcript");
+        const geometry = await request.evaluate((element) => {
+          const box = element.getBoundingClientRect();
+          const viewport = element.closest(".agent-transcript")!.getBoundingClientRect();
+          const hit = document.elementFromPoint(box.left + 8, box.top + 8);
+          return {
+            requestTop: box.top,
+            requestBottom: box.bottom,
+            viewportTop: viewport.top,
+            viewportBottom: viewport.bottom,
+            requestOwnsPointer: element.contains(hit),
+          };
+        });
+        expect(geometry.requestTop).toBeGreaterThanOrEqual(geometry.viewportTop);
+        expect(geometry.requestBottom).toBeLessThanOrEqual(geometry.viewportBottom);
+        expect(geometry.requestOwnsPointer).toBe(true);
+        const queue = page.locator("[data-member-work] [data-message-queue]");
+        await expect(queue).toHaveCount(1);
+        await expect(transcript.locator("[data-message-queue]")).toHaveCount(0);
+        const scroll = await reader.evaluate((element) => element.scrollTop);
+        await queue.getByRole("button", { name: "Edit queued message", exact: true }).click();
+        await queue.getByRole("textbox", { name: "Edit queued message", exact: true }).fill("Retain the original request and queue boundary.");
+        await queue.getByRole("button", { name: "Save queued message", exact: true }).click();
+        await expect(queue).toContainText("Retain the original request and queue boundary.");
+        await expect(request).toBeInViewport({ ratio: 1 });
+        expect(await reader.evaluate((element) => element.scrollTop)).toBeCloseTo(scroll, 0);
+        await queue.getByRole("button", { name: "Remove queued message", exact: true }).click();
+        await expect(page.locator("[data-message-queue]")).toHaveCount(0);
+        await expect(request).toBeInViewport({ ratio: 1 });
+        expect(await reader.evaluate((element) => element.scrollTop)).toBeCloseTo(scroll, 0);
+        expect(
+          await page.evaluate(() =>
+            (window as unknown as {
+              workbenchFixture: { events: { action: string; text?: string; options?: unknown }[] };
+            }).workbenchFixture.events.filter((event) =>
+              ["edit-queue", "remove-queue", "submit"].includes(event.action),
+            ),
+          ),
+        ).toEqual([
+          {
+            action: "edit-queue",
+            text: "queued-review",
+            options: { sessionId: "member-conversation", text: "Retain the original request and queue boundary." },
+          },
+          {
+            action: "remove-queue",
+            text: "queued-review",
+            options: { sessionId: "member-conversation" },
+          },
+        ]);
+        await expect(page.getByRole("textbox", { name: "Message Reviewer", exact: true })).toHaveValue("Keep my draft");
+        if (scenario === "long-history") {
+          const box = await reader.boundingBox();
+          await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
+          await page.mouse.wheel(0, -100);
+          await expect.poll(() => reader.evaluate((element) => element.scrollTop)).toBeLessThan(scroll);
+          await expect(request).toBeInViewport({ ratio: 1 });
+        }
+      });
+    }
+  }
+}

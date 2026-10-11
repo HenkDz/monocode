@@ -201,6 +201,7 @@ try {
         "long-history",
       ]) {
         const page = await context.newPage();
+        await page.addInitScript(() => localStorage.clear());
         const errors = [];
         const external = [];
         page.on("pageerror", (error) => errors.push(error.message));
@@ -259,6 +260,17 @@ try {
         await page.waitForTimeout(350);
         const key = `workbench-${width}-${theme}-${scenario}`;
         await layout(page, key);
+        if (["failed", "long-history"].includes(scenario)) {
+          const request = await page.locator('[data-chat-message="turn"]').evaluate((element) => {
+            const box = element.getBoundingClientRect();
+            const viewport = element.closest(".agent-transcript").getBoundingClientRect();
+            const hit = document.elementFromPoint(box.left + 8, box.top + 8);
+            return box.top >= viewport.top && box.bottom <= viewport.bottom && element.contains(hit);
+          });
+          check(`${key}: original request fully readable at initial position`, request);
+        }
+        if (scenario === "zero")
+          check(`${key}: no inherited Manager message`, (await page.locator(".cc7u-manager-note").count()) === 0);
         check(
           `${key}: clean local component render`,
           errors.length === 0 && external.length === 0,
@@ -289,6 +301,7 @@ try {
         await page.close();
       }
   const session = await context.newPage();
+  await session.addInitScript(() => localStorage.clear());
   await session.setViewportSize({ width: 1440, height: 1000 });
   await session.goto(
     `${origin}/tests/browser/cc7u-workbench.html?kind=session&scenario=failed`,

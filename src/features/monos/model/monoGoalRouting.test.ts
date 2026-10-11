@@ -108,6 +108,16 @@ describe("exact project routes", () => {
           .toEqual({ kind: "grand", reason: "More than one project mentioned" });
       }
   });
+  it.each(["C:/outside/repo/index.ts", "C:\\outside\\repo\\index.ts", "/outside/repo/index.ts", "\\\\server\\repo\\file.ts",
+    "src/project.ts", "workspace/settings", "codebase/atlas", "project/index.ts"])(
+    "preserves scope-noun path segments only with explicit selection: %s", path => {
+      const selected = { mode: "goal" as const, override: "manager" as const, projectId: "c:/code/atlas" };
+      expect(decide(`Fix Atlas ${path}`)).toMatchObject({ kind: "grand" });
+      expect(decide(`Fix Atlas ${path}`, { choice: selected })).toMatchObject({ kind: "manager",
+        project: { managerMonoId: "atlas-manager" }, reason: "Contains file paths: routed to Atlas because you selected it" });
+      expect(decide(`Fix Atlas ${path} and other projects`, { choice: selected }))
+        .toEqual({ kind: "grand", reason: "Comparison or cross-project goal" });
+    });
   it.each(["Fix Atlas and Beacon.", "Fix Atlas. Update Beacon", "Fix Atlas... and Beacon"])("keeps sentence conflict %s at Grand", text => {
     for (const override of ["auto", "manager"] as const)
       for (const ctx of [context(), monoGoalRoutingContext(owner, roster, projects, ["C:/code/Beacon"]),

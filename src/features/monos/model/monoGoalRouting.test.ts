@@ -43,6 +43,10 @@ const projectSetGoals = [
   "Additional registered projects need the Atlas fix",
   "Fix Atlas and other workspaces",
   "Fix Atlas and another codebase",
+  "Fix Atlas and every other code base",
+  "Fix Atlas and every other code-base",
+  "Fix Atlas and every other work space",
+  "Fix Atlas and every other work-space",
 ];
 
 describe("exact project routes", () => {
@@ -75,7 +79,8 @@ describe("exact project routes", () => {
       for (const ctx of [context(), monoGoalRoutingContext(owner, roster, projects, ["C:/code/Beacon"]),
         monoGoalRoutingContext(owner, roster.filter(member => member.id !== "beacon-manager"), projects)])
         for (const override of ["auto", "manager"] as const)
-          for (const noun of ["project", "projects", "repository", "repositories", "repo", "repos", "workspace", "workspaces", "codebase", "codebases"])
+          for (const noun of ["project", "projects", "repository", "repositories", "repo", "repos", "workspace", "workspaces", "codebase", "codebases",
+            "work space", "work spaces", "work-space", "work-spaces", "code base", "code bases", "code-base", "code-bases"])
             for (const qualifier of ["", "registered", "one of our widely separated", "**our**\tregistered\r\n"])
               for (const text of [`Fix Atlas: _${quantifier}_ ${qualifier} ${noun}`,
                 `Fix Atlas and ${noun}; ${qualifier} **${quantifier.toUpperCase()}**`])
@@ -109,7 +114,8 @@ describe("exact project routes", () => {
       }
   });
   it.each(["C:/outside/repo/index.ts", "C:\\outside\\repo\\index.ts", "/outside/repo/index.ts", "\\\\server\\repo\\file.ts",
-    "src/project.ts", "workspace/settings", "codebase/atlas", "project/index.ts"])(
+    "src/project.ts", "workspace/settings", "codebase/atlas", "project/index.ts", "code-base/index.ts", "work-space/settings",
+    "C:/work-space/code-base/index.ts", "code/base.ts"])(
     "preserves scope-noun path segments only with explicit selection: %s", path => {
       const selected = { mode: "goal" as const, override: "manager" as const, projectId: "c:/code/atlas" };
       expect(decide(`Fix Atlas ${path}`)).toMatchObject({ kind: "grand" });
@@ -118,6 +124,12 @@ describe("exact project routes", () => {
       expect(decide(`Fix Atlas ${path} and other projects`, { choice: selected }))
         .toEqual({ kind: "grand", reason: "Comparison or cross-project goal" });
     });
+  it("keeps ASCII formatting inside ordinary scope aliases at Grand", () => {
+    for (const alias of ["code\tbase", "code\r\nbase", "code**base**", "work\tspace", "work**space**", "WORK _ SPACE"])
+      for (const override of ["auto", "manager"] as const)
+        expect(decide(`Fix Atlas and another ${alias}`, { choice: { mode: "goal", override, projectId: "c:/code/atlas" } }))
+          .toEqual({ kind: "grand", reason: "Comparison or cross-project goal" });
+  });
   it.each(["Fix Atlas and Beacon.", "Fix Atlas. Update Beacon", "Fix Atlas... and Beacon"])("keeps sentence conflict %s at Grand", text => {
     for (const override of ["auto", "manager"] as const)
       for (const ctx of [context(), monoGoalRoutingContext(owner, roster, projects, ["C:/code/Beacon"]),

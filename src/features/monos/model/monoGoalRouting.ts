@@ -115,7 +115,7 @@ export function decideMonoGoalRoute(input: {
   // Scope wording requires Grand even for benign singular phrases.
   const scopeText = plainTokens.join(" ").replace(/[^a-z]/gi, " ");
   if (/\b(compare|compares|compared|comparing|comparisons?|versus|vs\.?|cross[- ]project)\b/i.test(text) ||
-      /\b(project|repo|workspace|codebase)/i.test(scopeText))
+      /\b(project|repo|work\s*space|code\s*base)/i.test(scopeText))
     return grand("Comparison or cross-project goal");
   const foldedText = foldProjectText(text);
   if (/[<>]|&(?:#(?:x[0-9a-f]+|\d+)|[a-z][a-z0-9]*);|\]\s*\(/i.test(foldedText))

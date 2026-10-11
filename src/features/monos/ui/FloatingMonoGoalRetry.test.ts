@@ -409,6 +409,10 @@ for (const explicit of [false, true]) {
     "Fix Atlas workspace startup",
     "Fix Atlas codebase startup",
     "Fix Atlas and 42 repositories",
+    "Fix Atlas and every other code base",
+    "Fix Atlas and every other code-base",
+    "Fix Atlas and every other work space",
+    "Fix Atlas and every other work-space",
   ])("retains floating Grand scope and retry identity for %s (explicit " + explicit + ")", async text => {
     const f = await fixture("floating", true);
     await f.change({ ...initial, projects: [...initial.projects, {

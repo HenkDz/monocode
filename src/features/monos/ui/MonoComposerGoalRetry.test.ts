@@ -184,6 +184,10 @@ for (const explicit of [false, true]) {
     "Fix Atlas workspace startup",
     "Fix Atlas codebase startup",
     "Fix Atlas and 42 repositories",
+    "Fix Atlas and every other code base",
+    "Fix Atlas and every other code-base",
+    "Fix Atlas and every other work space",
+    "Fix Atlas and every other work-space",
   ])("retains embedded Grand scope and retry identity for %s (explicit " + explicit + ")", async text => {
     const f = fixture();
     f.change({ ...context, projects: [...context.projects, {

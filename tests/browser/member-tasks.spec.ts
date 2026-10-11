@@ -17,13 +17,14 @@ for (const [width, height, mode] of [
     const log = page.getByRole("region", { name: "Member work log" });
     await expect(log).toBeVisible({ timeout: 90_000 });
     const cards = log.locator("[data-member-task]");
-    const history = log.getByRole("button", {
-      name: "History (120)",
+    const history = log.getByRole("tab", {
+      name: "History",
       exact: true,
     });
+    const current = log.getByRole("tab", { name: "Current", exact: true });
     const composer = page.getByRole("textbox", { name: "Message Rowan" });
-    await expect(cards).toHaveCount(mode === "history" ? 0 : 20);
-    await expect(history).toHaveAttribute("aria-expanded", "false");
+    await expect(cards).toHaveCount(mode === "history" ? 0 : 5);
+    await expect(history).toHaveAttribute("aria-selected", "false");
     if (mode !== "history") {
       await expect(cards.first()).toHaveAttribute(
         "data-member-task",
@@ -33,11 +34,8 @@ for (const [width, height, mode] of [
     }
     const composerBefore = (await composer.boundingBox())!;
     await history.click();
-    await expect(cards).toHaveCount(mode === "history" ? 120 : 140);
-    const scroller = log.locator(".overflow-y-auto");
-    await expect(
-      log.getByRole("heading", { name: "Completed and cancelled" }),
-    ).toBeInViewport();
+    await expect(cards).toHaveCount(5);
+    const scroller = page.locator("[data-fixture-work]");
     expect(
       await scroller.evaluate((el) => el.clientHeight),
     ).toBeLessThanOrEqual(Math.min(height * 0.3, 256) + 1);
@@ -47,6 +45,10 @@ for (const [width, height, mode] of [
     await expect
       .poll(() => scroller.evaluate((el) => el.scrollTop))
       .toBeGreaterThan(100);
+    const next = log.getByRole("button", { name: "Next assignments", exact: true });
+    for (let i = 1; i < 24; i++) await next.click();
+    await expect(log.getByRole("navigation", { name: "Assignment pages" })).toContainText("24 / 24");
+    await expect(next).toBeDisabled();
     const finalCard = log.locator(
       '[data-member-task="Completed assignment 0"]',
     );
@@ -54,11 +56,8 @@ for (const [width, height, mode] of [
     await expect(page.getByRole("dialog")).toContainText("Verify the routing");
     await page.keyboard.press("Escape");
     await expect(page.getByRole("dialog")).toHaveCount(0);
-    await history.click();
-    await expect(cards).toHaveCount(mode === "history" ? 0 : 20);
-    expect(await scroller.evaluate((el) => el.scrollTop)).toBeLessThanOrEqual(
-      1,
-    );
+    await current.click();
+    await expect(cards).toHaveCount(mode === "history" ? 0 : 5);
     if (mode !== "history") await expect(cards.first()).toBeInViewport();
     await expect(composer).toHaveValue("Keep my draft");
     const composerAfter = (await composer.boundingBox())!;

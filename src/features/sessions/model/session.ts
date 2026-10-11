@@ -90,6 +90,7 @@ export type EditedResendRejection = {
   providerRewound: boolean;
 };
 export type ComposerTurnOptions = {
+  followUpBehavior?: "steer" | "queue";
   monoGoal?: import("../../monos/model/monoGoalRouting").MonoGoalSubmission;
   intent?: TurnIntent;
   resendEdited?: boolean;

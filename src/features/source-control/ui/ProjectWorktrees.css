@@ -1,0 +1,9 @@
+[data-task-worktree] [data-worktree-header] { height: auto; min-height: 48px; }
+[data-task-worktree] [data-worktree-header] > button[data-sidebar-row] { padding-inline: 9px; }
+[data-task-worktree] [data-worktree-header] .agent-state { align-self: flex-start; margin-top: 14px; }
+[data-task-worktree] [data-worktree-header] [data-worktree-metadata] { flex: 1; }
+@container sidebar (max-width: 180px) {
+  [data-task-worktree] [data-worktree-header] > button[data-sidebar-row] { flex-basis: 100%; }
+  [data-task-worktree] [data-worktree-header] [data-worktree-member] { max-width: 65%; }
+  [data-task-worktree] [data-worktree-header] [data-worktree-metadata] { flex-wrap: wrap; }
+}

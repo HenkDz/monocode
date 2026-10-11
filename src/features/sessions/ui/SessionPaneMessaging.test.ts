@@ -252,12 +252,12 @@ it("shows the member work log without a full-height greeting hiding it below the
   ).toBe(false);
   expect(field()).not.toBeNull();
   expect(
-    container.querySelector("[data-member-work]")!.classList.contains("flex-1"),
+    container.querySelector("[data-member-work]")!.classList.contains("cc7u-work"),
   ).toBe(true);
   expect(
     container
       .querySelector('[role="tabpanel"]')!
-      .classList.contains("shrink-0"),
+      .classList.contains("flex-1"),
   ).toBe(true);
 });
 
@@ -273,10 +273,10 @@ it("updates the member header from live session and roster state", () => {
 
   render({
     ...pane,
-    monoState: { status: "needs-you", activity: "Review decision" },
+    monoState: { status: "needs-you", liveState: { status: "needs-you", reason: "decision", detail: "Review decision" } },
   });
   expect(
-    container.querySelector('header [data-mono-status="needs-you"]')
+    container.querySelector('header [data-agent-state="needs-you"]')
       ?.textContent,
   ).toContain("Review decision");
 
@@ -333,11 +333,11 @@ it("puts a member's blocked message queue above the conversation and routes edit
   pane.onDeleteQueuedMessage = vi.fn();
   render(pane);
   const notice = container.querySelector(
-    '[aria-label="Codex storage needs repair"]',
+    '[aria-label="Conversation couldn’t start"]',
   )!;
   const log = container.querySelector('[aria-label="Member work log"]')!;
   const queue = container.querySelector('[aria-label="Message queue"]')!;
-  const conversation = container.querySelector('[role="tabpanel"]')!;
+  const conversation = container.querySelector('[data-workbench-conversation] [role="tabpanel"]')!;
   expect(
     notice.compareDocumentPosition(log) & Node.DOCUMENT_POSITION_FOLLOWING,
   ).toBeTruthy();
@@ -394,11 +394,11 @@ it("keeps recovery, draft and the transcript mounted while member tabs change by
   setComposerDraft("chat", "Keep my member draft");
   render(pane);
   const draft = field();
-  const tabs = container.querySelectorAll<HTMLButtonElement>('[role="tab"]');
+  const tabs = container.querySelectorAll<HTMLButtonElement>('[aria-label="Member view"] [role="tab"]');
   const conversation =
-    container.querySelector<HTMLElement>('[role="tabpanel"]')!;
+    container.querySelector<HTMLElement>('[data-workbench-conversation] [role="tabpanel"]')!;
   const notice = container.querySelector(
-    '[aria-label="Codex storage needs repair"]',
+    '[aria-label="Conversation couldn’t start"]',
   );
   act(() =>
     tabs[0].dispatchEvent(
@@ -409,7 +409,7 @@ it("keeps recovery, draft and the transcript mounted while member tabs change by
   expect(document.activeElement).toBe(tabs[1]);
   expect(conversation.hidden).toBe(true);
   expect(
-    container.querySelector('[aria-label="Codex storage needs repair"]'),
+    container.querySelector('[aria-label="Conversation couldn’t start"]'),
   ).toBe(notice);
   expect(field()).toBe(draft);
   expect(field().value).toBe("Keep my member draft");
@@ -453,11 +453,11 @@ it("shows the assigned worker's storage recovery at the top and targets that wor
   pane.onCodexStorageRepair = vi.fn(async () => {});
   render(pane);
   const notice = container.querySelector(
-    '[aria-label="Codex storage needs repair"]',
+    '[aria-label="Conversation couldn’t start"]',
   )!;
   expect(notice.textContent).toContain("Assigned worker: Review the patch");
   const repair = [...notice.querySelectorAll<HTMLButtonElement>("button")].find(
-    (button) => button.textContent === "Repair",
+    (button) => button.textContent === "Resolve storage",
   )!;
   await act(async () => repair.click());
   expect(pane.onCodexStorageRepair).toHaveBeenCalledWith("worker");
@@ -484,7 +484,7 @@ it("labels the running member turn metrics separately from assignments", () => {
   render(pane);
   const header = container.querySelector("header")!;
   expect(header.textContent).toContain("Current conversation turn");
-  expect(header.textContent).toContain("1,240 in");
+  expect(header.textContent).toContain("1.2k in");
   expect(header.textContent).not.toContain("No conversation turn running");
   render({
     ...pane,
@@ -495,7 +495,7 @@ it("labels the running member turn metrics separately from assignments", () => {
     },
   });
   expect(container.querySelector("header")!.textContent).toContain(
-    "No conversation turn running",
+    "Last conversation turn",
   );
   expect(
     container.querySelector('header [data-agent-state="blocked"]'),
@@ -512,7 +512,7 @@ it("labels the running member turn metrics separately from assignments", () => {
     "Running tool",
   );
   expect(container.querySelector("header")!.textContent).toContain(
-    "No conversation turn running",
+    "Last conversation turn",
   );
   expect(
     container.querySelector("[data-session-composer]")!.textContent,

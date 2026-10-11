@@ -140,3 +140,23 @@ it("keeps team availability and unread replies together on the rail", () => {
   expect(row.getAttribute("title")).toContain("3 new replies");
   expect(row.querySelector("[data-mono-unread]")?.textContent).toBe("3");
 });
+
+it("shows a short waiting state with full project and downstream context on focus", () => {
+  const mono = createMono(["/projects/Browser Link"]);
+  const detail = "Reviewer could not launch because its isolated storage is unavailable";
+  render({ states: new Map([[mono.id, { status: "idle", teamWorking: 12,
+    liveState: { status: "waiting-on-member", reason: "dependency", waitingOn: "Reviewer", detail },
+  }]]) });
+  const row = container.querySelector<HTMLButtonElement>(`[data-mono-status="idle"] button`)!;
+  const state = row.querySelector('[data-mono-rail-state]')!;
+  expect(state.textContent).toBe("Waiting");
+  expect(state.className).not.toContain("truncate");
+  expect(row.title).toContain("Browser Link");
+  expect(row.title).toContain("12 working below");
+  expect(row.getAttribute("aria-label")).toContain(detail);
+  act(() => row.focus());
+  const tooltip = document.getElementById(row.getAttribute("aria-describedby")!);
+  expect(tooltip?.getAttribute("role")).toBe("tooltip");
+  expect(tooltip?.textContent).toContain(detail);
+  expect(tooltip?.textContent).toContain("12 working below");
+});

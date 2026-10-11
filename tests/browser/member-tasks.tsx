@@ -9,6 +9,7 @@ import type {
 import type { Mono } from "../../src/features/monos/model/mono";
 import { publishCardSessions } from "../../src/features/monos/model/monoCards";
 import "../../src/styles/index.css";
+import "../../src/features/monos/ui/workbench.css";
 
 const mode = new URLSearchParams(location.search).get("mode");
 document.documentElement.classList.toggle("theme-light", mode === "light");
@@ -91,7 +92,9 @@ createRoot(document.getElementById("root")!).render(
         hideTurnMetrics
       />
     </div>
-    <MemberWorkLog member={member} />
+    <div data-fixture-work className="shrink-0 overflow-y-auto" style={{ maxHeight: "min(30dvh, 256px)" }}>
+      <MemberWorkLog member={member} />
+    </div>
     <div className="mx-auto w-full max-w-4xl shrink-0 p-4">
       <textarea
         aria-label="Message Rowan"

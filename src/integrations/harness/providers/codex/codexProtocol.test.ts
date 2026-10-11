@@ -16,12 +16,16 @@ import { parseCodexModelList } from "./codexCatalog";
 
 it("maps explicit completed Codex compaction notifications without finishing the turn", () => {
   const scope = { threadId: "thread", turnId: "turn" };
-  expect(mapCodexNotification("thread/compacted", scope)).toEqual({ events: [{ type: "context.compacted" }] });
-  expect(mapCodexNotification("item/completed", { ...scope, item: { type: "contextCompaction", id: "compact" } }))
-    .toEqual({ events: [{ type: "context.compacted" }] });
-  expect(mapCodexNotification("item/started", { ...scope, item: { type: "contextCompaction", id: "compact" } }).events).toEqual([]);
-  expect(mapCodexNotification("thread/compacted", {}).events).toEqual([]);
-  expect(mapCodexNotification("item/completed", { item: { type: "contextCompaction", id: "compact" } }).events).toEqual([]);
+  const compacted = (method: string, rec: Record<string, unknown>) =>
+    mapCodexNotification(method, rec).events.filter(event => event.type === "context.compacted");
+  expect(compacted("thread/compacted", scope)).toEqual([{ type: "context.compacted" }]);
+  expect(compacted("item/completed", { ...scope, item: { type: "contextCompaction", id: "compact" } }))
+    .toEqual([{ type: "context.compacted" }]);
+  expect(compacted("item/started", { ...scope, item: { type: "contextCompaction", id: "compact" } })).toEqual([]);
+  expect(compacted("thread/compacted", {})).toEqual([]);
+  expect(compacted("item/completed", { item: { type: "contextCompaction", id: "compact" } })).toEqual([]);
+  expect(mapCodexNotification("item/started", { ...scope, item: { type: "contextCompaction", id: "compact" } }).events)
+    .toEqual([{ type: "turn.compaction", id: "compact", phase: "started" }]);
   expect(mapCodexNotification("warning", { message: "Compacted context" }).events).toEqual([{ type: "status", text: "Compacted context" }]);
 });
 
@@ -1038,6 +1042,8 @@ describe("mapCodexNotification thread/tokenUsage/updated", () => {
         cacheReadTokens: 30_000,
         outputTokens: 2_000,
         cacheHitPercent: 75,
+        modelCallId: "900000:880000:800000:20000",
+        providerTurnId: "turn1",
       },
     ]);
   });

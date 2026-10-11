@@ -4,11 +4,15 @@ import {
   listMonos,
   monoLook,
   monosSnapshot,
-  monoStatusLabel,
+  monoState,
+  monoLiveStatusLabel,
   monoTeamWorkingLabel,
   subscribeMonos,
 } from "../../monos/model/mono";
-import { memberAvailability, memberTasks, monoLiveState } from "../../monos/model/monoNavigation";
+import { memberTasks, monoLiveState } from "../../monos/model/monoNavigation";
+import { AgentStatusLabel } from "../../agents/ui/AgentStatusLabel";
+import { AgentDetailTooltip } from "../../agents/ui/AgentDetailTooltip";
+import { agentLiveStateTooltip } from "../../agents/model/agentLiveState";
 import type { Session } from "../../sessions/model/session";
 import { PixelMascot } from "../../projects/ui/PixelMascot";
 import { ChevronDown, ChevronRight } from "../../../shared/ui/icons";
@@ -110,6 +114,7 @@ export function ProjectManagerRow({
           )}
         </button>
       )}
+      <AgentDetailTooltip detail={live?.liveState && agentLiveStateTooltip(live.liveState)}>
       <button
         type="button"
         disabled={opening}
@@ -166,7 +171,7 @@ export function ProjectManagerRow({
         <span className="truncate">
           {look?.name ?? "Manager"}
         </span>
-        {live && <span role="status" className="ml-auto shrink-0 text-[10px] text-content/50">{monoStatusLabel(live)}{live.teamWorking ? ` · ${monoTeamWorkingLabel(live)}` : ""}{waiting.length > 1 ? ` (${waiting.length})` : ""}</span>}
+        {live && <span role="status" title={live.liveState?.detail} className="ml-auto shrink-0 text-[10px] text-content/50">{monoLiveStatusLabel(live)}{live.teamWorking ? ` · ${monoTeamWorkingLabel(live)}` : ""}{waiting.length > 1 ? ` (${waiting.length})` : ""}</span>}
         {label && !live && (
           <span
             role="status"
@@ -178,15 +183,21 @@ export function ProjectManagerRow({
           </span>
         )}
       </button>
+      </AgentDetailTooltip>
       {expanded !== false &&
         members.map((member) => {
           const look = monoLook(member);
           const tasks = memberTasks(runs, member.id);
           const task = tasks.find(task => ["queued", "running", "cancelling"].includes(task.status)) ?? tasks[0];
-          const state = sessions ? monoLiveState(listMonos(), runs, sessions, member.id) : { status: memberAvailability(tasks, approvalSessionIds, busySessionIds, member.sessionId) };
+          const ids = [member.sessionId, task?.sessionId];
+          const state = sessions ? monoLiveState(listMonos(), runs, sessions, member.id) : monoState({
+            blocks: ids.some(id => id && approvalSessionIds?.has(id)) ? [{ id: "approval", role: "approval", text: "", approval: { requestId: 0 } }] : [],
+            busy: ids.some(id => id && busySessionIds?.has(id)),
+          }, { task, tasks });
           const availability = state.status;
           const memberSelected = member.id === selectedMemberId;
           return (
+            <AgentDetailTooltip key={member.id} detail={state.liveState && agentLiveStateTooltip(state.liveState)}>
             <button
               type="button"
               key={member.id}
@@ -209,9 +220,10 @@ export function ProjectManagerRow({
               />
               <span className="min-w-0 truncate">{look.name}</span>
               <span role="status" className={`ml-auto shrink-0 text-[10px] ${availability === "needs-you" ? "text-amber-700 dark:text-amber-400" : availability === "working" ? "text-accent" : "text-content/40"}`}>
-                {monoStatusLabel(state)}
+                {state.liveState ? <AgentStatusLabel state={state.liveState} /> : monoLiveStatusLabel(state)}
               </span>
             </button>
+            </AgentDetailTooltip>
           );
         })}
       {error && (

@@ -5,7 +5,10 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import { formatLiveElapsed } from "../../sessions/model/liveAgents";
+import { selectAgentLiveState } from "../../agents/model/agentLiveState";
+import { selectTaskMetrics } from "../../agents/model/agentMetrics";
+import { TaskMetricsLine, taskMetricsDetail } from "../../agents/ui/TaskMetricsLine";
+import { AgentDetailTooltip } from "../../agents/ui/AgentDetailTooltip";
 import { listMonos, monoLook, monoState } from "../model/mono";
 import { ArtifactText } from "../../artifacts/ui/ArtifactReference";
 import {
@@ -165,10 +168,6 @@ export function MonoTeamActivity({
     const dispatch = run.dispatches?.find(
       (d) => d.id === (task.activeDispatchId ?? task.lastDispatchId),
     );
-    const turn = session?.blocks.find(
-      (block) => block.role === "user" && block.startedAt !== undefined,
-    );
-    const startedAt = dispatch?.startedAt ?? turn?.startedAt;
     const ready = section === "Ready to merge";
     const title = activityTaskTitle(
       task,
@@ -198,6 +197,8 @@ export function MonoTeamActivity({
             task.id,
           )
         : openCardSession(task.sessionId);
+    const metrics = selectTaskMetrics(task, run.dispatches ?? [], sessions, now);
+    const state = selectAgentLiveState(session, { task, tasks: run.tasks, runStatus: run.status });
     return (
       <article
         key={task.id}
@@ -224,6 +225,7 @@ export function MonoTeamActivity({
           >
             {title}
           </span>
+          <AgentDetailTooltip detail={taskMetricsDetail(metrics, state)}>
           <button
             type="button"
             onClick={open}
@@ -232,6 +234,7 @@ export function MonoTeamActivity({
           >
             Open
           </button>
+          </AgentDetailTooltip>
         </div>
         <div className="mt-1 flex min-w-0 items-center gap-2 text-content/60">
           <span title={look.name} className="max-w-24 truncate">
@@ -252,18 +255,13 @@ export function MonoTeamActivity({
               monoId={task.memberId ?? run.ownerMonoId}
             />
           </p>
-          {startedAt !== undefined && (
-            <span className="shrink-0">
-              {formatLiveElapsed(
-                startedAt,
-                task.status === "running"
-                  ? now
-                  : (dispatch?.updatedAt ??
-                      startedAt + (turn?.durationMs ?? 0)),
-              )}
-            </span>
-          )}
         </div>
+        <TaskMetricsLine
+          metrics={metrics}
+          state={state}
+          startedAt={dispatch?.turnStartedAt ?? dispatch?.startedAt}
+          endedAt={dispatch?.finishedAt ?? (!["running", "queued", "cancelling"].includes(task.status) ? dispatch?.updatedAt : undefined)}
+        />
         {entry.decisions.map(decision)}
       </article>
     );

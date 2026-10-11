@@ -10,6 +10,9 @@ import { Popover, type PopoverAnchor } from "../../shared/ui/Popover";
 import { Shimmer } from "../../shared/ui/Shimmer";
 import { useAnimatedReorder } from "../../shared/hooks/useAnimatedReorder";
 import { MonoRailMascot } from "../../features/monos/ui/MonoRailMascot";
+import { AgentStatusLabel } from "../../features/agents/ui/AgentStatusLabel";
+import { AgentDetailTooltip } from "../../features/agents/ui/AgentDetailTooltip";
+import { agentLiveStateTooltip } from "../../features/agents/model/agentLiveState";
 import { MonoIntroPopover } from "../../features/monos/ui/MonoIntro";
 import { ProjectBackgroundDialog } from "../../features/projects/ui/ProjectBackgroundDialog";
 import { monoBackgroundKey } from "../../features/monos/model/monoBackground";
@@ -23,7 +26,7 @@ import {
   findMono,
   listMonos,
   railMonos,
-  monoStatusLabel,
+  monoLiveStatusLabel,
   monoTeamWorkingLabel,
   monoIntroDismissed,
   nextMonoLook,
@@ -144,7 +147,7 @@ export function MonoRailSection({
           const status =
             state.status === "idle"
               ? undefined
-              : (state.activity ?? monoStatusLabel(state));
+              : (state.activity ?? monoLiveStatusLabel(state));
           return (
             <div
               key={mono.id}
@@ -182,12 +185,13 @@ export function MonoRailSection({
                 });
               }}
             >
+              <AgentDetailTooltip detail={state.liveState && agentLiveStateTooltip(state.liveState)}>
               <button
                 type="button"
-                title={[look.name, projects, monoStatusLabel(state), status, monoTeamWorkingLabel(state), unseen ? unreadLabel(unseen) : undefined].filter(Boolean).join("\n")}
+                title={[look.name, projects, monoLiveStatusLabel(state), state.liveState?.detail ?? status, monoTeamWorkingLabel(state), unseen ? unreadLabel(unseen) : undefined].filter(Boolean).join("\n")}
                 aria-label={[
                   look.name,
-                  monoStatusLabel(state),
+                  monoLiveStatusLabel(state),
                   monoTeamWorkingLabel(state),
                   unseen ? unreadLabel(unseen) : undefined,
                 ]
@@ -214,9 +218,10 @@ export function MonoRailSection({
                     {look.name}
                   </span>
                 )}
-                {state.status === "needs-you" || state.teamWorking ? (
+                {state.liveState || state.status === "needs-you" || state.teamWorking ? (
                   <span className={`min-w-0 truncate text-[10px] ${state.status === "needs-you" ? "text-accent" : "text-content/50"}`}>
-                    {[state.status === "needs-you" ? monoStatusLabel(state) : undefined, monoTeamWorkingLabel(state)].filter(Boolean).join(" · ")}
+                    {state.liveState && !state.attentionLocation ? <AgentStatusLabel state={state.liveState} /> : state.status === "needs-you" ? monoLiveStatusLabel(state) : null}
+                    {state.teamWorking ? ` · ${monoTeamWorkingLabel(state)}` : null}
                   </span>
                 ) : null}
                 {unseen ? (
@@ -229,6 +234,7 @@ export function MonoRailSection({
                   </span>
                 ) : null}
               </button>
+              </AgentDetailTooltip>
               <button
                 type="button"
                 data-no-drag

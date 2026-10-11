@@ -1431,7 +1431,7 @@ it("shows saved and live subagents under their lead inside the hover/focus workt
     },
   ];
   await renderWorkers();
-  expect(card.textContent).toContain("Needs input");
+  expect(card.textContent).toContain("Needs you");
   const details = [...card.querySelectorAll("button")].find(
     (item) => item.textContent === "See details",
   )!;

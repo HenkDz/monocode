@@ -12,11 +12,13 @@ import {
 } from "../../../shared/ui/icons";
 import { isImeComposition } from "../../../shared/lib/keyboard";
 import type { MessageQueueStatus, QueuedMessage } from "../model/session";
+import type { AgentLiveState } from "../../agents/model/agentLiveState";
+import { AgentStatusLabel } from "../../agents/ui/AgentStatusLabel";
 
 export function MessageQueue({
   messages,
   status,
-  storageBlocked = false,
+  liveState,
   onDelete,
   onEdit,
   onEditingChange,
@@ -27,7 +29,7 @@ export function MessageQueue({
 }: {
   messages: QueuedMessage[];
   status?: MessageQueueStatus;
-  storageBlocked?: boolean;
+  liveState?: AgentLiveState;
   onDelete?: (messageId: string) => void;
   onEdit?: (messageId: string, text: string) => void;
   onEditingChange?: (messageId?: string) => void;
@@ -52,6 +54,7 @@ export function MessageQueue({
   if (messages.length === 0) return null;
   const paused = status === "paused";
   const failed = messages.some((message) => message.error);
+  const storageHeld = liveState?.reason === "storage" || liveState?.reason === "preparing-storage";
 
   const startEdit = (message: QueuedMessage) => {
     setEditingId(message.id);
@@ -76,9 +79,9 @@ export function MessageQueue({
         className="relative z-0 rounded-t-[10px] border border-b-0 border-content/10 bg-content/3 px-2 py-1"
         data-message-queue-card
       >
-        {storageBlocked ? (
+        {storageHeld ? (
           <div role="status" className="py-1 text-[11px] text-content/50">
-            Waiting for storage repair
+            <AgentStatusLabel state={liveState!} />
           </div>
         ) : paused ? (
           <div className="flex h-7 items-center gap-2 border-b border-stroke text-[12px]">
@@ -100,7 +103,7 @@ export function MessageQueue({
             </button>
           </div>
         ) : null}
-        {variant === "messages" && !paused && !storageBlocked ? (
+        {variant === "messages" && !paused && !storageHeld ? (
           <div role="status" className="py-1 text-[11px] text-content/50">
             {sendingId ? "Sending…" : "Waiting to send"}
           </div>
@@ -175,7 +178,7 @@ export function MessageQueue({
                       </p>
                     ) : null}
                   </div>
-                  {onSteer && !storageBlocked && !message.monoSessionCompletion ? (
+                  {onSteer && !storageHeld && !message.monoSessionCompletion ? (
                     <button
                       type="button"
                       disabled={sending}

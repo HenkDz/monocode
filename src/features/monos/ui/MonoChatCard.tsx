@@ -16,6 +16,9 @@ import {
 import { usePrStatusCache } from "../../source-control/hooks/usePrStatus";
 import { pathKey } from "../../../shared/lib/paths";
 import { PixelMascot } from "../../projects/ui/PixelMascot";
+import { AgentStatusLabel } from "../../agents/ui/AgentStatusLabel";
+import { AgentDetailTooltip } from "../../agents/ui/AgentDetailTooltip";
+import { agentLiveStateTooltip } from "../../agents/model/agentLiveState";
 
 const button =
   "rounded px-2 py-1 text-xs hover:bg-content/10 focus-visible:outline-accent";
@@ -150,15 +153,17 @@ export function MonoChatCard({
   if (card.type === "session") {
     const session = cardSession(card.sessionId);
     return (
+      <AgentDetailTooltip detail={session?.liveState && agentLiveStateTooltip(session.liveState)}>
       <button
         type="button"
         className={`${button} block w-full border border-content/15 p-3 text-left`}
         onClick={() => openCardSession(card.sessionId)}
       >
         {session?.title ?? "Session"} ·{" "}
-        {session?.storageBlocked ? "Blocked · storage" : session?.needsInput ? "Needs you" : session?.busy ? "Running" : "Idle"}
+        {session?.liveState ? <AgentStatusLabel state={session.liveState} /> : session?.needsInput ? "Needs you" : session?.busy ? "Running" : "Idle"}
         {card.note && <p>{card.note}</p>}
       </button>
+      </AgentDetailTooltip>
     );
   }
   // PR blocks join their turn's one derived reference summary.

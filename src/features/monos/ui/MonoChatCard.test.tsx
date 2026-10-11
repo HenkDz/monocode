@@ -21,14 +21,27 @@ vi.mock("../../orchestration/ui/ProjectManagerReview", () => ({
   ReadyCard: () => null,
 }));
 
-it("labels a storage-blocked session card before idle or needs-input", async () => {
+it("uses canonical live state before legacy session flags", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const hydrate = vi.spyOn(monoManagerGoals, "hydrate").mockResolvedValue({ version: 1, goals: [], receipts: {} });
-  vi.mocked(cardSession).mockReturnValue({ id: "chat", title: "Reviewer", harness: "codex", busy: false, needsInput: true, storageBlocked: true });
+  const session = { id: "chat", title: "Reviewer", harness: "codex", busy: false, needsInput: true };
+  vi.mocked(cardSession).mockReturnValue({ ...session, liveState: { status: "blocked", reason: "storage", detail: "Repair AGENTS.md" } });
   const host = document.createElement("div"), root = createRoot(host);
   try {
     await act(async () => root.render(<MonoChatCard monoId="reviewer" blockId="card" card={{ type: "session", sessionId: "chat" }} />));
-    expect(host.textContent).toBe("Reviewer · Blocked · storage");
+    expect(host.querySelector("button")?.textContent).toBe("Reviewer · Blocked · storage");
+    vi.mocked(cardSession).mockReturnValue({ ...session, liveState: { status: "running-tool", detail: "Inspecting changes" } });
+    await act(async () => root.render(<MonoChatCard monoId="reviewer" blockId="card" card={{ type: "session", sessionId: "chat" }} />));
+    expect(host.querySelector("button")?.textContent).toBe("Reviewer · Running tool");
+    vi.mocked(cardSession).mockReturnValue(session);
+    await act(async () => root.render(<MonoChatCard monoId="reviewer" blockId="card" card={{ type: "session", sessionId: "chat" }} />));
+    expect(host.querySelector("button")?.textContent).toBe("Reviewer · Needs you");
+    vi.mocked(cardSession).mockReturnValue({ ...session, needsInput: false, busy: true });
+    await act(async () => root.render(<MonoChatCard monoId="reviewer" blockId="card" card={{ type: "session", sessionId: "chat" }} />));
+    expect(host.querySelector("button")?.textContent).toBe("Reviewer · Running");
+    vi.mocked(cardSession).mockReturnValue({ ...session, needsInput: false });
+    await act(async () => root.render(<MonoChatCard monoId="reviewer" blockId="card" card={{ type: "session", sessionId: "chat" }} />));
+    expect(host.querySelector("button")?.textContent).toBe("Reviewer · Idle");
   } finally {
     await act(async () => root.unmount());
     vi.mocked(cardSession).mockReset();

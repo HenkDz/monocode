@@ -30,6 +30,10 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { OrgArtifactLinks } from "../../artifacts/ui/OrgArtifactLinks";
 import { Modal } from "../../../shared/ui/Modal";
 import { ChevronDown } from "../../../shared/ui/icons";
+import { selectAgentLiveState } from "../../agents/model/agentLiveState";
+import { TaskMetricsLine, taskMetricsDetail } from "../../agents/ui/TaskMetricsLine";
+import { AgentDetailTooltip } from "../../agents/ui/AgentDetailTooltip";
+import { selectTaskMetrics } from "../../agents/model/agentMetrics";
 
 const tones = {
   running:
@@ -123,6 +127,8 @@ export function MemberWorkLog({ member }: { member: Mono }) {
       task.activeDispatchId ?? task.lastDispatchId ?? "",
     );
     const at = dispatch?.updatedAt ?? dispatch?.startedAt ?? task.prReadyAt;
+    const metrics = cardSession(task.sessionId)?.taskMetrics?.[task.id] ?? selectTaskMetrics(task, [...dispatches.values()], []);
+    const state = cardSession(task.sessionId)?.liveState ?? selectAgentLiveState(undefined, { task });
     const prNumber = task.prUrl?.match(/\/pull\/(\d+)/)?.[1];
     const verdict =
       task.status === "completed" &&
@@ -198,6 +204,7 @@ export function MemberWorkLog({ member }: { member: Mono }) {
               </time>
             )}
           </span>
+          <AgentDetailTooltip detail={taskMetricsDetail(metrics, state)}>
           <button
             type="button"
             aria-haspopup="dialog"
@@ -206,8 +213,15 @@ export function MemberWorkLog({ member }: { member: Mono }) {
           >
             Open
           </button>
+          </AgentDetailTooltip>
         </div>
         <div className="px-3 pb-2">
+          <TaskMetricsLine
+            metrics={metrics}
+            state={state}
+            startedAt={dispatch?.turnStartedAt ?? dispatch?.startedAt}
+            endedAt={dispatch?.finishedAt ?? (!["running", "queued", "cancelling"].includes(task.status) ? dispatch?.updatedAt : undefined)}
+          />
           <OrgArtifactLinks monoId={member.id} links={links} />
         </div>
       </article>

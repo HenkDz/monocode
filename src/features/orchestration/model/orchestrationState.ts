@@ -1,6 +1,6 @@
 import { pathKey } from "../../../shared/lib/paths";
 import type { OrchestrationChoice } from "./orchestrationPlan";
-import type { HarnessId } from "../../sessions/model/session";
+import type { HarnessId, TurnMetrics, TurnModel } from "../../sessions/model/session";
 import type { EffortSource } from "../../sessions/model/models";
 
 export type TaskStatus =
@@ -56,6 +56,20 @@ export type OrchestrationDispatch = {
   stage: DispatchStage;
   startedAt: number;
   updatedAt: number;
+  /** Epoch ms; startedAt retains its legacy dispatch-acceptance meaning. */
+  dispatchedAt?: number;
+  turnStartedAt?: number;
+  firstTokenAt?: number;
+  finishedAt?: number;
+  reportedAt?: number;
+  turnBlockId?: string;
+  reportedTurnBlockId?: string;
+  /** Retain observed accounting when a worker conversation is not loaded. */
+  turnMetrics?: TurnMetrics;
+  turnModel?: TurnModel;
+  /** Convention of the raw snapshot, independent of later task/provider changes. */
+  inputTokenConvention?: "includes-cache-read" | "excludes-cache";
+  durationMs?: number;
   result?: string;
   error?: string;
   cleanupError?: string;
@@ -86,6 +100,7 @@ export type OrchestrationTask = {
   origin?: "user" | "manager";
   id: string;
   monoGoalId?: string;
+  managerTurnBlockId?: string;
   memberId?: string;
   memberName?: string;
   memberMascot?: string;

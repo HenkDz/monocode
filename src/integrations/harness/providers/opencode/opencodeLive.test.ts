@@ -365,6 +365,7 @@ it("renders a v2 turn streamed as session step, text, reasoning, and tool events
     }),
   );
   expect(events).toContainEqual(expect.objectContaining({ type: "context" }));
+  expect(events).toContainEqual(expect.objectContaining({ type: "turn.metrics", modelCalls: 2, inputTokens: 100, outputTokens: 7, cacheReadTokens: 50 }));
   expect(events).toContainEqual({ type: "message.completed" });
 });
 
@@ -697,7 +698,8 @@ describe("OpenCode 2.x completion correlation", () => {
   it("waits for compaction to end before sending the next prompt", async () => {
     admittedIds[COMPACT] = ["msg_compact"];
     admittedIds[PROMPT] = ["msg_after"];
-    const compaction = compact([]);
+    const compactionEvents: HarnessEvent[] = [];
+    const compaction = compact(compactionEvents);
     const compacted = settled(compaction);
     await waitFor(() => calls(COMPACT) === 1, "compact");
     await drain();
@@ -713,6 +715,7 @@ describe("OpenCode 2.x completion correlation", () => {
 
     v2("session.compaction.ended", { reason: "manual", text: "summary" });
     await compaction;
+    expect(compactionEvents).toContainEqual({ type: "turn.compaction", phase: "started", id: "msg_compact" });
     await waitFor(() => calls(PROMPT) === 1, "prompt after compaction");
     await drain();
     // The compaction's execution goes on to run the queued prompt.

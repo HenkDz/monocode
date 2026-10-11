@@ -2789,3 +2789,101 @@ it("resumes a legacy project Manager while a user is working in the project chec
   expect(f.manager.run("lead")).toMatchObject({ status: "active", projectManager: true });
   expect(f.manager.submissionError("user")).toBeNull();
 });
+
+it("records delegation boundaries and observed Manager delivery on the exact worker turn", async () => {
+  const f = setup();
+  let now = 100;
+  vi.spyOn(Date, "now").mockImplementation(() => now);
+  f.lead.blocks.push({ id: "manager-turn", role: "user", text: "Delegate", startedAt: 90 });
+  f.lead.blocks.push({ id: "queued-manager", role: "user", text: "Next goal", startedAt: 95 });
+  f.lead.queuedMessages = [{ id: "queued", blockId: "queued-manager", text: "Next goal", attachments: [] }];
+  await f.start();
+  await f.delegate(["src"], { monoGoalId: "goal" });
+  await vi.waitFor(() => expect(f.manager.run("lead")!.dispatches?.[0].stage).toBe("turn_submitted"));
+  const task = f.tasks()[0];
+  const worker = f.sessions.find(session => session.id === task.sessionId)!;
+  expect(task).toMatchObject({ monoGoalId: "goal", managerTurnBlockId: "manager-turn" });
+  f.lead.queuedMessages = undefined;
+  expect(f.manager.run("lead")!.dispatches![0]).toMatchObject({ dispatchedAt: 100 });
+  worker.blocks.push({ id: "worker-turn", role: "user", text: "Task", startedAt: 110,
+    turnModel: { harness: "claude", id: "claude-test", name: "Claude test" } });
+  now = 120;
+  f.manager.observe(worker.id, { type: "turn.started", providerTurnId: "provider-turn" });
+  now = 130;
+  f.manager.observe(worker.id, { type: "reasoning.delta", text: "Thinking" });
+  await vi.waitFor(() => expect(f.saved.get("lead")!.dispatches![0].firstTokenAt).toBe(130));
+  now = 140;
+  f.manager.observe(worker.id, { type: "message.delta", text: "Done" });
+  expect(f.manager.run("lead")!.dispatches![0].firstTokenAt).toBe(130);
+  worker.blocks[0] = { ...worker.blocks[0], durationMs: 40,
+    turnMetrics: { firstTokenAt: 130, endedAt: 150, inputTokens: 20, outputTokens: 5, modelCalls: 2, compactions: [] } };
+  now = 150;
+  f.completions.get(worker.id)!({ status: "completed", text: "Done" });
+  await vi.waitFor(() => expect(f.saved.get("lead")!.dispatches![0].finishedAt).toBe(150));
+  expect(f.saved.get("lead")!.dispatches![0]).toMatchObject({ turnBlockId: "worker-turn", turnStartedAt: 110,
+    firstTokenAt: 130, durationMs: 40, turnModel: { harness: "claude", id: "claude-test", name: "Claude test" },
+    inputTokenConvention: "excludes-cache", turnMetrics: { inputTokens: 20, outputTokens: 5 } });
+  expect(f.manager.run("lead")!.dispatches![0].reportedAt).toBeUndefined();
+  f.lead.busy = false;
+  f.manager.sync();
+  await vi.waitFor(() => expect(f.completions.has(f.lead.id)).toBe(true));
+  f.lead.blocks.push({ id: "manager-report", role: "user", text: "Worker result", startedAt: 160 });
+  f.lead.blocks.push({ id: "future-manager", role: "user", text: "Future goal" });
+  now = 170;
+  f.manager.observe(f.lead.id, { type: "turn.started", providerTurnId: "manager-provider-turn" });
+  await vi.waitFor(() => expect(f.saved.get("lead")!.dispatches![0].reportedAt).toBe(170));
+  expect(f.saved.get("lead")!.dispatches![0].reportedTurnBlockId).toBe("manager-report");
+});
+
+it("retains cancelled dispatch metrics without reporting an undelivered result", async () => {
+  const f = setup();
+  await f.start();
+  await f.delegate(["src"]);
+  await vi.waitFor(() => expect(f.manager.run("lead")!.dispatches?.[0].stage).toBe("turn_submitted"));
+  const task = f.tasks()[0];
+  const dispatch = f.manager.run("lead")!.dispatches![0];
+  const worker = f.sessions.find(session => session.id === task.sessionId)!;
+  worker.blocks.push({ id: "worker-turn", role: "user", text: "Task", startedAt: dispatch.startedAt + 1,
+    turnModel: { harness: "codex", id: "codex-test", name: "Codex test" },
+    durationMs: 30, turnMetrics: { inputTokens: 10, outputTokens: 5 } });
+  await f.manager.cancelTask("lead", task.id);
+  expect(f.saved.get("lead")!.dispatches![0]).toMatchObject({ state: "cancelled", turnBlockId: "worker-turn", durationMs: 30,
+    turnModel: { harness: "codex", id: "codex-test", name: "Codex test" }, inputTokenConvention: "includes-cache-read",
+    turnMetrics: { inputTokens: 10, outputTokens: 5 } });
+  expect(f.saved.get("lead")!.dispatches![0].finishedAt).toBeDefined();
+  expect(f.saved.get("lead")!.dispatches![0].reportedAt).toBeUndefined();
+});
+
+it("retains a settled task while the first-token snapshot is still being saved", async () => {
+  const f = setup();
+  await f.start();
+  await f.delegate(["src"]);
+  await vi.waitFor(() => expect(f.saved.get("lead")!.dispatches?.[0].stage).toBe("turn_submitted"));
+  const task = f.tasks()[0];
+  let release!: () => void;
+  f.store.save.mockImplementationOnce(async () => new Promise<void>(resolve => { release = resolve; }));
+  const savesBefore = f.store.save.mock.calls.length;
+  f.manager.observe(task.sessionId, { type: "message.delta", text: "First" });
+  await vi.waitFor(() => expect(release).toBeDefined());
+  f.manager.observe(task.sessionId, { type: "message.delta", text: "More" });
+  expect(f.store.save).toHaveBeenCalledTimes(savesBefore + 1);
+  f.completions.get(task.sessionId)!({ status: "completed", text: "Done" });
+  await vi.waitFor(() => expect(f.tasks()[0].status).toBe("completed"));
+  release();
+  await vi.waitFor(() => expect(f.saved.get("lead")!.tasks[0].status).toBe("completed"));
+  expect(f.saved.get("lead")!.dispatches![0]).toMatchObject({ state: "completed" });
+  expect(f.saved.get("lead")!.dispatches![0].firstTokenAt).toBeDefined();
+});
+
+it("inherits a review assignment's goal from its exact target task", async () => {
+  const f = setup();
+  f.host.reviewerFor = () => ({ id: "reviewer", name: "Reviewer" });
+  await f.start();
+  await f.delegate(["src"], { monoGoalId: "goal", member: "builder", memberName: "Builder", memberMascot: "B", memberColor: "blue" });
+  await vi.waitFor(() => expect(f.completions.has(f.tasks()[0].sessionId)).toBe(true));
+  const target = f.tasks()[0];
+  f.completions.get(target.sessionId)!({ status: "completed", text: "Done" });
+  await vi.waitFor(() => expect(f.tasks()[0].status).toBe("completed"));
+  await f.delegate(["src"], { reviewTaskId: target.id, member: "reviewer", memberName: "Reviewer", memberMascot: "R", memberColor: "green" });
+  expect(f.tasks()[1]).toMatchObject({ monoGoalId: "goal", reviewOf: { taskId: target.id, dispatchId: f.tasks()[0].lastDispatchId } });
+});

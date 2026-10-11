@@ -855,6 +855,10 @@ async function handleEvent(
     if (!(await isDescendantSession(live, payloadSessionId))) return;
     if (live.muteUpdates || live.turnDone !== turn) return;
   } else if (live.client.generation === "v2") {
+    if (type === "session.compaction.started" || type === "session.compaction.ended" || type === "session.compaction.failed") {
+      live.onEvent({ type: "turn.compaction", phase: type === "session.compaction.started" ? "started" : "completed",
+        ...(stringField(properties, "inputID") ? { id: stringField(properties, "inputID") } : {}) });
+    }
     live.inbox.observe(type, properties);
     if (gateAwaitedInbox(live, type, properties)) return;
   }
@@ -1090,6 +1094,7 @@ function emitContext(live: Live, info: Record<string, unknown> | null): void {
   const used = contextUsedFromMessageInfo(info);
   const metrics = turnMetricsFromMessageInfo(info);
   const messageId = stringField(info, "id");
+  if (messageId && !live.turnMetricsByMessageId.has(messageId)) live.turnMetricsByMessageId.set(messageId, {});
   if (metrics && messageId) live.turnMetricsByMessageId.set(messageId, metrics);
   if (metrics && !messageId) {
     live.onEvent({ type: "turn.metrics", ...metrics });
@@ -1097,14 +1102,12 @@ function emitContext(live: Live, info: Record<string, unknown> | null): void {
   const aggregate = [
     ...live.turnMetricsByMessageId.values(),
   ].reduce<TurnMetrics>(
-    (total, current) => ({
-      inputTokens: (total.inputTokens ?? 0) + (current.inputTokens ?? 0),
-      outputTokens: (total.outputTokens ?? 0) + (current.outputTokens ?? 0),
-      cacheReadTokens:
-        (total.cacheReadTokens ?? 0) + (current.cacheReadTokens ?? 0),
-      cacheWriteTokens:
-        (total.cacheWriteTokens ?? 0) + (current.cacheWriteTokens ?? 0),
-    }),
+    (total, current) => {
+      for (const key of ["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens"] as const) {
+        if (current[key] != null) total[key] = (total[key] ?? 0) + current[key];
+      }
+      return total;
+    },
     {},
   );
   const aggregateInput =
@@ -1119,7 +1122,9 @@ function emitContext(live: Live, info: Record<string, unknown> | null): void {
       aggregateInput > 0
         ? ((aggregate.cacheReadTokens ?? 0) / aggregateInput) * 100
         : undefined;
-    live.onEvent({ type: "turn.metrics", ...aggregate });
+    live.onEvent({ type: "turn.metrics", ...aggregate, modelCalls: live.turnMetricsByMessageId.size });
+  } else if (messageId) {
+    live.onEvent({ type: "turn.metrics", modelCalls: live.turnMetricsByMessageId.size });
   }
   if (used === undefined) return;
   const providerID = stringField(info, "providerID");

@@ -8,7 +8,7 @@ vi.mock("@tauri-apps/api/core", async original => ({
     executable: "C:/preview/monocode-org.exe", tempDir: "C:/Temp", actions: ["goals.assign"],
   } : undefined),
 }));
-import { applyHarnessEvent } from "../../core/apply";
+import { appendUser, applyHarnessEvent } from "../../core/apply";
 import { newSession } from "../../../../features/sessions/model/session";
 import {
   foldableWork,
@@ -2079,6 +2079,20 @@ describe("claude manual compaction", () => {
     await turn;
   });
 
+  it("counts distinct parent assistant messages alongside the provider turn total", async () => {
+    const { events, turn } = await startTurn("claude-metrics");
+    for (const id of ["call-1", "call-1", "call-2"]) {
+      emit({ type: "assistant", session_id: "sess_1", message: { id, content: [] } });
+    }
+    emit({ type: "assistant", parent_tool_use_id: "child", session_id: "sess_1",
+      message: { id: "child-call", content: [] } });
+    emit({ type: "result", subtype: "success", session_id: "sess_1",
+      usage: { input_tokens: 500, output_tokens: 40, cache_read_input_tokens: 200 } });
+    await turn;
+    const session = events.reduce(applyHarnessEvent, appendUser(newSession("claude", "/fixture"), "Fixture"));
+    expect(session.blocks[0].turnMetrics).toMatchObject({ modelCalls: 2, inputTokens: 500, outputTokens: 40, cacheReadTokens: 200 });
+  });
+
   it("runs the built-in command and requires a compact boundary", async () => {
     const { turn } = await startTurn("s1");
     emit({ type: "result", subtype: "success", session_id: "sess_1" });
@@ -2106,6 +2120,7 @@ describe("claude manual compaction", () => {
       session_id: "sess_1",
       message: { content: [{ type: "text", text: "not transcript output" }] },
     });
+    emit({ type: "system", subtype: "status", status: "compacting", session_id: "sess_1" });
     emit({
       type: "system",
       subtype: "compact_boundary",
@@ -2120,5 +2135,8 @@ describe("claude manual compaction", () => {
     });
     expect(events).toContainEqual({ type: "context.compacted" });
     expect(events.some((event) => event.type === "message.delta")).toBe(false);
+    expect(events.filter(event => event.type === "turn.compaction")).toEqual([
+      { type: "turn.compaction", phase: "started" }, { type: "turn.compaction", phase: "completed" },
+    ]);
   });
 });

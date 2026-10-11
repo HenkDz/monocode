@@ -121,6 +121,34 @@ describe("turn duration", () => {
     expect(session.blocks[0]?.durationMs).toBe(4_000);
   });
 
+  it("ends an accepted outbox turn while excluding steers, drafts and pending bubbles", () => {
+    now = 1_000;
+    let session = enqueueMonoMessage(newSession("codex", "/tmp"), {
+      id: "accepted", text: "Queued turn", attachments: [],
+    });
+    now = 2_000;
+    session = acknowledgeMonoMessage(session, session.queuedMessages![0], {
+      mode: "new-turn",
+    });
+    session = appendSteerUser(session, "Follow up");
+    session = enqueueMonoMessage(session, {
+      id: "pending", text: "Next turn", attachments: [],
+    });
+    session.blocks = [
+      ...session.blocks,
+      { id: "draft", role: "user", text: "Draft", draft: true, startedAt: 3_000 },
+    ];
+    session = stopStreaming(session, 4_000);
+    expect(session.blocks[0]).toMatchObject({
+      sentAt: 1_000,
+      startedAt: 2_000,
+      durationMs: 2_000,
+      turnMetrics: { endedAt: 4_000 },
+    });
+    expect(session.blocks.slice(1).every(block => block.durationMs == null && !block.turnMetrics)).toBe(true);
+    expect(session.queuedMessages).toHaveLength(1);
+  });
+
   it("records duration when the turn errors", () => {
     now = 1_000;
     let session = appendUser(newSession("cursor", "/tmp"), "hi");

@@ -1,4 +1,6 @@
 import { sessionConversationPage } from "../features/agent-app/model/sessionConversation";
+import { selectTaskMetrics } from "../features/agents/model/agentMetrics";
+import { captureTurnEvent, isFirstTokenEvent } from "../features/agents/model/turnMetrics";
 import {
   adoptManagerMono,
   dedicatedMono,
@@ -8521,6 +8523,10 @@ function Workspace({
           if (!orchestrator.forSession(sessionId))
             trackSessionEdits(sessionId, workCwd, event);
           const routed = routePlanEvent(event);
+          if (!routed && isFirstTokenEvent(event))
+            setSessions((prev) => prev.map((session) =>
+              session.id === sessionId ? captureTurnEvent(session, event) : session,
+            ));
           if (routed) enqueueHarnessEvent(sessionId, routed);
         };
         const routeTurnEvent = (event: HarnessEvent) => {
@@ -13298,16 +13304,37 @@ function Workspace({
   );
 
   useEffect(() => {
+    const taskMetrics = new Map<string, Record<string, ReturnType<typeof selectTaskMetrics>>>();
+    for (const run of orchestrationRuns) {
+      for (const task of run.tasks) {
+        const metrics = taskMetrics.get(task.sessionId) ?? {};
+        metrics[task.id] = selectTaskMetrics(task, run.dispatches ?? [], sessions);
+        taskMetrics.set(task.sessionId, metrics);
+      }
+    }
     publishCardSessions(
-      sessions.map((session) => ({
-        id: session.id,
-        title: session.title,
-        harness: session.harness,
-        busy: !!session.busy,
-        needsInput: monoState(session).status === "needs-you",
-        storageBlocked: !!session.codexStorageError,
-        runtimeMode: session.runtimeMode,
-      })),
+      sessions.map((session) => {
+        const run = orchestrator.forSession(session.id);
+        const mono = monoForSession(session.id);
+        const state = mono && mono.archivedAt == null
+          ? monoLiveState(listMonos(), orchestrationRuns, sessions, mono.id)
+          : monoState(session, {
+            task: run?.tasks.find((task) => task.sessionId === session.id),
+            tasks: run?.tasks,
+            runStatus: run?.status,
+            pauseReason: run?.lastPauseReason,
+          });
+        return {
+          id: session.id,
+          title: session.title,
+          harness: session.harness,
+          busy: !!session.busy,
+          needsInput: state.status === "needs-you",
+          liveState: state.liveState,
+          taskMetrics: taskMetrics.get(session.id),
+          runtimeMode: session.runtimeMode,
+        };
+      }),
       (id) => {
         id = orchestrator.ownerSession(id);
         const session = sessionsRef.current.find(
@@ -13320,7 +13347,7 @@ function Workspace({
         else void onSelectHistorySession(id);
       },
     );
-  }, [sessions, onOpenProjectManager, onSelectHistorySession, onOpenMono]);
+  }, [sessions, orchestrationRuns, onOpenProjectManager, onSelectHistorySession, onOpenMono]);
   useEffect(() => {
     const reply = (event: Event) => {
       const { monoId, text } = (

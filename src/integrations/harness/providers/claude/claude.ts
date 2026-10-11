@@ -753,7 +753,13 @@ function handleLine(sessionId: string, live: Live, line: string): void {
     return;
   }
   if (type === "system") {
-    if (compactBoundary) live.onEvent({ type: "context.compacted" });
+    if (compactBoundary) {
+      live.onEvent({ type: "turn.compaction", phase: "completed" });
+      live.onEvent({ type: "context.compacted" });
+    }
+    if (stringField(rec, "subtype") === "status" && stringField(rec, "status") === "compacting") {
+      live.onEvent({ type: "turn.compaction", phase: "started" });
+    }
     const text = statusTextFromSystem(rec);
     if (text) {
       if ((stringField(rec, "subtype") ?? "").startsWith("compact")) {
@@ -846,6 +852,8 @@ function handleAssistant(live: Live, rec: Record<string, unknown>): void {
     return;
   }
 
+  const messageId = stringField(asRecord(rec.message), "id");
+  if (messageId) live.onEvent({ type: "turn.metrics", modelCallId: messageId });
   const used = contextUsedFromAssistant(rec);
   if (used !== undefined) live.onEvent({ type: "context", used });
 

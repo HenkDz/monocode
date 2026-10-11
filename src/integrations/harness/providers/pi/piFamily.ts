@@ -853,9 +853,13 @@ function handleFrame(
     }
     if (type === "agent_end" && rec.isTerminal === false) return;
   }
-  if (type === "compaction_start" || type === "auto_compaction_start") live.compacting = true;
+  if (type === "compaction_start" || type === "auto_compaction_start") {
+    live.compacting = true;
+    live.onEvent({ type: "turn.compaction", phase: "started" });
+  }
   if (type === "compaction_end" || type === "auto_compaction_end") {
     live.compacting = false;
+    live.onEvent({ type: "turn.compaction", phase: "completed" });
     if (asRecord(rec.result) && rec.aborted !== true && rec.skipped !== true && !stringField(rec, "errorMessage")) {
       live.onEvent({ type: "context.compacted" });
     }
@@ -872,7 +876,13 @@ function handleFrame(
   const context = contextFromUsage(rec, live.contextWindow);
   if (context) live.onEvent({ type: "context", ...context });
   const metrics = turnMetricsFromUsage(rec);
-  if (metrics) live.onEvent({ type: "turn.metrics", ...metrics });
+  const message = asRecord(rec.message);
+  const messageId = stringField(message, "id") ??
+    (typeof message?.timestamp === "number" && Number.isFinite(message.timestamp)
+      ? `pi:${message.timestamp}` : undefined);
+  if (metrics && type === "message_end" && messageId && message?.role === "assistant") {
+    live.onEvent({ type: "turn.metrics", ...metrics, modelCallId: messageId });
+  }
 
   const delta = assistantDeltaFromEvent(rec);
   if (delta) {

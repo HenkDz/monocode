@@ -1257,7 +1257,24 @@ function sanitizeTurnMetrics(value: unknown): TurnMetrics | undefined {
     ...(number("cacheHitPercent") != null
       ? { cacheHitPercent: number("cacheHitPercent") }
       : {}),
+    ...(number("firstTokenAt") != null ? { firstTokenAt: number("firstTokenAt") } : {}),
+    ...(number("endedAt") != null ? { endedAt: number("endedAt") } : {}),
+    ...(number("modelCalls") != null ? { modelCalls: number("modelCalls") } : {}),
   };
+  if (Array.isArray(rec.modelCallIds)) {
+    metrics.modelCallIds = [...new Set(rec.modelCallIds.filter((id): id is string => typeof id === "string" && id.length > 0))];
+  }
+  if (Array.isArray(rec.compactions)) {
+    metrics.compactions = rec.compactions.flatMap(value => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+      const row = value as Record<string, unknown>;
+      const at = (key: string) => typeof row[key] === "number" && Number.isFinite(row[key]) && row[key] >= 0 ? row[key] as number : undefined;
+      const startedAt = at("startedAt"), endedAt = at("endedAt");
+      if (startedAt == null && endedAt == null) return [];
+      return [{ ...(typeof row.id === "string" ? { id: row.id } : {}),
+        ...(startedAt != null ? { startedAt } : {}), ...(endedAt != null ? { endedAt } : {}) }];
+    });
+  }
   return Object.keys(metrics).length > 0 ? metrics : undefined;
 }
 

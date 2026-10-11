@@ -187,11 +187,11 @@ import { GithubStarPrompt } from "./GithubStarPrompt";
 import {
   isMonoSession,
   listMonos,
-  MONO_STATUS_LABEL,
+  monoLiveStatusLabel,
   monoLook,
   monosSnapshot,
   subscribeMonos,
-  type MonoStatus,
+  type MonoState,
 } from "../../features/monos/model/mono";
 import { MonoRailMascot } from "../../features/monos/ui/MonoRailMascot";
 import { useRailMonosPinned } from "../../features/settings/model/displayPrefs";
@@ -2612,6 +2612,7 @@ function CompactProjectRail({
       id: mono.id,
       ...monoLook(mono),
       status: monos.states.get(mono.id)?.status ?? "idle",
+      state: monos.states.get(mono.id) ?? { status: "idle" as const },
     }));
     // The roster is read through its snapshot.
   }, [monos, monosSnap]);
@@ -2685,7 +2686,7 @@ function CompactProjectRail({
                   name={mono.name}
                   mascot={mono.mascot}
                   color={mono.color}
-                  status={mono.status}
+                  state={mono.state}
                   active={mono.id === monos.activeId}
                   unseen={
                     mono.id === monos.activeId
@@ -2799,7 +2800,7 @@ function CompactRailMono({
   name,
   mascot,
   color,
-  status,
+  state,
   active,
   unseen,
   onClick,
@@ -2807,17 +2808,17 @@ function CompactRailMono({
   name: string;
   mascot: string;
   color: string;
-  status: MonoStatus;
+  state: MonoState;
   active: boolean;
   /** Replies the user has not read. */
   unseen: number;
   onClick: () => void;
 }) {
-  const label = `${name}, ${MONO_STATUS_LABEL[status]}`;
+  const label = `${name}, ${monoLiveStatusLabel(state)}`;
   return (
     <button
       type="button"
-      title={`${name}\n${MONO_STATUS_LABEL[status]}`}
+      title={`${name}\n${monoLiveStatusLabel(state)}${state.liveState?.detail ? `\n${state.liveState.detail}` : ""}`}
       aria-label={unseen ? `${label}, ${unreadLabel(unseen)}` : label}
       aria-current={active ? "true" : undefined}
       data-compact-rail-mono
@@ -2828,7 +2829,7 @@ function CompactRailMono({
           : "opacity-65 hover:bg-content/10 hover:opacity-100"
       }`}
     >
-      <MonoRailMascot name={mascot} color={color} status={status} />
+      <MonoRailMascot name={mascot} color={color} status={state.status} />
       {unseen ? (
         <span
           aria-hidden

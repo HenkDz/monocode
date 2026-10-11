@@ -36,6 +36,8 @@ vi.mock("./piClient", () => ({
 
 import { compactPiContext, stopPiSession } from "./pi";
 import type { HarnessEvent } from "../../core/types";
+import { appendUser, applyHarnessEvents } from "../../core/apply";
+import { newSession } from "../../../../features/sessions/model/session";
 
 describe("Pi live session", () => {
   beforeEach(() => {
@@ -141,6 +143,68 @@ describe("Pi live session", () => {
     frame({ type, reason: "manual", result, aborted: false, willRetry: false });
     expect(events.filter(event => event.type === "context.compacted")).toEqual([{ type: "context.compacted" }]);
     await stopPiSession(sessionId);
+  });
+
+  it("normalizes compaction boundaries and completed model usage without counting partial updates", async () => {
+    const events: HarnessEvent[] = [];
+    await compactPiContext({ sessionId: "pi-metrics", cwd: "/repo", model: "pi:default",
+      runtimeMode: "supervised", onEvent: event => events.push(event) });
+    const frame = mocks.frames[0]!;
+    frame({ type: "compaction_start" });
+    frame({ type: "compaction_end" });
+    frame({ type: "message_update", assistantMessageEvent: { partial: { usage: { input: 100, output: 10 } } } });
+    frame({ type: "message_end", message: { role: "assistant", timestamp: 1_000,
+      usage: { input: 100, output: 20, cacheRead: 80 } } });
+    expect(events.filter(event => event.type === "turn.compaction")).toEqual([
+      { type: "turn.compaction", phase: "started" }, { type: "turn.compaction", phase: "completed" },
+    ]);
+    expect(events.filter(event => event.type === "turn.metrics")).toEqual([
+      { type: "turn.metrics", modelCallId: "pi:1000", inputTokens: 100, outputTokens: 20,
+        cacheReadTokens: 80, cacheHitPercent: 80 / 180 * 100 },
+    ]);
+    await stopPiSession("pi-metrics");
+  });
+
+  it("accumulates two completed requests without replayed turn_end frames replacing usage", async () => {
+    const events: HarnessEvent[] = [];
+    await compactPiContext({ sessionId: "pi-two-requests", cwd: "/repo", model: "pi:default",
+      runtimeMode: "supervised", onEvent: event => events.push(event) });
+    const frame = mocks.frames[0]!;
+    const first = { role: "assistant", id: "request-1", timestamp: 1_000,
+      usage: { input: 100, output: 20, cacheRead: 80 } };
+    const second = { role: "assistant", timestamp: 2_000,
+      usage: { input: 200, output: 40, cacheRead: 170 } };
+    for (const message of [first, second]) {
+      frame({ type: "message_end", message });
+      frame({ type: "turn_end", message });
+    }
+    frame({ type: "message_end", message: first });
+    const session = applyHarnessEvents(
+      appendUser(newSession("pi", "/repo"), "Run both requests"), events,
+    );
+    expect(events.filter(event => event.type === "turn.metrics")).toHaveLength(3);
+    expect(session.blocks[0].turnMetrics).toMatchObject({
+      inputTokens: 300, outputTokens: 60, cacheReadTokens: 250,
+      modelCalls: 2, modelCallIds: ["request-1", "pi:2000"],
+    });
+    expect(session.blocks[0].turnMetrics?.cacheHitPercent).toBeCloseTo(250 / 550 * 100);
+    expect(session.context?.used).toBe(200);
+    await stopPiSession("pi-two-requests");
+  });
+
+  it("requires a completed identified assistant message for accounting while preserving context updates", async () => {
+    const events: HarnessEvent[] = [];
+    await compactPiContext({ sessionId: "pi-usage-identity", cwd: "/repo", model: "pi:default",
+      runtimeMode: "supervised", onEvent: event => events.push(event) });
+    const frame = mocks.frames[0]!;
+    const usage = { input: 100, output: 20, cacheRead: 80 };
+    frame({ type: "message_start", message: { role: "assistant", id: "request", usage } });
+    frame({ type: "message_end", message: { role: "assistant", usage } });
+    frame({ type: "message_end", message: { role: "toolResult", id: "tool", usage } });
+    frame({ type: "turn_end", usage });
+    expect(events.filter(event => event.type === "turn.metrics")).toEqual([]);
+    expect(events.at(-1)).toEqual({ type: "context", used: 200, window: 200_000 });
+    await stopPiSession("pi-usage-identity");
   });
 
   it("publishes readable Ponytail status and extension notifications", async () => {

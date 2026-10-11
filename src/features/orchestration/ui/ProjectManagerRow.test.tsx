@@ -14,13 +14,22 @@ it("shows the member's storage block instead of idle and clears it after repair"
   ]));
   const session = { ...newSession("codex", "/repo"), id: "member-chat", codexStorageError: "hooks.json conflict" };
   const host = document.createElement("div"), root = createRoot(host);
+  document.body.append(host);
   try {
     await act(async () => root.render(<ProjectManagerRow project="/repo" onOpen={vi.fn()} sessions={[session]} />));
     expect(host.querySelector('[aria-label="Open Reviewer"] [role="status"]')?.textContent).toBe("Blocked · storage");
+    const reviewer = host.querySelector<HTMLButtonElement>('[aria-label="Open Reviewer"]')!;
+    const detailId = reviewer.getAttribute("aria-describedby")!;
+    expect(document.getElementById(detailId)?.textContent).toContain("Blocked · storage");
+    expect(document.getElementById(detailId)?.textContent).toContain("hooks.json conflict");
+    await act(async () => reviewer.focus());
+    expect(document.getElementById(detailId)?.getAttribute("role")).toBe("tooltip");
+    expect(reviewer.querySelector("button, [tabindex]")).toBeNull();
     await act(async () => root.render(<ProjectManagerRow project="/repo" onOpen={vi.fn()} sessions={[{ ...session, codexStorageError: undefined }]} />));
     expect(host.querySelector('[aria-label="Open Reviewer"] [role="status"]')?.textContent).toBe("Idle");
   } finally {
     await act(async () => root.unmount());
+    host.remove();
     localStorage.removeItem("monocode:mono-roster");
   }
 });
@@ -62,25 +71,28 @@ it("shows member availability and a task tooltip without repeating its title or 
   const snapshot = vi.spyOn(orchestrator, "snapshot").mockReturnValue(runs);
   const host = document.createElement("div");
   const root = createRoot(host);
-  const render = (attention = new Set<string>(), busy = new Set<string>()) => act(async () => root.render(
-    <ProjectManagerRow project="/repo" onOpen={vi.fn()} expanded onToggle={vi.fn()} approvalSessionIds={attention} busySessionIds={busy} />,
+  const render = (attention = new Set<string>(), busy = new Set<string>(), sessions?: Parameters<typeof ProjectManagerRow>[0]["sessions"]) => act(async () => root.render(
+    <ProjectManagerRow project="/repo" onOpen={vi.fn()} expanded onToggle={vi.fn()} approvalSessionIds={attention} busySessionIds={busy} sessions={sessions} />,
   ));
   const member = () => host.querySelector<HTMLButtonElement>('[aria-label="Open Backend"]')!;
   try {
     await render();
-    expect(member().textContent).toBe("BackendIdle");
+    expect(member().textContent).toBe("BackendWaiting review");
     expect(member().title).toBe(task.title);
     expect(host.textContent).not.toContain(task.title);
     expect(host.textContent).not.toContain("completed");
     expect(host.querySelector('[aria-label="Toggle Manager team"]')).not.toBeNull();
     task.status = "running";
     await render();
-    expect(member().textContent).toBe("BackendWorking");
+    expect(member().textContent).toBe("BackendThinking");
     await render(new Set(["worker"]));
     expect(member().textContent).toBe("BackendNeeds you");
     task.status = "completed";
     await render(new Set(), new Set(["member-chat"]));
-    expect(member().textContent).toBe("BackendWorking");
+    expect(member().textContent).toBe("BackendThinking");
+    await render(new Set(), new Set(), [{ ...newSession("codex", "/repo"), id: "worker", codexStorageError: "Repair AGENTS.md", queuedMessages: [{ id: "q", text: "review", attachments: [] }] }]);
+    expect(member().textContent).toBe("BackendBlocked · storage");
+    expect(member().querySelector('[data-agent-state="blocked"]')?.getAttribute("title")).toBe("Blocked · storage · Repair AGENTS.md");
   } finally {
     await act(async () => root.unmount());
     snapshot.mockRestore();
@@ -106,7 +118,7 @@ it("opens the normal Manager conversation only on demand and reports opening fai
       root.render(<ProjectManagerRow project="/repo" onOpen={open} selected />),
     );
     expect(open).not.toHaveBeenCalled();
-    expect(host.textContent).toBe("Manager");
+    expect(host.querySelector("button")?.textContent).toBe("Manager");
     expect(host.querySelector("form")).toBeNull();
     expect(host.querySelector("button")?.getAttribute("aria-current")).toBe("page");
     await act(async () => host.querySelector("button")!.click());

@@ -380,7 +380,9 @@ export function mapCodexNotification(
   if (!rec) return { events: [] };
 
   if (method === "thread/compacted") {
-    return { events: stringField(rec, "threadId") ? [{ type: "context.compacted" }] : [] };
+    const events: HarnessEvent[] = [{ type: "turn.compaction", phase: "completed", legacy: true }];
+    if (stringField(rec, "threadId")) events.push({ type: "context.compacted" });
+    return { events };
   }
 
   if (method === "rawResponseItem/completed") {
@@ -573,6 +575,12 @@ function mapTokenUsage(rec: Record<string, unknown>): MappedCodexNotification {
   const cacheReadTokens = numberField(last, "cachedInputTokens");
   const cacheWriteTokens = numberField(last, "cacheWriteInputTokens");
   const outputTokens = numberField(last, "outputTokens");
+  const total = asRecord(usage?.total);
+  const modelCallId = numberField(total, "totalTokens") > 0
+    ? ["totalTokens", "inputTokens", "cachedInputTokens", "outputTokens"]
+      .map(key => numberField(total, key)).join(":")
+    : undefined;
+  const providerTurnId = stringField(rec, "turnId");
   const cacheReported =
     "cachedInputTokens" in last || "cacheWriteInputTokens" in last;
   const metrics: TurnMetrics = {
@@ -600,7 +608,10 @@ function mapTokenUsage(rec: Record<string, unknown>): MappedCodexNotification {
             },
           ]
         : []),
-      ...(hasMetrics ? [{ type: "turn.metrics" as const, ...metrics }] : []),
+      ...(hasMetrics ? [{ type: "turn.metrics" as const, ...metrics,
+        ...(modelCallId ? { modelCallId } : {}),
+        ...(providerTurnId ? { providerTurnId } : {}),
+      }] : []),
     ],
   };
 }
@@ -658,7 +669,10 @@ function mapItemLifecycle(
   const completed = method === "item/completed";
 
   if (itemType === "contextCompaction") {
-    return { events: completed && stringField(rec, "threadId") ? [{ type: "context.compacted" }] : [] };
+    const events: HarnessEvent[] = [{ type: "turn.compaction", id: callId,
+      phase: completed ? "completed" : "started" }];
+    if (completed && stringField(rec, "threadId")) events.push({ type: "context.compacted" });
+    return { events };
   }
 
   if (SILENT_ITEM_TYPES.has(itemType)) {

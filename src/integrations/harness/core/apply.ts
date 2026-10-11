@@ -23,6 +23,7 @@ import { resolveModel } from "../../../features/sessions/model/models";
 import type { HarnessEvent } from "./types";
 import { usageLimitFromError } from "../../../features/sessions/model/usageLimit";
 import { parseTeamMessage } from "../../../features/sessions/model/teamMessage";
+import { captureTurnEvent, currentTurnIndex } from "../../../features/agents/model/turnMetrics";
 
 /** Apply one delivery batch without copying the transcript for every token. */
 export function applyHarnessEvents(
@@ -44,7 +45,7 @@ export function applyHarnessEvents(
       index++;
     }
     next = patchStreaming(
-      next,
+      captureTurnEvent(next, event),
       event.type === "message.delta" ? "assistant" : "reasoning",
       texts,
       true,
@@ -57,6 +58,7 @@ export function applyHarnessEvent(
   session: Session,
   event: HarnessEvent,
 ): Session {
+  session = captureTurnEvent(session, event);
   switch (event.type) {
     case "message.delta":
       return patchStreaming(session, "assistant", event.text, true);
@@ -143,7 +145,8 @@ export function applyHarnessEvent(
         }),
       };
     case "turn.metrics":
-      return mergeTurnMetrics(session, event);
+    case "turn.compaction":
+      return session;
     case "tasks.updated":
       return upsertTaskList(session, event);
     case "background.updated":
@@ -229,39 +232,6 @@ export function applyHarnessEvent(
     default:
       return session;
   }
-}
-
-function mergeTurnMetrics(
-  session: Session,
-  event: Extract<HarnessEvent, { type: "turn.metrics" }>,
-): Session {
-  let userIndex = -1;
-  for (let index = session.blocks.length - 1; index >= 0; index -= 1) {
-    if (session.blocks[index].role === "user") {
-      userIndex = index;
-      break;
-    }
-  }
-  if (userIndex < 0) return session;
-
-  const current = session.blocks[userIndex];
-  const metrics = {
-    ...(current.turnMetrics ?? {}),
-    ...(event.inputTokens != null ? { inputTokens: event.inputTokens } : {}),
-    ...(event.outputTokens != null ? { outputTokens: event.outputTokens } : {}),
-    ...(event.cacheReadTokens != null
-      ? { cacheReadTokens: event.cacheReadTokens }
-      : {}),
-    ...(event.cacheWriteTokens != null
-      ? { cacheWriteTokens: event.cacheWriteTokens }
-      : {}),
-    ...(event.cacheHitPercent != null
-      ? { cacheHitPercent: event.cacheHitPercent }
-      : {}),
-  };
-  const blocks = session.blocks.slice();
-  blocks[userIndex] = { ...current, turnMetrics: metrics };
-  return { ...session, blocks };
 }
 
 function upsertPlan(
@@ -489,7 +459,7 @@ export function appendUser(
   session = settlePendingApprovals(session);
   const incoming = parseTeamMessage(text);
   return appendBlock(
-    { ...session, busy: true, turnReady: false },
+    { ...session, busy: true, turnReady: false, compacting: false },
     {
       id: crypto.randomUUID(),
       role: "user",
@@ -536,9 +506,10 @@ export function stopStreaming(session: Session, endedAt = Date.now()): Session {
   return {
     ...settled,
     busy: false,
+    compacting: false,
     turnReady: false,
     pendingQuestion: undefined,
-    blocks: stampTurnDuration(settled.blocks.map(stopBlockProgress), endedAt),
+    blocks: stampTurnDuration(settled, endedAt).map(stopBlockProgress),
   };
 }
 
@@ -707,17 +678,9 @@ function stopBlockProgress(block: Block): Block {
   };
 }
 
-function stampTurnDuration(blocks: Block[], endedAt: number): Block[] {
-  let lastUser = -1;
-  for (let i = blocks.length - 1; i >= 0; i--) {
-    const block = blocks[i];
-    // A message sent mid-turn joined it; the turn is timed from its start.
-    if (block.role === "user" && block.sentAt != null) continue;
-    if (block.role === "user") {
-      lastUser = i;
-      break;
-    }
-  }
+function stampTurnDuration(session: Session, endedAt: number): Block[] {
+  const blocks = session.blocks;
+  const lastUser = currentTurnIndex(session);
   if (lastUser < 0) return blocks;
   const user = blocks[lastUser];
   if (user.durationMs != null || user.startedAt == null) return blocks;
@@ -725,6 +688,7 @@ function stampTurnDuration(blocks: Block[], endedAt: number): Block[] {
   next[lastUser] = {
     ...user,
     durationMs: Math.max(0, endedAt - user.startedAt),
+    turnMetrics: { ...user.turnMetrics, endedAt },
   };
   return next;
 }

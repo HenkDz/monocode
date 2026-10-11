@@ -49,6 +49,10 @@ type Props = PullRequestContext & {
   entries?: readonly WorktreePr[];
   onOpen?: (entry: WorktreePr) => void;
   now?: number;
+  loading?: boolean;
+  error?: string | null;
+  onRetry?: () => void;
+  scopeLabel?: string;
 };
 
 function PrChecksRefresh({ entry }: { entry: WorktreePr }) {
@@ -96,7 +100,14 @@ function PrChecksRefresh({ entry }: { entry: WorktreePr }) {
     )
       recordPullRequest(current.cwd, { ...current.pr, checksStatus });
   }, [entry, view.checks, view.error]);
-  return null;
+  return view.error ? (
+    <div role="alert" className="border-t border-stroke px-4 py-3 text-xs text-content/70">
+      <p>Checks for PR #{entry.pr.number} are unavailable. {view.error}</p>
+      <button type="button" onClick={view.refresh} className="mt-2 rounded px-2 py-1 text-accent hover:bg-content/5 focus-visible:outline-accent">Retry checks for PR #{entry.pr.number}</button>
+    </div>
+  ) : view.loading || view.refreshing ? (
+    <p role="status" className="px-4 py-2 text-xs text-content/60">{view.loading ? "Loading" : "Refreshing"} checks for PR #{entry.pr.number}…</p>
+  ) : null;
 }
 
 export function PullRequestsList({
@@ -108,6 +119,10 @@ export function PullRequestsList({
   roster: providedRoster,
   onOpen = (entry) => openPullRequests({ urls: [entry.pr.url] }),
   now,
+  loading = false,
+  error,
+  onRetry,
+  scopeLabel,
 }: Props) {
   const storedEntries = usePullRequests();
   const storedRuns = useSyncExternalStore(
@@ -140,6 +155,9 @@ export function PullRequestsList({
   const [mergedOpen, setMergedOpen] = useState(false);
   const groups = groupPullRequestRows(rows, filters, scope, now);
   const scopedRows = filterPullRequestRows(rows, {}, scope);
+  const hasRecentRows = groupPullRequestRows(rows, { closed: true }, scope, now).some((group) => group.rows.length);
+  const filteredEmpty = hasRecentRows && !groups.some((group) => group.rows.length);
+  const scoped = Object.values(scope).some((value) => value !== undefined);
   const projects = [
     ...new Map(
       scopedRows.map((row) => [row.project, row.projectName]),
@@ -200,6 +218,10 @@ export function PullRequestsList({
         buttons[next]?.focus();
       }}
     >
+      {(compact || scoped) && <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-stroke px-3 py-2 text-[11px] text-content/60">
+        <span>{scopeLabel ?? (scope.sessionId ? "Related to this conversation" : scope.monoId ? "Related to this member" : scope.project || scope.projects ? "Project pull requests" : "Related pull requests")}</span>
+        {scoped && <button type="button" onClick={() => openPullRequests()} className="rounded px-1 py-0.5 text-accent hover:bg-content/5 focus-visible:outline-accent">Open all PRs</button>}
+      </div>}
       <div
         className={`flex flex-wrap items-center gap-2 border-b border-content/8 ${compact ? "p-3" : "px-5 py-3"}`}
       >
@@ -269,7 +291,10 @@ export function PullRequestsList({
         </label>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {groups.map((group) => (
+        {error ? <div role="alert" className="px-4 py-4 text-xs text-content/70"><p>Could not load related pull requests. {error}</p>{scopedRows.length > 0 && <p className="mt-1">Showing saved pull requests.</p>}{onRetry && <button type="button" onClick={onRetry} className="mt-2 rounded px-2 py-1 text-accent hover:bg-content/5 focus-visible:outline-accent">Retry pull requests</button>}</div>
+          : loading ? <p role="status" className="px-4 py-4 text-xs text-content/70">{scopedRows.length ? "Refreshing related pull requests…" : "Loading related pull requests…"}</p>
+            : scopedRows.some((row) => row.entry.unavailable) ? <p role="status" className="px-4 py-3 text-xs text-content/70">Latest PR status is unavailable. Showing saved pull requests.</p> : null}
+        {groups.filter((group) => group.rows.length > 0).map((group) => (
           <section
             key={group.label}
             aria-label={`${group.label}, ${group.rows.length} pull requests`}
@@ -308,21 +333,22 @@ export function PullRequestsList({
               ))}
           </section>
         ))}
-        {!groups.some((group) => group.rows.length) && (
-          <p className="px-4 py-6 text-sm text-content/45">
-            No pull requests match.
-          </p>
+        {!loading && !error && !groups.some((group) => group.rows.length) && (
+          <div role="status" className="px-4 py-6 text-sm text-content/70">
+            <p>{filteredEmpty ? "No pull requests match these filters." : scopedRows.length ? "No recent pull requests in this context." : scoped ? "No related pull requests yet." : "No pull requests yet."}</p>
+            {filteredEmpty && <button type="button" onClick={() => setFilters({ ownership: "all", closed: true })} className="mt-3 rounded px-2 py-1 text-xs text-accent hover:bg-content/5 focus-visible:outline-accent">Reset filters</button>}
+          </div>
         )}
+        {!providedEntries &&
+          scopedRows
+            .filter((row) => row.entry.pr.state === "open")
+            .map((row) => (
+              <PrChecksRefresh
+                key={`${row.entry.cwd}:${row.entry.pr.url}`}
+                entry={row.entry}
+              />
+            ))}
       </div>
-      {!providedEntries &&
-        scopedRows
-          .filter((row) => row.entry.pr.state === "open")
-          .map((row) => (
-            <PrChecksRefresh
-              key={`${row.entry.cwd}:${row.entry.pr.url}`}
-              entry={row.entry}
-            />
-          ))}
     </div>
   );
 }

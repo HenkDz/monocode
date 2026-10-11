@@ -31,7 +31,10 @@ import { OrgArtifactLinks } from "../../artifacts/ui/OrgArtifactLinks";
 import { Modal } from "../../../shared/ui/Modal";
 import { ChevronDown } from "../../../shared/ui/icons";
 import { selectAgentLiveState } from "../../agents/model/agentLiveState";
-import { TaskMetricsLine, taskMetricsDetail } from "../../agents/ui/TaskMetricsLine";
+import {
+  TaskMetricsLine,
+  taskMetricsDetail,
+} from "../../agents/ui/TaskMetricsLine";
 import { AgentDetailTooltip } from "../../agents/ui/AgentDetailTooltip";
 import { selectTaskMetrics } from "../../agents/model/agentMetrics";
 
@@ -62,9 +65,15 @@ export function MemberWorkLog({ member }: { member: Mono }) {
   const statuses = usePrStatusCache();
   const actions = useContext(OrchestrationActions);
   const [openedTask, setOpenedTask] = useState<string>();
+  const [pendingTask, setPendingTask] = useState<string>();
+  const [actionError, setActionError] = useState<{
+    memberId: string;
+    message: string;
+  }>();
   const [expanded, setExpanded] = useState(true);
   const [showHistory, setShowHistory] = useState(false);
   const panelId = useId();
+  const taskToggleRef = useRef<HTMLButtonElement>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
   const historyRef = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
@@ -83,15 +92,59 @@ export function MemberWorkLog({ member }: { member: Mono }) {
     () => subscribeCardSessions(() => refresh((value) => value + 1)),
     [],
   );
+  const taskRuns = new Map(
+    runs.flatMap((run) => run.tasks.map((task) => [task.id, run] as const)),
+  );
   const tasks = memberTasks(runs, member.id)
     .map((task) => {
-      const needsYou = !!cardSession(task.sessionId)?.needsInput;
+      const run = taskRuns.get(task.id);
+      const session = cardSession(task.sessionId);
+      const needsYou =
+        !["completed", "cancelled", "failed"].includes(task.status) &&
+        !!session?.needsInput;
       const pr = taskPrStatus(task, statuses);
       const rank = managerQueueRank(task, pr);
+      const live =
+        ["running", "cancelling"].includes(task.status) ||
+        (["queued", "blocked", "interrupted"].includes(task.status) &&
+          ["blocked", "queued", "needs-you"].includes(
+            session?.liveState?.status ?? "",
+          ));
+      let state =
+        (live &&
+        !["idle", "done", "waiting-review", "waiting-on-member"].includes(
+          session?.liveState?.status ?? "",
+        )
+          ? session?.liveState
+          : undefined) ??
+        selectAgentLiveState(undefined, {
+          task:
+            task.status === "completed"
+              ? {
+                  ...task,
+                  accepted:
+                    task.accepted &&
+                    !!task.lastDispatchId &&
+                    task.acceptedDispatchId === task.lastDispatchId,
+                }
+              : task,
+          tasks: run?.tasks,
+          runStatus: run?.status,
+          pauseReason: run?.lastPauseReason ?? run?.error,
+        });
+      if (needsYou && !["needs-you", "blocked"].includes(state.status))
+        state = {
+          status: "needs-you",
+          reason: "decision",
+          detail: "Waiting for your decision",
+        };
       return {
         task,
+        run,
         needsYou,
         pr,
+        state,
+        session,
         rank: rank === 3 ? 3 : needsYou ? 0 : rank,
         links: [
           { id: task.reportArtifactId, label: "Report" },
@@ -104,9 +157,16 @@ export function MemberWorkLog({ member }: { member: Mono }) {
       };
     })
     .sort((a, b) => a.rank - b.rank);
-  const current = tasks.filter(({ rank }) => rank !== 3);
+  const current = tasks.filter(
+    ({ task, rank }) =>
+      rank !== 3 && !["queued", "completed"].includes(task.status),
+  );
+  const queue = tasks.filter(({ task }) => task.status === "queued");
+  const workLog = tasks.filter(
+    ({ task, rank }) => task.status === "completed" && rank !== 3,
+  );
   const history = tasks.filter(({ rank }) => rank === 3);
-  const attention = current.filter(({ rank }) => rank === 0).length;
+  const attention = tasks.filter(({ rank }) => rank === 0).length;
   const dispatches = new Map(
     runs
       .flatMap((run) => run.dispatches ?? [])
@@ -120,6 +180,9 @@ export function MemberWorkLog({ member }: { member: Mono }) {
     task,
     needsYou,
     pr,
+    run,
+    state,
+    session,
     links,
   }: (typeof tasks)[number]) => {
     const [label, tone] = managerTaskLifecycle(task, pr, needsYou);
@@ -127,8 +190,9 @@ export function MemberWorkLog({ member }: { member: Mono }) {
       task.activeDispatchId ?? task.lastDispatchId ?? "",
     );
     const at = dispatch?.updatedAt ?? dispatch?.startedAt ?? task.prReadyAt;
-    const metrics = cardSession(task.sessionId)?.taskMetrics?.[task.id] ?? selectTaskMetrics(task, [...dispatches.values()], []);
-    const state = cardSession(task.sessionId)?.liveState ?? selectAgentLiveState(undefined, { task });
+    const metrics =
+      session?.taskMetrics?.[task.id] ??
+      selectTaskMetrics(task, run?.dispatches ?? [], []);
     const prNumber = task.prUrl?.match(/\/pull\/(\d+)/)?.[1];
     const verdict =
       task.status === "completed" &&
@@ -204,15 +268,17 @@ export function MemberWorkLog({ member }: { member: Mono }) {
               </time>
             )}
           </span>
-          <AgentDetailTooltip detail={taskMetricsDetail(metrics, state)}>
-          <button
-            type="button"
-            aria-haspopup="dialog"
-            className={`${button} shrink-0 bg-content/8 font-medium`}
-            onClick={() => setOpenedTask(task.id)}
+          <AgentDetailTooltip
+            detail={openedTask ? undefined : taskMetricsDetail(metrics, state)}
           >
-            Open
-          </button>
+            <button
+              type="button"
+              aria-haspopup="dialog"
+              className={`${button} shrink-0 bg-content/8 font-medium`}
+              onClick={() => setOpenedTask(task.id)}
+            >
+              Open
+            </button>
           </AgentDetailTooltip>
         </div>
         <div className="px-3 pb-2">
@@ -220,21 +286,73 @@ export function MemberWorkLog({ member }: { member: Mono }) {
             metrics={metrics}
             state={state}
             startedAt={dispatch?.turnStartedAt ?? dispatch?.startedAt}
-            endedAt={dispatch?.finishedAt ?? (!["running", "queued", "cancelling"].includes(task.status) ? dispatch?.updatedAt : undefined)}
+            endedAt={
+              dispatch?.finishedAt ??
+              (!["running", "queued", "cancelling"].includes(task.status)
+                ? dispatch?.updatedAt
+                : undefined)
+            }
           />
+          {state.detail && (
+            <p data-task-reason className="mt-1 break-words text-content/60">
+              {state.detail}
+            </p>
+          )}
           <OrgArtifactLinks monoId={member.id} links={links} />
+          {task.status === "queued" && (
+            <div className="mt-2 flex flex-wrap gap-1">
+              <button
+                type="button"
+                className={button}
+                onClick={() =>
+                  actions
+                    ? actions.open(task.sessionId)
+                    : openCardSession(task.sessionId)
+                }
+              >
+                Open worker session
+              </button>
+              <button
+                type="button"
+                className={button}
+                disabled={pendingTask !== undefined || !run?.leadId}
+                onClick={async () => {
+                  if (!run?.leadId || pendingTask) return;
+                  setPendingTask(task.id);
+                  setActionError(undefined);
+                  try {
+                    await orchestrator.cancelTask(run.leadId, task.id);
+                    taskToggleRef.current?.focus();
+                  } catch (error) {
+                    setActionError({
+                      memberId: member.id,
+                      message: `${task.title}: ${error instanceof Error ? error.message : String(error)}`,
+                    });
+                  } finally {
+                    setPendingTask(undefined);
+                  }
+                }}
+              >
+                {pendingTask === task.id ? "Cancelling…" : "Cancel task"}
+              </button>
+            </div>
+          )}
         </div>
       </article>
     );
   };
   const selected = tasks.find(({ task }) => task.id === openedTask);
-  const renderDetails = ({ task, links }: (typeof tasks)[number]) => {
+  const renderDetails = ({ task, links, rank }: (typeof tasks)[number]) => {
     const cwd = task.workspace?.checkoutCwd;
     return (
       <Modal
         title={task.title}
         fitViewport
-        onClose={() => setOpenedTask(undefined)}
+        onClose={() => {
+          setOpenedTask(undefined);
+          if (!expanded || (rank === 3 && !showHistory))
+            taskToggleRef.current?.focus();
+        }}
       >
         <div
           id={`member-task-${task.id}`}
@@ -327,6 +445,7 @@ export function MemberWorkLog({ member }: { member: Mono }) {
     >
       <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs">
         <button
+          ref={taskToggleRef}
           type="button"
           aria-expanded={expanded}
           aria-controls={panelId}
@@ -368,12 +487,50 @@ export function MemberWorkLog({ member }: { member: Mono }) {
           No assignments yet. {look?.name ?? "Your Manager"} assigns work here.
         </p>
       )}
+      {actionError?.memberId === member.id && (
+        <p
+          role="alert"
+          className="px-2.5 py-1 text-xs text-red-700 dark:text-red-400"
+        >
+          {actionError.message}
+        </p>
+      )}
       <div id={panelId} hidden={!expanded}>
         <div
           ref={scrollerRef}
           className="max-h-[min(30dvh,16rem)] space-y-2 overflow-y-auto overscroll-contain"
         >
-          {expanded && current.map(renderTask)}
+          {expanded &&
+            (current.length > 0 || queue.length > 0 || workLog.length > 0) && (
+              <div className="space-y-2" data-member-section="current">
+                <h3 className="px-2.5 text-xs font-medium text-content/60">
+                  Current assignment
+                </h3>
+                {current.length ? (
+                  current.map(renderTask)
+                ) : (
+                  <p className="px-2.5 text-xs text-content/50">
+                    No current assignment.
+                  </p>
+                )}
+              </div>
+            )}
+          {expanded && queue.length > 0 && (
+            <div className="space-y-2" data-member-section="queue">
+              <h3 className="px-2.5 text-xs font-medium text-content/60">
+                Queue ({queue.length})
+              </h3>
+              {queue.map(renderTask)}
+            </div>
+          )}
+          {expanded && workLog.length > 0 && (
+            <div className="space-y-2" data-member-section="log">
+              <h3 className="px-2.5 text-xs font-medium text-content/60">
+                Work log ({workLog.length})
+              </h3>
+              {workLog.map(renderTask)}
+            </div>
+          )}
           <div
             ref={historyRef}
             id={`${panelId}-history`}

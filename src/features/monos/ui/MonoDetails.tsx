@@ -142,6 +142,7 @@ export function MonoDetails({
   const orgIds = orgDescendants(roster, monoId);
   const orgProjects = [...new Set(roster.filter(entry => orgIds.has(entry.id))
     .flatMap(entry => [...entry.projects, ...(entry.managerProject ? [entry.managerProject] : [])]))];
+  const worktreeCwd = sessions?.find(session => session.id === sessionId)?.worktreeCwd ?? cwd;
   const files = useMonoFiles(monoId, state.status);
   const habits = useHabits(monoId, state.status);
   const actions = habitActions(monoId);
@@ -296,6 +297,10 @@ export function MonoDetails({
         aria-labelledby={onTabChange ? `${panelId}-${tab}` : undefined}
         className="flex min-h-0 flex-1 flex-col"
       >
+        {tab === "details" && pages.length === 0 && <div className="shrink-0 border-b border-stroke px-4 py-3 text-xs text-content/70" data-mono-next-turn>
+          <p>Model and effort changes apply to the next turn.</p>
+          <p className="mt-2 flex min-w-0 gap-2"><span className="shrink-0 text-content/50">Worktree</span><span className="min-w-0 truncate" title={worktreeCwd} data-mono-worktree>{worktreeCwd}</span></p>
+        </div>}
         <PanelStack pages={tab === "details" ? pages : tab === "activity" && showWork && teamActivity ? [{
           key: "work",
           node: <div className="flex min-h-0 flex-1 flex-col" data-mono-work>
@@ -304,7 +309,7 @@ export function MonoDetails({
           </div>,
         }] : []}>
           {tab === "prs" ? (
-            <PullRequestsList compact sessions={sessions} runs={runs} scope={mono?.role === "manager"
+            <PullRequestsList compact sessions={sessions} runs={runs} scopeLabel={`${agent.name} pull requests`} scope={mono?.role === "manager"
               ? { project: mono.managerProject ?? mono.projects[0] ?? cwd }
               : mono?.role === "orchestrator"
                 ? { projects: orgProjects }

@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { IconButton } from "../../../app/shell/TitleBar";
 import { useDragResize } from "../../../shared/hooks/useDragResize";
 import { PanelRightToggle } from "../../../shared/ui/icons";
@@ -13,6 +13,8 @@ export function MonoSidebar({
   kind,
   label,
   color,
+  returnFocus,
+  onInteract,
   windowControls,
   children,
 }: {
@@ -20,24 +22,27 @@ export function MonoSidebar({
   kind: "details" | "activity" | "prs" | "sessions" | "artifact" | "changes";
   label: string;
   color: string;
+  returnFocus?: HTMLElement | null;
+  onInteract?: () => void;
   windowControls?: ReactNode;
   children: ReactNode;
 }) {
   // Readers (documents, diffs) need room; the turn sidebars stay narrow.
   const reader = kind === "artifact" || kind === "changes";
+  const pane = useRef<HTMLElement | null>(null);
+  const [keyboardWidth, setKeyboardWidth] = useState<number | null>(null);
+  const maxWidth = () =>
+    Math.min(
+      window.innerWidth - 24,
+      reader
+        ? Math.min(840, Math.max(360, Math.round(window.innerWidth * 0.58)))
+        : Math.min(440, Math.max(MIN_WIDTH, Math.round(window.innerWidth * 0.4))),
+    );
+  const minWidth = Math.min(reader ? 360 : MIN_WIDTH, maxWidth());
   const resize = useDragResize({
-    min: reader ? 360 : MIN_WIDTH,
-    max: () =>
-      Math.min(
-        window.innerWidth - 24,
-        reader
-          ? Math.min(840, Math.max(360, Math.round(window.innerWidth * 0.58)))
-          : Math.min(
-              440,
-              Math.max(MIN_WIDTH, Math.round(window.innerWidth * 0.4)),
-            ),
-      ),
-    defaultWidth: reader ? 560 : MIN_WIDTH,
+    min: minWidth,
+    max: maxWidth,
+    defaultWidth: keyboardWidth ?? (reader ? 560 : MIN_WIDTH),
     initial: reader ? rememberedArtifactWidth : rememberedWidth,
     direction: "left",
     onCommit: (width) => {
@@ -45,9 +50,24 @@ export function MonoSidebar({
       else rememberedWidth = width;
     },
   });
+  useLayoutEffect(() => {
+    if (keyboardWidth === null) return;
+    // Keyboard sizing uses the same clamped commit as pointer resizing.
+    resize.onDoubleClick();
+    setKeyboardWidth(null);
+  }, [keyboardWidth, resize.onDoubleClick]);
+  useLayoutEffect(() => {
+    if (!open) return;
+    const panel = pane.current;
+    const opener = returnFocus ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
+    return () => {
+      if (opener?.isConnected && panel?.contains(document.activeElement))
+        opener.focus({ preventScroll: true });
+    };
+  }, [open, returnFocus]);
   return (
     <aside
-      ref={resize.setPaneRef}
+      ref={(element) => { pane.current = element; resize.setPaneRef(element); }}
       aria-label={label}
       aria-hidden={!open || undefined}
       inert={!open || undefined}
@@ -58,6 +78,8 @@ export function MonoSidebar({
       data-mono-artifact={kind === "artifact" ? "" : undefined}
       data-mono-changes={kind === "changes" ? "" : undefined}
       data-open={open}
+      onFocusCapture={onInteract}
+      onPointerDownCapture={onInteract}
       style={
         {
           "--mono-color": color,
@@ -72,9 +94,22 @@ export function MonoSidebar({
         role="separator"
         aria-orientation="vertical"
         aria-label={`Resize Mono ${kind}`}
-        className={`absolute inset-y-0 -left-1 z-20 w-2 cursor-col-resize touch-none ${resize.dragging ? "bg-content/15" : "hover:bg-content/10"}`}
+        aria-valuemin={minWidth}
+        aria-valuemax={maxWidth()}
+        aria-valuenow={resize.width}
+        tabIndex={open ? 0 : -1}
+        className={`absolute inset-y-0 -left-1 z-20 w-2 cursor-col-resize touch-none focus-visible:bg-accent/30 focus-visible:outline-2 focus-visible:outline-accent ${resize.dragging ? "bg-content/15" : "hover:bg-content/10"}`}
         onPointerDown={resize.onPointerDown}
         onDoubleClick={resize.onDoubleClick}
+        onKeyDown={(event) => {
+          if (!["ArrowLeft", "ArrowRight", "Home", "End", "Enter"].includes(event.key)) return;
+          event.preventDefault();
+          const step = event.shiftKey ? 40 : 10;
+          setKeyboardWidth(event.key === "Home" ? minWidth
+            : event.key === "End" ? maxWidth()
+              : event.key === "Enter" ? reader ? 560 : MIN_WIDTH
+                : resize.width + (event.key === "ArrowLeft" ? step : -step));
+        }}
       />
       {windowControls ? (
         <div className="absolute right-0 top-0 z-30 h-10">{windowControls}</div>

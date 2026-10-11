@@ -10,6 +10,7 @@ import {
   type WorktreePr,
 } from "../../source-control/model/pullRequests";
 import type { GithubPrChecksView } from "../../inbox/hooks/useGithubPrChecks";
+import { OPEN_PULL_REQUESTS } from "../model/pullRequestView";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 vi.mock("../../inbox/model/githubTasks", () => ({
@@ -101,6 +102,87 @@ it("renders compact metadata and latest states, hides noise and history by defau
   } finally {
     await act(async () => root.unmount());
   }
+});
+
+it("explains empty, loading and failed scoped lists and keeps saved content during refresh failures", async () => {
+  const host = document.createElement("div"), root = createRoot(host);
+  const onRetry = vi.fn(), onOpenAll = vi.fn();
+  const scope = { cwd: "/project" };
+  window.addEventListener(OPEN_PULL_REQUESTS, onOpenAll);
+  try {
+    await act(async () => root.render(<PullRequestsList compact entries={[]} scope={scope} />));
+    expect(host.textContent).toContain("No related pull requests yet.");
+    expect(host.querySelectorAll("section")).toHaveLength(0);
+    await act(async () => [...host.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Open all PRs")!.click());
+    expect(onOpenAll).toHaveBeenCalledOnce();
+    expect((onOpenAll.mock.calls[0][0] as CustomEvent).detail).toEqual({});
+    await act(async () => root.render(<PullRequestsList compact entries={[]} scope={scope} loading />));
+    expect(host.querySelector('[role="status"]')?.textContent).toBe("Loading related pull requests…");
+    expect(host.textContent).not.toContain("No related pull requests");
+    await act(async () => root.render(<PullRequestsList compact entries={[]} scope={scope} error="Offline" onRetry={onRetry} />));
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("Could not load related pull requests. Offline");
+    await act(async () => [...host.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Retry pull requests")!.click());
+    expect(onRetry).toHaveBeenCalledOnce();
+    const entries = [fixture(1)];
+    await act(async () => root.render(<PullRequestsList compact entries={entries} scope={scope} loading />));
+    expect(host.querySelector('[role="status"]')?.textContent).toBe("Refreshing related pull requests…");
+    expect(host.querySelectorAll("[data-pr-row]")).toHaveLength(1);
+    await act(async () => root.render(<PullRequestsList compact entries={entries} scope={scope} error="Offline" />));
+    expect(host.textContent).toContain("Showing saved pull requests.");
+    expect(host.querySelectorAll("[data-pr-row]")).toHaveLength(1);
+    await act(async () => root.render(<PullRequestsList compact entries={[{ ...fixture(1), unavailable: true }]} scope={scope} />));
+    expect(host.querySelector('[role="status"]')?.textContent).toBe("Latest PR status is unavailable. Showing saved pull requests.");
+    expect(host.querySelectorAll("[data-pr-row]")).toHaveLength(1);
+  } finally { await act(async () => root.unmount()); window.removeEventListener(OPEN_PULL_REQUESTS, onOpenAll); }
+});
+
+it("explains filter-empty results and resets filters including hidden closed PRs", async () => {
+  const host = document.createElement("div"), root = createRoot(host);
+  const entries = [fixture(1), fixture(2, { state: "closed" })];
+  try {
+    await act(async () => root.render(<PullRequestsList compact entries={entries} now={now} />));
+    const ownership = host.querySelector<HTMLSelectElement>('[aria-label="PR ownership"]')!;
+    await act(async () => {
+      ownership.value = "team";
+      ownership.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(host.textContent).toContain("No pull requests match these filters.");
+    expect(host.querySelectorAll("section")).toHaveLength(0);
+    await act(async () => [...host.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Reset filters")!.click());
+    expect(host.querySelectorAll("[data-pr-row]")).toHaveLength(2);
+    expect(host.textContent).not.toContain("No pull requests match");
+  } finally { await act(async () => root.unmount()); }
+});
+
+it("does not offer a filter reset that cannot reveal old unreferenced merged history", async () => {
+  const host = document.createElement("div"), root = createRoot(host);
+  try {
+    await act(async () => root.render(<PullRequestsList entries={[fixture(1, { state: "merged", closedAt: "2020-01-01T00:00:00Z" })]} now={now} />));
+    expect(host.textContent).toContain("No recent pull requests in this context.");
+    expect(host.textContent).not.toContain("Reset filters");
+  } finally { await act(async () => root.unmount()); }
+});
+
+it("shows the existing PR checks loader and its retryable errors without erasing rows", async () => {
+  const entry = fixture(91, { headOid: "checks-head" });
+  recordPullRequest(entry.cwd, entry.pr);
+  const host = document.createElement("div"), root = createRoot(host);
+  const original = checks.view;
+  const refresh = vi.fn();
+  try {
+    checks.view = { ...original, loading: true, refresh };
+    await act(async () => root.render(<PullRequestsList scope={{ urls: [entry.pr.url] }} now={now} />));
+    expect(host.querySelector('[role="status"]')?.textContent).toContain("Loading checks for PR #91");
+    checks.view = { ...original, refreshing: true, refresh };
+    await act(async () => root.render(<PullRequestsList scope={{ urls: [entry.pr.url] }} now={now} />));
+    expect(host.querySelector('[role="status"]')?.textContent).toContain("Refreshing checks for PR #91");
+    checks.view = { ...original, error: "Checks offline", refresh };
+    await act(async () => root.render(<PullRequestsList scope={{ urls: [entry.pr.url] }} now={now} />));
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("Checks for PR #91 are unavailable. Checks offline");
+    expect(host.querySelectorAll("[data-pr-row]")).toHaveLength(1);
+    await act(async () => [...host.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Retry checks for PR #91")!.click());
+    expect(refresh).toHaveBeenCalledOnce();
+  } finally { await act(async () => root.unmount()); checks.view = original; }
 });
 
 it("filters search and project and supports keyboard navigation", async () => {

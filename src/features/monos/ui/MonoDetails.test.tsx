@@ -29,6 +29,20 @@ let container: HTMLDivElement;
 const agent = { name: "Captain", mascot: "cat", color: "#6ba", projects: [] };
 const noop = () => {};
 
+it("labels model and effort as next-turn settings and shows the conversation's exact worktree", async () => {
+  await act(async () => root.render(createElement(MonoDetails, {
+    open: true, monoId: "sample", sessionId: "chat", cwd: "/repo", agent,
+    sessions: [{ id: "chat", cwd: "/repo", worktreeCwd: "/repo-worker" }],
+    state: { status: "idle" }, harness: "codex", model: "codex:gpt-5.4", modelSettings: {},
+    runtimeMode: "auto", onRuntimeModeChange: noop, onModelChange: noop,
+    onModelSettingsChange: noop, onClose: noop,
+  })));
+  const context = container.querySelector('[data-mono-next-turn]')!;
+  expect(context.textContent).toContain("Model and effort changes apply to the next turn.");
+  expect(context.querySelector("[data-mono-worktree]")?.textContent).toBe("/repo-worker");
+  expect(context.querySelector<HTMLElement>("[data-mono-worktree]")?.title).toBe("/repo-worker");
+});
+
 it("shows and edits the agent's permission mode in Details", async () => {
   setHarnessModels("codex", [{
     id: "codex:gpt-5.4", harness: "codex", name: "GPT-5.4",

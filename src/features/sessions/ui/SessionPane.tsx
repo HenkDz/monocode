@@ -109,6 +109,8 @@ import type {
   MonoGoalRoutingContext,
   MonoGoalSubmission,
 } from "../../monos/model/monoGoalRouting";
+import type { LaunchedSessionView } from "../../monos/model/monoSpawnedSessions";
+import { ModelControlPills, ModelPicker } from "./ModelPicker";
 import { MonoUsageLimitNotice } from "../../monos/ui/MonoUsageLimitNotice";
 import { MonoCodexStorageNotice } from "../../monos/ui/MonoCodexStorageNotice";
 import { codexStorageBlockedContext } from "../../monos/model/monoCodexStorageIssues";
@@ -122,6 +124,7 @@ import { memberTasks } from "../../monos/model/monoNavigation";
 import {
   monoMessageDeliveries,
   monoPendingTranscriptBlocks,
+  visibleMonoCompletionMessages,
 } from "../../monos/model/monoMessaging";
 import { useMonoTranscript } from "../../monos/hooks/useMonoTranscript";
 import { MONO_PAGE_TURNS } from "../data/sessionStore";
@@ -185,12 +188,17 @@ export type SessionPaneProps = {
   monoActivityTurnId?: string;
   monoState?: MonoState;
   monoGoalRouting?: MonoGoalRoutingContext;
-  onShowMonoSessions?: (
+  /** Open a session a Mono's turn launched, in the Mono's sidebar. */
+  onOpenMonoSession?: (
     sessionId: string,
     turnId: string,
     blocks: Block[],
+    launchedId: string,
   ) => void;
-  monoSessionsTurnId?: string;
+  /** Live status of the sessions this Mono launched, by id. */
+  monoLaunchedSessions?: ReadonlyMap<string, LaunchedSessionView>;
+  /** The launched session open in the Mono's sidebar. */
+  openMonoSessionId?: string;
   recents: RecentProject[];
   hideProjectPicker?: boolean;
   onFocus: (sessionId: string) => void;
@@ -415,8 +423,9 @@ const LocalSessionPane = memo(function LocalSessionPane({
   onShowMonoActivity,
   monoActivityTurnId,
   monoState,
-  onShowMonoSessions,
-  monoSessionsTurnId,
+  onOpenMonoSession,
+  monoLaunchedSessions,
+  openMonoSessionId,
   onOpenPlan,
   onBuildPlan,
   onSecondOpinion,
@@ -1036,6 +1045,15 @@ const LocalSessionPane = memo(function LocalSessionPane({
   );
   const monoNotices = agent && (
     <>
+      <MessageQueue
+        messages={visibleMonoCompletionMessages(session)}
+        status={session.queueStatus}
+        liveState={conversationLiveState}
+        sendingId={session.sendingQueuedMessageId}
+        onDelete={(messageId) => onDeleteQueuedMessage(session.id, messageId)}
+        onResume={() => onResumeQueue(session.id)}
+        variant="completions"
+      />
       {session.pendingQuestion && !questionDelegated && (
         <QuestionForm
           prompt={session.pendingQuestion}
@@ -1467,13 +1485,19 @@ const LocalSessionPane = memo(function LocalSessionPane({
                         : undefined
                     }
                     activeWorkTurnId={monoActivityTurnId}
-                    onShowSessions={
-                      agent && onShowMonoSessions
-                        ? (turnId, blocks) =>
-                            onShowMonoSessions(session.id, turnId, blocks)
+                    onOpenSession={
+                      agent && onOpenMonoSession
+                        ? (turnId, blocks, launchedId) =>
+                            onOpenMonoSession(
+                              session.id,
+                              turnId,
+                              blocks,
+                              launchedId,
+                            )
                         : undefined
                     }
-                    activeSessionsTurnId={monoSessionsTurnId}
+                    launchedSessions={monoLaunchedSessions}
+                    openSessionId={openMonoSessionId}
                     // A Mono's turn keeps copy, save as note and the time.
                     daySeparators={!!agent}
                     hideTurnMetrics={!!agent}
@@ -1707,20 +1731,6 @@ const LocalSessionPane = memo(function LocalSessionPane({
                     }
                     name={agent.name}
                     enabled={visible}
-                    controls={
-                      <ContextMeter
-                        usage={session.context}
-                        rotationScheduled={!!rotationStatus.plan}
-                        rotationDeferredReason={rotationStatus.deferredReason}
-                        onCompact={
-                          canCompactHarnessContext(session.harness) &&
-                          !session.worktreeRemoved
-                            ? () => onCompactContext(session.id)
-                            : undefined
-                        }
-                        compactDisabled={!canRotateContext(session)}
-                      />
-                    }
                     quoteRequest={quoteRequest}
                     onQuoteRequestConsumed={acknowledgeQuote}
                     onDraftChange={draftChanged}
@@ -1734,6 +1744,49 @@ const LocalSessionPane = memo(function LocalSessionPane({
                       monoGoal
                         ? onSubmitGoal?.(session.id, text, attachments, monoGoal) ?? false
                         : onSubmit(session.id, text, attachments)
+                    }
+                    controls={
+                      <>
+                        <ModelPicker
+                          harness={session.harness}
+                          model={session.model}
+                          values={session.modelSettings}
+                          allowedHarnesses={allowedModelHarnesses}
+                          project={workCwd}
+                          hideSettings
+                          hotkeys={focused && !btw.open}
+                          variant="text"
+                          onChange={(harness, model) =>
+                            onModelChange(session.id, harness, model)
+                          }
+                          onSettingsChange={(settings, settingId) =>
+                            onModelSettingsChange(session.id, settings, settingId)
+                          }
+                        />
+                        <ModelControlPills
+                          harness={session.harness}
+                          model={session.model}
+                          values={session.modelSettings}
+                          variant="text"
+                          onSettingsChange={(settings, settingId) =>
+                            onModelSettingsChange(session.id, settings, settingId)
+                          }
+                        />
+                        <div className="min-w-0 rounded-md px-1.5 py-1 transition-colors hover:bg-content/8">
+                          <ContextMeter
+                            usage={session.context}
+                            rotationScheduled={!!rotationStatus.plan}
+                            rotationDeferredReason={rotationStatus.deferredReason}
+                            onCompact={
+                              canCompactHarnessContext(session.harness) &&
+                              !session.worktreeRemoved
+                                ? () => onCompactContext(session.id)
+                                : undefined
+                            }
+                            compactDisabled={!canRotateContext(session)}
+                          />
+                        </div>
+                      </>
                     }
                   />
                 </>

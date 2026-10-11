@@ -79,3 +79,21 @@ it("keeps combined internal reports out of the user's outbox", () => {
   expect(markup).toBe("");
   expect(markup).not.toContain("MonoCode completion notification");
 });
+
+it.each([1, 3])("shows only a safe summary for %s failed completions in Mono notices", (count) => {
+  const message = monoSessionCompletionMessage({
+    sessionId: "worker", requestId: "request", project: "/synthetic",
+    prompt: "Review", outcome: { status: "completed", text: "Private report body" },
+  });
+  message.monoSessionCompletion!.title = "API fix";
+  message.monoSessionCompletion!.sessionCount = count;
+  message.error = "Connection lost";
+  const markup = renderToStaticMarkup(createElement(MessageQueue, {
+    messages: [message, { id: "user", text: "User message", attachments: [] }],
+    variant: "completions", status: "paused", onResume: vi.fn(), onSteer: vi.fn(),
+  }));
+  expect(markup).toContain(count > 1 ? "3 sessions completed" : "Session completed: API fix");
+  expect(markup).toContain("Connection lost");
+  expect(markup).toContain("Retry");
+  expect(markup).not.toMatch(/Private report body|MonoCode completion notification|User message|Steer/);
+});

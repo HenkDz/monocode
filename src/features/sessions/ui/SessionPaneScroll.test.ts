@@ -300,7 +300,7 @@ it("routes a Mono footer activity click to its session and selected turn", () =>
   ).toBe("true");
 });
 
-it("routes launched sessions from a Mono footer to its session and turn", () => {
+it("routes a launched session's card to the Mono, its turn and the session", () => {
   const pane = props();
   pane.session.blocks[0] = {
     ...pane.session.blocks[0],
@@ -314,35 +314,44 @@ it("routes launched sessions from a Mono footer to its session and turn", () => 
       },
     ],
   };
-  const onShowMonoSessions = vi.fn();
+  const onOpenMonoSession = vi.fn();
+  const monoLaunchedSessions = new Map([
+    ["app-review", { state: { status: "thinking" as const }, title: "Review" }],
+  ]);
   act(() =>
-    root.render(createElement(SessionPane, { ...pane, onShowMonoSessions })),
+    root.render(
+      createElement(SessionPane, {
+        ...pane,
+        onOpenMonoSession,
+        monoLaunchedSessions,
+      }),
+    ),
   );
-  act(() =>
-    container
-      .querySelector<HTMLButtonElement>(
-        '[data-turn-actions] [aria-label="Show sessions"]',
-      )!
-      .click(),
-  );
-  expect(onShowMonoSessions).toHaveBeenCalledWith(
+  const card = container.querySelector<HTMLButtonElement>(
+    '[data-launched-session="app-review"]',
+  )!;
+  expect(card.dataset.state).toBe("thinking");
+  act(() => card.click());
+  expect(onOpenMonoSession).toHaveBeenCalledWith(
     "chat",
     "user",
     pane.session.blocks,
+    "app-review",
   );
   act(() =>
     root.render(
       createElement(SessionPane, {
         ...pane,
-        onShowMonoSessions,
-        monoSessionsTurnId: "user",
+        onOpenMonoSession,
+        monoLaunchedSessions,
+        openMonoSessionId: "app-review",
       }),
     ),
   );
   expect(
     container
-      .querySelector('[aria-label="Hide sessions"]')
-      ?.getAttribute("aria-expanded"),
+      .querySelector('[data-launched-session="app-review"]')
+      ?.getAttribute("aria-pressed"),
   ).toBe("true");
 });
 

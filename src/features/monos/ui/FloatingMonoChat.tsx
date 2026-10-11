@@ -457,7 +457,7 @@ function FloatingConversation({
           onOpenArtifact={onOpenArtifact}
           onOpenDiff={() => void action({ kind: "reveal" })}
           onShowWork={() => void action({ kind: "reveal" })}
-          onShowSessions={() => void action({ kind: "reveal" })}
+          onOpenSession={() => void action({ kind: "reveal" })}
         />
       </div>
       {session.pendingQuestion ? (

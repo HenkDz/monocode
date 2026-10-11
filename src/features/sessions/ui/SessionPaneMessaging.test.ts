@@ -6,6 +6,7 @@ import { SessionPane, type SessionPaneProps } from "./SessionPane";
 import { clearComposerDraft, setComposerDraft } from "../model/draftCache";
 import { saveMonoRotation } from "../../monos/model/monoRotation";
 import { registerBuiltinHarnesses } from "../../../integrations/harness/core/register";
+import { resetHarnessModelOverlays, setHarnessModels } from "../model/models";
 
 const probes = vi.hoisted(() => ({
   mono: true,
@@ -13,6 +14,7 @@ const probes = vi.hoisted(() => ({
   pick: vi.fn(),
   transcript: vi.fn(),
   composer: vi.fn(),
+  modelPicker: vi.fn(),
   checkoutNotice: vi.fn(),
   runs: [] as {
     leadId: string;
@@ -27,6 +29,16 @@ const probes = vi.hoisted(() => ({
     dispatches: [];
   }[],
 }));
+vi.mock("./ModelPicker", async (original) => {
+  const actual = await original<typeof import("./ModelPicker")>();
+  return {
+    ...actual,
+    ModelPicker: (props: Parameters<typeof actual.ModelPicker>[0]) => {
+      probes.modelPicker(props);
+      return createElement(actual.ModelPicker, props);
+    },
+  };
+});
 vi.mock("./Composer", () => ({
   Composer: (props: {
     disabled?: boolean;
@@ -107,8 +119,10 @@ beforeEach(() => {
   );
   vi.stubGlobal("cancelAnimationFrame", vi.fn());
   localStorage.clear();
+  resetHarnessModelOverlays();
   probes.transcript.mockClear();
   probes.composer.mockClear();
+  probes.modelPicker.mockClear();
   probes.checkoutNotice.mockReset().mockReturnValue(null);
   clearComposerDraft("chat");
   probes.pick.mockReset().mockResolvedValue([
@@ -129,6 +143,7 @@ afterEach(() => {
   act(() => root.unmount());
   container.remove();
   clearComposerDraft("chat");
+  resetHarnessModelOverlays();
   vi.unstubAllGlobals();
 });
 const noop = () => {};
@@ -650,6 +665,47 @@ it.each(["reasoningEffort", "serviceTier"])(
   },
 );
 
+it.each([false, true])(
+  "forwards setting IDs from the embedded Mono picker and effort control (member: %s)",
+  async (member) => {
+    probes.member = member;
+    setHarnessModels("codex", [{
+      id: "codex:up1-test",
+      harness: "codex",
+      name: "UP1 test model",
+      settings: [{
+        id: "reasoningEffort",
+        label: "Effort",
+        kind: "select",
+        value: "medium",
+        options: [
+          { value: "medium", label: "Medium" },
+          { value: "high", label: "High" },
+        ],
+      }],
+    }]);
+    const pane = props();
+    pane.session.model = "codex:up1-test";
+    pane.session.modelSettings = { reasoningEffort: "medium" };
+    pane.onModelSettingsChange = vi.fn();
+    render(pane);
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Effort: Medium"]')!.click());
+    const option = [...document.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')]
+      .find(button => button.textContent?.trim() === "High")!;
+    await act(async () => option.click());
+    expect(pane.onModelSettingsChange).toHaveBeenCalledExactlyOnceWith(
+      "chat", { reasoningEffort: "high" }, "reasoningEffort",
+    );
+
+    // The beside-picker layout hides its settings; retain its callback too.
+    const settings = { reasoningEffort: "medium", serviceTier: "fast" };
+    act(() => probes.modelPicker.mock.calls.at(-1)![0].onSettingsChange(settings, "serviceTier"));
+    expect(pane.onModelSettingsChange).toHaveBeenLastCalledWith(
+      "chat", settings, "serviceTier",
+    );
+  },
+);
+
 it("routes a previously blocked user's failed-send Retry through the existing queue", () => {
   probes.mono = false;
   const pane = props();
@@ -697,6 +753,69 @@ it("keeps internal notifications out of the Mono's composer and user outbox", ()
   );
   expect(container.textContent).not.toContain("Session completed: API fix");
   expect(field()).not.toBeNull();
+});
+
+it("keeps ready completion notifications out of the composer while they deliver", () => {
+  const pane = props();
+  const notification = {
+    id: "notification",
+    text: "Hidden completion review prompt",
+    attachments: [],
+    monoSessionCompletion: {
+      sessionId: "worker",
+      title: "API fix",
+      status: "completed" as const,
+    },
+  };
+  pane.session = {
+    ...pane.session,
+    busy: false,
+    queueStatus: "active",
+    queuedMessages: [notification],
+  };
+  render(pane);
+  expect(container.querySelector("[data-message-queue]")).toBeNull();
+  expect(container.textContent).not.toContain(
+    "Hidden completion review prompt",
+  );
+  expect(pane.session.queuedMessages).toEqual([notification]);
+  expect(probes.transcript.mock.calls.at(-1)![0].messageDeliveries.size).toBe(
+    0,
+  );
+  expect(field()).not.toBeNull();
+});
+
+it("keeps failed completion notifications visible and lets the user retry them", () => {
+  const pane = props();
+  pane.onResumeQueue = vi.fn();
+  pane.session = {
+    ...pane.session,
+    busy: false,
+    queueStatus: "paused",
+    queuedMessages: [
+      {
+        id: "notification",
+        text: "Hidden completion review prompt",
+        attachments: [],
+        error: "Connection lost",
+        monoSessionCompletion: {
+          sessionId: "worker",
+          title: "API fix",
+          status: "completed",
+        },
+      },
+    ],
+  };
+  render(pane);
+  const queue = container.querySelector("[data-message-queue]")!;
+  expect(queue.textContent).toContain("Session completed: API fix");
+  expect(queue.textContent).toContain("Connection lost");
+  expect(queue.textContent).not.toContain("Hidden completion review prompt");
+  const retry = [...queue.querySelectorAll<HTMLButtonElement>("button")].find(
+    (button) => button.textContent?.trim() === "Retry",
+  )!;
+  act(() => retry.click());
+  expect(pane.onResumeQueue).toHaveBeenCalledWith("chat");
 });
 
 it("keeps rapid sends out of the queue and steer interface", () => {

@@ -805,7 +805,7 @@ it("shows answers to mid-turn follow-ups immediately and retains them during lat
   expect(container.textContent).toContain("Stopping the review now.");
 });
 
-it.each(["pending", "paused", "failed"] as const)(
+it.each(["pending", "paused", "failed", "storage-blocked"] as const)(
   "keeps narration hidden until a %s follow-up is delivered",
   (delivery) => {
     const blocks: Block[] = [
@@ -825,6 +825,23 @@ it.each(["pending", "paused", "failed"] as const)(
     expect(container.textContent).not.toContain("I will inspect the files.");
   },
 );
+
+it.each(["What have you done today?", "👍"])("keeps a held message visible while storage blocks retry/resume: %s", (text) => {
+  const block: Block = { id: "held", role: "user", text, sentAt: 1100 };
+  const session = { ...newSession("codex", "/tmp"), blocks: [block], queuedMessages: [{ id: block.id, blockId: block.id, text, attachments: [], error: "Old failure" }], queueStatus: "paused" as const, codexStorageError: "hooks.json conflict" };
+  render(session.blocks, {
+    agentMascot: { mascot: "cat", color: "#6ba" },
+    onRetryMessage: vi.fn(),
+    messageDeliveries: monoMessageDeliveries(session),
+  });
+  const bubble = container.querySelector('[data-prompt-anchor="held"]')!;
+  expect(bubble.getAttribute("data-message-delivery")).toBe("storage-blocked");
+  expect(bubble.textContent).toContain(text);
+  expect(bubble.querySelector('[role="status"]')?.textContent).toBe("Waiting for storage repair");
+  expect(bubble.textContent).not.toMatch(/Retry|Resume|Old failure/);
+  expect(bubble.querySelector('[role="alert"]')).toBeNull();
+  expect(session.queuedMessages).toHaveLength(1);
+});
 
 it.each(["Follow up", "👍"])(
   "keeps a failed optimistic message visible with inline retry: %s",

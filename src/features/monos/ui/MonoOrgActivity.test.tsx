@@ -9,6 +9,21 @@ import { newSession } from "../../sessions/model/session";
 import { crewMessages, recordCrewDecision } from "../model/monoCrewEvents";
 import { activityToolTitle } from "../model/monoTeamActivity";
 
+it("shows a storage-blocked member even when its chat is idle", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const roster = [{ id: "reviewer", role: "member", name: "Reviewer", sessionId: "chat", projects: ["/app"], mascot: "cat", color: "#abc" }] as Mono[];
+  const session = { ...newSession("codex", "/app"), id: "chat", codexStorageError: "hooks.json conflict" };
+  const host = document.createElement("div"), root = createRoot(host);
+  try {
+    await act(async () => root.render(<MonoOrgActivity rootId="reviewer" roster={roster} runs={[]} sessions={[session]} now={0} />));
+    expect(host.querySelector('[data-org-member="reviewer"]')?.textContent).toContain("Blocked · storage");
+    expect(host.querySelector('[data-org-member="reviewer"]')?.textContent).not.toContain("Idle");
+  } finally {
+    await act(async () => root.unmount());
+    vi.unstubAllGlobals();
+  }
+});
+
 it("summarizes the newest completed task and its pending approval", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const roster = [{ id: "worker", role: "member", reportsTo: "manager", name: "Worker", projects: ["/app"], mascot: "cat", color: "#abc" }] as Mono[];

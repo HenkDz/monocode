@@ -19,6 +19,28 @@ import {
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
+it("surfaces one actionable account storage issue for multiple blocked members", () => {
+  vi.stubGlobal("window", { innerWidth: 1280 });
+  try {
+    const detail = `Codex storage needs repair: ${JSON.stringify({
+      entry: "hooks.json", monoPath: "C:/mono/hooks.json", sourcePath: "C:/Users/test/.codex/hooks.json",
+      monoBytes: 12, sourceBytes: 20, monoMtime: 1, sourceMtime: 2, identical: false,
+      monoFingerprint: "mono", sourceFingerprint: "source", canKeepMono: true,
+    })}`;
+    const markup = renderToStaticMarkup(createElement(InboxView, {
+      cwd: "/repo", recents: [], onAsk: async () => "", onAskRestart: async () => "",
+      onAskMount: () => {}, onOpenIntegrations: () => {}, onCodexStorageRepair: async () => {},
+      codexStorageIssues: [{ accountId: "default", detail, sessionIds: ["Reviewer", "Backend"],
+        blockedContext: "1 queued message on Reviewer is waiting; Backend is waiting for storage repair" }],
+    }));
+    expect(markup.match(/Codex account · default/g)).toHaveLength(1);
+    expect(markup).toContain("Codex hooks file got out of sync");
+    expect(markup).toContain("1 queued message on Reviewer is waiting");
+    expect(markup).toContain("Use ~/.codex version");
+    expect(markup).toContain("Keep MonoCode version");
+  } finally { vi.unstubAllGlobals(); }
+});
+
 it("labels ordinary-session ready PRs with their session and worktree in the actual Inbox", () => {
   vi.stubGlobal("window", { innerWidth: 1280 });
   try {

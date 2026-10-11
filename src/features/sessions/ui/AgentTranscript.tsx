@@ -2525,10 +2525,10 @@ function UserMessageBlock({
   const deliveryControl =
     delivery && delivery.status !== "pending" ? (
       <div className="flex max-w-full items-center gap-2 px-3 pt-1 font-sans text-xs text-content/50">
-        <span role={delivery.error ? "alert" : "status"}>
-          {delivery.error ? `Not sent · ${delivery.error}` : "Not sent"}
+        <span role={delivery.error && delivery.status !== "storage-blocked" ? "alert" : "status"}>
+          {delivery.status === "storage-blocked" ? "Waiting for storage repair" : delivery.error ? `Not sent · ${delivery.error}` : "Not sent"}
         </span>
-        {onRetryMessage ? (
+        {onRetryMessage && delivery.status !== "storage-blocked" ? (
           <button
             type="button"
             onClick={() => onRetryMessage(block.id)}

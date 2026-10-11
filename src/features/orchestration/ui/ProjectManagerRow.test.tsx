@@ -4,7 +4,26 @@ import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
 import { ProjectManagerRow } from "./ProjectManagerRow";
 import { orchestrator, type OrchestrationRun } from "../model/orchestration";
+import { newSession } from "../../sessions/model/session";
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+
+it("shows the member's storage block instead of idle and clears it after repair", async () => {
+  localStorage.setItem("monocode:mono-roster", JSON.stringify([
+    { id: "m", role: "manager", managerProject: "/repo", projects: ["/repo"], mascot: "cat", color: "#aaaaaa" },
+    { id: "b", role: "member", reportsTo: "m", name: "Reviewer", sessionId: "member-chat", projects: ["/repo"], mascot: "cat", color: "#aaaaaa" },
+  ]));
+  const session = { ...newSession("codex", "/repo"), id: "member-chat", codexStorageError: "hooks.json conflict" };
+  const host = document.createElement("div"), root = createRoot(host);
+  try {
+    await act(async () => root.render(<ProjectManagerRow project="/repo" onOpen={vi.fn()} sessions={[session]} />));
+    expect(host.querySelector('[aria-label="Open Reviewer"] [role="status"]')?.textContent).toBe("Blocked · storage");
+    await act(async () => root.render(<ProjectManagerRow project="/repo" onOpen={vi.fn()} sessions={[{ ...session, codexStorageError: undefined }]} />));
+    expect(host.querySelector('[aria-label="Open Reviewer"] [role="status"]')?.textContent).toBe("Idle");
+  } finally {
+    await act(async () => root.unmount());
+    localStorage.removeItem("monocode:mono-roster");
+  }
+});
 
 it("selects members with native keyboard-focusable buttons and only one current row", async () => {
   localStorage.setItem("monocode:mono-roster", JSON.stringify([

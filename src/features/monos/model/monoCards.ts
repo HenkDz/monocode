@@ -148,6 +148,7 @@ export type CardSession = {
   harness: string;
   busy: boolean;
   needsInput: boolean;
+  storageBlocked?: boolean;
   runtimeMode?: RuntimeMode;
   /** The last thing its agent said, on one line. */
   lastLine?: string;

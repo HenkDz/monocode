@@ -16,6 +16,7 @@ import type { MessageQueueStatus, QueuedMessage } from "../model/session";
 export function MessageQueue({
   messages,
   status,
+  storageBlocked = false,
   onDelete,
   onEdit,
   onEditingChange,
@@ -26,6 +27,7 @@ export function MessageQueue({
 }: {
   messages: QueuedMessage[];
   status?: MessageQueueStatus;
+  storageBlocked?: boolean;
   onDelete?: (messageId: string) => void;
   onEdit?: (messageId: string, text: string) => void;
   onEditingChange?: (messageId?: string) => void;
@@ -74,7 +76,11 @@ export function MessageQueue({
         className="relative z-0 rounded-t-[10px] border border-b-0 border-content/10 bg-content/3 px-2 py-1"
         data-message-queue-card
       >
-        {paused ? (
+        {storageBlocked ? (
+          <div role="status" className="py-1 text-[11px] text-content/50">
+            Waiting for storage repair
+          </div>
+        ) : paused ? (
           <div className="flex h-7 items-center gap-2 border-b border-stroke text-[12px]">
             <Pause className="size-3.5" />
             <span className="min-w-0 flex-1 truncate">
@@ -94,7 +100,7 @@ export function MessageQueue({
             </button>
           </div>
         ) : null}
-        {variant === "messages" && !paused ? (
+        {variant === "messages" && !paused && !storageBlocked ? (
           <div role="status" className="py-1 text-[11px] text-content/50">
             {sendingId ? "Sending…" : "Waiting to send"}
           </div>
@@ -169,7 +175,7 @@ export function MessageQueue({
                       </p>
                     ) : null}
                   </div>
-                  {onSteer && !message.monoSessionCompletion ? (
+                  {onSteer && !storageBlocked && !message.monoSessionCompletion ? (
                     <button
                       type="button"
                       disabled={sending}

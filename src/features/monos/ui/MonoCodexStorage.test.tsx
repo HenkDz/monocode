@@ -37,6 +37,101 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
+const hooksConflict = {
+  entry: "hooks.json", monoPath: "C:/synthetic/mono/hooks.json", sourcePath: "C:/synthetic/.codex/hooks.json",
+  monoBytes: 18, sourceBytes: 5202, monoMtime: 1, sourceMtime: 2, identical: false,
+  monoFingerprint: "mono-hash", sourceFingerprint: "account-hash", canKeepMono: true,
+};
+const conflictDetail = (value = hooksConflict) => `Codex storage needs repair: ${JSON.stringify(value)}`;
+const buttonNamed = (name: string) => Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
+  .find(button => button.textContent?.startsWith(name))!;
+
+it("offers explicit account and Mono choices with a plain title, held message context, and collapsed diagnostics", async () => {
+  const resolve = vi.fn(async () => {});
+  const reveal = vi.fn(async () => {});
+  const detail = conflictDetail();
+  await act(async () => root.render(
+    <MonoCodexStorageNotice detail={detail} blockedContext="1 queued message on Reviewer is waiting"
+      onRepair={vi.fn()} onResolve={resolve} onReveal={reveal} />,
+  ));
+  expect(container.querySelectorAll('[role="status"]')).toHaveLength(1);
+  expect(container.textContent).toContain("Codex hooks file got out of sync");
+  expect(container.textContent).toContain("1 queued message on Reviewer is waiting");
+  expect(container.querySelector("details")?.open).toBe(false);
+  expect(container.textContent).toContain("Recommended");
+  await act(async () => buttonNamed("Show in folder").click());
+  expect(reveal).toHaveBeenCalledOnce();
+  await act(async () => buttonNamed("Copy details").click());
+  expect(native.copy).toHaveBeenCalledWith(detail);
+  await act(async () => buttonNamed("Keep MonoCode version").click());
+  expect(resolve).toHaveBeenCalledExactlyOnceWith("keep_mono_version");
+  expect(container.textContent).toContain("Codex storage repaired");
+});
+
+it("uses the recommended account version and prevents other actions until resolution finishes", async () => {
+  let finish!: () => void;
+  const resolve = vi.fn(() => new Promise<void>(done => { finish = done; }));
+  await act(async () => root.render(
+    <MonoCodexStorageNotice detail={conflictDetail()} onRepair={vi.fn()} onResolve={resolve}
+      onCompare={vi.fn()} onReveal={vi.fn()} />,
+  ));
+  await act(async () => buttonNamed("Use ~/.codex version").click());
+  expect(resolve).toHaveBeenCalledExactlyOnceWith("use_account_version");
+  for (const name of ["Repairing", "Keep MonoCode version", "Compare", "Show in folder"])
+    expect(buttonNamed(name).disabled).toBe(true);
+  await act(async () => buttonNamed("Keep MonoCode version").click());
+  expect(resolve).toHaveBeenCalledOnce();
+  await act(async () => finish());
+  expect(container.textContent).toContain("Codex storage repaired");
+});
+
+it("compares bounded plain text versions and never interprets hooks as markup", async () => {
+  const compare = vi.fn(async () => ({
+    sourceContent: "<script>run_hook()</script>", monoContent: "x".repeat(70000),
+  }));
+  await act(async () => root.render(
+    <MonoCodexStorageNotice detail={conflictDetail()} onRepair={vi.fn()} onCompare={compare} />,
+  ));
+  await act(async () => buttonNamed("Compare").click());
+  expect(compare).toHaveBeenCalledOnce();
+  expect(container.querySelector('[aria-label="Account version"] pre')?.textContent).toBe("<script>run_hook()</script>");
+  expect(container.querySelector('[aria-label="MonoCode version"] pre')?.textContent).toHaveLength(65536);
+  expect(container.querySelector("script")).toBeNull();
+  expect(container.textContent).toContain("Preview truncated");
+  await act(async () => buttonNamed("Close comparison").click());
+  expect(container.querySelector('[aria-label="Account version"]')).toBeNull();
+});
+
+it("disables private credential overrides and hides unavailable comparison content", async () => {
+  const resolve = vi.fn(async () => {});
+  const compare = vi.fn(async () => ({ unavailable: "Credential content cannot be compared", sourceContent: "do-not-show", monoContent: "do-not-show" }));
+  await act(async () => root.render(
+    <MonoCodexStorageNotice detail={conflictDetail({ ...hooksConflict, entry: "auth.json", canKeepMono: false })}
+      onRepair={vi.fn()} onResolve={resolve} onCompare={compare} />,
+  ));
+  expect(buttonNamed("Keep MonoCode version").disabled).toBe(true);
+  await act(async () => buttonNamed("Keep MonoCode version").click());
+  expect(resolve).not.toHaveBeenCalled();
+  await act(async () => buttonNamed("Compare").click());
+  expect(container.textContent).toContain("Credential content cannot be compared");
+  expect(container.textContent).not.toContain("do-not-show");
+});
+
+it("offers preparation refresh when a stale conflict is already linked", async () => {
+  const resolve = vi.fn(async () => { throw new Error("The file is already linked. Refresh the issue."); });
+  const repair = vi.fn(async () => {});
+  await act(async () => root.render(
+    <MonoCodexStorageNotice detail={conflictDetail()} onRepair={repair} onResolve={resolve} />,
+  ));
+  expect(buttonNamed("Refresh issue")).toBeUndefined();
+  await act(async () => buttonNamed("Use ~/.codex version").click());
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain("already linked");
+  await act(async () => buttonNamed("Refresh issue").click());
+  expect(repair).toHaveBeenCalledOnce();
+  expect(resolve).toHaveBeenCalledOnce();
+  expect(container.textContent).toContain("Codex storage repaired");
+});
+
 it("shows one system notice with Repair, prevents concurrent clicks, and reports failed repair", async () => {
   let reject!: (error: Error) => void;
   const onRepair = vi.fn(
@@ -172,7 +267,7 @@ it("shows clipboard failures while retaining the exact repair details", async ()
       .find((button) => button.textContent === "Copy details")!
       .click(),
   );
-  expect(container.querySelector('[role="alert"]')?.textContent).toBe(detail);
+  expect(container.querySelector("details pre")?.textContent).toBe(detail);
   expect(container.textContent).toContain(
     "Could not copy details: Clipboard unavailable",
   );

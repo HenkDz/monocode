@@ -8,7 +8,7 @@ import {
   type MonoManagerGoal,
 } from "../model/monoManagerGoals";
 import type { Mono } from "../model/mono";
-import { openCardSession } from "../model/monoCards";
+import { cardSession, openCardSession } from "../model/monoCards";
 vi.mock("../model/monoCards", () => ({
   openCardSession: vi.fn(),
   cardSession: vi.fn(),
@@ -20,6 +20,22 @@ vi.mock("../../source-control/hooks/usePrStatus", () => ({
 vi.mock("../../orchestration/ui/ProjectManagerReview", () => ({
   ReadyCard: () => null,
 }));
+
+it("labels a storage-blocked session card before idle or needs-input", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const hydrate = vi.spyOn(monoManagerGoals, "hydrate").mockResolvedValue({ version: 1, goals: [], receipts: {} });
+  vi.mocked(cardSession).mockReturnValue({ id: "chat", title: "Reviewer", harness: "codex", busy: false, needsInput: true, storageBlocked: true });
+  const host = document.createElement("div"), root = createRoot(host);
+  try {
+    await act(async () => root.render(<MonoChatCard monoId="reviewer" blockId="card" card={{ type: "session", sessionId: "chat" }} />));
+    expect(host.textContent).toBe("Reviewer · Blocked · storage");
+  } finally {
+    await act(async () => root.unmount());
+    vi.mocked(cardSession).mockReset();
+    hydrate.mockRestore();
+    vi.unstubAllGlobals();
+  }
+});
 
 it("leaves explicit PR blocks to the turn summary and hides empty ready cards", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);

@@ -13,7 +13,7 @@ import type {
 
 type UserCards = Parameters<typeof appendUser>[3];
 export type MessageDelivery = {
-  status: "pending" | "paused" | "failed";
+  status: "pending" | "paused" | "failed" | "storage-blocked";
   error?: string;
 };
 
@@ -90,11 +90,13 @@ export function monoMessageDeliveries(
       .map((message) => [
         message.blockId ?? message.id,
         {
-          status: message.error
-            ? "failed"
-            : session.queueStatus === "paused"
-              ? "paused"
-              : "pending",
+          status: session.codexStorageError
+            ? "storage-blocked"
+            : message.error
+              ? "failed"
+              : session.queueStatus === "paused"
+                ? "paused"
+                : "pending",
           ...(message.error ? { error: message.error } : {}),
         },
       ]),

@@ -207,6 +207,9 @@ import {
   type InboxSessionPortal,
 } from "./InboxDiscussionPanel";
 import { inboxAskKey } from "../model/inboxAsk";
+import { MonoCodexStorageNotice } from "../../monos/ui/MonoCodexStorageNotice";
+import type { MonoCodexStorageIssue } from "../../monos/model/monoCodexStorageIssues";
+import type { CodexStorageResolution, CodexStorageComparison } from "../../monos/model/monoCodexStorage";
 
 const MIN_WIDTH = 240;
 const MAX_WIDTH = 420;
@@ -390,6 +393,10 @@ type Props = {
   onRepairChecks?: CiRepairProps["onRepairChecks"];
   onRepairNotNeeded?: CiRepairProps["onRepairNotNeeded"];
   sessions?: readonly SessionSummary[];
+  codexStorageIssues?: readonly MonoCodexStorageIssue[];
+  onCodexStorageRepair?: (sessionId: string, resolution?: CodexStorageResolution) => Promise<void>;
+  onCodexStorageCompare?: (sessionId: string) => Promise<CodexStorageComparison>;
+  onCodexStorageReveal?: (sessionId: string) => Promise<void>;
   managerQuestions?: readonly { id: string; key?: string; project: string; question: string; sourceLabel?: string; kind?: "decision" | "reply" | "ready"; urls?: readonly string[] }[];
   onOpenSession?: (sessionId: string) => void | Promise<void>;
   /** Session-card destination to reveal after the Inbox list loads. */
@@ -413,6 +420,10 @@ export function InboxView({
   onRepairChecks,
   onRepairNotNeeded,
   sessions = [],
+  codexStorageIssues = [],
+  onCodexStorageRepair,
+  onCodexStorageCompare,
+  onCodexStorageReveal,
   managerQuestions = [],
   onOpenSession,
   target = null,
@@ -921,6 +932,21 @@ export function InboxView({
       ref={resize.setPaneRef}
       className="relative flex h-full min-h-0 shrink-0 flex-col border-r border-stroke"
     >
+      {codexStorageIssues.length > 0 && onCodexStorageRepair && (
+        <section aria-label="Codex account storage issues" className="max-h-80 shrink-0 overflow-y-auto border-b border-stroke">
+          {codexStorageIssues.map(issue => <div key={issue.accountId}>
+            <p className="px-4 pt-2 text-xs text-content/50">Codex account · {issue.accountId}</p>
+            <MonoCodexStorageNotice
+              detail={issue.detail}
+              blockedContext={issue.blockedContext}
+              onRepair={() => onCodexStorageRepair(issue.sessionIds[0])}
+              onResolve={resolution => onCodexStorageRepair(issue.sessionIds[0], resolution)}
+              onCompare={onCodexStorageCompare ? () => onCodexStorageCompare(issue.sessionIds[0]) : undefined}
+              onReveal={onCodexStorageReveal ? () => onCodexStorageReveal(issue.sessionIds[0]) : undefined}
+            />
+          </div>)}
+        </section>
+      )}
       {managerQuestions.length > 0 && <section aria-label="Manager questions" className="max-h-48 shrink-0 overflow-y-auto border-b border-stroke p-2">
         {(["decision", "ready", "reply"] as const).map(kind => <div key={kind}>
         {managerQuestions.some(item => (item.kind ?? "decision") === kind) && <h2 className="px-2 py-1 text-xs font-medium text-content/60">{kind === "ready" ? "Ready to merge" : kind === "reply" ? "New replies" : "Needs your decision"}</h2>}

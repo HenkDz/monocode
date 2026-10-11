@@ -8037,9 +8037,29 @@ function Workspace({
       const rotationTask = rotationRun?.tasks.find(task => task.sessionId === sessionId);
       const taskContext = rotationTask && rotationRun
         ? retainedTaskContext(rotationRun, rotationTask) : "";
-      const rotationStatus = (mono || rotationTask) && !pendingSwitch && !editedResend
-        ? sessionRotationStatus(current, harnessText, taskContext) : undefined;
+      const pendingRotation = loadMonoRotation(sessionId)?.pendingBrief;
+      const rotationStatus = (mono || rotationTask || pendingRotation) && !pendingSwitch && (!editedResend || pendingRotation)
+        ? sessionRotationStatus(current, harnessText, taskContext,
+          editedResend ? draftCleared.blocks.slice(editedResend.blocks.length) : []) : undefined;
       const monoRotation = rotationStatus?.plan;
+      if (pendingRotation && !monoRotation) {
+        const message = rotationStatus?.deferredReason ?? "Context refresh is pending. Finish pending operations or decisions before retrying.";
+        editedResend?.reject();
+        enqueueHarnessEvent(sessionId, { type: "session.error", message });
+        flushHarnessEvents();
+        options?.onSettled?.({ status: "failed", text: "", error: message });
+        return false;
+      }
+      // Preserve the replacement carry before a rewind can remove its provider copy.
+      if (editedResend && monoRotation && !saveMonoRotation(sessionId, {
+        ...monoRotation.rotation, pendingBrief: monoRotation.rotation.pendingBrief ?? monoRotation.brief(sessionId),
+      })) {
+        editedResend.reject();
+        enqueueHarnessEvent(sessionId, { type: "session.error", message: "The context refresh brief could not be saved. Try again when storage is available." });
+        flushHarnessEvents();
+        options?.onSettled?.({ status: "failed", text: "", error: "The context refresh brief could not be saved." });
+        return false;
+      }
 
       const gen = (turnGen.current.get(sessionId) ?? 0) + 1;
       turnGen.current.set(sessionId, gen);
@@ -8753,8 +8773,6 @@ function Workspace({
                 : turnPrompt,
             ),
           );
-          if (rotationStatus?.deferredReason && loadMonoRotation(sessionId)?.pendingBrief)
-            throw new Error(rotationStatus.deferredReason);
           if (monoRotation) {
             if (turnGen.current.get(sessionId) !== gen) return;
             if (!saveMonoRotation(sessionId, {

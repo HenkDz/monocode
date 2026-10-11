@@ -88,13 +88,24 @@ export function sessionRotationStatus(
     Partial<Session>,
   nextText = "",
   taskContext = "",
+  replacedBlocks: readonly Block[] = [],
 ): { plan?: ReturnType<typeof planRotation>; deferredReason?: string } {
-  if (!canRotateContext(session)) return {};
   const previous = loadMonoRotation(session.id);
+  if (!canRotateContext({ ...session, blocks: [...session.blocks, ...replacedBlocks] }))
+    return previous?.pendingBrief ? {
+      deferredReason: "Context refresh is pending. Finish pending operations or decisions before retrying.",
+    } : {};
   if (!previous?.pendingBrief && !rotationReason(session, nextText)) return {};
+  if (previous?.pendingBrief &&
+    replacedBlocks.some(block => block.id === previous.afterBlockId))
+    return { deferredReason: "Context refresh deferred: earlier constraints cannot be edited while a refresh is pending. Retry without editing." };
+  const replacedIds = new Set(replacedBlocks.map(block => block.id));
+  const replacedTexts = new Set(replacedBlocks.filter(block => block.role === "user" && !block.internal).map(block => block.text));
   const after = previous?.afterBlockId
     ? session.blocks.findIndex((block) => block.id === previous.afterBlockId)
     : -1;
+  if (previous?.pendingBrief && replacedBlocks.length && previous.afterBlockId && after < 0)
+    return { deferredReason: "Context refresh deferred: the edited input's boundary is not loaded. Load the earlier conversation or retry without editing." };
   // A paged archive cannot prove all older constraints without a complete carry.
   if (
     session.monoTranscript?.before != null &&
@@ -104,7 +115,8 @@ export function sessionRotationStatus(
       deferredReason: "Context refresh deferred: older constraints are not fully loaded. Compact manually or load the earlier conversation.",
     };
   const requests = new Map(
-    (previous?.userRequests ?? []).map((request) => [request.id, request]),
+    (previous?.userRequests ?? []).filter(request => !replacedIds.has(request.id))
+      .map((request) => [request.id, request]),
   );
   for (const block of session.blocks) {
     if (
@@ -126,39 +138,40 @@ export function sessionRotationStatus(
       );
   }
   const referenceText = [...references].join("\n");
-  const constraints = userRequests.map((request) => request.text).join("\n\n");
-  const pendingInputs = previous?.pendingBrief
-    ? [...new Set([
-        ...(previous.pendingInputs ?? []),
-        ...(previous.pendingInput ? [previous.pendingInput] : []),
-        ...session.blocks.slice(after + 1)
-          .filter(block => block.role === "user" && !block.internal && !block.draft)
-          .map(block => block.text),
-        nextText,
-      ].filter(text => text.trim()))]
-    : [];
   const requestTexts = new Set(userRequests.map(request => request.text));
-  const protectedChars = constraints.length + taskContext.length + referenceText.length +
-    pendingInputs.filter(text => !requestTexts.has(text)).join("\n\n").length;
+  const constraints = [...requestTexts].join("\n\n");
+  const savedInputs = previous?.pendingBrief ? [
+    ...(previous.pendingInputs ?? []),
+    ...(previous.pendingInput ? [previous.pendingInput] : []),
+  ] : [];
+  const pendingInputs = [...new Set([
+    ...savedInputs.filter(text => !replacedTexts.has(text) || requestTexts.has(text)),
+    ...(previous?.pendingBrief ? session.blocks.slice(after + 1)
+      .filter(block => block.role === "user" && !block.internal && !block.draft)
+      .map(block => block.text) : []),
+    nextText,
+  ].filter(text => text.trim()))];
+  const protectedChars = [...new Set([...requestTexts, ...pendingInputs])].join("\n\n").length +
+    taskContext.length + referenceText.length;
   if (protectedChars > 8_000)
     return {
-      deferredReason: `Context refresh deferred: constraints, scope or references too large (${protectedChars} chars; limit 8,000). Compact manually or trim constraints.`,
+      deferredReason: `Context refresh deferred: constraints, scope or references too large (${protectedChars} chars; limit 8,000). ${previous?.pendingBrief ? "Trim the next input or edit the unaccepted input; compaction cannot shrink saved inputs." : "Compact manually or trim the next input."}`,
     };
+  const retryBrief = (base: string) => [base,
+    ...(pendingInputs.length ? [
+      `Unaccepted continuation inputs; retain their constraints, with the current request taking priority:\n${pendingInputs.join("\n\n")}`,
+    ] : []),
+  ].join("\n\n");
   if (previous?.pendingBrief) {
-    const brief = () => [
-      previous.pendingBrief,
-      ...(pendingInputs.length ? [
-        `Unaccepted continuation inputs; retain their constraints, with the current request taking priority:\n${pendingInputs.join("\n\n")}`,
-      ] : []),
-    ].join("\n\n");
+    const brief = () => retryBrief(previous.pendingBrief!);
     const chars = brief().length + nextText.length + 120;
     if (chars > 14_000)
       return {
-        deferredReason: `Context refresh deferred: brief and next input too large (${chars} chars; limit 14,000). Compact manually or trim constraints.`,
+        deferredReason: `Context refresh deferred: brief and next input too large (${chars} chars; limit 14,000). Trim the next input or edit the unaccepted input; compaction cannot shrink saved inputs.`,
       };
     return {
       plan: {
-        rotation: { ...previous, userRequests, references: [...references], pendingInputs },
+        rotation: { ...previous, userRequests, references: [...references], pendingInput: replacedBlocks.length ? undefined : previous.pendingInput, pendingInputs },
         brief,
       },
     };
@@ -189,10 +202,10 @@ export function sessionRotationStatus(
         : []),
     ].join("\n\n");
   // Leave 12K for CC1's first-thread context within its 26K rotation budget.
-  const chars = brief(session.id).length + nextText.length + 120;
+  const chars = retryBrief(brief(session.id)).length + nextText.length + 120;
   if (chars > 14_000)
     return {
-      deferredReason: `Context refresh deferred: brief and next input too large (${chars} chars; limit 14,000). Compact manually or trim constraints.`,
+      deferredReason: `Context refresh deferred: brief and next input too large (${chars} chars; limit 14,000). Compact manually or trim the next input.`,
     };
   return { plan: { rotation: plan.rotation, brief } };
 }

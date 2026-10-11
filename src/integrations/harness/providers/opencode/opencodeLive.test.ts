@@ -132,6 +132,17 @@ const {
   stopOpenCodeSession,
 } = await import("./opencode");
 import type { HarnessEvent } from "../../core/types";
+const { canEditLastTurn, createEditedResendAttempt } = await import(
+  "../../../../features/sessions/model/editLastTurn"
+);
+const {
+  acceptMonoRotation,
+  loadMonoRotation,
+  rotateProviderContext,
+  saveMonoRotation,
+  sessionRotationStatus,
+} = await import("../../../../features/monos/model/monoRotation");
+const { assembleMonoPrompt } = await import("../../../../features/monos/model/monoPrompt");
 
 const waitFor = async (predicate: () => boolean, label: string) => {
   for (let index = 0; index < 200; index += 1) {
@@ -1051,6 +1062,142 @@ describe("OpenCode event stream recovery", () => {
 });
 
 describe("OpenCode edit recovery", () => {
+  it("reattaches pending constraints after a lost rotation response, stop cleanup and edited resend rewind", async () => {
+    const stored = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => stored.get(key) ?? null,
+      setItem: (key: string, value: string) => stored.set(key, value),
+    });
+    const baseHttp = harnessHttp.getMockImplementation()!;
+    try {
+      const restriction = "Never read /synthetic/private; use only /synthetic/approved.";
+      const assignment = "Original assignment (verbatim): Verify the parser only in the retained checkout.";
+      const firstRequest = "Continue the parser task. Do not publish.";
+      const session = {
+        ...newSession("opencode", "/repo"),
+        id: "opencode-live",
+        model: "opencode:openrouter/anthropic/claude-sonnet-4.6",
+        providerSessionId: "old",
+        context: { used: 700, window: 1000 },
+        orchestrationLeadId: "lead",
+        blocks: [
+          { id: "scope", role: "user" as const, text: restriction },
+          { id: "done", role: "assistant" as const, text: "Checkpoint ready." },
+        ],
+      };
+      expect(canEditLastTurn(session)).toBe(true);
+      const planned = sessionRotationStatus(session, firstRequest, assignment).plan!;
+      expect(planned).toBeDefined();
+      expect(saveMonoRotation(session.id, {
+        ...planned.rotation,
+        pendingBrief: planned.brief(session.id),
+      })).toBe(true);
+      const fresh = await rotateProviderContext(session, async () => undefined);
+      const accepted = vi.fn(() => acceptMonoRotation(fresh.id, planned.rotation.at));
+      const sentTexts: string[] = [];
+      harnessHttp.mockImplementation(async (input) => {
+        const pathname = new URL(input.url).pathname;
+        if (input.method === "POST" && pathname.endsWith("/prompt_async")) {
+          const body = JSON.parse(input.body!) as {
+            parts: { type: string; text?: string }[];
+          };
+          sentTexts.push(body.parts.filter(part => part.type === "text")
+            .map(part => part.text).join("\n"));
+          sessionMessages.push({
+            info: {
+              id: `stored-attempt-${sentTexts.length}`,
+              sessionID: "session_1",
+              role: "user",
+              time: { created: sentTexts.length },
+            },
+            parts: body.parts,
+          });
+          if (sentTexts.length === 1)
+            throw new Error("synthetic response lost after storing prompt");
+          return { status: 204, body: "" };
+        }
+        if (input.method === "POST" && pathname.endsWith("/revert")) {
+          sessionMessages = [];
+          return { status: 204, body: "" };
+        }
+        return baseHttp(input);
+      });
+      const input = {
+        sessionId: fresh.id,
+        cwd: fresh.cwd,
+        model: fresh.model,
+        runtimeMode: fresh.runtimeMode,
+        onEvent(event: HarnessEvent) {
+          if (event.type === "session.providerBound")
+            fresh.providerSessionId = event.providerSessionId;
+        },
+      };
+      await expect(sendOpenCodeTurn({
+        ...input,
+        text: firstRequest,
+        prepareText: async () => assembleMonoPrompt(
+          firstRequest, [planned.brief(fresh.id)], false, false,
+        ),
+        onAccepted: accepted,
+      })).rejects.toThrow("synthetic response lost after storing prompt");
+      expect(sentTexts[0]).toContain(restriction);
+      expect(sentTexts[0]).toContain(assignment);
+      expect(accepted).not.toHaveBeenCalled();
+      expect(loadMonoRotation(fresh.id)?.pendingBrief).toContain(restriction);
+      fresh.blocks.push({ id: "failed-attempt", role: "user", text: firstRequest });
+
+      await stopOpenCodeSession(fresh.id);
+      expect(closeHarnessSse).toHaveBeenCalledExactlyOnceWith(fresh.id);
+      expect(killChild).toHaveBeenCalledExactlyOnceWith(fresh.id);
+      expect(harnessHttp.mock.calls.some(([request]) =>
+        new URL(request.url).pathname === "/session/session_1/abort",
+      )).toBe(true);
+      expect(canEditLastTurn(fresh)).toBe(true);
+      const edited = createEditedResendAttempt(fresh);
+      expect(edited).not.toBeNull();
+      const retryText = "Verify tests only.";
+      const retry = sessionRotationStatus(
+        { ...fresh, blocks: edited!.blocks },
+        retryText,
+        assignment,
+        fresh.blocks.slice(edited!.blocks.length),
+      ).plan!;
+      expect(retry).toBeDefined();
+      expect(saveMonoRotation(fresh.id, retry.rotation)).toBe(true);
+      await expect(rewindOpenCodeLastTurn(input)).resolves.toEqual({ submitted: false });
+      edited!.markProviderRewound();
+      expect(harnessHttp.mock.calls.some(([request]) =>
+        new URL(request.url).pathname.endsWith("/revert"),
+      )).toBe(true);
+      expect(sessionMessages).toHaveLength(0);
+      expect(loadMonoRotation(fresh.id)?.pendingBrief).toContain(restriction);
+      const done = sendOpenCodeTurn({
+        ...input,
+        text: retryText,
+        prepareText: async () => assembleMonoPrompt(
+          retryText, [retry.brief(fresh.id)], false, false,
+        ),
+        onAccepted: accepted,
+      });
+      await waitFor(() => accepted.mock.calls.length === 1, "retry acceptance");
+      idle();
+      await done;
+      expect(sentTexts).toHaveLength(2);
+      expect(sentTexts[1]).toContain(restriction);
+      expect(sentTexts[1]).toContain(assignment);
+      expect(sentTexts[1]).toContain(retryText);
+      expect(sentTexts[1]).not.toContain(firstRequest);
+      expect(accepted).toHaveBeenCalledOnce();
+      expect(loadMonoRotation(fresh.id)?.pendingBrief).toBeUndefined();
+      expect(loadMonoRotation(fresh.id)?.pendingInput).toBeUndefined();
+      expect(loadMonoRotation(fresh.id)?.pendingInputs).toBeUndefined();
+      expect(canEditLastTurn(fresh)).toBe(true);
+    } finally {
+      harnessHttp.mockImplementation(baseHttp);
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("reverts the latest user message before resending an edited prompt", async () => {
     sessionMessages = [
       {

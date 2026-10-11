@@ -57,10 +57,11 @@ export function prepareCodexMonoContext(input: MonoSkillsContext & {
   providerAccountId?: string;
   threadId?: string;
   migrationOnly?: boolean;
+  sandboxRequired?: boolean;
 }): Promise<PreparedContext> {
   const key = `${input.providerAccountId ?? "default"}:${input.sessionId}`;
   const pending = inFlight.get(key);
-  const skills = JSON.stringify([input.cwd, input.skillsRole, input.skillsPolicy]);
+  const skills = JSON.stringify([input.cwd, input.skillsRole, input.skillsPolicy, input.sandboxRequired]);
   if (pending) {
     if (
       pending.threadId === input.threadId &&
@@ -87,10 +88,13 @@ async function prepare(
   const store = await prepareMonoCodexStore(
     input.providerAccountId,
     input.threadId,
-    { skillsRole: input.skillsRole, skillsPolicy: input.skillsPolicy, projectPath: input.cwd },
+    { skillsRole: input.skillsRole, skillsPolicy: input.skillsPolicy, projectPath: input.cwd, sandboxRequired: input.sandboxRequired },
   );
   if (input.migrationOnly && store.hasThread)
     return { config: {}, hasThread: true, ...(store.threadPath ? { threadPath: store.threadPath } : {}) };
+  if (input.threadId && store.hasThread && store.threadPath?.replace(/\\/g, "/").split("/").includes("archived_sessions")) {
+    store.threadPath = await restoreMonoThread(input, store);
+  }
   const release = await acquireHarnessBridge();
   const id = `${input.sessionId}:codex-store:${input.providerAccountId ?? "default"}`;
   const rpc: JsonRpcClient = new JsonRpcClient(
@@ -242,6 +246,37 @@ async function prepare(
     }
     if (method) throw new Error(`Codex storage ${method}: ${error instanceof Error ? error.message : String(error)}`);
     throw error;
+  } finally {
+    rpc.close();
+    unwatchChild(id);
+    await killChild(id).catch(() => undefined);
+    release();
+  }
+}
+
+/** Native unarchive restores the indexed rollout before the selected home resumes it. */
+async function restoreMonoThread(
+  input: Parameters<typeof prepareCodexMonoContext>[0],
+  store: Awaited<ReturnType<typeof prepareMonoCodexStore>>,
+): Promise<string> {
+  const release = await acquireHarnessBridge();
+  const id = `${input.sessionId}:codex-restore:${input.providerAccountId ?? "default"}`;
+  const rpc = new JsonRpcClient(id, {}, { includeJsonrpc: false, label: "codex-restore" });
+  watchChild(id, line => rpc.pushLine(line), () => rpc.close(new Error("Codex restore connection exited")));
+  try {
+    await spawnChild(id, input.path, ["app-server", ...(store.skillArgs ?? [])], input.cwd,
+      { provider: "codex", id: input.providerAccountId ?? "default" }, "codex", "mono", undefined, store.skillsContextId);
+    await rpc.request("initialize", {
+      clientInfo: { name: "monocode", title: "MonoCode", version: "0.1.0" },
+      capabilities: { experimentalApi: true },
+    }, 30_000);
+    await rpc.notify("initialized", undefined);
+    const restored = await rpc.request<{ thread: Thread }>("thread/unarchive", { threadId: input.threadId }, 30_000);
+    if (restored.thread.id !== input.threadId || !restored.thread.path || restored.thread.path.replace(/\\/g, "/").split("/").includes("archived_sessions"))
+      throw new Error("Codex did not restore the saved Mono context");
+    return restored.thread.path;
+  } catch (error) {
+    throw new Error(`Codex storage restore: ${error instanceof Error ? error.message : String(error)}`);
   } finally {
     rpc.close();
     unwatchChild(id);

@@ -917,6 +917,31 @@ export async function loadWorkspaceSnapshot(): Promise<unknown | null> {
   return raw ?? null;
 }
 
+function sanitizeMonoGoalSubmission(value: unknown): Block["monoGoalSubmission"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const submission = value as Record<string, unknown>;
+  const id = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(value);
+  const project = (value: unknown): value is string => typeof value === "string" && !!value.trim() && value.length <= 4096;
+  const { ownerId, requestId, userMessageId, projectId, managerMonoId, reason, choice } = submission;
+  if (Object.keys(submission).some(key => !["ownerId", "requestId", "userMessageId", "projectId", "managerMonoId", "reason", "choice"].includes(key)) ||
+      !id(ownerId) || !id(requestId) || !id(userMessageId) ||
+      (projectId !== undefined && !project(projectId)) || (managerMonoId !== undefined && !id(managerMonoId)) ||
+      typeof reason !== "string" || !reason.trim() || reason.length >= 280 ||
+      !choice || typeof choice !== "object" || Array.isArray(choice)) return undefined;
+  const selected = choice as Record<string, unknown>;
+  if (Object.keys(selected).some(key => !["mode", "override", "projectId"].includes(key)) ||
+      (selected.mode !== "chat" && selected.mode !== "goal") ||
+      (selected.override !== "auto" && selected.override !== "grand" && selected.override !== "manager") ||
+      (selected.projectId !== undefined && !project(selected.projectId))) return undefined;
+  return {
+    ownerId, requestId, userMessageId, reason,
+    ...(projectId !== undefined ? { projectId } : {}),
+    ...(managerMonoId !== undefined ? { managerMonoId } : {}),
+    choice: { mode: selected.mode, override: selected.override,
+      ...(selected.projectId !== undefined ? { projectId: selected.projectId } : {}) },
+  };
+}
+
 function sanitizeBlock(
   block: Block,
   options?: { hydrate?: boolean },
@@ -926,6 +951,12 @@ function sanitizeBlock(
     role: block.role,
     text: block.text,
   };
+  if (block.role === "user" && !block.internal && !block.draft && !block.attachments?.length && block.appRequestId == null &&
+      block.monoSource == null && block.monoSessionCompletion == null &&
+      block.monoTeamMessage == null && block.monoHabit == null) {
+    const submission = sanitizeMonoGoalSubmission(block.monoGoalSubmission);
+    if (submission?.userMessageId === block.id) next.monoGoalSubmission = submission;
+  }
   if (block.attachments?.length) {
     next.attachments = block.attachments.map(persistableAttachment);
   }

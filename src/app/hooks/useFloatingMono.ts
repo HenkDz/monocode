@@ -55,10 +55,13 @@ export function useFloatingMono(
       if (!session) return;
       const state = monoLiveState(listMonos(), current.current.runs, current.current.sessions, monoId);
       lastSessions.set(monoId, session);
-      lastStates.set(monoId, JSON.stringify(state));
+      lastStates.set(monoId, JSON.stringify({ state, goalRouting: current.current.host.goalRouting?.(monoId) }));
       void invoke("mono_chat_publish", {
         monoId,
-        session: floatingMonoSession(session, state),
+        session: {
+          ...floatingMonoSession(session, state),
+          monoGoalRouting: current.current.host.goalRouting?.(monoId),
+        },
       }).catch(console.error);
     };
     publish.current = () => {
@@ -73,7 +76,10 @@ export function useFloatingMono(
         const session = current.current.sessions.find(
           (s) => s.id === mono.sessionId,
         );
-        const stateKey = JSON.stringify(monoLiveState(listMonos(), current.current.runs, current.current.sessions, monoId));
+        const stateKey = JSON.stringify({
+          state: monoLiveState(listMonos(), current.current.runs, current.current.sessions, monoId),
+          goalRouting: current.current.host.goalRouting?.(monoId),
+        });
         if (session && (session !== lastSessions.get(monoId) || stateKey !== lastStates.get(monoId))) {
           publishSession(monoId);
         }

@@ -1,11 +1,12 @@
 // @vitest-environment happy-dom
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { expect, it, vi } from "vitest";
-import { ProjectManagerRow } from "./ProjectManagerRow";
+import { afterEach, expect, it, vi } from "vitest";
+import { ProjectManagerRow, SidebarUnseenCounts } from "./ProjectManagerRow";
 import { orchestrator, type OrchestrationRun } from "../model/orchestration";
 import { newSession } from "../../sessions/model/session";
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+afterEach(() => localStorage.clear());
 
 it("shows the member's storage block instead of idle and clears it after repair", async () => {
   localStorage.setItem("monocode:mono-roster", JSON.stringify([
@@ -46,8 +47,9 @@ it("selects members with native keyboard-focusable buttons and only one current 
   try {
     await act(async () => root.render(<ProjectManagerRow project="/repo" onOpen={open} onOpenMember={open} selected />));
     expect(host.querySelectorAll('[aria-current="page"]')).toHaveLength(1);
+    await act(async () => host.querySelector<HTMLButtonElement>('button[aria-controls]')!.click());
     const member = host.querySelector<HTMLButtonElement>('[aria-label="Open Backend"]')!;
-    member.focus();
+    await act(async () => member.focus());
     expect(document.activeElement).toBe(member);
     await act(async () => member.click());
     expect(open).toHaveBeenCalledWith("b");
@@ -102,6 +104,51 @@ it("shows member availability and a task tooltip without repeating its title or 
 const trees = vi.hoisted(() => ({
   data: { worktrees: [{}] } as { worktrees: unknown[] } | undefined,
 }));
+
+it("folds idle members while retaining selected, unread, attention, queued, blocked and active rows in saved order", async () => {
+  const names = ["Idle first", "Selected", "Unread", "Attention", "Queued", "Blocked", "Active", "Idle last"];
+  localStorage.setItem("monocode:mono-roster", JSON.stringify([
+    { id: "m", role: "manager", managerProject: "/repo", projects: ["/repo"], mascot: "cat", color: "#aaaaaa" },
+    ...names.map((name, index) => ({ id: String(index), name, role: "member", reportsTo: "m", sessionId: `chat-${index}`, projects: ["/repo"], mascot: "cat", color: "#aaaaaa" })),
+  ]));
+  const sessions = names.map((_, index) => ({ ...newSession("codex", "/repo"), id: `chat-${index}` }));
+  sessions[4].queuedMessages = [{ id: "q", text: "Next task", attachments: [] }];
+  sessions[5].codexStorageError = "Repair storage";
+  sessions[6].busy = true;
+  const host = document.createElement("div");
+  let root = createRoot(host);
+  const render = (collapsed = false) => act(async () => root.render(
+    <SidebarUnseenCounts.Provider value={new Map([["2", 1]])}>
+      <ProjectManagerRow project="/repo" onOpen={vi.fn()} sessions={sessions} selectedMemberId="1" expanded={!collapsed} attention={[{ id: "chat-3", key: "reply", project: "/repo", kind: "reply", question: "New reply" }]} />
+    </SidebarUnseenCounts.Provider>,
+  ));
+  const visibleNames = () => [...host.querySelectorAll<HTMLButtonElement>('button[aria-label^="Open "]')].slice(1).map(button => button.getAttribute("aria-label")?.slice(5));
+  try {
+    await render();
+    expect(visibleNames()).toEqual(names.slice(1, 7));
+    const disclosure = host.querySelector<HTMLButtonElement>('button[aria-controls]')!;
+    expect(disclosure.textContent).toBe("2 idle members");
+    expect(disclosure.getAttribute("aria-expanded")).toBe("false");
+    await act(async () => disclosure.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", ctrlKey: true, bubbles: true })));
+    expect(disclosure.getAttribute("aria-expanded")).toBe("false");
+    await act(async () => disclosure.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
+    expect(visibleNames()).toEqual(names);
+    expect(disclosure.getAttribute("aria-expanded")).toBe("true");
+    await render(true);
+    expect(visibleNames()).toEqual(names.slice(1, 7));
+    expect(host.querySelector('button[aria-controls]')).toBeNull();
+    await render();
+    expect(visibleNames()).toEqual(names);
+    await act(async () => root.unmount());
+    root = createRoot(host);
+    await act(async () => root.render(<ProjectManagerRow project="/repo" onOpen={vi.fn()} sessions={sessions} />));
+    expect(host.querySelector('button[aria-controls]')?.getAttribute("aria-expanded")).toBe("true");
+    expect(host.querySelector('[aria-label="Open Idle first"]')).not.toBeNull();
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+  }
+});
 vi.mock("../../source-control/hooks/useProjectWorktrees", () => ({
   useProjectWorktrees: () => trees,
 }));

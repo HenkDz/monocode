@@ -1,10 +1,7 @@
-import { useContext, useEffect, useState, useSyncExternalStore } from "react";
+import { useContext, useEffect, useId, useState, useSyncExternalStore } from "react";
 import { findModel } from "../../sessions/model/models";
-import { orchestrator } from "../model/orchestration";
-import {
-  orchestrationTaskLabel,
-  type OrchestrationSummary,
-} from "../model/orchestrationSummary";
+import { orchestrator, type OrchestrationTask } from "../model/orchestration";
+import type { OrchestrationSummary } from "../model/orchestrationSummary";
 import { HARNESS_TITLE } from "../../sessions/model/session";
 import { HarnessIcon } from "../../sessions/ui/HarnessIcon";
 import {
@@ -19,6 +16,10 @@ import { AgentDetailTooltip } from "../../agents/ui/AgentDetailTooltip";
 import { agentLiveStateLabel, selectAgentLiveState, type AgentLiveState } from "../../agents/model/agentLiveState";
 import { selectTaskMetrics } from "../../agents/model/agentMetrics";
 import { cardSessionsSnapshot, subscribeCardSessions } from "../../monos/model/monoCards";
+import { useProjectExpansion } from "../../projects/hooks/useProjectExpansion";
+import { readFlag, writeFlag } from "../../settings/model/storageFlags";
+import { usePrStatusCache } from "../../source-control/hooks/usePrStatus";
+import { managerTaskFinished, taskPrStatus } from "../model/projectManager";
 
 export function OrchestrationSidebarAgents({
   leadId,
@@ -30,6 +31,7 @@ export function OrchestrationSidebarAgents({
   const actions = useContext(OrchestrationActions);
   const workers = useContext(OrchestrationWorkers);
   const sessions = useSyncExternalStore(subscribeCardSessions, cardSessionsSnapshot, cardSessionsSnapshot);
+  const prStatuses = usePrStatusCache();
   const runs = useSyncExternalStore(
     orchestrator.subscribe,
     orchestrator.snapshot,
@@ -37,10 +39,18 @@ export function OrchestrationSidebarAgents({
   );
   const [error, setError] = useState<string>();
   const [pending, setPending] = useState(false);
+  const [historyExpanded, setHistoryExpanded] = useProjectExpansion(leadId, "sidebar-task-history", false);
+  const historyId = useId();
+  const [focusedId, setFocusedId] = useState<string>();
+  const expansionKey = (sessionId: string) => `monocode:sidebar-agent-expanded:${leadId}:${sessionId}`;
   // Rows expand independently, so several agents can be watched side by side.
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(
-    () => new Set(),
+    () => new Set(summary.tasks.filter(task => readFlag(expansionKey(task.sessionId))).map(task => task.sessionId)),
   );
+  useEffect(() => {
+    setExpanded(new Set(summary.tasks.filter(task => readFlag(expansionKey(task.sessionId))).map(task => task.sessionId)));
+    setFocusedId(undefined);
+  }, [leadId]);
   // Revealing a worker from its toast opens that row without closing others.
   const revealed = workers.selectedId;
   useEffect(() => {
@@ -50,6 +60,7 @@ export function OrchestrationSidebarAgents({
       );
   }, [revealed]);
   const toggle = (sessionId: string, isOpen: boolean) => {
+    writeFlag(expansionKey(sessionId), !isOpen);
     setExpanded((current) => {
       const next = new Set(current);
       if (isOpen) next.delete(sessionId);
@@ -78,24 +89,40 @@ export function OrchestrationSidebarAgents({
       setPending(false);
     }
   };
-  const done = summary.tasks.filter(
+  const completed = summary.tasks.filter(
     (task) => task.status === "completed",
   ).length;
+  const cancelled = summary.tasks.filter(task => task.status === "cancelled").length;
+  const unfinished = summary.tasks.length - completed - cancelled;
+  const taskRows = summary.tasks.map((task) => {
+    const live = run?.tasks.find(entry => entry.sessionId === task.sessionId);
+    const session = sessions.get(task.sessionId);
+    const state: AgentLiveState = (session?.liveState?.status === "idle" ? undefined : session?.liveState) ?? (task.needsInput
+      ? { status: "needs-you", reason: "approval", detail: "Waiting for user input" }
+      : live ? selectAgentLiveState(undefined, { task: live, tasks: run?.tasks, runStatus: run?.status, pauseReason: run?.lastPauseReason })
+      : selectAgentLiveState(undefined, { task: task as OrchestrationTask }));
+    const history = ["completed", "cancelled"].includes(task.status)
+      && ["idle", "done"].includes(state.status) && !task.needsInput
+      && (task.status === "cancelled" || live?.accepted === true
+        && (!run?.projectManager || managerTaskFinished(live, taskPrStatus(live, prStatuses)))
+        || !live && state.status === "done")
+      && task.sessionId !== revealed && task.sessionId !== focusedId && !expanded.has(task.sessionId);
+    return { task, live, session, state, history };
+  });
+  const historyCount = taskRows.filter(row => row.history).length;
   const action =
-    "rounded px-1.5 py-0.5 text-[11px] text-content/55 hover:bg-content/10 hover:text-content disabled:opacity-35";
+    "rounded px-1.5 py-0.5 text-[11px] text-content/75 hover:bg-content/10 hover:text-content disabled:opacity-35";
   // Sits inside an already-lit row, so it needs its own surface to read as a
   // button rather than as another line of text.
   const solidAction =
     "rounded bg-content/15 px-1.5 py-0.5 text-[11px] text-content/75 hover:bg-content/25 hover:text-content disabled:opacity-35";
   return (
     <div className="relative mt-1.5">
-      <div className="mb-0.5 px-0.5 flex items-center justify-between text-[11px] text-content/45">
-        <span>
-          {summary.tasks.length}{" "}
-          {summary.tasks.length === 1 ? "agent" : "agents"}
-        </span>
+      <div className="mb-0.5 px-0.5 flex flex-wrap items-center gap-x-1 text-[11px] text-content/75">
         <span className="tabular-nums">
-          {done}/{summary.tasks.length} done
+          {summary.tasks.length}{" "}
+          {summary.tasks.length === 1 ? "task" : "tasks"}
+          {cancelled === summary.tasks.length && cancelled > 0 ? " · all cancelled" : ` · ${completed} completed${cancelled ? ` · ${cancelled} cancelled` : ""}${unfinished ? ` · ${unfinished} unfinished` : ""}`}
         </span>
       </div>
       {/*
@@ -107,22 +134,15 @@ export function OrchestrationSidebarAgents({
         a second scroll region here made rows clip mid-line.
       */}
       <div
+        id={historyId}
         aria-label="Orchestrated agents"
         className="-mx-2 flex touch-pan-y flex-col gap-px"
         onPointerDown={(event) => event.stopPropagation()}
         onClick={(event) => event.stopPropagation()}
       >
-        {summary.tasks.map((task) => {
+        {taskRows.filter(row => !row.history || historyExpanded).map(({ task, live, session, state }) => {
           // Something waiting on an answer opens itself; it cannot be missed.
           const open = expanded.has(task.sessionId) || !!task.needsInput;
-          const live = run?.tasks.find(
-            (entry) => entry.sessionId === task.sessionId,
-          );
-          const session = sessions.get(task.sessionId);
-          const state: AgentLiveState = session?.liveState ?? (task.needsInput
-            ? { status: "needs-you", reason: "approval", detail: "Waiting for user input" }
-            : live ? selectAgentLiveState(undefined, { task: live, tasks: run?.tasks, runStatus: run?.status, pauseReason: run?.lastPauseReason })
-            : { status: task.status === "completed" || task.status === "cancelled" ? "done" : task.status === "failed" ? "failed" : task.status === "blocked" || task.status === "interrupted" ? "blocked" : "queued", detail: orchestrationTaskLabel(task, summary) });
           const label = agentLiveStateLabel(state);
           const metrics = live ? session?.taskMetrics?.[live.id] ?? selectTaskMetrics(live, run?.dispatches ?? [], []) : undefined;
           const dispatch = run?.dispatches?.find(entry => entry.id === (live?.activeDispatchId ?? live?.lastDispatchId));
@@ -136,24 +156,36 @@ export function OrchestrationSidebarAgents({
             <div
               key={task.sessionId}
               data-orchestration-agent={task.sessionId}
+              onFocusCapture={() => setFocusedId(task.sessionId)}
+              onBlurCapture={(event) => {
+                if (!event.currentTarget.contains(event.relatedTarget)) setFocusedId(undefined);
+              }}
               // Expanding lights the whole row, header and detail together.
               className={`rounded-md ${open ? "bg-selection" : ""}`}
             >
               <AgentDetailTooltip detail={taskMetricsDetail(metrics, state)}>
               <button
                 type="button"
+                data-sidebar-row
                 title={`${task.title} · ${HARNESS_TITLE[task.harness]} · ${model} · ${label}`}
                 aria-label={`Agent details: ${task.title}`}
                 aria-expanded={open}
                 onClick={() => toggle(task.sessionId, open)}
+                onKeyDown={(event) => {
+                  if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+                  if (event.key === "ArrowRight" && !open || event.key === "ArrowLeft" && open) {
+                    event.preventDefault();
+                    toggle(task.sessionId, open);
+                  }
+                }}
                 // Named, because the whole session card is already a `group`.
-                className={`group/agent flex w-full min-w-0 items-center gap-1.5 rounded-md px-2 py-1.5 text-left ${
+                className={`group/agent flex w-full min-w-0 items-center gap-1.5 rounded-md px-2 py-1.5 text-left @max-[240px]/sidebar:flex-wrap ${
                   open ? "" : "hover:bg-content/10"
                 }`}
               >
                 {/* One slot: the chevron stands in for the harness mark
                     whenever this row is open or under the pointer. */}
-                <span className="grid size-3.5 shrink-0 place-items-center text-content/45">
+                <span className="grid size-3.5 shrink-0 place-items-center text-content/75">
                   {open ? (
                     <ChevronDown className="size-3" strokeWidth={1.75} />
                   ) : (
@@ -169,18 +201,18 @@ export function OrchestrationSidebarAgents({
                     </>
                   )}
                 </span>
-                <span className="min-w-0 flex-1 truncate text-[12px] leading-snug text-content/80">
+                <span className="min-w-0 flex-1 truncate text-[12px] leading-snug text-content/80 @max-[240px]/sidebar:overflow-visible @max-[240px]/sidebar:whitespace-normal @max-[240px]/sidebar:break-words">
                   {task.title}
                 </span>
                 <span
-                  className={`flex shrink-0 items-center gap-1 text-[11px] ${
+                  className={`flex shrink-0 items-center gap-1 text-[11px] @max-[240px]/sidebar:ml-5 @max-[240px]/sidebar:basis-full @max-[240px]/sidebar:shrink @max-[240px]/sidebar:whitespace-normal ${
                     attention
-                      ? "text-amber-400"
+                      ? "text-amber-700 dark:text-amber-400"
                       : working
-                        ? "text-accent"
+                        ? "text-content/75 dark:text-accent"
                         : task.status === "completed"
-                          ? "text-emerald-400"
-                          : "text-content/45"
+                          ? "text-emerald-700 dark:text-emerald-400"
+                          : "text-content/75"
                   }`}
                 >
                   {attention ? (
@@ -194,14 +226,14 @@ export function OrchestrationSidebarAgents({
                 </span>
               </button>
               </AgentDetailTooltip>
-              <div className="pb-1 pl-6.5 pr-2">
+              <div className="pb-1 pl-6.5 pr-2 [&_[data-task-metrics]]:text-content/75 @max-[240px]/sidebar:[&_[data-task-metrics]]:overflow-visible @max-[240px]/sidebar:[&_[data-task-metrics]]:whitespace-normal @max-[240px]/sidebar:[&_[data-task-metrics]]:break-words">
                 <TaskMetricsLine state={state} metrics={metrics} startedAt={dispatch?.turnStartedAt ?? dispatch?.startedAt} endedAt={dispatch?.finishedAt ?? (dispatch && ["completed", "failed", "blocked", "interrupted", "cancelled"].includes(dispatch.state) ? dispatch.updatedAt : undefined)} />
               </div>
               {/* Indented to the title's column: the icon slot and its gap. */}
               {open && (
                 <div className="space-y-2 pb-3 pl-6.5 pr-2">
                   <p
-                    className="flex min-w-0 items-center gap-1.5 text-[11px] text-content/45"
+                    className="flex min-w-0 items-center gap-1.5 text-[11px] text-content/75"
                     title={`${model} · ${HARNESS_TITLE[task.harness]}`}
                   >
                     <HarnessIcon
@@ -211,7 +243,7 @@ export function OrchestrationSidebarAgents({
                     <span className="min-w-0 truncate">{model}</span>
                   </p>
                   {live?.error && (
-                    <p className="text-[11px] text-red-400">{live.error}</p>
+                    <p className="text-[11px] text-red-700 dark:text-red-400">{live.error}</p>
                   )}
                   <div className="flex flex-wrap items-center gap-1">
                     {workers.openDetails && (
@@ -252,8 +284,28 @@ export function OrchestrationSidebarAgents({
           );
         })}
       </div>
+      {historyCount > 0 && (
+        <button
+          type="button"
+          data-sidebar-row
+          aria-expanded={historyExpanded}
+          aria-controls={historyId}
+          onClick={() => setHistoryExpanded(!historyExpanded)}
+          onKeyDown={(event) => {
+            if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+            if (event.key === "ArrowRight" || event.key === "ArrowLeft") {
+              event.preventDefault();
+              setHistoryExpanded(event.key === "ArrowRight");
+            }
+          }}
+          className="mt-0.5 flex w-full items-center gap-1.5 rounded px-0.5 py-1 text-left text-[11px] text-content/75 hover:bg-content/5 focus-visible:outline-accent"
+        >
+          {historyExpanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
+          History · {historyCount}
+        </button>
+      )}
       {(error || run?.error) && (
-        <p role="alert" className="py-1 text-[11px] text-red-400">
+        <p role="alert" className="py-1 text-[11px] text-red-700 dark:text-red-400">
           {error ?? run?.error}
         </p>
       )}
@@ -261,7 +313,7 @@ export function OrchestrationSidebarAgents({
           agents together. Resume has no other home, so it stays. */}
       {run?.status === "paused" && (
         <div className="mt-1.5 space-y-1.5 border-t border-stroke pt-1.5">
-          <p className="px-0.5 text-[11px] leading-relaxed text-content/45">
+          <p className="px-0.5 text-[11px] leading-relaxed text-content/75">
             {stopping
               ? "Stopping interrupted work before this run can resume."
               : leadBusy
@@ -269,7 +321,7 @@ export function OrchestrationSidebarAgents({
                 : "Resume continues interrupted workers from their retained checkouts and starts queued work. Policy-blocked tasks stay stopped for review."}
           </p>
           {resumeBlocker && (
-            <p className="px-0.5 text-[11px] leading-relaxed text-amber-400">
+            <p className="px-0.5 text-[11px] leading-relaxed text-amber-700 dark:text-amber-400">
               {resumeBlocker.title || "Another conversation"} is still running
               in this project.
             </p>

@@ -24,6 +24,7 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type KeyboardEvent,
   type MouseEvent,
   type ReactNode,
 } from "react";
@@ -106,6 +107,7 @@ import { orchestrator } from "../../features/orchestration/model/orchestration";
 import { cardSessionsSnapshot, subscribeCardSessions } from "../../features/monos/model/monoCards";
 import { listMonos, subscribeMonos } from "../../features/monos/model/mono";
 import { useProjectExpansion } from "../../features/projects/hooks/useProjectExpansion";
+import { SidebarUnseenCounts } from "../../features/orchestration/ui/ProjectManagerRow";
 
 type Props = {
   sessions?: PullRequestContext["sessions"];
@@ -207,11 +209,12 @@ export function ProjectRail({
   const resize = useDragResize({
     min: PROJECT_RAIL_WIDTH_MIN,
     max: () =>
-      Math.min(PROJECT_RAIL_WIDTH_MAX, Math.floor(window.innerWidth * 0.35)),
+      Math.max(PROJECT_RAIL_WIDTH_MIN, Math.min(PROJECT_RAIL_WIDTH_MAX, Math.floor(window.innerWidth * 0.35))),
     defaultWidth: PROJECT_RAIL_WIDTH_DEFAULT,
     initial: loadProjectRailWidth(),
     onCommit: saveProjectRailWidth,
   });
+  const resizeMax = Math.max(PROJECT_RAIL_WIDTH_MIN, Math.min(PROJECT_RAIL_WIDTH_MAX, Math.floor(window.innerWidth * 0.35)));
   const [railOrder, setRailOrder] = useState(loadProjectRailOrder);
   const [pinnedPaths, setPinnedPaths] = useState(loadPinnedProjects);
   const [groupLabels, setGroupLabels] = useState(loadTabGroupLabels);
@@ -384,10 +387,11 @@ export function ProjectRail({
   );
   return (
     <ProjectPrAttention.Provider value={attention}>
+    <SidebarUnseenCounts.Provider value={monos?.unseenCounts ?? emptyUnseenCounts}>
     <nav
       ref={resize.setPaneRef}
       aria-label="Projects"
-      className={`sidebar-glass relative shrink-0 flex-col border-r border-stroke ${visible ? "flex" : "hidden"}`}
+      className={`sidebar-glass @container/sidebar relative shrink-0 flex-col border-r border-stroke ${visible ? "flex" : "hidden"}`}
     >
       <div
         className="flex h-10 shrink-0 select-none items-center pr-1.5"
@@ -464,6 +468,7 @@ export function ProjectRail({
               scrollRef.current = el;
             }}
             className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-none pb-2"
+            onKeyDown={navigateSidebarRows}
           >
             {monos ? (
               <MonoRailSection
@@ -610,24 +615,60 @@ export function ProjectRail({
       ) : null}
       <div
         role="separator"
+        tabIndex={0}
         aria-orientation="vertical"
         aria-label="Resize project sidebar"
         aria-valuenow={resize.width}
         aria-valuemin={PROJECT_RAIL_WIDTH_MIN}
-        aria-valuemax={PROJECT_RAIL_WIDTH_MAX}
-        className={`absolute inset-y-0 -right-px z-10 w-1.5 cursor-col-resize touch-none ${
+        aria-valuemax={resizeMax}
+        aria-valuetext={`${resize.width} pixels`}
+        className={`absolute inset-y-0 -right-px z-10 w-1.5 cursor-col-resize touch-none focus-visible:bg-accent/40 focus-visible:outline-accent ${
           resize.dragging ? "bg-content/15" : "hover:bg-content/10"
         }`}
         onPointerDown={resize.onPointerDown}
         onDoubleClick={resize.onDoubleClick}
+        onKeyDown={(event) => {
+          if (event.altKey || event.ctrlKey || event.metaKey) return;
+          if (!["ArrowLeft", "ArrowRight", "Home", "End", "Enter"].includes(event.key)) return;
+          event.preventDefault();
+          const step = event.shiftKey ? 40 : 10;
+          resize.setWidth(event.key === "Home" ? PROJECT_RAIL_WIDTH_MIN
+            : event.key === "End" ? resizeMax
+            : event.key === "Enter" ? PROJECT_RAIL_WIDTH_DEFAULT
+            : resize.width + (event.key === "ArrowLeft" ? -step : step));
+        }}
       />
     </nav>
+    </SidebarUnseenCounts.Provider>
     </ProjectPrAttention.Provider>
   );
 }
 
 type SortableHandle = ReturnType<typeof useAnimatedReorder>;
 const ProjectPrAttention = createContext<ReadonlyMap<string, number>>(new Map());
+const emptyUnseenCounts: ReadonlyMap<string, number> = new Map();
+
+function navigateSidebarRows(event: KeyboardEvent<HTMLDivElement>) {
+  if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+  const current = event.target as HTMLElement;
+  if (!current.matches("button[data-sidebar-row]")) return;
+  if (["ArrowLeft", "ArrowRight"].includes(event.key)) {
+    const expanded = current.getAttribute("aria-expanded");
+    if (expanded === null) return;
+    event.preventDefault();
+    if ((expanded === "true") !== (event.key === "ArrowRight")) current.click();
+    return;
+  }
+  if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+  const rows = [...event.currentTarget.querySelectorAll<HTMLButtonElement>("button[data-sidebar-row]:not(:disabled)")]
+    .filter(row => !row.closest("[hidden], [inert]"));
+  const index = rows.indexOf(current as HTMLButtonElement);
+  if (index < 0) return;
+  event.preventDefault();
+  const next = event.key === "Home" ? 0 : event.key === "End" ? rows.length - 1
+    : Math.max(0, Math.min(rows.length - 1, index + (event.key === "ArrowUp" ? -1 : 1)));
+  rows[next]?.focus();
+}
 
 function ProjectSection({
   label,
@@ -725,7 +766,7 @@ function ProjectSectionHeader({
   return (
     <div className="flex items-center gap-1 px-3 pb-1.5 pt-1">
       {/* As tall as the header buttons, so every section header matches. */}
-      <span className="min-w-0 flex-1 truncate px-1 text-xs leading-5 text-content/50">
+      <span className="min-w-0 flex-1 truncate px-1 text-xs leading-5 text-content/75">
         {label}
       </span>
       {onAddGroup ? (
@@ -737,7 +778,7 @@ function ProjectSectionHeader({
             const rect = event.currentTarget.getBoundingClientRect();
             onAddGroup(rect.left, rect.bottom);
           }}
-          className="grid size-5 shrink-0 place-items-center rounded-md text-content/50 hover:bg-content/8 hover:text-content"
+          className="grid size-5 shrink-0 place-items-center rounded-md text-content/70 hover:bg-content/8 hover:text-content"
         >
           <FolderPlus className="size-3.5" strokeWidth={1.75} />
         </button>
@@ -814,7 +855,7 @@ function ProjectGroupSection({
       aria-label={group.name}
     >
       <div
-        className="project-reorder-item group relative flex h-8 items-stretch rounded-md px-2 opacity-65 cursor-default"
+        className="project-reorder-item group relative flex h-8 items-stretch rounded-md px-2 text-content/75 cursor-default"
         onContextMenu={(event) => {
           event.preventDefault();
           event.currentTarget
@@ -826,6 +867,7 @@ function ProjectGroupSection({
         <button
           type="button"
           aria-expanded={!group.collapsed}
+          data-sidebar-row
           aria-label={`${group.name}, ${countLabel}`}
           title={`${group.name} · ${countLabel}`}
           onClick={onToggleCollapsed}
@@ -1007,7 +1049,7 @@ function ProjectCard({
       <div
         data-selected={selected || undefined}
         className={`project-reorder-item group relative flex touch-none items-stretch rounded-md px-2 h-8 ${
-          selected ? "text-content" : "text-content/65"
+          selected ? "text-content" : "text-content/75"
         } cursor-default`}
         onPointerDown={(event) => {
           if (event.button !== 0) return;
@@ -1042,6 +1084,7 @@ function ProjectCard({
             data-no-drag
             aria-label={`${expanded ? "Collapse" : "Expand"} worktrees in ${name}`}
             aria-expanded={expanded}
+            data-sidebar-row
             onClick={() => setExpanded(!expanded)}
             className="mr-1 grid w-4 shrink-0 place-items-center rounded-md text-content/60 hover:text-content"
           >
@@ -1059,6 +1102,7 @@ function ProjectCard({
             muteStatus ? `${cardAriaLabel}, ${muteStatus}` : cardAriaLabel
           }
           aria-current={selected ? "true" : undefined}
+          data-sidebar-row
           className={`flex min-w-0 flex-1 cursor-default items-center gap-2 text-left transition-[padding] duration-150 motion-reduce:transition-none ${hasWorktrees ? `group-hover:pr-20 group-focus-within:pr-20 [@media(hover:none)]:pr-20 ${activeOnly ? "pr-6" : ""}` : "group-hover:pr-12 group-focus-within:pr-12 [@media(hover:none)]:pr-12"}`}
         >
           <div className="project-card-logo grid size-4 shrink-0 place-items-center transition-opacity group-hover:opacity-0">
@@ -1087,7 +1131,7 @@ function ProjectCard({
           )}
           {actionablePrs > 0 && <span aria-label={`${actionablePrs} pull requests need attention`} title={`${actionablePrs} PRs need you or are ready to merge`} className="rounded bg-accent/10 px-1 text-[10px] text-accent">{actionablePrs}</span>}
           {machine ? (
-            <span className="min-w-0 flex-1 truncate text-[11px] leading-tight text-content/45">
+            <span className="min-w-0 flex-1 truncate text-[11px] leading-tight text-content/75">
               {machine.name}
             </span>
           ) : null}
@@ -1268,7 +1312,7 @@ function AddProjectButton({ onOpenFolder }: { onOpenFolder: () => void }) {
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
-        className="grid size-5 shrink-0 place-items-center rounded-md text-content/50 hover:bg-content/8 hover:text-content aria-expanded:bg-content/8 aria-expanded:text-content"
+        className="grid size-5 shrink-0 place-items-center rounded-md text-content/70 hover:bg-content/8 hover:text-content aria-expanded:bg-content/8 aria-expanded:text-content"
       >
         <Plus className="size-3.5" strokeWidth={1.75} />
       </button>

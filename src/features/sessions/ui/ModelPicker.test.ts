@@ -406,7 +406,7 @@ describe("model picker", () => {
     ]);
   });
 
-  it("can move effort into a dedicated composer control", () => {
+  it.each(["pill", "text"] as const)("can move effort into a dedicated %s composer control with its setting ID", (variant) => {
     const onSettingsChange = vi.fn();
     act(() =>
       root.render(
@@ -418,6 +418,7 @@ describe("model picker", () => {
             model: "grok:grok-4.6",
             values: { effort: "high" },
             hideSettings: true,
+            variant,
             onChange: vi.fn(),
             onSettingsChange,
           }),
@@ -425,6 +426,7 @@ describe("model picker", () => {
             harness: "grok",
             model: "grok:grok-4.6",
             values: { effort: "high" },
+            variant,
             onSettingsChange,
           }),
         ),
@@ -446,7 +448,7 @@ describe("model picker", () => {
       'button[aria-label="Effort: High"]',
     )!;
     expect(effortTrigger.textContent).toBe("High");
-    expect(effortTrigger.querySelector("svg")).not.toBeNull();
+    expect(!!effortTrigger.querySelector("svg")).toBe(variant !== "text");
     act(() => effortTrigger.click());
     const effortMenu = container.querySelector<HTMLElement>(
       '[role="menu"][aria-label="Effort"]',
@@ -457,7 +459,7 @@ describe("model picker", () => {
     expect(onSettingsChange).toHaveBeenCalledWith({ effort: "xhigh" }, "effort");
   });
 
-  it("opens the model list with no intermediate menu when settings live beside the picker", () => {
+  it.each(["pill", "text"] as const)("opens the model list beside %s settings and forwards toggle setting IDs", (variant) => {
     setHarnessModels("cursor", [
       {
         id: "cursor:composer-2.5",
@@ -489,6 +491,7 @@ describe("model picker", () => {
             model: "cursor:composer-2.5",
             values: { fast: "false" },
             hideSettings: true,
+            variant,
             onChange: vi.fn(),
             onSettingsChange,
           }),
@@ -496,6 +499,7 @@ describe("model picker", () => {
             harness: "cursor",
             model: "cursor:composer-2.5",
             values: { fast: "false" },
+            variant,
             onSettingsChange,
           }),
         ),

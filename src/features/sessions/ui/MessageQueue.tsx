@@ -35,7 +35,7 @@ export function MessageQueue({
   onEditingChange?: (messageId?: string) => void;
   onSteer?: (messageId: string) => void;
   onResume?: () => void;
-  variant?: "queue" | "messages";
+  variant?: "queue" | "messages" | "completions";
   sendingId?: string;
 }) {
   const [editingId, setEditingId] = useState<string>();
@@ -50,7 +50,9 @@ export function MessageQueue({
     };
   }, []);
   // Legacy saved queues may still contain app events before hydration migrates them.
-  messages = messages.filter(message => !message.monoSessionCompletion && !message.monoSource && !parseTeamMessage(message.text));
+  messages = messages.filter(message => variant === "completions"
+    ? !!message.monoSessionCompletion
+    : !message.monoSessionCompletion && !message.monoSource && !parseTeamMessage(message.text));
   if (messages.length === 0) return null;
   const paused = status === "paused";
   const failed = messages.some((message) => message.error);
@@ -89,7 +91,7 @@ export function MessageQueue({
             <span className="min-w-0 flex-1 truncate">
               {failed
                 ? "A message couldn't be sent"
-                : variant === "messages"
+                : variant !== "queue"
                   ? "Messages paused"
                   : "Queue paused because you interrupted"}
             </span>
@@ -103,7 +105,7 @@ export function MessageQueue({
             </button>
           </div>
         ) : null}
-        {variant === "messages" && !paused && !storageHeld ? (
+        {variant !== "queue" && !paused && !storageHeld ? (
           <div role="status" className="py-1 text-[11px] text-content/50">
             {sendingId ? "Sending…" : "Waiting to send"}
           </div>
@@ -112,7 +114,11 @@ export function MessageQueue({
           const sending = sendingId === message.id;
           const editing = editingId === message.id;
           const label =
-            message.text.trim() ||
+            (message.monoSessionCompletion
+              ? message.monoSessionCompletion.sessionCount && message.monoSessionCompletion.sessionCount > 1
+                ? `${message.monoSessionCompletion.sessionCount} sessions completed`
+                : `Session completed: ${message.monoSessionCompletion.title}`
+              : message.text.trim()) ||
             message.noteCard?.title ||
             message.handoffCard?.brief ||
             `${message.attachments.length} attachment${message.attachments.length === 1 ? "" : "s"}`;

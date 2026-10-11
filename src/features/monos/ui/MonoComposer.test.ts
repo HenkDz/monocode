@@ -16,6 +16,18 @@ vi.mock("../../sessions/model/attachments", async (original) => ({
 vi.mock("../../sessions/hooks/useFileDrop", () => ({
   useFileDrop: () => false,
 }));
+// The picker itself is covered on its own; here it just hands over a pick.
+vi.mock("../../../shared/ui/EmojiPicker", async () => {
+  const { createElement } = await import("react");
+  return {
+    EmojiPickerPopover: ({ onPick }: { onPick: (emoji: string) => void }) =>
+      createElement(
+        "button",
+        { type: "button", "data-pick": "", onClick: () => onPick("😀") },
+        "pick",
+      ),
+  };
+});
 
 let container: HTMLDivElement;
 let root: Root;
@@ -269,27 +281,35 @@ it("renders the regular four-mode AccessPicker chip in the Mono composer", async
   expect(container.querySelector('[aria-label="Supervised"]')).not.toBeNull();
 });
 
-it("places permissions between attach and Send below the input with a flexible center column", () => {
+it("keeps permissions beside the tools and one context meter beneath the goal composer", () => {
   container.style.width = "260px";
-  render({ runtimeMode: "auto-accept-edits", onRuntimeModeChange: vi.fn() });
-  const layout = container.querySelector<HTMLElement>("[data-layout]")!;
+  render({
+    runtimeMode: "auto-accept-edits",
+    onRuntimeModeChange: vi.fn(),
+    goalRouting,
+    controls: createElement(ContextMeter, {
+      usage: { used: 150_000, window: 200_000 },
+      rotationScheduled: true,
+      onCompact: vi.fn(),
+    }),
+  });
   const attach = container.querySelector('[aria-label="Attach files"]')!;
+  const emoji = container.querySelector('[aria-label="Add emoji"]')!;
   const picker = container.querySelector('[data-access-picker-trigger]')!;
   const send = container.querySelector('[aria-label="Send"]')!;
   const toolbar = container.querySelector<HTMLElement>("[data-mono-composer-toolbar]")!;
-  expect(layout.dataset.layout).toBe("multiline");
-  expect(picker.closest("[data-layout]")).toBe(layout);
-  expect(layout.className).toContain("minmax(0,1fr)");
-  expect(field().className).toContain("row-start-1");
-  expect(field().className).toContain("col-span-3");
-  expect(toolbar.className).toContain("row-start-2");
-  expect(toolbar.className).toContain("col-span-3");
   expect(toolbar.className).toContain("min-w-0");
-  expect([...toolbar.querySelectorAll("button")]).toEqual([attach, picker, send]);
+  expect([...toolbar.querySelectorAll("button")].slice(0, 3)).toEqual([attach, emoji, picker]);
+  expect(send.closest("[data-mono-composer-toolbar]")).toBeNull();
+  expect(field().parentElement!.contains(send)).toBe(true);
   expect(field().compareDocumentPosition(toolbar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  const route = container.querySelector("[data-mono-goal-route]")!;
+  expect(route.compareDocumentPosition(field()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  const controls = toolbar.querySelector("[data-mono-composer-controls]")!;
+  expect(controls.querySelectorAll('[title="Context usage"]')).toHaveLength(1);
+  expect(container.querySelectorAll('[title="Context usage"]')).toHaveLength(1);
   const pickerCell = picker.parentElement!.parentElement!;
   expect(pickerCell.className).toContain("min-w-0");
-  expect(pickerCell.className).toContain("flex-1");
   expect(pickerCell.className).toContain("[&_button]:max-w-full");
 });
 
@@ -448,4 +468,37 @@ it("follows the composer autocorrect setting", () => {
 
   act(() => saveComposerAutocorrect(true));
   expect(field().getAttribute("spellcheck")).toBe("true");
+});
+
+it("inserts a picked emoji where the cursor was, beside attach", async () => {
+  render({ controls: createElement("span", null, "Model") });
+  const field = container.querySelector("textarea")!;
+  act(() => {
+    const setter = Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      "value",
+    )!.set!;
+    setter.call(field, "hi there");
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  field.setSelectionRange(2, 2);
+  const button = container.querySelector<HTMLButtonElement>(
+    'button[aria-label="Add emoji"]',
+  )!;
+  expect(button.previousElementSibling?.getAttribute("aria-label")).toBe(
+    "Attach files",
+  );
+  // The picker loads on first open.
+  await act(async () => button.click());
+  await vi.waitFor(() =>
+    expect(container.querySelector("[data-pick]")).not.toBeNull(),
+  );
+  expect(button.getAttribute("aria-expanded")).toBe("true");
+  act(() => container.querySelector<HTMLButtonElement>("[data-pick]")!.click());
+  expect(field.value).toBe("hi😀 there");
+  expect(container.querySelector("[data-pick]")).toBeNull();
+
+  // The floating chat keeps its inline input, without the extra row.
+  render();
+  expect(container.querySelector('button[aria-label="Add emoji"]')).toBeNull();
 });

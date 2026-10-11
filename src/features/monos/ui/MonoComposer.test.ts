@@ -173,13 +173,14 @@ it("locks route controls during Send and retains the authorized snapshot while t
     expect(button.disabled).toBe(true);
   render({ goalRouting: { ...goalRouting, projects: [{ ...goalRouting.projects[0], available: false }] }, onSubmit });
   expect(first.managerMonoId).toBe("manager");
+  expect(container.querySelector('[data-mono-goal-route] [role="status"]')?.textContent).toContain("Send to DZDistro Manager");
   await act(async () => resolve(false));
   expect(container.querySelector('[data-mono-goal-route] [aria-pressed="true"]')?.textContent).toBe("New goal");
+  expect(container.querySelector('[data-mono-goal-route] [role="status"]')?.textContent).toContain("Send to Grand Orch");
   act(submit);
-  expect(onSubmit.mock.calls[1][2]).toBe(first);
-  expect(onSubmit.mock.calls[1][2]).toEqual(expect.objectContaining({
-    projectId: "dzdistro", managerMonoId: "manager", reason: "Exact project name",
-  }));
+  expect(onSubmit.mock.calls[1][2]!.requestId).not.toBe(first.requestId);
+  expect(onSubmit.mock.calls[1][2]).not.toHaveProperty("projectId");
+  expect(onSubmit.mock.calls[1][2]!.reason).toBe("Project has no available local Manager");
   await act(async () => resolve(true));
   expect(container.querySelector('[data-mono-goal-route] [aria-pressed="true"]')?.textContent).toBe("Chat");
 });

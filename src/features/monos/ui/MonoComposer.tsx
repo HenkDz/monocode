@@ -25,6 +25,7 @@ import {
 import {
   decideMonoGoalRoute,
   type MonoGoalRouteChoice,
+  type MonoGoalRouteDecision,
   type MonoGoalRoutingContext,
   type MonoGoalSubmission,
 } from "../model/monoGoalRouting";
@@ -86,6 +87,12 @@ export function MonoComposer({
   const goalRequest = useRef<{
     signature: string;
     submission: MonoGoalSubmission;
+    route: MonoGoalRouteDecision;
+    rejected: boolean;
+  } | null>(null);
+  const [retainedGoalRoute, setRetainedGoalRoute] = useState<{
+    signature: string;
+    route: MonoGoalRouteDecision;
   } | null>(null);
   const autocorrect = useComposerAutocorrect();
   const textRef = useRef(text);
@@ -236,13 +243,18 @@ export function MonoComposer({
     if (!message && !files.length) return;
     const generation = readGeneration.current;
     const clear = (accepted: boolean | void) => {
-      if (accepted === false) return;
+      if (accepted === false) {
+        if (goalRequest.current) goalRequest.current.rejected = true;
+        if (generation === readGeneration.current) setRetainedGoalRoute(null);
+        return;
+      }
       goalRequest.current = null;
       if (generation !== readGeneration.current) {
         if (getComposerDraft(sessionId) === draft)
           setComposerDraft(sessionId, "");
         return;
       }
+      setRetainedGoalRoute(null);
       update("");
       setGoalChoice({ mode: "chat", override: "auto" });
       attachmentsRef.current = [];
@@ -257,19 +269,35 @@ export function MonoComposer({
         files.map((file) => file.id),
         goalChoice,
       ]);
-      if (goalRequest.current?.signature !== signature) {
+      if (
+        goalRequest.current?.signature !== signature ||
+        goalRequest.current.rejected
+      ) {
         const route = decideMonoGoalRoute({
           text: message,
           attachmentCount: files.length,
           choice: goalChoice,
           context: goalRouting,
         });
+        const previous =
+          goalRequest.current?.signature === signature
+            ? goalRequest.current.submission
+            : undefined;
+        const project = route.kind === "manager" ? route.project : undefined;
+        const sameRoute =
+          previous?.reason === route.reason &&
+          previous.projectId === project?.id &&
+          previous.managerMonoId === project?.managerMonoId;
         goalRequest.current = {
           signature,
+          route,
+          rejected: false,
           submission: {
             ownerId: goalRouting.ownerId,
-            requestId: crypto.randomUUID(),
-            userMessageId: crypto.randomUUID(),
+            requestId: sameRoute ? previous.requestId : crypto.randomUUID(),
+            userMessageId: sameRoute
+              ? previous.userMessageId
+              : crypto.randomUUID(),
             choice: { ...goalChoice },
             reason: route.reason,
             ...(route.kind === "manager"
@@ -281,6 +309,7 @@ export function MonoComposer({
           },
         };
       }
+      setRetainedGoalRoute(goalRequest.current);
       goal = goalRequest.current.submission;
     }
     const result = goal
@@ -332,6 +361,17 @@ export function MonoComposer({
             text={text}
             attachmentCount={attachments.length}
             choice={goalChoice}
+            route={
+              retainedGoalRoute?.signature ===
+              JSON.stringify([
+                goalRouting.ownerId,
+                text.trim(),
+                attachments.map((file) => file.id),
+                goalChoice,
+              ])
+                ? retainedGoalRoute.route
+                : undefined
+            }
             onChange={setGoalChoice}
             disabled={!enabled || submitting}
           />

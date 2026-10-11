@@ -411,6 +411,7 @@ function enqueueSessionWrite<T>(
 
 export async function upsertSession(
   session: Session,
+  recovery?: { monoBaseline: readonly Block[]; monoLiveBlocks: Block[] },
 ): Promise<SessionSummary | null> {
   if (!shouldPersistSession(session) || deletedSessionIds.has(session.id)) {
     return null;
@@ -431,7 +432,7 @@ export async function upsertSession(
   const summary = await enqueueSessionWrite(session.id, async () => {
     if (deletedSessionIds.has(session.id)) return null;
     if (mono) {
-      const previous = monoSavedBlocks.get(session.id);
+      const previous = recovery?.monoBaseline ?? monoSavedBlocks.get(session.id);
       let same = 0;
       if (previous) {
         while (
@@ -460,7 +461,10 @@ export async function upsertSession(
         blocksChanged: changed,
         appendOnly: previous?.length === 0,
       });
-      monoSavedBlocks.set(session.id, snapshot);
+      // A history repair must not expand the cache used by ordinary live-page saves.
+      monoSavedBlocks.set(session.id, recovery
+        ? recovery.monoLiveBlocks.filter(block => monoPersistedBlock(block) !== null)
+        : snapshot);
       return summary;
     }
     return invoke<SessionSummary>("session_upsert", {

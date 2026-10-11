@@ -2,6 +2,7 @@ import { SearchableSelect } from "../../../shared/ui/SearchableSelect";
 import {
   decideMonoGoalRoute,
   type MonoGoalRouteChoice,
+  type MonoGoalRouteDecision,
   type MonoGoalRoutingContext,
 } from "../model/monoGoalRouting";
 
@@ -10,6 +11,7 @@ export function MonoGoalRoute({
   text,
   attachmentCount,
   choice,
+  route: retainedRoute,
   onChange,
   disabled = false,
 }: {
@@ -17,15 +19,18 @@ export function MonoGoalRoute({
   text: string;
   attachmentCount: number;
   choice: MonoGoalRouteChoice;
+  route?: MonoGoalRouteDecision;
   onChange: (choice: MonoGoalRouteChoice) => void;
   disabled?: boolean;
 }) {
-  const route = decideMonoGoalRoute({
-    text: text.trim(),
-    attachmentCount,
-    choice,
-    context,
-  });
+  const route =
+    retainedRoute ??
+    decideMonoGoalRoute({
+      text: text.trim(),
+      attachmentCount,
+      choice,
+      context,
+    });
   return (
     <div data-mono-goal-route className="px-2.5 pt-2 pb-1">
       <div className="flex flex-wrap items-center gap-2">

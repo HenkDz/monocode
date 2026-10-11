@@ -61,7 +61,7 @@ export function monoGoalRoutingContext(
   };
 }
 
-type Mention = { id: string; start: number; end: number; reason: string };
+type Mention = { id: string; start: number; end: number; reason: string; exact: boolean };
 function mentions(text: string, projects: readonly MonoGoalProject[]): Mention[] {
   const normalized = text.replace(/\\/g, "/");
   const found: Mention[] = [];
@@ -79,10 +79,12 @@ function mentions(text: string, projects: readonly MonoGoalProject[]): Mention[]
         const end = start + needle.length;
         const boundary = /[\p{L}\p{N}_./-]/u;
         const before = haystack[start - 1];
+        const descendant = isPath && haystack[end] === "/" &&
+          /[^\s"'`()\[\]{}<>]/u.test(haystack[end + 1] ?? "");
         const after = haystack[end] === "/" && isPath &&
           !boundary.test(haystack[end + 1] ?? "") ? haystack[end + 1] : haystack[end];
-        if ((!before || !boundary.test(before)) && (!after || !boundary.test(after)))
-          found.push({ id: project.id, start, end, reason });
+        if ((!before || !boundary.test(before)) && (descendant || !after || !boundary.test(after)))
+          found.push({ id: project.id, start, end, reason, exact: !descendant });
         start = haystack.indexOf(needle, end);
       }
     }
@@ -109,14 +111,14 @@ export function decideMonoGoalRoute(input: {
   const matches = mentions(text, context.projects);
   const ids = new Set(matches.map(match => match.id));
   if (ids.size > 1) return grand("More than one project mentioned");
-  const selected = choice.override === "manager" ? choice.projectId : [...ids][0];
+  const selected = choice.override === "manager" ? choice.projectId : matches.find(match => match.exact)?.id;
   if (!selected) return grand("Choose a project or mention its exact name or path");
   if (ids.size && !ids.has(selected)) return grand("Selected project differs from the text");
   const project = context.projects.find(project => project.id === selected);
   if (!project?.available || !project.managerMonoId)
     return grand("Project has no available local Manager");
   return { kind: "manager", project,
-    reason: choice.override === "manager" ? "Project selected" : matches.find(match => match.id === selected)!.reason };
+    reason: choice.override === "manager" ? "Project selected" : matches.find(match => match.id === selected && match.exact)!.reason };
 }
 
 export type MonoGoalSubmitHost = {

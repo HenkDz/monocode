@@ -45,6 +45,50 @@ describe("exact project routes", () => {
   it.each(["Fix Atlas and Beacon", "Compare Atlas costs", "Atlas versus alternatives", "Update across projects", "Atlas compared to alternatives", "Update both repos"])("falls back for %s", text => {
     expect(decide(text)).toMatchObject({ kind: "grand" });
   });
+  it.each([
+    "Update Atlas and C:/code/Beacon",
+    "Update Atlas and C:/code/Beacon/src/index.ts in the same change",
+    "Update Atlas and c:\\CODE\\BEACON\\src\\index.ts in the same change",
+  ])("counts a second project referenced by path: %s", text => {
+    expect(decide(text)).toMatchObject({ kind: "grand", reason: "More than one project mentioned" });
+  });
+  it("counts an unavailable second project referenced by a descendant path", () => {
+    expect(decide("Update Atlas and C:/code/Beacon/src/index.ts", {
+      context: monoGoalRoutingContext(owner, roster, projects, ["C:/code/Beacon"]),
+    })).toMatchObject({ kind: "grand", reason: "More than one project mentioned" });
+  });
+  it("counts Unix descendant paths while preserving case and project boundaries", () => {
+    const ctx = { ...context(), projects: context().projects.map(project => ({ ...project, path: `/code/${project.name}` })) };
+    expect(decide("Update Atlas and /code/Beacon/src/index.ts", { context: ctx }))
+      .toMatchObject({ kind: "grand", reason: "More than one project mentioned" });
+    expect(decide("Update Atlas and /code/beacon/src/index.ts", { context: ctx }))
+      .toMatchObject({ kind: "manager", project: { name: "Atlas" } });
+    expect(decide("Update Atlas and C:/code/Beacon-old/src/index.ts"))
+      .toMatchObject({ kind: "manager", project: { name: "Atlas" } });
+  });
+  it("uses descendant references for ambiguity without authorizing an automatic route", () => {
+    for (const path of ["src/index.ts", "@index.ts", ".env"])
+      expect(decide(`Update C:/code/Atlas/${path}`))
+        .toMatchObject({ kind: "grand", reason: "Choose a project or mention its exact name or path" });
+    expect(decide("Update Atlas and C:/code/Atlas/src/index.ts"))
+      .toMatchObject({ kind: "manager", project: { name: "Atlas" }, reason: "Exact project name" });
+    expect(decide("Update C:/code/Atlas/src/index.ts", {
+      choice: { mode: "goal", override: "manager", projectId: "c:/code/atlas" },
+    })).toMatchObject({ kind: "manager", project: { name: "Atlas" } });
+    expect(decide("Update C:/code/Beacon/src/index.ts", {
+      choice: { mode: "goal", override: "manager", projectId: "c:/code/atlas" },
+    })).toMatchObject({ kind: "grand", reason: "Selected project differs from the text" });
+  });
+  it("keeps descendant references attached to the most specific registered root", () => {
+    const ctx = context();
+    ctx.projects.push({ ...ctx.projects[1], id: "c:/code/atlas/nested", path: "C:/code/Atlas/nested", name: "Nested" });
+    expect(decide("Update Nested and C:/code/Atlas/nested/src/index.ts", { context: ctx }))
+      .toMatchObject({ kind: "manager", project: { name: "Nested" }, reason: "Exact project name" });
+    expect(decide("Update Atlas and C:/code/Atlas/nested/src/index.ts", { context: ctx }))
+      .toMatchObject({ kind: "grand", reason: "More than one project mentioned" });
+    expect(decide("Update C:/code/Atlas/nested/src/index.ts", { context: ctx }))
+      .toMatchObject({ kind: "grand", reason: "Choose a project or mention its exact name or path" });
+  });
   it("lets the user select a project with no name in the goal, and override to Grand", () => {
     expect(decide("Fix login", { choice: { mode: "goal", override: "manager", projectId: "c:/code/atlas" } })).toMatchObject({ kind: "manager" });
     expect(decide("Fix Atlas", { choice: { mode: "goal", override: "grand" } })).toMatchObject({ kind: "grand" });

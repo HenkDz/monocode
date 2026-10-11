@@ -53,6 +53,12 @@ import {
   type MonoGoalSubmission,
 } from "../features/monos/model/monoGoalRouting";
 import { readMonoConversation } from "../features/monos/model/monoConversation";
+import { serializeMonoGoalUpdate } from "../features/monos/model/monoGoalUpdates";
+import {
+  getMonoGoalRecoveryBlocks,
+  mergeMonoGoalRecoverySession,
+  monoGoalRecoveryLiveSession,
+} from "../features/sessions/data/monoGoalRecovery";
 import {
   resumeMonoUsageLimit,
   switchMonoUsageLimitAccount,
@@ -11960,12 +11966,18 @@ function Workspace({
             }
           }
           if (mono.role === "orchestrator" && mono.sessionId) {
-            const source = await ensureOpenSession(mono.sessionId);
-            for (const block of source?.blocks ?? []) {
-              if (!block.monoGoalSubmission || block.role !== "user" ||
-                  source?.blocks.some(card => card.id === `route-${block.id}` && card.monoCard)) continue;
-              await submitMonoGoalRef.current(source!.id, block.text, [], block.monoGoalSubmission, true)
-                .catch(error => console.error("Mono goal route retained pending work", error));
+            try {
+              const source = await ensureOpenSession(mono.sessionId);
+              const recovered = source && mergeMonoGoalRecoverySession(source,
+                await getMonoGoalRecoveryBlocks(source.id));
+              for (const block of recovered?.blocks ?? []) {
+                if (!block.monoGoalSubmission || block.role !== "user" ||
+                    recovered?.blocks.some(card => card.id === `route-${block.id}` && card.monoCard)) continue;
+                await submitMonoGoalRef.current(source!.id, block.text, [], block.monoGoalSubmission, true)
+                  .catch(error => console.error("Mono goal route retained pending work", error));
+              }
+            } catch (error) {
+              console.error("Mono goal transcript recovery unavailable", error);
             }
           }
           await monoManagerGoals.recover(mono.id, managerGoalHost.current);
@@ -12249,14 +12261,26 @@ function Workspace({
     const mono = monoForSession(sessionId);
     if (!mono || mono.id !== submission.ownerId || mono.role !== "orchestrator")
       throw Error("That Grand Orchestrator is no longer available");
+    let history = recovery ? await getMonoGoalRecoveryBlocks(sessionId) : undefined;
     const update = async (change: (session: Session) => Session) => {
-      const session = sessionsRef.current.find(entry => entry.id === sessionId);
-      if (!session) throw Error("The originating chat is unavailable");
-      const next = change(session);
-      await upsertSession(next);
-      sessionsRef.current = sessionsRef.current.map(entry => entry.id === sessionId
-        ? change(entry) : entry);
-      setSessions(sessionsRef.current);
+      return serializeMonoGoalUpdate(sessionId, async () => {
+        if (history) history = await getMonoGoalRecoveryBlocks(sessionId);
+        const live = sessionsRef.current.find(entry => entry.id === sessionId);
+        if (!live) throw Error("The originating chat is unavailable");
+        const session = history ? mergeMonoGoalRecoverySession(live, history) : live;
+        const next = change(session);
+        if (next === session) return;
+        const nextLive = history ? monoGoalRecoveryLiveSession(live, next, history) : next;
+        if (!await upsertSession(next, history ? { monoBaseline: history, monoLiveBlocks: nextLive.blocks } : undefined))
+          throw Error("The originating chat could not be saved");
+        sessionsRef.current = sessionsRef.current.map(entry => entry.id === sessionId
+          ? history
+            ? monoGoalRecoveryLiveSession(entry, change(mergeMonoGoalRecoverySession(entry, history)), history)
+            : change(entry)
+          : entry);
+        if (history) history = next.blocks;
+        setSessions(sessionsRef.current);
+      });
     };
     return submitMonoGoal({ text, attachmentCount: attachments.length, origin: "user", submission, recovery }, {
       context: () => goalRoutingForMono(mono.id) ?? { ownerId: mono.id, projects: [] },
@@ -12268,8 +12292,8 @@ function Workspace({
         return (await managerGoalHost.current.projects(mono.id)).find(entry => pathKey(entry.folder) === pathKey(folder));
       },
       persistOrigin: (origin, prompt) => update(session => appendMonoGoalOrigin(session, origin, prompt)),
-      hasOrigin: origin => !!sessionsRef.current.find(session => session.id === sessionId)?.blocks
-        .some(block => block.id === origin.userMessageId && block.monoGoalSubmission?.requestId === origin.requestId),
+      hasOrigin: origin => !!(history ?? sessionsRef.current.find(session => session.id === sessionId)?.blocks)
+        ?.some(block => block.id === origin.userMessageId && block.monoGoalSubmission?.requestId === origin.requestId),
       persistPending: (origin, error) => update(session => appendMonoGoalPendingCard(session, origin, error)),
       persistCard: (origin, goal) => update(session => appendMonoGoalCard(session, origin, goal)),
       grand: () => submitSession(sessionId, text, attachments),

@@ -1,0 +1,3737 @@
+{
+  "appIdentifier": "com.monocode.cc3.mockups",
+  "staticOnly": true,
+  "nativeAppLaunched": false,
+  "startedAt": "2026-10-11T10:33:12.999Z",
+  "node": "v26.5.0",
+  "isolation": {
+    "emptyTemporaryCwd": true,
+    "isolatedBrowserProfile": true,
+    "codexHomeUnset": true,
+    "orcaEnvironmentCount": 0,
+    "scrubbedVariableCount": 22
+  },
+  "assetHashes": {
+    "mission-control.html": "35447fe92e0f60a7a05d7877f3aad110330e95f8f8646143e3313f2a3cc9a5af",
+    "attention.html": "4f3faa9074aedc5f803e9563c841f991b28a1f1af8d26f9c3e36040d75f37004",
+    "timeline.html": "a2f4065eb06e075ab2da4ceb95f9989896d8e9bc2a4e64da102d15a8d4a188e9",
+    "member.html": "658865419060a83e81b1b22d28ca7f19964c21aa462950f36dab6cab5bfa9906",
+    "steering.html": "515b16924b374884218106da284c31a4d7a725d991ddefc15ce3b4f7e25bbdda",
+    "monocode.css": "8fff6f3729a0288c4f929d78f55eb86039138b8a5d2ecf0f0287810a7350d5cc"
+  },
+  "cases": [
+    {
+      "name": "mission-control",
+      "theme": "dark",
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "checks": [
+        {
+          "name": "page served successfully",
+          "passed": true
+        },
+        {
+          "name": "one h1 and main",
+          "passed": true
+        },
+        {
+          "name": "descriptive document title",
+          "passed": true,
+          "detail": "Mission control · MonoCode CC3"
+        },
+        {
+          "name": "no horizontal overflow",
+          "passed": true,
+          "detail": {
+            "width": 1440,
+            "viewport": 1440
+          }
+        },
+        {
+          "name": "no script, inline event or submission hooks",
+          "passed": true
+        },
+        {
+          "name": "local hrefs and assets valid",
+          "passed": true
+        },
+        {
+          "name": "first Tab shows skip link with focus outline",
+          "passed": true,
+          "detail": {
+            "isSkip": true,
+            "href": "#main",
+            "top": 8,
+            "outline": "2px"
+          }
+        },
+        {
+          "name": "skip link reaches main anchor",
+          "passed": true
+        },
+        {
+          "name": "Tab reaches all visible native controls",
+          "passed": true,
+          "detail": {
+            "expected": 21,
+            "reached": 21,
+            "counts": {
+              "a": 14,
+              "summary": 2,
+              "button": 4,
+              "select": 1
+            }
+          }
+        },
+        {
+          "name": "native control focus has visible outline",
+          "passed": true
+        },
+        {
+          "name": "native details toggle with Enter",
+          "passed": true
+        },
+        {
+          "name": "operational buttons are inert static previews",
+          "passed": true,
+          "detail": {
+            "buttons": 4,
+            "requests": 0
+          }
+        },
+        {
+          "name": "reduced motion disables animations and transitions",
+          "passed": true
+        },
+        {
+          "name": "sampled attention text contrast meets 4.5:1",
+          "passed": true,
+          "detail": {
+            "samples": 12,
+            "minimum": 8.45
+          }
+        },
+        {
+          "name": "no browser console page or resource errors",
+          "passed": true,
+          "detail": []
+        }
+      ],
+      "errors": [],
+      "focusable": {
+        "a": 14,
+        "summary": 2,
+        "button": 4,
+        "select": 1
+      },
+      "statusContrast": [
+        {
+          "text": "4",
+          "ratio": 8.45,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            43,
+            43,
+            43
+          ]
+        },
+        {
+          "text": "3",
+          "ratio": 8.45,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            43,
+            43,
+            43
+          ]
+        },
+        {
+          "text": "Needs you",
+          "ratio": 10.88,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            21,
+            21,
+            21
+          ]
+        },
+        {
+          "text": "Blocked",
+          "ratio": 10.88,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            21,
+            21,
+            21
+          ]
+        },
+        {
+          "text": "Failed check",
+          "ratio": 10.88,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            21,
+            21,
+            21
+          ]
+        },
+        {
+          "text": "1",
+          "ratio": 8.45,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            43,
+            43,
+            43
+          ]
+        },
+        {
+          "text": "Needs you",
+          "ratio": 10.88,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            21,
+            21,
+            21
+          ]
+        },
+        {
+          "text": "Reviewer is blocked by storage",
+          "ratio": 9.72,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            34,
+            32,
+            26
+          ]
+        },
+        {
+          "text": "Needs you · approval",
+          "ratio": 8.87,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            39,
+            39,
+            39
+          ]
+        },
+        {
+          "text": "Blocked · storage",
+          "ratio": 8.87,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            39,
+            39,
+            39
+          ]
+        },
+        {
+          "text": "Needs you · decision",
+          "ratio": 10.68,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            23,
+            23,
+            23
+          ]
+        },
+        {
+          "text": "Needs you",
+          "ratio": 8.87,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            39,
+            39,
+            39
+          ]
+        }
+      ],
+      "structure": {
+        "title": "Mission control · MonoCode CC3",
+        "h1": 1,
+        "main": 1,
+        "width": 1440,
+        "viewport": 1440,
+        "scripts": 0,
+        "inlineEvents": 0,
+        "forms": 0
+      },
+      "localResources": [
+        {
+          "url": "/monocode.css",
+          "status": 200
+        },
+        {
+          "url": "/mission-control.html",
+          "status": 200
+        },
+        {
+          "url": "/steering.html",
+          "status": 200
+        },
+        {
+          "url": "/attention.html",
+          "status": 200
+        },
+        {
+          "url": "/timeline.html",
+          "status": 200
+        },
+        {
+          "url": "/member.html",
+          "status": 200
+        }
+      ],
+      "screenshot": "screenshots/mission-control-dark-1440.png",
+      "screenshotSha256": "c73374dbc478a899d811eea745d42045f2cfe1aa68eec8fa112ab55dfedcbea2"
+    },
+    {
+      "name": "mission-control",
+      "theme": "light",
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "checks": [
+        {
+          "name": "page served successfully",
+          "passed": true
+        },
+        {
+          "name": "one h1 and main",
+          "passed": true
+        },
+        {
+          "name": "descriptive document title",
+          "passed": true,
+          "detail": "Mission control · MonoCode CC3"
+        },
+        {
+          "name": "no horizontal overflow",
+          "passed": true,
+          "detail": {
+            "width": 1440,
+            "viewport": 1440
+          }
+        },
+        {
+          "name": "no script, inline event or submission hooks",
+          "passed": true
+        },
+        {
+          "name": "local hrefs and assets valid",
+          "passed": true
+        },
+        {
+          "name": "first Tab shows skip link with focus outline",
+          "passed": true,
+          "detail": {
+            "isSkip": true,
+            "href": "#main",
+            "top": 8,
+            "outline": "2px"
+          }
+        },
+        {
+          "name": "skip link reaches main anchor",
+          "passed": true
+        },
+        {
+          "name": "Tab reaches all visible native controls",
+          "passed": true,
+          "detail": {
+            "expected": 21,
+            "reached": 21,
+            "counts": {
+              "a": 14,
+              "summary": 2,
+              "button": 4,
+              "select": 1
+            }
+          }
+        },
+        {
+          "name": "native control focus has visible outline",
+          "passed": true
+        },
+        {
+          "name": "native details toggle with Enter",
+          "passed": true
+        },
+        {
+          "name": "operational buttons are inert static previews",
+          "passed": true,
+          "detail": {
+            "buttons": 4,
+            "requests": 0
+          }
+        },
+        {
+          "name": "reduced motion disables animations and transitions",
+          "passed": true
+        },
+        {
+          "name": "sampled attention text contrast meets 4.5:1",
+          "passed": true,
+          "detail": {
+            "samples": 12,
+            "minimum": 5.36
+          }
+        },
+        {
+          "name": "no browser console page or resource errors",
+          "passed": true,
+          "detail": []
+        }
+      ],
+      "errors": [],
+      "focusable": {
+        "a": 14,
+        "summary": 2,
+        "button": 4,
+        "select": 1
+      },
+      "statusContrast": [
+        {
+          "text": "4",
+          "ratio": 5.36,
+          "foreground": [
+            114,
+            93,
+            28
+          ],
+          "background": [
+            235,
+            235,
+            235
+          ]
+        },
+        {
+          "text": "3",
+          "ratio": 5.36,
+          "foreground": [
+            114,
+            93,
+            28
+          ],
+          "background": [
+            235,
+            235,
+            235
+          ]
+        },
+        {
+          "text": "Needs you",
+          "ratio": 5.94,
+          "foreground": [
+            114,
+            93,
+            28
+          ],
+          "background": [
+            247,
+            247,
+            247
+          ]
+        },
+        {
+          "text": "Blocked",
+          "ratio": 5.94,
+          "foreground": [
+            114,
+            93,
+            28
+          ],
+          "background": [
+            247,
+            247,
+            247
+          ]
+        },
+        {
+          "text": "Failed check",
+          "ratio": 5.94,
+          "foreground": [
+            114,
+            93,
+            28
+          ],
+          "background": [
+            247,
+            247,
+            247
+          ]
+        },
+        {
+          "text": "1",
+          "ratio": 5.36,
+          "foreground": [
+            114,
+            93,
+            28
+          ],
+          "background": [
+            235,
+            235,
+            235
+          ]
+        },
+        {
+          "text": "Needs you",
+          "ratio": 5.94,
+          "foreground": [
+            114,
+            93,
+            28
+          ],
+          "background": [
+            247,
+            247,
+            247
+          ]
+        },
+        {
+          "text": "Reviewer is blocked by storage",
+          "ratio": 5.61,
+          "foreground": [
+            114,
+            93,
+            28
+          ],
+          "background": [
+            242,
+            240,
+            235
+          ]
+        },
+        {
+          "text": "Needs you · approval",
+          "ratio": 5.41,
+          "foreground": [
+            114,
+            93,
+            28
+          ],
+          "background": [
+            236,
+            236,
+            236
+          ]
+        },
+        {
+          "text": "Blocked · storage",
+          "ratio": 5.41,
+          "foreground": [
+            114,
+            93,
+            28
+          ],
+          "background": [
+            236,
+            236,
+            236
+          ]
+        },
+        {
+          "text": "Needs you · decision",
+          "ratio": 5.94,
+          "foreground": [
+            114,
+            93,
+            28
+          ],
+          "background": [
+            247,
+            247,
+            247
+          ]
+        },
+        {
+          "text": "Needs you",
+          "ratio": 5.41,
+          "foreground": [
+            114,
+            93,
+            28
+          ],
+          "background": [
+            236,
+            236,
+            236
+          ]
+        }
+      ],
+      "structure": {
+        "title": "Mission control · MonoCode CC3",
+        "h1": 1,
+        "main": 1,
+        "width": 1440,
+        "viewport": 1440,
+        "scripts": 0,
+        "inlineEvents": 0,
+        "forms": 0
+      },
+      "localResources": [
+        {
+          "url": "/monocode.css",
+          "status": 200
+        },
+        {
+          "url": "/mission-control.html",
+          "status": 200
+        },
+        {
+          "url": "/steering.html",
+          "status": 200
+        },
+        {
+          "url": "/attention.html",
+          "status": 200
+        },
+        {
+          "url": "/timeline.html",
+          "status": 200
+        },
+        {
+          "url": "/member.html",
+          "status": 200
+        }
+      ],
+      "screenshot": "screenshots/mission-control-light-1440.png",
+      "screenshotSha256": "ce575d94b4181acad2b316b3c9daba7a89f38d36f31a264085978b7ef5faff23"
+    },
+    {
+      "name": "attention",
+      "theme": "dark",
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "checks": [
+        {
+          "name": "page served successfully",
+          "passed": true
+        },
+        {
+          "name": "one h1 and main",
+          "passed": true
+        },
+        {
+          "name": "descriptive document title",
+          "passed": true,
+          "detail": "Attention queue · MonoCode CC3"
+        },
+        {
+          "name": "no horizontal overflow",
+          "passed": true,
+          "detail": {
+            "width": 1440,
+            "viewport": 1440
+          }
+        },
+        {
+          "name": "no script, inline event or submission hooks",
+          "passed": true
+        },
+        {
+          "name": "local hrefs and assets valid",
+          "passed": true
+        },
+        {
+          "name": "first Tab shows skip link with focus outline",
+          "passed": true,
+          "detail": {
+            "isSkip": true,
+            "href": "#main",
+            "top": 8,
+            "outline": "2px"
+          }
+        },
+        {
+          "name": "skip link reaches main anchor",
+          "passed": true
+        },
+        {
+          "name": "Tab reaches all visible native controls",
+          "passed": true,
+          "detail": {
+            "expected": 26,
+            "reached": 26,
+            "counts": {
+              "a": 9,
+              "summary": 2,
+              "button": 15
+            }
+          }
+        },
+        {
+          "name": "native control focus has visible outline",
+          "passed": true
+        },
+        {
+          "name": "native details toggle with Enter",
+          "passed": true
+        },
+        {
+          "name": "operational buttons are inert static previews",
+          "passed": true,
+          "detail": {
+            "buttons": 15,
+            "requests": 0
+          }
+        },
+        {
+          "name": "reduced motion disables animations and transitions",
+          "passed": true
+        },
+        {
+          "name": "sampled attention text contrast meets 4.5:1",
+          "passed": true,
+          "detail": {
+            "samples": 10,
+            "minimum": 5.93
+          }
+        },
+        {
+          "name": "no browser console page or resource errors",
+          "passed": true,
+          "detail": []
+        }
+      ],
+      "errors": [],
+      "focusable": {
+        "a": 9,
+        "summary": 2,
+        "button": 15
+      },
+      "statusContrast": [
+        {
+          "text": "4",
+          "ratio": 5.93,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            67,
+            67,
+            67
+          ]
+        },
+        {
+          "text": "3",
+          "ratio": 8.45,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            43,
+            43,
+            43
+          ]
+        },
+        {
+          "text": "Needs you",
+          "ratio": 10.88,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            21,
+            21,
+            21
+          ]
+        },
+        {
+          "text": "Blocked",
+          "ratio": 10.88,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            21,
+            21,
+            21
+          ]
+        },
+        {
+          "text": "Failed check",
+          "ratio": 10.88,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            21,
+            21,
+            21
+          ]
+        },
+        {
+          "text": "1",
+          "ratio": 8.45,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            43,
+            43,
+            43
+          ]
+        },
+        {
+          "text": "Needs you",
+          "ratio": 10.88,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            21,
+            21,
+            21
+          ]
+        },
+        {
+          "text": "Blocked · storage",
+          "ratio": 10.68,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            23,
+            23,
+            23
+          ]
+        },
+        {
+          "text": "Needs you · approval",
+          "ratio": 10.68,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            23,
+            23,
+            23
+          ]
+        },
+        {
+          "text": "Needs you · decision",
+          "ratio": 10.68,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            23,
+            23,
+            23
+          ]
+        }
+      ],
+      "structure": {
+        "title": "Attention queue · MonoCode CC3",
+        "h1": 1,
+        "main": 1,
+        "width": 1440,
+        "viewport": 1440,
+        "scripts": 0,
+        "inlineEvents": 0,
+        "forms": 0
+      },
+      "localResources": [
+        {
+          "url": "/monocode.css",
+          "status": 200
+        },
+        {
+          "url": "/attention.html",
+          "status": 200
+        },
+        {
+          "url": "/steering.html",
+          "status": 200
+        },
+        {
+          "url": "/mission-control.html",
+          "status": 200
+        },
+        {
+          "url": "/timeline.html",
+          "status": 200
+        },
+        {
+          "url": "/member.html",
+          "status": 200
+        }
+      ],
+      "screenshot": "screenshots/attention-dark-1440.png",
+      "screenshotSha256": "0e4b05ca5b8ba1309855ed6590528bab407e6a7b1daf7ff6780ec1c77b7336de"
+    },
+    {
+      "name": "attention",
+      "theme": "light",
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "checks": [
+        {
+          "name": "page served successfully",
+          "passed": true
+        },
+        {
+          "name": "one h1 and main",
+          "passed": true
+        },
+        {
+          "name": "descriptive document title",
+          "passed": true,
+          "detail": "Attention queue · MonoCode CC3"
+        },
+        {
+          "name": "no horizontal overflow",
+          "passed": true,
+          "detail": {
+            "width": 1440,
+            "viewport": 1440
+          }
+        },
+        {
+          "name": "no script, inline event or submission hooks",
+          "passed": true
+        },
+        {
+          "name": "local hrefs and assets valid",
+          "passed": true
+        },
+        {
+          "name": "first Tab shows skip link with focus outline",
+          "passed": true,
+          "detail": {
+            "isSkip": true,
+            "href": "#main",
+            "top": 8,
+            "outline": "2px"
+          }
+        },
+        {
+          "name": "skip link reaches main anchor",
+          "passed": true
+        },
+        {
+          "name": "Tab reaches all visible native controls",
+          "passed": true,
+          "detail": {
+            "expected": 26,
+            "reached": 26,
+            "counts": {
+              "a": 9,
+              "summary": 2,
+              "button": 15
+            }
+          }
+        },
+        {
+          "name": "native control focus has visible outline",
+          "passed": true
+        },
+        {
+          "name": "native details toggle with Enter",
+          "passed": true
+        },
+        {
+          "name": "operational buttons are inert static previews",
+          "passed": true,
+          "detail": {
+            "buttons": 15,
+            "requests": 0
+          }
+        },
+        {
+          "name": "reduced motion disables animations and transitions",
+          "passed": true
+        },
+        {
+          "name": "sampled attention text contrast meets 4.5:1",
+          "passed": true,
+          "detail": {
+            "samples": 10,
+            "minimum": 4.73
+          }
+        },
+        {
+          "name": "no browser console page or resource errors",
+          "passed": true,
+          "detail": []
+        }
+      ],
+      "errors": [],
+      "focusable": {
+        "a": 9,
+        "summary": 2,
+        "button": 15
+      },
+      "statusContrast": [
+        {
+          "text": "4",
+          "ratio": 4.73,
+          "foreground": [
+            114,
+            93,
+            28
+          ],
+          "background": [
+            222,
+            222,
+            222
+          ]
+        },
+        {
+          "text": "3",
+          "ratio": 5.36,
+          "foreground": [
+            114,
+            93,
+            28
+          ],
+          "background": [
+            235,
+            235,
+            235
+          ]
+        },
+        {
+          "text": "Needs you",
+          "ratio": 5.94,
+          "foreground": [
+            114,
+            93,
+            28
+          ],
+          "background": [
+            247,
+            247,
+            247
+          ]
+        },
+        {
+          "text": "Blocked",
+          "ratio": 5.94,
+          "foreground": [
+            114,
+            93,
+            28
+          ],
+          "background": [
+            247,
+            247,
+            247
+          ]
+        },
+        {
+          "text": "Failed check",
+          "ratio": 5.94,
+          "foreground": [
+            114,
+            93,
+            28
+          ],
+          "background": [
+            247,
+            247,
+            247
+          ]
+        },
+        {
+          "text": "1",
+          "ratio": 5.36,
+          "foreground": [
+            114,
+            93,
+            28
+          ],
+          "background": [
+            235,
+            235,
+            235
+          ]
+        },
+        {
+          "text": "Needs you",
+          "ratio": 5.94,
+          "foreground": [
+            114,
+            93,
+            28
+          ],
+          "background": [
+            247,
+            247,
+            247
+          ]
+        },
+        {
+          "text": "Blocked · storage",
+          "ratio": 5.94,
+          "foreground": [
+            114,
+            93,
+            28
+          ],
+          "background": [
+            247,
+            247,
+            247
+          ]
+        },
+        {
+          "text": "Needs you · approval",
+          "ratio": 5.94,
+          "foreground": [
+            114,
+            93,
+            28
+          ],
+          "background": [
+            247,
+            247,
+            247
+          ]
+        },
+        {
+          "text": "Needs you · decision",
+          "ratio": 5.94,
+          "foreground": [
+            114,
+            93,
+            28
+          ],
+          "background": [
+            247,
+            247,
+            247
+          ]
+        }
+      ],
+      "structure": {
+        "title": "Attention queue · MonoCode CC3",
+        "h1": 1,
+        "main": 1,
+        "width": 1440,
+        "viewport": 1440,
+        "scripts": 0,
+        "inlineEvents": 0,
+        "forms": 0
+      },
+      "localResources": [
+        {
+          "url": "/monocode.css",
+          "status": 200
+        },
+        {
+          "url": "/attention.html",
+          "status": 200
+        },
+        {
+          "url": "/steering.html",
+          "status": 200
+        },
+        {
+          "url": "/mission-control.html",
+          "status": 200
+        },
+        {
+          "url": "/timeline.html",
+          "status": 200
+        },
+        {
+          "url": "/member.html",
+          "status": 200
+        }
+      ],
+      "screenshot": "screenshots/attention-light-1440.png",
+      "screenshotSha256": "82b6771c526fdcdad5be1a2cbc009ff0e41c8de5cd7a8a1834243f33a14ed095"
+    },
+    {
+      "name": "timeline",
+      "theme": "dark",
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "checks": [
+        {
+          "name": "page served successfully",
+          "passed": true
+        },
+        {
+          "name": "one h1 and main",
+          "passed": true
+        },
+        {
+          "name": "descriptive document title",
+          "passed": true,
+          "detail": "Delegation timeline · MonoCode CC3"
+        },
+        {
+          "name": "no horizontal overflow",
+          "passed": true,
+          "detail": {
+            "width": 1440,
+            "viewport": 1440
+          }
+        },
+        {
+          "name": "no script, inline event or submission hooks",
+          "passed": true
+        },
+        {
+          "name": "local hrefs and assets valid",
+          "passed": true
+        },
+        {
+          "name": "first Tab shows skip link with focus outline",
+          "passed": true,
+          "detail": {
+            "isSkip": true,
+            "href": "#main",
+            "top": 8,
+            "outline": "2px"
+          }
+        },
+        {
+          "name": "skip link reaches main anchor",
+          "passed": true
+        },
+        {
+          "name": "Tab reaches all visible native controls",
+          "passed": true,
+          "detail": {
+            "expected": 13,
+            "reached": 13,
+            "counts": {
+              "a": 9,
+              "summary": 3,
+              "button": 1
+            }
+          }
+        },
+        {
+          "name": "native control focus has visible outline",
+          "passed": true
+        },
+        {
+          "name": "native details toggle with Enter",
+          "passed": true
+        },
+        {
+          "name": "operational buttons are inert static previews",
+          "passed": true,
+          "detail": {
+            "buttons": 1,
+            "requests": 0
+          }
+        },
+        {
+          "name": "reduced motion disables animations and transitions",
+          "passed": true
+        },
+        {
+          "name": "sampled attention text contrast meets 4.5:1",
+          "passed": true,
+          "detail": {
+            "samples": 8,
+            "minimum": 8.45
+          }
+        },
+        {
+          "name": "no browser console page or resource errors",
+          "passed": true,
+          "detail": []
+        }
+      ],
+      "errors": [],
+      "focusable": {
+        "a": 9,
+        "summary": 3,
+        "button": 1
+      },
+      "statusContrast": [
+        {
+          "text": "4",
+          "ratio": 8.45,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            43,
+            43,
+            43
+          ]
+        },
+        {
+          "text": "3",
+          "ratio": 8.45,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            43,
+            43,
+            43
+          ]
+        },
+        {
+          "text": "Needs you",
+          "ratio": 10.88,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            21,
+            21,
+            21
+          ]
+        },
+        {
+          "text": "Blocked",
+          "ratio": 10.88,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            21,
+            21,
+            21
+          ]
+        },
+        {
+          "text": "Failed check",
+          "ratio": 10.88,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            21,
+            21,
+            21
+          ]
+        },
+        {
+          "text": "1",
+          "ratio": 8.45,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            43,
+            43,
+            43
+          ]
+        },
+        {
+          "text": "Needs you",
+          "ratio": 10.88,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            21,
+            21,
+            21
+          ]
+        },
+        {
+          "text": "Review is waiting on storage",
+          "ratio": 9.72,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            34,
+            32,
+            26
+          ]
+        }
+      ],
+      "structure": {
+        "title": "Delegation timeline · MonoCode CC3",
+        "h1": 1,
+        "main": 1,
+        "width": 1440,
+        "viewport": 1440,
+        "scripts": 0,
+        "inlineEvents": 0,
+        "forms": 0
+      },
+      "localResources": [
+        {
+          "url": "/monocode.css",
+          "status": 200
+        },
+        {
+          "url": "/timeline.html",
+          "status": 200
+        },
+        {
+          "url": "/steering.html",
+          "status": 200
+        },
+        {
+          "url": "/mission-control.html",
+          "status": 200
+        },
+        {
+          "url": "/attention.html",
+          "status": 200
+        },
+        {
+          "url": "/member.html",
+          "status": 200
+        }
+      ],
+      "screenshot": "screenshots/timeline-dark-1440.png",
+      "screenshotSha256": "7acdec07168089626208349b66359a444df25dea2969cda61252dd4ab37a4b0f"
+    },
+    {
+      "name": "timeline",
+      "theme": "light",
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "checks": [
+        {
+          "name": "page served successfully",
+          "passed": true
+        },
+        {
+          "name": "one h1 and main",
+          "passed": true
+        },
+        {
+          "name": "descriptive document title",
+          "passed": true,
+          "detail": "Delegation timeline · MonoCode CC3"
+        },
+        {
+          "name": "no horizontal overflow",
+          "passed": true,
+          "detail": {
+            "width": 1440,
+            "viewport": 1440
+          }
+        },
+        {
+          "name": "no script, inline event or submission hooks",
+          "passed": true
+        },
+        {
+          "name": "local hrefs and assets valid",
+          "passed": true
+        },
+        {
+          "name": "first Tab shows skip link with focus outline",
+          "passed": true,
+          "detail": {
+            "isSkip": true,
+            "href": "#main",
+            "top": 8,
+            "outline": "2px"
+          }
+        },
+        {
+          "name": "skip link reaches main anchor",
+          "passed": true
+        },
+        {
+          "name": "Tab reaches all visible native controls",
+          "passed": true,
+          "detail": {
+            "expected": 13,
+            "reached": 13,
+            "counts": {
+              "a": 9,
+              "summary": 3,
+              "button": 1
+            }
+          }
+        },
+        {
+          "name": "native control focus has visible outline",
+          "passed": true
+        },
+        {
+          "name": "native details toggle with Enter",
+          "passed": true
+        },
+        {
+          "name": "operational buttons are inert static previews",
+          "passed": true,
+          "detail": {
+            "buttons": 1,
+            "requests": 0
+          }
+        },
+        {
+          "name": "reduced motion disables animations and transitions",
+          "passed": true
+        },
+        {
+          "name": "sampled attention text contrast meets 4.5:1",
+          "passed": true,
+          "detail": {
+            "samples": 8,
+            "minimum": 5.36
+          }
+        },
+        {
+          "name": "no browser console page or resource errors",
+          "passed": true,
+          "detail": []
+        }
+      ],
+      "errors": [],
+      "focusable": {
+        "a": 9,
+        "summary": 3,
+        "button": 1
+      },
+      "statusContrast": [
+        {
+          "text": "4",
+          "ratio": 5.36,
+          "foreground": [
+            114,
+            93,
+            28
+          ],
+          "background": [
+            235,
+            235,
+            235
+          ]
+        },
+        {
+          "text": "3",
+          "ratio": 5.36,
+          "foreground": [
+            114,
+            93,
+            28
+          ],
+          "background": [
+            235,
+            235,
+            235
+          ]
+        },
+        {
+          "text": "Needs you",
+          "ratio": 5.94,
+          "foreground": [
+            114,
+            93,
+            28
+          ],
+          "background": [
+            247,
+            247,
+            247
+          ]
+        },
+        {
+          "text": "Blocked",
+          "ratio": 5.94,
+          "foreground": [
+            114,
+            93,
+            28
+          ],
+          "background": [
+            247,
+            247,
+            247
+          ]
+        },
+        {
+          "text": "Failed check",
+          "ratio": 5.94,
+          "foreground": [
+            114,
+            93,
+            28
+          ],
+          "background": [
+            247,
+            247,
+            247
+          ]
+        },
+        {
+          "text": "1",
+          "ratio": 5.36,
+          "foreground": [
+            114,
+            93,
+            28
+          ],
+          "background": [
+            235,
+            235,
+            235
+          ]
+        },
+        {
+          "text": "Needs you",
+          "ratio": 5.94,
+          "foreground": [
+            114,
+            93,
+            28
+          ],
+          "background": [
+            247,
+            247,
+            247
+          ]
+        },
+        {
+          "text": "Review is waiting on storage",
+          "ratio": 5.61,
+          "foreground": [
+            114,
+            93,
+            28
+          ],
+          "background": [
+            242,
+            240,
+            235
+          ]
+        }
+      ],
+      "structure": {
+        "title": "Delegation timeline · MonoCode CC3",
+        "h1": 1,
+        "main": 1,
+        "width": 1440,
+        "viewport": 1440,
+        "scripts": 0,
+        "inlineEvents": 0,
+        "forms": 0
+      },
+      "localResources": [
+        {
+          "url": "/monocode.css",
+          "status": 200
+        },
+        {
+          "url": "/timeline.html",
+          "status": 200
+        },
+        {
+          "url": "/steering.html",
+          "status": 200
+        },
+        {
+          "url": "/mission-control.html",
+          "status": 200
+        },
+        {
+          "url": "/attention.html",
+          "status": 200
+        },
+        {
+          "url": "/member.html",
+          "status": 200
+        }
+      ],
+      "screenshot": "screenshots/timeline-light-1440.png",
+      "screenshotSha256": "63a02feece9dfc99d155b7aabf3ea24ce3b35da53422485f39ec87f0fb8c4398"
+    },
+    {
+      "name": "member",
+      "theme": "dark",
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "checks": [
+        {
+          "name": "page served successfully",
+          "passed": true
+        },
+        {
+          "name": "one h1 and main",
+          "passed": true
+        },
+        {
+          "name": "descriptive document title",
+          "passed": true,
+          "detail": "Reviewer · MonoCode CC3"
+        },
+        {
+          "name": "no horizontal overflow",
+          "passed": true,
+          "detail": {
+            "width": 1440,
+            "viewport": 1440
+          }
+        },
+        {
+          "name": "no script, inline event or submission hooks",
+          "passed": true
+        },
+        {
+          "name": "local hrefs and assets valid",
+          "passed": true
+        },
+        {
+          "name": "first Tab shows skip link with focus outline",
+          "passed": true,
+          "detail": {
+            "isSkip": true,
+            "href": "#main",
+            "top": 8,
+            "outline": "2px"
+          }
+        },
+        {
+          "name": "skip link reaches main anchor",
+          "passed": true
+        },
+        {
+          "name": "Tab reaches all visible native controls",
+          "passed": true,
+          "detail": {
+            "expected": 21,
+            "reached": 21,
+            "counts": {
+              "a": 11,
+              "summary": 3,
+              "button": 4,
+              "textarea": 1,
+              "select": 2
+            }
+          }
+        },
+        {
+          "name": "native control focus has visible outline",
+          "passed": true
+        },
+        {
+          "name": "native details toggle with Enter",
+          "passed": true
+        },
+        {
+          "name": "operational buttons are inert static previews",
+          "passed": true,
+          "detail": {
+            "buttons": 4,
+            "requests": 0
+          }
+        },
+        {
+          "name": "reduced motion disables animations and transitions",
+          "passed": true
+        },
+        {
+          "name": "sampled attention text contrast meets 4.5:1",
+          "passed": true,
+          "detail": {
+            "samples": 8,
+            "minimum": 8.45
+          }
+        },
+        {
+          "name": "no browser console page or resource errors",
+          "passed": true,
+          "detail": []
+        }
+      ],
+      "errors": [],
+      "focusable": {
+        "a": 11,
+        "summary": 3,
+        "button": 4,
+        "textarea": 1,
+        "select": 2
+      },
+      "statusContrast": [
+        {
+          "text": "4",
+          "ratio": 8.45,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            43,
+            43,
+            43
+          ]
+        },
+        {
+          "text": "3",
+          "ratio": 8.45,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            43,
+            43,
+            43
+          ]
+        },
+        {
+          "text": "Needs you",
+          "ratio": 10.88,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            21,
+            21,
+            21
+          ]
+        },
+        {
+          "text": "Blocked",
+          "ratio": 8.45,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            43,
+            43,
+            43
+          ]
+        },
+        {
+          "text": "Failed check",
+          "ratio": 10.88,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            21,
+            21,
+            21
+          ]
+        },
+        {
+          "text": "1",
+          "ratio": 8.45,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            43,
+            43,
+            43
+          ]
+        },
+        {
+          "text": "Needs you",
+          "ratio": 10.88,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            21,
+            21,
+            21
+          ]
+        },
+        {
+          "text": "Queued · storage",
+          "ratio": 10.68,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            23,
+            23,
+            23
+          ]
+        }
+      ],
+      "structure": {
+        "title": "Reviewer · MonoCode CC3",
+        "h1": 1,
+        "main": 1,
+        "width": 1440,
+        "viewport": 1440,
+        "scripts": 0,
+        "inlineEvents": 0,
+        "forms": 0
+      },
+      "localResources": [
+        {
+          "url": "/monocode.css",
+          "status": 200
+        },
+        {
+          "url": "/member.html",
+          "status": 200
+        },
+        {
+          "url": "/steering.html",
+          "status": 200
+        },
+        {
+          "url": "/mission-control.html",
+          "status": 200
+        },
+        {
+          "url": "/attention.html",
+          "status": 200
+        },
+        {
+          "url": "/timeline.html",
+          "status": 200
+        }
+      ],
+      "screenshot": "screenshots/member-dark-1440.png",
+      "screenshotSha256": "df0a30c80ff5079cf71ba1d7938f671c5fcc0bed2b72e849f591e20e2e617a4f"
+    },
+    {
+      "name": "member",
+      "theme": "light",
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "checks": [
+        {
+          "name": "page served successfully",
+          "passed": true
+        },
+        {
+          "name": "one h1 and main",
+          "passed": true
+        },
+        {
+          "name": "descriptive document title",
+          "passed": true,
+          "detail": "Reviewer · MonoCode CC3"
+        },
+        {
+          "name": "no horizontal overflow",
+          "passed": true,
+          "detail": {
+            "width": 1440,
+            "viewport": 1440
+          }
+        },
+        {
+          "name": "no script, inline event or submission hooks",
+          "passed": true
+        },
+        {
+          "name": "local hrefs and assets valid",
+          "passed": true
+        },
+        {
+          "name": "first Tab shows skip link with focus outline",
+          "passed": true,
+          "detail": {
+            "isSkip": true,
+            "href": "#main",
+            "top": 8,
+            "outline": "2px"
+          }
+        },
+        {
+          "name": "skip link reaches main anchor",
+          "passed": true
+        },
+        {
+          "name": "Tab reaches all visible native controls",
+          "passed": true,
+          "detail": {
+            "expected": 21,
+            "reached": 21,
+            "counts": {
+              "a": 11,
+              "summary": 3,
+              "button": 4,
+              "textarea": 1,
+              "select": 2
+            }
+          }
+        },
+        {
+          "name": "native control focus has visible outline",
+          "passed": true
+        },
+        {
+          "name": "native details toggle with Enter",
+          "passed": true
+        },
+        {
+          "name": "operational buttons are inert static previews",
+          "passed": true,
+          "detail": {
+            "buttons": 4,
+            "requests": 0
+          }
+        },
+        {
+          "name": "reduced motion disables animations and transitions",
+          "passed": true
+        },
+        {
+          "name": "sampled attention text contrast meets 4.5:1",
+          "passed": true,
+          "detail": {
+            "samples": 8,
+            "minimum": 5.36
+          }
+        },
+        {
+          "name": "no browser console page or resource errors",
+          "passed": true,
+          "detail": []
+        }
+      ],
+      "errors": [],
+      "focusable": {
+        "a": 11,
+        "summary": 3,
+        "button": 4,
+        "textarea": 1,
+        "select": 2
+      },
+      "statusContrast": [
+        {
+          "text": "4",
+          "ratio": 5.36,
+          "foreground": [
+            114,
+            93,
+            28
+          ],
+          "background": [
+            235,
+            235,
+            235
+          ]
+        },
+        {
+          "text": "3",
+          "ratio": 5.36,
+          "foreground": [
+            114,
+            93,
+            28
+          ],
+          "background": [
+            235,
+            235,
+            235
+          ]
+        },
+        {
+          "text": "Needs you",
+          "ratio": 5.94,
+          "foreground": [
+            114,
+            93,
+            28
+          ],
+          "background": [
+            247,
+            247,
+            247
+          ]
+        },
+        {
+          "text": "Blocked",
+          "ratio": 5.36,
+          "foreground": [
+            114,
+            93,
+            28
+          ],
+          "background": [
+            235,
+            235,
+            235
+          ]
+        },
+        {
+          "text": "Failed check",
+          "ratio": 5.94,
+          "foreground": [
+            114,
+            93,
+            28
+          ],
+          "background": [
+            247,
+            247,
+            247
+          ]
+        },
+        {
+          "text": "1",
+          "ratio": 5.36,
+          "foreground": [
+            114,
+            93,
+            28
+          ],
+          "background": [
+            235,
+            235,
+            235
+          ]
+        },
+        {
+          "text": "Needs you",
+          "ratio": 5.94,
+          "foreground": [
+            114,
+            93,
+            28
+          ],
+          "background": [
+            247,
+            247,
+            247
+          ]
+        },
+        {
+          "text": "Queued · storage",
+          "ratio": 5.94,
+          "foreground": [
+            114,
+            93,
+            28
+          ],
+          "background": [
+            247,
+            247,
+            247
+          ]
+        }
+      ],
+      "structure": {
+        "title": "Reviewer · MonoCode CC3",
+        "h1": 1,
+        "main": 1,
+        "width": 1440,
+        "viewport": 1440,
+        "scripts": 0,
+        "inlineEvents": 0,
+        "forms": 0
+      },
+      "localResources": [
+        {
+          "url": "/monocode.css",
+          "status": 200
+        },
+        {
+          "url": "/member.html",
+          "status": 200
+        },
+        {
+          "url": "/steering.html",
+          "status": 200
+        },
+        {
+          "url": "/mission-control.html",
+          "status": 200
+        },
+        {
+          "url": "/attention.html",
+          "status": 200
+        },
+        {
+          "url": "/timeline.html",
+          "status": 200
+        }
+      ],
+      "screenshot": "screenshots/member-light-1440.png",
+      "screenshotSha256": "78b060d1f537796b07bbbfb5900bf63e921e6df132a289e2ed4672d120cf133c"
+    },
+    {
+      "name": "steering",
+      "theme": "dark",
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "checks": [
+        {
+          "name": "page served successfully",
+          "passed": true
+        },
+        {
+          "name": "one h1 and main",
+          "passed": true
+        },
+        {
+          "name": "descriptive document title",
+          "passed": true,
+          "detail": "Steering · MonoCode CC3"
+        },
+        {
+          "name": "no horizontal overflow",
+          "passed": true,
+          "detail": {
+            "width": 1440,
+            "viewport": 1440
+          }
+        },
+        {
+          "name": "no script, inline event or submission hooks",
+          "passed": true
+        },
+        {
+          "name": "local hrefs and assets valid",
+          "passed": true
+        },
+        {
+          "name": "first Tab shows skip link with focus outline",
+          "passed": true,
+          "detail": {
+            "isSkip": true,
+            "href": "#main",
+            "top": 8,
+            "outline": "2px"
+          }
+        },
+        {
+          "name": "skip link reaches main anchor",
+          "passed": true
+        },
+        {
+          "name": "Tab reaches all visible native controls",
+          "passed": true,
+          "detail": {
+            "expected": 14,
+            "reached": 14,
+            "counts": {
+              "a": 7,
+              "summary": 2,
+              "input": 1,
+              "select": 2,
+              "button": 2
+            }
+          }
+        },
+        {
+          "name": "native control focus has visible outline",
+          "passed": true
+        },
+        {
+          "name": "native details toggle with Enter",
+          "passed": true
+        },
+        {
+          "name": "operational buttons are inert static previews",
+          "passed": true,
+          "detail": {
+            "buttons": 2,
+            "requests": 0
+          }
+        },
+        {
+          "name": "reduced motion disables animations and transitions",
+          "passed": true
+        },
+        {
+          "name": "sampled attention text contrast meets 4.5:1",
+          "passed": true,
+          "detail": {
+            "samples": 8,
+            "minimum": 8.45
+          }
+        },
+        {
+          "name": "no browser console page or resource errors",
+          "passed": true,
+          "detail": []
+        }
+      ],
+      "errors": [],
+      "focusable": {
+        "a": 7,
+        "summary": 2,
+        "input": 1,
+        "select": 2,
+        "button": 2
+      },
+      "statusContrast": [
+        {
+          "text": "4",
+          "ratio": 8.45,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            43,
+            43,
+            43
+          ]
+        },
+        {
+          "text": "3",
+          "ratio": 8.45,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            43,
+            43,
+            43
+          ]
+        },
+        {
+          "text": "Needs you",
+          "ratio": 10.88,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            21,
+            21,
+            21
+          ]
+        },
+        {
+          "text": "Blocked",
+          "ratio": 10.88,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            21,
+            21,
+            21
+          ]
+        },
+        {
+          "text": "Failed check",
+          "ratio": 10.88,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            21,
+            21,
+            21
+          ]
+        },
+        {
+          "text": "1",
+          "ratio": 8.45,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            43,
+            43,
+            43
+          ]
+        },
+        {
+          "text": "Needs you",
+          "ratio": 10.88,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            21,
+            21,
+            21
+          ]
+        },
+        {
+          "text": "Blocked · storage",
+          "ratio": 8.87,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            39,
+            39,
+            39
+          ]
+        }
+      ],
+      "structure": {
+        "title": "Steering · MonoCode CC3",
+        "h1": 1,
+        "main": 1,
+        "width": 1440,
+        "viewport": 1440,
+        "scripts": 0,
+        "inlineEvents": 0,
+        "forms": 0
+      },
+      "localResources": [
+        {
+          "url": "/monocode.css",
+          "status": 200
+        },
+        {
+          "url": "/steering.html",
+          "status": 200
+        },
+        {
+          "url": "/mission-control.html",
+          "status": 200
+        },
+        {
+          "url": "/attention.html",
+          "status": 200
+        },
+        {
+          "url": "/timeline.html",
+          "status": 200
+        },
+        {
+          "url": "/member.html",
+          "status": 200
+        }
+      ],
+      "screenshot": "screenshots/steering-dark-1440.png",
+      "screenshotSha256": "7d780d34356cf38df82a04d1e770afdb5284ec4f312bae003be5c0a6d1c35a8c"
+    },
+    {
+      "name": "steering",
+      "theme": "light",
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "checks": [
+        {
+          "name": "page served successfully",
+          "passed": true
+        },
+        {
+          "name": "one h1 and main",
+          "passed": true
+        },
+        {
+          "name": "descriptive document title",
+          "passed": true,
+          "detail": "Steering · MonoCode CC3"
+        },
+        {
+          "name": "no horizontal overflow",
+          "passed": true,
+          "detail": {
+            "width": 1440,
+            "viewport": 1440
+          }
+        },
+        {
+          "name": "no script, inline event or submission hooks",
+          "passed": true
+        },
+        {
+          "name": "local hrefs and assets valid",
+          "passed": true
+        },
+        {
+          "name": "first Tab shows skip link with focus outline",
+          "passed": true,
+          "detail": {
+            "isSkip": true,
+            "href": "#main",
+            "top": 8,
+            "outline": "2px"
+          }
+        },
+        {
+          "name": "skip link reaches main anchor",
+          "passed": true
+        },
+        {
+          "name": "Tab reaches all visible native controls",
+          "passed": true,
+          "detail": {
+            "expected": 14,
+            "reached": 14,
+            "counts": {
+              "a": 7,
+              "summary": 2,
+              "input": 1,
+              "select": 2,
+              "button": 2
+            }
+          }
+        },
+        {
+          "name": "native control focus has visible outline",
+          "passed": true
+        },
+        {
+          "name": "native details toggle with Enter",
+          "passed": true
+        },
+        {
+          "name": "operational buttons are inert static previews",
+          "passed": true,
+          "detail": {
+            "buttons": 2,
+            "requests": 0
+          }
+        },
+        {
+          "name": "reduced motion disables animations and transitions",
+          "passed": true
+        },
+        {
+          "name": "sampled attention text contrast meets 4.5:1",
+          "passed": true,
+          "detail": {
+            "samples": 8,
+            "minimum": 5.36
+          }
+        },
+        {
+          "name": "no browser console page or resource errors",
+          "passed": true,
+          "detail": []
+        }
+      ],
+      "errors": [],
+      "focusable": {
+        "a": 7,
+        "summary": 2,
+        "input": 1,
+        "select": 2,
+        "button": 2
+      },
+      "statusContrast": [
+        {
+          "text": "4",
+          "ratio": 5.36,
+          "foreground": [
+            114,
+            93,
+            28
+          ],
+          "background": [
+            235,
+            235,
+            235
+          ]
+        },
+        {
+          "text": "3",
+          "ratio": 5.36,
+          "foreground": [
+            114,
+            93,
+            28
+          ],
+          "background": [
+            235,
+            235,
+            235
+          ]
+        },
+        {
+          "text": "Needs you",
+          "ratio": 5.94,
+          "foreground": [
+            114,
+            93,
+            28
+          ],
+          "background": [
+            247,
+            247,
+            247
+          ]
+        },
+        {
+          "text": "Blocked",
+          "ratio": 5.94,
+          "foreground": [
+            114,
+            93,
+            28
+          ],
+          "background": [
+            247,
+            247,
+            247
+          ]
+        },
+        {
+          "text": "Failed check",
+          "ratio": 5.94,
+          "foreground": [
+            114,
+            93,
+            28
+          ],
+          "background": [
+            247,
+            247,
+            247
+          ]
+        },
+        {
+          "text": "1",
+          "ratio": 5.36,
+          "foreground": [
+            114,
+            93,
+            28
+          ],
+          "background": [
+            235,
+            235,
+            235
+          ]
+        },
+        {
+          "text": "Needs you",
+          "ratio": 5.94,
+          "foreground": [
+            114,
+            93,
+            28
+          ],
+          "background": [
+            247,
+            247,
+            247
+          ]
+        },
+        {
+          "text": "Blocked · storage",
+          "ratio": 5.41,
+          "foreground": [
+            114,
+            93,
+            28
+          ],
+          "background": [
+            236,
+            236,
+            236
+          ]
+        }
+      ],
+      "structure": {
+        "title": "Steering · MonoCode CC3",
+        "h1": 1,
+        "main": 1,
+        "width": 1440,
+        "viewport": 1440,
+        "scripts": 0,
+        "inlineEvents": 0,
+        "forms": 0
+      },
+      "localResources": [
+        {
+          "url": "/monocode.css",
+          "status": 200
+        },
+        {
+          "url": "/steering.html",
+          "status": 200
+        },
+        {
+          "url": "/mission-control.html",
+          "status": 200
+        },
+        {
+          "url": "/attention.html",
+          "status": 200
+        },
+        {
+          "url": "/timeline.html",
+          "status": 200
+        },
+        {
+          "url": "/member.html",
+          "status": 200
+        }
+      ],
+      "screenshot": "screenshots/steering-light-1440.png",
+      "screenshotSha256": "6ec3679c929bf3ee32fbcd1e0e33ff771d39c432e413bc6dff17b224fe935b97"
+    },
+    {
+      "name": "mission-control",
+      "theme": "dark",
+      "viewport": {
+        "width": 390,
+        "height": 1000
+      },
+      "checks": [
+        {
+          "name": "page served successfully",
+          "passed": true
+        },
+        {
+          "name": "one h1 and main",
+          "passed": true
+        },
+        {
+          "name": "descriptive document title",
+          "passed": true,
+          "detail": "Mission control · MonoCode CC3"
+        },
+        {
+          "name": "no horizontal overflow",
+          "passed": true,
+          "detail": {
+            "width": 390,
+            "viewport": 390
+          }
+        },
+        {
+          "name": "no script, inline event or submission hooks",
+          "passed": true
+        },
+        {
+          "name": "local hrefs and assets valid",
+          "passed": true
+        },
+        {
+          "name": "first Tab shows skip link with focus outline",
+          "passed": true,
+          "detail": {
+            "isSkip": true,
+            "href": "#main",
+            "top": 8,
+            "outline": "2px"
+          }
+        },
+        {
+          "name": "skip link reaches main anchor",
+          "passed": true
+        },
+        {
+          "name": "Tab reaches all visible native controls",
+          "passed": true,
+          "detail": {
+            "expected": 18,
+            "reached": 18,
+            "counts": {
+              "a": 13,
+              "button": 4,
+              "select": 1
+            }
+          }
+        },
+        {
+          "name": "native control focus has visible outline",
+          "passed": true
+        },
+        {
+          "name": "native details toggle with Enter",
+          "passed": true
+        },
+        {
+          "name": "operational buttons are inert static previews",
+          "passed": true,
+          "detail": {
+            "buttons": 4,
+            "requests": 0
+          }
+        },
+        {
+          "name": "reduced motion disables animations and transitions",
+          "passed": true
+        },
+        {
+          "name": "sampled attention text contrast meets 4.5:1",
+          "passed": true,
+          "detail": {
+            "samples": 6,
+            "minimum": 8.45
+          }
+        },
+        {
+          "name": "no browser console page or resource errors",
+          "passed": true,
+          "detail": []
+        }
+      ],
+      "errors": [],
+      "focusable": {
+        "a": 13,
+        "button": 4,
+        "select": 1
+      },
+      "statusContrast": [
+        {
+          "text": "4",
+          "ratio": 8.45,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            43,
+            43,
+            43
+          ]
+        },
+        {
+          "text": "Reviewer is blocked by storage",
+          "ratio": 9.72,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            34,
+            32,
+            26
+          ]
+        },
+        {
+          "text": "Needs you · approval",
+          "ratio": 8.87,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            39,
+            39,
+            39
+          ]
+        },
+        {
+          "text": "Blocked · storage",
+          "ratio": 8.87,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            39,
+            39,
+            39
+          ]
+        },
+        {
+          "text": "Needs you · decision",
+          "ratio": 10.68,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            23,
+            23,
+            23
+          ]
+        },
+        {
+          "text": "Needs you",
+          "ratio": 8.87,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            39,
+            39,
+            39
+          ]
+        }
+      ],
+      "structure": {
+        "title": "Mission control · MonoCode CC3",
+        "h1": 1,
+        "main": 1,
+        "width": 390,
+        "viewport": 390,
+        "scripts": 0,
+        "inlineEvents": 0,
+        "forms": 0
+      },
+      "localResources": [
+        {
+          "url": "/monocode.css",
+          "status": 200
+        },
+        {
+          "url": "/mission-control.html",
+          "status": 200
+        },
+        {
+          "url": "/steering.html",
+          "status": 200
+        },
+        {
+          "url": "/attention.html",
+          "status": 200
+        },
+        {
+          "url": "/timeline.html",
+          "status": 200
+        },
+        {
+          "url": "/member.html",
+          "status": 200
+        }
+      ],
+      "screenshot": "screenshots/mission-control-dark-390.png",
+      "screenshotSha256": "8c846979bef97476730e2de0be4f816be8ff4f973c723a9f8cbbf6f32b56f3bd"
+    },
+    {
+      "name": "member",
+      "theme": "dark",
+      "viewport": {
+        "width": 390,
+        "height": 1000
+      },
+      "checks": [
+        {
+          "name": "page served successfully",
+          "passed": true
+        },
+        {
+          "name": "one h1 and main",
+          "passed": true
+        },
+        {
+          "name": "descriptive document title",
+          "passed": true,
+          "detail": "Reviewer · MonoCode CC3"
+        },
+        {
+          "name": "no horizontal overflow",
+          "passed": true,
+          "detail": {
+            "width": 390,
+            "viewport": 390
+          }
+        },
+        {
+          "name": "no script, inline event or submission hooks",
+          "passed": true
+        },
+        {
+          "name": "local hrefs and assets valid",
+          "passed": true
+        },
+        {
+          "name": "first Tab shows skip link with focus outline",
+          "passed": true,
+          "detail": {
+            "isSkip": true,
+            "href": "#main",
+            "top": 8,
+            "outline": "2px"
+          }
+        },
+        {
+          "name": "skip link reaches main anchor",
+          "passed": true
+        },
+        {
+          "name": "Tab reaches all visible native controls",
+          "passed": true,
+          "detail": {
+            "expected": 18,
+            "reached": 18,
+            "counts": {
+              "a": 10,
+              "button": 4,
+              "summary": 1,
+              "textarea": 1,
+              "select": 2
+            }
+          }
+        },
+        {
+          "name": "native control focus has visible outline",
+          "passed": true
+        },
+        {
+          "name": "native details toggle with Enter",
+          "passed": true
+        },
+        {
+          "name": "operational buttons are inert static previews",
+          "passed": true,
+          "detail": {
+            "buttons": 4,
+            "requests": 0
+          }
+        },
+        {
+          "name": "reduced motion disables animations and transitions",
+          "passed": true
+        },
+        {
+          "name": "sampled attention text contrast meets 4.5:1",
+          "passed": true,
+          "detail": {
+            "samples": 2,
+            "minimum": 8.45
+          }
+        },
+        {
+          "name": "no browser console page or resource errors",
+          "passed": true,
+          "detail": []
+        }
+      ],
+      "errors": [],
+      "focusable": {
+        "a": 10,
+        "button": 4,
+        "summary": 1,
+        "textarea": 1,
+        "select": 2
+      },
+      "statusContrast": [
+        {
+          "text": "4",
+          "ratio": 8.45,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            43,
+            43,
+            43
+          ]
+        },
+        {
+          "text": "Queued · storage",
+          "ratio": 10.68,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            23,
+            23,
+            23
+          ]
+        }
+      ],
+      "structure": {
+        "title": "Reviewer · MonoCode CC3",
+        "h1": 1,
+        "main": 1,
+        "width": 390,
+        "viewport": 390,
+        "scripts": 0,
+        "inlineEvents": 0,
+        "forms": 0
+      },
+      "localResources": [
+        {
+          "url": "/monocode.css",
+          "status": 200
+        },
+        {
+          "url": "/member.html",
+          "status": 200
+        },
+        {
+          "url": "/steering.html",
+          "status": 200
+        },
+        {
+          "url": "/mission-control.html",
+          "status": 200
+        },
+        {
+          "url": "/attention.html",
+          "status": 200
+        },
+        {
+          "url": "/timeline.html",
+          "status": 200
+        }
+      ],
+      "screenshot": "screenshots/member-dark-390.png",
+      "screenshotSha256": "85dfef1ddc550379c6dc14de7241ace4106066b14e8fc7a341f97eb80aedc1f0"
+    },
+    {
+      "name": "steering",
+      "theme": "dark",
+      "viewport": {
+        "width": 390,
+        "height": 1000
+      },
+      "checks": [
+        {
+          "name": "page served successfully",
+          "passed": true
+        },
+        {
+          "name": "one h1 and main",
+          "passed": true
+        },
+        {
+          "name": "descriptive document title",
+          "passed": true,
+          "detail": "Steering · MonoCode CC3"
+        },
+        {
+          "name": "no horizontal overflow",
+          "passed": true,
+          "detail": {
+            "width": 390,
+            "viewport": 390
+          }
+        },
+        {
+          "name": "no script, inline event or submission hooks",
+          "passed": true
+        },
+        {
+          "name": "local hrefs and assets valid",
+          "passed": true
+        },
+        {
+          "name": "first Tab shows skip link with focus outline",
+          "passed": true,
+          "detail": {
+            "isSkip": true,
+            "href": "#main",
+            "top": 8,
+            "outline": "2px"
+          }
+        },
+        {
+          "name": "skip link reaches main anchor",
+          "passed": true
+        },
+        {
+          "name": "Tab reaches all visible native controls",
+          "passed": true,
+          "detail": {
+            "expected": 11,
+            "reached": 11,
+            "counts": {
+              "a": 6,
+              "input": 1,
+              "select": 2,
+              "button": 2
+            }
+          }
+        },
+        {
+          "name": "native control focus has visible outline",
+          "passed": true
+        },
+        {
+          "name": "native details toggle with Enter",
+          "passed": true
+        },
+        {
+          "name": "operational buttons are inert static previews",
+          "passed": true,
+          "detail": {
+            "buttons": 2,
+            "requests": 0
+          }
+        },
+        {
+          "name": "reduced motion disables animations and transitions",
+          "passed": true
+        },
+        {
+          "name": "sampled attention text contrast meets 4.5:1",
+          "passed": true,
+          "detail": {
+            "samples": 2,
+            "minimum": 8.45
+          }
+        },
+        {
+          "name": "no browser console page or resource errors",
+          "passed": true,
+          "detail": []
+        }
+      ],
+      "errors": [],
+      "focusable": {
+        "a": 6,
+        "input": 1,
+        "select": 2,
+        "button": 2
+      },
+      "statusContrast": [
+        {
+          "text": "4",
+          "ratio": 8.45,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            43,
+            43,
+            43
+          ]
+        },
+        {
+          "text": "Blocked · storage",
+          "ratio": 8.87,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            39,
+            39,
+            39
+          ]
+        }
+      ],
+      "structure": {
+        "title": "Steering · MonoCode CC3",
+        "h1": 1,
+        "main": 1,
+        "width": 390,
+        "viewport": 390,
+        "scripts": 0,
+        "inlineEvents": 0,
+        "forms": 0
+      },
+      "localResources": [
+        {
+          "url": "/monocode.css",
+          "status": 200
+        },
+        {
+          "url": "/steering.html",
+          "status": 200
+        },
+        {
+          "url": "/mission-control.html",
+          "status": 200
+        },
+        {
+          "url": "/attention.html",
+          "status": 200
+        },
+        {
+          "url": "/timeline.html",
+          "status": 200
+        },
+        {
+          "url": "/member.html",
+          "status": 200
+        }
+      ],
+      "screenshot": "screenshots/steering-dark-390.png",
+      "screenshotSha256": "9efa7b734d16811de74f68ebc0d439904d0262397a9dc2324caa2863a38258fd"
+    },
+    {
+      "name": "mission-control",
+      "theme": "dark",
+      "viewport": {
+        "width": 900,
+        "height": 1000
+      },
+      "checks": [
+        {
+          "name": "page served successfully",
+          "passed": true
+        },
+        {
+          "name": "one h1 and main",
+          "passed": true
+        },
+        {
+          "name": "descriptive document title",
+          "passed": true,
+          "detail": "Mission control · MonoCode CC3"
+        },
+        {
+          "name": "no horizontal overflow",
+          "passed": true,
+          "detail": {
+            "width": 900,
+            "viewport": 900
+          }
+        },
+        {
+          "name": "no script, inline event or submission hooks",
+          "passed": true
+        },
+        {
+          "name": "local hrefs and assets valid",
+          "passed": true
+        },
+        {
+          "name": "first Tab shows skip link with focus outline",
+          "passed": true,
+          "detail": {
+            "isSkip": true,
+            "href": "#main",
+            "top": 8,
+            "outline": "2px"
+          }
+        },
+        {
+          "name": "skip link reaches main anchor",
+          "passed": true
+        },
+        {
+          "name": "Tab reaches all visible native controls",
+          "passed": true,
+          "detail": {
+            "expected": 21,
+            "reached": 21,
+            "counts": {
+              "a": 14,
+              "summary": 2,
+              "button": 4,
+              "select": 1
+            }
+          }
+        },
+        {
+          "name": "native control focus has visible outline",
+          "passed": true
+        },
+        {
+          "name": "native details toggle with Enter",
+          "passed": true
+        },
+        {
+          "name": "operational buttons are inert static previews",
+          "passed": true,
+          "detail": {
+            "buttons": 4,
+            "requests": 0
+          }
+        },
+        {
+          "name": "reduced motion disables animations and transitions",
+          "passed": true
+        },
+        {
+          "name": "sampled attention text contrast meets 4.5:1",
+          "passed": true,
+          "detail": {
+            "samples": 12,
+            "minimum": 8.45
+          }
+        },
+        {
+          "name": "no browser console page or resource errors",
+          "passed": true,
+          "detail": []
+        }
+      ],
+      "errors": [],
+      "focusable": {
+        "a": 14,
+        "summary": 2,
+        "button": 4,
+        "select": 1
+      },
+      "statusContrast": [
+        {
+          "text": "4",
+          "ratio": 8.45,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            43,
+            43,
+            43
+          ]
+        },
+        {
+          "text": "3",
+          "ratio": 8.45,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            43,
+            43,
+            43
+          ]
+        },
+        {
+          "text": "Needs you",
+          "ratio": 10.88,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            21,
+            21,
+            21
+          ]
+        },
+        {
+          "text": "Blocked",
+          "ratio": 10.88,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            21,
+            21,
+            21
+          ]
+        },
+        {
+          "text": "Failed check",
+          "ratio": 10.88,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            21,
+            21,
+            21
+          ]
+        },
+        {
+          "text": "1",
+          "ratio": 8.45,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            43,
+            43,
+            43
+          ]
+        },
+        {
+          "text": "Needs you",
+          "ratio": 10.88,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            21,
+            21,
+            21
+          ]
+        },
+        {
+          "text": "Reviewer is blocked by storage",
+          "ratio": 9.72,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            34,
+            32,
+            26
+          ]
+        },
+        {
+          "text": "Needs you · approval",
+          "ratio": 8.87,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            39,
+            39,
+            39
+          ]
+        },
+        {
+          "text": "Blocked · storage",
+          "ratio": 8.87,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            39,
+            39,
+            39
+          ]
+        },
+        {
+          "text": "Needs you · decision",
+          "ratio": 10.68,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            23,
+            23,
+            23
+          ]
+        },
+        {
+          "text": "Needs you",
+          "ratio": 8.87,
+          "foreground": [
+            232,
+            197,
+            71
+          ],
+          "background": [
+            39,
+            39,
+            39
+          ]
+        }
+      ],
+      "structure": {
+        "title": "Mission control · MonoCode CC3",
+        "h1": 1,
+        "main": 1,
+        "width": 900,
+        "viewport": 900,
+        "scripts": 0,
+        "inlineEvents": 0,
+        "forms": 0
+      },
+      "localResources": [
+        {
+          "url": "/monocode.css",
+          "status": 200
+        },
+        {
+          "url": "/mission-control.html",
+          "status": 200
+        },
+        {
+          "url": "/steering.html",
+          "status": 200
+        },
+        {
+          "url": "/attention.html",
+          "status": 200
+        },
+        {
+          "url": "/timeline.html",
+          "status": 200
+        },
+        {
+          "url": "/member.html",
+          "status": 200
+        }
+      ],
+      "screenshot": "screenshots/mission-control-dark-900.png",
+      "screenshotSha256": "7a4977f92948e37d77925b04991f1c586bdd74903c1e8500d20ee9cf19016df7"
+    }
+  ],
+  "serverChecks": [
+    {
+      "name": "encoded parent traversal rejected",
+      "passed": true
+    },
+    {
+      "name": "malformed URL rejected",
+      "passed": true
+    },
+    {
+      "name": "non-static file denied",
+      "passed": true
+    },
+    {
+      "name": "asset stable during capture: mission-control.html",
+      "passed": true
+    },
+    {
+      "name": "asset stable during capture: attention.html",
+      "passed": true
+    },
+    {
+      "name": "asset stable during capture: timeline.html",
+      "passed": true
+    },
+    {
+      "name": "asset stable during capture: member.html",
+      "passed": true
+    },
+    {
+      "name": "asset stable during capture: steering.html",
+      "passed": true
+    },
+    {
+      "name": "asset stable during capture: monocode.css",
+      "passed": true
+    }
+  ],
+  "cleanup": {
+    "browserClosed": true,
+    "serverClosed": true,
+    "temporaryProfileRemoved": true
+  },
+  "limits": [
+    "Synthetic static HTML only; no native MonoCode, provider, app database or operational backend was exercised.",
+    "Keyboard checks cover native focus, outline, skip link and details; static palette rows do not implement arrow-key selection, Enter actions, Esc dismissal or a dialog focus trap.",
+    "Contrast samples cover attention status text with composited solid ancestor backgrounds; this is not a complete WCAG audit or screen-reader acceptance test.",
+    "Timeline ranges are synthetic fixture labels; accurate production call, compaction, cost and goal attribution depend on later data work."
+  ],
+  "chromium": "153.0.8010.12",
+  "finishedAt": "2026-10-11T10:33:46.465Z",
+  "summary": {
+    "cases": 14,
+    "screenshots": 14,
+    "checks": 219,
+    "passed": 219,
+    "failed": 0
+  },
+  "status": "PASS"
+}

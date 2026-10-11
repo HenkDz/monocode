@@ -8,8 +8,7 @@ import {
   OrchestrationActions,
   OrchestrationWorkers,
 } from "./OrchestrationActions";
-import { Check, ChevronDown, ChevronRight, CircleAlert } from "../../../shared/ui/icons";
-import { TerminalSpinner } from "../../sessions/ui/TerminalSpinner";
+import { ChevronDown, ChevronRight } from "../../../shared/ui/icons";
 import { AgentStatusLabel } from "../../agents/ui/AgentStatusLabel";
 import { TaskMetricsLine, taskMetricsDetail } from "../../agents/ui/TaskMetricsLine";
 import { AgentDetailTooltip } from "../../agents/ui/AgentDetailTooltip";
@@ -146,9 +145,6 @@ export function OrchestrationSidebarAgents({
           const label = agentLiveStateLabel(state);
           const metrics = live ? session?.taskMetrics?.[live.id] ?? selectTaskMetrics(live, run?.dispatches ?? [], []) : undefined;
           const dispatch = run?.dispatches?.find(entry => entry.id === (live?.activeDispatchId ?? live?.lastDispatchId));
-          const working =
-            summary.live && ["thinking", "running-tool", "compacting"].includes(state.status);
-          const attention = ["blocked", "failed", "needs-you"].includes(state.status);
           // A saved provider model may not be in this window's catalog yet.
           // Keep its identity instead of substituting the harness default.
           const model = findModel(task.model)?.name ?? task.model;
@@ -205,29 +201,14 @@ export function OrchestrationSidebarAgents({
                   {task.title}
                 </span>
                 <span
-                  className={`flex shrink-0 items-center gap-1 text-[11px] @max-[240px]/sidebar:ml-5 @max-[240px]/sidebar:basis-full @max-[240px]/sidebar:shrink @max-[240px]/sidebar:whitespace-normal ${
-                    attention
-                      ? "text-amber-700 dark:text-amber-400"
-                      : working
-                        ? "text-content/75 dark:text-accent"
-                        : task.status === "completed"
-                          ? "text-emerald-700 dark:text-emerald-400"
-                          : "text-content/75"
-                  }`}
+                  className="flex shrink-0 items-center gap-1 text-[11px] @max-[240px]/sidebar:ml-5 @max-[240px]/sidebar:basis-full @max-[240px]/sidebar:shrink @max-[240px]/sidebar:whitespace-normal"
                 >
-                  {attention ? (
-                    <CircleAlert className="size-3" strokeWidth={1.75} />
-                  ) : working ? (
-                    <TerminalSpinner className="inline-block w-3 select-none text-center text-[11px] leading-none text-accent" />
-                  ) : task.status === "completed" ? (
-                    <Check className="size-3" strokeWidth={2.25} />
-                  ) : null}
                   <AgentStatusLabel state={state} />
                 </span>
               </button>
               </AgentDetailTooltip>
               <div className="pb-1 pl-6.5 pr-2 [&_[data-task-metrics]]:text-content/75 @max-[240px]/sidebar:[&_[data-task-metrics]]:overflow-visible @max-[240px]/sidebar:[&_[data-task-metrics]]:whitespace-normal @max-[240px]/sidebar:[&_[data-task-metrics]]:break-words">
-                <TaskMetricsLine state={state} metrics={metrics} startedAt={dispatch?.turnStartedAt ?? dispatch?.startedAt} endedAt={dispatch?.finishedAt ?? (dispatch && ["completed", "failed", "blocked", "interrupted", "cancelled"].includes(dispatch.state) ? dispatch.updatedAt : undefined)} />
+                <TaskMetricsLine showState={false} state={state} metrics={metrics} startedAt={dispatch?.turnStartedAt ?? dispatch?.startedAt} endedAt={dispatch?.finishedAt ?? (dispatch && ["completed", "failed", "blocked", "interrupted", "cancelled"].includes(dispatch.state) ? dispatch.updatedAt : undefined)} />
               </div>
               {/* Indented to the title's column: the icon slot and its gap. */}
               {open && (

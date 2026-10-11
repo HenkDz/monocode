@@ -6,6 +6,7 @@ import {
   type ReactElement,
 } from "react";
 import { Popover } from "../../../shared/ui/Popover";
+import "./agentState.css";
 
 /** Reuses the row's button so details do not add another tab stop. */
 export function AgentDetailTooltip({ detail, children }: {
@@ -43,7 +44,7 @@ export function AgentDetailTooltip({ detail, children }: {
           role="tooltip"
           id={id}
           onDismiss={() => { setFocused(false); setHovered(false); }}
-          className="pointer-events-none px-2.5 py-2 text-xs leading-relaxed"
+          className="agent-detail-tooltip pointer-events-none px-2.5 py-2 text-xs leading-relaxed"
         >
           {detail}
         </Popover>

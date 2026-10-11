@@ -28,6 +28,7 @@ import { selectAgentLiveState } from "../../agents/model/agentLiveState";
 import { currentTurnIndex } from "../../agents/model/turnMetrics";
 import { selectAgentMetrics } from "../../agents/model/agentMetrics";
 import { TaskMetricsLine } from "../../agents/ui/TaskMetricsLine";
+import { AgentStatusLabel } from "../../agents/ui/AgentStatusLabel";
 import type { Worktree } from "../../source-control/model/worktrees";
 import { orchestrator } from "../../orchestration/model/orchestration";
 import { DiscussionEmpty } from "./DiscussionEmpty";
@@ -1123,21 +1124,26 @@ const LocalSessionPane = memo(function LocalSessionPane({
                 />
                 <div className="min-w-0 flex-1">
                   <h2 className="text-sm font-semibold">{agent.name}</h2>
-                  <MonoStatus
-                    state={memberState}
-                    color={agent.color}
-                    className="mt-1 text-xs text-content/70"
-                  />
+                  {memberState.liveState && !memberState.attentionLocation ? (
+                    <AgentStatusLabel state={memberState.liveState} className="mt-1 text-xs" />
+                  ) : (
+                    <MonoStatus
+                      state={memberState}
+                      color={agent.color}
+                      className="mt-1 text-xs text-content/70"
+                    />
+                  )}
                   {!session.busy ? (
-                    <p className="mt-1 text-[11px] text-content/55">
+                    <p className="mt-1 text-[11px] text-content/75">
                       No conversation turn running
                     </p>
                   ) : (
                     <div className="mt-1">
-                      <span className="text-[11px] text-content/55">
+                      <span className="text-[11px] text-content/75">
                         Current conversation turn
                       </span>
                       <TaskMetricsLine
+                        showState={false}
                         state={conversationLiveState}
                         metrics={selectAgentMetrics({
                           ...session,
@@ -1167,9 +1173,6 @@ const LocalSessionPane = memo(function LocalSessionPane({
                       className="mx-auto max-h-[20dvh] w-full max-w-4xl shrink-0 overflow-y-auto overscroll-contain px-4 pb-2"
                     >
                       <h3 className="mb-1 text-xs font-medium">Messages</h3>
-                      <p className="mb-1 text-xs text-content/60">
-                        {memberDelivery}
-                      </p>
                       <MessageQueue
                         messages={memberMessages}
                         status={session.queueStatus}
@@ -1644,7 +1647,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
                   {isMember && (
                     <p
                       role="status"
-                      className="px-3 py-1 text-xs text-content/60"
+                      className="px-3 py-1 text-xs text-content/75"
                     >
                       {memberDelivery}
                     </p>

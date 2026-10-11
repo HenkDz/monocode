@@ -13,11 +13,11 @@
 .mc-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 24px 28px; border-bottom: 1px solid var(--color-stroke); }
 .mc-eyebrow, .mc-node-role { font-size: 10px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase; color: color-mix(in srgb, var(--color-content) 70%, transparent); }
 .mc-toolbar h1 { font-size: 24px; font-weight: 600; letter-spacing: -.04em; margin: 3px 0; }
-.mc-subtitle, .mc-coverage, .mc-note, .mc-node-metrics dt, .mc-goal-meta, .mc-goal-tokens > span { color: color-mix(in srgb, var(--color-content) 72%, transparent); }
+.mc-subtitle, .mc-coverage, .mc-note, .mc-goal-note, .mc-node-metrics dt, .mc-goal-meta, .mc-goal-tokens > span { color: color-mix(in srgb, var(--color-content) 72%, transparent); }
 .mc-scroll { flex: 1; min-height: 0; overflow: auto; padding: 24px 28px; scrollbar-gutter: stable; }
 .mc-button, .mc-list-heading select { padding: 8px 12px; border: 1px solid var(--color-stroke); border-radius: 6px; background: color-mix(in srgb, var(--color-content) 4%, var(--color-background-base)); color: inherit; font: inherit; cursor: pointer; }
 .mission-control button:focus-visible, .mission-control select:focus-visible, .mission-control summary:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
-.mc-attention { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 16px 20px; margin-bottom: 24px; border: 1px solid color-mix(in srgb, var(--color-accent) 45%, var(--color-stroke)); border-left: 3px solid var(--color-accent); border-radius: 8px; background: color-mix(in srgb, var(--color-accent) 7%, var(--color-background-base)); }
+.mc-attention { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 16px 20px; margin-bottom: 24px; border: 1px solid color-mix(in srgb, var(--agent-needs-you) 45%, var(--color-stroke)); border-left: 2px solid var(--agent-needs-you); border-radius: 8px; background: color-mix(in srgb, var(--agent-needs-you) 5%, var(--color-background-base)); }
 .mc-attention strong { font-weight: 600; }
 .mc-attention p { margin: 4px 0 0; }
 .mc-list-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
@@ -39,14 +39,17 @@
 .mc-chain > li { min-width: 0; position: relative; }
 .mc-chain > li + li::before { content: "→"; position: absolute; left: -21px; top: 28px; color: color-mix(in srgb, var(--color-content) 55%, transparent); }
 .mc-worker-branch > ol { display: grid; gap: 12px; list-style: none; padding: 0; margin: 0; }
-.mc-node { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; min-width: 0; padding: 16px; border: 1px solid var(--color-stroke); border-radius: 7px; background: var(--color-background-base); }
-.mc-node[data-state="blocked"], .mc-node[data-state="needs-you"], .mc-node[data-state="failed"] { border-left: 3px solid var(--color-accent); }
+.mc-node { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; min-width: 0; padding: 12px; border: 1px solid var(--color-stroke); border-radius: 8px; background: var(--color-background-base); }
+.mc-node.agent-state-surface { border-inline-start: 2px solid var(--agent-state-color); }
 .mc-node h3 { font-size: 14px; font-weight: 600; margin: 0; }
 .mc-state { font-size: 12px; font-weight: 600; }
 .mc-reason, .mc-activity, .mc-note, .mc-review { font-size: 12px; line-height: 1.5; margin: 0; }
 .mc-node-metrics { display: grid; gap: 8px; font-size: 12px; margin: 4px 0; width: 100%; }
 .mc-node-metrics dt { font-size: 11px; }
 .mc-node-metrics dd { margin: 2px 0 0; font-variant-numeric: tabular-nums; }
+.mc-metrics { width: 100%; font-size: 12px; font-variant-numeric: tabular-nums; }
+.mc-metrics > summary { line-height: 1.5; }
+.mc-goal-note { margin: 0; padding: 0 20px 16px; font-size: 12px; line-height: 1.5; }
 .mc-review { border-top: 1px solid var(--color-stroke); padding-top: 8px; width: 100%; }
 .mc-review span { font-size: 11px; }
 .mc-link { margin-top: 4px; padding: 6px 0; color: var(--color-content); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; background: none; border: 0; }

@@ -38,23 +38,6 @@ import {
 import { AgentDetailTooltip } from "../../agents/ui/AgentDetailTooltip";
 import { selectTaskMetrics } from "../../agents/model/agentMetrics";
 
-const tones = {
-  running:
-    "border-l-accent [&_[data-task-status]]:bg-accent/10 [&_[data-task-status]]:text-accent",
-  review:
-    "border-l-amber-500 [&_[data-task-status]]:bg-amber-500/10 [&_[data-task-status]]:text-amber-700 dark:[&_[data-task-status]]:text-amber-400",
-  changes:
-    "border-l-orange-500 [&_[data-task-status]]:bg-orange-500/10 [&_[data-task-status]]:text-orange-700 dark:[&_[data-task-status]]:text-orange-400",
-  ready:
-    "border-l-emerald-500 [&_[data-task-status]]:bg-emerald-500/10 [&_[data-task-status]]:text-emerald-700 dark:[&_[data-task-status]]:text-emerald-400",
-  merged:
-    "border-l-emerald-500/40 [&_[data-task-status]]:bg-emerald-500/5 [&_[data-task-status]]:text-emerald-700 dark:[&_[data-task-status]]:text-emerald-400",
-  failed:
-    "border-l-red-500 [&_[data-task-status]]:bg-red-500/10 [&_[data-task-status]]:text-red-700 dark:[&_[data-task-status]]:text-red-400",
-  muted:
-    "border-l-content/20 [&_[data-task-status]]:bg-content/5 [&_[data-task-status]]:text-content/60",
-};
-
 /** Task snapshots are the durable work log; never copy streaming worker prose into another session. */
 export function MemberWorkLog({ member }: { member: Mono }) {
   const runs = useSyncExternalStore(
@@ -185,7 +168,7 @@ export function MemberWorkLog({ member }: { member: Mono }) {
     session,
     links,
   }: (typeof tasks)[number]) => {
-    const [label, tone] = managerTaskLifecycle(task, pr, needsYou);
+    const [label] = managerTaskLifecycle(task, pr, needsYou);
     const dispatch = dispatches.get(
       task.activeDispatchId ?? task.lastDispatchId ?? "",
     );
@@ -204,7 +187,8 @@ export function MemberWorkLog({ member }: { member: Mono }) {
       <article
         key={task.id}
         data-member-task={task.id}
-        className={`min-w-0 overflow-hidden rounded-xl border border-content/20 border-l-2 bg-content/5 font-sans text-xs shadow-sm ${tones[tone]}`}
+        data-state={state.status}
+        className="agent-state-surface min-w-0 overflow-hidden rounded-lg border border-stroke bg-content/2 font-sans text-xs"
       >
         <div className="flex w-full min-w-0 flex-wrap items-center gap-x-3 gap-y-2 p-3 text-left focus-visible:outline-accent">
           <span className="flex min-w-0 flex-1 basis-52 items-center gap-2">
@@ -216,7 +200,7 @@ export function MemberWorkLog({ member }: { member: Mono }) {
             </strong>
             <span
               data-task-status
-              className="shrink-0 rounded-md px-1.5 py-0.5"
+              className="shrink-0 rounded bg-content/5 px-1.5 py-0.5 text-content/70"
             >
               {label}
             </span>
@@ -294,7 +278,7 @@ export function MemberWorkLog({ member }: { member: Mono }) {
             }
           />
           {state.detail && (
-            <p data-task-reason className="mt-1 break-words text-content/60">
+            <p data-task-reason className="mt-1 break-words text-content/75">
               {state.detail}
             </p>
           )}
@@ -483,7 +467,7 @@ export function MemberWorkLog({ member }: { member: Mono }) {
         )}
       </div>
       {!tasks.length && (
-        <p className="px-2.5 py-1 text-xs text-content/50">
+        <p className="px-2.5 py-1 text-xs text-content/70">
           No assignments yet. {look?.name ?? "Your Manager"} assigns work here.
         </p>
       )}
@@ -498,7 +482,10 @@ export function MemberWorkLog({ member }: { member: Mono }) {
       <div id={panelId} hidden={!expanded}>
         <div
           ref={scrollerRef}
-          className="max-h-[min(30dvh,16rem)] space-y-2 overflow-y-auto overscroll-contain"
+          role="region"
+          aria-label="Assignments and work history"
+          tabIndex={0}
+          className="max-h-[min(30dvh,16rem)] space-y-2 overflow-y-auto overscroll-contain rounded-md border-b border-stroke pb-2 [scrollbar-gutter:stable] [scrollbar-width:thin] focus-visible:outline-accent"
         >
           {expanded &&
             (current.length > 0 || queue.length > 0 || workLog.length > 0) && (
@@ -509,7 +496,7 @@ export function MemberWorkLog({ member }: { member: Mono }) {
                 {current.length ? (
                   current.map(renderTask)
                 ) : (
-                  <p className="px-2.5 text-xs text-content/50">
+                  <p className="px-2.5 text-xs text-content/70">
                     No current assignment.
                   </p>
                 )}

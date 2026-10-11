@@ -42,9 +42,9 @@ for (const theme of ["dark", "light"]) {
           name: "Codex storage needs repair",
         });
         await expect(notice).toBeInViewport();
-        await expect(
-          page.getByRole("region", { name: "Message queue" }),
-        ).toContainText("storage is repaired");
+        await expect(page.getByText("Message will queue until storage is repaired.", { exact: true })).toHaveCount(1);
+        await expect(page.getByText("Message will queue until storage is repaired.", { exact: true })).toBeInViewport();
+        await expect(page.locator('header [data-agent-state="blocked"] .agent-state-cue')).toHaveCount(1);
         await expect(
           page
             .getByRole("region", { name: "Message queue" })

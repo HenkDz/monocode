@@ -1,0 +1,117 @@
+:root {
+  --agent-active: #7dd3fc;
+  --agent-tool: #6ee7b7;
+  --agent-attention: #fcd34d;
+  --agent-failure: #fca5a5;
+  --agent-muted: #b5b5b5;
+  --agent-thinking: var(--agent-active);
+  --agent-running-tool: var(--agent-tool);
+  --agent-compacting: var(--agent-active);
+  --agent-waiting-review: var(--agent-muted);
+  --agent-waiting-on-member: var(--agent-muted);
+  --agent-queued: var(--agent-muted);
+  --agent-blocked: var(--agent-attention);
+  --agent-needs-you: var(--agent-attention);
+  --agent-idle: var(--agent-muted);
+  --agent-done: var(--agent-tool);
+  --agent-failed: var(--agent-failure);
+}
+html.theme-light {
+  --agent-active: #075985;
+  --agent-tool: #166534;
+  --agent-attention: #854d0e;
+  --agent-failure: #991b1b;
+  --agent-muted: #595959;
+}
+:is(
+  [data-agent-state="thinking"],
+  .agent-state-surface[data-state="thinking"]
+) {
+  --agent-state-color: var(--agent-thinking);
+}
+:is(
+  [data-agent-state="running-tool"],
+  .agent-state-surface[data-state="running-tool"]
+) {
+  --agent-state-color: var(--agent-running-tool);
+}
+:is(
+  [data-agent-state="compacting"],
+  .agent-state-surface[data-state="compacting"]
+) {
+  --agent-state-color: var(--agent-compacting);
+}
+:is(
+  [data-agent-state="waiting-review"],
+  .agent-state-surface[data-state="waiting-review"]
+) {
+  --agent-state-color: var(--agent-waiting-review);
+}
+:is(
+  [data-agent-state="waiting-on-member"],
+  .agent-state-surface[data-state="waiting-on-member"]
+) {
+  --agent-state-color: var(--agent-waiting-on-member);
+}
+:is([data-agent-state="queued"], .agent-state-surface[data-state="queued"]) {
+  --agent-state-color: var(--agent-queued);
+}
+:is([data-agent-state="blocked"], .agent-state-surface[data-state="blocked"]) {
+  --agent-state-color: var(--agent-blocked);
+}
+:is(
+  [data-agent-state="needs-you"],
+  .agent-state-surface[data-state="needs-you"]
+) {
+  --agent-state-color: var(--agent-needs-you);
+}
+:is([data-agent-state="idle"], .agent-state-surface[data-state="idle"]) {
+  --agent-state-color: var(--agent-idle);
+}
+:is([data-agent-state="done"], .agent-state-surface[data-state="done"]) {
+  --agent-state-color: var(--agent-done);
+}
+:is([data-agent-state="failed"], .agent-state-surface[data-state="failed"]) {
+  --agent-state-color: var(--agent-failed);
+}
+.agent-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  vertical-align: baseline;
+  color: var(--agent-state-color);
+}
+.agent-state-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.agent-state-cue {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.agent-state-check {
+  width: 12px;
+  height: 12px;
+  border-radius: 0;
+  background: none;
+}
+/* Older MonoStatus wrappers already supply a dot; the canonical label owns it now. */
+[data-mono-status]:has(> .agent-state) > [aria-hidden]:first-child {
+  display: none;
+}
+/* Whole-row dimming would also lower the canonical label's contrast. */
+.project-reorder-item[data-mono-status]:has(.agent-state) {
+  opacity: 1;
+}
+.agent-state-surface {
+  border-inline-start: 2px solid var(--agent-state-color);
+}
+/* The Popover frame must also let clicks reach controls under a read-only hint. */
+[data-popover-side]:has(> .agent-detail-tooltip) {
+  pointer-events: none;
+}

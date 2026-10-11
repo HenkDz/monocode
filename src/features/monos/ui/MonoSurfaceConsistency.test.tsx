@@ -135,7 +135,7 @@ it("keeps Permissions before Specialty when member details are opened from Team"
   try {
     await act(async () => root.render(<MonoTeamPage monoId="m" fallback={{ harness: "codex", model: "codex:gpt-5.4" }} onBack={noop} />));
     await act(async () => [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Backend"))!.click());
-    expect([...host.querySelectorAll("dt")].map(row => row.textContent)).toEqual(["Model", "Permissions", "Specialty"]);
+    expect([...host.querySelectorAll("dt")].map(row => row.textContent)).toEqual(["Model", "Effort", "Permissions", "Specialty"]);
     expect(host.querySelector("dl")?.textContent).toContain("Full access");
     expect(host.querySelector("[data-access-picker-trigger]")).toBeNull();
     await act(async () => root.render(<MemberDetails member={{ ...roster[2], sessionId: "member-chat" }} fallback={{ harness: "codex", model: "codex:gpt-5.4" }} onBack={noop} />));

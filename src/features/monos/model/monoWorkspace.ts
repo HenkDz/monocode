@@ -18,9 +18,12 @@ import {
   legacyMonoRuntimeMode,
   finishMonoPermissionsMigration,
   saveMonoSessionId,
+  updateMono,
 } from "./mono";
 import { forgetAgentContext } from "./monoFiles";
 import { forgetMonoRotation } from "./monoRotation";
+import { mergeModelSettings, resolveModel } from "../../sessions/model/models";
+import { resolveMonoRoleEffort } from "./monoRoleEffort";
 
 const openingMonos = new Map<string, Promise<Session | undefined>>();
 
@@ -88,7 +91,12 @@ async function loadMonoSession(
   // All first-open paths, including a goal arriving before the chat is opened,
   // must use the Mono's profile. Existing chats above keep the user's choice.
   const runtimeMode = monoDefaultRuntimeMode(current);
-  const session = profile ? { ...newSession(profile.harness, home, profile.model, runtimeMode, profile.modelSettings), id: defaults.id } : { ...defaults, runtimeMode };
+  let session = profile ? { ...newSession(profile.harness, home, profile.model, runtimeMode, profile.modelSettings), id: defaults.id } : { ...defaults, runtimeMode };
+  if (current.role) {
+    const effort = resolveMonoRoleEffort(current, resolveModel(session.harness, session.model), profile?.modelSettings);
+    session = { ...session, ...effort };
+    if (effort.effortSource === "role") updateMono(monoId, mono => ({ ...mono, effortSource: "role" }));
+  }
   await migratePermissions(current.id, session, host);
   saveMonoSessionId(monoId, session.id);
   host.add(session);
@@ -110,7 +118,8 @@ export async function resetMonoSession(
     replace(session: Session): void;
   },
 ): Promise<Session> {
-  const monoId = monoForSession(current.id)?.id;
+  const mono = monoForSession(current.id);
+  const monoId = mono?.id;
   const stopped = (await host.stop(current.id)) ?? current;
   const fresh = newSession(
     stopped.harness,
@@ -119,6 +128,10 @@ export async function resetMonoSession(
     stopped.runtimeMode,
     stopped.modelSettings,
   );
+  if (mono?.role) {
+    fresh.modelSettings = mergeModelSettings(resolveModel(stopped.harness, stopped.model), stopped.modelSettings);
+    fresh.effortSource = stopped.effortSource;
+  }
   // A failed deletion must leave the original conversation selected.
   await host.remove(stopped);
   forgetAgentContext(current.id);

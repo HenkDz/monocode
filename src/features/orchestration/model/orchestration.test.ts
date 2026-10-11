@@ -135,6 +135,50 @@ async function saveTaskDocument(f: ReturnType<typeof setup>, task: Orchestration
   return artifact;
 }
 
+it("persists a cloned worker effort snapshot and retains it through retry and hydration", async () => {
+  const f = setup();
+  const preparedSettings = { reasoningEffort: "high", serviceTier: "fast" };
+  const create = f.host.createWorker;
+  f.host.createWorker = vi.fn(async (run, task) => ({
+    ...await create(run, task),
+    modelSettings: task.effortSource ? task.modelSettings : preparedSettings,
+    effortSource: task.effortSource ?? "role",
+  }));
+  f.manager.bind(f.host);
+  await f.start();
+  await f.delegate(["src"]);
+  await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledOnce());
+  const task = f.tasks()[0];
+  const snapshot = { reasoningEffort: "high", serviceTier: "fast" };
+  expect(task).toMatchObject({ modelSettings: snapshot, effortSource: "role" });
+  expect(task.modelSettings).not.toBe(preparedSettings);
+  expect(f.saved.get("lead")!.tasks[0]).toMatchObject({ modelSettings: snapshot, effortSource: "role" });
+  preparedSettings.reasoningEffort = "xhigh";
+  expect(f.tasks()[0].modelSettings).toEqual(snapshot);
+
+  f.completions.get(task.sessionId)!({ status: "failed", text: "", error: "Provider unavailable" });
+  await vi.waitFor(() => expect(f.tasks()[0].status).toBe("failed"));
+  await f.call("retry", { taskId: task.id, text: "Resume the same assignment", files: ["src"] });
+  await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledTimes(2));
+  expect(vi.mocked(f.host.createWorker).mock.calls[1][1]).toMatchObject({ modelSettings: snapshot, effortSource: "role" });
+  expect(f.tasks()[0]).toMatchObject({ sessionId: task.sessionId, modelSettings: snapshot, effortSource: "role" });
+
+  f.completions.get(task.sessionId)!({ status: "failed", text: "", error: "Provider unavailable" });
+  await vi.waitFor(() => expect(f.tasks()[0].status).toBe("failed"));
+  const restored = new Orchestrator(f.store);
+  restored.bind(f.host);
+  await restored.hydrate("lead");
+  expect(restored.run("lead")!.tasks[0]).toMatchObject({ sessionId: task.sessionId, modelSettings: snapshot, effortSource: "role" });
+});
+
+it("rejects an invalid effort source before creating a worker", async () => {
+  const f = setup();
+  await f.start();
+  await expect(f.delegate(["src"], { effortSource: "invalid" })).rejects.toThrow("effortSource must be role or user");
+  expect(f.tasks()).toEqual([]);
+  expect(f.host.createWorker).not.toHaveBeenCalled();
+});
+
 it("rejects an in-flight delegation whose goal was cancelled during async scope checks", async () => {
   const f = setup();
   await f.start();

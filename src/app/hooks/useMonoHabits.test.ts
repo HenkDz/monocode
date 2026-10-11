@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Habit } from "../../features/monos/model/monoHabits";
 import type { Block, Session } from "../../features/sessions/model/session";
+import { loadLastModelSettings, resetHarnessModelOverlays, saveLastModelSettings, setHarnessModels, type AgentModel } from "../../features/sessions/model/models";
 
 let stored: Habit[] = [];
 let fileVersion = 0;
@@ -84,7 +85,52 @@ afterEach(() => {
   vi.stubGlobal("window", originalWindow);
   act(() => root.unmount());
   for (const extra of extraRoots) act(() => extra.unmount());
+  resetHarnessModelOverlays();
   vi.unstubAllGlobals();
+});
+
+const effortModel: AgentModel = {
+  id: "claude:x", harness: "claude", name: "Habit effort test",
+  settings: [
+    { id: "effort", label: "Reasoning", kind: "select", value: "high", options: ["low", "medium", "high", "xhigh"].map(value => ({ value, label: value })) },
+    { id: "serviceTier", label: "Speed", kind: "select", value: "auto", options: ["auto", "fast"].map(value => ({ value, label: value })) },
+  ],
+};
+
+it.each([["role", "medium"], ["user", "low"], [undefined, "high"]] as const)(
+  "preserves the resident %s effort choice in an org habit despite global xhigh",
+  async (effortSource, effort) => {
+    MONO.role = "manager";
+    setHarnessModels("claude", [effortModel]);
+    saveLastModelSettings({ effort: "xhigh", serviceTier: "auto" });
+    const host = setup("NOTHING_TO_REPORT");
+    const resident = host.sessions()[0];
+    Object.assign(resident, { modelSettings: { effort, serviceTier: "fast" }, effortSource, providerAccountId: "resident-account" });
+    await vi.waitFor(() => expect(host.add).toHaveBeenCalledOnce());
+    const run = host.add.mock.calls[0][0];
+    expect(run.modelSettings).toEqual({ effort, serviceTier: "fast" });
+    expect(run.effortSource).toBe(effortSource);
+    expect(run.modelSettings).not.toBe(resident.modelSettings);
+    expect(run).toMatchObject({ harness: resident.harness, model: resident.model });
+    expect(run.providerAccountId).toBeUndefined();
+    expect(resident.providerAccountId).toBe("resident-account");
+    expect(resident.modelSettings).toEqual({ effort, serviceTier: "fast" });
+    expect(loadLastModelSettings()).toEqual({ effort: "xhigh", serviceTier: "auto" });
+    await vi.waitFor(() => expect(stored[0].lastOutcome).toBe("quiet"));
+  },
+);
+
+it("keeps the remembered model-setting behavior for plain Mono habits", async () => {
+  setHarnessModels("claude", [effortModel]);
+  saveLastModelSettings({ effort: "xhigh" });
+  const host = setup("NOTHING_TO_REPORT");
+  host.sessions()[0].modelSettings = { effort: "medium" };
+  await vi.waitFor(() => expect(host.add).toHaveBeenCalledOnce());
+  const run = host.add.mock.calls[0][0];
+  expect(run.modelSettings.effort).toBe("xhigh");
+  expect(run.effortSource).toBeUndefined();
+  expect(run.runtimeMode).toBe("full-access");
+  await vi.waitFor(() => expect(stored[0].lastOutcome).toBe("quiet"));
 });
 
 function setup(

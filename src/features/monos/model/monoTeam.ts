@@ -5,6 +5,7 @@ import { assertDirectReport, validateMonoOrg, validateMonoOrgTransition, isTeamR
 export { isTeamReviewer } from "./monoOrg";
 import { readAgentFile, writeAgentFile, MonoFileConflict, MEMORY_MAX_BYTES, MEMORY_MAX_LINES, type AgentFilePath } from "./monoFiles";
 import { addMemoryEntry, memoryDate, memoryEntry, memoryLines } from "./monoMemory";
+import { isEffortSettingId } from "../../sessions/model/models";
 
 export const TEAM_SOUL_MAX_BYTES = 8 * 1024;
 export const TEAM_DEFAULT_CAP = 6;
@@ -207,9 +208,9 @@ function reconcileMember(roster: readonly Mono[], managerId: string, change: Tea
   const current = assertTeamMember(roster, managerId, change.memberId);
   const before = change.before!;
   const after = { ...current };
-  for (const key of ["name", "specialty", "workerProfile", "archivedAt"] as const) {
+  for (const key of ["name", "specialty", "workerProfile", "effortSource", "archivedAt"] as const) {
     if (JSON.stringify(before[key]) === JSON.stringify(change.after[key])) continue;
-    const fields: TeamLockedField[] = key === "workerProfile" ? (["harness", "model", "modelSettings"] as const).filter((field) => JSON.stringify(before.workerProfile?.[field]) !== JSON.stringify(change.after.workerProfile?.[field])) : key === "archivedAt" ? [] : [key];
+    const fields: TeamLockedField[] = key === "workerProfile" ? (["harness", "model", "modelSettings"] as const).filter((field) => JSON.stringify(before.workerProfile?.[field]) !== JSON.stringify(change.after.workerProfile?.[field])) : key === "effortSource" ? ["modelSettings"] : key === "archivedAt" ? [] : [key];
     if (fields.some((field) => current.userLockedFields?.includes(field))) throw new TeamEditConflict("The user locked a field while the team action was saving");
     if (JSON.stringify(current[key]) !== JSON.stringify(before[key]) && JSON.stringify(current[key]) !== JSON.stringify(change.after[key])) throw new TeamEditConflict("The member changed while the team action was saving");
     Object.assign(after, { [key]: change.after[key] });
@@ -277,7 +278,8 @@ export function handleMonoTeam(managerId: string, requestId: string, action: str
       const color = input.color ?? manager.color;
       if (typeof color !== "string" || color.length > 100 || !/^#[0-9a-fA-F]{3,8}$|^(?:hsl|rgb)a?\([\d\s.,%+-]+\)$/.test(color)) throw Error("Choose a project color");
       if (input.reviewer !== undefined && typeof input.reviewer !== "boolean") throw Error("reviewer must be a boolean");
-      after = { id: crypto.randomUUID(), name: shortText(input.name, "name"), specialty: shortText(input.specialty, "specialty"), role: "member", reportsTo: managerId, projects: [...manager.projects], origin: "manager", reviewer: input.reviewer === true, mascot, color, workerProfile };
+      after = { id: crypto.randomUUID(), name: shortText(input.name, "name"), specialty: shortText(input.specialty, "specialty"), role: "member", reportsTo: managerId, projects: [...manager.projects], origin: "manager", reviewer: input.reviewer === true, mascot, color, workerProfile,
+        effortSource: Object.keys(input.modelSettings ?? {}).some(isEffortSettingId) ? undefined : "role" };
       files.soul = { before: "", after: soul };
       if (input.memory !== undefined && !(Array.isArray(input.memory) && input.memory.length === 0)) files.memory = { before: "", after: addTeamMemory("", input.memory) };
     } else {
@@ -288,6 +290,7 @@ export function handleMonoTeam(managerId: string, requestId: string, action: str
         if (input.name !== undefined) after.name = shortText(input.name, "name");
         if (input.specialty !== undefined) after.specialty = shortText(input.specialty, "specialty");
         if (["harness", "model", "modelSettings"].some((key) => Object.prototype.hasOwnProperty.call(input, key))) after.workerProfile = updateProfile(before, input, host);
+        if (input.modelSettings && Object.keys(input.modelSettings).some(isEffortSettingId)) after.effortSource = undefined;
         if (input.soul !== undefined) files.soul = { before: (await readAgentFile(before.id, "SOUL.md")).text ?? "", after: validateTeamSoul(input.soul) };
       } else if (action.startsWith("team.memory.")) {
         const memory = (await readAgentFile(before.id, "MEMORY.md")).text ?? "";
@@ -310,7 +313,7 @@ export function handleMonoTeam(managerId: string, requestId: string, action: str
 export function lockMonoField(id: string, field: TeamLockedField): void {
   if (!TEAM_LOCKED_FIELDS.includes(field)) throw Error("Unknown user-locked field");
   const roster = listMonos(true);
-  saveMonoTeamRoster(roster.map((mono) => mono.id === id && mono.role === "member" ? { ...mono, userLockedFields: [...new Set([...(mono.userLockedFields ?? []), field])] } : mono));
+  saveMonoTeamRoster(roster.map((mono) => mono.id === id && (mono.role === "member" || field === "modelSettings" && (mono.role === "manager" || mono.role === "orchestrator")) ? { ...mono, userLockedFields: [...new Set([...(mono.userLockedFields ?? []), field])] } : mono));
 }
 
 export function unlockMonoField(id: string, field: TeamLockedField): void {
@@ -373,6 +376,7 @@ export function undoMonoTeamChanges(
           "name",
           "specialty",
           "workerProfile",
+          "effortSource",
           "archivedAt",
         ] as const) {
           if (
@@ -387,6 +391,7 @@ export function undoMonoTeamChanges(
           if (
             ((key === "name" || key === "specialty") &&
               member.userLockedFields?.includes(key)) ||
+            (key === "effortSource" && member.userLockedFields?.includes("modelSettings")) ||
             (key === "workerProfile" &&
               (["harness", "model", "modelSettings"] as const).some(
                 (field) =>
@@ -476,6 +481,7 @@ export function undoMonoTeamChanges(
         "name",
         "specialty",
         "workerProfile",
+        "effortSource",
         "archivedAt",
       ] as const) {
         if (JSON.stringify(restored[key]) === JSON.stringify(member[key]))
@@ -487,6 +493,7 @@ export function undoMonoTeamChanges(
         if (
           ((key === "name" || key === "specialty") &&
             latestMember.userLockedFields?.includes(key)) ||
+          (key === "effortSource" && latestMember.userLockedFields?.includes("modelSettings")) ||
           (key === "workerProfile" &&
             (["harness", "model", "modelSettings"] as const).some(
               (field) =>

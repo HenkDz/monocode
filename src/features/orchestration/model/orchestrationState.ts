@@ -1,6 +1,7 @@
 import { pathKey } from "../../../shared/lib/paths";
 import type { OrchestrationChoice } from "./orchestrationPlan";
 import type { HarnessId } from "../../sessions/model/session";
+import type { EffortSource } from "../../sessions/model/models";
 
 export type TaskStatus =
   | "queued"
@@ -107,6 +108,7 @@ export type OrchestrationTask = {
   harness: HarnessId;
   model: string;
   modelSettings?: Record<string, string>;
+  effortSource?: EffortSource;
   prompt: string;
   files: string[];
   /** Logical scopes in the lead checkout, used for scheduling overlap. */

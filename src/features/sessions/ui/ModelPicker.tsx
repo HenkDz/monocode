@@ -1110,7 +1110,8 @@ export function ModelSettingRows({
   side = "top",
   onSettingsChange,
   row,
-}: Pick<Props, "harness" | "model" | "values" | "side" | "onSettingsChange"> & {
+}: Pick<Props, "harness" | "model" | "values" | "side"> & {
+  onSettingsChange: (settings: Record<string, string>, settingId?: string) => void;
   row: (setting: {
     id: string;
     label: string;
@@ -1137,7 +1138,7 @@ export function ModelSettingRows({
                   setting={setting}
                   values={values}
                   variant="plain"
-                  onSettingsChange={onSettingsChange}
+                  onSettingsChange={(settings) => onSettingsChange(settings, setting.id)}
                 />
               ) : (
                 <SelectPill
@@ -1145,7 +1146,7 @@ export function ModelSettingRows({
                   values={values}
                   variant="plain"
                   side={side}
-                  onSettingsChange={onSettingsChange}
+                  onSettingsChange={(settings) => onSettingsChange(settings, setting.id)}
                 />
               ),
           })}

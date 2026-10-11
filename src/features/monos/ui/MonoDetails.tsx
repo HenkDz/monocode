@@ -2,12 +2,15 @@ import {
   useEffect,
   useId,
   useState,
+  useSyncExternalStore,
   type ComponentProps,
   type ReactNode,
 } from "react";
 import type { HarnessId, RuntimeMode } from "../../sessions/model/session";
 import { AccessPicker } from "../../sessions/ui/AccessPicker";
 import { ModelPicker, ModelSettingRows } from "../../sessions/ui/ModelPicker";
+import { getModelSnapshot, modelEffortSetting, subscribeModels, type EffortSource } from "../../sessions/model/models";
+import { useModelSource } from "../../sessions/ui/modelSource";
 import type { MonoLook, MonoState } from "../model/mono";
 import {
   loadMonoFiles,
@@ -24,7 +27,10 @@ import { MonoProjects } from "./MonoProjects";
 import { MonoPreferencesPage } from "./MonoPreferencesPage";
 import { MonoSettingsPage } from "./MonoSettingsPage";
 import { MonoTeamPage, MemberDetails } from "./MonoTeamPage";
-import { findMono, listMonos } from "../model/mono";
+import { findMono, listMonos, monosSnapshot, subscribeMonos, updateMono } from "../model/mono";
+import { resetMonoRoleEffort, resolveMonoRoleEffort } from "../model/monoRoleEffort";
+import { lockMonoField } from "../model/monoTeam";
+import { MonoRoleEffort } from "./MonoRoleEffort";
 import { orgDescendants } from "../model/monoTeamActivity";
 import { habitActions, HabitsList, useHabits } from "./MonoHabits";
 import { MemoryPage, SoulPage } from "./MonoFilePages";
@@ -67,10 +73,11 @@ type Props = {
   harness: HarnessId;
   model: string;
   modelSettings: Record<string, string>;
+  effortSource?: EffortSource;
   runtimeMode: RuntimeMode;
   busy?: boolean;
   onModelChange: (harness: HarnessId, model: string) => void;
-  onModelSettingsChange: (settings: Record<string, string>) => void;
+  onModelSettingsChange: (settings: Record<string, string>, effortSource?: EffortSource) => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
   onClose: () => void;
   onReset?: () => Promise<void>;
@@ -100,6 +107,7 @@ export function MonoDetails({
   harness,
   model,
   modelSettings,
+  effortSource: sessionEffortSource,
   runtimeMode,
   onModelChange,
   onModelSettingsChange,
@@ -109,7 +117,27 @@ export function MonoDetails({
   windowControls,
 }: Props) {
   const panelId = useId();
+  useSyncExternalStore(subscribeMonos, monosSnapshot);
+  useSyncExternalStore(subscribeModels, getModelSnapshot);
   const mono = findMono(monoId);
+  const currentModel = useModelSource().resolve(harness, model);
+  const effortSetting = modelEffortSetting(currentModel);
+  const effective = mono ? resolveMonoRoleEffort(sessionId ? { ...mono, effortSource: sessionEffortSource } : mono, currentModel, modelSettings) : { modelSettings, effortSource: undefined };
+  const changeSettings = (settings: Record<string, string>, settingId?: string) => {
+    const effortSource = settingId === effortSetting?.id && settingId ? "user" : effective.effortSource;
+    if (mono) {
+      updateMono(mono.id, value => ({ ...value, workerProfile: { harness, model, modelSettings: settings }, effortSource }));
+      lockMonoField(mono.id, "modelSettings");
+    }
+    onModelSettingsChange(settings, effortSource);
+  };
+  const resetEffort = () => {
+    if (!mono) return;
+    const reset = resetMonoRoleEffort(mono, currentModel, effective.modelSettings);
+    updateMono(mono.id, value => ({ ...value, effortSource: reset.effortSource, userLockedFields: reset.userLockedFields, workerProfile: { harness, model, modelSettings: reset.modelSettings } }));
+    onModelSettingsChange(reset.modelSettings, reset.effortSource);
+  };
+  const effortControl = (control?: ReactNode) => mono ? <MonoRoleEffort mono={mono} model={currentModel} values={effective.modelSettings} source={effective.effortSource} onReset={resetEffort}>{control}</MonoRoleEffort> : control;
   const roster = listMonos();
   const orgIds = orgDescendants(roster, monoId);
   const orgProjects = [...new Set(roster.filter(entry => orgIds.has(entry.id))
@@ -294,7 +322,7 @@ export function MonoDetails({
               {...(activity ?? { blocks: [], live: false })}
             />
           ) : findMono(monoId)?.role === "member" ? (
-            <MemberDetails member={findMono(monoId)!} fallback={{ harness, model, modelSettings }} onBack={onClose} providerAccountId={providerAccountId} runtimeMode={runtimeMode} onRuntimeModeChange={onRuntimeModeChange} onProfileChange={profile => { onModelChange(profile.harness, profile.model); onModelSettingsChange(profile.modelSettings ?? {}); }} />
+            <MemberDetails member={findMono(monoId)!} fallback={{ harness, model, modelSettings }} conversationProfile={{ harness, model, modelSettings }} conversationEffortSource={sessionId ? sessionEffortSource : effective.effortSource} onBack={onClose} providerAccountId={providerAccountId} runtimeMode={runtimeMode} onRuntimeModeChange={onRuntimeModeChange} onProfileChange={(profile, effortSource) => { if (profile.harness !== harness || profile.model !== model) onModelChange(profile.harness, profile.model); onModelSettingsChange(profile.modelSettings ?? {}, effortSource); }} />
           ) : (
             <MonoSettingsPage
               monoId={monoId}
@@ -310,26 +338,27 @@ export function MonoDetails({
                   <ModelPicker
                     harness={harness}
                     model={model}
-                    values={modelSettings}
+                    values={effective.modelSettings}
                     project={cwd}
                     hideSettings
                     side="bottom"
                     variant="plain"
                     onChange={onModelChange}
-                    onSettingsChange={onModelSettingsChange}
+                    onSettingsChange={changeSettings}
                   />
                 </Property>
                 <MonoCodexStorageSource harness={harness} providerAccountId={providerAccountId} cwd={cwd} />
                 <ModelSettingRows
                   harness={harness}
                   model={model}
-                  values={modelSettings}
+                  values={effective.modelSettings}
                   side="bottom"
-                  onSettingsChange={onModelSettingsChange}
-                  row={({ label, control }) => (
-                    <Property label={label}>{control}</Property>
+                  onSettingsChange={changeSettings}
+                  row={({ id, label, control }) => (
+                    <Property label={label}>{id === effortSetting?.id ? effortControl(control) : control}</Property>
                   )}
                 />
+                {mono && !effortSetting && <Property label="Effort">{effortControl()}</Property>}
                 {runtimeMode && onRuntimeModeChange && (
                   <Property label="Permissions">
                     <AccessPicker

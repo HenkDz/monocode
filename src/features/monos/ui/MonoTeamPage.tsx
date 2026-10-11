@@ -1,4 +1,4 @@
-import { useState, useSyncExternalStore } from "react";
+import { useState, useSyncExternalStore, type ReactNode } from "react";
 import {
   findMono,
   listMonos,
@@ -12,6 +12,8 @@ import {
 import { PixelMascot } from "../../projects/ui/PixelMascot";
 import { PageHeader, Property } from "./monoPanelParts";
 import { ModelPicker, ModelSettingRows } from "../../sessions/ui/ModelPicker";
+import { getModelSnapshot, isEffortSettingId, modelEffortSetting, subscribeModels, type EffortSource } from "../../sessions/model/models";
+import { useModelSource } from "../../sessions/ui/modelSource";
 import { MonoCodexStorageSource } from "./MonoCodexStorageSource";
 import { RUNTIME_MODE_LABEL, type RuntimeMode } from "../../sessions/model/session";
 import { AccessPicker } from "../../sessions/ui/AccessPicker";
@@ -28,6 +30,12 @@ import { assertTeamRetire, handleMonoTeam, lockMonoField } from "../model/monoTe
 import { monoTeamHost } from "../model/monoTeamRuntime";
 import { MonoFieldLock } from "./MonoFieldLock";
 import { teamReviewerWarning } from "../model/monoOrg";
+import { resetMonoRoleEffort, resolveMonoRoleEffort, switchMonoRoleEffort } from "../model/monoRoleEffort";
+import { MonoRoleEffort } from "./MonoRoleEffort";
+
+function memberFallback(fallback: NonNullable<Mono["workerProfile"]>) {
+  return { ...fallback, modelSettings: Object.fromEntries(Object.entries(fallback.modelSettings ?? {}).filter(([id]) => !isEffortSettingId(id))) };
+}
 
 export function MonoTeamPage({
   monoId,
@@ -139,7 +147,7 @@ export function MonoTeamPage({
               try {
                 void monoTeamHost(monoId, true).then(host => handleMonoTeam(monoId, crypto.randomUUID(), "team.hire", {
                   name, specialty, soul: `# ${name}\n\nWork as the ${specialty} for this project. Follow the Manager's task scope, verify your work and report evidence.`,
-                  ...(specialty.trim().toLowerCase() === "reviewer" ? {} : fallback),
+                  ...(specialty.trim().toLowerCase() === "reviewer" ? {} : memberFallback(fallback)),
                 }, host)).then(() => { setName(""); setSpecialty(""); setError(undefined); }).catch(error => setError(String(error)));
               } catch (error) {
                 setError(String(error));
@@ -183,6 +191,8 @@ export function MonoTeamPage({
 export function MemberDetails({
   member,
   fallback,
+  conversationProfile,
+  conversationEffortSource,
   onBack,
   onProfileChange,
   providerAccountId,
@@ -191,8 +201,10 @@ export function MemberDetails({
 }: {
   member: Mono;
   fallback: NonNullable<Mono["workerProfile"]>;
+  conversationProfile?: NonNullable<Mono["workerProfile"]>;
+  conversationEffortSource?: EffortSource;
   onBack(): void;
-  onProfileChange?: (profile: NonNullable<Mono["workerProfile"]>) => void;
+  onProfileChange?: (profile: NonNullable<Mono["workerProfile"]>, effortSource?: EffortSource) => void;
   providerAccountId?: string;
   runtimeMode?: RuntimeMode;
   onRuntimeModeChange?: (mode: RuntimeMode) => void;
@@ -204,7 +216,28 @@ export function MemberDetails({
   const statuses = usePrStatusCache();
   const files = useMonoFiles(member.id, "idle");
   const look = monoLook(member);
-  const profile = member.workerProfile ?? fallback;
+  useSyncExternalStore(subscribeModels, getModelSnapshot);
+  const source = useModelSource();
+  const storedProfile = conversationProfile ?? member.workerProfile ?? memberFallback(fallback);
+  const currentModel = source.resolve(storedProfile.harness, storedProfile.model);
+  const effortSetting = modelEffortSetting(currentModel);
+  const effortOwner = conversationProfile ? { ...member, effortSource: conversationEffortSource } : member;
+  const effective = resolveMonoRoleEffort(effortOwner, currentModel, storedProfile.modelSettings);
+  const profile = { ...storedProfile, modelSettings: effective.modelSettings };
+  const changeProfile = (next: NonNullable<Mono["workerProfile"]>, effortSource?: EffortSource) => {
+    updateMono(member.id, value => ({ ...value, workerProfile: next, effortSource }));
+    onProfileChange?.(next, effortSource);
+  };
+  const changeSettings = (modelSettings: Record<string, string>, settingId?: string) => {
+    changeProfile({ ...profile, modelSettings }, settingId === effortSetting?.id && settingId ? "user" : effective.effortSource);
+    lockMonoField(member.id, "modelSettings");
+  };
+  const resetEffort = () => {
+    const reset = resetMonoRoleEffort(member, currentModel, profile.modelSettings);
+    updateMono(member.id, value => ({ ...value, effortSource: reset.effortSource, userLockedFields: reset.userLockedFields, workerProfile: { ...profile, modelSettings: reset.modelSettings } }));
+    onProfileChange?.({ ...profile, modelSettings: reset.modelSettings }, reset.effortSource);
+  };
+  const effortControl = (control?: ReactNode) => <MonoRoleEffort mono={member} model={currentModel} values={profile.modelSettings} source={effective.effortSource} onReset={resetEffort}>{control}</MonoRoleEffort>;
   const sessions = useSyncExternalStore(subscribeCardSessions, cardSessionsSnapshot);
   const session = member.sessionId ? sessions.get(member.sessionId) : undefined;
   const permissionMode = runtimeMode ?? session?.runtimeMode ?? (member.sessionId ? undefined : monoDefaultRuntimeMode(member));
@@ -246,15 +279,11 @@ export function MemberDetails({
             harness={profile.harness} model={profile.model} values={profile.modelSettings ?? {}}
             project={member.projects[0]} side="bottom" variant="plain" hideSettings
             onChange={(harness, model) => {
-              onProfileChange?.({ harness, model });
-              updateMono(member.id, value => ({ ...value, workerProfile: { harness, model } }));
+              const next = switchMonoRoleEffort(effortOwner, currentModel, source.resolve(harness, model), profile.modelSettings);
+              changeProfile({ harness, model, modelSettings: next.modelSettings }, next.effortSource);
               lockMonoField(member.id, "harness"); lockMonoField(member.id, "model");
             }}
-            onSettingsChange={(modelSettings) => {
-              onProfileChange?.({ ...profile, modelSettings });
-              updateMono(member.id, value => ({ ...value, workerProfile: { ...profile, modelSettings } }));
-              lockMonoField(member.id, "modelSettings");
-            }}
+            onSettingsChange={changeSettings}
           />
           <MonoFieldLock monoId={member.id} field="harness" />
           <MonoFieldLock monoId={member.id} field="model" />
@@ -262,11 +291,8 @@ export function MemberDetails({
         </Property>
         <MonoCodexStorageSource harness={profile.harness} providerAccountId={providerAccountId} cwd={member.projects[0] ?? ""} />
         <ModelSettingRows harness={profile.harness} model={profile.model} values={profile.modelSettings ?? {}} side="bottom"
-          onSettingsChange={modelSettings => {
-            onProfileChange?.({ ...profile, modelSettings });
-            updateMono(member.id, value => ({ ...value, workerProfile: { ...profile, modelSettings } }));
-            lockMonoField(member.id, "modelSettings");
-          }} row={({ label, control }) => <Property label={label}>{control}</Property>} />
+          onSettingsChange={changeSettings} row={({ id, label, control }) => <Property label={label}>{id === effortSetting?.id ? effortControl(control) : control}</Property>} />
+        {!effortSetting && <Property label="Effort">{effortControl()}</Property>}
         <Property label="Permissions">{onRuntimeModeChange && permissionMode ? <AccessPicker value={permissionMode} onChange={onRuntimeModeChange} side="bottom" variant="plain" /> : <span className="text-xs" title="Open this teammate's chat to view or change permissions">{permissionMode ? RUNTIME_MODE_LABEL[permissionMode] : "Open chat to view"}</span>}</Property>
         <Property label="Specialty">
           <input

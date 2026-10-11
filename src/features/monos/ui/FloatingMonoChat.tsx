@@ -19,7 +19,7 @@ import {
   monoMessageDeliveries,
   monoPendingTranscriptBlocks,
 } from "../model/monoMessaging";
-import { sessionWorkCwd, type Session } from "../../sessions/model/session";
+import { sessionWorkCwd } from "../../sessions/model/session";
 import {
   FLOATING_MONO_CHANGED,
   floatingMonoAttachments,
@@ -387,7 +387,7 @@ function FloatingConversation({
   onOpenArtifact,
 }: {
   mono: FloatingMonoEntry;
-  session: Session;
+  session: NonNullable<FloatingMonoView["session"]>;
   focus: number;
   action: (action: FloatingMonoAction) => Promise<boolean>;
   onOpenArtifact: (id: string) => void;
@@ -496,16 +496,18 @@ function FloatingConversation({
       <div className="shrink-0 px-1 pb-1">
         <MonoComposer
           sessionId={`floating:${session.id}`}
+          goalRouting={session.monoGoalRouting}
           name={mono.name}
           runtimeMode={session.runtimeMode}
           onRuntimeModeChange={(mode) => void action({ kind: "runtimeMode", mode })}
           enabled={!session.worktreeRemoved}
           focusToken={focus}
-          onSubmit={async (text, attachments) => {
+          onSubmit={async (text, attachments, monoGoal) => {
             const accepted = await action({
               kind: "submit",
               text,
               attachments: floatingMonoAttachments(attachments),
+              ...(monoGoal ? { monoGoal } : {}),
             });
             // Only bytes/paths cross into the owner; its renderer never owns
             // these composer preview URLs.

@@ -28,6 +28,14 @@ import {
   consumeQuoteRequest,
   type QuoteRequest,
 } from "../../sessions/model/quoteDraft";
+import {
+  decideMonoGoalRoute,
+  type MonoGoalRouteChoice,
+  type MonoGoalRouteDecision,
+  type MonoGoalRoutingContext,
+  type MonoGoalSubmission,
+} from "../model/monoGoalRouting";
+import { MonoGoalRoute } from "./MonoGoalRoute";
 
 const DROP_STATE = { current: { attachmentsSupported: true, remote: false } };
 
@@ -48,10 +56,12 @@ type Props = {
   onQuoteRequestConsumed?: (id: number) => void;
   onDraftChange?: (text: string) => void;
   controls?: ReactNode;
+  goalRouting?: MonoGoalRoutingContext;
   /** Returns false when the message wasn't taken, so the draft stays. */
   onSubmit: (
     text: string,
     attachments: Attachment[],
+    goal?: MonoGoalSubmission,
   ) => boolean | void | Promise<boolean | void>;
   onFocus?: () => void;
 };
@@ -72,11 +82,26 @@ export function MonoComposer({
   onQuoteRequestConsumed,
   onDraftChange,
   controls,
+  goalRouting,
   onSubmit,
   onFocus,
 }: Props) {
   const [text, setText] = useState(() => getComposerDraft(sessionId) ?? "");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [goalChoice, setGoalChoice] = useState<MonoGoalRouteChoice>({
+    mode: "chat",
+    override: "auto",
+  });
+  const goalRequest = useRef<{
+    signature: string;
+    submission: MonoGoalSubmission;
+    route: MonoGoalRouteDecision;
+    rejected: boolean;
+  } | null>(null);
+  const [retainedGoalRoute, setRetainedGoalRoute] = useState<{
+    signature: string;
+    route: MonoGoalRouteDecision;
+  } | null>(null);
   const autocorrect = useComposerAutocorrect();
   const textRef = useRef(text);
   const attachmentsRef = useRef(attachments);
@@ -226,18 +251,78 @@ export function MonoComposer({
     if (!message && !files.length) return;
     const generation = readGeneration.current;
     const clear = (accepted: boolean | void) => {
-      if (accepted === false) return;
+      if (accepted === false) {
+        if (goalRequest.current) goalRequest.current.rejected = true;
+        if (generation === readGeneration.current) setRetainedGoalRoute(null);
+        return;
+      }
+      goalRequest.current = null;
       if (generation !== readGeneration.current) {
         if (getComposerDraft(sessionId) === draft)
           setComposerDraft(sessionId, "");
         return;
       }
+      setRetainedGoalRoute(null);
       update("");
+      setGoalChoice({ mode: "chat", override: "auto" });
       attachmentsRef.current = [];
       setAttachments([]);
       setDropError(null);
     };
-    const result = onSubmit(message, files);
+    let goal: MonoGoalSubmission | undefined;
+    if (goalRouting && goalChoice.mode === "goal") {
+      const signature = JSON.stringify([
+        goalRouting.ownerId,
+        message,
+        files.map((file) => file.id),
+        goalChoice,
+      ]);
+      if (
+        goalRequest.current?.signature !== signature ||
+        goalRequest.current.rejected
+      ) {
+        const route = decideMonoGoalRoute({
+          text: message,
+          attachmentCount: files.length,
+          choice: goalChoice,
+          context: goalRouting,
+        });
+        const previous =
+          goalRequest.current?.signature === signature
+            ? goalRequest.current.submission
+            : undefined;
+        const project = route.kind === "manager" ? route.project : undefined;
+        const sameRoute =
+          previous?.reason === route.reason &&
+          previous.projectId === project?.id &&
+          previous.managerMonoId === project?.managerMonoId;
+        goalRequest.current = {
+          signature,
+          route,
+          rejected: false,
+          submission: {
+            ownerId: goalRouting.ownerId,
+            requestId: sameRoute ? previous.requestId : crypto.randomUUID(),
+            userMessageId: sameRoute
+              ? previous.userMessageId
+              : crypto.randomUUID(),
+            choice: { ...goalChoice },
+            reason: route.reason,
+            ...(route.kind === "manager"
+              ? {
+                  projectId: route.project.id,
+                  managerMonoId: route.project.managerMonoId,
+                }
+              : {}),
+          },
+        };
+      }
+      setRetainedGoalRoute(goalRequest.current);
+      goal = goalRequest.current.submission;
+    }
+    const result = goal
+      ? onSubmit(message, files, goal)
+      : onSubmit(message, files);
     if (result instanceof Promise) {
       submittingRef.current = true;
       setSubmitting(true);
@@ -277,6 +362,27 @@ export function MonoComposer({
           <p role="alert" className="px-3 pt-2 text-xs text-red-400">
             {dropError}
           </p>
+        ) : null}
+        {goalRouting ? (
+          <MonoGoalRoute
+            context={goalRouting}
+            text={text}
+            attachmentCount={attachments.length}
+            choice={goalChoice}
+            route={
+              retainedGoalRoute?.signature ===
+              JSON.stringify([
+                goalRouting.ownerId,
+                text.trim(),
+                attachments.map((file) => file.id),
+                goalChoice,
+              ])
+                ? retainedGoalRoute.route
+                : undefined
+            }
+            onChange={setGoalChoice}
+            disabled={!enabled || submitting}
+          />
         ) : null}
         {attachments.length > 0 ? (
           <div className="flex flex-wrap gap-1.5 px-2.5 pt-2">

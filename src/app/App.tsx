@@ -46,7 +46,21 @@ import {
   monoGoalOrigins,
   type ManagerGoalHost,
 } from "../features/monos/model/monoManagerGoals";
+import {
+  appendMonoGoalCard,
+  appendMonoGoalOrigin,
+  appendMonoGoalPendingCard,
+  monoGoalRoutingContext,
+  submitMonoGoal,
+  type MonoGoalSubmission,
+} from "../features/monos/model/monoGoalRouting";
 import { readMonoConversation } from "../features/monos/model/monoConversation";
+import { serializeMonoGoalUpdate } from "../features/monos/model/monoGoalUpdates";
+import {
+  getMonoGoalRecoveryBlocks,
+  mergeMonoGoalRecoverySession,
+  monoGoalRecoveryLiveSession,
+} from "../features/sessions/data/monoGoalRecovery";
 import {
   resumeMonoUsageLimit,
   switchMonoUsageLimitAccount,
@@ -9074,6 +9088,10 @@ function Workspace({
   submitAfterProjectSyncRef.current = submitSession;
   // Interactive callers use the immediate result to clear their composer. The
   // queued-launch receiver uses submitSession to await the actual acceptance.
+  const submitMonoGoalRef = useRef<(
+    sessionId: string, text: string, attachments: Attachment[], submission: MonoGoalSubmission,
+    recovery?: boolean,
+  ) => Promise<boolean>>(null!);
   const onSubmit = useCallback(
     (...args: Parameters<Submit>): boolean => {
       // Reject before async preparation can make the composer clear its draft.
@@ -11954,6 +11972,21 @@ function Workspace({
               await orchestrator.hydrate(id);
             }
           }
+          if (mono.role === "orchestrator" && mono.sessionId) {
+            try {
+              const source = await ensureOpenSession(mono.sessionId);
+              const recovered = source && mergeMonoGoalRecoverySession(source,
+                await getMonoGoalRecoveryBlocks(source.id));
+              for (const block of recovered?.blocks ?? []) {
+                if (!block.monoGoalSubmission || block.role !== "user" ||
+                    recovered?.blocks.some(card => card.id === `route-${block.id}` && card.monoCard)) continue;
+                await submitMonoGoalRef.current(source!.id, block.text, [], block.monoGoalSubmission, true)
+                  .catch(error => console.error("Mono goal route retained pending work", error));
+              }
+            } catch (error) {
+              console.error("Mono goal transcript recovery unavailable", error);
+            }
+          }
           await monoManagerGoals.recover(mono.id, managerGoalHost.current);
           const events = monoManagerGoals.events(mono.id);
           if (!events.length || !mono.sessionId) continue;
@@ -12056,6 +12089,7 @@ function Workspace({
               folder,
               branch: run?.workspace?.branch,
               managerId,
+              managerMonoId: owner?.id,
               managerExists:
                 !!owner || !!run ||
                 sessionsRef.current.some((session) => session.id === managerId),
@@ -12141,6 +12175,14 @@ function Workspace({
       ).find((project) => project.id === goal.projectId);
       if (!mono || !project)
         throw new Error("Goal's project is no longer assigned");
+      if (goal.route) {
+        const managers = listMonos(true).filter(member => member.role === "manager" &&
+          member.archivedAt == null && member.reportsTo === mono.id &&
+          member.projects.length === 1 && projectKey(member.projects[0]) === projectKey(project.folder));
+        if (mono.archivedAt != null || managers.length !== 1 || remoteProjectFor(project.folder) ||
+            project.managerId !== goal.managerId || managers[0].id !== goal.route.managerMonoId)
+          throw Error("Goal's original Manager is unavailable; retained pending delivery");
+      }
       const savedOwner = orchestrator.run(goal.managerId)?.ownerMonoId;
       let owner =
         (savedOwner && findMono(savedOwner)) || dedicatedMono(project.folder);
@@ -12212,6 +12254,57 @@ function Workspace({
       );
       setSessions(sessionsRef.current);
     },
+  };
+
+  const goalRoutingForMono = (monoId: string) => {
+    const mono = findMono(monoId);
+    if (mono?.role !== "orchestrator" || mono.archivedAt != null) return;
+    const projects = monoLook(mono).projects;
+    return monoGoalRoutingContext(mono, listMonos(true), projects,
+      projects.filter(project => remoteProjectFor(project.path) ||
+        !recents.some(recent => projectKey(recent.path) === projectKey(project.path))).map(project => project.path));
+  };
+  submitMonoGoalRef.current = async (sessionId, text, attachments, submission, recovery) => {
+    const mono = monoForSession(sessionId);
+    if (!mono || mono.id !== submission.ownerId || mono.role !== "orchestrator")
+      throw Error("That Grand Orchestrator is no longer available");
+    let history = recovery ? await getMonoGoalRecoveryBlocks(sessionId) : undefined;
+    const update = async (change: (session: Session) => Session) => {
+      return serializeMonoGoalUpdate(sessionId, async () => {
+        if (history) history = await getMonoGoalRecoveryBlocks(sessionId);
+        const live = sessionsRef.current.find(entry => entry.id === sessionId);
+        if (!live) throw Error("The originating chat is unavailable");
+        const session = history ? mergeMonoGoalRecoverySession(live, history) : live;
+        const next = change(session);
+        if (next === session) return;
+        const nextLive = history ? monoGoalRecoveryLiveSession(live, next, history) : next;
+        if (!await upsertSession(next, history ? { monoBaseline: history, monoLiveBlocks: nextLive.blocks } : undefined))
+          throw Error("The originating chat could not be saved");
+        sessionsRef.current = sessionsRef.current.map(entry => entry.id === sessionId
+          ? history
+            ? monoGoalRecoveryLiveSession(entry, change(mergeMonoGoalRecoverySession(entry, history)), history)
+            : change(entry)
+          : entry);
+        if (history) history = next.blocks;
+        setSessions(sessionsRef.current);
+      });
+    };
+    return submitMonoGoal({ text, attachmentCount: attachments.length, origin: "user", submission, recovery }, {
+      context: () => goalRoutingForMono(mono.id) ?? { ownerId: mono.id, projects: [] },
+      ledger: monoManagerGoals,
+      goals: managerGoalHost.current,
+      resolve: async project => {
+        const folder = await invoke<string>("project_root", { project: project.path }).catch(() => undefined);
+        if (!folder) return;
+        return (await managerGoalHost.current.projects(mono.id)).find(entry => pathKey(entry.folder) === pathKey(folder));
+      },
+      persistOrigin: (origin, prompt) => update(session => appendMonoGoalOrigin(session, origin, prompt)),
+      hasOrigin: origin => !!(history ?? sessionsRef.current.find(session => session.id === sessionId)?.blocks)
+        ?.some(block => block.id === origin.userMessageId && block.monoGoalSubmission?.requestId === origin.requestId),
+      persistPending: (origin, error) => update(session => appendMonoGoalPendingCard(session, origin, error)),
+      persistCard: (origin, goal) => update(session => appendMonoGoalCard(session, origin, goal)),
+      grand: () => submitSession(sessionId, text, attachments),
+    });
   };
 
   useEffect(() => {
@@ -14630,7 +14723,10 @@ function Workspace({
           setSessions(sessionsRef.current);
         },
       }),
-    submit: onSubmit,
+    submit: (sessionId, text, attachments, options) => options?.monoGoal
+      ? submitMonoGoalRef.current(sessionId, text, attachments, options.monoGoal)
+      : onSubmit(sessionId, text, attachments),
+    goalRouting: goalRoutingForMono,
     stop: onStop,
     approval: onApproval,
     question: onQuestionReply,
@@ -14668,6 +14764,8 @@ function Workspace({
     onSaveDraft,
     onRemoveDraft,
     onSubmit,
+    onSubmitGoal: (sessionId: string, text: string, attachments: Attachment[], submission: MonoGoalSubmission) =>
+      submitMonoGoalRef.current(sessionId, text, attachments, submission),
     onStop,
     onCompactContext,
     onPlaceSessionInFolder,
@@ -14828,6 +14926,7 @@ function Workspace({
                   <SessionPane
                     {...sessionPaneProps}
                     session={monoShownSessionPane}
+                    monoGoalRouting={goalRoutingForMono(monoForSession(monoShownSessionPane.id)?.id ?? "")}
                     // The Mono view covers the workspace, so a review opens
                     // beside the chat rather than in a hidden tab.
                     onOpenDiff={onOpenMonoDiff}
@@ -15458,6 +15557,7 @@ function Workspace({
                                     <SessionPane
                                       {...sessionPaneProps}
                                       session={session}
+                                      monoGoalRouting={goalRoutingForMono(monoForSession(session.id)?.id ?? "")}
                                       visible={visible}
                                       focused={
                                         visible &&
@@ -15596,6 +15696,7 @@ function Workspace({
                         <SessionPane
                           {...sessionPaneProps}
                           session={session}
+                          monoGoalRouting={goalRoutingForMono(monoForSession(session.id)?.id ?? "")}
                           visible={visible}
                           focused={visible}
                           inSplit={false}

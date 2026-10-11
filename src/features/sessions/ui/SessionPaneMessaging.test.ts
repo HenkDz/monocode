@@ -190,6 +190,31 @@ function field() {
   )!;
 }
 
+it("passes a new-goal route from the embedded composer to the shared submit boundary", async () => {
+  const pane = props();
+  const onSubmitGoal = vi.fn(async () => true);
+  pane.onSubmitGoal = onSubmitGoal;
+  pane.onSubmit = vi.fn();
+  pane.monoGoalRouting = {
+    ownerId: "grand",
+    projects: [{ id: "dzdistro", name: "DZDistro", path: "C:/projects/dzdistro", managerMonoId: "manager", available: true }],
+  };
+  setComposerDraft("chat", "Fix DZDistro checkout");
+  render(pane);
+  act(() => [...container.querySelectorAll<HTMLButtonElement>("button")]
+    .find(button => button.textContent === "New goal")!.click());
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Send"]')!.click());
+  expect(onSubmitGoal).toHaveBeenCalledWith("chat", "Fix DZDistro checkout", [],
+    expect.objectContaining({
+      projectId: "dzdistro", managerMonoId: "manager", reason: "Exact project name",
+      requestId: expect.any(String), userMessageId: expect.any(String),
+    }),
+  );
+  expect(pane.onSubmit).not.toHaveBeenCalled();
+  expect(field().value).toBe("");
+  expect(container.querySelector('[data-mono-goal-route] [aria-pressed="true"]')?.textContent).toBe("Chat");
+});
+
 it("shows the member work log without a full-height greeting hiding it below the fold", () => {
   probes.member = true;
   const pane = props();

@@ -132,6 +132,34 @@ async function render() {
   );
 }
 
+it("passes the floating new-goal route and stable source IDs to its owner", async () => {
+  const view = snapshot(0);
+  view.session!.monoGoalRouting = {
+    ownerId: "first",
+    projects: [{ id: "dzdistro", name: "DZDistro", path: "C:/projects/dzdistro", managerMonoId: "manager", available: true }],
+  };
+  native.invoke.mockImplementation(async command => command === "mono_chat_state" ? view : undefined);
+  await render();
+  const input = container.querySelector<HTMLTextAreaElement>('[aria-label="Message Captain"]')!;
+  const inputProps = Object.entries(input).find(([key]) => key.startsWith("__reactProps"))![1];
+  act(() => inputProps.onChange({ target: { value: "Fix DZDistro checkout" } }));
+  act(() => [...container.querySelectorAll<HTMLButtonElement>("button")]
+    .find(button => button.textContent === "New goal")!.click());
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Send"]')!.click());
+  expect(native.invoke).toHaveBeenCalledWith("mono_chat_action", {
+    monoId: "first",
+    action: {
+      kind: "submit", text: "Fix DZDistro checkout", attachments: [],
+      monoGoal: expect.objectContaining({
+        projectId: "dzdistro", managerMonoId: "manager", reason: "Exact project name",
+        requestId: expect.any(String), userMessageId: expect.any(String),
+      }),
+    },
+  });
+  expect(input.value).toBe("");
+  expect(container.querySelector('[data-mono-goal-route] [aria-pressed="true"]')?.textContent).toBe("Chat");
+});
+
 it("shows this window's Mono with its status beneath the name", async () => {
   await render();
   expect(container.textContent).toContain("Captain's conversation");

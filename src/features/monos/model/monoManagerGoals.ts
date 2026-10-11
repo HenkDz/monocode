@@ -28,6 +28,14 @@ export type GoalStatus =
   | "done"
   | "cancelled"
   | "blocked";
+export type GoalRouteMetadata = {
+  sourceUserMessageId: string;
+  projectId: string;
+  managerId: string;
+  managerMonoId?: string;
+  reason: string;
+  override: "auto" | "manager";
+};
 export type MonoManagerGoal = {
   id: string;
   monoId: string;
@@ -41,6 +49,7 @@ export type MonoManagerGoal = {
   createdAt: number;
   updatedAt: number;
   archived?: boolean;
+  route?: GoalRouteMetadata;
 };
 type Receipt = {
   signature: string;
@@ -64,6 +73,7 @@ export type ManagerProject = {
   branch?: string;
   managerId: string;
   managerExists: boolean;
+  managerMonoId?: string;
   running: number;
   needsDecision: number;
   ready: number;
@@ -150,6 +160,9 @@ export class MonoManagerGoals {
   isCancelling(goalId: string): boolean {
     return [...this.ledgers.values()].some(ledger => Object.values(ledger.receipts).some(receipt => receipt.pending?.cancel && receipt.pending.goalId === goalId));
   }
+  deliveryPending(monoId: string, requestId: string): boolean {
+    return !!this.ledgers.get(monoId)?.receipts[requestId]?.pending;
+  }
   private serial<T>(fn: () => Promise<T>): Promise<T> {
     const next = this.tail.then(fn);
     this.tail = next.catch(() => undefined);
@@ -215,26 +228,46 @@ export class MonoManagerGoals {
       (goal) => goal.id === receipt.pending!.goalId,
     );
     if (!goal) throw Error("Goal receipt references missing state");
-    await host.deliver(
-      goal,
-      receipt.pending.text,
-      `mono-goal-${id}-${requestId}`,
-      !!receipt.pending.cancel,
-    );
-    await this.save(id, {
-      ...ledger,
-      goals: receipt.pending.cancel
-        ? ledger.goals.map((entry) =>
-            entry.id === goal.id
-              ? { ...entry, state: "cancelled" as const, updatedAt: Date.now() }
-              : entry,
-          )
-        : ledger.goals,
-      receipts: {
-        ...ledger.receipts,
-        [requestId]: { signature: receipt.signature, result: receipt.result },
-      },
-    });
+    const routedAssignment = !!goal.route && goal.requestId === requestId;
+    if (routedAssignment && goal.state === "cancelled") {
+      await this.save(id, { ...ledger, receipts: { ...ledger.receipts,
+        [requestId]: { signature: receipt.signature, result: receipt.result } } });
+      return;
+    }
+    if (routedAssignment && this.isCancelling(goal.id)) return;
+    try {
+      if (routedAssignment) {
+        const project = (await host.projects(id)).find(project => project.id === goal.projectId);
+        if (!project?.managerExists || project.managerId !== goal.managerId ||
+            goal.route!.managerMonoId !== undefined && goal.route!.managerMonoId !== project.managerMonoId)
+          throw Error("Routed Manager is no longer available");
+      }
+      await host.deliver(
+        goal,
+        receipt.pending.text,
+        `mono-goal-${id}-${requestId}`,
+        !!receipt.pending.cancel,
+      );
+      await this.save(id, {
+        ...ledger,
+        goals: receipt.pending.cancel || routedAssignment && goal.state === "blocked"
+          ? ledger.goals.map((entry) =>
+              entry.id === goal.id
+                ? { ...entry, state: receipt.pending!.cancel ? "cancelled" as const : "queued" as const, updatedAt: Date.now() }
+                : entry,
+            )
+          : ledger.goals,
+        receipts: {
+          ...ledger.receipts,
+          [requestId]: { signature: receipt.signature, result: receipt.result },
+        },
+      });
+    } catch (error) {
+      if (routedAssignment && goal.state !== "blocked")
+        await this.save(id, { ...ledger, goals: ledger.goals.map(entry => entry.id === goal.id
+          ? { ...entry, state: "blocked" as const, updatedAt: Date.now() } : entry) });
+      throw error;
+    }
   }
   recover(id: string, host: ManagerGoalHost) {
     return this.serial(async () => {
@@ -250,6 +283,7 @@ export class MonoManagerGoals {
     action: string,
     input: Record<string, unknown>,
     host: ManagerGoalHost,
+    route?: GoalRouteMetadata,
   ) {
     return this.serial(async () => {
       if (!origin) throw Error("No active Mono or user-approved habit turn");
@@ -260,10 +294,20 @@ export class MonoManagerGoals {
         throw Error("Unknown Manager action or input field");
       if (!/^[A-Za-z0-9_-]{1,128}$/.test(requestId))
         throw Error("Invalid requestId");
+      if (route !== undefined) {
+        if (!route || action !== "goals.assign" || origin.kind !== "user" ||
+            typeof route.sourceUserMessageId !== "string" || !route.sourceUserMessageId || route.sourceUserMessageId !== origin.messageId ||
+            !["auto", "manager"].includes(route.override))
+          throw Error("Invalid user goal route");
+        text(route.reason, "route reason");
+        if (route.managerMonoId !== undefined) text(route.managerMonoId, "route Manager");
+      }
       const ledger = await this.load(monoId);
       const signature = JSON.stringify([
         action,
         Object.entries(input).sort(([a], [b]) => a.localeCompare(b)),
+        ...(route ? [[route.sourceUserMessageId, route.projectId, route.managerId, route.reason, route.override,
+          ...(route.managerMonoId !== undefined ? [route.managerMonoId] : [])]] : []),
       ]);
       const previous = Object.prototype.hasOwnProperty.call(
         ledger.receipts,
@@ -279,13 +323,13 @@ export class MonoManagerGoals {
             goal.requestId === requestId ||
             goal.id === previous.pending?.goalId,
         );
-        if (
-          owned &&
-          !(await host.projects(monoId)).some(
-            (project) => project.id === owned.projectId,
-          )
-        )
-          throw Error("Project is no longer assigned to this Mono");
+        if (owned) {
+          const project = (await host.projects(monoId)).find(project => project.id === owned.projectId);
+          if (!project) throw Error("Project is no longer assigned to this Mono");
+          if (route && (!project.managerExists || project.managerId !== route.managerId ||
+              route.managerMonoId !== undefined && route.managerMonoId !== project.managerMonoId))
+            throw Error("Routed Manager is no longer available");
+        }
         // Replaying a pending assignment in an event must not manufacture authority.
         if (
           previous.pending &&
@@ -338,6 +382,9 @@ export class MonoManagerGoals {
           throw Error(
             "Not one of this Mono's registered projects. Ask the user to add it in Mono details.",
           );
+        if (route && (!project.managerExists || route.projectId !== project.id || route.managerId !== project.managerId ||
+            route.managerMonoId !== undefined && route.managerMonoId !== project.managerMonoId))
+          throw Error("Goal route no longer matches its registered project Manager");
         if (ledger.goals.filter((goal) => !terminal(goal.state)).length >= 100)
           throw Error("Finish active goals before adding more");
         message = text(input.goal, "goal");
@@ -353,6 +400,7 @@ export class MonoManagerGoals {
           prUrls: [],
           createdAt: Date.now(),
           updatedAt: Date.now(),
+          ...(route ? { route: { ...route } } : {}),
         };
       } else {
         const existing = ledger.goals.find(
@@ -405,7 +453,7 @@ export class MonoManagerGoals {
       const changed: MonoManagerGoal[] = [];
       for (const [id, ledger] of this.ledgers) {
         const goals = ledger.goals.map((goal) => {
-          if (terminal(goal.state)) return goal;
+          if (terminal(goal.state) || goal.route && ledger.receipts[goal.requestId]?.pending) return goal;
           const run = runs.find((run) => run.leadId === goal.managerId);
           const tasks =
             run?.tasks.filter((task) => task.monoGoalId === goal.id) ?? [];

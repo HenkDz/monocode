@@ -10,6 +10,7 @@ export type AgentLiveStatus =
 
 export type AgentLiveState = {
   status: AgentLiveStatus;
+  warning?: string;
   reason?: "storage" | "usage-limit" | "approval" | "decision" | "error"
     | "preparing-storage" | "paused" | "editing" | "handoff" | "worktree" | "dependency" | "held-updates" | "tool";
   detail?: string;
@@ -20,7 +21,7 @@ export type AgentLiveSession = Pick<Session,
   "blocks" | "busy" | "pendingQuestion" | "usageLimit" | "codexStorageError"
   | "codexStoragePreparing" | "queuedMessages" | "pendingMonoEvents" | "queueStatus"
   | "worktreePreparing" | "worktreeRemoved" | "editingQueuedMessageId" | "pendingSwitch"
-  | "backgroundTasks"
+  | "backgroundTasks" | "rotationWarning"
 > & { compacting?: boolean };
 
 export type AgentLiveContext = {
@@ -44,6 +45,11 @@ function plainLine(text: string): string {
 
 /** Current blockers and work outrank queued work and historical task outcomes. */
 export function selectAgentLiveState(session?: AgentLiveSession, context: AgentLiveContext = {}): AgentLiveState {
+  const state = deriveAgentLiveState(session, context);
+  return session?.rotationWarning ? { ...state, warning: session.rotationWarning } : state;
+}
+
+function deriveAgentLiveState(session?: AgentLiveSession, context: AgentLiveContext = {}): AgentLiveState {
   const blocks = session?.blocks ?? [];
   let turnIndex = currentTurnIndex({ blocks, queuedMessages: session?.queuedMessages });
   if (turnIndex < 0) {
@@ -169,5 +175,6 @@ export function agentLiveStateLabel(state: AgentLiveState): string {
 
 export const agentLiveStateTooltip = (state: AgentLiveState) => {
   const label = agentLiveStateLabel(state);
-  return state.detail && state.detail !== label && label !== `Waiting · ${state.detail}` ? `${label} · ${state.detail}` : label;
+  const detail = state.detail && state.detail !== label && label !== `Waiting · ${state.detail}` ? `${label} · ${state.detail}` : label;
+  return state.warning ? `${detail} · ${state.warning}` : detail;
 };

@@ -76,20 +76,42 @@ shortening the draft or successfully compacting that provider allows progress.
 A rejected pending retry returns before committing its user block, so it stays
 correctable and cannot poison later short retries.
 
-An edited resend with a pending carry replaces only the edited unaccepted input.
-The original brief, earlier constraints, retained assignment and other failed
-inputs are reattached. App saves the updated carry before provider rewind and
-requires a valid plan even during a switch or other unsafe state. The planner
-checks removed blocks for unresolved activity and verifies that the edit follows
-the saved rotation boundary. The visible task composer uses the same edited
-input and boundary. Storage failure stops the edit before provider history changes.
+CC5EH disables edited resend while a rotation carry is pending, before storage
+preparation or provider rewind. The visible Edit action and keyboard recall use
+the same rule: "Retry the original first. Editing is available after it's accepted."
+Pending text cannot absorb an edited replacement. After acceptance, supported
+task chats retain their existing edit and rewind behavior; primary Mono/org
+chats retain their existing no-Edit policy. CC5EG's pre-rewind replacement save
+has been removed.
 
-Compaction cannot shrink saved pending inputs; their guidance now says so.
-Supported retained task chats can explicitly edit an oversized failed input.
-Primary Mono/org chats still retain their existing no-Edit policy, and provider
-editing requires a rewindable history. Older pre-release oversized carries on
-those surfaces remain protected rather than being silently reset. The new initial
-bounds prevent creating such carries through the reviewed startup sequence.
+Provider acceptance remains successful if clearing its saved carry fails. The
+app retries the exact accepted carry after 250 ms, doubling delays up to 30 s,
+and shows a small storage warning in the chat and CC4 live state. The working
+or completed status stays accurate. Until clearing succeeds, an in-memory
+settled view prevents replay in the running app. A newer carry, explicit
+discard or session deletion cancels the old retry; unreadable storage does not
+overwrite other carries. This settled view cannot survive app exit before a
+successful durable write, so restarting during an ongoing storage failure can
+still encounter the old saved carry.
+
+Compaction cannot shrink saved pending inputs. Oversized legacy carries offer
+"Discard pending input" on retained tasks, primary Mono and org chats. The
+confirmation previews every unaccepted input being discarded, including visible
+continuations after the saved boundary. Nothing changes until confirmation and
+a successful durable save. Stale previews and unreadable storage fail closed.
+Accepted constraints, the original brief and assignment, references and visible
+history stay intact; discarded failed block IDs prevent later reabsorption.
+If the original boundary is unloaded, load the earlier conversation before
+discarding. The new initial bounds still prevent creating these oversized
+carries through the reviewed startup sequence.
+
+Delivery is not literally exactly once. Each structural carry block appears
+once, but the same restriction can appear in both recent conversation and
+protected user requests, and a current request can appear in the retry wrapper
+and current prompt. Lost provider acknowledgments can also cause retries of
+already stored input. These continuity duplicates remain deliberate; this
+round prevents abandoned replacement text from entering pending carries and
+does not claim transport-level exactly-once acceptance.
 
 Context and configuration events retain their submitted harness/model/settings
 identity until the event queue reaches the reducer. A changed selection rejects

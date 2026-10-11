@@ -13,6 +13,15 @@ const task = (status: OrchestrationTask["status"], patch: Partial<OrchestrationT
 }) as OrchestrationTask;
 
 describe("selectAgentLiveState", () => {
+  it("shows durable carry clearing warnings without changing accepted turn or task status", () => {
+    const rotationWarning = "Input accepted. Retrying the saved carry update.";
+    const active = selectAgentLiveState(session({ busy: true, rotationWarning }));
+    expect(active).toEqual({ status: "thinking", detail: "Thinking", warning: rotationWarning });
+    expect(agentLiveStateTooltip(active)).toContain(rotationWarning);
+    expect(selectAgentLiveState(session({ rotationWarning }), { task: task("completed", { accepted: true }) }))
+      .toEqual({ status: "done", warning: rotationWarning });
+    expect(selectAgentLiveState(session({ busy: true })).warning).toBeUndefined();
+  });
   it.each([
     [{}, "idle"],
     [{ busy: true }, "thinking"],

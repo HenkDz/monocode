@@ -4,8 +4,11 @@ import type { Block } from "../../sessions/model/session";
 import {
   loadMonoRotation,
   acceptMonoRotation,
+  discardMonoRotationPendingInputs,
+  forgetMonoRotation,
   planRotation,
   planSessionRotation,
+  previewMonoRotationDiscard,
   rotationReason,
   saveMonoRotation,
   sessionRotationStatus,
@@ -18,7 +21,11 @@ beforeEach(() => {
     setItem: (key: string, value: string) => stored.set(key, value),
   });
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
 
 const HOUR = 60 * 60 * 1000;
 const T0 = new Date(2026, 9, 4, 9).getTime();
@@ -349,7 +356,7 @@ it("checks the first input with retry-equivalent protection and reserves the ret
   expect(sessionRotationStatus(fresh, "Retry").plan).toBeDefined();
 });
 
-it("edits only the failed input while carrying earlier restrictions, assignment and other failures", () => {
+it("rejects every edit while a carry is pending without changing the original inputs", () => {
   const session = { id: "edited-pending", providerSessionId: "old", context: { used: 700, window: 1000 },
     blocks: [{ id: "scope", role: "user" as const, text: "Never publish or read /private." }] };
   const assignment = "Original assignment: verify the parser in /approved.";
@@ -359,15 +366,23 @@ it("edits only the failed input while carrying earlier restrictions, assignment 
   const second = sessionRotationStatus({ ...session, blocks: [...session.blocks, a] }, "Do not merge.", assignment).plan!;
   saveMonoRotation(session.id, second.rotation);
   const b = { id: "b", role: "user" as const, text: "Do not merge." };
-  const edited = sessionRotationStatus({ ...session, blocks: [...session.blocks, a] }, "Verify tests only.", assignment, [b]).plan!;
-  expect(edited.brief(session.id)).toContain(session.blocks[0].text);
-  expect(edited.brief(session.id)).toContain(assignment);
-  expect(edited.rotation.pendingInputs).toEqual(["Use account A.", "Verify tests only."]);
-  expect(edited.brief(session.id)).not.toContain(b.text);
-  expect(sessionRotationStatus({ ...session, blocks: [] }, "Replace scope", assignment, session.blocks).deferredReason).toContain("earlier constraints cannot be edited");
+  const saved = loadMonoRotation(session.id);
+  for (const removed of [[b], session.blocks]) {
+    const edited = sessionRotationStatus({ ...session, blocks: [...session.blocks, a] }, "Verify tests only.", assignment, removed);
+    expect(edited).toEqual({ deferredReason: "Retry the original first. Editing is available after it's accepted." });
+    expect(loadMonoRotation(session.id)).toEqual(saved);
+  }
+  // Reload after abandoning failed preparation/rewind still retries the original carry.
+  const retry = sessionRotationStatus({ ...session, blocks: [...session.blocks, a, b] }, "Retry", assignment).plan!;
+  expect(retry.brief(session.id)).toContain(session.blocks[0].text);
+  expect(retry.brief(session.id)).toContain(assignment);
+  expect(retry.rotation.pendingInputs).toEqual([a.text, b.text, "Retry"]);
+  expect(retry.brief(session.id)).not.toContain("Verify tests only.");
+  acceptMonoRotation(session.id, saved!.at);
+  expect(sessionRotationStatus({ ...session, blocks: [...session.blocks, a] }, "Verify tests only.", assignment, [b]).plan).toBeDefined();
 });
 
-it("recovers a legacy oversized pending input through an explicit edit without compacting away constraints", () => {
+it("recovers a legacy oversized pending input only after explicit discard, retaining scope and assignment", () => {
   const restriction = "Keep the original scope.";
   const input = "x".repeat(8001);
   const scope = { id: "scope", role: "user" as const, text: restriction };
@@ -377,12 +392,24 @@ it("recovers a legacy oversized pending input through an explicit edit without c
     pendingBrief: `${restriction}\nOriginal assignment: parser only.`, pendingInput: input,
     userRequests: [scope, failed].map(({ id, text }) => ({ id, text })) });
   expect(sessionRotationStatus(session, "Retry").deferredReason).toContain("compaction cannot shrink saved inputs");
-  const edited = sessionRotationStatus({ ...session, blocks: [scope] }, "Verify tests only.", "", [failed]).plan!;
-  expect(edited.brief(session.id)).toContain(restriction);
-  expect(edited.brief(session.id)).toContain("Original assignment: parser only.");
-  expect(edited.brief(session.id)).not.toContain(input);
-  saveMonoRotation(session.id, edited.rotation);
-  expect(sessionRotationStatus({ ...session, blocks: [scope] }, "Retry").plan).toBeDefined();
+  expect(sessionRotationStatus({ ...session, blocks: [scope] }, "Verify tests only.", "", [failed]).plan).toBeUndefined();
+  const preview = previewMonoRotationDiscard(session)!;
+  expect(preview.inputs).toEqual([input]);
+  expect(preview.blockIds).toEqual([failed.id]);
+  expect(discardMonoRotationPendingInputs(session, preview)).toBe(true);
+  const retained = loadMonoRotation(session.id)!;
+  expect(retained.pendingBrief).toBe(`${restriction}\nOriginal assignment: parser only.`);
+  expect(retained.userRequests).toEqual([{ id: scope.id, text: restriction }]);
+  expect(retained.discardedInputIds).toEqual([failed.id]);
+  const retry = sessionRotationStatus(session, "Retry").plan!;
+  expect(retry.brief(session.id)).toContain(restriction);
+  expect(retry.brief(session.id)).toContain("Original assignment: parser only.");
+  expect(retry.brief(session.id)).not.toContain(input);
+  saveMonoRotation(session.id, retry.rotation);
+  acceptMonoRotation(session.id, retained.at);
+  const next = sessionRotationStatus({ ...session, context: { used: 700, window: 1000 } }, "Continue").plan!;
+  expect(next.rotation.userRequests).toEqual([{ id: scope.id, text: restriction }]);
+  expect(next.brief(session.id)).not.toContain(input);
 });
 
 it("checks removed blocks and session operations before preparing an edited pending carry", () => {
@@ -413,18 +440,18 @@ it("uses the same protected accounting when the new request repeats an earlier r
   expect(retry.plan!.rotation.userRequests).toHaveLength(2);
 });
 
-it("keeps an unloaded failed request when only another request with identical text is edited", () => {
+it("never accepts an edited replacement when its original boundary is unloaded", () => {
   const scope = { id: "scope", role: "user" as const, text: "Keep the scope." };
   const text = "Do not merge.";
   const session = { id: "unloaded-duplicate", providerSessionId: "replacement", blocks: [scope] };
   const replaced = { id: "b", role: "user" as const, text };
   saveMonoRotation(session.id, { at: 1, reason: "context", afterBlockId: scope.id, earlier: [],
     pendingBrief: scope.text, pendingInputs: [text], userRequests: [{ id: "a", text }, { id: "b", text }] });
-  const edited = sessionRotationStatus(session, "Verify tests only.", "", [replaced]).plan!;
-  expect(edited.brief(session.id)).toContain(text);
-  expect(edited.rotation.userRequests).toContainEqual({ id: "a", text });
-  expect(edited.rotation.userRequests).not.toContainEqual({ id: "b", text });
-  expect(sessionRotationStatus({ ...session, blocks: [] }, "Verify tests only.", "", [replaced]).deferredReason).toContain("boundary is not loaded");
+  const original = loadMonoRotation(session.id);
+  expect(sessionRotationStatus(session, "Verify tests only.", "", [replaced]).plan).toBeUndefined();
+  expect(sessionRotationStatus({ ...session, blocks: [] }, "Verify tests only.", "", [replaced]).deferredReason).toBe("Retry the original first. Editing is available after it's accepted.");
+  expect(loadMonoRotation(session.id)).toEqual(original);
+  expect(previewMonoRotationDiscard({ ...session, blocks: [] })).toBeUndefined();
 });
 
 it("reapplies protected and complete-brief bounds to failed-start retries", () => {

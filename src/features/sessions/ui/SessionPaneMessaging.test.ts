@@ -4,13 +4,15 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { SessionPane, type SessionPaneProps } from "./SessionPane";
 import { clearComposerDraft, setComposerDraft } from "../model/draftCache";
-import { saveMonoRotation } from "../../monos/model/monoRotation";
+import { acceptMonoRotation, discardMonoRotationPendingInputs, loadMonoRotation, saveMonoRotation } from "../../monos/model/monoRotation";
 import { registerBuiltinHarnesses } from "../../../integrations/harness/core/register";
 import { resetHarnessModelOverlays, setHarnessModels } from "../model/models";
 
 const probes = vi.hoisted(() => ({
   mono: true,
   member: false,
+  org: false,
+  actualPane: false,
   pick: vi.fn(),
   transcript: vi.fn(),
   composer: vi.fn(),
@@ -39,12 +41,12 @@ vi.mock("./ModelPicker", async (original) => {
     },
   };
 });
-vi.mock("./Composer", () => ({
-  Composer: (props: {
-    disabled?: boolean;
-    onSubmit: (text: string, attachments: []) => void;
-  }) => {
+vi.mock("./Composer", async (original) => {
+  const actual = await original<typeof import("./Composer")>();
+  return { ...actual,
+  Composer: (props: Parameters<typeof actual.Composer>[0]) => {
     probes.composer(props);
+    if (probes.actualPane) return createElement(actual.Composer, props);
     return createElement(
       "button",
       {
@@ -54,23 +56,28 @@ vi.mock("./Composer", () => ({
       "Send user message",
     );
   },
-}));
+  };
+});
 vi.mock("../hooks/useFileDrop", () => ({ useFileDrop: () => false }));
 vi.mock("../model/attachments", async (original) => ({
   ...(await original<typeof import("../model/attachments")>()),
   pickAttachments: probes.pick,
 }));
-vi.mock("./AgentTranscript", () => ({
+vi.mock("./AgentTranscript", async (original) => {
+  const actual = await original<typeof import("./AgentTranscript")>();
+  return { ...actual,
   MonoActivityTrail: () => createElement("p", null, "Activity steps"),
-  AgentTranscript: (props: { onAddToChat: (text: string) => void }) => {
+  AgentTranscript: (props: Parameters<typeof actual.AgentTranscript>[0]) => {
     probes.transcript(props);
+    if (probes.actualPane) return createElement(actual.AgentTranscript, props);
     return createElement(
       "button",
-      { onClick: () => props.onAddToChat("Selected response") },
+      { onClick: () => props.onAddToChat?.("Selected response") },
       "Quote response",
     );
   },
-}));
+  };
+});
 vi.mock("../../orchestration/model/orchestration", async (original) => ({
   ...(await original<
     typeof import("../../orchestration/model/orchestration")
@@ -88,7 +95,7 @@ vi.mock("../../monos/model/mono", async (original) => ({
     probes.mono
       ? {
           id: "mono",
-          role: probes.member ? "member" : undefined,
+          role: probes.member ? "member" : probes.org ? "manager" : undefined,
           sessionId: "chat",
           name: "Captain",
           mascot: "cat",
@@ -103,6 +110,8 @@ beforeEach(() => {
   registerBuiltinHarnesses();
   probes.mono = true;
   probes.member = false;
+  probes.org = false;
+  probes.actualPane = false;
   probes.runs = [];
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal(
@@ -981,8 +990,8 @@ it("plans a retained task edit with its replacement input and retained assignmen
   const pane = props();
   pane.session.harness = "opencode";
   pane.session.blocks = [{ id: "scope", role: "user", text: "Do not publish." }, { id: "failed", role: "user", text: "x".repeat(8001) }];
-  saveMonoRotation("chat", { at: 1, reason: "context", afterBlockId: "scope", earlier: [],
-    pendingBrief: "Do not publish.\nOriginal assignment: Verify the parser only.", pendingInput: "x".repeat(8001) });
+  pane.session.providerSessionId = "thread";
+  pane.session.context = { used: 70_000, window: 100_000 };
   render(pane);
   expect(probes.transcript.mock.calls.at(-1)![0].onEditLastTurn).toBeTypeOf("function");
   expect(probes.composer.mock.calls.at(-1)![0].rotationScheduled).toBe(false);
@@ -992,6 +1001,109 @@ it("plans a retained task edit with its replacement input and retained assignmen
   });
   expect(probes.composer.mock.calls.at(-1)![0].rotationScheduled).toBe(true);
   expect(probes.composer.mock.calls.at(-1)![0].rotationDeferredReason).toBeUndefined();
+});
+
+it("locks the actual task Edit and keyboard recall until the original carry is accepted", async () => {
+  probes.mono = false;
+  probes.actualPane = true;
+  probes.runs = [{ leadId: "lead", tasks: [{ id: "task", title: "Patch", sessionId: "chat", memberId: "worker", status: "queued", prompt: "Verify the parser only." }], dispatches: [] }];
+  const pane = props();
+  pane.session.harness = "opencode";
+  pane.session.blocks = [{ id: "scope", role: "user", text: "Do not publish." }, { id: "failed", role: "user", text: "Original continuation" }];
+  saveMonoRotation("chat", { at: 1, reason: "context", afterBlockId: "scope", earlier: [],
+    pendingBrief: "Do not publish.\nOriginal assignment: Verify the parser only.", pendingInput: "Original continuation" });
+  render(pane);
+  const reason = "Retry the original first. Editing is available after it's accepted.";
+  const edit = container.querySelector<HTMLButtonElement>('[aria-label="Edit and resend"]')!;
+  expect(edit.disabled).toBe(true);
+  expect(edit.title).toBe(reason);
+  expect(container.textContent).toContain(reason);
+  expect(container.querySelectorAll(".user-message-actions")).toHaveLength(1);
+  const input = container.querySelector<HTMLTextAreaElement>("textarea")!;
+  await act(async () => {
+    edit.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    edit.click();
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }));
+  });
+  expect(input.value).toBe("");
+  expect(container.querySelector('[aria-label="Cancel edit"]')).toBeNull();
+  expect(loadMonoRotation("chat")?.pendingInput).toBe("Original continuation");
+  await acceptMonoRotation("chat", 1);
+  render({ ...pane, session: { ...pane.session } });
+  const enabled = container.querySelector<HTMLButtonElement>('[aria-label="Edit and resend"]')!;
+  expect(enabled.disabled).toBe(false);
+  await act(async () => {
+    enabled.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    enabled.click();
+  });
+  expect(input.value).toBe("Original continuation");
+  expect(container.querySelector('[aria-label="Cancel edit"]')).not.toBeNull();
+  expect(container.textContent).not.toContain(reason);
+});
+
+it.each(["primary", "org", "member", "task"])(
+  "previews every oversized pending input and only discards after confirmation in a %s pane",
+  async (kind) => {
+    probes.mono = kind !== "task";
+    probes.org = kind === "org";
+    probes.member = kind === "member";
+    probes.actualPane = true;
+    if (kind === "task") probes.runs = [{ leadId: "lead", tasks: [{ id: "task", title: "Patch", sessionId: "chat", memberId: "worker", status: "queued", prompt: "Verify the parser only." }], dispatches: [] }];
+    const pane = props();
+    pane.session.harness = "opencode";
+    const original = `Pending start ${"x".repeat(8_001)} pending end`;
+    pane.session.blocks = [{ id: "scope", role: "user", text: "Do not publish." }, { id: "failed", role: "user", text: "Visible failed continuation" }];
+    const before = { at: 1, reason: "context" as const, afterBlockId: "scope", earlier: ["Retained history"], userRequests: [{ id: "scope", text: "Do not publish." }],
+      pendingBrief: "Do not publish.\nOriginal assignment: Verify the parser only.", pendingInput: original, pendingInputs: ["Saved second continuation"] };
+    saveMonoRotation("chat", before);
+    pane.onDiscardRotationPendingInput = vi.fn((_id, preview) => discardMonoRotationPendingInputs(pane.session, preview));
+    render(pane);
+    if (kind !== "task") expect(container.querySelector('[aria-label="Edit and resend"]')).toBeNull();
+    const discard = [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Discard pending input")!;
+    await act(async () => {
+      discard.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+      discard.click();
+    });
+    const preview = document.querySelector<HTMLElement>('[aria-label="Pending input to discard"]')!;
+    expect(preview.textContent).toContain(original);
+    expect(preview.textContent).toContain("Saved second continuation");
+    expect(preview.textContent).toContain("Visible failed continuation");
+    expect(preview.textContent).not.toContain("Do not publish.");
+    expect(pane.onDiscardRotationPendingInput).not.toHaveBeenCalled();
+    await act(async () => [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find(button => button.textContent === "Cancel")!.click());
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(loadMonoRotation("chat")).toEqual(before);
+    await act(async () => discard.click());
+    await act(async () => [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find(button => button.textContent === "Discard pending input")!.click());
+    expect(pane.onDiscardRotationPendingInput).toHaveBeenCalledTimes(1);
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(loadMonoRotation("chat")).toMatchObject({ pendingBrief: before.pendingBrief, userRequests: before.userRequests, earlier: before.earlier });
+    expect(loadMonoRotation("chat")?.pendingInputs).toBeUndefined();
+    expect(loadMonoRotation("chat")?.pendingInput).toBeUndefined();
+    expect(pane.session.blocks).toHaveLength(2);
+  },
+);
+
+it("keeps a changed carry after stale discard confirmation and reports the failure", async () => {
+  const pane = props();
+  const before = { at: 1, reason: "context" as const, afterBlockId: "user", earlier: [], pendingBrief: "Continue safely", pendingInput: "x".repeat(8_001) };
+  saveMonoRotation("chat", before);
+  pane.onDiscardRotationPendingInput = vi.fn((_id, preview) => discardMonoRotationPendingInputs(pane.session, preview));
+  render(pane);
+  await act(async () => [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Discard pending input")!.click());
+  saveMonoRotation("chat", { ...before, pendingInputs: ["New pending input"] });
+  await act(async () => [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find(button => button.textContent === "Discard pending input")!.click());
+  expect(document.querySelector('[role="dialog"] [role="alert"]')?.textContent).toContain("Could not discard pending input");
+  expect(loadMonoRotation("chat")?.pendingInputs).toEqual(["New pending input"]);
+});
+
+it("shows acceptance-clearing recovery as a small status warning", () => {
+  const pane = props();
+  pane.session.rotationWarning = "Context refresh accepted; saving the cleared pending input is retrying.";
+  pane.session.busy = true;
+  render(pane);
+  expect([...container.querySelectorAll('[role="status"]')].some(node => node.textContent === pane.session.rotationWarning)).toBe(true);
+  expect(container.querySelector('[role="alert"]')).toBeNull();
 });
 
 it.each([

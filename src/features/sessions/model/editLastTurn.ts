@@ -7,6 +7,7 @@ import type {
 } from "./session";
 import { isOperatorUserTurn, operatorUserPrompt } from "./operatorCommand";
 import { isUserMessage, teamMessage } from "./teamMessage";
+import { loadMonoRotation } from "../../monos/model/monoRotation";
 
 /** Harnesses that can rewind provider state before resending an edited prompt. */
 export function harnessSupportsEditLastTurn(harness: HarnessId): boolean {
@@ -70,7 +71,7 @@ export type EditedResendPreparation = {
 export function prepareEditedResend(
   session: Session,
 ): EditedResendPreparation | null {
-  if (!canEditLastTurn(session)) return null;
+  if (loadMonoRotation(session.id)?.pendingBrief || !canEditLastTurn(session)) return null;
   const block = lastUserTurnBlock(session.blocks);
   if (!block) return null;
   return {

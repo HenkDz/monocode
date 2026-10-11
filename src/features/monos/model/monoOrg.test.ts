@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 import {
   assertDirectReport,
   resolveTeamMember,
@@ -51,8 +52,14 @@ const tree = () =>
     "app",
   );
 
+const shellRules = readFileSync(new URL("../../../../docs/mono-rules/shell.md", import.meta.url), "utf8");
+const teamRules = readFileSync(new URL("../../../../docs/mono-rules/team.md", import.meta.url), "utf8");
+
 it("guides org sessions to the app's sibling worktree location", () => {
-  const context = orgTurnContext(tree(), "app");
+  const core = orgTurnContext(tree(), "app");
+  expect(core).toContain("app rules shell");
+  expect(core).toContain("cleanup requires user confirmation");
+  const context = `${core}\n${shellRules}`;
   expect(context).toContain("sibling <main-checkout-name>-worktrees");
   expect(context).toContain("Never create Git worktrees inside");
   expect(context).toContain("wait for explicit user confirmation");
@@ -60,7 +67,10 @@ it("guides org sessions to the app's sibling worktree location", () => {
 
 it("tells org agents to conserve the user's shared GitHub quota", () => {
   for (const id of ["leader", "app", "app-backend"]) {
-    const context = orgTurnContext(tree(), id);
+    const core = orgTurnContext(tree(), id);
+    expect(core).toContain("at most every 60 seconds");
+    expect(core).toContain("stop at low/exhausted budget");
+    const context = `${core}\n${shellRules}`;
     expect(context).toContain("gh pr view --json with only the fields needed");
     expect(context).toContain("at most every 60 seconds");
     expect(context).toContain("Stop GitHub polling");
@@ -97,11 +107,11 @@ it("hands each role only its direct reports and leaves plain Mono context unchan
   expect(orgTurnContext(roster, "app")).toContain('"id":"app-backend"');
   for (const id of ["leader", "app", "app-backend"]) {
     expect(orgTurnContext(roster, id)).toContain("login:false");
-    expect(orgTurnContext(roster, id)).toContain("Claude's Bash tool");
-    expect(orgTurnContext(roster, id)).toContain("NO leading &");
-    expect(orgTurnContext(roster, id)).toContain("NEVER pass --json inline");
-    expect(orgTurnContext(roster, id)).toContain("--input option remains available when needed, not required");
-    expect(orgTurnContext(roster, id)).toContain("never an external MCP/node_repl process");
+    expect(`${orgTurnContext(roster, id)}\n${shellRules}`).toContain("Claude's Bash tool");
+    expect(shellRules).toContain("NO leading &");
+    expect(shellRules).toContain("NEVER pass --json inline");
+    expect(shellRules).toContain("--input option remains available when needed, not required");
+    expect(orgTurnContext(roster, id)).toContain("never external MCP/node_repl");
   }
   expect(
     orgTurnContext([...roster, node("plain", undefined, ["/app"])], "plain"),
@@ -119,7 +129,8 @@ it("retains existing teams and leaves new Managers empty", () => {
   const fresh = withDefaultTeam([node("fresh", "manager", ["/fresh"])], "fresh");
   expect(fresh).toHaveLength(1);
   expect(fresh[0].teamInitialized).toBe(true);
-  expect(orgTurnContext(fresh, "fresh")).toContain("study your project's structure");
+  expect(orgTurnContext(fresh, "fresh")).toContain("study the project read-only");
+  expect(teamRules).toContain("study your project's structure");
   expect(() =>
     validateMonoOrg([...roster, node("plain", undefined, ["/app"])]),
   ).not.toThrow();

@@ -39,7 +39,7 @@ for (const theme of ["dark", "light"]) {
       await expect(composer).toBeInViewport();
       if (scenario === "blocked") {
         const notice = page.getByRole("status", {
-          name: "Codex storage needs repair",
+          name: "Conversation couldn’t start",
         });
         await expect(notice).toBeInViewport();
         await expect(page.getByText("Message will queue until storage is repaired.", { exact: true })).toHaveCount(1);
@@ -109,7 +109,7 @@ for (const theme of ["dark", "light"]) {
           queue.getByRole("button", { name: "Edit queued message" }).first(),
         ).toBeInViewport();
         await expect(
-          page.getByRole("status", { name: "Codex storage needs repair" }),
+          page.getByRole("status", { name: "Conversation couldn’t start" }),
         ).toBeInViewport();
       }
       await page.screenshot({
@@ -137,7 +137,7 @@ for (const scenario of ["blocked", "long-log"]) {
     if (scenario === "blocked") {
       await page.getByRole("button", { name: /^Work · Needs attention$/ }).click();
       await expect(
-        page.getByRole("status", { name: "Codex storage needs repair" }),
+        page.getByRole("status", { name: "Conversation couldn’t start" }),
       ).toBeInViewport();
       await page.getByRole("button", { name: "Close work", exact: true }).click();
     }
@@ -237,7 +237,7 @@ test("blocked queued messages can be edited and removed while the composer draft
     page.getByRole("textbox", { name: "Message Reviewer", exact: true }),
   ).toHaveValue("Keep my draft");
   await expect(
-    page.getByRole("status", { name: "Codex storage needs repair" }),
+    page.getByRole("status", { name: "Conversation couldn’t start" }),
   ).toBeInViewport();
 });
 

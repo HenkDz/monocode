@@ -22,7 +22,7 @@ for (const width of [1440, 1100]) {
         await expect(header.locator("[data-workbench-metrics]")).toHaveCount(1);
         await expect(header).not.toContainText("cached");
         if (scenario === "failed") {
-          await expect(work.getByRole("status", { name: "Codex storage needs repair" })).toBeVisible();
+          await expect(work.getByRole("status", { name: "Conversation couldn’t start" })).toBeVisible();
           await expect(work).toContainText("not started");
           await expect(header).toContainText("storage");
         } else if (scenario === "waiting") await expect(header).toContainText("Reviewer");
@@ -65,6 +65,14 @@ test("header actions and tab keyboard navigation preserve the composer draft", a
   await header.getByRole("button", { name: "Message", exact: true }).click();
   await expect(composer).toBeFocused();
   await composer.fill("Keep the focused review boundary.");
+  const effort = page.locator('[data-session-composer] button[data-model-control][title$=": High"]');
+  await expect(effort).toBeVisible();
+  await effort.click();
+  await page.getByRole("menu").getByText("Medium", { exact: true }).click();
+  await expect(page.locator('[data-session-composer] button[data-model-control][title$=": Medium"]')).toBeVisible();
+  await page.locator('[data-workbench-conversation]').getByRole("img", { name: /^69% context used,/ }).hover();
+  await expect(page.getByText("69% context used", { exact: true })).toBeVisible();
+  await header.hover();
   const tabs = page.getByRole("tablist", { name: "Member view" });
   await tabs.getByRole("tab", { name: "Conversation", exact: true }).focus();
   await page.keyboard.press("ArrowRight");
@@ -74,7 +82,7 @@ test("header actions and tab keyboard navigation preserve the composer draft", a
   await page.keyboard.press("Home");
   await expect(tabs.getByRole("tab", { name: "Conversation", exact: true })).toBeFocused();
   await header.getByRole("button", { name: "Details", exact: true }).click();
-  await expect(page.getByRole("dialog")).toContainText("Native Core");
+  await expect(page.getByRole("dialog", { name: "Session details", exact: true }).getByRole("textbox", { name: "Name", exact: true })).toHaveValue("Native Core");
   await page.keyboard.press("Escape");
   await expect(composer).toHaveValue("Keep the focused review boundary.");
   await header.getByRole("button", { name: "Steer", exact: true }).click();
@@ -125,4 +133,46 @@ test("narrow Work toggle keeps the composer reachable and retains history select
   await toggle.click();
   await expect(work.getByRole("tab", { name: "History", exact: true })).toHaveAttribute("aria-selected", "true");
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(600);
+});
+
+test("flat sidebar pages preserve selected, unread, attention and dirty task rows", async ({ page }) => {
+  await page.setViewportSize({ width: 1100, height: 1000 });
+  await page.goto("/tests/browser/cc7u-workbench.html?scenario=long-history&theme=light&sidebar=app", { waitUntil: "commit" });
+  const sidebar = page.getByRole("complementary", { name: "Workspace navigation" });
+  const rows = sidebar.locator("[data-task-worktree]");
+  await expect(rows.first()).toBeVisible({ timeout: 90_000 });
+  const selected = sidebar.locator('[data-worktree="C:/synthetic/BrowserLink/current"]');
+  const attention = sidebar.locator('[data-worktree="C:/synthetic/BrowserLink/history-3"]');
+  const unreadDirty = sidebar.locator('[data-worktree="C:/synthetic/BrowserLink/history-4"]');
+  const protectedRows = [selected, attention, unreadDirty];
+  for (const row of protectedRows) await expect(row).toBeVisible();
+  await expect(unreadDirty.locator("[data-worktree-unread]")).toHaveText("New reply");
+  await expect(unreadDirty.locator("[data-worktree-dirty]")).toHaveText("Changes");
+  await expect(rows.locator('button[aria-label^="Expand sessions"], button[aria-label^="Collapse sessions"]')).toHaveCount(0);
+  for (const button of await rows.locator('button[aria-label^="Open worktree"]').all()) expect(await button.getAttribute("aria-expanded")).toBeNull();
+  const filter = sidebar.getByRole("group", { name: "Worktree filter" });
+  await filter.getByRole("button", { name: "All", exact: true }).click();
+  await sidebar.getByRole("button", { name: "Next worktree page", exact: true }).click();
+  for (const row of protectedRows) await expect(row).toBeVisible();
+  const rowButton = selected.locator('button[data-sidebar-row]').first();
+  await expect(rowButton).toHaveAttribute("title", /Review native window restoration, foreground focus and browser activation/);
+  await rowButton.focus();
+  await page.keyboard.press("ArrowDown");
+  expect(await rowButton.evaluate(element => element === document.activeElement)).toBe(false);
+  await rowButton.click();
+  expect(await page.evaluate(() => (window as unknown as { workbenchFixture: { events: { action: string; text?: string }[] } }).workbenchFixture.events.some(event => event.action === "open-session" && event.text === "member-conversation"))).toBe(true);
+  await unreadDirty.hover();
+  const dimensions = await unreadDirty.evaluate(element => {
+    const row = element.getBoundingClientRect();
+    const fields = [...element.querySelectorAll("[data-worktree-member], [data-worktree-metadata], [data-worktree-dirty], [data-worktree-unread]")].map(field => ({ box: field.getBoundingClientRect().toJSON(), client: field.clientWidth, scroll: field.scrollWidth }));
+    return { row: row.toJSON(), fields };
+  });
+  for (const field of dimensions.fields) {
+    expect(field.box.right).toBeLessThanOrEqual(dimensions.row.right + 1);
+    expect(field.scroll).toBeLessThanOrEqual(field.client + 1);
+  }
+  await page.reload({ waitUntil: "commit" });
+  await expect(sidebar.getByRole("group", { name: "Worktree filter" }).getByRole("button", { name: "All", exact: true })).toHaveAttribute("aria-pressed", "true", { timeout: 90_000 });
+  const grand = sidebar.locator("[data-mono-rail-state]");
+  expect(await grand.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
 });

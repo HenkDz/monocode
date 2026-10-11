@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { SessionPane, type SessionPaneProps } from "../../src/features/sessions/ui/SessionPane";
 import { MonoRailSection } from "../../src/app/shell/MonoRailSection";
+import { ProjectRail } from "../../src/app/shell/ProjectRail";
 import { ProjectManagerRow } from "../../src/features/orchestration/ui/ProjectManagerRow";
 import { ProjectWorktrees } from "../../src/features/source-control/ui/ProjectWorktrees";
 import type { Mono } from "../../src/features/monos/model/mono";
@@ -14,6 +15,7 @@ import type { OrchestrationRun, OrchestrationTask } from "../../src/features/orc
 import type { Block, Session } from "../../src/features/sessions/model/session";
 import type { SessionSummary } from "../../src/features/sessions/data/sessionStore";
 import { setComposerDraft } from "../../src/features/sessions/model/draftCache";
+import { setHarnessModels } from "../../src/features/sessions/model/models";
 import { selectAgentLiveState } from "../../src/features/agents/model/agentLiveState";
 import type { AgentLiveState } from "../../src/features/agents/model/agentLiveState";
 import "../../src/styles/index.css";
@@ -31,7 +33,7 @@ const sessionId = workerSession ? "review-worker" : "member-conversation";
 const events: { action: string; text?: string; options?: unknown }[] = [];
 Object.assign(window, { workbenchFixture: { events } });
 document.documentElement.classList.toggle("theme-light", params.get("theme") === "light");
-localStorage.clear();
+setHarnessModels("codex", ["GPT-5.4", "GPT-5.3 Codex"].map((name, i) => ({ id: i ? "codex:gpt-5.3-codex" : "codex:gpt-5.4", harness: "codex", name, settings: [{ id: "reasoningEffort", label: "Reasoning effort", kind: "select", value: "high", options: [{ value: "low", label: "Low" }, { value: "medium", label: "Medium" }, { value: "high", label: "High" }] }] })));
 const member: Mono = {
   id: "member", role: "member", reportsTo: "manager", name: memberName,
   specialty: waiting || working ? "Windows engineering" : "Quality & safety",
@@ -81,7 +83,7 @@ const blocks: Block[] = zero ? [] : [
   { id: "last-reply", role: "assistant", text: waiting ? "The implementation checks pass. I’ve handed the change to Reviewer and am waiting for the independent verdict." : working ? "I’m checking the saved window activation changes against the focused acceptance steps." : "The earlier conversation is saved. The new review attempt has not started because Codex couldn’t open storage." },
 ];
 const initialSession: Session = {
-  id: sessionId, harness: "codex", model: "codex:gpt-5.4", modelSettings: { reasoning_effort: "high" }, runtimeMode: "supervised",
+  id: sessionId, harness: "codex", model: "codex:gpt-5.4", modelSettings: { reasoningEffort: "high" }, runtimeMode: "supervised",
   title: workerSession ? "Window activation review" : `${memberName} conversation`, cwd, branch: "cc7-native-review", worktreeCwd: workspace("current").checkoutCwd, blocks,
   context: { used: 178_000, window: 258_000 }, busy: working,
   ...(!zero && !waiting && !working ? { codexStorageError: current.error, queueStatus: "paused" as const,
@@ -107,6 +109,7 @@ const noop = () => {};
 
 function Fixture() {
   const [session, setSession] = useState(initialSession);
+  const monos = { states: new Map([[grand.id, { status: zero ? "idle" as const : "needs-you" as const, liveState: zero ? { status: "idle" as const } : { status: "failed" as const, detail: "Failed launch in Browser Link · 1 member working below" } }]]), onOpen: noop, onCreate: noop, onDelete: noop };
   const props: SessionPaneProps = {
     session, visible: true, focused: true, inSplit: false, composerFocused: false, recents: [], monoState: { status: working ? "working" : zero ? "idle" : "needs-you", liveState },
     onFocus: noop, onClose: noop, onCwdChange: noop, onBranchChange: noop, onWorkspaceModeChange: noop, onWorktreeBaseChange: noop,
@@ -122,16 +125,19 @@ function Fixture() {
     onCodexStorageCompare: async () => ({ monoContent: "Saved Mono instructions", sourceContent: "Saved account instructions" }),
     onApproval: noop, onQuestionReply: noop, onOpenFile: noop, onOpenDiff: noop, onOpenPlan: noop, onBuildPlan: noop, onNewTerminal: noop,
   };
+  const worktrees = <ProjectWorktrees project={cwd} currentProject={cwd} enabled history={history} openSessions={history.filter(value => value.id === sessionId)} busySessionIds={new Set(working ? [sessionId] : [])} approvalSessionIds={new Set(["worker-history-3"])} unseenFinishedIds={new Set(["worker-history-4"])} liveAgents={[]} activeSessionId={sessionId}
+    onLoadHistory={async () => true} onSelectWorktree={(_project, tree) => events.push({ action: "open-worktree", text: tree.path })} onNewSession={noop} onSelectSession={id => events.push({ action: "open-session", text: id })}
+    renderManager={() => <ProjectManagerRow project={cwd} sessions={[session]} onOpen={async () => { events.push({ action: "open-manager" }); }} onOpenMember={async id => { events.push({ action: "open-member", text: id }); }} />} />;
   return <OrchestrationActions.Provider value={{ update: noop, confirm: async () => {}, retry: noop, open: id => events.push({ action: "open-session", text: id }), openWorker: id => events.push({ action: "open-worktree", text: id }) }}><div className="cc7u-fixture-shell">
     <aside className="cc7u-fixture-sidebar @container/sidebar" aria-label="Workspace navigation">
+      {params.get("sidebar") === "app" ? <ProjectRail cwd={cwd} recents={[]} activeSessionId={sessionId} monos={monos} onSelectProject={noop} onOpenProject={noop} renderProjectWorktrees={() => worktrees} /> : <>
       <strong className="cc7u-fixture-brand">MonoCode</strong>
       <nav className="cc7u-fixture-nav"><button>Mission control</button><button>Team</button></nav>
-      <MonoRailSection states={new Map([[grand.id, { status: zero ? "idle" : "needs-you", liveState: zero ? { status: "idle" } : { status: "failed", detail: "Failed launch in Browser Link · 1 member working below" } }]])} onOpen={noop} onCreate={noop} onDelete={noop} />
+      <MonoRailSection {...monos} />
       <section aria-label="Browser Link sidebar"><div className="cc7u-fixture-project">Browser Link</div>
-        <ProjectWorktrees project={cwd} currentProject={cwd} enabled history={history} openSessions={history.filter(value => value.id === sessionId)} busySessionIds={new Set(working ? [sessionId] : [])} approvalSessionIds={new Set(["worker-history-3"])} unseenFinishedIds={new Set(["worker-history-4"])} liveAgents={[]} activeSessionId={sessionId}
-          onLoadHistory={async () => true} onSelectWorktree={(_project, tree) => events.push({ action: "open-worktree", text: tree.path })} onNewSession={noop} onSelectSession={id => events.push({ action: "open-session", text: id })}
-          renderManager={() => <ProjectManagerRow project={cwd} sessions={[session]} onOpen={async () => { events.push({ action: "open-manager" }); }} onOpenMember={async id => { events.push({ action: "open-member", text: id }); }} />} />
+        {worktrees}
       </section>
+      </>}
     </aside>
     <div className="cc7u-fixture-main"><div className="cc7u-fixture-topbar">Browser Link <span>/ {workerSession ? "Session" : "Member"}</span><small>Synthetic workspace · saved just now</small></div><div className="cc7u-fixture-pane"><SessionPane {...props} /></div></div>
     <style>{`.cc7u-fixture-shell{display:grid;grid-template-columns:232px minmax(0,1fr);height:100dvh;overflow:hidden;background:var(--color-background-base);color:var(--color-content);font:13px/1.5 var(--font-sans)}.cc7u-fixture-sidebar{min-width:0;overflow:auto;padding:23px 14px 16px;border-right:1px solid var(--color-stroke);background:color-mix(in srgb,var(--color-background-base) 94%,black)}.cc7u-fixture-brand{display:block;margin:0 10px 25px;font-size:16px}.cc7u-fixture-nav{display:grid;gap:4px;margin:0 0 22px}.cc7u-fixture-nav button{text-align:left;padding:8px 10px;font-size:12px}.cc7u-fixture-nav button:last-child{background:var(--color-selection);border-radius:6px}.cc7u-fixture-project{margin:26px 10px 8px;font-size:11px;color:var(--color-muted)}.cc7u-fixture-main{display:flex;flex-direction:column;min-height:0;min-width:0}.cc7u-fixture-topbar{height:47px;flex:none;display:flex;align-items:center;gap:10px;padding:0 30px;border-bottom:1px solid var(--color-stroke);font-size:11px}.cc7u-fixture-topbar span,.cc7u-fixture-topbar small{color:var(--color-muted)}.cc7u-fixture-topbar small{margin-left:auto;font-size:10px}.cc7u-fixture-pane{display:flex;position:relative;flex:1;min-height:0;min-width:0}.cc7u-fixture-pane>section{flex:1}.theme-light .cc7u-fixture-sidebar{background:#f0f0f0}@media(max-width:1200px){.cc7u-fixture-shell{grid-template-columns:210px minmax(0,1fr)}.cc7u-fixture-topbar{padding:0 24px}}@media(max-width:760px){.cc7u-fixture-shell{grid-template-columns:minmax(0,1fr)}.cc7u-fixture-sidebar{display:none}.cc7u-fixture-topbar{padding:0 16px}.cc7u-fixture-topbar small{display:none}}`}</style>

@@ -20,6 +20,26 @@ import {
 
 let now = 0;
 
+it("retains an advertised compaction threshold through split context reports", () => {
+  const first = applyHarnessEvent(newSession("codex", "/tmp"), {
+    type: "context", used: 100, window: 1000, effectiveCompactionThreshold: 800,
+  });
+  expect(first.context).toEqual({ used: 100, window: 1000, effectiveCompactionThreshold: 800 });
+  expect(applyHarnessEvent(first, { type: "context", used: 200 }).context)
+    .toEqual({ used: 200, window: 1000, effectiveCompactionThreshold: 800 });
+});
+
+it("invalidates limits when the provider reports a changed model or configuration", () => {
+  const session = { ...newSession("codex", "/tmp"), modelSettings: { effort: "high" },
+    context: { used: 100, window: 1000, effectiveCompactionThreshold: 800 } };
+  expect(applyHarnessEvent(session, { type: "session.configChanged", model: "different" }).context)
+    .toEqual({ used: 100 });
+  expect(applyHarnessEvent(session, { type: "session.configChanged", modelSettings: { effort: "medium" } }).context)
+    .toEqual({ used: 100 });
+  expect(applyHarnessEvent(session, { type: "session.configChanged", model: session.model, modelSettings: { effort: "high" } }).context)
+    .toEqual(session.context);
+});
+
 beforeEach(() => {
   now = 0;
   vi.spyOn(Date, "now").mockImplementation(() => now);

@@ -227,6 +227,7 @@ type Props = {
   remoteSession?: boolean;
   remoteFeatures?: { attachments: boolean; plan: boolean; draft: boolean };
   context?: ContextUsage;
+  rotationScheduled?: boolean;
   compactSupported?: boolean;
   quoteRequest?: QuoteRequest;
   initialDraft?: string;
@@ -353,6 +354,7 @@ export function Composer({
   remoteSession = false,
   remoteFeatures,
   context,
+  rotationScheduled,
   compactSupported = false,
   quoteRequest,
   initialDraft,
@@ -1997,6 +1999,7 @@ export function Composer({
               <div className="ml-auto flex shrink-0 items-center">
                 <ContextMeter
                   usage={context}
+                  rotationScheduled={rotationScheduled}
                   onCompact={
                     compactSupported && !worktreeRemoved
                       ? onCompactContext

@@ -27,7 +27,7 @@ for (const variant of [{ width: 1440, presentation: "page" }, { width: 390, pres
     await expect(blocker.locator('[aria-label="Sandbox setup command"]')).toHaveText(setupCommand);
     await expect(blocker.locator("details, summary, [data-attention-details]")).toHaveCount(0);
     expect(await events(page)).toEqual([]);
-    await blocker.getByRole("button", { name: "Switch this account to unelevated", exact: true }).click();
+    await blocker.getByRole("button", { name: "Use unelevated sandbox for Monos", exact: true }).click();
     await expect(blocker.getByRole("alert").first()).toContainText("file is busy");
     await blocker.getByRole("button", { name: "Use full access for this Mono", exact: true }).click();
     expect(await events(page)).toEqual([

@@ -10191,11 +10191,11 @@ function Workspace({
         if (resolution === "use_unelevated_sandbox") {
           const accountSessions = sessionsRef.current.filter(entry => entry.harness === "codex" && !remoteProjectFor(entry.cwd) &&
             codexStorageAccountId(entry, selectedProviderAccountId("codex", entry.cwd)) === accountId);
-          if (accountSessions.some(entry => entry.busy || entry.codexStoragePreparing)) throw new Error("Wait for this account's current turns and storage preparations to finish before switching its sandbox.");
+          if (accountSessions.some(entry => entry.busy || entry.codexStoragePreparing)) throw new Error("Wait for this account's current turns and storage preparations to finish before changing its Mono sandbox.");
           for (const entry of accountSessions) await stopHarnessSession("codex", entry.id);
           const changed = await invoke<{ configPath: string; backupPaths: string[] }>("codex_mono_use_unelevated_sandbox", { providerAccountId: accountId });
           flushSync(() => setSessions(previous => previous.map(entry => entry.id === sessionId ? { ...entry, blocks: [...entry.blocks,
-            { id: crypto.randomUUID(), role: "system", text: `This account now uses the unelevated Codex sandbox. Config: ${changed.configPath}\nBackups: ${changed.backupPaths.join("\n")}\nRestore each backup over its config to undo this choice, then restart the account's idle conversations.` }] } : entry)));
+            { id: crypto.randomUUID(), role: "system", text: `Monos on this account now use the unelevated Codex sandbox. Your own Codex config is unchanged. Private config: ${changed.configPath}\nBackups: ${changed.backupPaths.join("\n")}\nRestore the private backup over its config to undo this choice, then restart the account's idle Mono conversations.` }] } : entry)));
         } else if (resolution === "use_mono_full_access") {
           await stopHarnessSession("codex", sessionId);
           const mono = monoForSession(sessionId);

@@ -105,6 +105,12 @@ it("keeps task snapshots ahead of later member sessions and profile edits", () =
   expect(snapshotMonoWorkerPermissions({ ...snapshot, windowsSandbox: undefined }, { ...member, windowsSandbox: "elevated" }, resident)).toEqual({ runtimeMode: "auto", runtimeModeSource: "role" });
 });
 
+it("resolves a fresh worker from current role ownership instead of a stale resident mode", () => {
+  const reset = { ...member, runtimeMode: "auto" as const, runtimeModeSource: "role" as const };
+  const resident = { ...newSession("codex", "/project", undefined, "full-access"), id: "resident", runtimeModeSource: "role" as const };
+  expect(snapshotMonoWorkerPermissions({ sessionId: "fresh" }, reset, resident)).toEqual({ runtimeMode: "auto", runtimeModeSource: "role" });
+});
+
 it("keeps existing worker and named legacy resident choices without upgrading them", () => {
   const saved = { ...newSession("codex", "/project", undefined, "supervised"), id: "task", windowsSandbox: "elevated" as const };
   expect(snapshotMonoWorkerPermissions({ sessionId: "task", runtimeMode: "auto", runtimeModeSource: "role" }, member, saved)).toEqual({ runtimeMode: "supervised", runtimeModeSource: undefined, windowsSandbox: "elevated" });

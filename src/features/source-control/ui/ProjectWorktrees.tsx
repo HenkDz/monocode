@@ -72,6 +72,7 @@ import {
   worktreeTaskSessions,
 } from "../model/worktreeSessions";
 import type { Worktree, WorktreeSessionOptions } from "../model/worktrees";
+import { useWorktreeRemovalTasks } from "../model/worktreeRemovalTasks";
 import { useProjectExpansion } from "../../projects/hooks/useProjectExpansion";
 
 /** Older idle sessions fold behind "Show more"; anything active stays listed. */
@@ -147,6 +148,7 @@ export function ProjectWorktrees({
   onSelectSession,
 }: Props) {
   const { data, error, refresh } = useProjectWorktrees(project, enabled);
+  const removalTasks = useWorktreeRemovalTasks();
   const orchestrationActions = useContext(OrchestrationActions);
   const managerRuns = useSyncExternalStore(
     orchestrator.subscribe,
@@ -196,6 +198,9 @@ export function ProjectWorktrees({
     menu?.trigger.focus();
     setMenu(undefined);
   };
+  useEffect(() => {
+    if (menu && removalTasks.some(task => task.pending && pathKey(task.path) === pathKey(menu.tree.path))) setMenu(undefined);
+  }, [menu, removalTasks]);
   useEffect(() => {
     if (!enabled) setMenu(undefined);
   }, [enabled]);
@@ -425,6 +430,7 @@ export function ProjectWorktrees({
                 <div hidden={!group.expanded}>
             {group.trees.map((tree) => {
               const key = pathKey(tree.path);
+              const removing = removalTasks.some(task => pathKey(task.path) === key && task.pending);
               const userSessions = groups.get(key) ?? [];
               const taskTree = section.name === "Task worktrees";
               const workerSessions = workers.get(key) ?? [];
@@ -498,6 +504,8 @@ export function ProjectWorktrees({
                 <div
                   key={key}
                   data-worktree={tree.path}
+                  inert={removing || undefined}
+                  aria-busy={removing || undefined}
                   className={`my-1 rounded-md border border-transparent hover:border-content/15 hover:bg-content/5 focus-within:border-content/15 focus-within:bg-content/5 ${done ? "opacity-60" : ""} ${folded && sessions[0].id === activeSessionId ? "bg-selection" : ""} ${menu?.tree.path === tree.path ? "border-content/15 bg-content/5" : ""}`}
                 >
                   <div
@@ -551,7 +559,7 @@ export function ProjectWorktrees({
                     )}
                     <button
                       type="button"
-                      disabled={tree.missing}
+                      disabled={tree.missing || removing}
                       aria-current={selected ? "true" : undefined}
                       aria-expanded={expandable ? expanded : undefined}
                       aria-label={`Open worktree ${label}`}
@@ -565,7 +573,7 @@ export function ProjectWorktrees({
                             ? onSelectSession(sessions[0].id, { project, tree })
                             : onSelectWorktree(project, tree)
                       }
-                      className={`flex h-full min-w-0 flex-1 items-center gap-2 text-left text-xs disabled:opacity-40 ${selected ? "text-content" : "text-content/65"}`}
+                      className={`flex h-full min-w-0 flex-1 items-center gap-2 text-left text-xs ${removing ? "disabled:opacity-70" : "disabled:opacity-40"} ${selected ? "text-content" : "text-content/65"}`}
                     >
                       <WorktreePrIcon tree={tree} enabled={enabled} taskPrUrl={taskTree ? managerTask?.prUrl ?? null : undefined} status={workerStatus || undefined} />
                       <span
@@ -574,7 +582,7 @@ export function ProjectWorktrees({
                         {label}
                       </span>
                       <span className="shrink-0 text-[11px] text-content/40">
-                        {tree.isMain ? "primary" : !tree.branch ? tree.head.slice(0, 7) : ""}
+                        {removing ? <span className="inline-flex items-center gap-1.5 rounded-full bg-content/10 px-2 py-0.5 text-[10px] font-medium text-content/80"><Loader className="size-3 animate-spin motion-reduce:animate-none" />Deleting…</span> : tree.isMain ? "primary" : !tree.branch ? tree.head.slice(0, 7) : ""}
                       </span>
                       {!expanded && sessions.length > 1 ? (
                         <span
@@ -1008,7 +1016,7 @@ ${openPrUrl}`}
             void refresh();
           }}
           onDeleted={() => {
-            setDeleting(undefined);
+            setDeleting(current => current?.path === deleting.path ? undefined : current);
             void refresh();
           }}
         />

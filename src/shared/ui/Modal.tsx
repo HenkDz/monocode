@@ -1,5 +1,5 @@
 import { NativePopupHost } from "./NativePopupHost";
-import { X } from "./icons";
+import { Minus, X } from "./icons";
 import { useContext, useEffect, useId, useRef, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
@@ -20,6 +20,8 @@ const TOP: Record<ModalSize, string> = {
 
 type Props = {
   onClose: () => void;
+  onMinimize?: () => void;
+  modal?: boolean;
   title: string;
   description?: string;
   size?: ModalSize;
@@ -34,6 +36,8 @@ type Props = {
 
 export function ModalPanel({
   onClose,
+  onMinimize,
+  modal = true,
   title,
   description,
   size = "md",
@@ -57,12 +61,13 @@ export function ModalPanel({
   const descriptionId = description ? `${uid}-desc` : undefined;
 
   useEffect(() => {
+    if (!modal) return;
     const trigger = triggerRef.current;
     if (!minimalHeader) closeRef.current?.focus();
     return () => {
       if (trigger?.isConnected) trigger.focus();
     };
-  }, [minimalHeader]);
+  }, [minimalHeader, modal]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -70,13 +75,16 @@ export function ModalPanel({
       const dialogs = document.querySelectorAll(
         '[role="dialog"][aria-modal="true"]',
       );
-      if (!panel || dialogs[dialogs.length - 1] !== panel) return;
+      if (!panel || (modal
+        ? dialogs[dialogs.length - 1] !== panel
+        : dialogs.length > 0 || !panel.contains(document.activeElement))) return;
       if (
         event.target instanceof Element &&
         event.target.closest("[data-dialog-popover]")
       )
         return;
       if (event.key === "Tab" && !event.defaultPrevented) {
+        if (!modal) return;
         const controls = [
           ...panel.querySelectorAll<HTMLElement>(
             'button:not(:disabled), a[href], input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex="-1"])',
@@ -107,20 +115,20 @@ export function ModalPanel({
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [onClose]);
+  }, [onClose, modal]);
 
   return (
     <div
       className={
         popupHost
           ? "relative z-[1] w-full"
-          : `absolute z-[1] left-1/2 ${fitViewport ? "top-1/2 -translate-y-1/2" : TOP[size]} ${WIDTH[size]} -translate-x-1/2`
+          : `absolute z-[1] left-1/2 ${fitViewport ? "top-1/2 -translate-y-1/2" : TOP[size]} ${WIDTH[size]} -translate-x-1/2 ${modal ? "" : "pointer-events-auto"}`
       }
     >
       <div
         ref={panelRef}
         role="dialog"
-        aria-modal="true"
+        aria-modal={modal}
         aria-labelledby={titleId}
         aria-describedby={descriptionId}
         onMouseDown={(event) => event.stopPropagation()}
@@ -153,6 +161,14 @@ export function ModalPanel({
                 </p>
               ) : null}
             </div>
+            {onMinimize && <button
+              type="button"
+              aria-label="Minimize"
+              onClick={onMinimize}
+              className="grid size-7 shrink-0 place-items-center rounded-md text-content/45 hover:bg-content/8 hover:text-content focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            >
+              <Minus className="size-3.5" strokeWidth={1.75} />
+            </button>}
             <button
               ref={closeRef}
               type="button"
@@ -179,11 +195,11 @@ export function Modal(props: Props) {
   const host = useContext(NativePopupHost);
   if (host) return createPortal(<ModalPanel {...props} />, host);
   return createPortal(
-    <div className="fixed inset-0" style={{ zIndex: LAYER.dialog }}>
-      <div
+    <div className={`fixed inset-0 ${props.modal === false ? "pointer-events-none" : ""}`} style={{ zIndex: LAYER.dialog }}>
+      {props.modal !== false && <div
         className="modal-backdrop absolute inset-0 z-0 bg-black/40"
         onMouseDown={props.onClose}
-      />
+      />}
       <ModalPanel {...props} />
     </div>,
     document.body,

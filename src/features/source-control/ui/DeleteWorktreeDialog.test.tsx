@@ -1,8 +1,10 @@
 // @vitest-environment happy-dom
-import { act } from "react";
+import { act, StrictMode, useState, type ComponentProps } from "react";
 import { createRoot } from "react-dom/client";
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { DeleteWorktreeDialog } from "./DeleteWorktreeDialog";
+import { WorktreeRemovalTasks } from "./WorktreeRemovalTasks";
+import { finishWorktreeRemovalTask, startWorktreeRemovalTask } from "../model/worktreeRemovalTasks";
 import type { Worktree } from "../model/worktrees";
 import { gitDiffIndex, type GitChangedFile, type GitDiffIndex } from "../../../platform/tauri/fs";
 
@@ -16,8 +18,81 @@ const index = (files: GitChangedFile[] = [file("edit.ts")], upstream: string | n
   additions: 0, deletions: 0, remote: "origin", defaultBranch: "main", aheadOfDefault: 2, headPushed: false,
 });
 beforeEach(() => { vi.mocked(gitDiffIndex).mockReset().mockResolvedValue(index()); });
+afterEach(() => act(() => { for (const path of ["/tree", "/a", "/b"]) finishWorktreeRemovalTask(path); }));
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+
+function Dialog(props: ComponentProps<typeof DeleteWorktreeDialog>) {
+  const [open, setOpen] = useState(true);
+  return <>
+    <WorktreeRemovalTasks />
+    {open && <DeleteWorktreeDialog {...props} onClose={() => { setOpen(false); props.onClose(); }} />}
+  </>;
+}
+
+it("lets pending deletion minimize and restore without restarting its job", async () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  let resolve!: () => void;
+  const remove = vi.fn(() => new Promise<void>(done => { resolve = done; }));
+  const close = vi.fn(), deleted = vi.fn();
+  try {
+    await act(async () => root.render(<StrictMode><Dialog cwd="/repo"
+      tree={{ path: "/tree", branch: "feature", head: "abc" } as Worktree}
+      onRemove={remove} onClose={close} onDeleted={deleted} /></StrictMode>));
+    await act(async () => document.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+    expect(close).toHaveBeenCalledOnce();
+    expect(remove).toHaveBeenCalledOnce();
+    expect(document.querySelector('[role="dialog"]')?.getAttribute("aria-modal")).toBe("false");
+    expect(document.querySelector(".modal-backdrop")).toBeNull();
+    await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Minimize"]')!.click());
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.querySelector('[role="status"]')?.textContent).toContain("Deleting worktree");
+    await act(async () => [...document.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Show progress")!.click());
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Deletion in progress");
+    expect(remove).toHaveBeenCalledOnce();
+    await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Minimize"]')!.click());
+    act(() => { expect(startWorktreeRemovalTask("/tree", () => null)).toBe(false); });
+    expect(deleted).not.toHaveBeenCalled();
+    await act(async () => resolve());
+    expect(deleted).toHaveBeenCalledOnce();
+    expect(document.querySelector('[role="status"]')).toBeNull();
+  } finally { await act(async () => root.unmount()); host.remove(); }
+});
+
+it("allows separate worktree deletions to finish independently", async () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  const finishes = new Map<string, () => void>();
+  const remove = vi.fn((_cwd: string, path: string) => new Promise<void>(resolve => finishes.set(path, resolve)));
+  const deleted = vi.fn();
+  function App() {
+    const [path, setPath] = useState<string>();
+    return <><WorktreeRemovalTasks />
+      <button onClick={() => setPath("/a")}>Delete A</button><button onClick={() => setPath("/b")}>Delete B</button>
+      {path && <DeleteWorktreeDialog key={path} cwd="/repo" tree={{ path, branch: "feature", head: "abc" } as Worktree}
+        onRemove={remove} onClose={() => setPath(undefined)} onDeleted={() => deleted(path)} />}
+    </>;
+  }
+  try {
+    await act(async () => root.render(<App />));
+    for (const label of ["Delete A", "Delete B"]) {
+      await act(async () => [...host.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === label)!.click());
+      await act(async () => document.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+      await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Minimize"]')!.click());
+      expect(document.querySelector('[role="dialog"]')).toBeNull();
+    }
+    expect(remove).toHaveBeenCalledTimes(2);
+    expect(document.querySelectorAll('[role="status"]')).toHaveLength(2);
+    await act(async () => finishes.get("/b")!());
+    expect(deleted).toHaveBeenCalledWith("/b");
+    expect(document.querySelectorAll('[role="status"]')).toHaveLength(1);
+    await act(async () => finishes.get("/a")!());
+    expect(deleted.mock.calls).toEqual([["/b"], ["/a"]]);
+  } finally { await act(async () => root.unmount()); host.remove(); }
+});
 
 it("retains sessions and does not repeat worktree deletion after branch cleanup fails", async () => {
   const host = document.createElement("div");
@@ -32,12 +107,13 @@ it("retains sessions and does not repeat worktree deletion after branch cleanup 
   try {
     await act(async () =>
       root.render(
-        <DeleteWorktreeDialog
+        <Dialog
           cwd="/repo"
           tree={
             {
               path: "/tree",
               branch: "feature",
+              head: "ce76191abcd",
               dirty: true,
               unpushed: 2,
             } as Worktree
@@ -69,6 +145,9 @@ it("retains sessions and does not repeat worktree deletion after branch cleanup 
       );
     await submit();
     expect(remove).toHaveBeenCalledWith("/repo", "/tree", true, false);
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain("Unmerged branch retained");
+    await act(async () => [...document.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Review")!.click());
     expect(document.body.textContent).toContain(
       "Worktree removed; branch cleanup failed",
     );
@@ -95,7 +174,7 @@ async function withDialog(check: (host: HTMLElement) => Promise<void> | void, tr
   document.body.append(host);
   const root = createRoot(host);
   try {
-    await act(async () => root.render(<DeleteWorktreeDialog
+    await act(async () => root.render(<Dialog
       cwd="/repo" tree={{ path: "/tree", branch: "feature", head: "ce76191abcd", dirty: true, ...tree } as Worktree}
       onRemove={vi.fn()} onDeleteBranch={vi.fn()} onDeleted={vi.fn()} onClose={vi.fn()} onOpenChanges={onOpenChanges}
     />));

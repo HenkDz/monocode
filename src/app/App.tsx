@@ -191,6 +191,7 @@ import {
 } from "../features/source-control/model/worktreeFocus";
 import { ProjectWorktrees } from "../features/source-control/ui/ProjectWorktrees";
 import { DeleteWorktreeDialog } from "../features/source-control/ui/DeleteWorktreeDialog";
+import { WorktreeRemovalTasks } from "../features/source-control/ui/WorktreeRemovalTasks";
 import { summarizeOrchestration } from "../features/orchestration/model/orchestrationSummary";
 import {
   assertWorktreeFilesClosed,
@@ -14807,6 +14808,7 @@ function Workspace({
         >
           {compactTitleBar ? workspaceTitleBar : null}
           <GithubBudgetNotice cwd={sidebarCwd} />
+          <WorktreeRemovalTasks />
           {projectAdditionDialog}
           <div className="flex min-h-0 min-w-0 flex-1">
             {managerRemoval && (
@@ -14829,7 +14831,7 @@ function Workspace({
                   })
                 }
                 onClose={() => setManagerRemoval(undefined)}
-                onDeleted={() => setManagerRemoval(undefined)}
+                onDeleted={() => setManagerRemoval(current => current?.tree.path === managerRemoval.tree.path ? undefined : current)}
               />
             )}
             <Sidebar

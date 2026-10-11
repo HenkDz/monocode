@@ -4,6 +4,30 @@ import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
 import { Modal } from "./Modal";
 
+it("lets a progress dialog minimize without capturing app focus or keyboard navigation", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const outside = document.createElement("button"), host = document.createElement("div");
+  const close = vi.fn(), minimize = vi.fn();
+  document.body.append(outside, host);
+  outside.focus();
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(<Modal title="Deleting" modal={false} onClose={close} onMinimize={minimize}>Working</Modal>));
+    expect(document.querySelector('[role="dialog"]')?.getAttribute("aria-modal")).toBe("false");
+    expect(document.querySelector(".modal-backdrop")).toBeNull();
+    expect(document.activeElement).toBe(outside);
+    act(() => outside.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+    expect(close).not.toHaveBeenCalled();
+    const button = document.querySelector<HTMLButtonElement>('[aria-label="Minimize"]')!;
+    button.focus();
+    const tab = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
+    act(() => button.dispatchEvent(tab));
+    expect(tab.defaultPrevented).toBe(false);
+    await act(async () => button.click());
+    expect(minimize).toHaveBeenCalledOnce();
+  } finally { await act(async () => root.unmount()); outside.remove(); host.remove(); vi.unstubAllGlobals(); }
+});
+
 it("keeps keyboard focus in the dialog, closes with Escape, and returns focus to Open", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const trigger = document.createElement("button"),

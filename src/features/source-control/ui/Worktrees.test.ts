@@ -58,11 +58,15 @@ import {
 import { CreateWorktreeDialog } from "./CreateWorktreeDialog";
 import { FolderTree, GitBranch } from "../../../shared/ui/icons";
 import { DeleteWorktreeDialog } from "./DeleteWorktreeDialog";
+import { WorktreeRemovalTasks } from "./WorktreeRemovalTasks";
+import { finishWorktreeRemovalTask } from "../model/worktreeRemovalTasks";
 import { DeleteSessionDialog } from "../../sessions/ui/DeleteSessionDialog";
 import { WorktreesPage } from "./WorktreesPage";
 
 let container: HTMLDivElement;
 let root: Root;
+let tasksRoot: Root;
+let tasksContainer: HTMLDivElement;
 const tree: Worktree = {
   path: "/repo-worktrees/feature",
   branch: "feature",
@@ -80,6 +84,10 @@ beforeEach(() => {
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
+  tasksContainer = document.createElement("div");
+  document.body.append(tasksContainer);
+  tasksRoot = createRoot(tasksContainer);
+  act(() => tasksRoot.render(createElement(WorktreeRemovalTasks)));
   vi.mocked(checkWorktreeRemoval).mockResolvedValue(undefined);
   vi.mocked(useProjectBranchesState).mockReturnValue({
     branches: {
@@ -95,7 +103,10 @@ beforeEach(() => {
   });
 });
 afterEach(async () => {
+  await act(async () => finishWorktreeRemovalTask(tree.path));
   await act(async () => root.unmount());
+  await act(async () => tasksRoot.unmount());
+  tasksContainer.remove();
   container.remove();
   vi.clearAllMocks();
   vi.unstubAllGlobals();
@@ -942,7 +953,8 @@ it.each(["partial", "rejected", "worktree", "refresh"] as const)(
     const refresh = deferred();
     vi.mocked(listWorktrees).mockReturnValue(refresh.promise);
     await act(async () => button("Delete worktree and sessions").click());
-    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.querySelector('[role="dialog"][aria-modal="true"]')).toBeNull();
+    expect(document.querySelector(".modal-backdrop")).toBeNull();
     expect(remove.disabled).toBe(true);
     expect(onDeleteSessions).toHaveBeenCalledWith(["deleted", "remaining"]);
     const sessionIds = failure === "worktree" ? [] : ["remaining"];

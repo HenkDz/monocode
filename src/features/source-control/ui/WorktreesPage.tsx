@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { CreateWorktreeDialog } from "./CreateWorktreeDialog";
 import { DeleteWorktreeDialog } from "./DeleteWorktreeDialog";
+import { useWorktreeRemovalTasks } from "../model/worktreeRemovalTasks";
 import { SearchableProjectPicker } from "../../projects/ui/SearchableProjectPicker";
 import {
   FolderOpen,
@@ -65,6 +66,7 @@ export function WorktreesPage({
   const [error, setError] = useState<string>();
   const [creating, setCreating] = useState(false);
   const [deleting, setDeleting] = useState<Worktree>();
+  const removalTasks = useWorktreeRemovalTasks();
   const [refreshingAfterFailure, setRefreshingAfterFailure] = useState(false);
   return (
     <div
@@ -152,7 +154,7 @@ export function WorktreesPage({
                 ? "Create a branch before deleting this detached worktree"
                 : undefined;
             return (
-              <div key={tree.path} className="flex items-start gap-3 p-4">
+              <div key={tree.path} inert={removalTasks.some(task => pathKey(task.path) === pathKey(tree.path) && task.pending) || undefined} className="flex items-start gap-3 p-4">
                 <FolderTree className="mt-0.5 size-4 shrink-0 text-content/45" />
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
@@ -280,7 +282,7 @@ export function WorktreesPage({
                 : error;
               // A partial deletion invalidates the dialog's saved session IDs.
               // Require a fresh listing before another destructive attempt.
-              setDeleting(undefined);
+              setDeleting(current => current?.path === deleting.path ? undefined : current);
               setError(String(failure));
               setRefreshingAfterFailure(true);
               await refresh();
@@ -292,9 +294,9 @@ export function WorktreesPage({
           onDeleted={() => {
             if (isEqualOrInside(project, deleting.path)) {
               const main = data?.worktrees.find((tree) => tree.isMain);
-              if (main) setProject(main.path);
+              if (main) setProject(current => current === project ? main.path : current);
             }
-            setDeleting(undefined);
+            setDeleting(current => current?.path === deleting.path ? undefined : current);
             refresh();
           }}
         />

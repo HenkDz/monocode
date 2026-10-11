@@ -8,6 +8,7 @@ import { ProjectRail } from "../../../app/shell/ProjectRail";
 import { ProjectManagerRow } from "../../orchestration/ui/ProjectManagerRow";
 import { useProjectWorktrees } from "../hooks/useProjectWorktrees";
 import { setWorktreeFocus, worktreeFocus } from "../model/worktreeFocus";
+import { finishWorktreeRemovalTask, startWorktreeRemovalTask } from "../model/worktreeRemovalTasks";
 import type { Worktree, WorktreeCreationOptions } from "../model/worktrees";
 let creationOptions: WorktreeCreationOptions;
 import type { SessionSummary } from "../../sessions/data/sessionStore";
@@ -112,6 +113,23 @@ const button = (label: string) => {
 const render = async () => {
   await act(async () => root.render(createElement(ProjectWorktrees, props)));
 };
+
+it("blocks only the worktree being removed and restores it after failure", async () => {
+  await render();
+  await act(async () => button("Actions for feature-a").click());
+  try {
+    act(() => { startWorktreeRemovalTask("/trees/a", () => null); });
+    const affected = container.querySelector('[data-worktree="/trees/a"]')!;
+    expect(affected.hasAttribute("inert")).toBe(true);
+    expect(affected.getAttribute("aria-busy")).toBe("true");
+    expect(affected.textContent).toContain("Deleting");
+    expect(button("Open worktree feature-a").disabled).toBe(true);
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+    expect(container.querySelector('[data-worktree="/trees/b"]')!.hasAttribute("inert")).toBe(false);
+    expect(button("Open worktree feature-b").disabled).toBe(false);
+  } finally { act(() => finishWorktreeRemovalTask("/trees/a")); }
+  expect(button("Open worktree feature-a").disabled).toBe(false);
+});
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);

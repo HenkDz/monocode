@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useRef,
   useState,
   type ComponentType,
   type FormEvent,
@@ -9,6 +10,7 @@ import { prettyCwd } from "../../../shared/lib/paths";
 import { type Worktree } from "../model/worktrees";
 import { Modal } from "../../../shared/ui/Modal";
 import { gitDiffIndex, type GitDiffIndex } from "../../../platform/tauri/fs";
+import { finishWorktreeRemovalTask, startWorktreeRemovalTask, updateWorktreeRemovalTask } from "../model/worktreeRemovalTasks";
 import {
   CircleAlert,
   CloudUpload,
@@ -42,17 +44,7 @@ function Consequence({
   );
 }
 
-export function DeleteWorktreeDialog({
-  cwd,
-  tree,
-  sessionCount = 0,
-  onRemove,
-  onClose,
-  onDeleted,
-  onDeleteBranch,
-  onOpenChanges,
-  allowDeleteSessions = true,
-}: {
+type Props = {
   cwd: string;
   tree: Worktree;
   sessionCount?: number;
@@ -67,11 +59,21 @@ export function DeleteWorktreeDialog({
   onDeleteBranch?: (force: boolean) => Promise<void>;
   onOpenChanges?: (path: string) => void;
   allowDeleteSessions?: boolean;
+};
+
+export function DeleteWorktreeDialog(props: Props) {
+  return <WorktreeRemovalDialog {...props} />;
+}
+
+function WorktreeRemovalDialog(props: Props & {
+  background?: { review: boolean; deleteSessions: boolean; deleteBranch: boolean; forceBranch: boolean };
 }) {
-  const [busy, setBusy] = useState(false);
-  const [deleteSessions, setDeleteSessions] = useState(false);
-  const [deleteBranch, setDeleteBranch] = useState(false);
-  const [forceBranch, setForceBranch] = useState(false);
+  const { cwd, tree, sessionCount = 0, onRemove, onClose, onDeleted, onDeleteBranch, onOpenChanges, allowDeleteSessions = true, background } = props;
+  const started = useRef(false);
+  const [busy, setBusy] = useState(Boolean(background));
+  const [deleteSessions, setDeleteSessions] = useState(background?.deleteSessions ?? false);
+  const [deleteBranch, setDeleteBranch] = useState(background?.deleteBranch ?? false);
+  const [forceBranch, setForceBranch] = useState(background?.forceBranch ?? false);
   const [removed, setRemoved] = useState(false);
   const [error, setError] = useState<string>();
   const [changes, setChanges] = useState<GitDiffIndex | null>();
@@ -89,11 +91,10 @@ export function DeleteWorktreeDialog({
   const untracked = files.filter((file) => file.status === "untracked").length;
   const staged = files.filter((file) => file.staged).length;
   const unpushed = changes?.upstream ? changes.ahead : 0;
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    if (busy || changes === undefined) return;
+  const remove = async () => {
     setBusy(true);
     setError(undefined);
+    updateWorktreeRemovalTask(tree.path, { pending: true, review: true, error: undefined });
     try {
       // Confirmation covers the complete destructive action, including any
       // local changes that appeared after the last status refresh.
@@ -105,10 +106,49 @@ export function DeleteWorktreeDialog({
       onDeleted();
     } catch (e) {
       setError(String(e));
+      updateWorktreeRemovalTask(tree.path, { pending: false, review: false, error: String(e) });
     } finally {
       setBusy(false);
     }
   };
+  useEffect(() => {
+    if (!background || started.current) return;
+    started.current = true;
+    void remove();
+    // The confirmed options and callbacks belong to this deletion, even after navigation.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [background]);
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    if (busy || changes === undefined) return;
+    if (background) { void remove(); return; }
+    if (startWorktreeRemovalTask(tree.path, review => <WorktreeRemovalDialog
+      {...props}
+      background={{ review, deleteSessions, deleteBranch, forceBranch }}
+      onClose={() => finishWorktreeRemovalTask(tree.path)}
+      onDeleted={() => { finishWorktreeRemovalTask(tree.path); onDeleted(); }}
+    />)) onClose();
+    else setError("This worktree already has a deletion in progress. Review its status first.");
+  };
+  if (background && !background.review) return null;
+  if (background && busy) {
+    const minimize = () => updateWorktreeRemovalTask(tree.path, { review: false });
+    return <Modal title="Deleting worktree…" size="sm" modal={false} onMinimize={minimize} onClose={minimize}>
+      <div className="space-y-3 p-4 text-[13px]">
+        <p className="break-all font-mono text-content/60">{prettyCwd(tree.path)}</p>
+        <p role="status" className="flex items-center gap-2"><Loader className="size-3.5 animate-spin motion-reduce:animate-none" />{removed ? "Deleting local branch…" : "Deletion in progress…"}</p>
+        <p className="text-content/60">You can keep using the app or minimize this dialog.</p>
+      </div>
+    </Modal>;
+  }
+  if (background && error && !removed) return <Modal title="Worktree deletion failed" size="sm" onClose={onClose}>
+    <div className="space-y-3 p-4 text-[13px]">
+      <p className="break-all font-mono text-content/60">{prettyCwd(tree.path)}</p>
+      <p role="alert" className="break-words text-red-400">{error}</p>
+      <p>Close this message and retry from the worktree to check its current files and sessions.</p>
+      <button type="button" onClick={onClose} className="rounded-md px-3 py-1.5 hover:bg-content/8">Close</button>
+    </div>
+  </Modal>;
   return (
     <Modal
       title="Delete worktree?"

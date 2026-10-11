@@ -6,6 +6,8 @@ use std::time::Duration;
 use serde_json::{json, Value};
 use tauri::Manager;
 
+pub const CLI_SHELL_GUIDANCE: &str = "PowerShell: prefix a quoted executable path with &. Git Bash: use forward slashes and no &. PowerShell 5.1: use --input FILE instead of inline JSON.";
+
 const USAGE: &str = r#"MonoCode local control — supervise this orchestration run from the lead agent.
 
 Usage: {exe} control ACTION [--json JSON | --input FILE|-] [--request-id ID]
@@ -367,33 +369,48 @@ fn quoted(value: &str) -> String {
 /// Resolve on each call: restarted/renamed previews must never inherit another
 /// process's executable identity. Drop Windows device prefixes for shell argv.
 pub(crate) fn running_executable() -> Result<String, String> {
-    let path = std::env::current_exe()
+    let mut path = std::env::current_exe()
         .and_then(|path| path.canonicalize())
         .map_err(|error| error.to_string())?;
+    if cfg!(windows) && !cfg!(debug_assertions) && !cfg!(test) {
+        path = console_executable(&path)?;
+    }
     let text = path.to_string_lossy();
     Ok(if cfg!(windows) {
         if let Some(unc) = text.strip_prefix(r"\\?\UNC\") {
-            format!(r"\\{unc}")
+            format!("//{}", unc.replace('\\', "/"))
         } else {
-            text.trim_start_matches(r"\\?\").to_owned()
+            text.trim_start_matches(r"\\?\").replace('\\', "/")
         }
     } else {
         text.into_owned()
     })
 }
 
+fn console_executable(path: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    let cli = path.with_file_name("monocode-cli.exe");
+    if !cli.is_file() {
+        return Err("MonoCode console CLI is missing; rebuild or reinstall MonoCode.".into());
+    }
+    cli.canonicalize().map_err(|error| error.to_string())
+}
+
 pub fn help() -> String {
     let exe = running_executable()
         .map(|path| quoted(&path))
         .unwrap_or_else(|_| "monocode".into());
-    USAGE.replace("{exe}", &exe)
+    format!("{}\n{}", USAGE.replace("{exe}", &exe), CLI_SHELL_GUIDANCE)
 }
 
 pub fn app_help() -> String {
     let exe = running_executable()
         .map(|path| quoted(&path))
         .unwrap_or_else(|_| "monocode".into());
-    APP_USAGE.replace("{exe}", &exe)
+    format!(
+        "{}\n{}",
+        APP_USAGE.replace("{exe}", &exe),
+        CLI_SHELL_GUIDANCE
+    )
 }
 
 #[tauri::command]
@@ -683,7 +700,7 @@ pub fn app_cli_executable_matches(path: String) -> bool {
     }
     let (Ok(candidate), Ok(current)) = (
         candidate.canonicalize(),
-        std::env::current_exe().and_then(|p| p.canonicalize()),
+        running_executable().and_then(|p| std::fs::canonicalize(p).map_err(|e| e.to_string())),
     ) else {
         return false;
     };
@@ -908,14 +925,16 @@ pub fn maybe_run(args: Vec<String>) -> Option<i32> {
     match args.first().map(String::as_str) {
         Some("control") => Some(run(args.into_iter().skip(1).collect())),
         Some("app") => Some(run_app(args.into_iter().skip(1).collect())),
-        Some("--help" | "-h") => {
-            println!("{}\n{}", help(), app_help());
-            Some(0)
-        }
-        Some("--version" | "-V") => {
-            println!("MonoCode {}", env!("CARGO_PKG_VERSION"));
-            Some(0)
-        }
+        Some("--help" | "-h") => Some(print_output(
+            &format!("{}\n{}", help(), app_help()),
+            0,
+            None,
+        )),
+        Some("--version" | "-V") => Some(print_output(
+            &format!("MonoCode {}", env!("CARGO_PKG_VERSION")),
+            0,
+            None,
+        )),
         _ => None,
     }
 }
@@ -932,26 +951,27 @@ fn run_mode(args: Vec<String>, app_mode: bool) -> i32 {
     let parsed = match parse_args_for(&args, app_mode) {
         Ok(parsed) => parsed,
         Err(error) => {
-            println!("{}", json!({"ok": false, "error": error}));
-            return 1;
+            return print_output(&json!({"ok": false, "error": error}).to_string(), 1, None);
         }
     };
     let (action, input, request_id) = match parsed {
         Parsed::Help => {
-            println!("{}", if app_mode { app_help() } else { help() });
-            return 0;
+            return print_output(&if app_mode { app_help() } else { help() }, 0, None);
         }
         Parsed::Call(action, input, request_id) => (action, input, request_id),
     };
-    match send(&action, &input, &request_id, app_mode) {
+    let (response, code) = response(send(&action, &input, &request_id, app_mode), &request_id);
+    print_output(&response.to_string(), code, Some(&request_id))
+}
+
+fn response(result: Result<Value, Failure>, request_id: &str) -> (Value, i32) {
+    match result {
         Ok(mut value) => {
             if value.get("ok").and_then(Value::as_bool) == Some(true) {
-                println!("{value}");
-                return 0;
+                value["requestId"] = json!(request_id);
+                return (value, 0);
             }
-            value = with_retry_hint(value, &request_id);
-            println!("{value}");
-            1
+            (with_retry_hint(value, request_id), 1)
         }
         Err(Failure { error, sent }) => {
             // The call may have reached the run even though its answer was
@@ -961,7 +981,44 @@ fn run_mode(args: Vec<String>, app_mode: bool) -> i32 {
                 response["requestId"] = json!(request_id);
                 response["retryWith"] = json!(format!("--request-id {request_id}"));
             }
-            println!("{response}");
+            (response, 1)
+        }
+    }
+}
+
+fn write_output(mut output: impl Write, text: &str, code: i32) -> std::io::Result<i32> {
+    writeln!(output, "{text}")?;
+    output.flush()?;
+    Ok(code)
+}
+
+fn print_output(text: &str, code: i32, request_id: Option<&str>) -> i32 {
+    let result = (|| {
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+            use windows_sys::Win32::System::Console::{GetStdHandle, STD_OUTPUT_HANDLE};
+            let handle = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
+            // Rust treats a detached null stdout as a successful empty write.
+            if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "No stdout handle",
+                ));
+            }
+        }
+        write_output(std::io::stdout().lock(), text, code)
+    })();
+    match result {
+        Ok(code) => code,
+        Err(error) => {
+            let retry = request_id
+                .map(|id| format!(" Retry the same call with --request-id {id}."))
+                .unwrap_or_default();
+            let _ = writeln!(
+                std::io::stderr().lock(),
+                "MonoCode stdout failed: {error}.{retry}"
+            );
             1
         }
     }
@@ -1055,7 +1112,12 @@ fn send(action: &str, input: &Value, request_id: &str, app_mode: bool) -> Result
     if line.len() > max_response as usize {
         return Err(sent("MonoCode response is too large"));
     }
-    serde_json::from_str(&line).map_err(|_| sent("MonoCode returned an invalid response"))
+    let value: Value =
+        serde_json::from_str(&line).map_err(|_| sent("MonoCode returned an invalid response"))?;
+    if value.get("ok").and_then(Value::as_bool).is_none() {
+        return Err(sent("MonoCode returned an invalid response"));
+    }
+    Ok(value)
 }
 
 fn read_capped(mut source: impl Read) -> Result<String, String> {
@@ -1177,6 +1239,132 @@ mod tests {
             Parsed::Call(action, input, id) => Ok((action, input, id)),
             Parsed::Help => Err("help".into()),
         }
+    }
+
+    #[test]
+    fn output_is_one_complete_json_line_and_flushed() {
+        struct Output {
+            bytes: Vec<u8>,
+            flushed: bool,
+        }
+        impl Write for Output {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                // Short writes must still produce the entire receipt.
+                let length = bytes.len().min(7);
+                self.bytes.extend_from_slice(&bytes[..length]);
+                Ok(length)
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                self.flushed = true;
+                Ok(())
+            }
+        }
+        let (receipt, code) = response(
+            Ok(json!({"ok":true,"result":{"goalId":"goal-1"}})),
+            "retry-1",
+        );
+        let mut output = Output {
+            bytes: vec![],
+            flushed: false,
+        };
+        assert_eq!(
+            write_output(&mut output, &receipt.to_string(), code).unwrap(),
+            0
+        );
+        assert!(output.flushed);
+        assert_eq!(
+            output.bytes.iter().filter(|byte| **byte == b'\n').count(),
+            1
+        );
+        assert_eq!(
+            serde_json::from_slice::<Value>(&output.bytes).unwrap(),
+            receipt
+        );
+        assert_eq!(receipt["requestId"], "retry-1");
+        assert_eq!(receipt["result"]["goalId"], "goal-1");
+    }
+
+    #[test]
+    fn failed_stdout_writes_and_flushes_cannot_succeed() {
+        struct BrokenOutput {
+            fail_write: bool,
+        }
+        impl Write for BrokenOutput {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                if self.fail_write {
+                    Err(std::io::ErrorKind::BrokenPipe.into())
+                } else {
+                    Ok(bytes.len())
+                }
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Err(std::io::ErrorKind::BrokenPipe.into())
+            }
+        }
+        for fail_write in [true, false] {
+            assert!(write_output(BrokenOutput { fail_write }, r#"{"ok":true}"#, 0).is_err());
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_detached_stdout_returns_nonzero_with_the_original_request_id() {
+        const CHILD: &str = "MONOCODE_TEST_DETACHED_STDOUT";
+        if std::env::var_os(CHILD).is_some() {
+            use windows_sys::Win32::System::Console::{SetStdHandle, STD_OUTPUT_HANDLE};
+            unsafe { SetStdHandle(STD_OUTPUT_HANDLE, std::ptr::null_mut()) };
+            std::process::exit(print_output(r#"{"ok":true}"#, 0, Some("lost-receipt")));
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "control_cli::tests::a_detached_stdout_returns_nonzero_with_the_original_request_id", "--nocapture"])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        let diagnostic = String::from_utf8_lossy(&output.stderr);
+        assert!(diagnostic.contains("No stdout handle"));
+        assert!(diagnostic.contains("--request-id lost-receipt"));
+    }
+
+    #[test]
+    fn response_failures_retain_unknown_outcome_ids_and_denials_stay_nonretryable() {
+        for result in [
+            Err(sent("lost reply")),
+            Ok(json!({"ok":false,"error":"server failure"})),
+        ] {
+            let (value, code) = response(result, "retry-1");
+            assert_eq!(code, 1);
+            assert_eq!(value["ok"], false);
+            assert_eq!(value["requestId"], "retry-1");
+            assert_eq!(value["retryWith"], "--request-id retry-1");
+        }
+        let (value, code) = response(Err(unsent("no connection")), "retry-1");
+        assert_eq!(code, 1);
+        assert!(value.get("retryWith").is_none());
+        let denied = json!({"ok":false,"error":"denied","retryable":false});
+        assert_eq!(response(Ok(denied.clone()), "retry-1"), (denied, 1));
+    }
+
+    #[test]
+    fn console_client_is_a_required_sibling_of_the_current_preview() {
+        let root =
+            std::env::temp_dir().join(format!("monocode-cli-sibling-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let desktop = root.join("renamed-preview.exe");
+        assert!(console_executable(&desktop).is_err());
+        let cli = root.join("monocode-cli.exe");
+        std::fs::write(&cli, "synthetic client").unwrap();
+        assert_eq!(
+            console_executable(&desktop).unwrap(),
+            cli.canonicalize().unwrap()
+        );
+        assert_eq!(
+            console_executable(&cli).unwrap(),
+            cli.canonicalize().unwrap()
+        );
+        std::fs::remove_dir_all(root).unwrap();
+        assert!(app_help().contains(CLI_SHELL_GUIDANCE));
+        assert!(help().contains(CLI_SHELL_GUIDANCE));
     }
     #[test]
     fn cli_probes_exit_before_desktop_startup() {

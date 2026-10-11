@@ -1,5 +1,6 @@
 [package]
 name = "monocode"
+default-run = "monocode"
 version.workspace = true
 edition.workspace = true
 description = "MonoCode — one UI for every agent harness"
@@ -11,6 +12,10 @@ license.workspace = true
 [lib]
 name = "monocode_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "monocode-cli"
+path = "src/control_cli_main.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -45,7 +50,7 @@ keyring = { version = "3.6", default-features = false, features = ["windows-nati
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-single-instance = "2"
 portable-pty = { version = "0.9", path = "../vendor/portable-pty" }
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Credentials", "Win32_Storage_FileSystem", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_System_LibraryLoader", "Win32_System_Diagnostics_ToolHelp"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Credentials", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_System_LibraryLoader", "Win32_System_Diagnostics_ToolHelp"] }
 tauri-winrt-notification = "0.8"
 # WinRT toast settings (Windows.UI.Notifications) to read the per-app block.
 windows = { version = "0.62", features = ["UI_Notifications"] }

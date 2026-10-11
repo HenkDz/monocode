@@ -1,11 +1,13 @@
 import { expect, it, vi } from "vitest";
 import type { OrchestrationRun } from "../../orchestration/model/orchestrationState";
+import { newSession } from "../../sessions/model/session";
 import {
   MonoManagerGoals,
   validManagerProjects,
   type GoalLedger,
   type ManagerGoalHost,
 } from "./monoManagerGoals";
+import { enqueueMonoMessage } from "./monoMessaging";
 
 it("keeps valid project names and order when recents include a non-repository folder and a missing path", async () => {
   const projects = [
@@ -138,6 +140,30 @@ it("persists before dispatch and replays the same receipt across a restart", asy
   expect(f.deliver).toHaveBeenCalledTimes(2); // Same delivery ID, retried only after uncertain delivery.
   expect(f.deliver.mock.calls[0]).toEqual(f.deliver.mock.calls[1]);
   expect(restored.goals("mono")).toHaveLength(1);
+});
+
+it("replays the original goal receipt after lost stdout without a second queued delivery", async () => {
+  const f = setup();
+  let manager = newSession("codex", "/project");
+  const deliver = vi.fn<ManagerGoalHost["deliver"]>(async (_goal, text, receiptId) => {
+    manager = enqueueMonoMessage(manager, { id: receiptId, text, attachments: [] });
+  });
+  f.host.deliver = deliver;
+  const input = { projectId: "/project", goal: "Fix tests" };
+
+  // The mutation completed, but the caller did not receive its first CLI response.
+  await f.ledger.handle("mono", user, "lost-output", "goals.assign", input, f.host).then(() => undefined);
+  const original = f.saved.get("mono")!.receipts["lost-output"].result;
+  const restored = new MonoManagerGoals(f.storage);
+  const stdout = JSON.stringify(await restored.handle("mono", user, "lost-output", "goals.assign", input, f.host));
+
+  expect(JSON.parse(stdout)).toEqual(original);
+  expect(JSON.parse(stdout)).toMatchObject({ accepted: true, goalId: f.saved.get("mono")!.goals[0].id });
+  expect(restored.goals("mono")).toHaveLength(1);
+  expect(f.saved.get("mono")!.goals).toHaveLength(1);
+  expect(deliver).toHaveBeenCalledTimes(1);
+  expect(manager.queuedMessages).toHaveLength(1);
+  expect(manager.queuedMessages![0]).toMatchObject({ id: "mono-goal-mono-lost-output", text: input.goal });
 });
 
 it("rejects report injection, unassigned projects, and single-project delegation", async () => {

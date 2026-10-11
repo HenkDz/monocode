@@ -1,4 +1,5 @@
 import { TurnNotReadyError } from "../../core/types";
+import { canResumeMonoAfterCwdChange } from "../monoCwdResume";
 import { nativeModelId } from "../../../../features/sessions/model/models";
 import { taskListFromToolInput } from "../../../../features/sessions/model/taskList";
 import { normalizeProjectPath } from "../../../../features/projects/model/recents";
@@ -86,6 +87,7 @@ type InFlightTool = {
 type Live = {
   rpc: PiRpc;
   cwd: string;
+  providerAccountId?: string;
   providerSessionId: string;
   contextWindow?: number;
   nativeModel: string;
@@ -124,6 +126,7 @@ type Live = {
 type Resume = {
   sessionId: string;
   cwd: string;
+  providerAccountId?: string;
 };
 
 const INIT_TIMEOUT_MS = 45_000;
@@ -427,10 +430,11 @@ export function bindSession(
   threadId: string,
   providerSessionId: string,
   cwd: string,
+  providerAccountId?: string,
 ): void {
   const sessionId = providerSessionId.trim();
   if (!threadId || !sessionId || !cwd.trim()) return;
-  stateFor(flavor).resumeByThread.set(threadId, { sessionId, cwd });
+  stateFor(flavor).resumeByThread.set(threadId, { sessionId, cwd, providerAccountId });
 }
 
 async function ensureLive(
@@ -438,6 +442,7 @@ async function ensureLive(
   input: HarnessSessionInput,
 ): Promise<Live> {
   const { liveByThread, resumeByThread } = stateFor(flavor);
+  const preserve = canResumeMonoAfterCwdChange(input, resumeByThread.get(input.sessionId));
   const existing = liveByThread.get(input.sessionId);
   const wantPlanning = input.intent === "plan";
   if (
@@ -450,13 +455,13 @@ async function ensureLive(
     return existing;
   }
   if (existing) {
-    if (existing.cwd !== input.cwd) resumeByThread.delete(input.sessionId);
+    if (existing.cwd !== input.cwd && !preserve) resumeByThread.delete(input.sessionId);
     await stopSession(flavor, input.sessionId);
   }
 
   const resume = resumeByThread.get(input.sessionId);
-  const canResume = resume != null && resume.cwd === input.cwd;
-  if (resume && resume.cwd !== input.cwd) {
+  const canResume = resume != null && (resume.cwd === input.cwd || preserve);
+  if (resume && resume.cwd !== input.cwd && !preserve) {
     resumeByThread.delete(input.sessionId);
   }
 
@@ -465,9 +470,10 @@ async function ensureLive(
       flavor,
       input,
       canResume ? resume?.sessionId : undefined,
+      preserve,
     );
   } catch (error) {
-    if (!canResume) throw error;
+    if (!canResume || preserve) throw error;
     resumeByThread.delete(input.sessionId);
     await stopSession(flavor, input.sessionId);
     return startLive(flavor, input, undefined);
@@ -478,6 +484,7 @@ async function startLive(
   flavor: PiFlavor,
   input: HarnessSessionInput,
   resume: string | undefined,
+  fork = false,
 ): Promise<Live> {
   const state = stateFor(flavor);
   const { liveByThread } = state;
@@ -499,6 +506,7 @@ async function startLive(
   const live: Live = {
     rpc,
     cwd: input.cwd,
+    providerAccountId: input.providerAccountId,
     providerSessionId: "",
     nativeModel: native,
     thinking: input.modelSettings?.thinking ?? "",
@@ -561,6 +569,7 @@ async function startLive(
     path,
     buildPiSpawnArgs(flavor, {
       resume,
+      fork,
       model: modelRef ? native : undefined,
       plan: input.intent === "plan",
     }),
@@ -1236,6 +1245,7 @@ function bindState(
     stateFor(flavor).resumeByThread.set(sessionId, {
       sessionId: providerSessionId,
       cwd: live.cwd,
+      providerAccountId: live.providerAccountId,
     });
   }
   const model = asRecord(asRecord(data)?.model);

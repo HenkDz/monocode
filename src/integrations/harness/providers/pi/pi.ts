@@ -67,8 +67,9 @@ export function bindPiSession(
   threadId: string,
   providerSessionId: string,
   cwd: string,
+  providerAccountId?: string,
 ): void {
-  bindSession(PI_FLAVOR, threadId, providerSessionId, cwd);
+  bindSession(PI_FLAVOR, threadId, providerSessionId, cwd, providerAccountId);
 }
 
 /** Test seam. */

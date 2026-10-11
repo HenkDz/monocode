@@ -63,6 +63,7 @@ const {
   stopCodexSession,
   updateCodexRuntimeMode,
   __codexTestReset,
+  __codexTestResumeMap,
 } = await import("./codex");
 import type { HarnessEvent } from "../../core/types";
 import {
@@ -114,6 +115,8 @@ const waitFor = async (pred: () => boolean, label: string) => {
 async function startTurn(
   sessionId: string,
   options: {
+    cwd?: string;
+    resumeCwd?: string;
     runtimeMode?: RuntimeMode;
     intent?: TurnIntent;
     resume?: boolean;
@@ -137,14 +140,14 @@ async function startTurn(
     bindCodexSession(
       sessionId,
       "thr_1",
-      "/repo",
+      options.resumeCwd ?? "/repo",
       options.resumeProviderAccountId,
     );
   }
   const send = options.orgMonoId ? (input: Parameters<typeof sendCodexTurn>[0]) => sendHarnessTurn({ ...input, harness: "codex", orgMono: true, orgMonoId: options.orgMonoId }) : sendCodexTurn;
   const turn = send({
     sessionId,
-    cwd: "/repo",
+    cwd: options.cwd ?? "/repo",
     model: "codex:gpt-5.4",
     modelSettings: {},
     providerAccountId: options.providerAccountId,
@@ -454,6 +457,45 @@ describe("codex live turn sequence", () => {
     await next.turn;
   });
 
+  it.each(["saved", "live", "parked"])("moves a %s Mono to a new cwd while resuming its native thread", async state => {
+    const cwd = "/app-data/monos/orchestrator/workspace";
+    if (state !== "saved") {
+      const first = await startTurn("codex-live", { codexStore: "mono", providerAccountId: "work", cwd: "/synthetic-home" });
+      notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+      await first.turn;
+      if (state === "parked") await stopCodexSession("codex-live");
+      sent.length = 0;
+    }
+    const next = await startTurn("codex-live", {
+      codexStore: "mono", providerAccountId: "work", cwd,
+      resume: state === "saved", resumeCwd: "/synthetic-home", resumeProviderAccountId: "work", expectResume: true,
+    });
+    expect(parse().find(message => message.method === "thread/resume")?.params).toMatchObject({ threadId: "thr_1", cwd });
+    expect(parse().some(message => message.method === "thread/start")).toBe(false);
+    expect(spawnChild.mock.calls.at(-1)?.[3]).toBe(cwd);
+    expect(prepareCodexMonoContext).toHaveBeenLastCalledWith(expect.objectContaining({ threadId: "thr_1", cwd, providerAccountId: "work" }));
+    expect(restoreMonoCodexAgentState).toHaveBeenLastCalledWith("work", "thr_1");
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await next.turn;
+  });
+
+  it.each(["saved", "live"])("does not reuse a %s Mono's thread after its account and cwd change", async state => {
+    if (state === "live") {
+      const first = await startTurn("codex-live", { codexStore: "mono", providerAccountId: "old-account" });
+      notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+      await first.turn;
+      sent.length = 0;
+    } else {
+      bindCodexSession("codex-live", "thr_1", "/repo", "old-account");
+    }
+    const next = await startTurn("codex-live", { codexStore: "mono", providerAccountId: "new-account", cwd: "/new-workspace" });
+    expect(parse().some(message => message.method === "thread/resume")).toBe(false);
+    expect(prepareCodexMonoContext).toHaveBeenLastCalledWith(expect.objectContaining({ threadId: undefined, cwd: "/new-workspace", providerAccountId: "new-account" }));
+    expect(restoreMonoCodexAgentState).not.toHaveBeenCalled();
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await next.turn;
+  });
+
   it("restarts a warm Mono server on the next turn after its skills or plugin policy changes", async () => {
     const skillArgs = ["-c", 'plugins={"ponytail@test"={enabled=false}}'];
     const skillsContextId = "a".repeat(64);
@@ -583,6 +625,21 @@ describe("codex live turn sequence", () => {
       await second.turn;
     });
 
+    it.each(["live", "parked"])("resends context when a %s Mono changes cwd within the same instruction home", async state => {
+      await delivered();
+      if (state === "parked") await stopCodexSession("codex-live");
+      prepareCodexMonoContext.mockResolvedValueOnce({ config: {}, hasThread: true, skillsContextId: "a".repeat(64) });
+      const second = await startTurn("codex-live", {
+        ...initial, cwd: "/new-workspace", expectResume: true, prepareText,
+      });
+      expect(parse().find(message => message.method === "thread/resume")?.params).toMatchObject({ threadId: "thr_1", cwd: "/new-workspace" });
+      expect(parse().find(message => message.method === "turn/start")?.params).toMatchObject({
+        threadId: "thr_1", input: [{ type: "text", text: "Full org, soul and memory\nContinue" }],
+      });
+      notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+      await second.turn;
+    });
+
     it("keeps a failed switched prompt unreceipted so a retry resends it", async () => {
       await delivered();
       const changed = { ...initial, skillsPolicy: { mode: "all" as const } };
@@ -646,11 +703,11 @@ describe("codex live turn sequence", () => {
     await turn;
   });
 
-  it("does not discard a retained private Mono when resume fails", async () => {
+  it.each(["/repo", "/new-workspace"])("does not discard a retained private Mono when resume fails at %s", async cwd => {
     bindCodexSession("codex-live", "thr_1", "/repo");
     const turn = sendCodexTurn({
       sessionId: "codex-live",
-      cwd: "/repo",
+      cwd,
       model: "codex:gpt-5.4",
       runtimeMode: "supervised",
       codexStore: "mono",
@@ -677,6 +734,7 @@ describe("codex live turn sequence", () => {
     );
     await rejected;
     expect(parse().some((m) => m.method === "thread/start")).toBe(false);
+    expect(__codexTestResumeMap().get("codex-live")).toMatchObject({ threadId: "thr_1", cwd: "/repo" });
   });
 
   it.each(["missing", "missing-private", "account", "cwd", "ephemeral"])("prepares fresh context before turn/start after a %s fallback", async mode => {

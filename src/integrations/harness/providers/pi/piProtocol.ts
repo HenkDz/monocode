@@ -142,6 +142,7 @@ export function buildPiSpawnArgs(
   input: {
     model?: string;
     resume?: string;
+    fork?: boolean;
     /** Catalog probes and isolated jobs: do not write a session file. */
     noSession?: boolean;
     /** Catalog probes and throwaway text jobs — never for live chat. */
@@ -160,7 +161,7 @@ export function buildPiSpawnArgs(
     args.push("--tools", flavor.planTools.join(","));
   }
   if (input.resume?.trim()) {
-    args.push(flavor.resumeFlag, input.resume.trim());
+    args.push(input.fork ? "--fork" : flavor.resumeFlag, input.resume.trim());
   }
   const model = input.model?.trim();
   if (model) args.push("--model", model);

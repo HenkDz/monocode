@@ -10,7 +10,8 @@
 //!     ├── SOUL.md           who it is; edited by the user or at their request
 //!     ├── MEMORY.md         what it has learned; loads into every turn
 //!     ├── habits.json       what it does on its own, on a schedule
-//!     └── memory/           topic notes read on demand, and archive.md
+//!     ├── memory/           topic notes read on demand, and archive.md
+//!     └── workspace/        scratch cwd, separate from the controlled files
 //! ```
 //!
 //! A Mono is not tied to a project, so its folder is named by its own id. One
@@ -191,6 +192,46 @@ fn valid_id(id: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
 }
 
+fn ensure_real_directory(path: &Path) -> Result<(), String> {
+    match std::fs::create_dir(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(format!("{}: {error}", path.display())),
+    }
+    let metadata =
+        std::fs::symlink_metadata(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    let linked = metadata.file_type().is_symlink();
+    #[cfg(windows)]
+    let linked = {
+        use std::os::windows::fs::MetadataExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+        linked || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    };
+    if !metadata.is_dir() || linked {
+        return Err(format!(
+            "Mono workspace must use real directories: {}",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_workspace(data: &Path, id: &str) -> Result<PathBuf, String> {
+    if !valid_id(id) {
+        return Err("Not a Mono id".into());
+    }
+    let _guard = FILES_LOCK.lock().map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(data).map_err(|e| format!("{}: {e}", data.display()))?;
+    ensure_real_directory(data)?;
+    let root = data.join(MONOS_DIR);
+    let dir = root.join(id);
+    let workspace = dir.join("workspace");
+    for path in [&root, &dir, &workspace] {
+        ensure_real_directory(path)?;
+    }
+    Ok(workspace)
+}
+
 /// The Mono's folder, created with an empty memory on first use. A Mono that
 /// was a project's own takes over that project's folder the first time.
 fn agent_dir(root: &Path, mono: &str, legacy_project: Option<&str>) -> Result<PathBuf, String> {
@@ -306,6 +347,16 @@ pub async fn mono_load(
 }
 
 #[tauri::command]
+pub async fn mono_workspace_ensure(app: AppHandle, id: String) -> Result<String, String> {
+    let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        ensure_workspace(&data, &id).map(|path| path.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 pub async fn mono_read(
     app: AppHandle,
     mono: String,
@@ -368,6 +419,90 @@ mod tests {
         assert!(Path::new(&first.dir).join("memory").is_dir());
         assert!(load(&root, "../x", None).is_err());
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn workspace_is_separate_from_controlled_files_and_preserves_contents() {
+        let data = temp_root();
+        let root = data.join(MONOS_DIR);
+        save(&root, "mono-a", None, SOUL_FILE, "soul", None).unwrap();
+        save(&root, "mono-a", None, MEMORY_FILE, "memory", None).unwrap();
+        save(&root, "mono-a", None, "memory/topic.md", "topic", None).unwrap();
+        let workspace = ensure_workspace(&data, "mono-a").unwrap();
+        assert_eq!(workspace, root.join("mono-a/workspace"));
+        assert!(workspace.is_dir());
+        assert_eq!(std::fs::read_dir(&workspace).unwrap().count(), 0);
+        std::fs::write(workspace.join("scratch.txt"), "kept").unwrap();
+        assert_eq!(ensure_workspace(&data, "mono-a").unwrap(), workspace);
+        assert_ne!(ensure_workspace(&data, "mono-b").unwrap(), workspace);
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("scratch.txt")).unwrap(),
+            "kept"
+        );
+        let files = load(&root, "mono-a", None).unwrap();
+        assert_eq!(files.soul.as_deref(), Some("soul"));
+        assert_eq!(files.memory, "memory");
+        assert_eq!(files.topics, ["topic"]);
+        assert!(!root.join("mono-b").join(MEMORY_FILE).exists());
+        std::fs::remove_dir_all(data).unwrap();
+    }
+
+    #[test]
+    fn workspace_rejects_invalid_ids_before_creating_data() {
+        let data = temp_root();
+        let missing = data.join("new-data");
+        for id in ["", "../escape", "a/b", "a\\b", "C:", ".", ".."] {
+            assert!(ensure_workspace(&missing, id).is_err(), "{id}");
+        }
+        assert!(!missing.exists());
+        assert!(ensure_workspace(&missing, "mono-a").unwrap().is_dir());
+        std::fs::remove_dir_all(data).unwrap();
+    }
+
+    #[test]
+    fn workspace_refuses_files_in_its_directory_components() {
+        for relative in [MONOS_DIR, "monos/mono-a", "monos/mono-a/workspace"] {
+            let data = temp_root();
+            let blocked = data.join(relative);
+            std::fs::create_dir_all(blocked.parent().unwrap()).unwrap();
+            std::fs::write(&blocked, "kept").unwrap();
+            assert!(ensure_workspace(&data, "mono-a").is_err());
+            assert_eq!(std::fs::read_to_string(&blocked).unwrap(), "kept");
+            std::fs::remove_dir_all(data).unwrap();
+        }
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn workspace_refuses_directory_links_without_touching_their_targets() {
+        for relative in [
+            "linked-data",
+            "monos",
+            "monos/mono-a",
+            "monos/mono-a/workspace",
+        ] {
+            let data = temp_root();
+            let outside = temp_root();
+            let link = data.join(relative);
+            std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(&outside, &link).unwrap();
+            #[cfg(windows)]
+            junction::create(&outside, &link).unwrap();
+            let app_data = if relative == "linked-data" {
+                &link
+            } else {
+                &data
+            };
+            assert!(ensure_workspace(app_data, "mono-a").is_err(), "{relative}");
+            assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
+            #[cfg(unix)]
+            std::fs::remove_file(&link).unwrap();
+            #[cfg(windows)]
+            junction::delete(&link).unwrap();
+            std::fs::remove_dir_all(data).unwrap();
+            std::fs::remove_dir_all(outside).unwrap();
+        }
     }
 
     #[test]

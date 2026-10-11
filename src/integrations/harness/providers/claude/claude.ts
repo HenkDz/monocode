@@ -1,4 +1,5 @@
 import { TurnNotReadyError } from "../../core/types";
+import { canResumeMonoAfterCwdChange } from "../monoCwdResume";
 import { nativeModelId } from "../../../../features/sessions/model/models";
 import { sameProviderAccountId } from "../../../../features/providers/model/providerAccounts";
 import type {
@@ -437,6 +438,7 @@ export function restoreClaudeTaskLists(
 }
 
 async function ensureLive(input: HarnessSessionInput): Promise<Live> {
+  const preserve = canResumeMonoAfterCwdChange(input, resumeByThread.get(input.sessionId));
   const settingsKey = settingsKeyFor(input);
   const planning = input.intent === "plan";
   const existing = liveByThread.get(input.sessionId);
@@ -452,20 +454,19 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   }
   if (existing) {
     // Model and launch-setting changes require a fresh Claude process, but
-    // they must resume the same provider conversation. Only a cwd change
-    // invalidates the stored session because Claude sessions are cwd-bound.
-    if (existing.cwd !== input.cwd) resumeByThread.delete(input.sessionId);
+    // Mono folder changes also keep their saved native conversation.
+    if (existing.cwd !== input.cwd && !preserve) resumeByThread.delete(input.sessionId);
     await stopClaudeSession(input.sessionId);
   }
 
   const resume = resumeByThread.get(input.sessionId);
   const canResume =
     resume != null &&
-    resume.cwd === input.cwd &&
+    (resume.cwd === input.cwd || preserve) &&
     sameProviderAccountId(resume.providerAccountId, input.providerAccountId);
   if (
     resume &&
-    (resume.cwd !== input.cwd ||
+    ((resume.cwd !== input.cwd && !preserve) ||
       !sameProviderAccountId(resume.providerAccountId, input.providerAccountId))
   ) {
     resumeByThread.delete(input.sessionId);

@@ -1,4 +1,5 @@
 import { TurnNotReadyError } from "../../core/types";
+import { canResumeMonoAfterCwdChange } from "../monoCwdResume";
 import {
   modelContextWindow,
   nativeModelId,
@@ -136,6 +137,7 @@ type Live = {
 type Resume = {
   sessionId: string;
   cwd: string;
+  providerAccountId?: string;
 };
 
 const SERVER_TIMEOUT_MS = 30_000;
@@ -375,13 +377,15 @@ export function bindOpenCodeSession(
   threadId: string,
   providerSessionId: string,
   cwd: string,
+  providerAccountId?: string,
 ): void {
   const sessionId = providerSessionId.trim();
   if (!threadId || !sessionId || !cwd.trim()) return;
-  resumeByThread.set(threadId, { sessionId, cwd });
+  resumeByThread.set(threadId, { sessionId, cwd, providerAccountId });
 }
 
 async function ensureLive(input: HarnessSessionInput): Promise<Live> {
+  const preserve = canResumeMonoAfterCwdChange(input, resumeByThread.get(input.sessionId));
   const existing = liveByThread.get(input.sessionId);
   if (existing && existing.cwd === input.cwd) {
     existing.onEvent = input.onEvent;
@@ -394,13 +398,13 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     return existing;
   }
   if (existing) {
-    resumeByThread.delete(input.sessionId);
+    if (!preserve) resumeByThread.delete(input.sessionId);
     await stopOpenCodeSession(input.sessionId);
   }
 
   const resume = resumeByThread.get(input.sessionId);
-  const canResume = resume != null && resume.cwd === input.cwd;
-  if (resume && resume.cwd !== input.cwd) {
+  const canResume = resume != null && (resume.cwd === input.cwd || preserve);
+  if (resume && resume.cwd !== input.cwd && !preserve) {
     resumeByThread.delete(input.sessionId);
   }
 
@@ -470,6 +474,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     );
     const openCodeSession = await resolveSession(client, {
       resume: canResume ? resume : undefined,
+      preserve,
       runtimeMode: input.runtimeMode,
       cwd: input.cwd,
     });
@@ -514,6 +519,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     resumeByThread.set(input.sessionId, {
       sessionId: openCodeSession.id,
       cwd: input.cwd,
+      providerAccountId: input.providerAccountId,
     });
 
     await client.subscribeEvents(
@@ -578,6 +584,7 @@ async function resolveSession(
   client: OpenCodeClient,
   input: {
     resume?: Resume;
+    preserve?: boolean;
     runtimeMode: RuntimeMode;
     cwd: string;
   },
@@ -586,18 +593,32 @@ async function resolveSession(
   if (input.resume) {
     try {
       const adopted = await client.getSession(input.resume.sessionId);
-      if (!adopted.directory || sameDirectory(adopted.directory, input.cwd)) {
+      if ((!adopted.directory && !input.preserve) || (adopted.directory && sameDirectory(adopted.directory, input.cwd))) {
         await client
           .updateSession(adopted.id, { permission })
           .catch(() => undefined);
         return adopted;
       }
-      const forked = await client.forkSession(adopted.id, input.cwd);
+      const forked = input.preserve && client.generation === "v2"
+        ? await client.moveSession(adopted.id, input.cwd)
+        : await client.forkSession(adopted.id, input.cwd);
+      if (input.preserve && client.generation === "v1") {
+        if (!forked.id || forked.id === adopted.id) throw new Error("OpenCode did not retain a separate conversation for the new working folder.");
+        try {
+          const retained = await client.getSession(forked.id);
+          if (!retained.directory || !sameDirectory(retained.directory, input.cwd))
+            throw new Error("This OpenCode version cannot move the saved conversation to the new working folder. Update OpenCode and retry; the original conversation is intact.");
+        } catch (error) {
+          await client.deleteSession(forked.id);
+          throw error;
+        }
+      }
       await client
         .updateSession(forked.id, { permission })
         .catch(() => undefined);
       return forked;
     } catch (error) {
+      if (input.preserve) throw error;
       if (
         !isOpenCodeNotFound(error) &&
         !isHttpNotFound(error) &&

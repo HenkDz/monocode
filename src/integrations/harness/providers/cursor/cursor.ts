@@ -1,4 +1,5 @@
 import { TurnNotReadyError } from "../../core/types";
+import { canResumeMonoAfterCwdChange } from "../monoCwdResume";
 import { nativeModelId } from "../../../../features/sessions/model/models";
 import { AcpSubagents } from "../../core/acpSubagents";
 import type { RuntimeMode } from "../../../../features/sessions/model/session";
@@ -104,6 +105,7 @@ type Live = {
 type Resume = {
   acpSessionId: string;
   cwd: string;
+  providerAccountId?: string;
 };
 
 const liveByThread = new Map<string, Live>();
@@ -242,13 +244,15 @@ export function bindCursorSession(
   threadId: string,
   acpSessionId: string,
   cwd: string,
+  providerAccountId?: string,
 ): void {
   const sessionId = acpSessionId.trim();
   if (!threadId || !sessionId || !cwd.trim()) return;
-  resumeByThread.set(threadId, { acpSessionId: sessionId, cwd });
+  resumeByThread.set(threadId, { acpSessionId: sessionId, cwd, providerAccountId });
 }
 
 async function ensureLive(input: SendTurnInput): Promise<Live> {
+  const preserve = canResumeMonoAfterCwdChange(input, resumeByThread.get(input.sessionId));
   const existing = liveByThread.get(input.sessionId);
   if (existing && existing.cwd === input.cwd) {
     existing.onEvent = input.onEvent;
@@ -257,13 +261,13 @@ async function ensureLive(input: SendTurnInput): Promise<Live> {
     return existing;
   }
   if (existing) {
-    resumeByThread.delete(input.sessionId);
+    if (!preserve) resumeByThread.delete(input.sessionId);
     await stopCursorSession(input.sessionId);
   }
 
   const resume = resumeByThread.get(input.sessionId);
-  const canLoad = resume != null && resume.cwd === input.cwd;
-  if (resume && resume.cwd !== input.cwd) {
+  const canLoad = resume != null && (resume.cwd === input.cwd || preserve);
+  if (resume && resume.cwd !== input.cwd && !preserve) {
     resumeByThread.delete(input.sessionId);
   }
 
@@ -335,7 +339,8 @@ async function ensureLive(input: SendTurnInput): Promise<Live> {
         });
         acpSessionId = resume.acpSessionId;
         didLoad = true;
-      } catch {
+      } catch (error) {
+        if (preserve) throw error;
         setup = undefined;
         acpSessionId = undefined;
         didLoad = false;
@@ -386,6 +391,7 @@ async function ensureLive(input: SendTurnInput): Promise<Live> {
     resumeByThread.set(input.sessionId, {
       acpSessionId,
       cwd: input.cwd,
+      providerAccountId: input.providerAccountId,
     });
     live.onEvent({
       type: "session.providerBound",

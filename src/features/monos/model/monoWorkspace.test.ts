@@ -16,6 +16,11 @@ import {
   monoPermissionSessionIds,
 } from "./monoWorkspace";
 
+vi.mock("./monoWorkingDirectory", async original => ({
+  ...await original<object>(),
+  ensureMonoWorkingDirectory: vi.fn(async (id: string) => `/scratch/${id}`),
+}));
+
 beforeEach(() => {
   const stored = new Map<string, string>();
   vi.stubGlobal("localStorage", {
@@ -221,7 +226,7 @@ it("loads an existing resident conversation without creating a session", async (
   expect(host.add).not.toHaveBeenCalled();
 });
 
-it("starts a new Mono's conversation with Auto permissions in the home folder, once", async () => {
+it("starts a new Mono's conversation with Auto permissions in its project, once", async () => {
   const monoId = createMono(["/project"]).id;
   const host = {
     home: vi.fn().mockResolvedValue("/home"),
@@ -230,7 +235,7 @@ it("starts a new Mono's conversation with Auto permissions in the home folder, o
     add: vi.fn(),
   };
   const agent = (await ensureMonoSession(monoId, host))!;
-  expect(agent.cwd).toBe("/home");
+  expect(agent.cwd).toBe("/project");
   expect(agent.harness).toBe("codex");
   expect(agent.model).toBe("codex:gpt-6.1-sol");
   expect(agent.runtimeMode).toBe("auto");
@@ -288,7 +293,7 @@ it("allows retrying an open after the home lookup fails", async () => {
     add: vi.fn(),
   };
   await expect(ensureMonoSession(monoId, host)).rejects.toThrow("Not ready");
-  expect((await ensureMonoSession(monoId, host))!.cwd).toBe("/home");
+  expect((await ensureMonoSession(monoId, host))!.cwd).toBe(`/scratch/${monoId}`);
   expect(host.add).toHaveBeenCalledOnce();
 });
 

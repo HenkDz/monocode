@@ -1,4 +1,5 @@
 import { nativeModelId } from "../../../../features/sessions/model/models";
+import { canResumeMonoAfterCwdChange } from "../monoCwdResume";
 import { AcpSubagents } from "../../core/acpSubagents";
 import type { RuntimeMode } from "../../../../features/sessions/model/session";
 import { AcpClient, type AcpHandlers } from "../../core/acp";
@@ -67,6 +68,7 @@ type Live = {
 type Resume = {
   acpSessionId: string;
   cwd: string;
+  providerAccountId?: string;
 };
 
 // Bound startup and control requests; a prompt may legitimately run much longer.
@@ -289,10 +291,11 @@ export function bindAntigravitySession(
   threadId: string,
   acpSessionId: string,
   cwd: string,
+  providerAccountId?: string,
 ): void {
   const sessionId = acpSessionId.trim();
   if (!threadId || !sessionId || !cwd.trim()) return;
-  resumeByThread.set(threadId, { acpSessionId: sessionId, cwd });
+  resumeByThread.set(threadId, { acpSessionId: sessionId, cwd, providerAccountId });
 }
 
 /** Terminal settle for a retired transport: stop the clock and release waits. */
@@ -359,7 +362,7 @@ function queueLifecycle(input: SendTurnInput, recycle: boolean): Promise<Live> {
     if (live) {
       if (!recycle) return live;
       if (!live.stale && live.cwd === input.cwd) return live;
-      if (live.cwd !== input.cwd) resumeByThread.delete(input.sessionId);
+      if (live.cwd !== input.cwd && !canResumeMonoAfterCwdChange(input, resumeByThread.get(input.sessionId))) resumeByThread.delete(input.sessionId);
       await teardownLive(live);
       live = undefined;
     }
@@ -377,8 +380,9 @@ function queueLifecycle(input: SendTurnInput, recycle: boolean): Promise<Live> {
 
 async function startLive(input: SendTurnInput, life: number): Promise<Live> {
   const resume = resumeByThread.get(input.sessionId);
-  const canLoad = resume != null && resume.cwd === input.cwd;
-  if (resume && resume.cwd !== input.cwd) {
+  const preserve = canResumeMonoAfterCwdChange(input, resume);
+  const canLoad = resume != null && (resume.cwd === input.cwd || preserve);
+  if (resume && resume.cwd !== input.cwd && !preserve) {
     resumeByThread.delete(input.sessionId);
   }
 
@@ -520,7 +524,7 @@ async function startLive(input: SendTurnInput, life: number): Promise<Live> {
           didLoad = true;
         } catch (loadError) {
           if (retired()) throw new Error("Antigravity session stopped during startup");
-          if (isTimeout(loadError)) throw loadError;
+          if (preserve || isTimeout(loadError)) throw loadError;
           setup = undefined;
           acpSessionId = undefined;
           didLoad = false;
@@ -573,6 +577,7 @@ async function startLive(input: SendTurnInput, life: number): Promise<Live> {
     resumeByThread.set(input.sessionId, {
       acpSessionId,
       cwd: input.cwd,
+      providerAccountId: input.providerAccountId,
     });
     // Registration ends before the first listener callback: a cancel reentered
     // from onEvent must take the live path, never abortPendingSetup — closing

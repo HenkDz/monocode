@@ -1,4 +1,5 @@
 import { nativeModelId } from "../../../../features/sessions/model/models";
+import { canResumeMonoAfterCwdChange } from "../monoCwdResume";
 import { AcpSubagents } from "../../core/acpSubagents";
 import type { RuntimeMode } from "../../../../features/sessions/model/session";
 import { AcpClient, type AcpHandlers } from "../../core/acp";
@@ -60,6 +61,7 @@ type Live = {
 type Resume = {
   acpSessionId: string;
   cwd: string;
+  providerAccountId?: string;
 };
 
 const INIT_TIMEOUT_MS = 12_000;
@@ -209,13 +211,15 @@ export function bindGrokSession(
   threadId: string,
   acpSessionId: string,
   cwd: string,
+  providerAccountId?: string,
 ): void {
   const sessionId = acpSessionId.trim();
   if (!threadId || !sessionId || !cwd.trim()) return;
-  resumeByThread.set(threadId, { acpSessionId: sessionId, cwd });
+  resumeByThread.set(threadId, { acpSessionId: sessionId, cwd, providerAccountId });
 }
 
 async function ensureLive(input: HarnessSessionInput): Promise<Live> {
+  const preserve = canResumeMonoAfterCwdChange(input, resumeByThread.get(input.sessionId));
   const wantPlanning = input.intent === "plan";
   const wantFullAccess = input.runtimeMode === "full-access" && !wantPlanning;
   const existing = liveByThread.get(input.sessionId);
@@ -234,8 +238,8 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   }
 
   const resume = resumeByThread.get(input.sessionId);
-  const canLoad = resume != null && resume.cwd === input.cwd;
-  if (resume && resume.cwd !== input.cwd) {
+  const canLoad = resume != null && (resume.cwd === input.cwd || preserve);
+  if (resume && resume.cwd !== input.cwd && !preserve) {
     resumeByThread.delete(input.sessionId);
   }
 
@@ -338,13 +342,14 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     if (canLoad && resume) {
       try {
         setup = await acp.request(
-          "session/resume",
-          { sessionId: resume.acpSessionId },
+          preserve ? "session/load" : "session/resume",
+          { sessionId: resume.acpSessionId, ...(preserve ? { cwd: input.cwd, mcpServers: [] } : {}) },
           SESSION_TIMEOUT_MS,
         );
         acpSessionId = sessionIdFromResult(setup) ?? resume.acpSessionId;
         didLoad = true;
-      } catch {
+      } catch (error) {
+        if (preserve) throw error;
         muteGate.current = true;
         try {
           setup = await acp.request(
@@ -406,6 +411,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     resumeByThread.set(input.sessionId, {
       acpSessionId,
       cwd: input.cwd,
+      providerAccountId: input.providerAccountId,
     });
     live.onEvent({
       type: "session.providerBound",

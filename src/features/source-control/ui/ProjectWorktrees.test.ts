@@ -12,6 +12,8 @@ import { finishWorktreeRemovalTask, startWorktreeRemovalTask } from "../model/wo
 import type { Worktree, WorktreeCreationOptions } from "../model/worktrees";
 let creationOptions: WorktreeCreationOptions;
 import type { SessionSummary } from "../../sessions/data/sessionStore";
+import { publishCardSessions } from "../../monos/model/monoCards";
+import type { AgentLiveState } from "../../agents/model/agentLiveState";
 import {
   saveProjectGroups,
   saveProjectGroupAssignments,
@@ -114,6 +116,71 @@ const render = async () => {
   await act(async () => root.render(createElement(ProjectWorktrees, props)));
 };
 
+it("persists worktree session expansion per project including asynchronously loaded trees", async () => {
+  await render();
+  await act(async () => button("Collapse sessions in feature-a").click());
+  expect(localStorage.getItem("monocode:worktree-sessions-expanded:/repo:/trees/a")).toBe("0");
+  await act(async () => root.render(null));
+  const results = vi.mocked(useProjectWorktrees).mock.results;
+  const data = results[results.length - 1]!.value.data;
+  vi.mocked(useProjectWorktrees).mockReturnValue({ refresh });
+  await render();
+  vi.mocked(useProjectWorktrees).mockReturnValue({ data, refresh });
+  await render();
+  expect(button("Expand sessions in feature-a").getAttribute("aria-expanded")).toBe("false");
+  props.project = "/other";
+  props.history = [{ ...session("other", "/trees/a"), cwd: "/other" }];
+  props.openSessions = [];
+  props.busySessionIds = new Set(["other"]);
+  await render();
+  expect(button("Collapse sessions in feature-a").getAttribute("aria-expanded")).toBe("true");
+  props.project = "/repo";
+  props.history = [session("a", "/trees/a")];
+  props.busySessionIds = new Set(["a"]);
+  await render();
+  expect(button("Expand sessions in feature-a").getAttribute("aria-expanded")).toBe("false");
+  await act(async () => button("Expand sessions in feature-a").click());
+  await act(async () => root.render(null));
+  await render();
+  expect(button("Collapse sessions in feature-a").getAttribute("aria-expanded")).toBe("true");
+});
+
+it("keeps a current worktree visible while a settled session still has keyboard focus", async () => {
+  vi.mocked(useProjectWorktrees).mockReturnValue({ data: { worktrees: [tree("/stale", "stale"), tree("/protected", "protected")], defaultRoot: "/" }, refresh });
+  props.history = [session("reviewer", "/protected")];
+  props.openSessions = [];
+  props.busySessionIds = new Set();
+  props.approvalSessionIds = new Set();
+  const card = { id: "reviewer", title: "Reviewer", harness: "pi", busy: false, needsInput: false };
+  publishCardSessions([{ ...card, liveState: { status: "thinking" } }], () => {});
+  await render();
+  const focused = container.querySelector<HTMLButtonElement>('[data-worktree-session="reviewer"] button')!;
+  await act(async () => focused.focus());
+  await act(async () => publishCardSessions([{ ...card, liveState: { status: "idle" } }], () => {}));
+  expect(document.activeElement).toBe(focused);
+  expect(container.querySelector('[aria-label="Your worktrees"] [data-worktree="/protected"]')).not.toBeNull();
+  await act(async () => button("Toggle worktree History").focus());
+  expect(container.querySelector('[aria-label="Your worktrees"] [data-worktree="/protected"]')).toBeNull();
+  expect(button("Toggle worktree History").textContent).toBe("History · 2");
+});
+
+it("shows canonical worker blockers on a worktree without the Manager renderer", async () => {
+  vi.mocked(useProjectWorktrees).mockReturnValue({ data: { worktrees: [tree("/protected", "protected")], defaultRoot: "/" }, refresh });
+  props.history = [];
+  props.openSessions = [];
+  props.busySessionIds = new Set();
+  props.approvalSessionIds = new Set();
+  const snapshot = vi.spyOn(orchestrator, "snapshot").mockReturnValue([{ cwd: "/repo", projectManager: true, ownerMonoId: "manager", tasks: [{ id: "work", title: "Work", sessionId: "worker", status: "cancelled", workspace: { checkoutCwd: "/protected" } }] }] as OrchestrationRun[]);
+  publishCardSessions([{ id: "worker", title: "Worker", harness: "pi", busy: false, needsInput: false, liveState: { status: "blocked", reason: "storage", detail: "Worker storage held" } }], () => {});
+  try {
+    await render();
+    expect(container.querySelector('[aria-label="Your worktrees"] [data-agent-state="blocked"]')?.textContent).toBe("Blocked · storage");
+    const row = button("Open worktree Work");
+    await act(async () => row.focus());
+    expect(document.querySelector('[role="tooltip"]')?.textContent).toContain("Worker storage held");
+  } finally { snapshot.mockRestore(); }
+});
+
 it("blocks only the worktree being removed and restores it after failure", async () => {
   await render();
   await act(async () => button("Actions for feature-a").click());
@@ -135,6 +202,7 @@ beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("localStorage", new Storage());
   localStorage.clear();
+  publishCardSessions([], () => {});
   setWorktreeFocus("/repo", undefined);
   refresh.mockClear();
   vi.mocked(gitPrStatus).mockReset().mockResolvedValue(null);
@@ -255,7 +323,7 @@ it("keeps the primary checkout's identity and actions when a cancelled task has 
     expect(button("Open worktree main").title).not.toContain("Cancelled");
     expect(props.renderManager).toHaveBeenLastCalledWith(true, expect.any(Function), 1);
     expect(button("Toggle Task worktrees").textContent).toContain("0 active");
-    expect(button("Toggle Task worktrees").title).toBe("0 active · 1 finished");
+    expect(button("Toggle Task worktrees").title).toBe("0 active · 1 retained");
     const expandedBefore = button("Open worktree main").getAttribute("aria-expanded");
     await act(async () => button("Open worktree main").click());
     expect(button("Open worktree main").getAttribute("aria-expanded")).not.toBe(expandedBefore);
@@ -424,7 +492,7 @@ it("keeps a read-only shared linked checkout in Your worktrees and its enforced 
   } finally { snapshot.mockRestore(); }
 });
 
-it("labels peer user worktrees, scopes the guide to collapsed task worktrees, and shows Finished outcomes", async () => {
+it("keeps retained task outcomes current and clean terminal outcomes in History", async () => {
   const worktrees = [
     tree("/repo", "main", true),
     ...["running", "ready", "blocked", "merged", "closed", "cancelled"].map((id) =>
@@ -495,21 +563,21 @@ it("labels peer user worktrees, scopes the guide to collapsed task worktrees, an
     expect(queue.querySelector('[class*="border-l"]')).toBeNull();
     expect(button("Toggle Task worktrees").getAttribute("aria-expanded")).toBe("false");
     expect(button("Toggle Task worktrees").textContent).toContain("3 active");
-    expect(button("Toggle Task worktrees").title).toBe("3 active · 3 finished");
+    expect(button("Toggle Task worktrees").title).toBe("3 active · 1 retained");
     expect(queue.querySelector<HTMLDivElement>('[data-worktree-group-list]')?.hidden).toBe(true);
     await act(async () => button("Toggle Task worktrees").click());
     expect(
-      [...queue.querySelectorAll("[data-worktree]")].filter(row => !row.closest('[aria-label="Finished"]')).map((row) =>
+      [...queue.querySelectorAll("[data-worktree]")].map((row) =>
         row.getAttribute("data-worktree"),
       ),
-    ).toEqual(["/queue/blocked", "/queue/ready", "/queue/running"]);
+    ).toEqual(["/queue/blocked", "/queue/ready", "/queue/running", "/queue/closed"]);
     await act(async () => button("Actions for ready").click());
     await act(async () => menuItem("Review in Manager").click());
     expect(openManagerCard).toHaveBeenCalledWith("manager", "ready");
-    const done = queue.querySelector('[aria-label="Finished"]')!;
+    const done = container.querySelector('[aria-label="History"]')!;
     const merged = done.querySelector('[data-worktree="/queue/merged"]')!;
-    const closed = done.querySelector('[data-worktree="/queue/closed"]')!;
-    expect(merged.className).toContain("opacity-60");
+    const closed = queue.querySelector('[data-worktree="/queue/closed"]')!;
+    expect(merged.className).not.toContain("opacity-60");
     expect(merged.textContent).not.toContain("+21");
     expect(merged.querySelector("[data-worktree-metadata]")?.textContent).toBe("Merged");
     expect(closed.querySelector("[data-worktree-metadata]")?.textContent).toContain("Closed");
@@ -523,22 +591,20 @@ it("labels peer user worktrees, scopes the guide to collapsed task worktrees, an
     expect(warning.getAttribute("title")).toContain("1 untracked file");
     expect(closed.querySelector('[aria-label="1 untracked file"]')).toBeNull();
     expect(warning.getAttribute("title")).toContain("before deleting it");
-    expect(done.querySelector('[data-worktree="/queue/closed"]')).not.toBeNull();
+    expect(done.querySelector('[data-worktree="/queue/closed"]')).toBeNull();
     expect(
-      done.querySelector('[data-worktree="/queue/merged"]')?.parentElement
-        ?.hidden,
+      done.querySelector<HTMLDivElement>('[data-worktree-group-list]')?.hidden,
     ).toBe(true);
     await act(async () =>
       (done.querySelector("button") as HTMLButtonElement).click(),
     );
     expect(
-      done.querySelector('[data-worktree="/queue/merged"]')?.parentElement
-        ?.hidden,
+      done.querySelector<HTMLDivElement>('[data-worktree-group-list]')?.hidden,
     ).toBe(false);
     await act(async () => root.render(null));
     await render();
     expect(button("Toggle Task worktrees").getAttribute("aria-expanded")).toBe("true");
-    expect(button("Toggle Finished worktrees").getAttribute("aria-expanded")).toBe("true");
+    expect(button("Toggle worktree History").getAttribute("aria-expanded")).toBe("true");
     await act(async () => {
       localStorage.setItem("monocode.activeWorktrees:/repo", "1");
       window.dispatchEvent(new Event("storage"));
@@ -579,14 +645,17 @@ it("remembers Task worktrees expansion per project across remounts, independentl
   expect(button("Toggle team").getAttribute("aria-expanded")).toBe("false");
 });
 
-it("names remaining pagination separately from the inactive filter, including dirty worktrees", async () => {
+it("pages History separately from dirty current worktrees", async () => {
   const worktrees = Array.from({ length: 8 }, (_, i) => ({ ...tree(`/idle/${i}`, `idle-${i}`), dirty: i === 7 }));
   vi.mocked(useProjectWorktrees).mockReturnValue({ data: { worktrees, defaultRoot: "/idle" }, refresh });
   props.history = [];
   props.openSessions = [];
   await render();
-  const more = [...container.querySelectorAll<HTMLButtonElement>("button")].find((item) => item.textContent?.includes("Show 3 more"))!;
-  expect(more.textContent).toContain("3 remaining");
+  expect(button("Toggle worktree History").textContent).toContain("History · 7");
+  expect(container.querySelector('[aria-label="Your worktrees"] [data-worktree="/idle/7"]')).not.toBeNull();
+  await act(async () => button("Toggle worktree History").click());
+  const more = [...container.querySelectorAll<HTMLButtonElement>("button")].find((item) => item.textContent?.includes("Show 2 more"))!;
+  expect(more.textContent).toContain("2 remaining");
   expect(more.textContent).not.toContain("inactive");
   expect(more.title).toContain("shown five at a time");
   expect(more.title).toContain("focused checkout");
@@ -594,6 +663,109 @@ it("names remaining pagination separately from the inactive filter, including di
   await act(async () => more.click());
   expect(container.querySelectorAll("[data-worktree]")).toHaveLength(8);
 });
+
+it("folds 72 historical worktrees with persisted expansion and their original order", async () => {
+  const historical = Array.from({ length: 72 }, (_, i) => tree(`/history/${i}`, `history-${i}`));
+  vi.mocked(useProjectWorktrees).mockReturnValue({ data: { worktrees: [tree("/repo", "main", true), ...historical], defaultRoot: "/history" }, refresh });
+  props.history = [];
+  props.openSessions = [];
+  props.busySessionIds = new Set();
+  props.approvalSessionIds = new Set();
+  await render();
+  const disclosure = () => button("Toggle worktree History");
+  expect(disclosure().textContent).toBe("History · 72");
+  expect(disclosure().getAttribute("aria-expanded")).toBe("false");
+  expect(disclosure().hasAttribute("data-sidebar-row")).toBe(true);
+  expect(container.querySelectorAll('[aria-label="Your worktrees"] [data-worktree]')).toHaveLength(1);
+  await act(async () => disclosure().click());
+  const rows = () => [...container.querySelectorAll('[aria-label="History"] [data-worktree]')].map(row => row.getAttribute("data-worktree"));
+  expect(rows()).toEqual(historical.slice(0, 5).map(tree => tree.path));
+  expect(localStorage.getItem("monocode:finished-worktrees-expanded:/repo")).toBe("1");
+  await act(async () => root.render(null));
+  await render();
+  expect(disclosure().getAttribute("aria-expanded")).toBe("true");
+  expect(rows()).toEqual(historical.slice(0, 5).map(tree => tree.path));
+  await act(async () => {
+    localStorage.setItem("monocode.activeWorktrees:/repo", "1");
+    window.dispatchEvent(new Event("storage"));
+  });
+  expect(rows()).toEqual([]);
+  expect(disclosure().textContent).toBe("History · 72");
+  await act(async () => disclosure().click());
+  expect(rows()).toEqual(historical.slice(0, 5).map(tree => tree.path));
+  expect(localStorage.getItem("monocode.activeWorktrees:/repo")).toBe("0");
+  props.project = "/other";
+  await render();
+  expect(disclosure().getAttribute("aria-expanded")).toBe("false");
+  props.project = "/repo";
+  await render();
+  expect(disclosure().getAttribute("aria-expanded")).toBe("true");
+});
+
+it.each(["dirty", "detached-dirty", "unpushed", "focused", "approval", "busy", "unseen", "open", "pinned", "draft", "live", "missing"])(
+  "keeps %s work outside History even with the active-only filter", async kind => {
+    const protectedTree = { ...tree("/protected", "protected"), dirty: kind.endsWith("dirty"),
+      branch: kind === "detached-dirty" ? null : "protected", unpushed: kind === "unpushed" ? 1 : 0,
+      missing: kind === "missing" };
+    const protectedSession = { ...session("protected-chat", protectedTree.path), pinned: kind === "pinned", draft: kind === "draft" };
+    vi.mocked(useProjectWorktrees).mockReturnValue({ data: { worktrees: [tree("/stale", "stale"), protectedTree], defaultRoot: "/" }, refresh });
+    props.history = [protectedSession];
+    props.openSessions = kind === "open" ? [protectedSession] : [];
+    props.busySessionIds = new Set(kind === "busy" ? [protectedSession.id] : []);
+    props.approvalSessionIds = new Set(kind === "approval" ? [protectedSession.id] : []);
+    props.unseenFinishedIds = new Set(kind === "unseen" ? [protectedSession.id] : []);
+    if (kind === "live") props.liveAgents = [{ id: protectedSession.id, cwd: "/repo", title: "Live", harness: "pi", activity: "Thinking", needsApproval: false, done: false }];
+    if (kind === "focused") { props.currentProject = "/repo"; setWorktreeFocus("/repo", { path: protectedTree.path, branch: protectedTree.branch }); }
+    localStorage.setItem("monocode.activeWorktrees:/repo", "1");
+    await render();
+    expect(container.querySelector('[aria-label="Your worktrees"] [data-worktree="/protected"]')).not.toBeNull();
+    expect(button("Toggle worktree History").textContent).toBe("History · 1");
+    expect(container.querySelector('[aria-label="History"] [data-worktree="/protected"]')).toBeNull();
+  },
+);
+
+it.each<AgentLiveState>([
+  { status: "blocked", reason: "storage", detail: "Storage held Reviewer" },
+  { status: "queued", reason: "preparing-storage", detail: "Waiting for storage preparation" },
+  { status: "needs-you", reason: "approval", detail: "Approve command" },
+  { status: "running-tool", detail: "Running build" },
+  { status: "compacting", detail: "Compacting context" },
+  { status: "failed", reason: "error", detail: "Provider failed" },
+])("retains canonical $status sessions and exposes their reason on keyboard focus", async state => {
+  vi.mocked(useProjectWorktrees).mockReturnValue({ data: { worktrees: [tree("/stale", "stale"), tree("/protected", "protected")], defaultRoot: "/" }, refresh });
+  props.history = [session("reviewer", "/protected")];
+  props.openSessions = [];
+  props.busySessionIds = new Set();
+  props.approvalSessionIds = new Set();
+  publishCardSessions([{ id: "reviewer", title: "Reviewer", harness: "pi", busy: false, needsInput: false, liveState: state }], () => {});
+  await render();
+  const row = container.querySelector<HTMLButtonElement>('[data-worktree-session="reviewer"] button')!;
+  expect(container.querySelector('[aria-label="Your worktrees"] [data-worktree="/protected"]')).not.toBeNull();
+  expect(row.querySelector('[data-agent-state]')?.getAttribute("data-agent-state")).toBe(state.status);
+  expect(row.hasAttribute("data-sidebar-row")).toBe(true);
+  const description = row.getAttribute("aria-describedby")!;
+  expect(document.getElementById(description)?.textContent).toContain(state.detail);
+  await act(async () => row.focus());
+  expect(document.querySelector('[role="tooltip"]')?.textContent).toContain(state.detail);
+  expect(row.querySelector("button")).toBeNull();
+});
+
+it.each(["queued", "running", "completed", "blocked", "failed", "interrupted", "cancelling"] as const)(
+  "keeps unfinished %s task work current when its worker is unloaded", async status => {
+    vi.mocked(useProjectWorktrees).mockReturnValue({ data: { worktrees: [tree("/stale", "stale"), tree("/protected", "protected")], defaultRoot: "/" }, refresh });
+    props.history = [];
+    props.openSessions = [];
+    props.busySessionIds = new Set();
+    props.approvalSessionIds = new Set();
+    props.renderManager = () => createElement("span", null, "Manager");
+    const snapshot = vi.spyOn(orchestrator, "snapshot").mockReturnValue([{ cwd: "/repo", projectManager: true, tasks: [{ id: "work", title: "Work", sessionId: "unloaded", status, workspace: { checkoutCwd: "/protected" } }] }] as OrchestrationRun[]);
+    try {
+      await render();
+      expect(container.querySelector('[aria-label="Task worktrees"] [data-worktree="/protected"]')).not.toBeNull();
+      expect(button("Toggle worktree History").textContent).toBe("History · 1");
+    } finally { snapshot.mockRestore(); }
+  },
+);
 
 it("names detached worktrees from their latest titled session then commit subject, keeping the hash secondary", async () => {
   const worktrees = [
@@ -759,8 +931,8 @@ it("switches and creates repeated sessions in the explicit checkout without muta
     "/repo",
     expect.objectContaining({ path: "/trees/a" }),
   );
-  expect(button("a-chat, Working")).toBeDefined();
-  act(() => button("a-chat, Working").click());
+  expect(button("a-chat, Thinking")).toBeDefined();
+  act(() => button("a-chat, Thinking").click());
   expect(props.onSelectSession).toHaveBeenCalledWith("a-chat", {
     project: "/repo",
     tree: expect.objectContaining({ path: "/trees/a" }),
@@ -805,7 +977,7 @@ it("suspends history loading with a hidden rail and retries failed history witho
   props = { ...props, enabled: true };
   await render();
   expect(container.textContent).toContain("Could not load sessions");
-  expect(button("a-chat, Working")).toBeDefined();
+  expect(button("a-chat, Thinking")).toBeDefined();
   expect(props.onLoadHistory).toHaveBeenCalledOnce();
 });
 
@@ -910,7 +1082,7 @@ it("folds older idle sessions behind show more but keeps active ones listed", as
       .map((item) => item.getAttribute("aria-label") ?? "")
       .filter((label) => label.startsWith("old-"));
   expect(listed()).toHaveLength(6);
-  expect(listed()).toContain("old-7, Working");
+  expect(listed()).toContain("old-7, Thinking");
   const more = [...document.querySelectorAll("button")].find(
     (item) => item.textContent === "Show 2 more",
   );
@@ -942,13 +1114,14 @@ it("pages worktrees five at a time and keeps busy ones listed", async () => {
     [...container.querySelectorAll("button")].find((item) =>
       /^Show \d more/.test(item.textContent ?? ""),
     );
-  expect(listed()).toBe(6);
+  expect(listed()).toBe(7);
   expect(
     container.querySelector('[data-worktree="/trees/w11"]'),
   ).not.toBeNull();
+  await act(async () => button("Toggle worktree History").click());
   await act(async () => more()!.click());
-  expect(listed()).toBe(11);
-  expect(more()!.textContent).toContain("Show 2 more");
+  expect(listed()).toBe(12);
+  expect(more()!.textContent).toContain("Show 1 more");
   await act(async () => more()!.click());
   expect(listed()).toBe(13);
   expect(more()).toBeUndefined();
@@ -1060,7 +1233,7 @@ it.each(["merged", "closed"])(
     });
     try {
       await render();
-      expect(container.querySelectorAll("[data-worktree]")).toHaveLength(5);
+      expect(container.querySelectorAll('[aria-label="History"] [data-worktree]')).toHaveLength(5);
       expect(
         container.querySelector(`[data-worktree="${last.path}"]`),
       ).toBeNull();
@@ -1413,7 +1586,7 @@ it("shows saved and live subagents under their lead inside the hover/focus workt
     card.querySelector(
       '[data-worktree-session="lead"] [data-orchestration-agent="worker"]',
     )?.textContent,
-  ).toContain("Done");
+  ).toContain("Waiting review");
   expect(
     container.querySelector(
       '[data-worktree="/trees/b"] [data-orchestration-agent]',

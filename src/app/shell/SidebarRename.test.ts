@@ -1041,8 +1041,7 @@ describe("sidebar orchestration card", () => {
       expect(
         card().querySelector("[data-session-select] [data-orchestration-icon]"),
       ).toBeNull();
-      expect(card().textContent).toContain("3 agents");
-      expect(card().textContent).toContain("1/3 done");
+      expect(card().textContent).toContain("3 tasks · 1 completed · 2 unfinished");
       expect(card().textContent).toContain("Build settings");
       expect(card().textContent).toContain("Needs you");
       expect(

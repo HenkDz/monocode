@@ -70,6 +70,9 @@ export function isEqualOrInside(path: string, root: string): boolean {
   const base = trimSlash(root);
   const key = pathKey(normalized);
   const baseKey = pathKey(base);
+  if (root === "/") {
+    return path.startsWith("/") && !path.startsWith("/\\") && !windowsPath(path);
+  }
   return key === baseKey || key.startsWith(`${baseKey}/`);
 }
 

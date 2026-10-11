@@ -59,6 +59,7 @@ import {
   getMonoGoalRecoveryBlocks,
   mergeMonoGoalRecoverySession,
   monoGoalRecoveryLiveSession,
+  reconcileMonoGoalOrigin,
 } from "../features/sessions/data/monoGoalRecovery";
 import {
   resumeMonoUsageLimit,
@@ -623,6 +624,8 @@ import {
   setSessionLinkedWorkItem,
   setSessionPinned,
   shouldPersistSession,
+  retainSessionWrite,
+  sessionWriteNeedsReconciliation,
   writeSession,
   flushSessionWrites,
   type SessionSummary,
@@ -7384,6 +7387,17 @@ function Workspace({
       attachments: Attachment[] = [],
       options?: SubmitOptions,
     ): SubmissionAcceptance => {
+      if (sessionWriteNeedsReconciliation(sessionId)) {
+        const message = "Checking previous send… Retry Chat after reconciliation finishes.";
+        enqueueHarnessEvent(sessionId, { type: "status", text: message });
+        flushHarnessEvents();
+        void writeSession(sessionId, async () => {}).catch(error => {
+          enqueueHarnessEvent(sessionId, { type: "status", text: String(error) });
+          flushHarnessEvents();
+        });
+        options?.onSettled?.({ status: "failed", text: "", error: message });
+        return false;
+      }
       const owner = monoForSession(sessionId) ?? listMonos(true).find((mono) =>
         mono.id === (habitRunMono(sessionId) ?? orchestrator.forSession(sessionId)?.ownerMonoId),
       );
@@ -12373,8 +12387,18 @@ function Workspace({
         const next = change(session);
         if (next === session) return;
         const nextLive = history ? monoGoalRecoveryLiveSession(live, next, history) : next;
-        if (!await save(next, history ? { monoBaseline: history, monoLiveBlocks: nextLive.blocks } : undefined))
-          throw Error("The originating chat could not be saved");
+        try {
+          if (!await save(next, history ? { monoBaseline: history, monoLiveBlocks: nextLive.blocks } : undefined))
+            throw Error("The originating chat could not be saved");
+        } catch (error) {
+          retainSessionWrite(sessionId, () => reconcileMonoGoalOrigin(sessionId, submission, text,
+            () => sessionsRef.current.find(entry => entry.id === sessionId),
+            reconciled => {
+              sessionsRef.current = sessionsRef.current.map(entry => entry.id === sessionId ? reconciled : entry);
+              setSessions(sessionsRef.current);
+            }));
+          throw error;
+        }
         sessionsRef.current = sessionsRef.current.map(entry => entry.id === sessionId
           ? history
             ? monoGoalRecoveryLiveSession(entry, change(mergeMonoGoalRecoverySession(entry, history)), history)

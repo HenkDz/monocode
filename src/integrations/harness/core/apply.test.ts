@@ -10,6 +10,7 @@ import {
   enqueueMonoMessage,
 } from "../../../features/monos/model/monoMessaging";
 import { previewFromTool } from "../providers/claude/claudeProtocol";
+import { bindTurnContextProfile } from "./contextProfile";
 import {
   appendUser,
   applyHarnessEvent,
@@ -38,6 +39,29 @@ it("invalidates limits when the provider reports a changed model or configuratio
     .toEqual({ used: 100 });
   expect(applyHarnessEvent(session, { type: "session.configChanged", model: session.model, modelSettings: { effort: "high" } }).context)
     .toEqual(session.context);
+});
+
+it("ignores stale limit-only events without fabricating occupancy or clearing newer limits", () => {
+  const previous = { ...newSession("codex", "/tmp"), modelSettings: { effort: "high" } };
+  const bind = bindTurnContextProfile(previous);
+  const stale = bind({ type: "context", window: 1_000_000, effectiveCompactionThreshold: 900_000 });
+  const current = { ...previous, modelSettings: { effort: "medium" } };
+  expect(applyHarnessEvent(current, stale).context).toBeUndefined();
+  const fresh = { ...current, context: { used: 40_000, window: 100_000, effectiveCompactionThreshold: 80_000 } };
+  expect(applyHarnessEvent(fresh, stale).context).toBe(fresh.context);
+  expect(applyHarnessEvent(fresh, bind({ type: "context", used: 50_000, window: 1_000_000 })).context)
+    .toEqual({ used: 50_000, window: 100_000, effectiveCompactionThreshold: 80_000 });
+});
+
+it("checks the harness and every settings key while allowing reordered settings", () => {
+  const previous = { ...newSession("codex", "/tmp"), modelSettings: { effort: "high", tier: "fast" } };
+  const event = bindTurnContextProfile(previous)({ type: "context", used: 10, window: 100 });
+  expect(applyHarnessEvent({ ...previous, modelSettings: { tier: "fast", effort: "high" } }, event).context)
+    .toEqual({ used: 10, window: 100 });
+  expect(applyHarnessEvent({ ...previous, modelSettings: { effort: "high" } }, event).context)
+    .toEqual({ used: 10 });
+  expect(applyHarnessEvent({ ...previous, harness: "claude" }, event).context)
+    .toEqual({ used: 10 });
 });
 
 beforeEach(() => {

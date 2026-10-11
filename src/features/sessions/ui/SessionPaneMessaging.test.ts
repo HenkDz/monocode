@@ -4,6 +4,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { SessionPane, type SessionPaneProps } from "./SessionPane";
 import { clearComposerDraft, setComposerDraft } from "../model/draftCache";
+import { saveMonoRotation } from "../../monos/model/monoRotation";
+import { registerBuiltinHarnesses } from "../../../integrations/harness/core/register";
 
 const probes = vi.hoisted(() => ({
   mono: true,
@@ -20,6 +22,7 @@ const probes = vi.hoisted(() => ({
       sessionId: string;
       memberId: string;
       status: string;
+      prompt?: string;
     }[];
     dispatches: [];
   }[],
@@ -85,6 +88,7 @@ vi.mock("../../monos/model/mono", async (original) => ({
 let container: HTMLDivElement;
 let root: Root;
 beforeEach(() => {
+  registerBuiltinHarnesses();
   probes.mono = true;
   probes.member = false;
   probes.runs = [];
@@ -695,6 +699,189 @@ it("keeps rapid sends out of the queue and steer interface", () => {
   expect(container.textContent).not.toContain("Steer");
 });
 
+it.each([false, true])(
+  "shows scheduled refresh and unknown limit on real primary Mono surfaces (member: %s)",
+  (member) => {
+    probes.member = member;
+    const pane = props();
+    pane.session.providerSessionId = "thread";
+    pane.session.context = { used: 70_000, window: 100_000 };
+    render(pane);
+    const trigger = container.querySelector('[title="Context usage"]')!;
+    expect(container.querySelectorAll('[title="Context usage"]')).toHaveLength(
+      1,
+    );
+    expect(
+      field().compareDocumentPosition(trigger) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(trigger.getAttribute("aria-label")).toContain(
+      "Will refresh context before next turn",
+    );
+    render({
+      ...pane,
+      session: { ...pane.session, context: { used: 70_000 } },
+    });
+    expect(container.textContent).toContain("Context window unknown");
+    expect(
+      container
+        .querySelector('[title="Context usage"]')
+        ?.getAttribute("aria-label"),
+    ).not.toContain("Will refresh");
+    expect(field()).not.toBeNull();
+  },
+);
+
+it("replaces a Mono refresh promise with the actual draft's size deferral and restores it after trimming", () => {
+  const pane = props();
+  pane.session.providerSessionId = "thread";
+  pane.session.context = { used: 70_000, window: 100_000 };
+  render(pane);
+  const input = field();
+  const inputProps = Object.entries(input).find(([key]) =>
+    key.startsWith("__reactProps"),
+  )![1];
+  act(() => inputProps.onChange({ target: { value: "x".repeat(14_000) } }));
+  expect(container.querySelector('[role="status"]')?.textContent).toContain(
+    "Context refresh deferred: brief and next input too large",
+  );
+  expect(container.textContent).toContain(
+    "Compact manually or trim constraints",
+  );
+  expect(
+    container
+      .querySelector('[title="Context usage"]')
+      ?.getAttribute("aria-label"),
+  ).not.toContain("Will refresh");
+  expect(field().value).toHaveLength(14_000);
+  act(() => inputProps.onChange({ target: { value: "Continue" } }));
+  expect(
+    container
+      .querySelector('[title="Context usage"]')
+      ?.getAttribute("aria-label"),
+  ).toContain("Will refresh context before next turn");
+  expect(container.querySelector('[role="status"]')).toBeNull();
+  expect(field()).toBe(input);
+});
+
+it("explains an oversized protected carry at high occupancy and routes manual compaction", async () => {
+  const pane = props();
+  pane.session.providerSessionId = "thread";
+  pane.session.context = { used: 990_000, window: 1_000_000 };
+  pane.session.blocks[0].text = "x".repeat(8_001);
+  pane.onCompactContext = vi.fn(() => true);
+  render(pane);
+  expect(container.querySelector('[role="status"]')?.textContent).toContain(
+    "constraints, scope or references too large (8001 chars; limit 8,000)",
+  );
+  await act(async () =>
+    container
+      .querySelector<HTMLButtonElement>('[title="Context usage"]')!
+      .click(),
+  );
+  const action = [
+    ...document.querySelectorAll<HTMLButtonElement>("button"),
+  ].find((button) => button.textContent === "Compact now")!;
+  await act(async () => action.click());
+  expect(pane.onCompactContext).toHaveBeenCalledExactlyOnceWith("chat");
+});
+
+it("shows the pending carry's deferral after a detached failed startup without usage", () => {
+  saveMonoRotation("chat", {
+    at: 1,
+    reason: "context",
+    earlier: [],
+    pendingBrief: "Continue safely",
+    pendingInput: "x".repeat(8_001),
+  });
+  const pane = props();
+  render(pane);
+  expect(container.querySelector('[role="status"]')?.textContent).toContain(
+    "Context refresh deferred: constraints, scope or references too large",
+  );
+  expect(
+    container
+      .querySelector('[title="Context usage"]')
+      ?.getAttribute("aria-label"),
+  ).toContain("Context usage unknown");
+});
+
+it.each([
+  { busy: true },
+  { worktreePreparing: true },
+  { codexStoragePreparing: true },
+  { pendingQuestion: { requestId: 1, questions: [] } },
+])(
+  "keeps the Mono meter's manual compaction disabled during an operation or decision: %j",
+  async (operation) => {
+    const pane = props();
+    Object.assign(pane.session, operation);
+    pane.session.context = { used: 70_000, window: 100_000 };
+    pane.onCompactContext = vi.fn(() => true);
+    render(pane);
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>('[title="Context usage"]')!
+        .click(),
+    );
+    const action = [
+      ...document.querySelectorAll<HTMLButtonElement>("button"),
+    ].find((button) => button.textContent === "Compact now")!;
+    expect(action.disabled).toBe(true);
+    await act(async () => action.click());
+    expect(pane.onCompactContext).not.toHaveBeenCalled();
+  },
+);
+
+it("keeps compaction unavailable after the Mono's checkout was removed", () => {
+  const pane = props();
+  pane.session.worktreeRemoved = true;
+  pane.session.context = { used: 70_000, window: 100_000 };
+  render(pane);
+  expect(container.querySelector('[title="Context usage"]')).toBeNull();
+  expect(
+    container.querySelector('svg[role="img"]')?.getAttribute("aria-label"),
+  ).toContain("70% context used");
+});
+
+it("plans generic retained tasks with their current draft and full assignment scope", () => {
+  probes.mono = false;
+  probes.runs = [
+    {
+      leadId: "lead",
+      tasks: [
+        {
+          id: "task",
+          title: "Patch",
+          sessionId: "chat",
+          memberId: "mono",
+          status: "queued",
+          prompt: "Fix the parser",
+        },
+      ],
+      dispatches: [],
+    },
+  ];
+  const pane = props();
+  pane.session.providerSessionId = "thread";
+  pane.session.context = { used: 70_000, window: 100_000 };
+  render(pane);
+  expect(probes.composer.mock.calls.at(-1)![0].rotationScheduled).toBe(true);
+  act(() =>
+    probes.composer.mock.calls.at(-1)![0].onDraftChange("x".repeat(14_000)),
+  );
+  expect(probes.composer.mock.calls.at(-1)![0].rotationScheduled).toBe(false);
+  expect(
+    probes.composer.mock.calls.at(-1)![0].rotationDeferredReason,
+  ).toContain("brief and next input too large");
+  act(() => probes.composer.mock.calls.at(-1)![0].onDraftChange("Continue"));
+  probes.runs[0].tasks[0].prompt = "x".repeat(8_001);
+  render({ ...pane, session: { ...pane.session } });
+  expect(probes.composer.mock.calls.at(-1)![0].rotationScheduled).toBe(false);
+  expect(
+    probes.composer.mock.calls.at(-1)![0].rotationDeferredReason,
+  ).toContain("constraints, scope or references too large");
+});
 it.each([true, false])(
   "wires a rejected turn's retry notice for Mono and normal sessions (Mono: %s)",
   (mono) => {

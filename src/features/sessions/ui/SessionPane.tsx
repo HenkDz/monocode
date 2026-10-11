@@ -24,12 +24,14 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { Composer } from "./Composer";
+import { ContextMeter } from "./ContextMeter";
 import { selectAgentLiveState } from "../../agents/model/agentLiveState";
 import { currentTurnIndex } from "../../agents/model/turnMetrics";
 import { selectAgentMetrics } from "../../agents/model/agentMetrics";
 import { TaskMetricsLine } from "../../agents/ui/TaskMetricsLine";
-import { planSessionRotation } from "../../monos/model/monoRotation";
+import { sessionRotationStatus } from "../../monos/model/monoRotation";
 import { retainedTaskContext } from "../../orchestration/model/memberContinuity";
+import { canRotateContext } from "../../orchestration/model/taskContextBudget";
 import type { Worktree } from "../../source-control/model/worktrees";
 import { orchestrator } from "../../orchestration/model/orchestration";
 import { DiscussionEmpty } from "./DiscussionEmpty";
@@ -811,6 +813,34 @@ const LocalSessionPane = memo(function LocalSessionPane({
     (!draftBlock && (!isEmpty || inSplit || !!session.inboxAsk || !!agent));
   const composerDockMotion = useComposerDockMotion(dockComposer);
   const draftRef = useRef<string | undefined>(getComposerDraft(session.id));
+  const [composerDraft, setComposerDraftText] = useState(
+    () =>
+      draftRef.current ??
+      (agent || session.inboxCard || session.noteCard || session.handoffCard
+        ? ""
+        : session.composerSeed ?? ""),
+  );
+  const draftChanged = useCallback(
+    (text: string) => {
+      draftRef.current = text;
+      setComposerDraft(session.id, text);
+      setComposerDraftText(text);
+    },
+    [session.id],
+  );
+  const taskRun = memberTask
+    ? orchestrationRuns.find((run) =>
+        run.tasks.some((task) => task.sessionId === session.id),
+      )
+    : undefined;
+  const rotationStatus =
+    !remote && (mono || memberTask)
+      ? sessionRotationStatus(
+          session,
+          composerDraft,
+          memberTask && taskRun ? retainedTaskContext(taskRun, memberTask) : "",
+        )
+      : {};
   const composer = (
     <>
       {checkoutNotice && (
@@ -837,6 +867,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
         executionCwd={workCwd}
         sessionId={session.id}
         compactSupported={canCompactHarnessContext(session.harness)}
+        compactDisabled={!canRotateContext(session)}
         recents={recents}
         hideProjectPicker={
           isProjectManager(session.id) ||
@@ -846,11 +877,8 @@ const LocalSessionPane = memo(function LocalSessionPane({
         hideBranchPicker={!!session.inboxAsk || managed}
         hideTopBar={!!session.inboxAsk}
         context={session.context}
-        rotationScheduled={!remote && !!(mono || memberTask) && (() => {
-        const run = orchestrationRuns.find(entry => entry.tasks.some(task => task.sessionId === session.id));
-        const taskContext = memberTask && run ? retainedTaskContext(run, memberTask) : "";
-        return taskContext != null && !!planSessionRotation(session, "", taskContext);
-      })()}
+        rotationScheduled={!!rotationStatus.plan}
+        rotationDeferredReason={rotationStatus.deferredReason}
         quoteRequest={quoteRequest}
         initialDraft={
           draftRef.current ??
@@ -858,10 +886,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
             ? undefined
             : session.composerSeed)
         }
-        onDraftChange={(text) => {
-          draftRef.current = text;
-          setComposerDraft(session.id, text);
-        }}
+        onDraftChange={draftChanged}
         inboxCard={session.inboxCard}
         noteCard={session.noteCard}
         handoffCard={session.handoffCard}
@@ -1665,11 +1690,23 @@ const LocalSessionPane = memo(function LocalSessionPane({
                     }
                     name={agent.name}
                     enabled={visible}
+                    controls={
+                      <ContextMeter
+                        usage={session.context}
+                        rotationScheduled={!!rotationStatus.plan}
+                        rotationDeferredReason={rotationStatus.deferredReason}
+                        onCompact={
+                          canCompactHarnessContext(session.harness) &&
+                          !session.worktreeRemoved
+                            ? () => onCompactContext(session.id)
+                            : undefined
+                        }
+                        compactDisabled={!canRotateContext(session)}
+                      />
+                    }
                     quoteRequest={quoteRequest}
                     onQuoteRequestConsumed={acknowledgeQuote}
-                    onDraftChange={(text) => {
-                      draftRef.current = text;
-                    }}
+                    onDraftChange={draftChanged}
                     focusToken={
                       focused && composerFocused
                         ? composerFocusToken

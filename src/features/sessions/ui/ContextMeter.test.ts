@@ -172,3 +172,29 @@ it("keeps manual compaction disabled during a current operation", async () => {
   await act(async () => action.click());
   expect(compact).not.toHaveBeenCalled();
 });
+
+it("shows a protected-carry deferral and manual compaction without usage telemetry", async () => {
+  const reason =
+    "Context refresh deferred: constraints too large (8001 chars). Compact manually or trim constraints.";
+  const compact = vi.fn();
+  await act(async () =>
+    root.render(
+      createElement(ContextMeter, {
+        rotationDeferredReason: reason,
+        onCompact: compact,
+      }),
+    ),
+  );
+  expect(container.querySelector('[role="status"]')?.textContent).toBe(reason);
+  expect(container.querySelector("svg")).toBeNull();
+  const trigger = container.querySelector("button")!;
+  expect(trigger.getAttribute("aria-label")).toContain("Context usage unknown");
+  expect(trigger.getAttribute("aria-label")).toContain(reason);
+  expect(trigger.getAttribute("aria-label")).not.toContain("Will refresh");
+  await act(async () => trigger.click());
+  const action = [
+    ...document.querySelectorAll<HTMLButtonElement>("button"),
+  ].find((button) => button.textContent === "Compact now")!;
+  await act(async () => action.click());
+  expect(compact).toHaveBeenCalledOnce();
+});

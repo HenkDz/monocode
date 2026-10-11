@@ -29,34 +29,43 @@ export function ContextMeter({
   onCompact,
   compactDisabled = false,
   rotationScheduled = false,
+  rotationDeferredReason,
 }: {
   usage?: ContextUsage;
   onCompact?: () => void;
   compactDisabled?: boolean;
   rotationScheduled?: boolean;
+  rotationDeferredReason?: string;
 }) {
   const [hovered, setHovered] = useState(false);
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
-  const ratio = contextRatio(usage);
-  if (!usage || !Number.isFinite(usage.used) || usage.used < 0) return null;
+  const reading =
+    usage && Number.isFinite(usage.used) && usage.used >= 0 ? usage : undefined;
+  const ratio = contextRatio(reading);
+  if (!reading && !rotationScheduled && !rotationDeferredReason) return null;
 
-  const { headline, detail } = contextTooltip(usage);
-  const threshold = usage.effectiveCompactionThreshold;
+  const { headline, detail } = reading
+    ? contextTooltip(reading)
+    : {
+        headline: "Context usage unknown",
+        detail: "Provider has not reported usage",
+      };
+  const threshold = reading?.effectiveCompactionThreshold;
   const thresholdLabel =
     threshold != null && Number.isFinite(threshold) && threshold > 0
       ? `Context refresh threshold: ${formatTokens(threshold)} tokens`
       : "Context refresh threshold unknown";
-  const rotationLabel = rotationScheduled
-    ? "Will refresh context before next turn"
-    : undefined;
+  const rotationLabel =
+    rotationDeferredReason ??
+    (rotationScheduled ? "Will refresh context before next turn" : undefined);
   const label = `${headline}, ${detail}. ${thresholdLabel}${rotationLabel ? `. ${rotationLabel}` : ""}`;
   const actionsOpen = open && onCompact != null;
 
   return (
     <div
       ref={root}
-      className="relative shrink-0"
+      className="relative min-w-0 max-w-sm"
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       onFocus={() => setHovered(true)}
@@ -89,13 +98,18 @@ export function ContextMeter({
       ) : (
         <MeterRing ratio={ratio} label={label} />
       )}
+      {rotationDeferredReason ? (
+        <p role="status" className="mt-1 text-[11px] leading-4 text-content/60">
+          {rotationDeferredReason}
+        </p>
+      ) : null}
       {hovered || actionsOpen ? (
         <Popover
           anchor={root}
           side="top"
           align="end"
           onDismiss={onCompact ? () => setOpen(false) : undefined}
-          className={`w-max px-2.5 py-1.5 ${actionsOpen ? "" : "pointer-events-none"}`}
+          className={`w-max max-w-sm px-2.5 py-1.5 ${actionsOpen ? "" : "pointer-events-none"}`}
         >
           <div className="text-[12px] leading-4 text-content">{headline}</div>
           <div className="text-[11px] leading-4 text-content/50">{detail}</div>

@@ -9,6 +9,7 @@ import type {
   TurnMetrics,
 } from "../../../features/sessions/model/session";
 import type { UserQuestion } from "../../../features/sessions/model/userQuestion";
+import type { ContextProfile } from "./contextProfile";
 
 export type HarnessEvent =
   | { type: "session.started" }
@@ -22,6 +23,7 @@ export type HarnessEvent =
       type: "session.configChanged";
       model?: string;
       modelSettings?: Record<string, string>;
+      contextProfile?: ContextProfile;
     }
   | { type: "status"; text: string; key?: string }
   /** The provider refused the turn until its usage window resets (epoch ms). */
@@ -155,7 +157,7 @@ export type HarnessEvent =
       streaming?: boolean;
     }
   /** Context-window level after the harness's latest request. */
-  | { type: "context"; used?: number; window?: number; effectiveCompactionThreshold?: number }
+  | { type: "context"; used?: number; window?: number; effectiveCompactionThreshold?: number; contextProfile?: ContextProfile }
   /** Provider history was compacted; standing app context must be handed again. */
   | { type: "context.compacted" }
   /** Provider token accounting for the active user turn. */

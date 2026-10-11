@@ -29,6 +29,12 @@ The context meter keeps the actual reading, labels a scheduled refresh with
 “Will refresh context before next turn”, and states unknown windows and
 thresholds plainly. Remote sessions do not schedule this local policy.
 
+CC5EF also shows those labels beside the primary Mono composer used by
+Grand Orchestrator, Managers and members. Both composer surfaces plan with
+the current draft. An oversized carry or incomplete archive displays a
+specific deferral reason and a manual-compaction or trimming/loading path;
+it does not promise a refresh that the next input cannot fit.
+
 ## Continuity and failure recovery
 
 The deterministic existing brief keeps recent exchanges and excerpts from
@@ -54,6 +60,19 @@ actual replacement thread. No destructive chat reset is used. Codex private
 store migration remains exclusive to Mono chats, matching their existing
 storage selection. Generation checks prevent a cancelled submission from
 detaching a newer turn after migration.
+
+CC5EF preserves every unaccepted input across repeated startup failures,
+merges subsequent visible user constraints, and saves the updated carry
+before every retry. Retry carries obey both size allowances. If a pending
+carry cannot fit, submission reports the reason before another detach or
+startup can omit it. Acceptance clears the pending inputs only after the
+provider receives them.
+
+Context and configuration events retain their submitted harness/model/settings
+identity until the event queue reaches the reducer. A changed selection rejects
+old limits and configuration while keeping occupancy, transcript, billing and
+compaction observations. Canonical provider configuration advances that turn's
+identity so its subsequent limit-only updates still work.
 
 ## Task sizing
 
@@ -87,7 +106,7 @@ long tools. Also compare worker duration p95 and first-output p95. The targets
 are at least 50% fewer compactions and worker-turn p95 below 15 minutes; this
 round does not claim those live results from synthetic tests.
 
-## Validation
+## Original CC5E validation
 
 Windows; web checks used `NODE_OPTIONS=--no-experimental-webstorage`.
 
@@ -129,3 +148,10 @@ Native runtime/provider acceptance and latency improvement remain coordinator
 rollout checks. Oversized or incompletely loaded constraints deliberately
 defer automatic refresh; task segmentation remains the safeguard for those
 cases and for live turns without an idle boundary.
+
+## CC5EF repair validation
+
+The review's four findings and their committed reproductions are documented
+in `docs/cc5ef-rotation-fixes.md`. Current repair evidence is under
+`C:/Users/nooro/AppData/Local/Temp/monocode-cc/cc5ef/`; `REPORT.md` records the
+integrated branch revisions, exact checks and remaining rollout limits.

@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { memberContinuity, retainedTaskContext } from "./memberContinuity";
+import { sessionRotationStatus } from "../../monos/model/monoRotation";
 import type { OrchestrationRun, OrchestrationTask } from "./orchestrationState";
 
 it("carries the member's own recent project summaries and sender hand-off", () => {
@@ -115,21 +116,29 @@ it("retains exact review assignment references and excludes evidence from a late
   expect(retainedTaskContext(run, task)).not.toContain("implementation-report");
 });
 
-it("allows the exact retained-context boundary and defers instead of truncating beyond it", () => {
+it("retains scope beyond the allowance so the planner can explain its deferral", () => {
   const { run, task } = fixture();
   task.prompt = "";
   const overhead = retainedTaskContext(run, task)!.length;
   task.prompt = "P".repeat(8_000 - overhead);
   expect(retainedTaskContext(run, task)?.length).toBe(8_000);
   task.prompt += "P";
-  expect(retainedTaskContext(run, task)).toBeUndefined();
+  const context = retainedTaskContext(run, task);
+  expect(context.length).toBe(8_001);
+  expect(context).toContain(task.prompt);
+  const status = sessionRotationStatus({ id: task.sessionId!, providerSessionId: "old", context: { used: 700, window: 1000 }, blocks: [] }, "", context);
+  expect(status.plan).toBeUndefined();
+  expect(status.deferredReason).toContain("8001 chars");
 });
 
-it("defers for oversized recovery, hand-off or scope instead of dropping constraints", () => {
+it("preserves oversized recovery, hand-off and scope for the shared planner", () => {
   for (const patch of [{ recoveryPrompt: "R".repeat(8_000) }, { handoffNote: "H".repeat(8_000) }, { files: ["F".repeat(8_000)] }]) {
     const { run, task } = fixture();
     Object.assign(task, patch);
-    expect(retainedTaskContext(run, task)).toBeUndefined();
+    expect(retainedTaskContext(run, task).length).toBeGreaterThan(8_000);
+    const status = sessionRotationStatus({ id: task.sessionId!, providerSessionId: "old", context: { used: 700, window: 1000 }, blocks: [] }, "", retainedTaskContext(run, task));
+    expect(status.plan).toBeUndefined();
+    expect(status.deferredReason).toContain("constraints, scope or references too large");
   }
 });
 

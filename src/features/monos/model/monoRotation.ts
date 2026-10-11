@@ -41,6 +41,7 @@ export type MonoRotation = {
   /** Retried until an actual provider turn accepts the brief. */
   pendingBrief?: string;
   pendingInput?: string;
+  pendingInputs?: string[];
 };
 
 type Exchange = {
@@ -78,23 +79,19 @@ export function planSessionRotation(
   nextText = "",
   taskContext = "",
 ): ReturnType<typeof planRotation> | undefined {
-  if (!canRotateContext(session)) return undefined;
+  return sessionRotationStatus(session, nextText, taskContext).plan;
+}
+
+/** The chat and submission use the same bounds and deferral explanation. */
+export function sessionRotationStatus(
+  session: Pick<Session, "id" | "providerSessionId" | "context" | "blocks"> &
+    Partial<Session>,
+  nextText = "",
+  taskContext = "",
+): { plan?: ReturnType<typeof planRotation>; deferredReason?: string } {
+  if (!canRotateContext(session)) return {};
   const previous = loadMonoRotation(session.id);
-  if (previous?.pendingBrief) {
-    return {
-      rotation: previous,
-      brief: () =>
-        [
-          previous.pendingBrief,
-          ...(previous.pendingInput
-            ? [
-                `Unaccepted continuation input; retain its constraints, with the current request taking priority:\n${previous.pendingInput}`,
-              ]
-            : []),
-        ].join("\n\n"),
-    };
-  }
-  if (!rotationReason(session, nextText)) return undefined;
+  if (!previous?.pendingBrief && !rotationReason(session, nextText)) return {};
   const after = previous?.afterBlockId
     ? session.blocks.findIndex((block) => block.id === previous.afterBlockId)
     : -1;
@@ -103,7 +100,9 @@ export function planSessionRotation(
     session.monoTranscript?.before != null &&
     (!previous?.userRequests || after < 0)
   )
-    return undefined;
+    return {
+      deferredReason: "Context refresh deferred: older constraints are not fully loaded. Compact manually or load the earlier conversation.",
+    };
   const requests = new Map(
     (previous?.userRequests ?? []).map((request) => [request.id, request]),
   );
@@ -128,8 +127,42 @@ export function planSessionRotation(
   }
   const referenceText = [...references].join("\n");
   const constraints = userRequests.map((request) => request.text).join("\n\n");
-  if (constraints.length + taskContext.length + referenceText.length > 8_000)
-    return undefined;
+  const pendingInputs = previous?.pendingBrief
+    ? [...new Set([
+        ...(previous.pendingInputs ?? []),
+        ...(previous.pendingInput ? [previous.pendingInput] : []),
+        ...session.blocks.slice(after + 1)
+          .filter(block => block.role === "user" && !block.internal && !block.draft)
+          .map(block => block.text),
+        nextText,
+      ].filter(text => text.trim()))]
+    : [];
+  const requestTexts = new Set(userRequests.map(request => request.text));
+  const protectedChars = constraints.length + taskContext.length + referenceText.length +
+    pendingInputs.filter(text => !requestTexts.has(text)).join("\n\n").length;
+  if (protectedChars > 8_000)
+    return {
+      deferredReason: `Context refresh deferred: constraints, scope or references too large (${protectedChars} chars; limit 8,000). Compact manually or trim constraints.`,
+    };
+  if (previous?.pendingBrief) {
+    const brief = () => [
+      previous.pendingBrief,
+      ...(pendingInputs.length ? [
+        `Unaccepted continuation inputs; retain their constraints, with the current request taking priority:\n${pendingInputs.join("\n\n")}`,
+      ] : []),
+    ].join("\n\n");
+    const chars = brief().length + nextText.length + 120;
+    if (chars > 14_000)
+      return {
+        deferredReason: `Context refresh deferred: brief and next input too large (${chars} chars; limit 14,000). Compact manually or trim constraints.`,
+      };
+    return {
+      plan: {
+        rotation: { ...previous, userRequests, references: [...references], pendingInputs },
+        brief,
+      },
+    };
+  }
   const plan = planRotation(
     session.blocks,
     previous,
@@ -156,9 +189,12 @@ export function planSessionRotation(
         : []),
     ].join("\n\n");
   // Leave 12K for CC1's first-thread context within its 26K rotation budget.
-  if (brief(session.id).length + nextText.length + 120 > 14_000)
-    return undefined;
-  return { rotation: plan.rotation, brief };
+  const chars = brief(session.id).length + nextText.length + 120;
+  if (chars > 14_000)
+    return {
+      deferredReason: `Context refresh deferred: brief and next input too large (${chars} chars; limit 14,000). Compact manually or trim constraints.`,
+    };
+  return { plan: { rotation: plan.rotation, brief } };
 }
 
 /** Replace only provider context. The transcript and selected scope/profile survive. */
@@ -181,6 +217,7 @@ export function acceptMonoRotation(sessionId: string, at: number): void {
   const {
     pendingBrief: _accepted,
     pendingInput: _input,
+    pendingInputs: _inputs,
     ...settled
   } = rotation;
   saveMonoRotation(sessionId, settled);

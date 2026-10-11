@@ -228,7 +228,9 @@ type Props = {
   remoteFeatures?: { attachments: boolean; plan: boolean; draft: boolean };
   context?: ContextUsage;
   rotationScheduled?: boolean;
+  rotationDeferredReason?: string;
   compactSupported?: boolean;
+  compactDisabled?: boolean;
   quoteRequest?: QuoteRequest;
   initialDraft?: string;
   draftResetToken?: number;
@@ -355,7 +357,9 @@ export function Composer({
   remoteFeatures,
   context,
   rotationScheduled,
+  rotationDeferredReason,
   compactSupported = false,
+  compactDisabled = false,
   quoteRequest,
   initialDraft,
   draftResetToken,
@@ -1996,16 +2000,17 @@ export function Composer({
                   />
                 </>
               )}
-              <div className="ml-auto flex shrink-0 items-center">
+              <div className="ml-auto flex min-w-0 max-w-[60%] items-center">
                 <ContextMeter
                   usage={context}
                   rotationScheduled={rotationScheduled}
+                  rotationDeferredReason={rotationDeferredReason}
                   onCompact={
                     compactSupported && !worktreeRemoved
                       ? onCompactContext
                       : undefined
                   }
-                  compactDisabled={busy}
+                  compactDisabled={busy || compactDisabled}
                 />
               </div>
             </div>

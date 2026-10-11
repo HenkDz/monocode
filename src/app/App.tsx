@@ -392,6 +392,7 @@ import {
   type UserQuestionReply,
 } from "../integrations/harness";
 import { supportsHarnessLogin } from "../integrations/harness/core/authSupport";
+import { bindTurnContextProfile } from "../integrations/harness/core/contextProfile";
 import {
   appendPreparingHandoff,
   buildDeterministicHandoff,
@@ -692,7 +693,8 @@ import {
 } from "../features/monos/model/monoHabits";
 import {
   acceptMonoRotation,
-  planSessionRotation,
+  loadMonoRotation,
+  sessionRotationStatus,
   rotateProviderContext,
   saveMonoRotation,
 } from "../features/monos/model/monoRotation";
@@ -8017,8 +8019,9 @@ function Workspace({
       const rotationTask = rotationRun?.tasks.find(task => task.sessionId === sessionId);
       const taskContext = rotationTask && rotationRun
         ? retainedTaskContext(rotationRun, rotationTask) : "";
-      const monoRotation = (mono || rotationTask) && !pendingSwitch && !editedResend && taskContext != null
-        ? planSessionRotation(current, harnessText, taskContext) : undefined;
+      const rotationStatus = (mono || rotationTask) && !pendingSwitch && !editedResend
+        ? sessionRotationStatus(current, harnessText, taskContext) : undefined;
+      const monoRotation = rotationStatus?.plan;
 
       const gen = (turnGen.current.get(sessionId) ?? 0) + 1;
       turnGen.current.set(sessionId, gen);
@@ -8500,6 +8503,7 @@ function Workspace({
         };
 
         const pendingEditedEvents: HarnessEvent[] = [];
+        const bindContextProfile = bindTurnContextProfile(current);
         const applyTurnEvent = (event: HarnessEvent) => {
           orchestrator.observe(sessionId, event);
           if (options?.onSettled && event.type === "message.delta")
@@ -8523,7 +8527,7 @@ function Workspace({
             setSessions((prev) => prev.map((session) =>
               session.id === sessionId ? captureTurnEvent(session, event) : session,
             ));
-          if (routed) enqueueHarnessEvent(sessionId, routed);
+          if (routed) enqueueHarnessEvent(sessionId, bindContextProfile(routed));
         };
         const routeTurnEvent = (event: HarnessEvent) => {
           if (turnGen.current.get(sessionId) !== gen) return;
@@ -8625,7 +8629,7 @@ function Workspace({
                   : {}),
                 onEvent: (event) => {
                   if (turnGen.current.get(sessionId) !== gen) return;
-                  enqueueHarnessEvent(sessionId, event);
+                  enqueueHarnessEvent(sessionId, bindContextProfile(event));
                 },
               });
             } catch (error) {
@@ -8731,10 +8735,12 @@ function Workspace({
                 : turnPrompt,
             ),
           );
+          if (rotationStatus?.deferredReason && loadMonoRotation(sessionId)?.pendingBrief)
+            throw new Error(rotationStatus.deferredReason);
           if (monoRotation) {
             if (turnGen.current.get(sessionId) !== gen) return;
-            if (!monoRotation.rotation.pendingBrief && !saveMonoRotation(sessionId, {
-              ...monoRotation.rotation, pendingBrief: monoRotation.brief(sessionId),
+            if (!saveMonoRotation(sessionId, {
+              ...monoRotation.rotation, pendingBrief: monoRotation.rotation.pendingBrief ?? monoRotation.brief(sessionId),
             })) throw new Error("The context refresh brief could not be saved. Try again when storage is available.");
             if (mono && current.harness === "codex" && current.providerSessionId) {
               await migrateMonoCodexSession({
@@ -10927,6 +10933,7 @@ function Workspace({
       const gen = (turnGen.current.get(sessionId) ?? 0) + 1;
       turnGen.current.set(sessionId, gen);
       const workCwd = sessionWorkCwd(current);
+      const bindContextProfile = bindTurnContextProfile(current);
       const started = sessionsRef.current.map((session) =>
         session.id === sessionId
           ? applyHarnessEvent(
@@ -10961,7 +10968,7 @@ function Workspace({
               orchestrator.run(sessionId)?.status === "active",
             onEvent: (event) => {
               if (turnGen.current.get(sessionId) !== gen) return;
-              enqueueHarnessEvent(sessionId, event);
+              enqueueHarnessEvent(sessionId, bindContextProfile(event));
             },
           });
           if (turnGen.current.get(sessionId) !== gen) return;

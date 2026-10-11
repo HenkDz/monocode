@@ -24,6 +24,7 @@ import type { HarnessEvent } from "./types";
 import { usageLimitFromError } from "../../../features/sessions/model/usageLimit";
 import { parseTeamMessage } from "../../../features/sessions/model/teamMessage";
 import { captureTurnEvent, currentTurnIndex } from "../../../features/agents/model/turnMetrics";
+import { sameContextProfile } from "./contextProfile";
 
 /** Apply one delivery batch without copying the transcript for every token. */
 export function applyHarnessEvents(
@@ -136,15 +137,20 @@ export function applyHarnessEvent(
       return session.pendingQuestion?.requestId === event.requestId
         ? { ...session, pendingQuestion: undefined }
         : session;
-    case "context":
+    case "context": {
+      const currentProfile = !event.contextProfile || sameContextProfile(session, event.contextProfile);
+      if (!currentProfile && event.used == null) return session;
       return {
         ...session,
         context: mergeContextUsage(session.context, {
           used: event.used,
-          window: event.window,
-          effectiveCompactionThreshold: event.effectiveCompactionThreshold,
+          ...(currentProfile ? {
+            window: event.window,
+            effectiveCompactionThreshold: event.effectiveCompactionThreshold,
+          } : {}),
         }),
       };
+    }
     case "turn.metrics":
     case "turn.compaction":
       return session;
@@ -197,6 +203,7 @@ export function applyHarnessEvent(
     case "turn.ready":
       return session.busy ? { ...session, turnReady: true } : session;
     case "session.configChanged":
+      if (event.contextProfile && !sameContextProfile(session, event.contextProfile)) return session;
       return {
         ...session,
         ...((event.model && event.model !== session.model) ||

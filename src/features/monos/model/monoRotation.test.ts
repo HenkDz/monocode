@@ -3,10 +3,12 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Block } from "../../sessions/model/session";
 import {
   loadMonoRotation,
+  acceptMonoRotation,
   planRotation,
   planSessionRotation,
   rotationReason,
   saveMonoRotation,
+  sessionRotationStatus,
 } from "./monoRotation";
 
 beforeEach(() => {
@@ -266,6 +268,76 @@ it("retains an unaccepted continuation input when the next action is a retry", (
   );
   expect(retry.brief(session.id)).toContain("Unaccepted continuation input");
   expect(retry.brief(session.id).length).toBeLessThanOrEqual(14_000);
+});
+
+it("carries every constraint across two failed startups before provider acceptance", () => {
+  const session = {
+    id: "repeated-failure",
+    providerSessionId: "old-thread" as string | undefined,
+    context: { used: 700, window: 1000 } as { used: number; window: number } | undefined,
+    blocks: [{ id: "original", role: "user", text: "Edit the parser in the retained checkout." }] as Block[],
+  };
+  const firstInput = "Implement the parser fix.";
+  const secondInput = "Retry the parser fix. Do not push or merge any branch.";
+  const first = planSessionRotation(session, firstInput)!;
+  saveMonoRotation(session.id, { ...first.rotation, pendingBrief: first.brief(session.id) });
+  session.providerSessionId = undefined;
+  session.context = undefined;
+  session.blocks.push({ id: "attempt-a", role: "user", text: firstInput });
+  const second = planSessionRotation(session, secondInput)!;
+  expect(second.brief(session.id)).toContain(secondInput);
+  saveMonoRotation(session.id, second.rotation);
+  session.blocks.push({ id: "attempt-b", role: "user", text: secondInput });
+  const third = planSessionRotation(session, "Retry now.")!;
+  for (const input of [firstInput, secondInput, "Retry now."])
+    expect(third.brief(session.id)).toContain(input);
+  expect(third.rotation.userRequests?.map(request => request.text)).toContain(secondInput);
+  expect(third.brief(session.id).length + "Retry now.".length + 120).toBeLessThanOrEqual(14_000);
+  saveMonoRotation(session.id, third.rotation);
+  acceptMonoRotation(session.id, third.rotation.at);
+  expect(loadMonoRotation(session.id)?.pendingBrief).toBeUndefined();
+  expect(loadMonoRotation(session.id)?.pendingInputs).toBeUndefined();
+  expect(loadMonoRotation(session.id)?.userRequests?.map(request => request.text)).toContain(secondInput);
+});
+
+it("keeps unaccepted constraints even before their transcript blocks appear", () => {
+  const session = { id: "unaccepted", providerSessionId: "old", context: { used: 700, window: 1000 }, blocks: [] };
+  const first = planSessionRotation(session, "Do not publish.")!;
+  saveMonoRotation(session.id, { ...first.rotation, pendingBrief: first.brief(session.id) });
+  const second = planSessionRotation(session, "Use only account B.")!;
+  saveMonoRotation(session.id, second.rotation);
+  const retry = planSessionRotation(session, "Try again.")!;
+  expect(retry.brief(session.id)).toContain("Do not publish.");
+  expect(retry.brief(session.id)).toContain("Use only account B.");
+});
+
+it.each([700_000, 990_000])("explains oversized protected constraints at %i used tokens", (used) => {
+  const text = "x".repeat(8001);
+  const status = sessionRotationStatus({
+    id: "oversized", providerSessionId: "old", context: { used, window: 1_000_000 },
+    blocks: [{ id: "u", role: "user", text }],
+  });
+  expect(status.plan).toBeUndefined();
+  expect(status.deferredReason).toContain("8001 chars");
+  expect(status.deferredReason).toContain("Compact manually or trim constraints");
+});
+
+it("uses the next draft when explaining a deferred combined brief", () => {
+  const session = { id: "draft", providerSessionId: "old", context: { used: 700, window: 1000 }, blocks: [] };
+  expect(sessionRotationStatus(session).plan).toBeDefined();
+  const status = sessionRotationStatus(session, "n".repeat(14_000));
+  expect(status.plan).toBeUndefined();
+  expect(status.deferredReason).toContain("brief and next input too large");
+});
+
+it("reapplies protected and complete-brief bounds to failed-start retries", () => {
+  const session = { id: "retry-bounds", providerSessionId: "old", context: { used: 700, window: 1000 }, blocks: [] };
+  const first = planSessionRotation(session, "Keep constraints.")!;
+  saveMonoRotation(session.id, { ...first.rotation, pendingBrief: first.brief(session.id) });
+  expect(sessionRotationStatus(session, "x".repeat(8001)).deferredReason).toContain("constraints, scope or references too large");
+  const nextText = "x".repeat(7_000);
+  expect(sessionRotationStatus(session, nextText).deferredReason).toContain("brief and next input too large");
+  expect(loadMonoRotation(session.id)?.pendingInput).toBe("Keep constraints.");
 });
 
 it("briefs the fresh session with recent turns word for word and earlier ones as lines", () => {

@@ -1,4 +1,10 @@
-import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { isImeComposition } from "../../../shared/lib/keyboard";
 import { ArrowUp, Plus } from "../../../shared/ui/icons";
 import { AttachmentChip } from "../../sessions/ui/AttachmentChip";
@@ -41,6 +47,7 @@ type Props = {
   quoteRequest?: QuoteRequest;
   onQuoteRequestConsumed?: (id: number) => void;
   onDraftChange?: (text: string) => void;
+  controls?: ReactNode;
   /** Returns false when the message wasn't taken, so the draft stays. */
   onSubmit: (
     text: string,
@@ -64,6 +71,7 @@ export function MonoComposer({
   quoteRequest,
   onQuoteRequestConsumed,
   onDraftChange,
+  controls,
   onSubmit,
   onFocus,
 }: Props) {
@@ -375,6 +383,14 @@ export function MonoComposer({
           </div>
         </div>
       </div>
+      {controls ? (
+        <div
+          data-mono-composer-controls
+          className="flex min-w-0 items-center justify-end px-2.5 pb-1"
+        >
+          {controls}
+        </div>
+      ) : null}
     </form>
   );
 }

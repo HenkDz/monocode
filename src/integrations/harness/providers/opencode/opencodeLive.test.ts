@@ -222,6 +222,27 @@ afterEach(async () => {
   __openCodeTestReset();
 });
 
+it.each(["v1", "v2"])("routes explicit %s compaction only to its session", async generation => {
+  const events: HarnessEvent[] = [];
+  openCodeVersion = generation === "v1" ? "opencode 1.14.19" : "opencode v2.0.19";
+  const done = turn(events);
+  await waitFor(() => harnessHttp.mock.calls.some(([input]) => input.url.includes(generation === "v1" ? "/prompt_async" : "/prompt")), "prompt");
+  const emitCompaction = (type: string, sessionID?: string) => onSseEvent?.(generation === "v1"
+    ? { type, properties: { sessionID } }
+    : { id: `evt_${type}`, type, data: { sessionID } });
+  const completed = generation === "v1" ? "session.compacted" : "session.compaction.ended";
+  emitCompaction(completed, "unrelated");
+  emitCompaction(completed);
+  emitCompaction("session.compaction.started", "session_1");
+  emitCompaction("session.compaction.failed", "session_1");
+  expect(events.filter(event => event.type === "context.compacted")).toEqual([]);
+  emitCompaction(completed, "session_1");
+  expect(events.filter(event => event.type === "context.compacted")).toEqual([{ type: "context.compacted" }]);
+  if (generation === "v1") idle();
+  else onSseEvent?.({ id: "evt_done", type: "session.execution.succeeded", data: { sessionID: "session_1" } });
+  await done;
+});
+
 it("reports when OpenCode accepts a turn", async () => {
   const events: HarnessEvent[] = [];
   const onAccepted = vi.fn();
@@ -703,13 +724,15 @@ describe("OpenCode 2.x completion correlation", () => {
   });
 
   it("waits for compaction to end when admission returns no inbox id", async () => {
-    const compaction = compact([]);
+    const events: HarnessEvent[] = [];
+    const compaction = compact(events);
     const compacted = settled(compaction);
     await waitFor(() => calls(COMPACT) === 1, "compact");
     await drain();
     expect(compacted()).toBe(false);
     v2("session.compaction.ended", { reason: "manual", text: "summary" });
     await compaction;
+    expect(events).toContainEqual({ type: "context.compacted" });
   });
 
   describe.each(["with an inbox id", "without an inbox id"])(

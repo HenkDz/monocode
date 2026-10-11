@@ -678,6 +678,11 @@ function handleLine(sessionId: string, live: Live, line: string): void {
 
   if (live.muteUpdates) return;
 
+  const compactBoundary = type === "system" && stringField(rec, "subtype") === "compact_boundary";
+  const compactSessionId = stringField(rec, "session_id");
+  if (compactBoundary && (isSubagentMessage(rec) ||
+      (compactSessionId && live.claudeSessionId && compactSessionId !== live.claudeSessionId))) return;
+
   const sessionIdFromLine = sessionIdFromMessage(rec);
   if (sessionIdFromLine && sessionIdFromLine !== live.claudeSessionId) {
     live.claudeSessionId = sessionIdFromLine;
@@ -744,6 +749,7 @@ function handleLine(sessionId: string, live: Live, line: string): void {
     return;
   }
   if (type === "system") {
+    if (compactBoundary) live.onEvent({ type: "context.compacted" });
     const text = statusTextFromSystem(rec);
     if (text) {
       if ((stringField(rec, "subtype") ?? "").startsWith("compact")) {

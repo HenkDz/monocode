@@ -379,6 +379,10 @@ export function mapCodexNotification(
   const rec = asRecord(params);
   if (!rec) return { events: [] };
 
+  if (method === "thread/compacted") {
+    return { events: stringField(rec, "threadId") ? [{ type: "context.compacted" }] : [] };
+  }
+
   if (method === "rawResponseItem/completed") {
     const item = asRecord(rec.item);
     const type = item && stringField(item, "type");
@@ -551,7 +555,6 @@ export function mapCodexNotification(
 /** Codex thread items MonoCode already renders elsewhere or that are internal metadata. */
 const SILENT_ITEM_TYPES = new Set([
   "userMessage",
-  "contextCompaction",
   "enteredReviewMode",
 ]);
 
@@ -653,6 +656,10 @@ function mapItemLifecycle(
   if (!callId) return { events: [] };
   const itemType = stringField(item, "type") ?? "";
   const completed = method === "item/completed";
+
+  if (itemType === "contextCompaction") {
+    return { events: completed && stringField(rec, "threadId") ? [{ type: "context.compacted" }] : [] };
+  }
 
   if (SILENT_ITEM_TYPES.has(itemType)) {
     return { events: [] };

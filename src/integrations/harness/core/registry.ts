@@ -7,6 +7,7 @@ import type {
 } from "../../../features/sessions/model/session";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { findMono, monoRuntimeMode } from "../../../features/monos/model/mono";
+import { forgetAgentContext } from "../../../features/monos/model/monoFiles";
 import { appCliInvocation, appCliApprovalReason, isDirectAppCliCommand, type AppCliApprovalPolicy } from "./appCliApproval";
 import type { GeneratedSessionTitle } from "../../../features/sessions/model/sessionTitle";
 import type { PrContent } from "../../../features/source-control/model/gitText";
@@ -314,12 +315,16 @@ export function sendHarnessTurn(input: SendTurnInput & { harness: HarnessId }) {
       ? await invoke<AppCliApprovalPolicy>("app_cli_approval_policy", { cwd: input.cwd, sessionId: input.sessionId }).catch(() => undefined)
       : undefined;
     const automaticApprovals = new Set<number>();
+    let compacted = false;
     activeTurnSessions.add(input.sessionId);
     try {
       await adapter.sendTurn({
         ...input,
         ...(appCli ? { text: `${input.text}\n\n<monocode_cli_input>The current running MonoCode executable is ${appCli.executable}. Use this exact executable for app CLI calls; it overrides executable paths from earlier turns. ${appCli.tempDir ? `If you choose --input, the only auto-approved input location is this session's private folder: ${appCli.tempDir}.` : "Private input scoping is unavailable; --input will not be auto-approved."} Temporary input files are optional, not required. Never use another session's folder.</monocode_cli_input>` } : {}),
         onEvent: (event) => {
+          if (event.type === "context.compacted") {
+            compacted = true;
+          }
           const invocation = event.type === "approval.requested" ? appCliInvocation(event.command, appCli) : undefined;
           const candidate = invocation?.tokens;
           if (event.type === "approval.requested" && appCli && candidate &&
@@ -359,11 +364,16 @@ export function sendHarnessTurn(input: SendTurnInput & { harness: HarnessId }) {
             input.onEvent({ ...event, autoApprovalReason: appCli ? appCliApprovalReason(event.command, appCli.trustedRtk) : "Not auto-approved: the running app's CLI policy is unavailable." });
             return;
           }
-          input.onEvent(event);
+          forwardHarnessEvent(input, event);
         },
         onAccepted: () => {
           input.onEvent({ type: "turn.ready" });
-          input.onAccepted?.();
+          try {
+            input.onAccepted?.();
+          } finally {
+            // Acceptance can follow compaction and otherwise restore stale receipts.
+            if (compacted) forgetAgentContext(input.sessionId);
+          }
         },
       });
     } finally {
@@ -374,6 +384,11 @@ export function sendHarnessTurn(input: SendTurnInput & { harness: HarnessId }) {
       scheduleIdlePark(input.harness, input.sessionId);
     }
   });
+}
+
+function forwardHarnessEvent(input: CompactContextInput, event: HarnessEvent): void {
+  if (event.type === "context.compacted") forgetAgentContext(input.sessionId);
+  input.onEvent(event);
 }
 
 export function canCompactHarnessContext(id: HarnessId): boolean {
@@ -393,8 +408,11 @@ export function compactHarnessContext(
       throw new Error(`${input.harness} does not support manual compaction`);
     }
     cancelIdlePark(input.sessionId);
+    const onEvent = (event: HarnessEvent) => forwardHarnessEvent(input, event);
     try {
-      await adapter.compactContext(input);
+      await adapter.compactContext({ ...input, onEvent });
+      // Some manual compaction APIs succeed without a separate notification.
+      onEvent({ type: "context.compacted" });
     } finally {
       scheduleIdlePark(input.harness, input.sessionId);
     }
@@ -424,7 +442,7 @@ export function rewindHarnessLastTurn(
     }
     cancelIdlePark(input.sessionId);
     try {
-      return await adapter.rewindLastTurn(input);
+      return await adapter.rewindLastTurn({ ...input, onEvent: event => forwardHarnessEvent(input, event) });
     } finally {
       scheduleIdlePark(input.harness, input.sessionId);
     }

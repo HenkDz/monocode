@@ -35,6 +35,25 @@ function chat(id: string, cwd: string): Session {
   return session;
 }
 
+it.each(["role", "user"] as const)("retains %s effort and account affinity for an empty session restored from its workspace stub", effortSource => {
+  const session: Session = { ...newSession("codex", "/synthetic"), id: "role-account", blocks: [], providerAccountId: "other-account",
+    modelSettings: { reasoningEffort: "medium", serviceTier: "priority" }, effortSource };
+  const tab = newTab(session.id);
+  const snapshot = collectWorkspaceSnapshot([tab], [session], tab.id, session.cwd, new Map());
+  const parsed = parseWorkspaceSnapshot(JSON.parse(JSON.stringify(snapshot)))!;
+  expect(parsed.sessions[0].effortSource).toBe(effortSource);
+  const resumed = hydrateWorkspaceSnapshot(parsed, new Map())!.sessions.find(value => value.id === session.id)!;
+  expect(resumed).toMatchObject({ effortSource, modelSettings: session.modelSettings, providerAccountId: "other-account" });
+});
+
+it("drops an invalid workspace effort source without changing saved effort", () => {
+  const session = newSession("codex", "/synthetic");
+  const tab = newTab(session.id);
+  const raw = JSON.parse(JSON.stringify(collectWorkspaceSnapshot([tab], [session], tab.id, session.cwd, new Map())));
+  raw.sessions[0].effortSource = "unknown";
+  expect(parseWorkspaceSnapshot(raw)!.sessions[0].effortSource).toBeUndefined();
+});
+
 describe("project return snapshots", () => {
   it("migrates saved host file tabs to shared remote paths", () => {
     const project = "remote://env/repo";

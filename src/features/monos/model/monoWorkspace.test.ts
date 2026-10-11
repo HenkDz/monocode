@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { newSession } from "../../sessions/model/session";
+import { loadLastModelSettings, resetHarnessModelOverlays, saveLastModelSettings, setHarnessModels, type AgentModel } from "../../sessions/model/models";
 import type { OrchestrationTask } from "../../orchestration/model/orchestrationState";
 import { markHabitRun, clearHabitRun } from "./monoHabits";
 import { leafIds, newTab, splitPane } from "../../workspace/model/layout";
@@ -22,7 +23,82 @@ beforeEach(() => {
     setItem: (key: string, value: string) => stored.set(key, value),
   });
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { resetHarnessModelOverlays(); vi.unstubAllGlobals(); });
+
+const effortModel: AgentModel = {
+  id: "codex:role-effort-test", harness: "codex", name: "Role effort test",
+  settings: [
+    { id: "reasoningEffort", label: "Reasoning", kind: "select", value: "low", options: ["low", "medium", "high", "xhigh"].map(value => ({ value, label: value })) },
+    { id: "serviceTier", label: "Speed", kind: "select", value: "auto", options: ["auto", "fast"].map(value => ({ value, label: value })) },
+  ],
+};
+
+it.each(["orchestrator", "manager", "member"] as const)("uses %s effort rather than the remembered global xhigh on first open", async role => {
+  setHarnessModels("codex", [effortModel]);
+  saveLastModelSettings({ reasoningEffort: "xhigh", serviceTier: "fast" });
+  const mono = { id: "role", role, projects: ["/project"], mascot: "cat", color: "#abc", ...(role === "member" ? { reportsTo: "manager", specialty: "Builder" } : {}) };
+  localStorage.setItem("monocode:mono-roster", JSON.stringify([
+    ...(role === "member" ? [{ ...mono, id: "manager", role: "manager", reportsTo: undefined }] : []), mono,
+  ]));
+  const host = { home: async () => "/home", load: vi.fn(), create: () => newSession("codex", "/home", effortModel.id), add: vi.fn() };
+  const session = await ensureMonoSession(mono.id, host);
+  expect(session?.model).toBe(effortModel.id);
+  expect(session?.modelSettings.reasoningEffort).toBe(role === "member" ? "high" : "medium");
+  expect(session?.effortSource).toBe("role");
+  expect(loadLastModelSettings()).toEqual({ reasoningEffort: "xhigh", serviceTier: "fast" });
+});
+
+it.each([undefined, "user"] as const)("retains a populated %s effort profile despite a different global choice", async effortSource => {
+  setHarnessModels("codex", [effortModel]);
+  saveLastModelSettings({ reasoningEffort: "xhigh" });
+  localStorage.setItem("monocode:mono-roster", JSON.stringify([
+    { id: "manager", role: "manager", projects: ["/project"], mascot: "cat", color: "#abc", effortSource, workerProfile: { harness: "codex", model: effortModel.id, modelSettings: { reasoningEffort: "high", serviceTier: "fast" } } },
+  ]));
+  const host = { home: async () => "/home", load: vi.fn(), create: () => newSession("codex", "/home"), add: vi.fn() };
+  const session = await ensureMonoSession("manager", host);
+  expect(session?.modelSettings).toEqual({ reasoningEffort: "high", serviceTier: "fast" });
+  expect(session?.effortSource).toBe(effortSource);
+});
+
+it("resolves a newly inferred coordinator profile marked role instead of retaining its inherited high", async () => {
+  setHarnessModels("codex", [effortModel]);
+  localStorage.setItem("monocode:mono-roster", JSON.stringify([
+    { id: "manager", role: "manager", projects: ["/project"], mascot: "cat", color: "#abc", effortSource: "role", workerProfile: { harness: "codex", model: effortModel.id, modelSettings: { reasoningEffort: "high", serviceTier: "fast" } } },
+  ]));
+  const host = { home: async () => "/home", load: vi.fn(), create: () => newSession("codex", "/home"), add: vi.fn() };
+  expect((await ensureMonoSession("manager", host))?.modelSettings).toEqual({ reasoningEffort: "medium", serviceTier: "fast" });
+});
+
+it.each([undefined, "role", "user"] as const)("reopens a saved %s effort choice without reapplying defaults", async effortSource => {
+  setHarnessModels("codex", [effortModel]);
+  saveLastModelSettings({ reasoningEffort: "xhigh" });
+  const saved = { ...newSession("codex", "/home", effortModel.id), id: "saved", modelSettings: { reasoningEffort: "high", serviceTier: "fast" }, effortSource };
+  localStorage.setItem("monocode:mono-roster", JSON.stringify([
+    { id: "manager", role: "manager", sessionId: saved.id, projects: ["/project"], mascot: "cat", color: "#abc", effortSource: "role" },
+  ]));
+  const host = { home: vi.fn(), load: vi.fn(async () => saved), create: vi.fn(), add: vi.fn() };
+  expect(await ensureMonoSession("manager", host)).toBe(saved);
+  expect(host.create).not.toHaveBeenCalled();
+  expect(host.home).not.toHaveBeenCalled();
+});
+
+it.each([
+  [undefined, "high"], ["role", "medium"], ["user", "high"],
+] as const)("resets a %s conversation keeping its effort and speed despite global xhigh", async (effortSource, effort) => {
+  setHarnessModels("codex", [effortModel]);
+  saveLastModelSettings({ reasoningEffort: "xhigh", serviceTier: "auto" });
+  const current = { ...newSession("codex", "/home", effortModel.id), id: "saved", modelSettings: { reasoningEffort: effort, serviceTier: "fast" }, effortSource };
+  localStorage.setItem("monocode:mono-roster", JSON.stringify([
+    { id: "manager", role: "manager", sessionId: current.id, projects: ["/project"], mascot: "cat", color: "#abc" },
+  ]));
+  const host = { stop: vi.fn(async () => current), remove: vi.fn(async () => {}), replace: vi.fn() };
+  const fresh = await resetMonoSession(current, host);
+  expect(fresh.modelSettings).toEqual(current.modelSettings);
+  expect(fresh.effortSource).toBe(effortSource);
+  expect(fresh.id).not.toBe(current.id);
+  expect(findMono("manager")?.sessionId).toBe(fresh.id);
+  expect(loadLastModelSettings()).toEqual({ reasoningEffort: "xhigh", serviceTier: "auto" });
+});
 
 it("defaults new Managers and members to full access and plain Monos to Auto, preserving saved session choices", () => {
   const plain = { id: "plain", projects: [], mascot: "cat", color: "#abc" };

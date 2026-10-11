@@ -22,6 +22,7 @@ import {
 } from "../../projects/model/projectMascots";
 import { removeMonoBackground } from "./monoBackground";
 import type { TeamChange, TeamLockedField } from "./monoTeam";
+import type { EffortSource } from "../../sessions/model/models";
 
 /** The project palette's colors, plus indigo for a Mono's ninth preset. */
 export const MONO_COLORS = [
@@ -47,6 +48,7 @@ export type Mono = {
   origin?: "starter" | "manager";
   reviewer?: boolean;
   userLockedFields?: TeamLockedField[];
+  effortSource?: EffortSource;
   teamSizeCap?: number;
   /** Durable receipts and reversible team history, owned by this Manager. */
   teamChanges?: TeamChange[];
@@ -222,6 +224,7 @@ function parseMono(value: unknown): Mono | undefined {
       ? { origin: entry.origin }
       : entry.role === "member" ? { origin: "starter" as const } : {}),
     ...(entry.reviewer === true ? { reviewer: true } : {}),
+    ...(entry.effortSource === "role" || entry.effortSource === "user" ? { effortSource: entry.effortSource } : {}),
     ...(Array.isArray(entry.userLockedFields) ? { userLockedFields: entry.userLockedFields.filter((field): field is TeamLockedField => ["name", "specialty", "soul", "harness", "model", "modelSettings"].includes(String(field))) } : {}),
     ...(Number.isInteger(entry.teamSizeCap) && Number(entry.teamSizeCap) >= 1 && Number(entry.teamSizeCap) <= 24 ? { teamSizeCap: Number(entry.teamSizeCap) } : {}),
     ...(Array.isArray(entry.teamChanges) ? { teamChanges: entry.teamChanges as TeamChange[] } : {}),
@@ -402,6 +405,7 @@ export function adoptManagerMono(
   project: string,
   at = Date.now(),
   profile?: Mono["workerProfile"],
+  effortSource?: EffortSource,
 ): Mono {
   const existing = monoForSession(sessionId);
   if (existing?.role === "manager" && existing.teamInitialized) return existing;
@@ -421,6 +425,7 @@ export function adoptManagerMono(
     role: "manager",
     reportsTo: listMonos().find((mono) => mono.role === "orchestrator")?.id,
     workerProfile: existing?.workerProfile ?? profile,
+    effortSource: existing?.effortSource ?? effortSource,
     name:
       existing?.name ??
       `${resolveTabGroupLabel(key, loadTabGroupLabels(), seed)} Manager`,
@@ -488,6 +493,7 @@ export function addTeamMember(
   const member: Mono = {
     id: newMonoId(),
     role: "member",
+    effortSource: "role",
     reportsTo: managerId,
     name: name.trim(),
     specialty: specialty.trim(),

@@ -2,7 +2,7 @@
 import { webcrypto } from "node:crypto";
 import { beforeEach, expect, it, vi } from "vitest";
 import { addTeamMemory, assertTeamManager, assertTeamMember, defaultReviewerProfile, forgetTeamMemory, handleMonoTeam, lockMonoField, setTeamSizeCap, teamMemoryFacts, undoMonoTeamChange, undoMonoTeamChanges, unlockMonoField, validateTeamSoul, type TeamHost } from "./monoTeam";
-import { listMonos, updateMono, type Mono } from "./mono";
+import { addTeamMember, listMonos, updateMono, type Mono } from "./mono";
 
 const disk = vi.hoisted(() => new Map<string, string>());
 const hooks = vi.hoisted(() => ({ write: undefined as undefined | (() => void), fail: false }));
@@ -40,6 +40,47 @@ beforeEach(() => {
   hooks.fail = false;
   Object.defineProperty(globalThis, "crypto", { value: webcrypto, configurable: true });
   localStorage.setItem("monocode:mono-roster", JSON.stringify([node("manager", "manager"), node("reviewer", "member", "/app", "manager"), node("other", "manager", "/other"), node("other-member", "member", "/other", "other"), node("leader", "orchestrator")]));
+});
+
+it("marks a new member's inherited coordinator profile as a role choice", () => {
+  updateMono("manager", mono => ({ ...mono, effortSource: "user", workerProfile: { harness: "codex", model: "installed", modelSettings: { reasoningEffort: "medium", serviceTier: "fast" } } }));
+  const member = addTeamMember("manager", "Builder", "Backend");
+  expect(member.effortSource).toBe("role");
+  expect(listMonos().find(mono => mono.id === member.id)?.effortSource).toBe("role");
+  expect(member.workerProfile?.modelSettings?.serviceTier).toBe("fast");
+  expect(listMonos().find(mono => mono.id === "manager")?.effortSource).toBe("user");
+});
+
+it("marks inferred hires as role effort while retaining an explicitly supplied effort", async () => {
+  updateMono("manager", mono => ({ ...mono, workerProfile: { harness: "codex", model: "installed", modelSettings: { reasoningEffort: "medium" } } }));
+  const inferred = await handleMonoTeam("manager", "inferred-effort", "team.hire", hire, host()) as { member: Mono };
+  expect(inferred.member.effortSource).toBe("role");
+  expect(listMonos().find(mono => mono.id === inferred.member.id)?.effortSource).toBe("role");
+  const explicit = await handleMonoTeam("manager", "explicit-effort", "team.hire", { ...hire, modelSettings: { reasoningEffort: "low" } }, host()) as { member: Mono };
+  expect(explicit.member.effortSource).toBeUndefined();
+  expect(listMonos().find(mono => mono.id === explicit.member.id)?.workerProfile?.modelSettings).toEqual({ reasoningEffort: "low" });
+});
+
+it("allows coordinator model-settings locks without extending other member-only locks", () => {
+  for (const id of ["manager", "leader"]) {
+    lockMonoField(id, "modelSettings");
+    lockMonoField(id, "model");
+    lockMonoField(id, "name");
+    expect(listMonos().find(mono => mono.id === id)?.userLockedFields).toEqual(["modelSettings"]);
+    unlockMonoField(id, "modelSettings");
+    expect(listMonos().find(mono => mono.id === id)?.userLockedFields).toEqual([]);
+  }
+});
+
+it("retains an explicit team effort update and restores its role ownership on Undo", async () => {
+  updateMono("reviewer", mono => ({ ...mono, effortSource: "role", workerProfile: { harness: "codex", model: "installed", modelSettings: { reasoningEffort: "high" } } }));
+  const bridge = host();
+  const result = await handleMonoTeam("manager", "update-effort", "team.update", { memberId: "reviewer", modelSettings: { reasoningEffort: "low" } }, bridge) as { changeId: string };
+  const changed = listMonos().find(mono => mono.id === "reviewer")!;
+  expect(changed.effortSource).not.toBe("role");
+  expect(changed.workerProfile?.modelSettings).toEqual({ reasoningEffort: "low" });
+  await undoMonoTeamChange("manager", result.changeId, bridge);
+  expect(listMonos().find(mono => mono.id === "reviewer")).toMatchObject({ effortSource: "role", workerProfile: { modelSettings: { reasoningEffort: "high" } } });
 });
 
 it("enforces manager identity and own-project member scope", async () => {

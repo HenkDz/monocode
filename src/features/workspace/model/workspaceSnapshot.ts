@@ -48,6 +48,7 @@ export type WorkspaceSessionStub = {
   harness: HarnessId;
   model: string;
   modelSettings: Record<string, string>;
+  effortSource?: Session["effortSource"];
   runtimeMode: RuntimeMode;
   title: string;
   providerSessionId?: string;
@@ -357,6 +358,7 @@ function sessionStub(session: Session): WorkspaceSessionStub | null {
     harness: session.harness,
     model: session.model,
     modelSettings: { ...session.modelSettings },
+    ...(session.effortSource ? { effortSource: session.effortSource } : {}),
     runtimeMode: session.runtimeMode,
     title: session.title,
     ...(session.inboxAsk ? { inboxAsk: session.inboxAsk } : {}),
@@ -387,6 +389,7 @@ function sessionFromStub(stub: WorkspaceSessionStub): Session {
     // and the current picker preferences must not replace its model.
     model: stub.model || session.model,
     modelSettings: { ...stub.modelSettings },
+    ...(stub.effortSource ? { effortSource: stub.effortSource } : {}),
     title: stub.title,
     ...(stub.inboxAsk ? { inboxAsk: stub.inboxAsk } : {}),
     ...(stub.providerSessionId
@@ -427,6 +430,7 @@ function sanitizeStub(raw: unknown): WorkspaceSessionStub | null {
     harness,
     model: typeof value.model === "string" ? value.model : "",
     modelSettings,
+    ...(value.effortSource === "role" || value.effortSource === "user" ? { effortSource: value.effortSource } : {}),
     runtimeMode,
     title: typeof value.title === "string" ? value.title : "",
     ...(value.inboxAsk && typeof value.inboxAsk === "object"

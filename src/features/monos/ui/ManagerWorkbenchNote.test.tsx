@@ -48,7 +48,7 @@ function message(
 
 it("shows only the newest message from this member's Manager to this member", () => {
   recordCrewMessage(message("older", 100));
-  recordCrewMessage(message("newest matching", 300));
+  recordCrewMessage(message("newest matching", 300, { text: "<monocode_context>hidden instructions</monocode_context>\nnewest matching" }));
   recordCrewMessage(
     message("newer wrong sender", 500, { senderId: "other-manager" }),
   );
@@ -61,6 +61,8 @@ it("shows only the newest message from this member's Manager to this member", ()
   ).toBe("newest matching");
   expect(host.textContent).not.toContain("older");
   expect(host.textContent).not.toContain("wrong");
+  expect(host.textContent).not.toContain("hidden instructions");
+  expect(localStorage.getItem("monocode:crew-messages")).toContain("hidden instructions");
   act(() => recordCrewMessage(message("live matching update", 700)));
   expect(host.querySelector("p")?.textContent).toBe("live matching update");
 });

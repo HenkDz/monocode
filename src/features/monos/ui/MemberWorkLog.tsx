@@ -376,7 +376,7 @@ export function MemberWorkLog({
         fitViewport
         onClose={() => {
           setOpenedTask(undefined);
-          if (!visibleTasks.some((item) => item.task.id === task.id))
+          if (!visibleTasks.some((item) => item.task === task))
             taskToggleRef.current?.focus();
         }}
       >
@@ -522,16 +522,18 @@ export function MemberWorkLog({
                     >
                       {event.label}
                     </button>
-                    <span className="shrink-0 text-[11px] text-content/70">
-                      {event.at === undefined ? (
-                        "Time not recorded"
-                      ) : (
-                        <time dateTime={new Date(event.at).toISOString()}>
-                          {formatRelativeTime(new Date(event.at).toISOString())}
-                        </time>
-                      )}
-                    </span>
+                    {event.at !== undefined && (
+                      <time
+                        className="shrink-0 text-[11px] text-content/70"
+                        dateTime={new Date(event.at).toISOString()}
+                      >
+                        {formatRelativeTime(new Date(event.at).toISOString())}
+                      </time>
+                    )}
                   </div>
+                  <p className="mt-1 text-xs text-content/70">
+                    {presentationText(event.task.title)}
+                  </p>
                   {event.error ? (
                     <div className="mt-2">
                       <TranscriptError

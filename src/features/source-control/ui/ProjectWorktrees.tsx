@@ -305,7 +305,7 @@ export function ProjectWorktrees({
       (!!focusedPath && sameProjectPath(focusedPath, tree.path)) ||
       removalTasks.some(task => pathKey(task.path) === key && task.pending) ||
       (groups.get(key) ?? []).some(session => needsAttention(session) || openIds.has(session.id)) ||
-      (workers.get(key) ?? []).some(({ sessionId, task }) => task.needsInput || needsAttentionId(sessionId) ||
+      (workers.get(key) ?? []).some(({ sessionId, task }) => needsAttentionId(sessionId) ||
         managerQueueRank(task, taskPrStatus(task, prStatuses)) !== 3);
   }).map(tree => pathKey(tree.path)));
   const listedTrees = trees.filter(tree => currentPaths.has(pathKey(tree.path)));
@@ -487,7 +487,7 @@ export function ProjectWorktrees({
               const liveState = [...sessions.map(session => session.id), ...workerSessions.map(worker => worker.sessionId)]
                 .map(id => cardSessions.get(id)?.liveState)
                 .find(state => state && state.status !== "idle" && state.status !== "done");
-              const taskState = liveState ?? (sessions.some(session => approvalSessionIds.has(session.id)) || workerSessions.some(({ task }) => task.needsInput)
+              const taskState = liveState ?? (sessions.some(session => approvalSessionIds.has(session.id))
                 ? { status: "needs-you" as const, reason: "approval" as const, detail: "Waiting for user input" }
                 : selectAgentLiveState({ blocks: [], busy: sessions.some(session => busySessionIds.has(session.id)) }, { task: managerTask }));
               const member = managerTask?.memberId ? findMono(managerTask.memberId) : undefined;
@@ -604,10 +604,10 @@ export function ProjectWorktrees({
                         <span data-agent-state={taskState.status} className="agent-state" aria-label={agentLiveStateLabel(taskState)}><span aria-hidden="true" className="agent-state-cue" /></span>
                         <span className="min-w-0 flex-1 py-2">
                           <span data-worktree-label className="block truncate text-[11px] font-medium leading-4">{label}</span>
-                          <span className="mt-1 flex min-w-0 items-center gap-1.5 text-[10px] text-content/70">
-                            <span data-worktree-member className="max-w-[55%] truncate rounded border border-stroke px-1 py-px text-[9px] text-content">{memberName}</span>
+                          <span data-worktree-summary className="mt-1 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-[10px] text-content/70">
+                            <span data-worktree-member className="max-w-full break-words rounded border border-stroke px-1 py-px text-[9px] text-content">{memberName}</span>
                             <span data-worktree-metadata className="flex min-w-0 items-center gap-1">
-                              <span className="truncate" title={outcome || undefined}>{taskStatus}</span>
+                              <span className="break-words" title={outcome || undefined}>{taskStatus}</span>
                               {done ? <WorktreeDoneWarning tree={tree} enabled={enabled && !tree.missing} /> : null}
                             </span>
                             <WorktreePrIcon tree={tree} enabled={enabled} taskPrUrl={managerTask?.prUrl ?? null} status={workerStatus || undefined} />

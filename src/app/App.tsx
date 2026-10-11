@@ -7272,6 +7272,16 @@ function Workspace({
     [],
   );
 
+  // CC7U: share the existing sandbox change handler with the Workbench drawer.
+  const onWindowsSandboxChange = useCallback(async (sessionId: string, windowsSandbox: Session["windowsSandbox"]) => {
+    const current = sessionsRef.current.find(session => session.id === sessionId);
+    if (!current || current.busy) throw new Error("Wait for the current turn to finish before changing its sandbox engine.");
+    await stopHarnessSession("codex", current.id);
+    await upsertSession(current, latest => ({ ...latest, windowsSandbox }));
+    sessionsRef.current = sessionsRef.current.map(session => session.id === current.id ? { ...session, windowsSandbox } : session);
+    setSessions(sessionsRef.current);
+  }, []);
+
   const onSaveDraft = useCallback(
     (
       sessionId: string,
@@ -14920,6 +14930,7 @@ function Workspace({
   }, orchestrationRuns);
 
   const sessionPaneProps = {
+    onWindowsSandboxChange,
     workspaceSwitchingSessionId: workspaceNavigation.pending
       ? active?.id
       : undefined,
@@ -15061,14 +15072,7 @@ function Workspace({
         onRuntimeModeChange={(mode, source) =>
           onRuntimeModeChange(monoViewSession.id, mode, source)
         }
-        onWindowsSandboxChange={async windowsSandbox => {
-          const current = sessionsRef.current.find(session => session.id === monoViewSession.id);
-          if (!current || current.busy) throw new Error("Wait for the current turn to finish before changing its sandbox engine.");
-          await stopHarnessSession("codex", current.id);
-          await upsertSession(current, latest => ({ ...latest, windowsSandbox }));
-          sessionsRef.current = sessionsRef.current.map(session => session.id === current.id ? { ...session, windowsSandbox } : session);
-          setSessions(sessionsRef.current);
-        }}
+        onWindowsSandboxChange={windowsSandbox => onWindowsSandboxChange(monoViewSession.id, windowsSandbox)}
         onClose={() => { setMonoDetailsOpen(false); setMonoActivity(null); }}
         onReset={() => onResetMono(monoViewSession.id)}
         windowControls={monoCovers && !IS_MAC ? <WindowControls /> : undefined}

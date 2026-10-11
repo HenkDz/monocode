@@ -13,7 +13,7 @@ import type { Worktree, WorktreeCreationOptions } from "../model/worktrees";
 let creationOptions: WorktreeCreationOptions;
 import type { SessionSummary } from "../../sessions/data/sessionStore";
 import { publishCardSessions } from "../../monos/model/monoCards";
-import type { AgentLiveState } from "../../agents/model/agentLiveState";
+import { selectAgentLiveState, type AgentLiveState } from "../../agents/model/agentLiveState";
 import {
   saveProjectGroups,
   saveProjectGroupAssignments,
@@ -313,11 +313,11 @@ it.each<AgentLiveState>([
   } finally { snapshot.mockRestore(); }
 });
 
-it("keeps selected, unread, dirty and approval tasks visible across All pages and Active", async () => {
-  const protectedIds = ["selected", "unread", "dirty", "approval", "task-input"];
+it("keeps selected, unread, dirty, approval and decision sessions visible across All pages and Active", async () => {
+  const protectedIds = ["selected", "unread", "dirty", "approval", "decision"];
   const worktrees = [...Array.from({ length: 7 }, (_, index) => tree(`/tasks/old-${index}`, `old-${index}`)), ...protectedIds.map(id => ({ ...tree(`/tasks/${id}`, id), dirty: id === "dirty" }))];
   const snapshot = vi.spyOn(orchestrator, "snapshot").mockReturnValue([{ cwd: "/repo", projectManager: true, ownerMonoId: "manager", tasks: worktrees.map(checkout => ({
-    id: checkout.branch, title: checkout.branch, sessionId: `s-${checkout.branch}`, memberName: "Reviewer", harness: "pi", model: "", status: "cancelled", needsInput: checkout.branch === "task-input", workspace: { checkoutCwd: checkout.path, branch: checkout.branch },
+    id: checkout.branch, title: checkout.branch, sessionId: `s-${checkout.branch}`, memberName: "Reviewer", harness: "pi", model: "", status: "cancelled", workspace: { checkoutCwd: checkout.path, branch: checkout.branch },
   })) }] as OrchestrationRun[]);
   vi.mocked(useProjectWorktrees).mockReturnValue({ data: { worktrees, defaultRoot: "/tasks" }, refresh });
   props.renderManager = () => createElement("span", null, "Manager");
@@ -327,13 +327,16 @@ it("keeps selected, unread, dirty and approval tasks visible across All pages an
   props.unseenFinishedIds = new Set(["s-unread"]);
   props.approvalSessionIds = new Set(["s-approval"]);
   props.busySessionIds = new Set();
+  publishCardSessions([{ id: "s-decision", title: "Decision", harness: "pi", busy: false, needsInput: true,
+    liveState: selectAgentLiveState({ blocks: [], busy: false, pendingQuestion: { requestId: 1, title: "Choose the next step", questions: [] } }),
+  }], () => {});
   const visibleProtected = () => {
     for (const id of protectedIds) expect(container.querySelector(`[data-task-worktree][data-worktree="/tasks/${id}"]`)).not.toBeNull();
     expect(button("Open worktree selected").getAttribute("aria-current")).toBe("true");
     expect(container.querySelector('[data-worktree="/tasks/unread"] [data-worktree-unread]')?.textContent).toBe("New reply");
     expect(container.querySelector('[data-worktree="/tasks/dirty"] [data-worktree-dirty]')?.textContent).toBe("Changes");
     expect(button("Open worktree approval").textContent).toContain("Needs you");
-    expect(button("Open worktree task-input").textContent).toContain("Needs you");
+    expect(button("Open worktree decision").textContent).toContain("Needs you");
   };
   try {
     await render();

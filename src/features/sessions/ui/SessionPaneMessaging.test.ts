@@ -246,7 +246,7 @@ it("shows the member work log without a full-height greeting hiding it below the
   render(pane);
   expect(
     container.querySelector('[aria-label="Member work log"]')?.textContent,
-  ).toContain("No assignments yet.");
+  ).toContain("No assignments yet");
   expect(
     container.querySelector("header")?.classList.contains("min-h-full"),
   ).toBe(false);
@@ -256,7 +256,7 @@ it("shows the member work log without a full-height greeting hiding it below the
   ).toBe(true);
   expect(
     container
-      .querySelector('[role="tabpanel"]')!
+      .querySelector('[data-workbench-conversation] [role="tabpanel"]')!
       .classList.contains("flex-1"),
   ).toBe(true);
 });
@@ -276,8 +276,7 @@ it("updates the member header from live session and roster state", () => {
     monoState: { status: "needs-you", liveState: { status: "needs-you", reason: "decision", detail: "Review decision" } },
   });
   expect(
-    container.querySelector('header [data-agent-state="needs-you"]')
-      ?.textContent,
+    container.querySelector('header')?.textContent,
   ).toContain("Review decision");
 
   render({ ...pane, session: { ...pane.session, busy: false } });
@@ -574,6 +573,39 @@ it("routes transcript quotes to the Mono draft", () => {
   ].find((button) => button.textContent === "Quote response")!;
   act(() => quote.click());
   expect(field().value).toBe("> Selected response\n\n");
+});
+
+it("steers through the existing submission boundary and retains a rejected draft", async () => {
+  probes.member = true;
+  const pane = props();
+  pane.session.busy = true;
+  pane.session.blocks[0].startedAt = Date.now();
+  pane.onSubmit = vi.fn(() => false);
+  setComposerDraft("chat", "Check the new evidence first");
+  render(pane);
+  const steer = [...container.querySelectorAll<HTMLButtonElement>("header button")].find((button) => button.textContent === "Steer")!;
+  expect(steer.disabled).toBe(false);
+  act(() => steer.click());
+  expect(container.querySelector(".cc7u-delivery")?.textContent).toContain("steer the current turn");
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Send"]')!.click());
+  expect(pane.onSubmit).toHaveBeenCalledWith("chat", "Check the new evidence first", [], { followUpBehavior: "steer" });
+  expect(field().value).toBe("Check the new evidence first");
+});
+
+it("disables Workbench steering while recovery or a decision holds the conversation", () => {
+  probes.member = true;
+  const pane = props();
+  pane.session.busy = true;
+  for (const held of [
+    { codexStorageError: "Storage unavailable" },
+    { worktreeRemoved: true },
+    { pendingQuestion: { requestId: 1, questions: [] } },
+    { worktreePreparing: true },
+  ]) {
+    render({ ...pane, session: { ...pane.session, ...held } });
+    const steer = [...container.querySelectorAll<HTMLButtonElement>("header button")].find((button) => button.textContent === "Steer")!;
+    expect(steer.disabled).toBe(true);
+  }
 });
 
 it("shows usage recovery above the Mono input and routes the reset option", () => {

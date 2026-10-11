@@ -71,7 +71,8 @@ export type EditedResendPreparation = {
 export function prepareEditedResend(
   session: Session,
 ): EditedResendPreparation | null {
-  if (loadMonoRotation(session.id)?.pendingBrief || !canEditLastTurn(session)) return null;
+  const rotation = loadMonoRotation(session.id);
+  if (rotation === null || rotation?.pendingBrief || !canEditLastTurn(session)) return null;
   const block = lastUserTurnBlock(session.blocks);
   if (!block) return null;
   return {

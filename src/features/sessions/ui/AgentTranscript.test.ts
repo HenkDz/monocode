@@ -110,7 +110,9 @@ describe("AgentTranscript collapsed work", () => {
     expect(markup).toContain("Continue a session");
     expect(markup).toContain("View command");
     expect(markup).toContain('aria-haspopup="dialog"');
-    expect(markup).not.toContain("private-marker");
+    // A pending approval always shows the exact command it will run beside Allow/Deny.
+    expect(markup).toContain('aria-label="Command awaiting approval"');
+    expect(markup).toContain("private-marker");
     expect(markup).toContain("Allow</button>");
 
     const compound = renderToStaticMarkup(

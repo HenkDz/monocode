@@ -5,6 +5,7 @@ import type { ManagerWakeState } from "../../orchestration/model/managerWake";
 import { agentLiveStateLabel, agentLiveStateTooltip, selectAgentLiveState, type AgentLiveStatus } from "./agentLiveState";
 import { appendUser, applyHarnessEvent, stopStreaming } from "../../../integrations/harness/core/apply";
 import { acknowledgeMonoMessage, enqueueMonoMessage } from "../../monos/model/monoMessaging";
+import { MONO_ROTATION_READ_ERROR } from "../../monos/model/monoRotation";
 
 const session = (patch: Partial<Session> = {}) => ({ ...newSession("codex", "/app"), ...patch });
 const queued = { id: "q", text: "next", attachments: [] };
@@ -13,6 +14,37 @@ const task = (status: OrchestrationTask["status"], patch: Partial<OrchestrationT
 }) as OrchestrationTask;
 
 describe("selectAgentLiveState", () => {
+  it("shows unreadable saved context as retryable storage and clears it on the next turn", () => {
+    const blocked = applyHarnessEvent(session(), { type: "session.error", message: MONO_ROTATION_READ_ERROR });
+    const state = selectAgentLiveState(blocked, { task: task("running") });
+    expect(state).toEqual({ status: "blocked", reason: "storage", detail: MONO_ROTATION_READ_ERROR });
+    expect(agentLiveStateLabel(state)).toBe("Blocked · storage");
+    expect(agentLiveStateTooltip(state)).toContain("retry");
+    expect(selectAgentLiveState({ ...blocked, busy: true, blocks: [...blocked.blocks,
+      { id: "retry", role: "user", text: "Retry", startedAt: 2000 },
+    ] }).status).toBe("thinking");
+  });
+  it("keeps an active turn and its queue working when a follow-up cannot read saved context", () => {
+    const active = session({ busy: true, providerSessionId: "running", queueStatus: "active", queuedMessages: [queued],
+      blocks: [{ id: "user", role: "user", text: "Current turn", startedAt: 1000 },
+        { id: "tool", role: "tool", text: "", streaming: true, tool: { title: "Verify", status: "running" } }],
+    });
+    const rejected = applyHarnessEvent(active, { type: "session.error", message: MONO_ROTATION_READ_ERROR });
+    expect(rejected.busy).toBe(true);
+    expect(rejected.providerSessionId).toBe(active.providerSessionId);
+    expect(rejected.queueStatus).toBe("active");
+    expect(rejected.queuedMessages).toBe(active.queuedMessages);
+    expect(rejected.blocks[1]).toBe(active.blocks[1]);
+    expect(selectAgentLiveState(rejected)).toEqual({ status: "running-tool", detail: "Verify", warning: MONO_ROTATION_READ_ERROR });
+    expect(selectAgentLiveState(stopStreaming(rejected))).toEqual({ status: "blocked", reason: "storage", detail: MONO_ROTATION_READ_ERROR });
+  });
+  it("surfaces a queued follow-up read failure as a working warning, then blocked storage", () => {
+    const queue = [{ ...queued, error: MONO_ROTATION_READ_ERROR }];
+    expect(selectAgentLiveState(session({ busy: true, queuedMessages: queue })))
+      .toEqual({ status: "thinking", detail: "Thinking", warning: MONO_ROTATION_READ_ERROR });
+    expect(selectAgentLiveState(session({ queuedMessages: queue })))
+      .toEqual({ status: "blocked", reason: "storage", detail: MONO_ROTATION_READ_ERROR });
+  });
   it("shows durable carry clearing warnings without changing accepted turn or task status", () => {
     const rotationWarning = "Input accepted. Retrying the saved carry update.";
     const active = selectAgentLiveState(session({ busy: true, rotationWarning }));

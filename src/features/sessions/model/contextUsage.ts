@@ -15,6 +15,8 @@ export type ContextUsage = {
   effectiveCompactionThreshold?: number;
 };
 
+export const MONO_ROTATION_READ_ERROR = "Can't read saved context; retry";
+
 /** Fraction of the window in use, or null when the window is unknown. */
 export function contextRatio(usage: ContextUsage | undefined): number | null {
   if (

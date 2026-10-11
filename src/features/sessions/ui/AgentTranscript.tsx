@@ -4456,6 +4456,8 @@ function ActivityNoteRow({
 }
 
 function displayedToolLabel(block: Block, cwd?: string): string {
+  // A pending approval shows its exact label; the raw command is also shown beside Allow/Deny.
+  if (needsApproval(block)) return toolCallLabel(block, cwd) || "Tool call";
   const label = presentationText(toolCallLabel(block, cwd));
   return label.length > 160 || /\r?\n|[{}]|(?:^|\s)\[/.test(label)
     ? block.tool?.preview?.kind === "shell" || block.tool?.kind === "shell" ? "Run shell command" : "Tool call"
@@ -4904,8 +4906,11 @@ function ApprovalControls({
 }) {
   const approval = block.approval;
   if (!approval || approval.decided) return null;
+  // Exactly what will run, unfiltered, next to the decision controls.
+  const command = toolCommand(block).trim();
   return (
     <div className="mt-1.5">
+      {command && <pre aria-label="Command awaiting approval" className="mb-1.5 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-md bg-content/5 px-2 py-1.5 font-mono text-[11px] leading-4 text-content/85">{command}</pre>}
       {approval.autoApprovalReason && <p className="mb-1.5 break-words text-[11px] text-content/60" aria-label="Automatic approval status">{approval.autoApprovalReason}</p>}
       {onApproval && <div className="flex gap-2">
       <button

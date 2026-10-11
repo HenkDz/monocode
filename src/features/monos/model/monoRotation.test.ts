@@ -537,7 +537,7 @@ it("carries earlier lines across rotations, briefing only what came since", () =
   ];
   const text = planRotation(
     blocks,
-    loadMonoRotation("mono-1"),
+    loadMonoRotation("mono-1")!,
     "context",
     T0 + 5 * HOUR,
   ).brief("mono-1");

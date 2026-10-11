@@ -92,10 +92,10 @@ function commitTarget(target: PlanBuildTarget) {
 }
 
 function refreshCatalog() {
-  new Function("setSessions", "isLiveHarness", "resolveModel", "monoForSession", "resolveMonoRoleEffort", "mergeModelSettings", "sameSettings",
+  new Function("setSessions", "isLiveHarness", "resolveModel", "monoForSession", "resolveMonoRoleEffort", "mergeModelSettings", "sameSettings", "dropContextWindow",
     ts.transpile(`const refresh = ${refreshCallback}; refresh();`, { target: ts.ScriptTarget.ES2022 }),
   )((update: (sessions: Session[]) => Session[]) => { [session] = update([session]); }, () => true, resolveModel, () => findMono("manager"), resolveMonoRoleEffort, mergeModelSettings,
-    (a: Record<string, string>, b: Record<string, string>) => JSON.stringify(a) === JSON.stringify(b));
+    (a: Record<string, string>, b: Record<string, string>) => JSON.stringify(a) === JSON.stringify(b), dropContextWindow);
 }
 
 async function renderDetails() {
@@ -142,4 +142,41 @@ it("retains role ownership when the Build target supplies no effort choice", () 
   expect(findMono("manager")?.userLockedFields ?? []).not.toContain("modelSettings");
   refreshCatalog();
   expect(session.modelSettings.reasoningEffort).toBe("medium");
+});
+
+it.each([
+  { change: "model", id: "codex:new", effort: "high", source: "user" },
+  { change: "settings", id: "codex:old", effort: "low", source: "user" },
+  { change: "model and settings", id: "codex:new", effort: "low", source: "user" },
+  { change: "role effort", id: "codex:old", effort: "medium", source: "role" },
+] as const)("boot normalization invalidates saved limits after changing $change", ({ id, effort, source }) => {
+  session = {
+    ...session, model: "codex:old", modelSettings: { reasoningEffort: "high" }, effortSource: source,
+    providerSessionId: "saved-thread", providerAccountId: "saved-account",
+    context: { used: 700_000, window: 1_000_000, effectiveCompactionThreshold: 600_000 },
+    blocks: [{ id: "saved-turn", role: "user", text: "Keep the scope and do not push.",
+      turnMetrics: { inputTokens: 100, outputTokens: 20, modelCalls: 1 } }],
+  };
+  const previous = session;
+  setHarnessModels("codex", [{ ...model, id, settings: [{ ...model.settings![0], value: effort,
+    options: [{ value: effort, label: effort }] }] }]);
+  refreshCatalog();
+  expect(session).toEqual({ ...previous, model: id, modelSettings: { reasoningEffort: effort }, context: { used: 700_000 } });
+  expect(session.blocks).toBe(previous.blocks);
+  expect(previous.context).toEqual({ used: 700_000, window: 1_000_000, effectiveCompactionThreshold: 600_000 });
+});
+
+it("boot normalization retains saved limits and observations for an unchanged profile", () => {
+  session = { ...session, context: { used: 700_000, window: 1_000_000, effectiveCompactionThreshold: 600_000 } };
+  const previous = session;
+  refreshCatalog();
+  expect(session).toBe(previous);
+  expect(session.context).toBe(previous.context);
+});
+
+it("boot normalization leaves unreported context unknown when the model changes", () => {
+  session = { ...session, model: "codex:old" };
+  refreshCatalog();
+  expect(session.model).toBe(model.id);
+  expect(session.context).toBeUndefined();
 });

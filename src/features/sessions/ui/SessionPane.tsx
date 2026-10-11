@@ -28,6 +28,7 @@ import { ContextMeter } from "./ContextMeter";
 import { selectAgentLiveState } from "../../agents/model/agentLiveState";
 import {
   loadMonoRotation,
+  MONO_ROTATION_READ_ERROR,
   previewMonoRotationDiscard,
   sessionRotationStatus,
   type MonoRotationDiscardPreview,
@@ -491,8 +492,10 @@ const LocalSessionPane = memo(function LocalSessionPane({
   // A Mono's chat is a running conversation; what was said stays said.
   const editLastTurnSupported =
     !remote && !monoForSession(session.id) && canEditLastTurn(session);
-  const editLastTurnDisabledReason =
-    !remote && loadMonoRotation(session.id)?.pendingBrief
+  const savedRotation = !remote ? loadMonoRotation(session.id) : undefined;
+  const editLastTurnDisabledReason = savedRotation === null
+    ? MONO_ROTATION_READ_ERROR
+    : savedRotation?.pendingBrief
       ? "Retry the original first. Editing is available after it's accepted."
       : undefined;
   const editLastTurnEnabled =
@@ -1801,7 +1804,8 @@ const LocalSessionPane = memo(function LocalSessionPane({
                           editLastTurnSupported &&
                           !monoTranscript.viewingOlderPage
                             ? () => {
-                                if (loadMonoRotation(session.id)?.pendingBrief)
+                            const rotation = loadMonoRotation(session.id);
+                            if (rotation === null || rotation?.pendingBrief)
                                   return;
                                 onFocus(session.id);
                                 recallLastTurnRef.current?.();

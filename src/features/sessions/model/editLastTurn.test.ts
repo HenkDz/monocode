@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   canEditLastTurn,
   createEditedResendAttempt,
@@ -12,6 +12,15 @@ import {
   truncateBeforeLastUserTurn,
 } from "./editLastTurn";
 import { newSession, type Block } from "./session";
+
+beforeEach(() => {
+  const stored = new Map<string, string>();
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => stored.get(key) ?? null,
+    setItem: (key: string, value: string) => stored.set(key, value),
+  });
+});
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 function chat(blocks: Block[]) {
   return { ...newSession("pi", "/tmp"), blocks };

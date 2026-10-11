@@ -84,6 +84,15 @@ task chats retain their existing edit and rewind behavior; primary Mono/org
 chats retain their existing no-Edit policy. CC5EG's pre-rewind replacement save
 has been removed.
 
+CC5EI also refuses ordinary Retry and edited resend when the saved continuity
+store cannot be read. A readable absent carry and an unreadable store are
+distinct; read failure leaves the carry untouched and reports "Can't read saved
+context; retry" through CC4's storage state. Edit and keyboard recall stay
+disabled. Async preparation and busy follow-up paths recheck reads before
+rewind or dispatch. A rejected follow-up preserves an already running turn and
+shows the storage reason as a warning. Restoring reads permits ordinary Retry
+with the saved restrictions, original input and retained assignment.
+
 Provider acceptance remains successful if clearing its saved carry fails. The
 app retries the exact accepted carry after 250 ms, doubling delays up to 30 s,
 and shows a small storage warning in the chat and CC4 live state. The working
@@ -118,6 +127,11 @@ identity until the event queue reaches the reducer. A changed selection rejects
 old limits and configuration while keeping occupancy, transcript, billing and
 compaction observations. Canonical provider configuration advances that turn's
 identity so its subsequent limit-only updates still work.
+
+CC5EI applies the same limit invalidation to boot catalog normalization when
+the selected model or settings change. The old window and compaction threshold
+are dropped while occupancy and other observations remain; unchanged profiles
+retain their limits.
 
 ## Task sizing
 
@@ -232,3 +246,17 @@ writer/App checks pass six checks. No native source changed.
 Design decisions, failed-attempt disclosure, exact timings and remaining
 storage/exactly-once limits are recorded in `docs/cc5eh-rotation-simplify.md`
 and `C:/Users/nooro/AppData/Local/Temp/monocode-cc/cc5eh/REPORT.md`.
+
+## CC5EI unreadable continuity repair
+
+Full Vitest passes 612 files with 2 skipped: 7,448 tests passed, 13 skipped,
+zero failed or unhandled errors. TypeScript and production build pass. The
+focused 15-file suite passes 266 tests; the actual OpenCode fixture contributes
+15 cases including read recovery, async preparation, busy follow-ups and
+provider switching. No native source changed. Windows verification uses four
+workers and 20-second test/hook deadlines after diagnosing shared-load timing
+failures; the pasted-image fixture now waits for its actual error callback.
+
+Design, regression scenarios, validation receipts and remaining runtime limits
+are recorded in `docs/cc5ei-rotation-failclosed.md` and
+`C:/Users/nooro/AppData/Local/Temp/monocode-cc/cc5ei/REPORT.md`.

@@ -25,6 +25,8 @@ describe("contextRatio", () => {
   it("rejects nonsense readings", () => {
     expect(contextRatio({ used: -5, window: 100 })).toBeNull();
     expect(contextRatio({ used: 10, window: 0 })).toBeNull();
+    expect(contextRatio({ used: 10, window: Infinity })).toBeNull();
+    expect(contextRatio({ used: 10, window: NaN })).toBeNull();
   });
 });
 
@@ -59,7 +61,7 @@ describe("contextTooltip", () => {
 
   it("omits the denominator when the window is unknown", () => {
     expect(contextTooltip({ used: 176_000 })).toEqual({
-      headline: "Context used",
+      headline: "Context window unknown",
       detail: "176K tokens",
     });
   });
@@ -102,6 +104,32 @@ describe("mergeContextUsage", () => {
       window: 200_000,
     });
   });
+
+  it("keeps an advertised threshold across split usage reports", () => {
+    const seeded = mergeContextUsage(undefined, {
+      used: 10_000,
+      effectiveCompactionThreshold: 150_000,
+    });
+    expect(
+      mergeContextUsage(seeded, { window: 200_000, used: 20_000 }),
+    ).toEqual({
+      used: 20_000,
+      window: 200_000,
+      effectiveCompactionThreshold: 150_000,
+    });
+    expect(
+      mergeContextUsage(seeded, { effectiveCompactionThreshold: 100_000 }),
+    ).toEqual({
+      used: 10_000,
+      effectiveCompactionThreshold: 100_000,
+    });
+  });
+
+  it("does not infer a threshold from the model window", () => {
+    expect(
+      mergeContextUsage(undefined, { used: 10_000, window: 200_000 }),
+    ).not.toHaveProperty("effectiveCompactionThreshold");
+  });
 });
 
 describe("dropContextWindow", () => {
@@ -115,7 +143,24 @@ describe("dropContextWindow", () => {
     expect(dropContextWindow(undefined)).toBeUndefined();
   });
 
+  it("forgets the old model threshold until it is reported again", () => {
+    const changed = dropContextWindow({
+      used: 30_000,
+      window: 200_000,
+      effectiveCompactionThreshold: 150_000,
+    });
+    expect(changed).toEqual({ used: 30_000 });
+    expect(
+      mergeContextUsage(changed, { used: 35_000, window: 100_000 }),
+    ).toEqual({
+      used: 35_000,
+      window: 100_000,
+    });
+  });
+
   it("leaves the ring hidden until the next turn re-reports", () => {
-    expect(contextRatio(dropContextWindow({ used: 30_000, window: 200_000 }))).toBeNull();
+    expect(
+      contextRatio(dropContextWindow({ used: 30_000, window: 200_000 })),
+    ).toBeNull();
   });
 });

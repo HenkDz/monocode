@@ -702,7 +702,7 @@ export function retargetSessionToProject(
     ...(harness === session.harness
       ? {}
       : { providerSessionId: undefined, providerAccountId: undefined }),
-    ...(resolved.id === session.model
+    ...(resolved.id === session.model && harness === session.harness && cwd === session.cwd
       ? {}
       : { context: dropContextWindow(session.context) }),
   };

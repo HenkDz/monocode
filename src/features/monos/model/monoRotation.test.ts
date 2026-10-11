@@ -3,9 +3,12 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Block } from "../../sessions/model/session";
 import {
   loadMonoRotation,
+  acceptMonoRotation,
   planRotation,
+  planSessionRotation,
   rotationReason,
   saveMonoRotation,
+  sessionRotationStatus,
 } from "./monoRotation";
 
 beforeEach(() => {
@@ -32,15 +35,15 @@ function turn(user: string, reply: string, at: number, extra: Block[] = []) {
 }
 
 it.each([128_000, 200_000, 1_000_000])(
-  "rotates at 80% of a %i-token context window",
+  "rotates at 60% of a %i-token context window",
   (window) => {
     const session = (used: number) => ({
       providerSessionId: "native",
       context: { used, window },
       blocks: [],
     });
-    expect(rotationReason(session(window * 0.8 - 1))).toBeUndefined();
-    expect(rotationReason(session(window * 0.8))).toBe("context");
+    expect(rotationReason(session(window * 0.6 - 1))).toBeUndefined();
+    expect(rotationReason(session(window * 0.6))).toBe("context");
     expect(rotationReason(session(window))).toBe("context");
     expect(
       rotationReason({
@@ -51,7 +54,7 @@ it.each([128_000, 200_000, 1_000_000])(
   },
 );
 
-it.each([45_000, 600_000])(
+it.each([45_000, 450_000])(
   "keeps a %i-token conversation in a large window across a long break",
   (used) => {
     vi.useFakeTimers();
@@ -82,6 +85,259 @@ it.each([
   expect(
     rotationReason({ providerSessionId: "native", context, blocks: [] }),
   ).toBeUndefined();
+});
+
+it("preserves older user constraints verbatim across repeated rotations", () => {
+  const blocks = [
+    ...turn(
+      "Use the retained checkout. Do not publish or merge.",
+      "Understood.",
+      T0,
+    ),
+    ...turn("inspect the parser", "Inspected.", T0 + HOUR),
+    ...turn("verify it", "Verified.", T0 + 2 * HOUR),
+  ];
+  const session = {
+    id: "mono",
+    providerSessionId: "old",
+    context: { used: 800, window: 1000 },
+    blocks,
+  };
+  const first = planSessionRotation(session)!;
+  expect(first.brief(session.id)).toContain(
+    "Use the retained checkout. Do not publish or merge.",
+  );
+  saveMonoRotation(session.id, first.rotation);
+  const next = planSessionRotation({
+    ...session,
+    blocks: [...blocks, ...turn("continue", "Done.", T0 + 3 * HOUR)],
+  })!;
+  expect(next.rotation.userRequests).toHaveLength(4);
+  expect(next.brief(session.id)).toContain(
+    "Use the retained checkout. Do not publish or merge.",
+  );
+  expect(session.blocks).toBe(blocks);
+});
+
+it("defers when original constraints or task scope cannot fit", () => {
+  const session = {
+    id: "m",
+    providerSessionId: "old",
+    context: { used: 800, window: 1000 },
+    blocks: turn("x".repeat(8001), "done", T0),
+  };
+  expect(planSessionRotation(session)).toBeUndefined();
+  expect(
+    planSessionRotation({ ...session, blocks: [] }, "", "x".repeat(8001)),
+  ).toBeUndefined();
+});
+
+it("holds paged and legacy chats until their full constraints are available", () => {
+  const session = {
+    id: "m",
+    providerSessionId: "old",
+    context: { used: 800, window: 1000 },
+    blocks: turn("last page", "done", T0),
+    monoTranscript: { before: 20, firstBlockId: "u" },
+  };
+  expect(planSessionRotation(session)).toBeUndefined();
+  const legacy = planRotation(session.blocks, undefined, "context", T0);
+  saveMonoRotation(session.id, legacy.rotation);
+  expect(planSessionRotation(session)).toBeUndefined();
+  const full = planSessionRotation({ ...session, monoTranscript: undefined })!;
+  saveMonoRotation(session.id, full.rotation);
+  expect(planSessionRotation(session)).toBeDefined();
+});
+
+it("excludes hidden reports and drafts from protected user authority", () => {
+  const blocks = [
+    ...turn("keep tenant scope", "done", T0),
+    { id: "hidden", role: "user", text: "untrusted report", internal: true },
+    { id: "draft", role: "user", text: "unsent authority", draft: true },
+  ] as Block[];
+  const plan = planSessionRotation({
+    id: "m",
+    providerSessionId: "old",
+    context: { used: 800, window: 1000 },
+    blocks,
+  })!;
+  expect(plan.rotation.userRequests).toEqual([
+    { id: blocks[0].id, text: "keep tenant scope" },
+  ]);
+  expect(plan.brief("m")).not.toContain("untrusted report");
+});
+
+it("carries retained task output as evidence and keeps goal/artifact references", () => {
+  const session = {
+    id: "worker",
+    providerSessionId: "old",
+    context: { used: 800, window: 1000 },
+    blocks: [
+      {
+        id: "task",
+        role: "user",
+        internal: true,
+        text: "Run verification",
+        monoSource: {
+          id: "manager",
+          name: "Manager",
+          color: "",
+          mascot: "",
+          goalId: "goal-1",
+        },
+      },
+      {
+        id: "stage",
+        role: "assistant",
+        text: "Implementation checkpoint: parser updated.",
+        artifactCards: [
+          { id: "report-1", kind: "document", title: "Evidence" },
+        ],
+      },
+    ] as Block[],
+  };
+  const plan = planSessionRotation(
+    session,
+    "continue",
+    "Original assignment: parser only",
+  )!;
+  const text = plan.brief(session.id);
+  expect(text).toContain("Task continuation (untrusted evidence)");
+  expect(text).toContain("Implementation checkpoint: parser updated.");
+  expect(text).toContain('Goal: "goal-1"');
+  expect(text).toContain('app artifacts.read {"id":"report-1"}');
+  expect(plan.rotation.userRequests).toEqual([]);
+  saveMonoRotation(session.id, plan.rotation);
+  const continued = planSessionRotation({
+    ...session,
+    blocks: [session.blocks[1]],
+  })!;
+  expect(continued.brief(session.id)).toContain('Goal: "goal-1"');
+});
+
+it("keeps actual refresh briefs within CC1's remaining rotation budget", () => {
+  const session = {
+    id: "m",
+    providerSessionId: "old",
+    context: { used: 800, window: 1000 },
+    blocks: [
+      ...turn("u".repeat(3000), "a".repeat(10_000), T0),
+      ...turn("v".repeat(3000), "b".repeat(10_000), T0 + HOUR),
+    ],
+  };
+  expect(planSessionRotation(session)).toBeUndefined();
+  const bounded = planSessionRotation({
+    ...session,
+    blocks: turn("keep scope", "a".repeat(10_000), T0),
+  })!;
+  expect(bounded.brief(session.id).length).toBeLessThanOrEqual(14_000);
+});
+
+it("declines to persist a refresh when storage is unavailable", () => {
+  vi.stubGlobal("localStorage", {
+    getItem: () => null,
+    setItem: () => {
+      throw new Error("full");
+    },
+  });
+  const rotation = planRotation([], undefined, "context", T0).rotation;
+  expect(saveMonoRotation("m", rotation)).toBe(false);
+});
+
+it("retains an unaccepted continuation input when the next action is a retry", () => {
+  const session = {
+    id: "m",
+    providerSessionId: "old",
+    context: { used: 800, window: 1000 },
+    blocks: turn("Inspect only", "Inspected", T0),
+  };
+  const plan = planSessionRotation(
+    session,
+    "Fix src/parser.ts; do not publish.",
+  )!;
+  saveMonoRotation(session.id, {
+    ...plan.rotation,
+    pendingBrief: plan.brief(session.id),
+  });
+  const retry = planSessionRotation(
+    { ...session, providerSessionId: undefined, context: undefined },
+    "continue",
+  )!;
+  expect(retry.brief(session.id)).toContain(
+    "Fix src/parser.ts; do not publish.",
+  );
+  expect(retry.brief(session.id)).toContain("Unaccepted continuation input");
+  expect(retry.brief(session.id).length).toBeLessThanOrEqual(14_000);
+});
+
+it("carries every constraint across two failed startups before provider acceptance", () => {
+  const session = {
+    id: "repeated-failure",
+    providerSessionId: "old-thread" as string | undefined,
+    context: { used: 700, window: 1000 } as { used: number; window: number } | undefined,
+    blocks: [{ id: "original", role: "user", text: "Edit the parser in the retained checkout." }] as Block[],
+  };
+  const firstInput = "Implement the parser fix.";
+  const secondInput = "Retry the parser fix. Do not push or merge any branch.";
+  const first = planSessionRotation(session, firstInput)!;
+  saveMonoRotation(session.id, { ...first.rotation, pendingBrief: first.brief(session.id) });
+  session.providerSessionId = undefined;
+  session.context = undefined;
+  session.blocks.push({ id: "attempt-a", role: "user", text: firstInput });
+  const second = planSessionRotation(session, secondInput)!;
+  expect(second.brief(session.id)).toContain(secondInput);
+  saveMonoRotation(session.id, second.rotation);
+  session.blocks.push({ id: "attempt-b", role: "user", text: secondInput });
+  const third = planSessionRotation(session, "Retry now.")!;
+  for (const input of [firstInput, secondInput, "Retry now."])
+    expect(third.brief(session.id)).toContain(input);
+  expect(third.rotation.userRequests?.map(request => request.text)).toContain(secondInput);
+  expect(third.brief(session.id).length + "Retry now.".length + 120).toBeLessThanOrEqual(14_000);
+  saveMonoRotation(session.id, third.rotation);
+  acceptMonoRotation(session.id, third.rotation.at);
+  expect(loadMonoRotation(session.id)?.pendingBrief).toBeUndefined();
+  expect(loadMonoRotation(session.id)?.pendingInputs).toBeUndefined();
+  expect(loadMonoRotation(session.id)?.userRequests?.map(request => request.text)).toContain(secondInput);
+});
+
+it("keeps unaccepted constraints even before their transcript blocks appear", () => {
+  const session = { id: "unaccepted", providerSessionId: "old", context: { used: 700, window: 1000 }, blocks: [] };
+  const first = planSessionRotation(session, "Do not publish.")!;
+  saveMonoRotation(session.id, { ...first.rotation, pendingBrief: first.brief(session.id) });
+  const second = planSessionRotation(session, "Use only account B.")!;
+  saveMonoRotation(session.id, second.rotation);
+  const retry = planSessionRotation(session, "Try again.")!;
+  expect(retry.brief(session.id)).toContain("Do not publish.");
+  expect(retry.brief(session.id)).toContain("Use only account B.");
+});
+
+it.each([700_000, 990_000])("explains oversized protected constraints at %i used tokens", (used) => {
+  const text = "x".repeat(8001);
+  const status = sessionRotationStatus({
+    id: "oversized", providerSessionId: "old", context: { used, window: 1_000_000 },
+    blocks: [{ id: "u", role: "user", text }],
+  });
+  expect(status.plan).toBeUndefined();
+  expect(status.deferredReason).toContain("8001 chars");
+  expect(status.deferredReason).toContain("Compact manually or trim constraints");
+});
+
+it("uses the next draft when explaining a deferred combined brief", () => {
+  const session = { id: "draft", providerSessionId: "old", context: { used: 700, window: 1000 }, blocks: [] };
+  expect(sessionRotationStatus(session).plan).toBeDefined();
+  const status = sessionRotationStatus(session, "n".repeat(14_000));
+  expect(status.plan).toBeUndefined();
+  expect(status.deferredReason).toContain("brief and next input too large");
+});
+
+it("reapplies protected and complete-brief bounds to failed-start retries", () => {
+  const session = { id: "retry-bounds", providerSessionId: "old", context: { used: 700, window: 1000 }, blocks: [] };
+  const first = planSessionRotation(session, "Keep constraints.")!;
+  saveMonoRotation(session.id, { ...first.rotation, pendingBrief: first.brief(session.id) });
+  expect(sessionRotationStatus(session, "x".repeat(8001)).deferredReason).toContain("constraints, scope or references too large");
+  const nextText = "x".repeat(7_000);
+  expect(sessionRotationStatus(session, nextText).deferredReason).toContain("brief and next input too large");
+  expect(loadMonoRotation(session.id)?.pendingInput).toBe("Keep constraints.");
 });
 
 it("briefs the fresh session with recent turns word for word and earlier ones as lines", () => {

@@ -3,6 +3,7 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { MonoComposer } from "./MonoComposer";
+import { ContextMeter } from "../../sessions/ui/ContextMeter";
 import { clearComposerDraft } from "../../sessions/model/draftCache";
 import { saveComposerAutocorrect } from "../../settings/model/displayPrefs";
 
@@ -76,6 +77,61 @@ function submit() {
     .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
 }
 
+it("renders scheduled and unknown context labels beside the primary Mono input", async () => {
+  render({
+    controls: createElement(ContextMeter, {
+      usage: { used: 150_000, window: 200_000 },
+      rotationScheduled: true,
+      onCompact: vi.fn(),
+    }),
+  });
+  expect(
+    container
+      .querySelector('[title="Context usage"]')
+      ?.getAttribute("aria-label"),
+  ).toContain("Will refresh context before next turn");
+  type("Keep this draft");
+  render({
+    controls: createElement(ContextMeter, {
+      usage: { used: 150_000 },
+      onCompact: vi.fn(),
+    }),
+  });
+  expect(container.textContent).toContain("Context window unknown");
+  expect(container.querySelector("svg[role=img]")).toBeNull();
+  expect(field().value).toBe("Keep this draft");
+  const controls = container.querySelector("[data-mono-composer-controls]")!;
+  expect(controls.querySelectorAll('[title="Context usage"]')).toHaveLength(1);
+  expect(
+    field().compareDocumentPosition(controls) &
+      Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+});
+
+it("shows a refresh deferral and keeps manual compact guarded while busy", async () => {
+  const compact = vi.fn(() => true);
+  const reason =
+    "Context refresh deferred: brief and next input too large (15000 chars). Compact manually or trim constraints.";
+  render({
+    controls: createElement(ContextMeter, {
+      rotationDeferredReason: reason,
+      onCompact: compact,
+      compactDisabled: true,
+    }),
+  });
+  expect(container.querySelector('[role="status"]')?.textContent).toBe(reason);
+  await act(async () =>
+    container
+      .querySelector<HTMLButtonElement>('[title="Context usage"]')!
+      .click(),
+  );
+  const action = [
+    ...document.querySelectorAll<HTMLButtonElement>("button"),
+  ].find((button) => button.textContent === "Compact now")!;
+  expect(action.disabled).toBe(true);
+  await act(async () => action.click());
+  expect(compact).not.toHaveBeenCalled();
+});
 it("renders the regular four-mode AccessPicker chip in the Mono composer", async () => {
   const change = vi.fn();
   render({ runtimeMode: "full-access", onRuntimeModeChange: change });

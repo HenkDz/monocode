@@ -11,11 +11,19 @@ export type ContextUsage = {
   used: number;
   /** Context window for the active model, when the harness reports one. */
   window?: number;
+  /** Effective compaction threshold, only when reported by the provider. */
+  effectiveCompactionThreshold?: number;
 };
 
 /** Fraction of the window in use, or null when the window is unknown. */
 export function contextRatio(usage: ContextUsage | undefined): number | null {
-  if (!usage || !usage.window || usage.window <= 0) return null;
+  if (
+    !usage ||
+    !usage.window ||
+    !Number.isFinite(usage.window) ||
+    usage.window <= 0
+  )
+    return null;
   if (!Number.isFinite(usage.used) || usage.used < 0) return null;
   return Math.min(1, usage.used / usage.window);
 }
@@ -47,10 +55,11 @@ export function contextTooltip(usage: ContextUsage): {
   const percent = contextPercent(usage);
   return {
     headline:
-      percent === null ? "Context used" : `${percent}% context used`,
-    detail: usage.window
-      ? `${formatTokens(usage.used)} / ${formatTokens(usage.window)} tokens`
-      : `${formatTokens(usage.used)} tokens`,
+      percent === null ? "Context window unknown" : `${percent}% context used`,
+    detail:
+      percent !== null && usage.window != null
+        ? `${formatTokens(usage.used)} / ${formatTokens(usage.window)} tokens`
+        : `${formatTokens(usage.used)} tokens`,
   };
 }
 
@@ -63,17 +72,25 @@ export function contextTooltip(usage: ContextUsage): {
  */
 export function mergeContextUsage(
   previous: ContextUsage | undefined,
-  next: { used?: number; window?: number },
+  next: Partial<ContextUsage>,
 ): ContextUsage {
   const used = next.used ?? previous?.used ?? 0;
   const window = next.window ?? previous?.window;
-  return window ? { used, window } : { used };
+  const effectiveCompactionThreshold =
+    next.effectiveCompactionThreshold ?? previous?.effectiveCompactionThreshold;
+  return {
+    used,
+    ...(window ? { window } : {}),
+    ...(effectiveCompactionThreshold != null
+      ? { effectiveCompactionThreshold }
+      : {}),
+  };
 }
 
 /**
- * Forget the window while keeping the level.
+ * Forget the model-specific limits while keeping the level.
  *
- * The window is a property of the model, so switching models invalidates it.
+ * The limits are properties of the model, so switching models invalidates them.
  * The level still roughly holds — it describes the transcript, not the model —
  * and the next turn re-reports both.
  */

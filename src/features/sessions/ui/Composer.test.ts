@@ -64,6 +64,32 @@ function renderAction(
 }
 
 describe("ComposerAction", () => {
+  it("renders the generic composer's protected-carry explanation without usage", () => {
+    const reason =
+      "Context refresh deferred: constraints too large (8001 chars). Compact manually or trim constraints.";
+    const html = renderToStaticMarkup(createElement(Composer, {
+      harness: "codex",
+      model: "fixture",
+      runtimeMode: "supervised",
+      executionCwd: "/repo",
+      hideProjectPicker: true,
+      hideBranchPicker: true,
+      rotationDeferredReason: reason,
+      compactSupported: true,
+      onCompactContext: () => true,
+      onFocus: () => {},
+      onCwdChange: () => {},
+      onModelChange: () => {},
+      onRuntimeModeChange: () => {},
+      onSubmit: () => {},
+      busy: false,
+    }));
+    expect(html).toContain(reason);
+    expect(html).toContain("Context usage unknown");
+    expect(html).toContain('role="status"');
+    expect(html).not.toContain("Will refresh context before next turn");
+  });
+
   it("replaces Stop with Send when typing during a running turn", () => {
     const empty = renderAction(true, false);
     expect(empty).toContain('aria-label="Stop"');

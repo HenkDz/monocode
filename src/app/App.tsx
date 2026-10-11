@@ -393,6 +393,7 @@ import {
   type UserQuestionReply,
 } from "../integrations/harness";
 import { supportsHarnessLogin } from "../integrations/harness/core/authSupport";
+import { bindTurnContextProfile } from "../integrations/harness/core/contextProfile";
 import {
   appendPreparingHandoff,
   buildDeterministicHandoff,
@@ -692,11 +693,13 @@ import {
   updateHabits,
 } from "../features/monos/model/monoHabits";
 import {
+  acceptMonoRotation,
   loadMonoRotation,
-  planRotation,
-  rotationReason,
+  sessionRotationStatus,
+  rotateProviderContext,
   saveMonoRotation,
 } from "../features/monos/model/monoRotation";
+import { retainedTaskContext } from "../features/orchestration/model/memberContinuity";
 import {
   detachMonoTabs,
   ensureMonoSession,
@@ -1043,7 +1046,7 @@ function withHarnessChoice(
             harness,
             sessionDisplayTitle(session.title, session.harness),
           ),
-    ...(session.model === model
+    ...(session.model === model && session.harness === harness && sameSettings(session.modelSettings, modelSettings)
       ? {}
       : { context: dropContextWindow(session.context) }),
     ...(session.harness === harness
@@ -7195,7 +7198,8 @@ function Workspace({
           workerProfile: { harness: current.harness, model: current.model, modelSettings } }));
         if (source === "user" && (effortSelected || effortSource === "user")) lockMonoField(mono.id, "modelSettings");
       } else saveLastModelSettings(modelSettings);
-      const applySettings = (s: Session) => s.id === sessionId ? { ...s, modelSettings, effortSource: source } : s;
+      const applySettings = (s: Session) => s.id === sessionId ? { ...s, modelSettings, effortSource: source,
+        ...(sameSettings(s.modelSettings, modelSettings) ? {} : { context: dropContextWindow(s.context) }) } : s;
       sessionsRef.current = sessionsRef.current.map(applySettings);
       setSessions(prev => prev.map(applySettings));
     },
@@ -8012,21 +8016,13 @@ function Workspace({
         });
       }
 
-      // A Mono's chat never ends, but the provider session behind it does:
-      // once it fills most of the model's context window, this turn starts
-      // a fresh one, briefed on where the conversation was.
-      const monoRotationReason =
-        mono && !pendingSwitch && !editedResend
-          ? rotationReason(current)
-          : undefined;
-      const monoRotation = monoRotationReason
-        ? planRotation(
-            current.blocks,
-            loadMonoRotation(sessionId),
-            monoRotationReason,
-            Date.now(),
-          )
-        : undefined;
+      const rotationRun = orchestrator.forSession(sessionId);
+      const rotationTask = rotationRun?.tasks.find(task => task.sessionId === sessionId);
+      const taskContext = rotationTask && rotationRun
+        ? retainedTaskContext(rotationRun, rotationTask) : "";
+      const rotationStatus = (mono || rotationTask) && !pendingSwitch && !editedResend
+        ? sessionRotationStatus(current, harnessText, taskContext) : undefined;
+      const monoRotation = rotationStatus?.plan;
 
       const gen = (turnGen.current.get(sessionId) ?? 0) + 1;
       turnGen.current.set(sessionId, gen);
@@ -8508,6 +8504,7 @@ function Workspace({
         };
 
         const pendingEditedEvents: HarnessEvent[] = [];
+        const bindContextProfile = bindTurnContextProfile(current);
         const applyTurnEvent = (event: HarnessEvent) => {
           orchestrator.observe(sessionId, event);
           if (options?.onSettled && event.type === "message.delta")
@@ -8531,7 +8528,7 @@ function Workspace({
             setSessions((prev) => prev.map((session) =>
               session.id === sessionId ? captureTurnEvent(session, event) : session,
             ));
-          if (routed) enqueueHarnessEvent(sessionId, routed);
+          if (routed) enqueueHarnessEvent(sessionId, bindContextProfile(routed));
         };
         const routeTurnEvent = (event: HarnessEvent) => {
           if (turnGen.current.get(sessionId) !== gen) return;
@@ -8633,7 +8630,7 @@ function Workspace({
                   : {}),
                 onEvent: (event) => {
                   if (turnGen.current.get(sessionId) !== gen) return;
-                  enqueueHarnessEvent(sessionId, event);
+                  enqueueHarnessEvent(sessionId, bindContextProfile(event));
                 },
               });
             } catch (error) {
@@ -8716,6 +8713,7 @@ function Workspace({
                 const accepted = contextAccepted;
                 contextAccepted = undefined;
                 accepted?.();
+                if (monoRotation) acceptMonoRotation(sessionId, monoRotation.rotation.at);
                 if (editedResend) acceptEditedResend();
               },
               onEvent: event => {
@@ -8738,8 +8736,14 @@ function Workspace({
                 : turnPrompt,
             ),
           );
+          if (rotationStatus?.deferredReason && loadMonoRotation(sessionId)?.pendingBrief)
+            throw new Error(rotationStatus.deferredReason);
           if (monoRotation) {
-            if (current.harness === "codex" && current.providerSessionId) {
+            if (turnGen.current.get(sessionId) !== gen) return;
+            if (!saveMonoRotation(sessionId, {
+              ...monoRotation.rotation, pendingBrief: monoRotation.rotation.pendingBrief ?? monoRotation.brief(sessionId),
+            })) throw new Error("The context refresh brief could not be saved. Try again when storage is available.");
+            if (mono && current.harness === "codex" && current.providerSessionId) {
               await migrateMonoCodexSession({
                 sessionId,
                 threadId: current.providerSessionId,
@@ -8747,7 +8751,9 @@ function Workspace({
                 providerAccountId,
               });
             }
-            await forgetHarnessSession(current.harness, sessionId);
+            if (turnGen.current.get(sessionId) !== gen) return;
+            current = await rotateProviderContext(current, () => forgetHarnessSession(current.harness, sessionId));
+            if (turnGen.current.get(sessionId) !== gen) return;
             const fresh = (session: Session) =>
               session.id === sessionId
                 ? {
@@ -8759,7 +8765,6 @@ function Workspace({
             current = fresh(current);
             sessionsRef.current = sessionsRef.current.map(fresh);
             setSessions((prev) => prev.map(fresh));
-            saveMonoRotation(sessionId, monoRotation.rotation);
           }
           // The agent's soul and memory live in its folder. A native session
           // is handed them once, and memory again only when it changes.
@@ -10930,6 +10935,7 @@ function Workspace({
       const gen = (turnGen.current.get(sessionId) ?? 0) + 1;
       turnGen.current.set(sessionId, gen);
       const workCwd = sessionWorkCwd(current);
+      const bindContextProfile = bindTurnContextProfile(current);
       const started = sessionsRef.current.map((session) =>
         session.id === sessionId
           ? applyHarnessEvent(
@@ -10964,7 +10970,7 @@ function Workspace({
               orchestrator.run(sessionId)?.status === "active",
             onEvent: (event) => {
               if (turnGen.current.get(sessionId) !== gen) return;
-              enqueueHarnessEvent(sessionId, event);
+              enqueueHarnessEvent(sessionId, bindContextProfile(event));
             },
           });
           if (turnGen.current.get(sessionId) !== gen) return;

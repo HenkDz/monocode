@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildThreadStartParams,
   codexAppServerArgs,
+  codexWindowsSandbox,
   buildTurnStartParams,
   buildTurnSteerParams,
   codexCommandText,
@@ -39,6 +40,29 @@ it("uses the restricted-token fallback only for Windows read-only worker process
   expect(codexAppServerArgs(false, true)).toEqual(["app-server"]);
   expect(codexAppServerArgs(true, false)).toEqual(["app-server"]);
   expect(codexAppServerArgs(false, false)).toEqual(["app-server"]);
+});
+
+it("defaults only Windows Mono Auto and read-only workers to unelevated", () => {
+  for (const runtimeMode of ["auto", "auto-accept-edits"] as const) {
+    expect(codexWindowsSandbox({ codexStore: "mono", runtimeMode }, true)).toBe("unelevated");
+    expect(codexWindowsSandbox({ runtimeMode }, true)).toBeUndefined();
+    expect(codexWindowsSandbox({ codexStore: "mono", runtimeMode }, false)).toBeUndefined();
+  }
+  expect(codexWindowsSandbox({ codexStore: "mono", runtimeMode: "full-access" }, true)).toBeUndefined();
+  expect(codexWindowsSandbox({ codexStore: "mono", runtimeMode: "supervised" }, true)).toBeUndefined();
+  expect(codexWindowsSandbox({ runtimeMode: "full-access", readOnly: true }, true)).toBe("unelevated");
+  expect(codexWindowsSandbox({ runtimeMode: "auto", windowsSandbox: "elevated" }, true)).toBeUndefined();
+});
+
+it("keeps explicit Mono engine choices above read-only and Auto defaults", () => {
+  for (const windowsSandbox of ["elevated", "unelevated"] as const) {
+    const input = { codexStore: "mono" as const, runtimeMode: "auto" as const, readOnly: true, windowsSandbox };
+    expect(codexWindowsSandbox(input, true)).toBe(windowsSandbox);
+    expect(codexWindowsSandbox(input, false)).toBeUndefined();
+    expect(codexAppServerArgs(true, true, windowsSandbox)).toEqual(["app-server", "-c", `windows.sandbox="${windowsSandbox}"`]);
+  }
+  expect(codexAppServerArgs(false, true, "unelevated")).toEqual(windowsReadOnlyMono.args);
+  expect(codexAppServerArgs(false, false, "unelevated")).toEqual(["app-server"]);
 });
 
 it("shows code-mode custom tools using raw scoped call identity without parsing chat", () => {

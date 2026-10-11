@@ -25,11 +25,23 @@ import { formatShellIntent, inferShellIntent } from "../../core/shellIntent";
 import { streamTextDelta } from "../../core/streamText";
 import type { HarnessEvent } from "../../core/types";
 
-export function codexAppServerArgs(readOnly: boolean, windows: boolean): string[] {
-  // Windows read-only workers retain filesystem denial with the restricted-token
-  // fallback when elevated setup is unavailable; network isolation is weaker.
-  // https://learn.chatgpt.com/docs/windows/windows-sandbox
-  return windows && readOnly ? ["app-server", "-c", 'windows.sandbox="unelevated"'] : ["app-server"];
+export function codexWindowsSandbox(input: {
+  codexStore?: "mono";
+  windowsSandbox?: "elevated" | "unelevated";
+  readOnly?: boolean;
+  runtimeMode: RuntimeMode;
+}, windows: boolean): "elevated" | "unelevated" | undefined {
+  if (!windows) return undefined;
+  if (input.codexStore === "mono" && input.windowsSandbox) return input.windowsSandbox;
+  if (input.readOnly || (input.codexStore === "mono" &&
+      (input.runtimeMode === "auto" || input.runtimeMode === "auto-accept-edits"))) return "unelevated";
+  return undefined;
+}
+
+export function codexAppServerArgs(readOnly: boolean, windows: boolean, windowsSandbox?: "elevated" | "unelevated"): string[] {
+  // Per-launch engine overrides preserve filesystem policy and the account config.
+  const engine = windows ? windowsSandbox ?? (readOnly ? "unelevated" : undefined) : undefined;
+  return engine ? ["app-server", "-c", `windows.sandbox="${engine}"`] : ["app-server"];
 }
 
 /** Codex approval / sandbox settings for thread/start and turn/start. */

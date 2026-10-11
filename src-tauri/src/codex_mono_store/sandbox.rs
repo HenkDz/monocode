@@ -451,6 +451,11 @@ mod tests {
                 false,
                 None,
             ),
+            (
+                serde_json::json!({"windows":{"sandbox":"unelevated"}}),
+                false,
+                Some("elevated"),
+            ),
         ] {
             validate_launch_with(
                 &home,
@@ -464,6 +469,21 @@ mod tests {
             .unwrap();
         }
         assert!(!home.exists());
+    }
+    #[test]
+    fn explicit_elevated_engine_overrides_unelevated_configuration_and_stays_blocked() {
+        let fixture = Fixture::new();
+        let reason = validate_launch_with(
+            &fixture.0,
+            &serde_json::json!({"windows":{"sandbox":"unelevated"}}),
+            true,
+            Some("elevated"),
+            Some(false),
+            &HashMap::new(),
+            |_| Ok(Some(0)),
+        )
+        .unwrap_err();
+        assert!(reason.contains("automatically repair sandbox credentials"));
     }
     #[test]
     fn missing_machine_account_blocks_before_setup() {

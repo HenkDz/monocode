@@ -6,7 +6,7 @@ import type { OrchestrationTask } from "../../orchestration/model/orchestrationS
 import { markHabitRun, clearHabitRun } from "./monoHabits";
 import { leafIds, newTab, splitPane } from "../../workspace/model/layout";
 import { planWorkspaceTabClose } from "../../workspace/model/workspaceTabGroups";
-import { createMono, findMono, saveMonoName, saveMonoSessionId, monoRuntimeMode, monoDefaultRuntimeMode, legacyMonoRuntimeMode, saveMonoRuntimeMode } from "./mono";
+import { createMono, findMono, saveMonoName, saveMonoSessionId, setOrchestrator, monoRuntimeMode, monoDefaultRuntimeMode, legacyMonoRuntimeMode, saveMonoRuntimeMode } from "./mono";
 import { planAgentContext, recordAgentContext } from "./monoFiles";
 import { loadMonoRotation, saveMonoRotation } from "./monoRotation";
 import {
@@ -114,6 +114,42 @@ it("defaults new Managers and members to full access and plain Monos to Auto, pr
     expect(monoDefaultRuntimeMode(mono)).toBe(role === "orchestrator" ? "auto" : "full-access");
     expect(monoRuntimeMode(mono, "supervised")).toBe("supervised");
   }
+});
+
+it.each(["orchestrator", "manager", "member"] as const)("applies new %s permission ownership on first open and preserves reset choices", async role => {
+  const mono = { id: "role", role, runtimeModeSource: "role", windowsSandbox: "elevated", projects: ["/project"], mascot: "cat", color: "#abc", ...(role === "member" ? { reportsTo: "manager", specialty: "Reviewer", reviewer: true } : {}) };
+  localStorage.setItem("monocode:mono-roster", JSON.stringify([
+    ...(role === "member" ? [{ ...mono, id: "manager", role: "manager", reportsTo: undefined }] : []), mono,
+  ]));
+  const host = { home: async () => "/home", load: vi.fn(), create: () => newSession("codex", "/home", undefined, "supervised"), add: vi.fn() };
+  const created = (await ensureMonoSession(mono.id, host))!;
+  expect(created).toMatchObject({ runtimeMode: role === "member" ? "auto" : "full-access", runtimeModeSource: "role", windowsSandbox: "elevated" });
+  const saved = { ...created, runtimeMode: "supervised" as const, runtimeModeSource: "user" as const };
+  host.load.mockResolvedValue(saved);
+  expect(await ensureMonoSession(mono.id, host)).toBe(saved);
+  const fresh = await resetMonoSession(saved, { stop: async () => saved, remove: async () => {}, replace: vi.fn() });
+  expect(fresh).toMatchObject({ runtimeMode: "supervised", runtimeModeSource: "user", windowsSandbox: "elevated" });
+});
+
+it.each(["role", "user", undefined] as const)("resolves a converted Grand Orch's %s conversation honestly without migrating user or legacy choices", async runtimeModeSource => {
+  const mono = createMono();
+  const saved = { ...newSession("codex", "/home", undefined, "auto"), id: "saved", runtimeModeSource };
+  saveMonoSessionId(mono.id, saved.id);
+  setOrchestrator(mono.id, true);
+  const host = { home: vi.fn(), load: vi.fn(async () => saved), create: vi.fn(), add: vi.fn() };
+  const loaded = (await ensureMonoSession(mono.id, host))!;
+  expect(loaded.runtimeMode).toBe(runtimeModeSource === "role" ? "full-access" : "auto");
+  expect(loaded.runtimeModeSource).toBe(runtimeModeSource);
+  expect(monoRuntimeMode(findMono(mono.id), saved.runtimeMode, runtimeModeSource)).toBe(loaded.runtimeMode);
+  expect(host.create).not.toHaveBeenCalled();
+});
+
+it("retains read-only permissions when a role-owned conversation changes roles", async () => {
+  const mono = createMono();
+  const saved = { ...newSession("codex", "/home", undefined, "supervised"), id: "saved", runtimeModeSource: "role" as const, readOnly: true };
+  saveMonoSessionId(mono.id, saved.id);
+  setOrchestrator(mono.id, true);
+  expect(await ensureMonoSession(mono.id, { home: vi.fn(), load: async () => saved, create: vi.fn(), add: vi.fn() })).toBe(saved);
 });
 
 it("migrates each legacy permission once into the existing session and then honors later user choices", async () => {

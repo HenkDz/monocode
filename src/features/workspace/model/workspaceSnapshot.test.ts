@@ -54,6 +54,29 @@ it("drops an invalid workspace effort source without changing saved effort", () 
   expect(parseWorkspaceSnapshot(raw)!.sessions[0].effortSource).toBeUndefined();
 });
 
+it.each(["role", "user"] as const)("retains %s permission ownership and its explicit engine for an empty workspace session", runtimeModeSource => {
+  const session: Session = { ...newSession("codex", "/synthetic", undefined, "auto"), id: "role-permissions", blocks: [], runtimeModeSource, windowsSandbox: "elevated" };
+  const tab = newTab(session.id);
+  const snapshot = collectWorkspaceSnapshot([tab], [session], tab.id, session.cwd, new Map());
+  const parsed = parseWorkspaceSnapshot(JSON.parse(JSON.stringify(snapshot)))!;
+  expect(parsed.sessions[0]).toMatchObject({ runtimeMode: "auto", runtimeModeSource, windowsSandbox: "elevated" });
+  const resumed = hydrateWorkspaceSnapshot(parsed, new Map())!.sessions.find(value => value.id === session.id)!;
+  expect(resumed).toMatchObject({ runtimeMode: "auto", runtimeModeSource, windowsSandbox: "elevated" });
+});
+
+it("drops invalid workspace permission markers without changing the saved mode", () => {
+  const session = newSession("codex", "/synthetic", undefined, "full-access");
+  const tab = newTab(session.id);
+  const raw = JSON.parse(JSON.stringify(collectWorkspaceSnapshot([tab], [session], tab.id, session.cwd, new Map())));
+  raw.sessions[0].runtimeModeSource = "unknown";
+  raw.sessions[0].windowsSandbox = "unknown";
+  const parsed = parseWorkspaceSnapshot(raw)!;
+  const resumed = hydrateWorkspaceSnapshot(parsed, new Map())!.sessions[0];
+  expect(resumed.runtimeMode).toBe("full-access");
+  expect(resumed.runtimeModeSource).toBeUndefined();
+  expect(resumed.windowsSandbox).toBeUndefined();
+});
+
 describe("project return snapshots", () => {
   it("migrates saved host file tabs to shared remote paths", () => {
     const project = "remote://env/repo";

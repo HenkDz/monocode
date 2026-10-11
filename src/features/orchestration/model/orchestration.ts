@@ -64,6 +64,9 @@ export type WorkerPreparation = {
   workspace: OrchestrationWorkspace;
   modelSettings?: OrchestrationTask["modelSettings"];
   effortSource?: OrchestrationTask["effortSource"];
+  runtimeMode?: OrchestrationTask["runtimeMode"];
+  runtimeModeSource?: OrchestrationTask["runtimeModeSource"];
+  windowsSandbox?: OrchestrationTask["windowsSandbox"];
 };
 export type CheckoutSnapshot = {
   head: string;
@@ -2474,6 +2477,9 @@ export class Orchestrator {
             harness: reviewer.harness ?? (previous ?? task).harness, model: reviewer.model ?? (previous ?? task).model,
             modelSettings: reviewer.modelSettings ?? previous?.modelSettings,
             effortSource: reviewer.effortSource ?? previous?.effortSource,
+            runtimeMode: previous?.runtimeMode,
+            runtimeModeSource: previous?.runtimeModeSource,
+            windowsSandbox: previous?.windowsSandbox,
             memberMascot: reviewer.mascot ?? previous?.memberMascot, memberColor: reviewer.color ?? previous?.memberColor,
             readOnly: true, workspacePolicy: supportsReadOnlyTasks(reviewer.harness ?? (previous ?? task).harness) ? "shared" : "isolated-child",
             id: crypto.randomUUID(), sessionId: crypto.randomUUID(), title: `Re-review ${task.title}`,
@@ -2623,6 +2629,7 @@ export class Orchestrator {
                       workspace: prepared.workspace,
                       scratchDir: prepared.scratchDir,
                       ...(prepared.modelSettings ? { modelSettings: { ...prepared.modelSettings }, effortSource: prepared.effortSource } : {}),
+                      ...(prepared.runtimeMode ? { runtimeMode: prepared.runtimeMode, runtimeModeSource: prepared.runtimeModeSource, windowsSandbox: prepared.windowsSandbox } : {}),
                       writeScopes,
                       checkoutBaseline,
                       checkoutBaselineUnknown: !checkoutBaseline || undefined,

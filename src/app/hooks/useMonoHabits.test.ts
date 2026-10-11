@@ -133,6 +133,18 @@ it("keeps the remembered model-setting behavior for plain Mono habits", async ()
   await vi.waitFor(() => expect(stored[0].lastOutcome).toBe("quiet"));
 });
 
+it.each([["role", "auto"], ["user", "supervised"], [undefined, "full-access"]] as const)(
+  "preserves resident %s permission ownership and its explicit engine in an org habit",
+  async (runtimeModeSource, runtimeMode) => {
+    MONO.role = "member";
+    const host = setup("NOTHING_TO_REPORT");
+    Object.assign(host.sessions()[0], { runtimeMode, runtimeModeSource, windowsSandbox: "elevated" });
+    await vi.waitFor(() => expect(host.add).toHaveBeenCalledOnce());
+    expect(host.add.mock.calls[0][0]).toMatchObject({ runtimeMode, runtimeModeSource, windowsSandbox: "elevated" });
+    await vi.waitFor(() => expect(stored[0].lastOutcome).toBe("quiet"));
+  },
+);
+
 function setup(
   reply: string,
   approve?: { wait: Promise<void> },

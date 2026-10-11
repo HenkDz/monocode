@@ -9,6 +9,7 @@ import {
 } from "../features/monos/model/mono";
 import { monoEngineId } from "../features/monos/model/monoEngines";
 import { resolveMonoRoleEffort, snapshotMonoWorkerEffort, switchMonoRoleEffort } from "../features/monos/model/monoRoleEffort";
+import { resolveMonoRolePermissions, snapshotMonoWorkerPermissions } from "../features/monos/model/monoRolePermissions";
 import { archiveMonoConversation, archiveProjectMonos, offerProjectMonoRestore, projectMonoTeam } from "../features/monos/model/monoArchive";
 import { loadMonoView, saveMonoView, monoForView, monoViewProject, memberDetailsView, selectedOrgMono, monoLiveState } from "../features/monos/model/monoNavigation";
 import { MonoTeamActivity } from "../features/monos/ui/MonoTeamActivity";
@@ -2967,6 +2968,8 @@ function Workspace({
           active.modelSettings,
         ),
         providerAccountId: accountId,
+        runtimeModeSource: active.runtimeModeSource,
+        windowsSandbox: active.windowsSandbox,
         ...(active.effortSource || monoForSession(active.id)?.role ? { modelSettings: { ...active.modelSettings }, effortSource: active.effortSource } : {}),
       };
       const tab = newTab(session.id);
@@ -5023,7 +5026,7 @@ function Workspace({
 
   /** A Mono's conversation is a view over the existing workspace tabs. */
   const saveMonoPermissions = useCallback(async (session: Session) => {
-    return upsertSession(session, current => ({ ...current, runtimeMode: session.runtimeMode }));
+    return upsertSession(session, current => ({ ...current, runtimeMode: session.runtimeMode, runtimeModeSource: session.runtimeModeSource, windowsSandbox: session.windowsSandbox }));
   }, []);
 
   const onOpenMono = useCallback(
@@ -7252,11 +7255,11 @@ function Workspace({
   );
 
   const onRuntimeModeChange = useCallback(
-    (sessionId: string, runtimeMode: RuntimeMode) => {
+    (sessionId: string, runtimeMode: RuntimeMode, runtimeModeSource: Session["runtimeModeSource"] = "user") => {
       const mono = monoForSession(sessionId);
-      if (mono) saveMonoRuntimeMode(mono.id, runtimeMode);
+      if (mono) saveMonoRuntimeMode(mono.id, runtimeMode, runtimeModeSource);
       const targets = new Set(monoPermissionSessionIds(mono?.id, sessionId, sessionsRef.current, orchestrator.snapshot()));
-      sessionsRef.current = sessionsRef.current.map(s => targets.has(s.id) ? { ...s, runtimeMode } : s);
+      sessionsRef.current = sessionsRef.current.map(s => targets.has(s.id) ? { ...s, runtimeMode, ...(mono || s.orchestrationLeadId ? { runtimeModeSource } : {}) } : s);
       setSessions(sessionsRef.current);
       for (const updated of sessionsRef.current.filter(s => targets.has(s.id))) {
         void upsertSession(updated).catch(console.error);
@@ -7513,7 +7516,7 @@ function Workspace({
                 harness: current.harness,
                 model: current.model,
                 modelSettings: current.modelSettings,
-              }, current.effortSource);
+              }, current.effortSource, current.runtimeModeSource);
             if (!priorMono) void onOpenMono(mono.id);
             for (const project of mono.projects) {
               if (remoteProjectFor(project)) continue;
@@ -7689,7 +7692,7 @@ function Workspace({
       let current = options?.buildTarget
         ? withPlanBuildTarget(draftCleared, options.buildTarget)
         : draftCleared;
-      current = { ...current, runtimeMode: monoRuntimeMode(monoForSession(sessionId) ?? findMono(habitRunMono(sessionId) ?? ""), current.runtimeMode) };
+      current = { ...current, runtimeMode: monoRuntimeMode(monoForSession(sessionId) ?? findMono(habitRunMono(sessionId) ?? ""), current.runtimeMode, current.readOnly ? undefined : current.runtimeModeSource) };
       if (options?.codexStoragePrepared) current = { ...current, codexStoragePreparing: undefined };
       const editedResend = options?.resendEdited
         ? createEditedResendAttempt(current, options.onResendRejected)
@@ -8722,6 +8725,7 @@ function Workspace({
                 readOnly: current.readOnly === true,
                 ephemeral: current.ephemeral === true,
                 ...monoSkillsForSession(sessionId),
+                windowsSandbox: current.windowsSandbox,
                 controlsAgents:
                   operatorAccess ||
                   orchestrator.run(sessionId)?.status === "active",
@@ -8782,6 +8786,7 @@ function Workspace({
               runtimeMode: current.runtimeMode,
               ephemeral: current.ephemeral === true,
               ...monoSkillsForSession(sessionId),
+              windowsSandbox: current.windowsSandbox,
               intent: intent === "orchestrate" ? "plan" : intent,
               readOnly: !!readOnlyTask,
               monoSession: isMonoSession(sessionId),
@@ -10161,7 +10166,7 @@ function Workspace({
           await stopHarnessSession("codex", sessionId);
           const mono = monoForSession(sessionId);
           if (mono) saveMonoRuntimeMode(mono.id, "full-access");
-          flushSync(() => setSessions(previous => previous.map(entry => entry.id === sessionId ? { ...entry, runtimeMode: "full-access" } : entry)));
+          flushSync(() => setSessions(previous => previous.map(entry => entry.id === sessionId ? { ...entry, runtimeMode: "full-access", runtimeModeSource: "user" } : entry)));
           const updated = sessionsRef.current.find(entry => entry.id === sessionId)!;
           await upsertSession(updated);
         } else if (resolution) {
@@ -10573,6 +10578,7 @@ function Workspace({
         modelSettings: input.thread.modelSettings ?? input.source.modelSettings,
         ephemeral: false,
         ...monoSkillsForSession(input.source.id),
+        windowsSandbox: input.source.windowsSandbox,
         threadId: input.thread.providerThreadId,
         onThreadId: (providerThreadId) => {
           if (controller.signal.aborted) return;
@@ -11121,6 +11127,7 @@ function Workspace({
             readOnly: current.readOnly === true,
             ephemeral: current.ephemeral === true,
             ...monoSkillsForSession(sessionId),
+            windowsSandbox: current.windowsSandbox,
             controlsAgents:
               isMonoSession(sessionId) ||
               operatorEnabledInThread(current.blocks) ||
@@ -11460,7 +11467,6 @@ function Workspace({
           create: path => newDefaultSession(path, sessionDefaults?.runtimeMode),
           add: session => { sessionsRef.current = [...sessionsRef.current, session]; setSessions(sessionsRef.current); },
         }) : undefined;
-        const workerMode = task.readOnly ? "supervised" : memberSession?.runtimeMode ?? (run.projectManager ? "full-access" : lead.runtimeMode);
         if (
           run.projectManager &&
           !task.workspace &&
@@ -11533,8 +11539,7 @@ function Workspace({
             throw new Error(
               "This worker's configuration changed. Restore its approved harness, model and project before retrying.",
             );
-          // The lead's runtime mode governs its agents, including across a
-          // change mid-run: auto stays auto, supervised asks the lead.
+          let retainedPermissions = snapshotMonoWorkerPermissions(task, undefined, existing);
           const synced = {
             ...existing,
             cwd: projectCwd,
@@ -11543,16 +11548,19 @@ function Workspace({
               : checkoutCwd,
             branch: workspace.branch,
             worktreeRemoved: false,
-            runtimeMode: workerMode,
+            ...retainedPermissions,
             readOnly: task.readOnly,
             orchestrationLeadId: run.leadId,
           };
-          await upsertSession(existing, current => ({ ...current,
-            cwd: synced.cwd, worktreeCwd: synced.worktreeCwd, branch: synced.branch,
-            worktreeRemoved: false, runtimeMode: workerMode, readOnly: task.readOnly,
-            orchestrationLeadId: run.leadId,
-          }));
-          return { scratchDir, workspace, modelSettings: { ...synced.modelSettings }, effortSource: synced.effortSource ?? "user" };
+          await upsertSession(existing, current => {
+            retainedPermissions = snapshotMonoWorkerPermissions(task, undefined, current);
+            return { ...current,
+              cwd: synced.cwd, worktreeCwd: synced.worktreeCwd, branch: synced.branch,
+              worktreeRemoved: false, ...retainedPermissions, readOnly: task.readOnly,
+              orchestrationLeadId: run.leadId,
+            };
+          });
+          return { scratchDir, workspace, modelSettings: { ...synced.modelSettings }, effortSource: synced.effortSource ?? "user", ...retainedPermissions };
         }
         const restored = await getSession(task.sessionId);
         if (
@@ -11563,9 +11571,12 @@ function Workspace({
             "The saved worker no longer matches its approved model. Create a new assignment.",
           );
         const effort = snapshotMonoWorkerEffort(task, task.memberId ? findMono(task.memberId) : undefined);
+        const permissions = snapshotMonoWorkerPermissions(task, task.memberId ? findMono(task.memberId) : undefined,
+          sessionsRef.current.find(session => session.id === memberSession?.id) ?? memberSession);
         const fresh = {
-          ...newSession(task.harness, projectCwd, task.model, workerMode),
+          ...newSession(task.harness, projectCwd, task.model, permissions.runtimeMode),
           ...effort,
+          ...permissions,
           ...(sameProjectPath(projectCwd, checkoutCwd)
             ? {}
             : { worktreeCwd: checkoutCwd, branch: workspace.branch }),
@@ -11582,7 +11593,7 @@ function Workspace({
                 ? undefined
                 : workspace.branch,
               worktreeRemoved: false,
-              runtimeMode: workerMode,
+              ...snapshotMonoWorkerPermissions(task, undefined, restored),
             }
           : {
               ...fresh,
@@ -11609,7 +11620,7 @@ function Workspace({
         sessionsRef.current = next;
         setSessions(next);
         // Workers belong to the lead's agent panel; no workspace tab is created.
-        return { scratchDir, workspace, modelSettings: { ...worker.modelSettings }, effortSource: worker.effortSource ?? "user" };
+        return { scratchDir, workspace, modelSettings: { ...worker.modelSettings }, effortSource: worker.effortSource ?? "user", runtimeMode: worker.runtimeMode, runtimeModeSource: worker.runtimeModeSource, windowsSandbox: worker.windowsSandbox };
       },
       reviewedPullRequest: async (task) => {
         const pr = await gitPrStatus(task.workspace!.checkoutCwd);
@@ -12006,7 +12017,7 @@ function Workspace({
               id,
               title: "Manager",
             };
-        if (!stored) Object.assign(session, resolveMonoRoleEffort({ role: "manager" }, resolveModel(session.harness, session.model)));
+        if (!stored) Object.assign(session, resolveMonoRoleEffort({ role: "manager" }, resolveModel(session.harness, session.model)), resolveMonoRolePermissions({ role: "manager", runtimeModeSource: "role" }));
         if (stored && (stored.cwd !== folder || stored.worktreeCwd))
           await upsertSession(session);
         if (session.providerSessionId)
@@ -12328,7 +12339,7 @@ function Workspace({
           harness: session.harness,
           model: session.model,
           modelSettings: session.modelSettings,
-        }, session.effortSource);
+        }, session.effortSource, session.runtimeModeSource);
       }
       if (mono.id !== owner.id || mono.role !== "manager")
         assertDirectReport(listMonos(), mono.id, owner.id, "goal");
@@ -13611,6 +13622,9 @@ function Workspace({
           liveState: state.liveState,
           taskMetrics: taskMetrics.get(session.id),
           runtimeMode: session.runtimeMode,
+          runtimeModeSource: session.runtimeModeSource,
+          windowsSandbox: session.windowsSandbox,
+          readOnly: session.readOnly,
         };
       }),
       (id) => {
@@ -13770,7 +13784,7 @@ function Workspace({
           title: task.title,
           harness: task.harness,
           model: task.model,
-          runtimeMode: "full-access",
+          runtimeMode: task.runtimeMode ?? (task.readOnly ? "supervised" : "auto"),
           createdAt: dispatch?.startedAt ?? 0,
           updatedAt: dispatch?.updatedAt ?? 0,
         });
@@ -15000,6 +15014,9 @@ function Workspace({
         modelSettings={monoViewSession.modelSettings}
         effortSource={monoViewSession.effortSource}
         runtimeMode={monoViewSession.runtimeMode}
+        runtimeModeSource={monoViewSession.runtimeModeSource}
+        windowsSandbox={monoViewSession.windowsSandbox}
+        readOnly={monoViewSession.readOnly}
         busy={!!monoViewSession.busy}
         onWorkingDirectoryChange={async cwd => {
           const current = sessionsRef.current.find(session => session.id === monoViewSession.id);
@@ -15017,9 +15034,17 @@ function Workspace({
         onModelSettingsChange={(settings, source) =>
           onModelSettingsChange(monoViewSession.id, settings, undefined, source)
         }
-        onRuntimeModeChange={(mode) =>
-          onRuntimeModeChange(monoViewSession.id, mode)
+        onRuntimeModeChange={(mode, source) =>
+          onRuntimeModeChange(monoViewSession.id, mode, source)
         }
+        onWindowsSandboxChange={async windowsSandbox => {
+          const current = sessionsRef.current.find(session => session.id === monoViewSession.id);
+          if (!current || current.busy) throw new Error("Wait for the current turn to finish before changing its sandbox engine.");
+          await stopHarnessSession("codex", current.id);
+          await upsertSession(current, latest => ({ ...latest, windowsSandbox }));
+          sessionsRef.current = sessionsRef.current.map(session => session.id === current.id ? { ...session, windowsSandbox } : session);
+          setSessions(sessionsRef.current);
+        }}
         onClose={() => { setMonoDetailsOpen(false); setMonoActivity(null); }}
         onReset={() => onResetMono(monoViewSession.id)}
         windowControls={monoCovers && !IS_MAC ? <WindowControls /> : undefined}

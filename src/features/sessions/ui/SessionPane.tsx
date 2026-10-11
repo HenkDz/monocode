@@ -1767,7 +1767,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
                     key={session.id}
                     sessionId={session.id}
                     goalRouting={monoGoalRouting}
-                    runtimeMode={monoRuntimeMode(mono, session.runtimeMode)}
+                    runtimeMode={monoRuntimeMode(mono, session.runtimeMode, session.readOnly ? undefined : session.runtimeModeSource)}
                     onRuntimeModeChange={(mode) =>
                       onRuntimeModeChange(session.id, mode)
                     }

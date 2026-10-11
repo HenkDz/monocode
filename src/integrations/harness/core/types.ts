@@ -181,6 +181,8 @@ export type HarnessSessionInput = {
   ephemeral?: boolean;
   /** Persist Codex context in MonoCode's private Mono store. */
   codexStore?: "mono";
+  /** Explicit Windows engine for a private Mono home; inherited account settings remain untouched. */
+  windowsSandbox?: "elevated" | "unelevated";
   skillsRole?: import("../../../features/monos/model/monoSkills").MonoSkillsRole;
   skillsPolicy?: import("../../../features/monos/model/monoSkills").MonoSkillsPolicy;
   intent?: TurnIntent;

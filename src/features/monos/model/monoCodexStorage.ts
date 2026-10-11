@@ -55,7 +55,7 @@ export function codexSandboxRepairSettings(session: Session, isWindows: boolean,
   const intent = session.queuedMessages?.[0]?.intent ?? [...session.blocks].reverse().find(block => block.role === "user")?.intent;
   return {
     sandboxRequired: session.readOnly === true || intent === "plan" || intent === "orchestrate" || session.runtimeMode !== "full-access",
-    windowsSandbox: isWindows && session.readOnly ? "unelevated" as const : undefined,
+    windowsSandbox: isWindows ? session.windowsSandbox ?? (session.readOnly || session.runtimeMode === "auto" || session.runtimeMode === "auto-accept-edits" ? "unelevated" as const : undefined) : undefined,
     sandboxNetworkAccess: networkAccess,
   };
 }

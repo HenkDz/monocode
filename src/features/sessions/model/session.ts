@@ -424,6 +424,7 @@ export type Block = {
 
 export type RuntimeMode =
   "supervised" | "auto-accept-edits" | "auto" | "full-access";
+export type RuntimeModeSource = "role" | "user";
 
 /** One GitHub issue or pull request associated with a coding session. */
 export type LinkedWorkItem = {
@@ -477,7 +478,10 @@ export type Session = {
   model: string;
   modelSettings: Record<string, string>;
   effortSource?: EffortSource;
+  runtimeModeSource?: RuntimeModeSource;
   runtimeMode: RuntimeMode;
+  /** Explicit Windows sandbox engine for this Mono or its delegated task. */
+  windowsSandbox?: "elevated" | "unelevated";
   title: string;
   /** Project / working directory for this session. */
   cwd: string;

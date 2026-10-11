@@ -1,6 +1,6 @@
 import { pathKey } from "../../../shared/lib/paths";
 import type { OrchestrationChoice } from "./orchestrationPlan";
-import type { HarnessId, TurnMetrics, TurnModel } from "../../sessions/model/session";
+import type { HarnessId, TurnMetrics, TurnModel, Session } from "../../sessions/model/session";
 import type { EffortSource } from "../../sessions/model/models";
 import type { ManagerWakeState } from "./managerWake";
 
@@ -126,6 +126,9 @@ export type OrchestrationTask = {
   model: string;
   modelSettings?: Record<string, string>;
   effortSource?: EffortSource;
+  runtimeMode?: Session["runtimeMode"];
+  runtimeModeSource?: Session["runtimeModeSource"];
+  windowsSandbox?: Session["windowsSandbox"];
   prompt: string;
   files: string[];
   /** Logical scopes in the lead checkout, used for scheduling overlap. */

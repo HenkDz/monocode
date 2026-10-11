@@ -10,7 +10,7 @@ import { switchMonoRoleEffort } from "./monoRoleEffort";
 
 export const TEAM_SOUL_MAX_BYTES = 8 * 1024;
 export const TEAM_DEFAULT_CAP = 6;
-export const TEAM_LOCKED_FIELDS = ["name", "specialty", "soul", "harness", "model", "modelSettings"] as const;
+export const TEAM_LOCKED_FIELDS = ["name", "specialty", "soul", "harness", "model", "modelSettings", "runtimeMode"] as const;
 export type TeamLockedField = (typeof TEAM_LOCKED_FIELDS)[number];
 export type TeamChange = {
   id: string;
@@ -286,7 +286,7 @@ export function handleMonoTeam(managerId: string, requestId: string, action: str
       if (typeof color !== "string" || color.length > 100 || !/^#[0-9a-fA-F]{3,8}$|^(?:hsl|rgb)a?\([\d\s.,%+-]+\)$/.test(color)) throw Error("Choose a project color");
       if (input.reviewer !== undefined && typeof input.reviewer !== "boolean") throw Error("reviewer must be a boolean");
       after = { id: crypto.randomUUID(), name: shortText(input.name, "name"), specialty: shortText(input.specialty, "specialty"), role: "member", reportsTo: managerId, projects: [...manager.projects], origin: "manager", reviewer: input.reviewer === true, mascot, color, workerProfile,
-        effortSource: Object.keys(input.modelSettings ?? {}).some(isEffortSettingId) ? undefined : "role" };
+        effortSource: Object.keys(input.modelSettings ?? {}).some(isEffortSettingId) ? undefined : "role", runtimeModeSource: "role" };
       files.soul = { before: "", after: soul };
       if (input.memory !== undefined && !(Array.isArray(input.memory) && input.memory.length === 0)) files.memory = { before: "", after: addTeamMemory("", input.memory) };
     } else {
@@ -327,7 +327,7 @@ export function handleMonoTeam(managerId: string, requestId: string, action: str
 export function lockMonoField(id: string, field: TeamLockedField): void {
   if (!TEAM_LOCKED_FIELDS.includes(field)) throw Error("Unknown user-locked field");
   const roster = listMonos(true);
-  saveMonoTeamRoster(roster.map((mono) => mono.id === id && (mono.role === "member" || field === "modelSettings" && (mono.role === "manager" || mono.role === "orchestrator")) ? { ...mono, userLockedFields: [...new Set([...(mono.userLockedFields ?? []), field])] } : mono));
+  saveMonoTeamRoster(roster.map((mono) => mono.id === id && (mono.role === "member" || (field === "modelSettings" || field === "runtimeMode") && (mono.role === "manager" || mono.role === "orchestrator")) ? { ...mono, userLockedFields: [...new Set([...(mono.userLockedFields ?? []), field])] } : mono));
 }
 
 export function unlockMonoField(id: string, field: TeamLockedField): void {

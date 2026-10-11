@@ -59,7 +59,7 @@ export function prepareCodexMonoContext(input: MonoSkillsContext & {
   threadId?: string;
   migrationOnly?: boolean;
   sandboxRequired?: boolean;
-  windowsSandbox?: "unelevated";
+  windowsSandbox?: "elevated" | "unelevated";
   sandboxNetworkAccess?: boolean;
 }): Promise<PreparedContext> {
   const key = `${input.providerAccountId ?? "default"}:${input.sessionId}`;

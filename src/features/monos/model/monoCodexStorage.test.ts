@@ -25,6 +25,13 @@ it("keeps read-only and Plan repair restricted while allowing explicit full-acce
     expect(codexSandboxRepairSettings({ ...session, queuedMessages: [{ id: "plan", text: "Plan", attachments: [], intent }] }, true, false).sandboxRequired).toBe(true);
   }
   expect(codexSandboxRepairSettings({ ...session, runtimeMode: "auto" }, true, false).sandboxRequired).toBe(true);
+  for (const runtimeMode of ["auto", "auto-accept-edits"] as const) {
+    const worker = { ...session, runtimeMode };
+    expect(codexSandboxRepairSettings(worker, true, false).windowsSandbox).toBe("unelevated");
+    expect(codexSandboxRepairSettings({ ...worker, windowsSandbox: "elevated" }, true, false).windowsSandbox).toBe("elevated");
+    expect(codexSandboxRepairSettings(worker, false, false).windowsSandbox).toBeUndefined();
+  }
+  expect(codexSandboxRepairSettings({ ...session, readOnly: true, windowsSandbox: "elevated" }, true, false)).toMatchObject({ sandboxRequired: true, windowsSandbox: "elevated" });
 });
 
 const conflict = {

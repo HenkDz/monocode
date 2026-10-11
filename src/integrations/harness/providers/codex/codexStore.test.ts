@@ -185,7 +185,8 @@ it("prepares a saved Mono's instruction home with its new working folder", async
   mock.prepare.mockResolvedValueOnce({ home: "/mono/default", hasThread: true });
   await prepareCodexMonoContext({ ...input, threadId: "root", cwd, skillsRole: "grand_orchestrator" });
   expect(mock.prepare).toHaveBeenCalledWith("account", "root", {
-    skillsRole: "grand_orchestrator", skillsPolicy: undefined, projectPath: cwd, sandboxRequired: undefined,
+    skillsRole: "grand_orchestrator", skillsPolicy: undefined, projectPath: cwd, sandboxRequired: false,
+    windowsSandbox: undefined, sandboxNetworkAccess: undefined,
   });
   expect(mock.sent.find(request => request.method === "config/read")?.params).toEqual({ cwd });
   expect(mock.spawn.mock.calls[0][3]).toBe(cwd);
@@ -262,6 +263,16 @@ it("keeps an explicit unelevated read-only launch effective over an elevated acc
   expect(mock.prepare).toHaveBeenLastCalledWith("account", undefined, expect.objectContaining({ sandboxRequired: false, windowsSandbox: "unelevated", sandboxNetworkAccess: false }));
   expect(prepared.config.windows).toEqual({ sandbox: "unelevated", other: "preserved" });
   expect(mock.sandboxCheck).toHaveBeenLastCalledWith(expect.objectContaining({ windowsSandbox: "unelevated", sandboxConfig: expect.objectContaining({ windows: { sandbox: "unelevated", other: "preserved" } }) }));
+  expect(mock.sourceConfig).toEqual({ windows: { sandbox: "elevated", other: "preserved" } });
+});
+
+it("keeps an explicit elevated Mono choice blocked before thread recovery over an unelevated account", async () => {
+  mock.sourceConfig = { windows: { sandbox: "unelevated", other: "preserved" } };
+  mock.sandboxCheck.mockRejectedValueOnce(new Error("Codex storage needs repair: elevated setup cannot be excluded"));
+  await expect(prepareCodexMonoContext({ ...input, threadId: "root", sandboxRequired: true, windowsSandbox: "elevated", sandboxNetworkAccess: false })).rejects.toThrow("elevated setup cannot be excluded");
+  expect(mock.sandboxCheck).toHaveBeenLastCalledWith(expect.objectContaining({ windowsSandbox: "elevated", sandboxConfig: expect.objectContaining({ windows: { sandbox: "elevated", other: "preserved" } }) }));
+  expect(mock.sourceConfig).toEqual({ windows: { sandbox: "unelevated", other: "preserved" } });
+  expect(mock.sent.some(message => ["thread/read", "thread/resume", "turn/start"].includes(message.method))).toBe(false);
 });
 
 it("reads effective project settings before testing elevated artifact readiness", async () => {
@@ -281,7 +292,7 @@ it("does not coalesce checks for different effective engines or network policies
     await new Promise<void>(resolve => { accept = resolve; });
     return { home: "/mono/default", hasThread: false };
   });
-  const elevated = prepareCodexMonoContext({ ...input, sandboxRequired: true, sandboxNetworkAccess: false });
+  const elevated = prepareCodexMonoContext({ ...input, sandboxRequired: true, windowsSandbox: "elevated", sandboxNetworkAccess: false });
   const unelevated = prepareCodexMonoContext({ ...input, sandboxRequired: true, windowsSandbox: "unelevated", sandboxNetworkAccess: false });
   const online = prepareCodexMonoContext({ ...input, sandboxRequired: true, sandboxNetworkAccess: true });
   accept?.();

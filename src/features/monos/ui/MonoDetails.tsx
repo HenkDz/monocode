@@ -6,8 +6,7 @@ import {
   type ComponentProps,
   type ReactNode,
 } from "react";
-import type { HarnessId, RuntimeMode } from "../../sessions/model/session";
-import { AccessPicker } from "../../sessions/ui/AccessPicker";
+import type { HarnessId, RuntimeMode, Session } from "../../sessions/model/session";
 import { ModelPicker, ModelSettingRows } from "../../sessions/ui/ModelPicker";
 import { getModelSnapshot, modelEffortSetting, subscribeModels, type EffortSource } from "../../sessions/model/models";
 import { useModelSource } from "../../sessions/ui/modelSource";
@@ -31,6 +30,8 @@ import { findMono, listMonos, monosSnapshot, subscribeMonos, updateMono } from "
 import { resetMonoRoleEffort, resolveMonoRoleEffort } from "../model/monoRoleEffort";
 import { lockMonoField } from "../model/monoTeam";
 import { MonoRoleEffort } from "./MonoRoleEffort";
+import { resolveMonoRolePermissions } from "../model/monoRolePermissions";
+import { MonoPermissions } from "./MonoPermissions";
 import { orgDescendants } from "../model/monoTeamActivity";
 import { habitActions, HabitsList, useHabits } from "./MonoHabits";
 import { MemoryPage, SoulPage } from "./MonoFilePages";
@@ -77,11 +78,15 @@ type Props = {
   modelSettings: Record<string, string>;
   effortSource?: EffortSource;
   runtimeMode: RuntimeMode;
+  runtimeModeSource?: Session["runtimeModeSource"];
+  windowsSandbox?: Session["windowsSandbox"];
+  readOnly?: boolean;
   busy?: boolean;
   onWorkingDirectoryChange?: (cwd: string) => Promise<void>;
   onModelChange: (harness: HarnessId, model: string) => void;
   onModelSettingsChange: (settings: Record<string, string>, effortSource?: EffortSource) => void;
-  onRuntimeModeChange: (mode: RuntimeMode) => void;
+  onRuntimeModeChange: (mode: RuntimeMode, source?: Session["runtimeModeSource"]) => void;
+  onWindowsSandboxChange?: (engine: Session["windowsSandbox"]) => void | Promise<void>;
   onClose: () => void;
   onReset?: () => Promise<void>;
   windowControls?: ReactNode;
@@ -112,11 +117,15 @@ export function MonoDetails({
   modelSettings,
   effortSource: sessionEffortSource,
   runtimeMode,
+  runtimeModeSource,
+  windowsSandbox,
+  readOnly,
   busy,
   onWorkingDirectoryChange,
   onModelChange,
   onModelSettingsChange,
   onRuntimeModeChange,
+  onWindowsSandboxChange,
   onClose,
   onReset,
   windowControls,
@@ -125,6 +134,7 @@ export function MonoDetails({
   useSyncExternalStore(subscribeMonos, monosSnapshot);
   useSyncExternalStore(subscribeModels, getModelSnapshot);
   const mono = findMono(monoId);
+  const permissions = mono ? resolveMonoRolePermissions(sessionId ? { ...mono, runtimeModeSource } : mono, runtimeMode) : { runtimeMode, runtimeModeSource };
   const currentModel = useModelSource().resolve(harness, model);
   const effortSetting = modelEffortSetting(currentModel);
   const effective = mono ? resolveMonoRoleEffort(sessionId ? { ...mono, effortSource: sessionEffortSource } : mono, currentModel, modelSettings) : { modelSettings, effortSource: undefined };
@@ -346,7 +356,7 @@ export function MonoDetails({
               {...(activity ?? { blocks: [], live: false })}
             />
           ) : findMono(monoId)?.role === "member" ? (
-            <MemberDetails member={findMono(monoId)!} fallback={{ harness, model, modelSettings }} conversationProfile={{ harness, model, modelSettings }} conversationEffortSource={sessionId ? sessionEffortSource : effective.effortSource} onBack={onClose} providerAccountId={providerAccountId} runtimeMode={runtimeMode} onRuntimeModeChange={onRuntimeModeChange} onProfileChange={(profile, effortSource) => { if (profile.harness !== harness || profile.model !== model) onModelChange(profile.harness, profile.model); onModelSettingsChange(profile.modelSettings ?? {}, effortSource); }} />
+            <MemberDetails member={findMono(monoId)!} fallback={{ harness, model, modelSettings }} conversationProfile={{ harness, model, modelSettings }} conversationEffortSource={sessionId ? sessionEffortSource : effective.effortSource} onBack={onClose} providerAccountId={providerAccountId} runtimeMode={permissions.runtimeMode} runtimeModeSource={permissions.runtimeModeSource} windowsSandbox={sessionId ? windowsSandbox : windowsSandbox ?? mono?.windowsSandbox} readOnly={readOnly} busy={busy} onRuntimeModeChange={onRuntimeModeChange} onWindowsSandboxChange={onWindowsSandboxChange} onProfileChange={(profile, effortSource) => { if (profile.harness !== harness || profile.model !== model) onModelChange(profile.harness, profile.model); onModelSettingsChange(profile.modelSettings ?? {}, effortSource); }} />
           ) : (
             <MonoSettingsPage
               monoId={monoId}
@@ -383,16 +393,7 @@ export function MonoDetails({
                   )}
                 />
                 {mono && !effortSetting && <Property label="Effort">{effortControl()}</Property>}
-                {runtimeMode && onRuntimeModeChange && (
-                  <Property label="Permissions">
-                    <AccessPicker
-                      value={runtimeMode}
-                      onChange={onRuntimeModeChange}
-                      side="bottom"
-                      variant="plain"
-                    />
-                  </Property>
-                )}
+                <MonoPermissions key={monoId} mono={mono} harness={harness} runtimeMode={permissions.runtimeMode} runtimeModeSource={permissions.runtimeModeSource} windowsSandbox={sessionId ? windowsSandbox : windowsSandbox ?? mono?.windowsSandbox} readOnly={readOnly} busy={busy} onRuntimeModeChange={onRuntimeModeChange} onWindowsSandboxChange={onWindowsSandboxChange} />
                 <Property label="Projects">
                   {findMono(monoId)?.role === "manager" ? (
                     <span className="text-xs">{agent.projects[0]?.name}</span>

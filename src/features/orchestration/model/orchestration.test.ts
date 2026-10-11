@@ -135,7 +135,7 @@ async function saveTaskDocument(f: ReturnType<typeof setup>, task: Orchestration
   return artifact;
 }
 
-it("persists a cloned worker effort snapshot and retains it through retry and hydration", async () => {
+it("persists worker effort and permissions snapshots through retry and hydration", async () => {
   const f = setup();
   const preparedSettings = { reasoningEffort: "high", serviceTier: "fast" };
   const create = f.host.createWorker;
@@ -143,6 +143,9 @@ it("persists a cloned worker effort snapshot and retains it through retry and hy
     ...await create(run, task),
     modelSettings: task.effortSource ? task.modelSettings : preparedSettings,
     effortSource: task.effortSource ?? "role",
+    runtimeMode: task.runtimeMode ?? "auto",
+    runtimeModeSource: task.runtimeModeSource ?? "role",
+    windowsSandbox: task.runtimeMode ? task.windowsSandbox : "unelevated",
   }));
   f.manager.bind(f.host);
   await f.start();
@@ -150,9 +153,12 @@ it("persists a cloned worker effort snapshot and retains it through retry and hy
   await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledOnce());
   const task = f.tasks()[0];
   const snapshot = { reasoningEffort: "high", serviceTier: "fast" };
+  const permissions = { runtimeMode: "auto", runtimeModeSource: "role", windowsSandbox: "unelevated" };
   expect(task).toMatchObject({ modelSettings: snapshot, effortSource: "role" });
   expect(task.modelSettings).not.toBe(preparedSettings);
   expect(f.saved.get("lead")!.tasks[0]).toMatchObject({ modelSettings: snapshot, effortSource: "role" });
+  expect(task).toMatchObject(permissions);
+  expect(f.saved.get("lead")!.tasks[0]).toMatchObject(permissions);
   preparedSettings.reasoningEffort = "xhigh";
   expect(f.tasks()[0].modelSettings).toEqual(snapshot);
 
@@ -161,6 +167,7 @@ it("persists a cloned worker effort snapshot and retains it through retry and hy
   await f.call("retry", { taskId: task.id, text: "Resume the same assignment", files: ["src"] });
   await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledTimes(2));
   expect(vi.mocked(f.host.createWorker).mock.calls[1][1]).toMatchObject({ modelSettings: snapshot, effortSource: "role" });
+  expect(vi.mocked(f.host.createWorker).mock.calls[1][1]).toMatchObject(permissions);
   expect(f.tasks()[0]).toMatchObject({ sessionId: task.sessionId, modelSettings: snapshot, effortSource: "role" });
 
   f.completions.get(task.sessionId)!({ status: "failed", text: "", error: "Provider unavailable" });
@@ -169,6 +176,7 @@ it("persists a cloned worker effort snapshot and retains it through retry and hy
   restored.bind(f.host);
   await restored.hydrate("lead");
   expect(restored.run("lead")!.tasks[0]).toMatchObject({ sessionId: task.sessionId, modelSettings: snapshot, effortSource: "role" });
+  expect(restored.run("lead")!.tasks[0]).toMatchObject(permissions);
 });
 
 it("rejects an invalid effort source before creating a worker", async () => {
@@ -195,6 +203,9 @@ async function preparingWorkerFixture() {
     ...await create(run, task),
     modelSettings: { reasoningEffort: "high" },
     effortSource: "role",
+    runtimeMode: "auto",
+    runtimeModeSource: "role",
+    windowsSandbox: "unelevated",
   }));
   await f.start();
   await f.delegate(["src"]);
@@ -223,6 +234,8 @@ it.each(["cancelled", "stopped", "replaced"] as const)("does not submit or overw
   expect(f.saved.get("lead")).toEqual(persisted);
   expect(f.tasks()[0].status).toBe(state === "replaced" ? "running" : "cancelled");
   expect(f.tasks()[0].modelSettings).toBeUndefined();
+  expect(f.tasks()[0].runtimeMode).toBeUndefined();
+  expect(f.tasks()[0].windowsSandbox).toBeUndefined();
   expect(f.host.submit).not.toHaveBeenCalled();
 });
 
@@ -345,6 +358,7 @@ describe("delivery maintenance", () => {
   it("marks an approval outdated and assigns an exact-head re-review once", async () => {
     const f = await readyTask();
     f.tasks()[0].reviewedHead = "old";
+    Object.assign(f.tasks()[0], { runtimeMode: "full-access", runtimeModeSource: "user", windowsSandbox: "elevated" });
     f.host.reviewerFor = () => ({ id: "reviewer", name: "Reviewer", harness: "codex", model: "codex:reviewer", mascot: "owl", color: "#123456" });
     f.host.choices = () => [{ harness: "codex", models: [{ id: "codex:test", name: "Test" }, { id: "codex:reviewer", name: "Reviewer" }] }];
     f.host.checkoutSnapshot = vi.fn(async () => ({ head: "base", fingerprint: "baseline", clean: true, commitsAhead: 0, baseDiff: false }));
@@ -358,6 +372,9 @@ describe("delivery maintenance", () => {
     expect(f.tasks()[1].model).toBe("codex:reviewer");
     expect(f.tasks()[1].memberMascot).toBe("owl");
     expect(f.tasks()[1].readOnly).toBe(true);
+    expect(f.tasks()[1].runtimeMode).toBeUndefined();
+    expect(f.tasks()[1].runtimeModeSource).toBeUndefined();
+    expect(f.tasks()[1].windowsSandbox).toBeUndefined();
     expect(f.tasks()[1].prompt).toContain("new");
   });
   it("skips trivial reviews and keeps unknown mergeability out of ready", async () => {

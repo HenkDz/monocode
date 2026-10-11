@@ -14,7 +14,6 @@ import {
   isMonoSession,
   monoForSession,
   monoRuntimeMode,
-  monoDefaultRuntimeMode,
   legacyMonoRuntimeMode,
   finishMonoPermissionsMigration,
   saveMonoSessionId,
@@ -24,6 +23,7 @@ import { forgetAgentContext } from "./monoFiles";
 import { forgetMonoRotation } from "./monoRotation";
 import { mergeModelSettings, resolveModel } from "../../sessions/model/models";
 import { resolveMonoRoleEffort } from "./monoRoleEffort";
+import { resolveMonoRolePermissions } from "./monoRolePermissions";
 import { defaultMonoWorkingDirectory, ensureMonoWorkingDirectory } from "./monoWorkingDirectory";
 import { acceptMonoWorkingDirectoryMigration } from "./monoWorkingDirectoryMigration";
 
@@ -79,7 +79,7 @@ async function loadMonoSession(
     if (existing) {
       const current = findMono(monoId);
       if (!current) return undefined;
-      const runtimeMode = monoRuntimeMode(current, existing.runtimeMode);
+      const runtimeMode = existing.readOnly ? existing.runtimeMode : monoRuntimeMode(current, existing.runtimeMode, existing.runtimeModeSource);
       const session = runtimeMode === existing.runtimeMode ? existing : { ...existing, runtimeMode };
       await migratePermissions(current.id, session, host);
       return session;
@@ -93,8 +93,10 @@ async function loadMonoSession(
   const profile = current.workerProfile;
   // All first-open paths, including a goal arriving before the chat is opened,
   // must use the Mono's profile. Existing chats above keep the user's choice.
-  const runtimeMode = monoDefaultRuntimeMode(current);
+  const permissions = resolveMonoRolePermissions(current);
+  const runtimeMode = permissions.runtimeMode;
   let session = profile ? { ...newSession(profile.harness, cwd, profile.model, runtimeMode, profile.modelSettings), id: defaults.id } : { ...defaults, cwd, runtimeMode };
+  session = { ...session, ...permissions, ...(current.windowsSandbox ? { windowsSandbox: current.windowsSandbox } : {}) };
   if (current.role) {
     const effort = resolveMonoRoleEffort(current, resolveModel(session.harness, session.model), profile?.modelSettings);
     session = { ...session, ...effort };
@@ -131,6 +133,8 @@ export async function resetMonoSession(
     stopped.runtimeMode,
     stopped.modelSettings,
   );
+  fresh.runtimeModeSource = stopped.runtimeModeSource;
+  fresh.windowsSandbox = stopped.windowsSandbox;
   if (mono?.role) {
     fresh.modelSettings = mergeModelSettings(resolveModel(stopped.harness, stopped.model), stopped.modelSettings);
     fresh.effortSource = stopped.effortSource;

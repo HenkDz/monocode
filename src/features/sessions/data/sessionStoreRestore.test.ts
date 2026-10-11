@@ -38,6 +38,26 @@ function codexRecord(): SessionRecord {
 describe("restoring a session whose repair cannot be persisted", () => {
   beforeEach(() => invoke.mockReset());
 
+  it.each(["role", "user"] as const)("restores %s permission ownership and an explicit engine without leaking markers", async runtimeModeSource => {
+    invoke.mockImplementation(async (command: string) => command === "session_get" ? {
+      ...codexRecord(), blocks: [], runtimeMode: "auto", modelSettings: { reasoningEffort: "high", __monocodeRuntimeModeSource: runtimeModeSource, __monocodeWindowsSandbox: "elevated" },
+    } : null);
+    const session = await getSession("s1");
+    expect(session).toMatchObject({ runtimeMode: "auto", runtimeModeSource, windowsSandbox: "elevated", modelSettings: { reasoningEffort: "high" } });
+    expect(sanitizeSessionForPersist(session!).modelSettings).toEqual({ reasoningEffort: "high", __monocodeRuntimeModeSource: runtimeModeSource, __monocodeWindowsSandbox: "elevated" });
+  });
+
+  it.each([undefined, "invalid"])("retains legacy permissions and drops malformed markers (%s)", async marker => {
+    invoke.mockImplementation(async (command: string) => command === "session_get" ? {
+      ...codexRecord(), blocks: [], runtimeMode: "full-access", modelSettings: { reasoningEffort: "high", ...(marker ? { __monocodeRuntimeModeSource: marker, __monocodeWindowsSandbox: marker } : {}) },
+    } : null);
+    const session = await getSession("s1");
+    expect(session?.runtimeMode).toBe("full-access");
+    expect(session?.runtimeModeSource).toBeUndefined();
+    expect(session?.windowsSandbox).toBeUndefined();
+    expect(session?.modelSettings).toEqual({ reasoningEffort: "high" });
+  });
+
   it.each(["role", "user"] as const)("restores %s effort ownership and strips its storage marker from provider settings", async effortSource => {
     invoke.mockImplementation(async (command: string) => command === "session_get" ? {
       ...codexRecord(), blocks: [], modelSettings: { reasoningEffort: "high", __monocodeReadOnly: "true", __monocodeEffortSource: effortSource },

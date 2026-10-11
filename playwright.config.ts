@@ -13,8 +13,10 @@ export default defineConfig({
     { name: "webkit", use: { browserName: "webkit" } },
   ],
   webServer: {
-    command: "npm run dev -- --host 127.0.0.1 --port 1435",
-    url: "http://127.0.0.1:1435/tests/browser/transcript.html",
+    command:
+      "node node_modules/vite/bin/vite.js build --config tests/browser/vite.config.ts && node node_modules/vite/bin/vite.js preview --config tests/browser/vite.config.ts --host 127.0.0.1 --port 1435 --strictPort",
+    url: "http://127.0.0.1:1435/tests/browser/mono-activity.html",
+    timeout: 180_000,
     reuseExistingServer: false,
   },
 });

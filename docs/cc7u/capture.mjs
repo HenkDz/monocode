@@ -261,13 +261,18 @@ try {
         const key = `workbench-${width}-${theme}-${scenario}`;
         await layout(page, key);
         if (["failed", "long-history"].includes(scenario)) {
+          const viewport = await page.locator(".agent-transcript").boundingBox();
+          await page.mouse.move(viewport.x + viewport.width / 2, viewport.y + viewport.height / 2);
+          await page.mouse.wheel(0, -100);
+          await page.locator('[data-chat-message="turn"]').waitFor();
+          await page.waitForTimeout(350);
           const request = await page.locator('[data-chat-message="turn"]').evaluate((element) => {
             const box = element.getBoundingClientRect();
             const viewport = element.closest(".agent-transcript").getBoundingClientRect();
             const hit = document.elementFromPoint(box.left + 8, box.top + 8);
             return box.top >= viewport.top && box.bottom <= viewport.bottom && element.contains(hit);
           });
-          check(`${key}: original request fully readable at initial position`, request);
+          check(`${key}: original request fully readable after actual wheel scrolling`, request);
         }
         if (scenario === "zero")
           check(`${key}: no inherited Manager message`, (await page.locator(".cc7u-manager-note").count()) === 0);
@@ -293,7 +298,7 @@ try {
         const pair = await context.newPage();
         await pair.setViewportSize({ width: width * 2, height: 1034 });
         await pair.setContent(
-          `<html><head><style>*{box-sizing:border-box}body{margin:0;background:${theme === "light" ? "#fafafa" : "#151515"};color:${theme === "light" ? "#222" : "#eee"};font:12px system-ui}.pair{display:grid;grid-template-columns:1fr 1fr}.label{height:34px;padding:8px 16px;border-bottom:1px solid #8884}img{display:block;width:100%}</style></head><body><div class="pair"><div><div class="label">CC7S selected Workbench mockup${scenario === "working" ? " · Native waiting reference (no working mockup exists)" : ""}</div><img src="data:image/png;base64,${mockup.toString("base64")}"></div><div><div class="label">CC7U actual components · ${scenario} · ${width}px · ${theme}</div><img src="data:image/png;base64,${implementation.toString("base64")}"></div></div></body></html>`,
+          `<html><head><style>*{box-sizing:border-box}body{margin:0;background:${theme === "light" ? "#fafafa" : "#151515"};color:${theme === "light" ? "#222" : "#eee"};font:12px system-ui}.pair{display:grid;grid-template-columns:1fr 1fr}.label{height:34px;padding:8px 16px;border-bottom:1px solid #8884}img{display:block;width:100%}</style></head><body><div class="pair"><div><div class="label">CC7S selected Workbench mockup${scenario === "working" ? " · Native waiting reference (no working mockup exists)" : ""}</div><img src="data:image/png;base64,${mockup.toString("base64")}"></div><div><div class="label">CC7U actual components · ${scenario} · ${width}px · ${theme}${["failed", "long-history"].includes(scenario) ? " · reader scrolled to original request" : ""}</div><img src="data:image/png;base64,${implementation.toString("base64")}"></div></div></body></html>`,
         );
         await screenshot(pair, `${key}-comparison`);
         await pair.close();

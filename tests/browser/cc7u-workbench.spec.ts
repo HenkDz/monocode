@@ -722,7 +722,7 @@ test("flat historical session Conversation keeps its saved dispatch and queue af
 for (const width of [1440, 1100]) {
   for (const theme of ["dark", "light"]) {
     for (const scenario of ["failed", "long-history"]) {
-      test(`pending Work queue keeps the initial request readable at ${width}px ${theme} ${scenario}`, async ({
+      test(`pending queue keeps the request readable through scrolling and returns to latest at ${width}px ${theme} ${scenario}`, async ({
         page,
       }) => {
         await page.setViewportSize({ width, height: 1000 });
@@ -741,8 +741,12 @@ for (const width of [1440, 1100]) {
         await expect(request).toContainText(
           "Check restore and foreground focus. Keep the review tied to the saved change, and show me what still needs a real Windows check.",
         );
-        await expect(request).toBeInViewport({ ratio: 1 });
         const reader = transcript.locator(".agent-transcript");
+        const latest = await reader.evaluate((element) => element.scrollTop);
+        const viewport = await reader.boundingBox();
+        await page.mouse.move(viewport!.x + viewport!.width / 2, viewport!.y + viewport!.height / 2);
+        await page.mouse.wheel(0, -100);
+        await expect(request).toBeInViewport({ ratio: 1 });
         const geometry = await request.evaluate((element) => {
           const box = element.getBoundingClientRect();
           const viewport = element.closest(".agent-transcript")!.getBoundingClientRect();
@@ -758,7 +762,13 @@ for (const width of [1440, 1100]) {
         expect(geometry.requestTop).toBeGreaterThanOrEqual(geometry.viewportTop);
         expect(geometry.requestBottom).toBeLessThanOrEqual(geometry.viewportBottom);
         expect(geometry.requestOwnsPointer).toBe(true);
-        const queue = page.locator("[data-member-work] [data-message-queue]");
+        await page.getByRole("button", { name: "Jump to latest", exact: true }).click();
+        await expect.poll(() => reader.evaluate((element) => element.scrollTop)).toBeCloseTo(latest, 0);
+        await expect(page.getByRole("textbox", { name: "Message Reviewer", exact: true })).toHaveValue("Keep my draft");
+        await page.mouse.move(viewport!.x + viewport!.width / 2, viewport!.y + viewport!.height / 2);
+        await page.mouse.wheel(0, -100);
+        await expect(request).toBeInViewport({ ratio: 1 });
+        const queue = page.getByRole("region", { name: "Message queue", exact: true });
         await expect(queue).toHaveCount(1);
         await expect(transcript.locator("[data-message-queue]")).toHaveCount(0);
         const scroll = await reader.evaluate((element) => element.scrollTop);

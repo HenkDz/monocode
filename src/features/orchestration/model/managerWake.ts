@@ -78,16 +78,17 @@ export function reconcileManagerWake(run: OrchestrationRun, previous: Orchestrat
   for (const dispatch of run.dispatches ?? []) {
     if (!previous || previous.dispatches?.some(entry => entry.id === dispatch.id) ||
         state?.waves.some(wave => wave.dispatchIds.includes(dispatch.id))) continue;
-    state ??= emptyWake();
     const task = run.tasks.find(entry => entry.id === dispatch.taskId);
-    const recoveryWave = !run.managerTurnId && state.waves.find(wave => wave.retiredAt == null && wave.completedAt == null && wave.dispatchIds.some(id =>
+    const recoveryWave = !run.managerTurnId && state?.waves.find(wave => wave.retiredAt == null && wave.completedAt == null && wave.dispatchIds.some(id =>
       run.dispatches?.some(entry => entry.id === id && entry.taskId === dispatch.taskId && entry.state === "interrupted")));
     if (recoveryWave) {
-      state = { ...state, waves: state.waves.map(wave => wave.id === recoveryWave.id ? { ...wave, dispatchIds: wave.dispatchIds.map(id =>
+      state = { ...state!, waves: state!.waves.map(wave => wave.id === recoveryWave.id ? { ...wave, dispatchIds: wave.dispatchIds.map(id =>
         run.dispatches?.some(entry => entry.id === id && entry.taskId === dispatch.taskId) ? dispatch.id : id) } : wave) };
       continue;
     }
-    const turnId = run.managerTurnId ?? task?.managerTurnBlockId;
+    const turnId = run.managerTurnId ?? task?.managerWakeTurnId;
+    if (!turnId) continue;
+    state ??= emptyWake();
     const wave = state.waves.find(entry => entry.turnId === turnId && entry.completedAt == null && entry.retiredAt == null && !state?.receipt?.completedWaveIds.includes(entry.id));
     state = { ...state, waves: wave
       ? state.waves.map(entry => entry.id === wave.id ? { ...entry, dispatchIds: [...entry.dispatchIds, dispatch.id], deadline: dispatch.startedAt + MANAGER_WAKE_TIMEOUT } : entry)

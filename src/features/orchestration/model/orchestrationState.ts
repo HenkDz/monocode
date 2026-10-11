@@ -102,6 +102,7 @@ export type OrchestrationTask = {
   id: string;
   monoGoalId?: string;
   managerTurnBlockId?: string;
+  managerWakeTurnId?: string;
   memberId?: string;
   memberName?: string;
   memberMascot?: string;

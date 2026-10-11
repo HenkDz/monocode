@@ -2329,11 +2329,13 @@ describe("local orchestration", () => {
     f.manager.bind(f.host);
     f.lead.busy = false;
     await f.manager.start("lead", ["codex"], 2, undefined, true);
+    const turnId = await f.manager.beginManagerTurn("lead", true);
     f.lead.busy = true;
     await f.delegate(["a"]);
     await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledTimes(1));
     f.lead.busy = false;
     f.lead.codexStoragePreparing = true;
+    await f.manager.endManagerTurn("lead", turnId, { status: "completed", text: "Dispatched" });
     f.completions.get(f.tasks()[0].sessionId)!({ status: "completed", text: "Result retained" });
     await vi.waitFor(() => expect(f.tasks()[0].status).toBe("completed"));
     expect(f.tasks()[0].delivered).toBe(false);

@@ -381,14 +381,18 @@ describe("Manager wake engine integration", () => {
     const f = setup();
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     await f.start();
+    const firstTurn = await f.begin();
     const first = await f.delegate("before-receipt");
+    await f.end(firstTurn);
     f.saveTarget.mockRejectedValueOnce(Error("Target storage unavailable"));
     await f.complete(first);
     const receipt = clone(f.run().wakeState!.receipt!);
     expect(receipt.completedWaveIds).toHaveLength(1);
     expect(errors).toHaveBeenCalledOnce();
     f.patchLead({ codexStorageError: "Hold target acceptance" });
+    const lateTurn = await f.begin();
     const late = await f.delegate("after-receipt");
+    await f.end(lateTurn);
     expect(f.run().wakeState?.receipt).toEqual(receipt);
     expect(f.run().wakeState?.waves).toHaveLength(2);
     const lateWave = f.run().wakeState!.waves.find(wave => wave.dispatchIds.includes(late.activeDispatchId!))!;

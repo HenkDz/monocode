@@ -71,6 +71,18 @@ beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(10_000); });
 afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe("durable Manager wake waves", () => {
+  it("keeps untracked legacy dispatches on their existing delivery path", () => {
+    const previous = run();
+    const next = { ...previous, tasks: [task("legacy", { managerTurnBlockId: "historical-block" })], dispatches: [dispatch("legacy")] };
+    expect(reconcileManagerWake(next, previous, Date.now())).toBeUndefined();
+  });
+  it("seals a delayed launch against its recorded delegator turn after that turn has settled", () => {
+    const previous = run({ tasks: [task("delayed", { status: "queued", activeDispatchId: undefined, lastDispatchId: undefined, managerWakeTurnId: "settled-turn" })] });
+    const next = { ...previous, tasks: [task("delayed", { managerWakeTurnId: "settled-turn" })], dispatches: [dispatch("delayed")] };
+    const wakeState = reconcileManagerWake(next, previous, Date.now());
+    expect(wakeState?.waves[0]).toMatchObject({ turnId: "settled-turn", sealedAt: Date.now(), dispatchIds: ["dispatch:delayed"] });
+    expect(managerWakePlan({ ...next, wakeState }, Date.now()).ready).toBe(false);
+  });
   it.each([undefined, "dispatch:old"])("preserves legacy completion delivery when info first creates an outbox: %s", async dispatchId => {
     const previous = run({ tasks: [task("old", { status: "completed", activeDispatchId: undefined, lastDispatchId: dispatchId })],
       dispatches: dispatchId ? [dispatch("old", { state: "completed", stage: "settled" })] : [] });

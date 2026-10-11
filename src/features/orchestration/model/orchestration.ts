@@ -1630,6 +1630,7 @@ export class Orchestrator {
     ) => {
       const current = this.run(run.leadId)!;
       const goalId = current.tasks.find(task => task.id === id)?.monoGoalId;
+      if (patch.status === "queued") patch = { ...patch, managerWakeTurnId: current.managerTurnId };
       if (patch.status === "queued" && goalId && this.host?.goalCancelled?.(goalId))
         throw new Error("This goal was cancelled; retain its worktrees and files.");
       return record(
@@ -1886,6 +1887,7 @@ export class Orchestrator {
           id: crypto.randomUUID(),
           origin: input.origin === "user" ? "user" : "manager",
           managerTurnBlockId: managerSession?.blocks[currentTurnIndex(managerSession)]?.id,
+          managerWakeTurnId: run.managerTurnId,
           ...(input.member == null
             ? {}
             : {

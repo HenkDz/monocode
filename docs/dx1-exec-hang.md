@@ -27,6 +27,42 @@ unsupported shell-snapshot warning also appears in successful sessions.
 The native spawn implementation and thread/turn permission settings are
 unchanged between pre-CC `de8edc3` and preview `1a7dd30`.
 
+## Marker and UAC check
+
+The coordinator's CC6R F1 lead was checked against its pinned Codex 0.162.1
+source and a read-only inventory of the original preview home. All four
+artifacts exist: `.sandbox`, `.sandbox-bin` and `.sandbox-secrets` are
+junctions to `~/.codex`, and `cap_sid` is a file symlink to that account.
+The links were created at 14:23:51 UTC, before the incident. The marker is
+version 5, matches the account marker byte for byte, and was last modified
+on October 7. `SETUP_VERSION` is 5; the marker has no CODEX_HOME/path/SID
+binding. No missing marker or marker-version mismatch was demonstrated.
+The linked `cap_sid` cache has the expected JSON-object schema, matches the
+account file, and all 418 contained SID strings parse as Windows SIDs. This
+checks cache syntax, not token/logon or ACL effectiveness.
+Credential contents were not read and complete identity usability was not
+independently tested.
+
+The original log labels the two offending launches `setup refresh: spawning`
+at 14:31:47 and 14:33:22 UTC. Compatible identities still run runtime ACL
+refresh (`identity.rs:296-307`). This refresh launcher uses
+`background_command().status()` without UAC (`setup.rs:391-405`). The
+`runas`/infinite-wait launcher at `setup.rs:1034-1063` belongs to a different
+full-provisioning branch. The recorded helper work therefore establishes
+runtime refresh, not an unseen UAC wait for those launches. An earlier or
+unrelated consent prompt cannot be reconstructed from these logs alone.
+The enabled UAC Operational log retained the incident interval but has no
+events from 14:30 through 14:35 UTC. Security process-audit access was denied,
+Sysmon was absent, and no historical helper PID could be recovered. This
+disfavors a consent prompt preventing these helpers from starting, without
+proving absence of every separate/unlogged consent event.
+
+The CC6R missing-artifact finding remains a separate conditional risk for
+new instruction homes. It does not establish that the DX1 preview lost its
+linked sandbox identity. The source and snapshot evidence is recorded in
+`marker-identity-analysis.md` and `original-preview-sandbox-links.json`.
+`UAC-hypothesis-sanitized.json` records the historical event checks and limits.
+
 ## Change
 
 Code-mode `Script running with cell ID ...` responses previously marked the

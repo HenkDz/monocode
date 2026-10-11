@@ -95,6 +95,18 @@ describe("canDispatchQueuedHead", () => {
 });
 
 describe("canSteerQueuedHead", () => {
+  it("keeps an accepted Manager digest behind a user turn and prevents explicit steering", () => {
+    const digest = { ...queued("digest"), managerWake: { leadId: "engine", receiptId: "digest" } };
+    const busy = chat({ busy: true, turnReady: true, queuedMessages: [digest] });
+    expect(canSteerQueuedHead(busy)).toBe(false);
+    expect(queuedMessageForSubmit(busy, digest.id, "steer")).toBeUndefined();
+    expect(queuedMessageForSubmit(busy, digest.id, "dispatch")).toBeUndefined();
+    const idle = { ...busy, busy: false };
+    expect(queuedMessageForSubmit(idle, digest.id, "dispatch")).toBe(digest);
+    expect(canDispatchQueuedHead({ ...idle, pendingQuestion: { requestId: 1, questions: [] } })).toBe(false);
+    expect(canDispatchQueuedHead({ ...idle, blocks: [{ id: "approval", role: "tool", text: "", approval: { requestId: 1 } }] })).toBe(false);
+    expect(queuedMessageForSubmit({ ...idle, queuedMessages: [queued("user"), digest] }, digest.id, "dispatch")).toBeUndefined();
+  });
   it("still takes follow-ups while an optional asynchronous question is open", () => {
     expect(
       canSteerQueuedHead(

@@ -307,7 +307,7 @@ Actions:
   team.answer    Direct boss only. {monoId,requestId,answers} or {monoId,requestId,skip:true}.
                   For a permission: {monoId,requestId,decision:"allow"|"deny"}.
                   Never allow beyond the user's existing authority.
-  team.message   {memberId,text,topic?,requiresReply?} Ask a teammate; use requiresReply:false for informational feed messages without a recipient turn.
+  team.message   {memberId,text,topic?,kind?,requiresReply?} kind:info|question|decision|escalation; use kind:info or requiresReply:false for informational feed messages without a recipient turn.
                   After a few exchanges, a hint suggests involving your Manager.
   team.list      Manager only, own team. {} Members, profiles, soul summary,
                   memory count, tasks and user-locked fields.
@@ -784,7 +784,7 @@ pub(crate) fn validate_app_request(
 pub(crate) fn validate_team_input(action: &str, input: &Value) -> Result<(), String> {
     let fields: &[&str] = match action {
         "team.list" => &[],
-        "team.message" => &["memberId", "text", "topic", "requiresReply"],
+        "team.message" => &["memberId", "text", "topic", "kind", "requiresReply"],
         "team.hire" => &[
             "name",
             "specialty",
@@ -886,6 +886,14 @@ pub(crate) fn validate_team_input(action: &str, input: &Value) -> Result<(), Str
                     {
                         return Err("modelSettings must contain bounded string values".into());
                     }
+                }
+            }
+            "kind" => {
+                if !matches!(
+                    value.as_str(),
+                    Some("info" | "question" | "decision" | "escalation")
+                ) {
+                    return Err("kind must be info, question, decision or escalation".into());
                 }
             }
             "reviewer" | "requiresReply" => {
@@ -1643,6 +1651,42 @@ mod tests {
         }
         assert!(validate_app_request("team.hire", &json!({}), "bad/id").is_err());
         assert!(validate_app_request("team.unknown", &json!({}), "retry-1").is_err());
+    }
+
+    #[test]
+    fn team_message_kinds_accept_only_the_explicit_contract() {
+        for kind in ["info", "question", "decision", "escalation"] {
+            for requires_reply in [true, false] {
+                let input = json!({"memberId":"member", "text":"Recorded update", "kind":kind, "requiresReply":requires_reply});
+                assert!(validate_app_request("team.message", &input, "retry-1").is_ok());
+                assert!(parse_args_for(
+                    &args(&[
+                        "team.message",
+                        "--json",
+                        &input.to_string(),
+                        "--request-id",
+                        "retry-1"
+                    ]),
+                    true,
+                )
+                .is_ok());
+            }
+            assert!(validate_team_input(
+                "team.message",
+                &json!({"memberId":"member", "text":"Recorded update", "kind":kind})
+            )
+            .is_ok());
+        }
+        for kind in [
+            json!(null),
+            json!("progress"),
+            json!("Info"),
+            json!(true),
+            json!(0),
+            json!({}),
+        ] {
+            assert!(validate_team_input("team.message", &json!({"memberId":"member", "text":"Recorded update", "kind":kind, "requiresReply":false})).is_err());
+        }
     }
 
     #[test]

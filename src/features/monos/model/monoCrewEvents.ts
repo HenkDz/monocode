@@ -1,4 +1,5 @@
-export type CrewMessage = { id: string; managerId: string; senderId: string; recipientId: string; topic: string; text: string; at: number; summary?: string; requiresReply?: boolean };
+export type CrewMessageKind = "info" | "question" | "decision" | "escalation";
+export type CrewMessage = { id: string; managerId: string; senderId: string; recipientId: string; topic: string; text: string; at: number; summary?: string; requiresReply?: boolean; kind?: CrewMessageKind };
 const key = "monocode:crew-messages";
 const listeners = new Set<() => void>();
 export function crewMessages(): CrewMessage[] {
@@ -10,13 +11,18 @@ export function recordCrewMessage(event: CrewMessage): void {
   localStorage.setItem(key, JSON.stringify([...events, event].slice(-500)));
   listeners.forEach(listener => listener());
 }
-export function teamMessageRequiresReply(value: unknown): boolean {
+export function teamMessageKind(value: unknown): CrewMessageKind | undefined {
+  if (value === undefined || value === "info" || value === "question" || value === "decision" || value === "escalation") return value;
+  throw Error("kind must be info, question, decision or escalation");
+}
+export function teamMessageRequiresReply(value: unknown, kind?: unknown): boolean {
   if (value !== undefined && typeof value !== "boolean") throw Error("requiresReply must be a boolean");
-  return value !== false;
+  const messageKind = teamMessageKind(kind);
+  return value !== false && messageKind !== "info";
 }
 /** Informational messages reach the feed without waking a recipient or steering its work. */
 export async function deliverCrewMessage(event: CrewMessage, deliver: () => Promise<void>): Promise<void> {
-  if (teamMessageRequiresReply(event.requiresReply)) await deliver();
+  if (teamMessageRequiresReply(event.requiresReply, event.kind)) await deliver();
   recordCrewMessage(event);
 }
 export function subscribeCrewMessages(listener: () => void): () => void {

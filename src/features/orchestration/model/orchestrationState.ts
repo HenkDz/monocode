@@ -2,6 +2,7 @@ import { pathKey } from "../../../shared/lib/paths";
 import type { OrchestrationChoice } from "./orchestrationPlan";
 import type { HarnessId, TurnMetrics, TurnModel } from "../../sessions/model/session";
 import type { EffortSource } from "../../sessions/model/models";
+import type { ManagerWakeState } from "./managerWake";
 
 export type TaskStatus =
   | "queued"
@@ -180,6 +181,7 @@ export type OrchestrationRun = {
   projectName?: string;
   /** Persisted before a manager turn; absence means an idle manager is safe to restore. */
   managerTurnId?: string;
+  wakeState?: ManagerWakeState;
   recoveryNotice?: string;
   /** Restore is in progress, not a request for human intervention. */
   recovering?: boolean;

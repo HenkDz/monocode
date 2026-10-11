@@ -7,7 +7,7 @@ import type {
   TaskListItem,
   ToolPreview,
 } from "../../../features/sessions/model/session";
-import { dropContextWindow, mergeContextUsage } from "../../../features/sessions/model/contextUsage";
+import { dropContextWindow, mergeContextUsage, MONO_ROTATION_READ_ERROR } from "../../../features/sessions/model/contextUsage";
 import { displayPath } from "../../../shared/lib/paths";
 import {
   composeToolTitle,
@@ -167,7 +167,7 @@ export function applyHarnessEvent(
       return upsertPlan(session, event);
     case "session.error":
       return appendBlock(
-        failStreaming({
+        event.message === MONO_ROTATION_READ_ERROR && session.busy ? session : failStreaming({
           ...session,
           usageLimit: session.usageLimit ?? usageLimitFromError(event.message),
           // Do not drain remaining messages into the same failed connection.

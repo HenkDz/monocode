@@ -6,6 +6,7 @@ import {
   discardMonoRotationPendingInputs,
   forgetMonoRotation,
   loadMonoRotation,
+  MONO_ROTATION_READ_ERROR,
   previewMonoRotationDiscard,
   saveMonoRotation,
   sessionRotationStatus,
@@ -49,6 +50,42 @@ function pending(id: string): MonoRotation {
 function stored(id: string): MonoRotation | undefined {
   return JSON.parse(localStorage.getItem(KEY)!)[id];
 }
+
+it("distinguishes a readable absent carry from an unreadable store", () => {
+  expect(loadMonoRotation("missing")).toBeUndefined();
+  expect(sessionRotationStatus({ id: "missing", blocks: [] })).toEqual({});
+});
+
+it.each(["throws", "{invalid", "null", "[]", "false", "42", '"text"'])(
+  "blocks planning and mutation when saved context is unreadable: %s", mode => {
+    const id = "read-recovery";
+    const carry = pending(id);
+    const before = localStorage.getItem(KEY);
+    const session = { id, blocks: [{ id: "scope", role: "user" as const, text: "Keep the scope." }] };
+    const preview = previewMonoRotationDiscard(session)!;
+    const getItem = localStorage.getItem.bind(localStorage);
+    const read = vi.spyOn(localStorage, "getItem").mockImplementation(key => {
+      if (key !== KEY) return getItem(key);
+      if (mode === "throws") throw Error("temporary read outage");
+      return mode;
+    });
+    const writes = vi.spyOn(localStorage, "setItem");
+    expect(loadMonoRotation(id)).toBeNull();
+    for (const providerSessionId of [undefined, "old-provider"]) {
+      const current = { ...session, providerSessionId, context: { used: 700, window: 1000 } };
+      expect(sessionRotationStatus(current, "Retry")).toEqual({ deferredReason: MONO_ROTATION_READ_ERROR });
+      expect(sessionRotationStatus(current, "Edited", "", session.blocks)).toEqual({ deferredReason: MONO_ROTATION_READ_ERROR });
+    }
+    expect(saveMonoRotation(id, carry)).toBe(false);
+    expect(discardMonoRotationPendingInputs(session, preview)).toBe(false);
+    expect(writes).not.toHaveBeenCalled();
+    read.mockRestore();
+    expect(localStorage.getItem(KEY)).toBe(before);
+    const retry = sessionRotationStatus(session, "Retry").plan!;
+    expect(retry.brief(id)).toContain(carry.pendingBrief);
+    expect(retry.brief(id)).toContain(carry.pendingInput);
+  },
+);
 
 it("preserves provider acceptance, suppresses replay, and durably clears after backed-off storage recovery", async () => {
   vi.useFakeTimers();

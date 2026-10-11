@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { SessionPane, type SessionPaneProps } from "./SessionPane";
 import { clearComposerDraft, setComposerDraft } from "../model/draftCache";
-import { acceptMonoRotation, discardMonoRotationPendingInputs, loadMonoRotation, saveMonoRotation } from "../../monos/model/monoRotation";
+import { acceptMonoRotation, discardMonoRotationPendingInputs, loadMonoRotation, MONO_ROTATION_READ_ERROR, saveMonoRotation } from "../../monos/model/monoRotation";
 import { registerBuiltinHarnesses } from "../../../integrations/harness/core/register";
 import { resetHarnessModelOverlays, setHarnessModels } from "../model/models";
 
@@ -1001,6 +1001,37 @@ it("plans a retained task edit with its replacement input and retained assignmen
   });
   expect(probes.composer.mock.calls.at(-1)![0].rotationScheduled).toBe(true);
   expect(probes.composer.mock.calls.at(-1)![0].rotationDeferredReason).toBeUndefined();
+});
+
+it("locks task Edit and keyboard recall on unreadable storage, then recovers after reads resume", async () => {
+  probes.mono = false;
+  probes.actualPane = true;
+  const pane = props();
+  pane.session.harness = "opencode";
+  pane.session.blocks = [{ id: "original", role: "user", text: "Keep the scope." }];
+  const getItem = localStorage.getItem.bind(localStorage);
+  const read = vi.spyOn(localStorage, "getItem").mockImplementation(key => {
+    if (key === "monocode:mono-rotations") throw Error("unavailable");
+    return getItem(key);
+  });
+  try {
+    render(pane);
+    const edit = container.querySelector<HTMLButtonElement>('[aria-label="Edit and resend"]')!;
+    const input = container.querySelector<HTMLTextAreaElement>("textarea")!;
+    expect(edit.disabled).toBe(true);
+    expect(edit.title).toBe(MONO_ROTATION_READ_ERROR);
+    await act(async () => {
+      edit.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+      edit.click();
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }));
+    });
+    expect(input.value).toBe("");
+    expect(container.querySelector('[aria-label="Cancel edit"]')).toBeNull();
+  } finally {
+    read.mockRestore();
+  }
+  render({ ...pane, session: { ...pane.session } });
+  expect(container.querySelector<HTMLButtonElement>('[aria-label="Edit and resend"]')!.disabled).toBe(false);
 });
 
 it("locks the actual task Edit and keyboard recall until the original carry is accepted", async () => {

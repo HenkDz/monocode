@@ -2,6 +2,7 @@ import type { Session } from "../../sessions/model/session";
 import type { OrchestrationRun, OrchestrationTask } from "../../orchestration/model/orchestrationState";
 import type { ManagerWakeState } from "../../orchestration/model/managerWake";
 import { currentTurnIndex } from "./turnMetrics";
+import { MONO_ROTATION_READ_ERROR } from "../../sessions/model/contextUsage";
 
 export type AgentLiveStatus =
   | "thinking" | "running-tool" | "compacting"
@@ -46,7 +47,13 @@ function plainLine(text: string): string {
 /** Current blockers and work outrank queued work and historical task outcomes. */
 export function selectAgentLiveState(session?: AgentLiveSession, context: AgentLiveContext = {}): AgentLiveState {
   const state = deriveAgentLiveState(session, context);
-  return session?.rotationWarning ? { ...state, warning: session.rotationWarning } : state;
+  const warning = session?.rotationWarning ?? (session?.busy && (
+    session.queuedMessages?.[0]?.error === MONO_ROTATION_READ_ERROR ||
+    session.pendingMonoEvents?.[0]?.error === MONO_ROTATION_READ_ERROR ||
+    session.blocks.slice(currentTurnIndex(session) + 1)
+      .some(block => block.notice === "error" && block.text === MONO_ROTATION_READ_ERROR))
+    ? MONO_ROTATION_READ_ERROR : undefined);
+  return warning ? { ...state, warning } : state;
 }
 
 function deriveAgentLiveState(session?: AgentLiveSession, context: AgentLiveContext = {}): AgentLiveState {
@@ -94,9 +101,11 @@ function deriveAgentLiveState(session?: AgentLiveSession, context: AgentLiveCont
     return { status: "thinking", detail: "Thinking" };
   }
   for (let i = blocks.length - 1; i > turnIndex; i--) {
-    if (blocks[i].notice === "error") return { status: "failed", reason: "error", detail: blocks[i].text };
+    if (blocks[i].notice === "error") return blocks[i].text === MONO_ROTATION_READ_ERROR
+      ? { status: "blocked", reason: "storage", detail: blocks[i].text }
+      : { status: "failed", reason: "error", detail: blocks[i].text };
   }
-  if (queued?.error) return { status: "blocked", reason: "error", detail: queued.error };
+  if (queued?.error) return { status: "blocked", reason: queued.error === MONO_ROTATION_READ_ERROR ? "storage" : "error", detail: queued.error };
   if (queued) {
     if (session?.queueStatus === "paused" || session?.queueStatus === "resuming")
       return { status: "queued", reason: "paused", detail: session.queueStatus === "paused" ? "Queue paused" : "Waiting for the resumed turn" };

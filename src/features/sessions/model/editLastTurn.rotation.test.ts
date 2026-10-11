@@ -1,10 +1,24 @@
 // @vitest-environment happy-dom
-import { beforeEach, expect, it } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { acceptMonoRotation, loadMonoRotation, saveMonoRotation } from "../../monos/model/monoRotation";
 import { createEditedResendAttempt, prepareEditedResend } from "./editLastTurn";
 import { newSession } from "./session";
 
 beforeEach(() => localStorage.clear());
+
+it("refuses edit preparation during a read outage and recovers when an absent carry is readable", () => {
+  const session = { ...newSession("pi", "/synthetic"), blocks: [
+    { id: "original", role: "user" as const, text: "Keep the original scope." },
+  ] };
+  const read = vi.spyOn(localStorage, "getItem").mockImplementation(() => { throw Error("unavailable"); });
+  try {
+    expect(prepareEditedResend(session)).toBeNull();
+    expect(createEditedResendAttempt(session)).toBeNull();
+  } finally {
+    read.mockRestore();
+  }
+  expect(createEditedResendAttempt(session)).not.toBeNull();
+});
 
 it("keeps pending text unchanged through abandoned edit preparation and reload, then permits editing after acceptance", () => {
   const session = { ...newSession("pi", "/synthetic"), id: "pending-edit", blocks: [

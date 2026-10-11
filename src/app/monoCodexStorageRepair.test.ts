@@ -1,9 +1,13 @@
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import ts from "typescript";
-import { expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { MonoCodexStorageRecovery, isCodexStorageError, parseCodexStorageConflict, parseCodexStorageRecoveryConflict } from "../features/monos/model/monoCodexStorage";
 import { codexStorageAccountId } from "../features/monos/model/monoCodexStorageIssues";
+import { loadMonoRotation, MONO_ROTATION_READ_ERROR } from "../features/monos/model/monoRotation";
+
+beforeEach(() => vi.stubGlobal("localStorage", { getItem: () => null }));
+afterEach(() => vi.unstubAllGlobals());
 
 const app = ts.createSourceFile("App.tsx", readFileSync(new URL("./App.tsx", import.meta.url), "utf8"),
   ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
@@ -88,6 +92,7 @@ it.each(["relink", "first replay"])("unblocks a late account member during %s be
   });
   const context = {
     sessionsRef, codexStorageRecovery: { current: recovery }, codexStorageAccountId,
+    loadMonoRotation, MONO_ROTATION_READ_ERROR,
     isCodexStorageError, parseCodexStorageConflict,
     monoSkillsForSession: () => ({ skillsRole: "manager", skillsPolicy: { mode: "role" } }),
     sessionWorkCwd: (session: { cwd: string }) => session.cwd,

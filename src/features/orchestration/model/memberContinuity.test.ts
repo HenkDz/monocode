@@ -1,7 +1,16 @@
-import { expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { memberContinuity, retainedTaskContext } from "./memberContinuity";
 import { sessionRotationStatus } from "../../monos/model/monoRotation";
 import type { OrchestrationRun, OrchestrationTask } from "./orchestrationState";
+
+beforeEach(() => {
+  const stored = new Map<string, string>();
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => stored.get(key) ?? null,
+    setItem: (key: string, value: string) => stored.set(key, value),
+  });
+});
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 it("carries the member's own recent project summaries and sender hand-off", () => {
   const task = { id: "new", memberId: "backend", handoffNote: "UI: API shape is settled" } as OrchestrationTask;

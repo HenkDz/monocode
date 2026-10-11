@@ -5,6 +5,8 @@ import {
   taskContextBudget,
 } from "../../orchestration/model/taskContextBudget";
 import { forgetAgentContext } from "./monoFiles";
+import { MONO_ROTATION_READ_ERROR } from "../../sessions/model/contextUsage";
+export { MONO_ROTATION_READ_ERROR } from "../../sessions/model/contextUsage";
 
 /**
  * A Mono's chat never ends, but the provider session behind it does. A safe
@@ -93,6 +95,7 @@ export function sessionRotationStatus(
   replacedBlocks: readonly Block[] = [],
 ): { plan?: ReturnType<typeof planRotation>; deferredReason?: string } {
   const previous = loadMonoRotation(session.id);
+  if (previous === null) return { deferredReason: MONO_ROTATION_READ_ERROR };
   if (previous?.pendingBrief && replacedBlocks.length)
     return { deferredReason: "Retry the original first. Editing is available after it's accepted." };
   if (!canRotateContext({ ...session, blocks: [...session.blocks, ...replacedBlocks] }))
@@ -497,18 +500,20 @@ function cancelAcceptanceRetry(sessionId: string): void {
 function readRotations(): Record<string, MonoRotation> | undefined {
   try {
     const parsed = JSON.parse(localStorage.getItem(ROTATIONS_KEY) ?? "{}");
-    return parsed && typeof parsed === "object" ? parsed : undefined;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : undefined;
   } catch {
     return undefined;
   }
 }
 
-export function loadMonoRotation(sessionId: string): MonoRotation | undefined {
+/** Undefined means no saved carry; null means continuity could not be read. */
+export function loadMonoRotation(sessionId: string): MonoRotation | undefined | null {
   const rotations = readRotations();
-  const rotation = rotations?.[sessionId];
+  if (!rotations) return null;
+  const rotation = rotations[sessionId];
   const accepted = acceptedRotations.get(sessionId);
   if (!accepted) return rotation;
-  if (!rotations || JSON.stringify(rotation) === accepted.identity) return accepted.settled;
+  if (JSON.stringify(rotation) === accepted.identity) return accepted.settled;
   cancelAcceptanceRetry(sessionId);
   return rotation;
 }

@@ -719,6 +719,7 @@ import {
   acceptMonoRotation,
   discardMonoRotationPendingInputs,
   loadMonoRotation,
+  MONO_ROTATION_READ_ERROR,
   sessionRotationStatus,
   rotateProviderContext,
   saveMonoRotation,
@@ -2016,7 +2017,7 @@ function Workspace({
           ) {
             return session;
           }
-          return { ...session, model: resolved.id, modelSettings };
+          return { ...session, model: resolved.id, modelSettings, context: dropContextWindow(session.context) };
         }),
       );
     });
@@ -7398,7 +7399,16 @@ function Workspace({
           options,
         );
       if (editedResends.isActive(sessionId)) return false;
-      if (options?.resendEdited && loadMonoRotation(sessionId)?.pendingBrief) {
+      const savedRotation = loadMonoRotation(sessionId);
+      if (savedRotation === null) {
+        const message = MONO_ROTATION_READ_ERROR;
+        if (options?.resendEdited) options.onResendRejected?.({ providerRewound: false });
+        enqueueHarnessEvent(sessionId, { type: "session.error", message });
+        flushHarnessEvents();
+        options?.onSettled?.({ status: "failed", text: "", error: message });
+        return false;
+      }
+      if (options?.resendEdited && savedRotation?.pendingBrief) {
         const message = "Retry the original first. Editing is available after it's accepted.";
         options.onResendRejected?.({ providerRewound: false });
         enqueueHarnessEvent(sessionId, { type: "status", text: message });
@@ -7888,8 +7898,9 @@ function Workspace({
               }),
             };
           },
-          steer: (prepared) =>
-            steerHarnessTurn({
+          steer: (prepared) => {
+            if (loadMonoRotation(sessionId) === null) throw new Error(MONO_ROTATION_READ_ERROR);
+            return steerHarnessTurn({
               harness: current.harness,
               sessionId,
               cwd: initialWorkCwd,
@@ -7900,7 +7911,8 @@ function Workspace({
                 prepared.text,
               ),
               attachments: prepared.attachments,
-            }),
+            });
+          },
           delivered: () => {
             change((session) =>
               acknowledgeMonoMessage(session, message, {
@@ -8023,6 +8035,7 @@ function Workspace({
               sessionId,
               cwd: initialWorkCwd,
             });
+            if (loadMonoRotation(sessionId) === null) throw new Error(MONO_ROTATION_READ_ERROR);
             await steerHarnessTurn({
               harness: current.harness,
               sessionId,
@@ -8111,12 +8124,13 @@ function Workspace({
       const rotationTask = rotationRun?.tasks.find(task => task.sessionId === sessionId);
       const taskContext = rotationTask && rotationRun
         ? retainedTaskContext(rotationRun, rotationTask) : "";
-      const pendingRotation = loadMonoRotation(sessionId)?.pendingBrief;
+      const rotation = loadMonoRotation(sessionId);
+      const pendingRotation = rotation?.pendingBrief;
       const rotationStatus = (mono || rotationTask || pendingRotation) && !pendingSwitch && !editedResend
         ? sessionRotationStatus(current, harnessText, taskContext) : undefined;
       const monoRotation = rotationStatus?.plan;
-      if (pendingRotation && !monoRotation) {
-        const message = rotationStatus?.deferredReason ?? "Context refresh is pending. Finish pending operations or decisions before retrying.";
+      if (rotation === null || rotationStatus?.deferredReason === MONO_ROTATION_READ_ERROR || (pendingRotation && !monoRotation)) {
+        const message = rotation === null ? MONO_ROTATION_READ_ERROR : rotationStatus?.deferredReason ?? "Context refresh is pending. Finish pending operations or decisions before retrying.";
         editedResend?.reject();
         enqueueHarnessEvent(sessionId, { type: "session.error", message });
         flushHarnessEvents();
@@ -8534,6 +8548,7 @@ function Workspace({
             }
           : queuedHandoff;
         if (pendingSwitch) {
+          if (loadMonoRotation(sessionId) === null) throw new Error(MONO_ROTATION_READ_ERROR);
           let agentText = "";
           if (
             shouldAskOutgoingAgent(current) &&
@@ -8556,6 +8571,7 @@ function Workspace({
           if (turnGen.current.get(sessionId) !== gen) return;
           const latest = sessionsRef.current.find((s) => s.id === sessionId);
           const brief = chooseHandoffBrief(agentText, latest ?? current, text);
+          if (loadMonoRotation(sessionId) === null) throw new Error(MONO_ROTATION_READ_ERROR);
           await forgetHarnessSession(pendingSwitch.from, sessionId);
           if (turnGen.current.get(sessionId) !== gen) return;
           wrap = { from: pendingSwitch.from, to: current.harness, text: brief };
@@ -8708,6 +8724,7 @@ function Workspace({
           const earlier = queuedHandoff
             ? userMessagesAfterHandoff(current)
             : [];
+          if (loadMonoRotation(sessionId) === null) throw new Error(MONO_ROTATION_READ_ERROR);
           if (editedResend && canRewindHarnessLastTurn(current.harness)) {
             try {
               await rewindHarnessLastTurn({
@@ -8771,6 +8788,7 @@ function Workspace({
           const sendTurn = async (text: string, turnAttachments = prepared) => {
             contextProvider = undefined;
             const fallbackText = prepareContext ? await prepareContext(text) : text;
+            if (loadMonoRotation(sessionId) === null) throw new Error(MONO_ROTATION_READ_ERROR);
             return sendHarnessTurn({
               harness: current.harness,
               sessionId,
@@ -8805,7 +8823,9 @@ function Workspace({
               attachments: turnAttachments,
               prepareText: async provider => {
                 contextProvider = provider;
-                return prepareContext ? prepareContext(text, provider) : text;
+                const preparedText = prepareContext ? await prepareContext(text, provider) : text;
+                if (loadMonoRotation(sessionId) === null) throw new Error(MONO_ROTATION_READ_ERROR);
+                return preparedText;
               },
               onAccepted: () => {
                 if (turnGen.current.get(sessionId) !== gen) return;

@@ -1731,6 +1731,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
               className="flex min-h-0 flex-1 flex-col"
             >
               <MonoActivityContent
+                member={mono}
                 blocks={session.blocks.filter(
                   (block) => !queuedBlockIds.has(block.id),
                 )}

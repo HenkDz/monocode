@@ -62,6 +62,7 @@ import {
 } from "./wordFade";
 import { isFenceBlock, parseStreamingMarkdown } from "./streamingMarkdown";
 import { HighlightedCodeBlock } from "./HighlightedCodeBlock";
+import { presentationText } from "../model/transcriptPresentation";
 
 const MERMAID_BASE_CONFIG = {
   startOnLoad: false,
@@ -524,7 +525,7 @@ function DirectionalBlock({ dir, ...props }: BlockProps) {
 }
 
 export const AgentMarkdown = memo(function AgentMarkdown({
-  text,
+  text: sourceText,
   streaming,
   revealOnMount,
   className,
@@ -544,6 +545,7 @@ export const AgentMarkdown = memo(function AgentMarkdown({
   /** Show a newline inside a block as a line break, as a document does (#591). */
   hardBreaks?: boolean;
 }) {
+  const text = useMemo(() => presentationText(sourceText), [sourceText]);
   const [fileMenu, setFileMenu] = useState<FileLinkMenu | null>(null);
   const [fileActionError, setFileActionError] = useState<string | null>(null);
   const onFileContextMenu = useCallback(

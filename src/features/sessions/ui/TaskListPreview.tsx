@@ -1,6 +1,7 @@
 import { Check, ListEnd, Loader, Minus } from "../../../shared/ui/icons";
 import type { TaskListItem, TaskListItemStatus } from "../model/session";
 import { taskListProgressLabel } from "../model/taskList";
+import { presentationText } from "../model/transcriptPresentation";
 
 type Props = {
   items: TaskListItem[];
@@ -29,7 +30,7 @@ export function TaskListPreview({ items, explanation }: Props) {
           </div>
           {explanation ? (
             <p className="mt-0.5 line-clamp-2 font-sans text-[11.5px] leading-4 text-content/50">
-              {explanation}
+              {presentationText(explanation)}
             </p>
           ) : null}
         </div>
@@ -52,7 +53,7 @@ export function TaskListPreview({ items, explanation }: Props) {
                       : "text-content/60"
               }`}
             >
-              {item.text}
+              {presentationText(item.text)}
             </span>
           </li>
         ))}

@@ -115,6 +115,33 @@ it("uses the real route override picker and keeps cross-project safeguards", asy
   expect(f.host.goals.deliver).not.toHaveBeenCalled();
 });
 
+it.each([false, true])("checks raw special whitespace before sending (explicit %s)", async explicit => {
+  const f = fixture(); f.render(); enter("\ufeffFix Atlas checkout\u00a0");
+  if (explicit) await override("Atlas Manager");
+  expect(chip()).toContain("Send to Grand Orch");
+  expect(chip()).toContain("Contains non-English or special characters, so Grand Orch will route it.");
+  await act(async () => send());
+  expect(f.onSubmit.mock.calls[0][1]?.projectId).toBeUndefined();
+  expect(f.host.grand).toHaveBeenCalledOnce();
+  expect(f.host.goals.deliver).not.toHaveBeenCalled();
+  expect(f.host.ledger.goals("grand")).toHaveLength(0);
+});
+
+it("treats a raw whitespace edit as a new goal after an uncertain send", async () => {
+  const f = fixture(); f.render(); enter();
+  f.onSubmit.mockRejectedValueOnce(Error("Acknowledgement interrupted"));
+  await act(async () => send());
+  const first = f.onSubmit.mock.calls[0][1]!;
+  enter("Fix Atlas checkout\u00a0", false);
+  expect(chip()).toContain("Send to Grand Orch");
+  await act(async () => send());
+  const edited = f.onSubmit.mock.calls[1][1]!;
+  expect(edited.requestId).not.toBe(first.requestId);
+  expect(edited.projectId).toBeUndefined();
+  expect(f.host.goals.deliver).not.toHaveBeenCalled();
+  expect(f.host.grand).toHaveBeenCalledOnce();
+});
+
 it("keeps a pending envelope and blocks repeat Send until explicit rejection", async () => {
   const f = fixture();
   let resolve!: (value: boolean) => void;

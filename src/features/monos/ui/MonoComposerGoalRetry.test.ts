@@ -147,3 +147,20 @@ it("keeps the durable envelope and chip after an ambiguous throw and a replaceme
   expect(f.host.persistPending).toHaveBeenCalledOnce();
   expect(f.host.goals.deliver).not.toHaveBeenCalled();
 });
+
+it("gives a raw whitespace edit new IDs after an uncertain goal send", async () => {
+  const f = fixture(); f.render(); enterGoal();
+  f.onSubmit.mockRejectedValueOnce(Error("Acknowledgement interrupted"));
+  await act(async () => send());
+  const first = f.onSubmit.mock.calls[0][2]!;
+  const field = container.querySelector<HTMLTextAreaElement>('[aria-label="Message Grand"]')!;
+  const props = Object.entries(field).find(([key]) => key.startsWith("__reactProps"))![1];
+  act(() => props.onChange({ target: { value: "Fix Atlas checkout\u00a0" } }));
+  expect(chip()).toContain("Send to Grand Orch");
+  await act(async () => send());
+  const edited = f.onSubmit.mock.calls[1][2]!;
+  expect(edited.requestId).not.toBe(first.requestId);
+  expect(edited.projectId).toBeUndefined();
+  expect(f.host.goals.deliver).not.toHaveBeenCalled();
+  expect(f.host.grand).toHaveBeenCalledOnce();
+});

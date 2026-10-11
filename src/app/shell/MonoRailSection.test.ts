@@ -96,3 +96,34 @@ it("lists monos once there are some, with the plus in the header", () => {
   expect(container.querySelector("[data-mono-add]")).toBeNull();
   expect(container.querySelectorAll('[aria-label="New mono"]')).toHaveLength(1);
 });
+
+it("counts a mono's unread replies, except the one open", () => {
+  const mono = createMono();
+  const badge = () => container.querySelector("[data-mono-unread]");
+  render({ unseenCounts: new Map([[mono.id, 3]]) });
+  expect(badge()?.textContent).toBe("3");
+  expect(
+    container.querySelector(`[aria-label*="3 new replies"]`),
+  ).not.toBeNull();
+
+  render({ unseenCounts: new Map([[mono.id, 120]]) });
+  expect(badge()?.textContent).toBe("99+");
+
+  render({ activeId: mono.id, unseenCounts: new Map([[mono.id, 3]]) });
+  expect(badge()).toBeNull();
+});
+
+it("keeps team availability and unread replies together on the rail", () => {
+  const mono = createMono();
+  render({
+    states: new Map([[mono.id, { status: "idle", teamWorking: 2 }]]),
+    unseenCounts: new Map([[mono.id, 3]]),
+  });
+  const row = container.querySelector('[data-mono-status="idle"] button')!;
+  expect(row.getAttribute("aria-label")).toBe(
+    `${monoLook(mono).name}, Idle, 2 working below, 3 new replies`,
+  );
+  expect(row.getAttribute("title")).toContain("2 working below");
+  expect(row.getAttribute("title")).toContain("3 new replies");
+  expect(row.querySelector("[data-mono-unread]")?.textContent).toBe("3");
+});

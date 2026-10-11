@@ -10,6 +10,8 @@ import type { OrchestrationRun } from "../../orchestration/model/orchestrationSt
 const probes = vi.hoisted(() => ({
   composer: vi.fn(() => null),
   review: vi.fn(() => null),
+  changes: vi.fn(() => null),
+  member: false,
   runs: [] as OrchestrationRun[],
 }));
 
@@ -17,7 +19,10 @@ vi.mock("./Composer", () => ({ Composer: () => null }));
 vi.mock("../../monos/ui/MonoComposer", () => ({
   MonoComposer: probes.composer,
 }));
-vi.mock("./SessionReview", () => ({ SessionReview: probes.review }));
+vi.mock("./SessionReview", () => ({
+  SessionReview: probes.review,
+  SessionChangesButton: probes.changes,
+}));
 vi.mock("../../inbox/model/githubTasks", () => ({
   formatRelativeTime: vi.fn(() => "Just now"),
   githubPrDiff: vi.fn(async () => ({ additions: 5, deletions: 0, files: [] })),
@@ -53,6 +58,7 @@ vi.mock("../../monos/model/mono", async (importOriginal) => ({
     mascot: "cat",
     color: "#6ba",
     projects: [],
+    ...(probes.member ? { role: "member", reportsTo: "manager" } : {}),
   }),
 }));
 
@@ -64,6 +70,8 @@ beforeEach(() => {
   probes.runs = [];
   probes.composer.mockClear();
   probes.review.mockClear();
+  probes.changes.mockClear();
+  probes.member = false;
   vi.mocked(getMonoTranscriptPage).mockReset();
   observers = [];
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -160,6 +168,21 @@ function props(transcriptPool?: TranscriptPool): SessionPaneProps {
     onNewTerminal: noop,
   };
 }
+
+it.each([false, true])("keeps Mono edit controls alongside member work logs (member: %s)", (member) => {
+  probes.member = member;
+  const pane = props();
+  pane.session.blocks.splice(1, 0, {
+    id: "edit",
+    role: "tool",
+    text: "Write report.md",
+    tool: { kind: "edit", status: "completed", paths: ["/repo/report.md"] },
+  });
+  act(() => root.render(createElement(SessionPane, pane)));
+  expect(probes.changes).toHaveBeenCalled();
+  expect(probes.review).not.toHaveBeenCalled();
+  expect(!!container.querySelector('[aria-label="Member work log"]')).toBe(member);
+});
 
 it("reveals the archived ready turn from the status count and keeps its card out of the latest-turn footer", async () => {
   const pane = props();
@@ -423,6 +446,7 @@ it.each([
     expect(downward.defaultPrevented).toBe(!nativeOverscroll);
     const composerRenders = probes.composer.mock.calls.length;
     const reviewRenders = probes.review.mock.calls.length;
+    const changesRenders = probes.changes.mock.calls.length;
     writes.length = 0;
 
     act(() => {
@@ -435,6 +459,7 @@ it.each([
     expect(writes).toEqual([]);
     expect(probes.composer).toHaveBeenCalledTimes(composerRenders);
     expect(probes.review).toHaveBeenCalledTimes(reviewRenders);
+    expect(probes.changes).toHaveBeenCalledTimes(changesRenders);
 
     act(() =>
       container
@@ -445,6 +470,7 @@ it.each([
     expect(container.querySelector("[data-jump-to-bottom]")).toBeNull();
     expect(probes.composer).toHaveBeenCalledTimes(composerRenders);
     expect(probes.review).toHaveBeenCalledTimes(reviewRenders);
+    expect(probes.changes).toHaveBeenCalledTimes(changesRenders);
 
     // An idle chat follows directly; revisiting history doesn't ease its layout.
     height += 40;

@@ -1381,7 +1381,10 @@ const LocalSessionPane = memo(function LocalSessionPane({
                       </p>
                       <button
                         type="button"
-                        onClick={() => setDetailsOpen(true)}
+                        onClick={(event) => {
+                          event.currentTarget.focus();
+                          setDetailsOpen(true);
+                        }}
                       >
                         View hand-off
                       </button>
@@ -1469,7 +1472,10 @@ const LocalSessionPane = memo(function LocalSessionPane({
                     <button
                       type="button"
                       className="ml-auto text-[10px] text-content/65"
-                      onClick={() => setDetailsOpen(true)}
+                      onClick={(event) => {
+                        event.currentTarget.focus();
+                        setDetailsOpen(true);
+                      }}
                     >
                       Session details
                     </button>

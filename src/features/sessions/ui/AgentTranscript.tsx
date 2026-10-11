@@ -3923,7 +3923,10 @@ function SubagentRow({
         </div>
         <button type="button" aria-haspopup="dialog"
           className="rounded text-xs text-content/75 hover:text-content focus-visible:outline-accent"
-          onClick={() => setOverride(true)}>
+          onClick={(event) => {
+            event.currentTarget.focus();
+            setOverride(true);
+          }}>
           View full output
         </button>
         {override === true && (

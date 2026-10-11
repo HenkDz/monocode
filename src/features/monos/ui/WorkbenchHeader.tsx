@@ -147,7 +147,10 @@ export function WorkbenchHeader({
         >
           Open worktree
         </button>
-        <button type="button" onClick={onDetails}>
+        <button type="button" onClick={(event) => {
+          event.currentTarget.focus();
+          onDetails();
+        }}>
           Details
         </button>
       </div>

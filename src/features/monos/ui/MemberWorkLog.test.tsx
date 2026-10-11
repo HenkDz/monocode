@@ -247,7 +247,7 @@ it("shows a summary and opens sanitized Markdown with assignment and worker acti
   }
 });
 
-it("maps lifecycle and verified PR outcomes to light/dark status colors without treating stale acceptance as ready", async () => {
+it("keeps lifecycle and verified PR outcomes separate from canonical availability without treating stale acceptance as ready", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const verdict = (decision: "approve" | "changes") => ({
     decision,
@@ -353,30 +353,28 @@ it("maps lifecycle and verified PR outcomes to light/dark status colors without 
         .querySelector<HTMLButtonElement>('button[aria-controls$="-history"]')!
         .click(),
     );
-    for (const [id, label, border] of [
-      ["running", "Running", "border-l-accent"],
-      ["queued", "Queued", "border-l-content/20"],
-      ["cancelling", "Cancelling", "border-l-content/20"],
-      ["review", "In review", "border-l-amber-500"],
-      ["changes", "Changes requested", "border-l-orange-500"],
-      ["approved", "Approved", "border-l-emerald-500"],
-      ["ready", "PR ready", "border-l-emerald-500"],
-      ["stale", "In review", "border-l-amber-500"],
-      ["stale-verdict", "In review", "border-l-amber-500"],
-      ["merged", "Merged", "border-l-emerald-500/40"],
-      ["closed", "Closed (not merged)", "border-l-content/20"],
-      ["cancelled", "Cancelled", "border-l-content/20"],
-      ["failed", "Failed", "border-l-red-500"],
-      ["blocked", "Blocked", "border-l-red-500"],
-      ["no-changes", "Completed (no changes)", "border-l-emerald-500/40"],
+    for (const [id, label, status] of [
+      ["running", "Running", "thinking"],
+      ["queued", "Queued", "queued"],
+      ["cancelling", "Cancelling", "thinking"],
+      ["review", "In review", "waiting-review"],
+      ["changes", "Changes requested", "waiting-review"],
+      ["approved", "Approved", "waiting-review"],
+      ["ready", "PR ready", "done"],
+      ["stale", "In review", "waiting-review"],
+      ["stale-verdict", "In review", "waiting-review"],
+      ["merged", "Merged", "done"],
+      ["closed", "Closed (not merged)", "done"],
+      ["cancelled", "Cancelled", "done"],
+      ["failed", "Failed", "failed"],
+      ["blocked", "Blocked", "blocked"],
+      ["no-changes", "Completed (no changes)", "done"],
     ]) {
       const card = container.querySelector(`[data-member-task="${id}"]`)!;
       expect(card.querySelector("[data-task-status]")?.textContent).toBe(label);
-      expect(card.className).toContain(border);
-      if (
-        !["running", "queued", "cancelling", "closed", "cancelled"].includes(id)
-      )
-        expect(card.className).toContain("dark:");
+      expect(card.getAttribute("data-state")).toBe(status);
+      expect(card.querySelector(".agent-state")?.getAttribute("data-agent-state")).toBe(status);
+      expect(card.querySelectorAll(".agent-state-cue")).toHaveLength(1);
       if (["running", "queued", "cancelling", "stale-verdict"].includes(id))
         expect(card.querySelector('[title="Review notes"]')).toBeNull();
       expect(card.querySelector('[aria-haspopup="dialog"]')?.textContent).toBe(

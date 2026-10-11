@@ -109,3 +109,24 @@ it("leaves an inactive historical turn with no end unavailable", async () => {
     vi.unstubAllGlobals();
   }
 });
+
+it("omits a repeated visible state while preserving the metrics tooltip", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const host = document.createElement("div"),
+    root = createRoot(host);
+  try {
+    await act(async () =>
+      root.render(
+        <TaskMetricsLine
+          showState={false}
+          state={{ status: "blocked", reason: "storage" }}
+        />,
+      ),
+    );
+    expect(host.textContent).toBe("Elapsed unavailable · Tokens unavailable");
+    expect(host.querySelector("p")?.title).toBe("Blocked · storage");
+  } finally {
+    await act(async () => root.unmount());
+    vi.unstubAllGlobals();
+  }
+});

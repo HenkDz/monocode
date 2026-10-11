@@ -28,6 +28,7 @@ function GoalRow({ view, onOpenTarget }: { view: GoalView; onOpenTarget: (target
     </header>
     {view.rosterIssue && <p className="mc-roster-issue">{view.rosterIssue}</p>}
     <GoalChain view={view} onOpenTarget={onOpenTarget} />
+    {view.nodes.some(node => node.shared) && <p className="mc-goal-note">Shared conversations contribute only their linked goal turns. Goal totals can overlap.</p>}
   </article>;
 }
 

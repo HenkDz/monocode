@@ -43,6 +43,22 @@ describe("Mission control", () => {
     expect(host.querySelector(".mc-review")?.textContent).toContain("dispatch-synthetic-build");
   });
 
+  it("discloses metric scopes per node and explains shared conversation overlap once per goal", async () => {
+    await act(async () => root.render(<MissionControlView view={view()} onOpenTarget={() => {}} onClose={() => {}} />));
+    const goal = host.querySelector(".mc-goal")!;
+    expect(goal.querySelectorAll(".mc-goal-note")).toHaveLength(1);
+    expect(goal.querySelectorAll(".mc-node .mc-note")).toHaveLength(0);
+    const metrics = goal.querySelector<HTMLDetailsElement>(".mc-metrics")!;
+    expect(metrics.open).toBe(false);
+    expect(metrics.querySelector("summary")?.textContent).toMatch(/\d+m \d+s · [\d,]+ tokens/);
+    expect(metrics.querySelector("dt")?.textContent).toBe("Observed turn time");
+    metrics.open = true;
+    expect(metrics.querySelector("dl")?.textContent).toContain("Goal contribution");
+    expect(goal.querySelector('[data-role="manager"] [data-agent-state="waiting-on-member"]')?.textContent).toBe("Waiting · Reviewer blocked");
+    expect(goal.querySelector('[data-role="manager"] .mc-reason')).toBeNull();
+    expect(goal.querySelector('[data-role="worker"][data-state="blocked"] .mc-metrics summary')?.textContent).toBe("Elapsed unavailable · Tokens unavailable");
+  });
+
   it("restores project filter, history disclosure and scroll after returning from a conversation", async () => {
     const data = view();
     const render = (open: boolean) => root.render(<MissionControlView view={data} open={open} onOpenTarget={() => {}} onClose={() => {}} />);

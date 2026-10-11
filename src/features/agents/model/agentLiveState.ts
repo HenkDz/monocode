@@ -26,6 +26,8 @@ export type AgentLiveSession = Pick<Session,
 export type AgentLiveContext = {
   task?: OrchestrationTask;
   tasks?: readonly OrchestrationTask[];
+  /** Current states of unfinished assignments relevant to this coordinator. */
+  members?: readonly { name?: string; state: AgentLiveState }[];
   runStatus?: OrchestrationRun["status"];
   pauseReason?: string;
   wakeStates?: readonly ManagerWakeState[];
@@ -116,6 +118,13 @@ export function selectAgentLiveState(session?: AgentLiveSession, context: AgentL
     return { status: "needs-you", reason: "decision", detail: context.pauseReason || "Orchestration paused" };
   const deliveryError = context.wakeStates?.find(state => state.delivery?.error)?.delivery?.error;
   if (deliveryError) return { status: "blocked", reason: "storage", detail: deliveryError };
+  if (context.runStatus !== "finished" && context.runStatus !== "stopped") {
+    const member = context.members?.find(candidate => ["blocked", "failed"].includes(candidate.state.status));
+    if (member) {
+      const name = member.name || "member";
+      return { status: "waiting-on-member", reason: "dependency", waitingOn: name, detail: `${name} ${member.state.status}` };
+    }
+  }
   const held = context.wakeStates?.reduce((count, state) => count + state.events.filter(event => event.acknowledgedAt == null).length, 0) ?? 0;
   const waitingDispatches = new Set(context.wakeStates?.flatMap(state => state.waves
     .filter(wave => wave.retiredAt == null && wave.completedAt == null).flatMap(wave => wave.dispatchIds)));
@@ -142,7 +151,8 @@ export function agentLiveStateLabel(state: AgentLiveState): string {
     case "running-tool": return "Running tool";
     case "compacting": return "Compacting";
     case "waiting-review": return state.waitingOn ? `Waiting on ${state.waitingOn}` : "Waiting review";
-    case "waiting-on-member": return state.waitingOn ? `Waiting on ${state.waitingOn}` : "Waiting on member";
+    case "waiting-on-member": return state.reason === "dependency" && state.detail ? `Waiting · ${state.detail}`
+      : state.waitingOn ? `Waiting on ${state.waitingOn}` : "Waiting on member";
     case "queued": return state.reason === "preparing-storage" ? "Queued · waiting for storage" : "Queued";
     case "blocked": return `Blocked · ${state.reason === "usage-limit" ? "usage limit" : state.reason || "error"}`;
     case "needs-you": return "Needs you";
@@ -154,5 +164,5 @@ export function agentLiveStateLabel(state: AgentLiveState): string {
 
 export const agentLiveStateTooltip = (state: AgentLiveState) => {
   const label = agentLiveStateLabel(state);
-  return state.detail && state.detail !== label ? `${label} · ${state.detail}` : label;
+  return state.detail && state.detail !== label && label !== `Waiting · ${state.detail}` ? `${label} · ${state.detail}` : label;
 };

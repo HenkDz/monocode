@@ -215,7 +215,7 @@ it("updates the member header from live session and roster state", () => {
   pane.session.busy = true;
   render(pane);
   expect(
-    container.querySelector('header [data-mono-status="working"]')?.textContent,
+    container.querySelector('header [data-agent-state="thinking"]')?.textContent,
   ).toBe("Thinking");
 
   render({
@@ -229,7 +229,7 @@ it("updates the member header from live session and roster state", () => {
 
   render({ ...pane, session: { ...pane.session, busy: false } });
   expect(
-    container.querySelector('header [data-mono-status="idle"]')?.textContent,
+    container.querySelector('header [data-agent-state="idle"]')?.textContent,
   ).toContain("Idle");
 });
 
@@ -292,9 +292,10 @@ it("puts a member's blocked message queue above the conversation and routes edit
     queue.compareDocumentPosition(conversation) &
       Node.DOCUMENT_POSITION_FOLLOWING,
   ).toBeTruthy();
-  expect(queue.textContent).toContain(
-    "Message will queue until storage is repaired",
-  );
+  const delivery = "Message will queue until storage is repaired.";
+  expect(queue.textContent).not.toContain(delivery);
+  expect(container.querySelector("[data-session-composer]")?.textContent).toContain(delivery);
+  expect(container.textContent?.split(delivery)).toHaveLength(2);
   expect(
     probes.transcript.mock.calls
       .at(-1)![0]

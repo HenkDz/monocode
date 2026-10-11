@@ -2,10 +2,10 @@ import { useEffect, useState } from "react";
 import { formatLiveElapsed } from "../../sessions/model/liveAgents";
 import type { AgentMetrics } from "../model/agentMetrics";
 import {
-  agentLiveStateLabel,
   agentLiveStateTooltip,
   type AgentLiveState,
 } from "../model/agentLiveState";
+import { AgentStatusLabel } from "./AgentStatusLabel";
 
 export function taskMetricsDetail(metrics: AgentMetrics | undefined, state: AgentLiveState): string {
   return [
@@ -24,11 +24,13 @@ export function TaskMetricsLine({
   state,
   startedAt = metrics?.startedAt,
   endedAt = metrics?.endedAt,
+  showState = true,
 }: {
   metrics?: AgentMetrics;
   state: AgentLiveState;
   startedAt?: number;
   endedAt?: number;
+  showState?: boolean;
 }) {
   const [now, setNow] = useState(Date.now);
   const ticking = ["thinking", "running-tool", "compacting"].includes(state.status);
@@ -50,14 +52,22 @@ export function TaskMetricsLine({
     <p
       data-task-metrics
       title={taskMetricsDetail(metrics, state)}
-      className="min-w-0 truncate text-[11px] tabular-nums text-content/50"
+      className="min-w-0 truncate text-[11px] tabular-nums text-content/75"
     >
       {startedAt === undefined || (!ticking && endedAt === undefined && !metrics?.elapsedMs)
         ? "Elapsed unavailable"
         : endedAt === undefined && !ticking
           ? formatLiveElapsed(0, metrics!.elapsedMs)
           : formatLiveElapsed(startedAt, endedAt ?? now)}
-      {" · "}{metrics?.partial && counts.length ? "Recorded " : ""}{tokens}{" · "}{agentLiveStateLabel(state)}
+      {" · "}
+      {metrics?.partial && counts.length ? "Recorded " : ""}
+      {tokens}
+      {showState && (
+        <>
+          {" · "}
+          <AgentStatusLabel state={state} />
+        </>
+      )}
     </p>
   );
 }

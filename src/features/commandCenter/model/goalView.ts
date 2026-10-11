@@ -98,6 +98,8 @@ export function selectGoalViews(input: GoalViewInput): GoalViewModel {
   const sessions = new Map(input.sessions.map(session => [session.id, session]));
   const roster = new Map(input.roster.map(mono => [mono.id, mono]));
   const views = input.goals.map(goal => {
+    const finished = goal.archived || goal.state === "done" || goal.state === "cancelled";
+    const members: { name: string; state: AgentLiveState }[] = [];
     const run = runs.find(run => run.leadId === goal.managerId);
     const tasks = runs.flatMap(candidate => candidate.tasks.filter(task => task.monoGoalId === goal.id));
     const manager = roster.get(run?.ownerMonoId ?? "") ?? input.roster.find(mono => mono.managerEngineId === goal.managerId);
@@ -124,7 +126,7 @@ export function selectGoalViews(input: GoalViewInput): GoalViewModel {
       const metrics = scopedMetrics(engineSession ?? ownSession);
       const chatMetrics = ownSession && engineSession && ownSession.id !== engineSession.id ? scopedMetrics(ownSession) : undefined;
       const state = session || (role === "manager" && tasks.length) ? selectAgentLiveState(session,
-        role === "manager" ? { tasks, runStatus: run?.status, pauseReason: run?.lastPauseReason } : {}) : undefined;
+        role === "manager" ? { tasks, members, runStatus: run?.status, pauseReason: run?.lastPauseReason } : {}) : undefined;
       const activeTasks = tasks.filter(task => ["queued", "running", "cancelling"].includes(task.status)).length;
       return { id: `${role}:${mono?.id ?? sessionId ?? goal.id}`, monoId: mono?.id ?? (role === "orchestrator" ? goal.monoId : undefined), role,
         name: mono?.name ?? mono?.specialty ?? (role === "orchestrator" ? "Grand Orch" : "Manager"),
@@ -150,10 +152,13 @@ export function selectGoalViews(input: GoalViewInput): GoalViewModel {
       const sessionId = latest?.sessionId ?? task.sessionId;
       const session = sessions.get(sessionId);
       const member = roster.get(task.memberId ?? "");
-      const state = selectAgentLiveState(["completed", "cancelled"].includes(task.status) ? undefined : session,
+      const state = selectAgentLiveState(["completed", "cancelled", "failed"].includes(task.status) ? undefined : session,
         { task, tasks: workerRun.tasks, runStatus: workerRun.status, pauseReason: workerRun.lastPauseReason });
+      const name = task.memberName ?? member?.name ?? "Worker";
+      if (!finished && !["finished", "stopped"].includes(workerRun.status) && !task.accepted && !["completed", "cancelled"].includes(task.status))
+        members.push({ name, state });
       const reviewed = task.reviewOf && workerRun.tasks.find(candidate => candidate.id === task.reviewOf!.taskId);
-      return { id: `${workerRun.leadId}:${task.id}`, monoId: task.memberId, role: "worker", name: task.memberName ?? member?.name ?? "Worker",
+      return { id: `${workerRun.leadId}:${task.id}`, monoId: task.memberId, role: "worker", name,
         state, activity: task.title, target: sessionId ? (state.status === "needs-you" ? { requestSessionId: sessionId } : { sessionId }) : member ? { monoId: member.id } : undefined,
         metrics: selectTaskMetrics(task, workerRun.dispatches ?? [], input.sessions, now),
         elapsedMs: attempts.find(attempt => attempt.edge.id === latest?.id)?.elapsedMs, elapsedLabel: "Attempt elapsed",
@@ -161,7 +166,6 @@ export function selectGoalViews(input: GoalViewInput): GoalViewModel {
           available: !!reviewed && dispatchesForReview(workerRun, task.reviewOf.taskId, task.reviewOf.dispatchId) } : undefined } satisfies GoalNode;
     }));
     const nodes = [actor("orchestrator", origin, originSessionId), actor("manager", manager, run?.ownerSessionId ?? run?.leadId ?? manager?.sessionId), ...workers];
-    const finished = goal.archived || goal.state === "done" || goal.state === "cancelled";
     return { goal, projectId: goal.projectId, project: projectName(run?.workspace?.projectCwd ?? run?.cwd ?? goal.projectId), nodes,
       wallElapsedMs: !finished && Number.isFinite(goal.createdAt) ? Math.max(0, now - goal.createdAt) : undefined,
       metrics: selectGoalMetrics(goal, runs, input.sessions, now), rosterIssue: rosterIssue(nodes, input.roster) };
@@ -186,7 +190,7 @@ function dispatchesForReview(run: OrchestrationRun, taskId: string, dispatchId: 
 }
 
 export function goalTokenLabel(metrics?: AgentMetrics): string {
-  if (!metrics || (metrics.inputTokens == null && metrics.outputTokens == null)) return "— tokens · unavailable";
+  if (!metrics || (metrics.inputTokens == null && metrics.outputTokens == null)) return "Tokens unavailable";
   const tokens = (metrics.inputTokens ?? 0) + (metrics.outputTokens ?? 0);
   return `${tokens.toLocaleString()} tokens${metrics.partial || metrics.inputTokens == null || metrics.outputTokens == null ? " · partial" : ""}`;
 }

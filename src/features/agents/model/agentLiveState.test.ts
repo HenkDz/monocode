@@ -201,6 +201,64 @@ describe("selectAgentLiveState", () => {
     expect(selectAgentLiveState(session(), { wakeStates, runStatus: "paused", pauseReason: "Choose next step" }))
       .toEqual({ status: "needs-you", reason: "decision", detail: "Choose next step" });
   });
+
+  it.each(["blocked", "interrupted", "failed"] as const)("shows an idle coordinator waiting on a %s worker", status => {
+    const reviewer = task(status, { memberName: "Reviewer" });
+    const state = selectAgentLiveState(session(), { tasks: [reviewer], members: [{ name: reviewer.memberName, state: selectAgentLiveState(undefined, { task: reviewer }) }] });
+    const outcome = status === "failed" ? "failed" : "blocked";
+    expect(state).toEqual({ status: "waiting-on-member", reason: "dependency", waitingOn: "Reviewer", detail: `Reviewer ${outcome}` });
+    expect(agentLiveStateLabel(state)).toBe(`Waiting · Reviewer ${outcome}`);
+    expect(agentLiveStateTooltip(state)).toBe(`Waiting · Reviewer ${outcome}`);
+  });
+
+  it.each(["blocked", "failed"] as const)("uses a member's current %s state ahead of other active assignments", status => {
+    const reviewer = task("queued", { memberName: "Reviewer", reviewOf: { taskId: "build", dispatchId: "d" } });
+    const state = selectAgentLiveState(session(), {
+      tasks: [task("running", { id: "build", memberName: "Backend" }), reviewer],
+      members: [{ name: "Reviewer", state: { status, reason: status === "blocked" ? "storage" : "error" } }],
+    });
+    expect(agentLiveStateLabel(state)).toBe(`Waiting · Reviewer ${status}`);
+    expect(state.status).toBe("waiting-on-member");
+  });
+
+  it("ignores accepted or settled task failures and handles unavailable member identity", () => {
+    expect(selectAgentLiveState(session(), {
+      tasks: [task("failed", { accepted: true }), task("cancelled"), task("completed", { accepted: true })],
+      members: [{ name: "Reviewer", state: { status: "done" } }],
+    })).toEqual({ status: "idle" });
+    expect(agentLiveStateLabel(selectAgentLiveState(session(), {
+      tasks: [task("failed", { memberName: "Backend" })], members: [{ state: { status: "blocked" } }],
+    }))).toBe("Waiting · member blocked");
+  });
+
+  it("does not let a historical failed task override a current reviewer wait without member context", () => {
+    const old = task("failed", { id: "old", memberName: "Old Backend" });
+    const reviewer = task("queued", { id: "review", memberName: "Reviewer", reviewOf: { taskId: "build", dispatchId: "d" } });
+    expect(selectAgentLiveState(session(), { tasks: [old, reviewer], runStatus: "active" }))
+      .toEqual({ status: "waiting-review", waitingOn: "Reviewer", detail: "Waiting on Reviewer" });
+  });
+
+  it.each([
+    [{ busy: true }, "thinking"],
+    [{ queuedMessages: [queued] }, "queued"],
+    [{ codexStorageError: "Manager storage" }, "blocked"],
+    [{ pendingQuestion: { requestId: 1, questions: [] } }, "needs-you"],
+    [{ blocks: [{ id: "error", role: "system", text: "Manager failed", notice: "error" }] }, "failed"],
+  ] as [Partial<Session>, AgentLiveStatus][])("retains the coordinator's own state %s ahead of member waits", (patch, status) => {
+    expect(selectAgentLiveState(session(patch), {
+      tasks: [task("blocked", { memberName: "Reviewer" })],
+      members: [{ name: "Reviewer", state: { status: "blocked", reason: "storage" } }],
+    }).status).toBe(status);
+  });
+
+  it("does not make settled coordinators or workers wait on old member blockers", () => {
+    const context = { tasks: [task("failed")], members: [{ name: "Reviewer", state: { status: "blocked" as const } }] };
+    expect(selectAgentLiveState(session(), { ...context, runStatus: "finished" })).toEqual({ status: "done" });
+    expect(selectAgentLiveState(session(), { ...context, runStatus: "stopped" })).toEqual({ status: "idle" });
+    expect(selectAgentLiveState(session(), { ...context, runStatus: "paused" }).status).toBe("needs-you");
+    expect(selectAgentLiveState(session(), { ...context, task: task("completed", { accepted: true }) })).toEqual({ status: "done" });
+    expect(selectAgentLiveState(session(), { ...context, task: task("cancelled") })).toEqual({ status: "done", detail: "Cancelled" });
+  });
 });
 
 it("labels every canonical state", () => {

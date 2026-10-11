@@ -68,6 +68,25 @@ describe("Mission control goal projection", () => {
     expect(view.nodes[1].state?.status).toBe("waiting-on-member");
   });
 
+  it("makes an idle Manager wait on the blocked current goal worker and preserves its own work", () => {
+    const queued = task("task", { status: "queued", accepted: false, memberName: "Reviewer" });
+    const data = { runs: [run([queued])], sessions: [sessions[0], sessions[1], session("worker", [], { codexStorageError: "Repair storage" })] };
+    expect(project(data).live[0].nodes[1].state).toMatchObject({ status: "waiting-on-member", waitingOn: "Reviewer", detail: "Reviewer blocked" });
+    expect(project({ ...data, sessions: data.sessions.map(source => source.id === "manager-chat" ? { ...source, busy: true } : source) }).live[0].nodes[1].state?.status).toBe("thinking");
+  });
+
+  it("does not inherit reused worker blockers from completed, accepted or terminal-goal work", () => {
+    const held = session("worker", [], { codexStorageError: "Old repair" });
+    for (const completed of [task(), task("task", { status: "cancelled" })])
+      expect(project({ runs: [run([completed])], sessions: [sessions[0], sessions[1], held] }).live[0].nodes[1].state?.status).not.toBe("waiting-on-member");
+    const failed = task("task", { status: "failed", accepted: false, memberName: "Reviewer", error: "Connection lost" });
+    const data = { runs: [run([failed])], sessions: [sessions[0], sessions[1], held] };
+    expect(project(data).live[0].nodes[1].state?.detail).toBe("Reviewer failed");
+    expect(project(data).live[0].nodes[2].state?.status).toBe("failed");
+    expect(project({ ...data, goals: [goal("goal", { state: "done" })] }).finished[0].nodes[1].state?.status).not.toBe("waiting-on-member");
+    expect(project({ ...data, runs: [run([failed], [], { status: "finished" })] }).live[0].nodes[1].state?.status).toBe("done");
+  });
+
   it("preserves a Manager's durable-chat storage blocker over its busy engine session", () => {
     const view = project({ runs: [run(undefined, undefined, { ownerSessionId: "engine-chat" })], sessions: [
       sessions[0], session("manager-chat", [], { codexStorageError: "Repair required" }), session("engine-chat", [turn("manager-turn")], { busy: true }), sessions[2],
@@ -99,7 +118,7 @@ describe("Mission control goal projection", () => {
     expect(view.nodes[0].state).toBeUndefined();
     expect(view.nodes[1].target).toBeUndefined();
     expect(view.rosterIssue).toContain("unavailable");
-    expect(goalTokenLabel(view.metrics)).toBe("— tokens · unavailable");
+    expect(goalTokenLabel(view.metrics)).toBe("Tokens unavailable");
   });
 
   it("terminates cyclic roster links while retaining saved goal identity", () => {
@@ -146,7 +165,7 @@ describe("Mission control goal projection", () => {
     const view = project({ goals: [goal("goal", { state: "done", updatedAt: 999 })], sessions: [], runs: [] }).finished[0];
     expect(view.wallElapsedMs).toBeUndefined();
     expect(goalElapsedLabel(view.wallElapsedMs)).toBe("unavailable");
-    expect(goalTokenLabel(view.metrics)).toBe("— tokens · unavailable");
+    expect(goalTokenLabel(view.metrics)).toBe("Tokens unavailable");
   });
 
   it("keeps done, cancelled and archived goals in finished history", () => {

@@ -48,6 +48,7 @@ test("deletion can minimize while only its branch is disabled", async ({
   await remove.click();
   await expect(page.getByRole("dialog")).toHaveAttribute("aria-modal", "false");
   await expect(page.locator(".modal-backdrop")).toHaveCount(0);
+  await page.getByRole("button", { name: /^Toggle worktree History/ }).click();
   const other = page.getByRole("button", {
     name: "Open worktree other",
     exact: true,

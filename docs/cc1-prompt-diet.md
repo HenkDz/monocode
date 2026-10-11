@@ -99,8 +99,9 @@ memory, six saturated prior exchanges and an 8,000-character implementation
 result. Saturated worker rows use 24,000-character memory. Measurements call
 the real org, Mono, rotation, task and final assembly builders. The baseline
 reproduces the old App insertion paths from the unchanged starting revision.
-Values are JavaScript string characters added by this context region, including
-its wrapper, excluding the user/task request.
+Values below are JavaScript string characters added by the assembled context
+region, including its wrapper, excluding the user/task request and registry
+suffixes. The separate full-registry steady measurement follows the table.
 
 | Role / turn | Before | After | Reduction |
 | --- | ---: | ---: | ---: |
@@ -118,16 +119,55 @@ its wrapper, excluding the user/task request.
 | Worker / saturated delegation | 29,903 | 9,334 | 68.8% |
 | Worker / saturated review | 38,656 | 12,173 | 68.5% |
 
-First Mono turns are capped at 12,000 characters: full role/chart, identity,
+First Mono context regions are capped at 12,000 characters: full role/chart, identity,
 soul, fixture memory and CLI, with approximately 1,600 characters of headroom
-for the largest role. Steady unchanged turns cap at 1,000 and add 857–871
-characters including the authority core and wrapper. Rotation caps at 26,000,
+for the largest role. Steady unchanged context regions cap at 1,000 and add
+857–871 characters including the authority core and wrapper. Rotation caps at 26,000,
 retaining the existing approximately 13,000-character recap. Worker delegation
 caps at 9,500 and review at 12,500, allowing the fixed authority core, including
 the saturated memory/report cases. These intentional bounds are fixture
 regressions, not enforced truncation of arbitrary user-authored souls or
 task briefs. They exclude unchanged orchestration/native suffixes, global
 skills/plugins and provider history; they are not total model-input budgets.
+
+CC1G adds a separate full-registry steady budget. It sends a full first turn,
+records its provider acceptance, then rebuilds the retained provider's steady
+turn using the real receipt planners, authority core and `assembleMonoPrompt`.
+The real `sendHarnessTurn` registry appends `monocode_cli_input` before the
+test adapter captures prepared provider text. Both authority and CLI suffix
+appear exactly once; unchanged org, soul and memory are omitted.
+
+The synthetic Windows executable path is 110 characters and the private-input
+folder is 175, including the install directory, user profile and two UUID
+components. The unchanged suffix adds **650 characters**, including its
+separator and tags. A 58-character user request is counted separately:
+
+| Role / steady turn | Context region | Registry suffix | Full-registry app text | Provider input with request |
+| --- | ---: | ---: | ---: | ---: |
+| Grand Orch | 871 | 650 | 1,521 | 1,579 |
+| Manager | 863 | 650 | 1,513 | 1,571 |
+| Member home | 857 | 650 | 1,507 | 1,565 |
+
+The **1,000-character context-region budget** remains. The new
+**1,700-character full-registry application budget** includes the current CLI
+and private-folder suffix; the complete fixture input budget is 1,700 plus
+the user request's length. These bounds apply to this measured fixture, not
+arbitrary identity/path lengths or user-authored input, and do not count global
+skills/plugins or provider history. The suffix text stays unchanged because
+its executable precedence and private-input rules remain useful.
+
+CC1G focused validation passed **4 files / 83 tests**, with no failures or
+skips (Vitest 5.69 s; wall 8.725 s), using process-local
+`NODE_OPTIONS=--no-experimental-webstorage`. Reproducible measurements are
+written to `target/cc1-verification/after.json` (explicit context-region scope)
+and `registry-steady.json` (paths, budgets and provider-input counts). Copied
+measurements, the rerunnable command script, full logs and JSON results are in
+`C:/Users/nooro/AppData/Local/Temp/monocode-cc/cc1g/budget/`.
+
+Combined CC1G validation also passed the full suite: 564 files passed and 2
+skipped; 6,330 tests passed, 13 skipped, 0 failed. TypeScript and the production
+build passed. Details and the retained earlier failures are in
+`cc1g-stop-prepare.md` and the round report.
 
 The tests cover provider/model/account changes, changed roster/version,
 acceptance versus rejected sends, corrupt/full storage, deleted/rewound

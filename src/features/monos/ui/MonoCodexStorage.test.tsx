@@ -8,14 +8,19 @@ import { MonoCodexStorageRecovery } from "../model/monoCodexStorage";
 
 const native = vi.hoisted(() => ({
   info: vi.fn(),
+  shareHooks: vi.fn(),
   copy: vi.fn(),
   headless: false,
+  selectedAccountId: "default",
 }));
 vi.mock("../../../platform/tauri/clipboard", () => ({ copyText: native.copy }));
 vi.mock("../../../integrations/harness/core/child", () => ({
   hasHeadlessChildBackend: () => native.headless,
   monoCodexStorageInfo: native.info,
+  setMonoCodexHooksShared: native.shareHooks,
 }));
+vi.mock("../../providers/model/providerAccounts", () => ({ selectedProviderAccountId: () => native.selectedAccountId }));
+vi.mock("../../settings/model/sounds", () => ({ playCue: vi.fn() }));
 vi.mock("../../connections/model/remoteProjects", () => ({
   remoteProjectFor: (cwd: string) =>
     cwd.startsWith("remote:") ? {} : undefined,
@@ -27,12 +32,15 @@ beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.spyOn(console, "error").mockImplementation(() => {});
   native.copy.mockResolvedValue(undefined);
+  native.shareHooks.mockResolvedValue(undefined);
 });
 afterEach(async () => {
   await act(async () => root.render(null));
   native.info.mockReset();
+  native.shareHooks.mockReset();
   native.copy.mockReset();
   native.headless = false;
+  native.selectedAccountId = "default";
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -333,6 +341,7 @@ it("shows the selected Codex home and origin, refreshes account, and skips remot
     home: "/mono",
     sourceHome: "C:/orca/account/home",
     sourceKind: "CODEX_HOME",
+    shareHooks: false,
   });
   await act(async () =>
     root.render(
@@ -352,6 +361,7 @@ it("shows the selected Codex home and origin, refreshes account, and skips remot
     home: "/mono/work",
     sourceHome: "C:/codex/work",
     sourceKind: "account",
+    shareHooks: false,
   });
   await act(async () =>
     root.render(
@@ -383,4 +393,89 @@ it("shows the selected Codex home and origin, refreshes account, and skips remot
   );
   expect(native.info).not.toHaveBeenCalled();
   expect(container.textContent).toBe("");
+});
+
+it.each(["default", "account", "CODEX_HOME"] as const)("keeps %s hooks isolated by default and persists opt-in for only the selected account", async sourceKind => {
+  const flags = new Map([["selected", false], ["other", false]]);
+  native.selectedAccountId = "selected";
+  native.info.mockImplementation(async (accountId: string) => ({
+    home: `/synthetic/mono/${accountId}`, sourceHome: "C:/synthetic/account", sourceKind,
+    shareHooks: flags.get(accountId) ?? false,
+  }));
+  native.shareHooks.mockImplementation(async (accountId: string, shared: boolean) => { flags.set(accountId, shared); });
+  const renderSource = () => root.render(<dl><MonoCodexStorageSource harness="codex" cwd="/synthetic/repo" /></dl>);
+  await act(async () => renderSource());
+  const toggle = container.querySelector<HTMLButtonElement>('[role="switch"]')!;
+  expect(toggle.getAttribute("aria-checked")).toBe("false");
+  expect(toggle.getAttribute("aria-label")).toBe(sourceKind === "default" ? "Share hooks from ~/.codex" : "Share account hooks");
+  expect(container.textContent).toContain("all Monos using this account on their next turn");
+  expect(container.querySelector("span[title]")?.getAttribute("title")).toBe("C:/synthetic/account");
+  await act(async () => toggle.click());
+  expect(native.shareHooks).toHaveBeenCalledExactlyOnceWith("selected", true);
+  expect(native.info.mock.calls.map(([accountId]) => accountId)).toEqual(["selected", "selected"]);
+  expect(flags.get("other")).toBe(false);
+  expect(toggle.getAttribute("aria-checked")).toBe("true");
+  await act(async () => root.render(null));
+  await act(async () => renderSource());
+  expect(container.querySelector('[role="switch"]')?.getAttribute("aria-checked")).toBe("true");
+  await act(async () => container.querySelector<HTMLButtonElement>('[role="switch"]')!.click());
+  expect(native.shareHooks).toHaveBeenLastCalledWith("selected", false);
+  expect(flags.get("selected")).toBe(false);
+});
+
+it("reports a hooks-policy save failure without enabling sharing or preparing storage", async () => {
+  native.info.mockResolvedValue({ home: "/synthetic/mono/work", sourceHome: "/synthetic/account/work", sourceKind: "account", shareHooks: false });
+  native.shareHooks.mockRejectedValue(new Error("Could not save account hooks policy"));
+  await act(async () => root.render(<MonoCodexStorageSource harness="codex" providerAccountId="work" cwd="/synthetic/repo" />));
+  await act(async () => container.querySelector<HTMLButtonElement>('[role="switch"]')!.click());
+  expect(native.shareHooks).toHaveBeenCalledExactlyOnceWith("work", true);
+  expect(native.info).toHaveBeenCalledExactlyOnceWith("work");
+  expect(container.querySelector('[role="alert"]')?.textContent).toBe("Could not save account hooks policy");
+  expect(container.querySelector('[role="switch"]')?.getAttribute("aria-checked")).toBe("false");
+  expect(container.querySelector<HTMLButtonElement>('[role="switch"]')?.disabled).toBe(false);
+});
+
+it("retains the confirmed saved hooks preference when refreshing account information fails", async () => {
+  native.info.mockResolvedValueOnce({ home: "/synthetic/mono/work", sourceHome: "/synthetic/account/work", sourceKind: "account", shareHooks: false })
+    .mockRejectedValueOnce(new Error("Could not refresh account information"));
+  await act(async () => root.render(<MonoCodexStorageSource harness="codex" providerAccountId="work" cwd="/synthetic/repo" />));
+  await act(async () => container.querySelector<HTMLButtonElement>('[role="switch"]')!.click());
+  expect(native.shareHooks).toHaveBeenCalledExactlyOnceWith("work", true);
+  expect(native.info).toHaveBeenCalledTimes(2);
+  expect(container.querySelector('[role="switch"]')?.getAttribute("aria-checked")).toBe("true");
+  expect(container.querySelector('[role="alert"]')?.textContent).toBe("Could not refresh account information");
+});
+
+it("reloads the selected account and ignores an old save completion after the account changes", async () => {
+  const flags = new Map<string, boolean>();
+  native.selectedAccountId = "first";
+  native.info.mockImplementation(async (accountId: string) => ({
+    home: `/synthetic/mono/${accountId}`, sourceHome: `/synthetic/account/${accountId}`,
+    sourceKind: "account", shareHooks: flags.get(accountId) ?? false,
+  }));
+  let release!: () => void;
+  native.shareHooks.mockImplementationOnce(async (accountId: string, shared: boolean) => {
+    await new Promise<void>(resolve => { release = resolve; });
+    flags.set(accountId, shared);
+  }).mockImplementation(async (accountId: string, shared: boolean) => { flags.set(accountId, shared); });
+  const renderSource = () => root.render(<MonoCodexStorageSource harness="codex" cwd="/synthetic/repo" />);
+  await act(async () => renderSource());
+  await act(async () => container.querySelector<HTMLButtonElement>('[role="switch"]')!.click());
+  expect(container.querySelector<HTMLButtonElement>('[role="switch"]')?.disabled).toBe(true);
+  native.selectedAccountId = "second";
+  await act(async () => renderSource());
+  expect(container.querySelector("span[title]")?.getAttribute("title")).toBe("/synthetic/account/second");
+  expect(container.querySelector('[role="switch"]')?.getAttribute("aria-checked")).toBe("false");
+  expect(container.querySelector<HTMLButtonElement>('[role="switch"]')?.disabled).toBe(false);
+  await act(async () => container.querySelector<HTMLButtonElement>('[role="switch"]')!.click());
+  expect(native.shareHooks).toHaveBeenLastCalledWith("second", true);
+  await act(async () => release());
+  expect(native.info.mock.calls.map(([accountId]) => accountId)).toEqual(["first", "second", "second"]);
+  expect(container.querySelector("span[title]")?.getAttribute("title")).toBe("/synthetic/account/second");
+  expect(container.querySelector('[role="switch"]')?.getAttribute("aria-checked")).toBe("true");
+  native.selectedAccountId = "first";
+  await act(async () => renderSource());
+  expect(container.querySelector('[role="switch"]')?.getAttribute("aria-checked")).toBe("true");
+  expect(flags.get("first")).toBe(true);
+  expect(flags.get("second")).toBe(true);
 });

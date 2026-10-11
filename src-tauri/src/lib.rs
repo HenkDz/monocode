@@ -496,6 +496,7 @@ pub fn run() {
             harness::harness_spawn,
             codex_mono_store::codex_mono_store_prepare,
             codex_mono_store::codex_mono_store_info,
+            codex_mono_store::codex_mono_store_set_hooks_shared,
             codex_mono_store::codex_mono_store_resolve,
             codex_mono_store::codex_mono_store_compare,
             codex_mono_store::codex_mono_store_reveal,

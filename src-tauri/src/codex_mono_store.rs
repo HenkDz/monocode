@@ -2,7 +2,7 @@
 //! Configuration and credentials remain shared with the selected provider account.
 
 use std::collections::HashSet;
-use std::io::{Read, Write};
+use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 
@@ -90,6 +90,7 @@ pub struct PreparedStore {
     has_thread: bool,
     source_home: String,
     source_kind: &'static str,
+    share_hooks: bool,
 }
 
 #[derive(Serialize)]
@@ -98,6 +99,7 @@ pub struct StorageInfo {
     home: String,
     source_home: String,
     source_kind: &'static str,
+    share_hooks: bool,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
@@ -139,6 +141,12 @@ struct LinkSnapshot {
     private_override: bool,
     #[serde(default)]
     invalid: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HooksPolicy {
+    share_hooks: bool,
 }
 
 fn locations(
@@ -184,11 +192,25 @@ pub fn codex_mono_store_info(
     provider_account_id: Option<String>,
 ) -> Result<StorageInfo, String> {
     let (source, home, source_kind) = locations(&app, provider_account_id.as_deref())?;
+    let _lock = STORAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     Ok(StorageInfo {
         home: crate::fs::path_to_js(&home),
         source_home: crate::fs::path_to_js(&source),
         source_kind,
+        share_hooks: hooks_shared(&home)?,
     })
+}
+
+#[tauri::command(async)]
+pub fn codex_mono_store_set_hooks_shared(
+    app: AppHandle,
+    provider_account_id: Option<String>,
+    shared: bool,
+) -> Result<(), String> {
+    let (source, home, _) = locations(&app, provider_account_id.as_deref())?;
+    let _lock = STORAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (_, home) = storage_roots(&source, &home)?;
+    set_hooks_shared(&home, shared)
 }
 
 #[tauri::command(async)]
@@ -249,6 +271,7 @@ pub fn codex_mono_store_prepare(
         has_thread,
         source_home: crate::fs::path_to_js(&source),
         source_kind,
+        share_hooks: hooks_shared(&home)?,
     })
 }
 
@@ -427,6 +450,86 @@ fn private_directory(home: &Path, name: &str) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+fn hooks_policy_path(home: &Path) -> Result<PathBuf, String> {
+    let path = home.join(".monocode-hooks-policy.json");
+    match std::fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.is_file() && !replaceable_link(&path)? => {}
+        Ok(_) => return Err("Mono hooks policy must be a real private file".into()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.to_string()),
+    }
+    Ok(path)
+}
+
+fn hooks_shared(home: &Path) -> Result<bool, String> {
+    let path = hooks_policy_path(home)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ,
+        };
+        options
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .share_mode(FILE_SHARE_READ);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    let file = match options.open(&path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(format!("Could not read Mono hooks policy: {error}")),
+    };
+    let metadata = file.metadata().map_err(|e| e.to_string())?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err("Mono hooks policy must be a real private file".into());
+    }
+    #[cfg(windows)]
+    if handle_file_info(&file)?.nNumberOfLinks != 1 {
+        return Err("Mono hooks policy must be a real private file".into());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if metadata.nlink() != 1 {
+            return Err("Mono hooks policy must be a real private file".into());
+        }
+    }
+    match serde_json::from_reader::<_, HooksPolicy>(file) {
+        Ok(policy) => Ok(policy.share_hooks),
+        Err(error) if error.is_io() => Err(format!("Could not read Mono hooks policy: {error}")),
+        Err(error) => {
+            log_storage_issue(format!(
+                "Invalid Mono hooks policy preserved at {}; hooks remain isolated: {error}",
+                path.display()
+            ));
+            Ok(false)
+        }
+    }
+}
+
+fn set_hooks_shared(home: &Path, shared: bool) -> Result<(), String> {
+    let path = hooks_policy_path(home)?;
+    if shared && !hooks_shared(home)? && home.join(".monocode-links").exists() {
+        if let Some(snapshot) = read_snapshot(home, "hooks.json")? {
+            if snapshot.private_override && !snapshot.invalid {
+                write_snapshot(home, "hooks.json", &LinkSnapshot::default())?;
+            }
+        }
+    }
+    write_private_json(
+        &path,
+        &HooksPolicy {
+            share_hooks: shared,
+        },
+    )
+}
+
 fn snapshot_path(home: &Path, name: &str) -> Result<PathBuf, String> {
     validate_entry(name)?;
     let path = private_directory(home, ".monocode-links")?.join(format!("{name}.json"));
@@ -474,6 +577,10 @@ fn read_snapshot(home: &Path, name: &str) -> Result<Option<LinkSnapshot>, String
 
 fn write_snapshot(home: &Path, name: &str, snapshot: &LinkSnapshot) -> Result<(), String> {
     let path = snapshot_path(home, name)?;
+    write_private_json(&path, snapshot)
+}
+
+fn write_private_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
     let temp = path.with_file_name(format!(".monocode-link-{}", uuid::Uuid::new_v4()));
     let result = (|| {
         let mut file = std::fs::OpenOptions::new()
@@ -481,7 +588,7 @@ fn write_snapshot(home: &Path, name: &str, snapshot: &LinkSnapshot) -> Result<()
             .create_new(true)
             .open(&temp)
             .map_err(|e| e.to_string())?;
-        file.write_all(&serde_json::to_vec(snapshot).map_err(|e| e.to_string())?)
+        file.write_all(&serde_json::to_vec(value).map_err(|e| e.to_string())?)
             .map_err(|e| e.to_string())?;
         file.sync_all().map_err(|e| e.to_string())?;
         drop(file);
@@ -495,6 +602,11 @@ fn write_snapshot(home: &Path, name: &str, snapshot: &LinkSnapshot) -> Result<()
 
 fn fingerprint(path: &Path) -> Result<String, String> {
     let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    fingerprint_file(&mut file)
+}
+
+fn fingerprint_file(file: &mut std::fs::File) -> Result<String, String> {
+    file.rewind().map_err(|e| e.to_string())?;
     let mut hash = Sha256::new();
     let mut buffer = [0u8; 8192];
     loop {
@@ -687,7 +799,20 @@ fn open_entry(path: &Path, locked: bool) -> Result<std::fs::File, String> {
 fn entry_identity(path: &Path) -> Result<(u64, u64), String> {
     #[cfg(windows)]
     {
-        let info = handle_file_info(&open_entry(path, false)?)?;
+        file_identity(&open_entry(path, false)?)
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let metadata = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+        Ok((metadata.dev(), metadata.ino()))
+    }
+}
+
+fn file_identity(file: &std::fs::File) -> Result<(u64, u64), String> {
+    #[cfg(windows)]
+    {
+        let info = handle_file_info(file)?;
         Ok((
             info.dwVolumeSerialNumber as u64,
             (info.nFileIndexHigh as u64) << 32 | info.nFileIndexLow as u64,
@@ -696,7 +821,7 @@ fn entry_identity(path: &Path) -> Result<(u64, u64), String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        let metadata = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+        let metadata = file.metadata().map_err(|e| e.to_string())?;
         Ok((metadata.dev(), metadata.ino()))
     }
 }
@@ -792,28 +917,10 @@ fn backup_and_relink(
                     },
                 );
             }
-            let root = private_directory(home, ".monocode-conflicts")?;
-            let timestamp = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_err(|e| e.to_string())?
-                .as_millis();
-            let backup = root.join(format!("{timestamp}-{}", uuid::Uuid::new_v4()));
-            std::fs::create_dir(&backup).map_err(|e| e.to_string())?;
-            let saved = backup.join(name);
-            // Copy into a new inode: an archive must not share bytes with a symlink or an open writer.
-            let mut preserved = std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&saved)
-                .map_err(|e| e.to_string())?;
             let mut original = std::fs::File::open(&claimed.path).map_err(|e| e.to_string())?;
-            std::io::copy(&mut original, &mut preserved).map_err(|e| e.to_string())?;
-            preserved.sync_all().map_err(|e| e.to_string())?;
-            drop(preserved);
+            let saved = archive_file(home, name, &mut original, &actual.mono_fingerprint)?;
             // shortcut: Unix open writers can still change claimed bytes; add writer exclusion before guaranteeing concurrent Unix recovery.
-            if fingerprint(&saved)? != actual.mono_fingerprint
-                || fingerprint(&claimed.path)? != actual.mono_fingerprint
-            {
+            if fingerprint(&claimed.path)? != actual.mono_fingerprint {
                 return Err(
                     "Codex storage bytes changed during archive creation. Retry repair.".into(),
                 );
@@ -827,6 +934,123 @@ fn backup_and_relink(
         let _ = remove_link(&temp);
     }
     result
+}
+
+fn archive_file(
+    home: &Path,
+    name: &str,
+    original: &mut std::fs::File,
+    expected: &str,
+) -> Result<PathBuf, String> {
+    let root = private_directory(home, ".monocode-conflicts")?;
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_millis();
+    let backup = root.join(format!("{timestamp}-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&backup).map_err(|e| e.to_string())?;
+    let saved = backup.join(name);
+    // Archives have their own inode even when the original was a shared hardlink or symlink.
+    let mut preserved = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&saved)
+        .map_err(|e| e.to_string())?;
+    original.rewind().map_err(|e| e.to_string())?;
+    std::io::copy(original, &mut preserved).map_err(|e| e.to_string())?;
+    preserved.sync_all().map_err(|e| e.to_string())?;
+    drop(preserved);
+    if fingerprint(&saved)? != expected || fingerprint_file(original)? != expected {
+        return Err(format!(
+            "Codex storage bytes changed during archive creation; preserved {}. Retry repair.",
+            saved.display()
+        ));
+    }
+    Ok(saved)
+}
+
+fn publish_new_entry(temp: &Path, target: &Path) -> Result<(), String> {
+    #[cfg(windows)]
+    rename_handle(&open_entry(temp, true)?, target, false)?;
+    #[cfg(unix)]
+    rename_no_replace(temp, target)?;
+    Ok(())
+}
+
+fn prepare_isolated_hooks(home: &Path) -> Result<(), String> {
+    let target = home.join("hooks.json");
+    let existing = match std::fs::symlink_metadata(&target) {
+        Ok(metadata) if metadata.is_file() && !replaceable_link(&target)? => return Ok(()),
+        Ok(_) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => return Err(error.to_string()),
+    };
+    let temp = home.join(format!(".monocode-link-{}", uuid::Uuid::new_v4()));
+    let result = (|| {
+        let mut empty = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)
+            .map_err(|e| e.to_string())?;
+        empty
+            .write_all(br#"{"hooks":{}}"#)
+            .map_err(|e| e.to_string())?;
+        empty.sync_all().map_err(|e| e.to_string())?;
+        drop(empty);
+        if !existing {
+            return publish_new_entry(&temp, &target);
+        }
+        #[cfg(test)]
+        before_claim();
+        let mut claimed = ClaimedEntry::new(&target)?;
+        let result = (|| {
+            if claimed.real_file()? && !replaceable_link(&claimed.path)? {
+                return claimed.restore();
+            }
+            if !replaceable_link(&claimed.path)? {
+                return Err("Mono hooks must be a real file or a readable file link".into());
+            }
+            let claimed_id = entry_identity(&claimed.path)?;
+            #[cfg(windows)]
+            let mut original = if claimed.real_file()? {
+                claimed.file.try_clone().map_err(|e| e.to_string())?
+            } else {
+                use std::os::windows::fs::OpenOptionsExt;
+                use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
+                std::fs::OpenOptions::new()
+                    .read(true)
+                    .share_mode(FILE_SHARE_READ)
+                    .open(&claimed.path)
+                    .map_err(|e| {
+                        format!("Could not read linked Mono hooks; the link is preserved: {e}")
+                    })?
+            };
+            #[cfg(unix)]
+            let mut original = std::fs::File::open(&claimed.path).map_err(|e| {
+                format!("Could not read linked Mono hooks; the link is preserved: {e}")
+            })?;
+            if !original.metadata().map_err(|e| e.to_string())?.is_file() {
+                return Err("Linked Mono hooks must refer to a readable real file".into());
+            }
+            let referenced_id = file_identity(&original)?;
+            let fingerprint = fingerprint_file(&mut original)?;
+            archive_file(home, "hooks.json", &mut original, &fingerprint)?;
+            let current = std::fs::File::open(&claimed.path).map_err(|e| e.to_string())?;
+            if entry_identity(&claimed.path)? != claimed_id
+                || file_identity(&current)? != referenced_id
+                || fingerprint_file(&mut original)? != fingerprint
+            {
+                return Err("Linked Mono hooks changed during isolation. The original is preserved; retry preparation.".into());
+            }
+            publish_new_entry(&temp, &target)?;
+            claimed.discard()
+        })();
+        claimed.finish(result)
+    })();
+    if std::fs::symlink_metadata(&temp).is_ok() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    result.map_err(|error| format!("Could not isolate Mono hooks {}: {error}", target.display()))
 }
 
 fn publish_recovery_link(source: &Path, target: &Path, saved: &Path) -> Result<(), String> {
@@ -858,6 +1082,9 @@ fn resolve_files(
     let _lock = STORAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let (source, home) = storage_roots(source, home)?;
     let name = shared_entry_name(&home, &conflict.entry)?;
+    if name.eq_ignore_ascii_case("hooks.json") && !hooks_shared(&home)? {
+        return Err("Mono hooks are isolated. Refresh storage details or explicitly enable account hooks sharing.".into());
+    }
     snapshot_path(&home, &name)?;
     if matches!(resolution, StorageResolution::KeepMonoVersion) && login_entry(&name) {
         return Err("Login files must remain shared with the selected account".into());
@@ -908,6 +1135,10 @@ fn compare_files(source: &Path, home: &Path, name: &str) -> Result<StorageCompar
 fn prepare_files(source: &Path, home: &Path) -> Result<(), String> {
     let _lock = STORAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let (source, home) = storage_roots(source, home)?;
+    let share_hooks = hooks_shared(&home)?;
+    if !share_hooks {
+        prepare_isolated_hooks(&home)?;
+    }
     for name in STATE_NAMES {
         if std::fs::symlink_metadata(home.join(name)).is_ok_and(|m| m.file_type().is_symlink()) {
             return Err("Mono Codex state must remain in its private storage directory".into());
@@ -916,6 +1147,9 @@ fn prepare_files(source: &Path, home: &Path) -> Result<(), String> {
     for entry in std::fs::read_dir(&home).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
         let name = entry.file_name();
+        if !share_hooks && name.to_string_lossy().eq_ignore_ascii_case("hooks.json") {
+            continue;
+        }
         if private_entry(&name.to_string_lossy()) {
             continue;
         }
@@ -950,6 +1184,9 @@ fn prepare_files(source: &Path, home: &Path) -> Result<(), String> {
     for entry in std::fs::read_dir(&source).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
         let name = entry.file_name();
+        if !share_hooks && name.to_string_lossy().eq_ignore_ascii_case("hooks.json") {
+            continue;
+        }
         if private_entry(&name.to_string_lossy()) {
             continue;
         }
@@ -1100,10 +1337,7 @@ fn link_entry(source: &Path, target: &Path) -> Result<(), String> {
                         target.display()
                     ));
                 }
-                #[cfg(windows)]
-                rename_handle(&open_entry(&temp, true)?, target, false)?;
-                #[cfg(unix)]
-                rename_no_replace(&temp, target)?;
+                publish_new_entry(&temp, target)?;
                 claimed.discard()
             })();
             claimed.finish(result)
@@ -1190,6 +1424,11 @@ fn replaceable_link(path: &Path) -> Result<bool, String> {
     if metadata.is_file() {
         // A lone file may be private data or a detached former hardlink: preserve it.
         return Ok(file_info(path)?.nNumberOfLinks > 1);
+    }
+    #[cfg(unix)]
+    if metadata.is_file() {
+        use std::os::unix::fs::MetadataExt;
+        return Ok(metadata.nlink() > 1);
     }
     Ok(false)
 }
@@ -1800,6 +2039,9 @@ mod tests {
         std::fs::create_dir_all(fixture.home()).unwrap();
         std::fs::write(fixture.source().join(name), account).unwrap();
         std::fs::write(fixture.home().join(name), mono).unwrap();
+        if name.eq_ignore_ascii_case("hooks.json") {
+            opt_in_hooks(&fixture);
+        }
         let (source, home) = storage_roots(&fixture.source(), &fixture.home()).unwrap();
         let conflict = file_conflict(&source, &home, name).unwrap();
         (fixture, conflict)
@@ -1812,12 +2054,22 @@ mod tests {
             .collect()
     }
 
+    fn opt_in_hooks(fixture: &Fixture) {
+        std::fs::create_dir_all(fixture.home()).unwrap();
+        std::fs::write(
+            fixture.home().join(".monocode-hooks-policy.json"),
+            br#"{"shareHooks":true}"#,
+        )
+        .unwrap();
+    }
+
     #[test]
     fn storage_repair_atomic_source_replacement_detaches_hardlink_and_recovers_snapshot() {
         for name in ["hooks.json", "AGENTS.md", "config.toml"] {
             let fixture = Fixture::new();
             std::fs::create_dir_all(fixture.source()).unwrap();
             std::fs::create_dir_all(fixture.home()).unwrap();
+            opt_in_hooks(&fixture);
             let source = fixture.source().join(name);
             let target = fixture.home().join(name);
             std::fs::write(&source, b"tracked native bytes\0").unwrap();
@@ -2121,6 +2373,379 @@ mod tests {
             comparison.source_content.unwrap(),
             "<script>plain text</script>"
         );
+    }
+
+    #[test]
+    fn storage_hooks_default_creates_private_empty_file_without_sharing_account_hooks() {
+        let fixture = Fixture::new();
+        std::fs::create_dir_all(fixture.source()).unwrap();
+        std::fs::write(fixture.source().join("hooks.json"), b"account hooks").unwrap();
+        prepare_files(&fixture.source(), &fixture.home()).unwrap();
+        let target = fixture.home().join("hooks.json");
+        assert_eq!(std::fs::read(&target).unwrap(), br#"{"hooks":{}}"#);
+        assert!(!replaceable_link(&target).unwrap());
+        assert!(!same_entry(&fixture.source().join("hooks.json"), &target));
+        assert_eq!(
+            std::fs::read(fixture.source().join("hooks.json")).unwrap(),
+            b"account hooks"
+        );
+        assert!(!fixture.home().join(".monocode-conflicts").exists());
+    }
+
+    #[test]
+    fn storage_hooks_isolation_preserves_real_custom_hooks_and_ignores_corrupt_shared_snapshot() {
+        let fixture = Fixture::new();
+        std::fs::create_dir_all(fixture.source()).unwrap();
+        std::fs::create_dir_all(fixture.home()).unwrap();
+        std::fs::write(fixture.source().join("hooks.json"), b"account hooks").unwrap();
+        std::fs::write(fixture.home().join("hooks.json"), b"custom private hooks").unwrap();
+        let snapshot = snapshot_path(&fixture.home(), "hooks.json").unwrap();
+        std::fs::write(&snapshot, b"{broken").unwrap();
+        for _ in 0..2 {
+            prepare_files(&fixture.source(), &fixture.home()).unwrap();
+            assert_eq!(
+                std::fs::read(fixture.home().join("hooks.json")).unwrap(),
+                b"custom private hooks"
+            );
+            assert_eq!(std::fs::read(&snapshot).unwrap(), b"{broken");
+            assert!(!fixture.home().join(".monocode-conflicts").exists());
+        }
+    }
+
+    #[test]
+    fn storage_hooks_migrates_existing_symlink_and_hardlink_with_independent_real_archive() {
+        for hardlink in [false, true] {
+            let fixture = Fixture::new();
+            std::fs::create_dir_all(fixture.source()).unwrap();
+            std::fs::create_dir_all(fixture.home()).unwrap();
+            let account = fixture.source().join("hooks.json");
+            let target = fixture.home().join("hooks.json");
+            std::fs::write(&account, b"previous shared hooks").unwrap();
+            let account_id = entry_identity(&account).unwrap();
+            if hardlink {
+                std::fs::hard_link(&account, &target).unwrap();
+            } else {
+                create_link(&account, &target).unwrap();
+            }
+            prepare_files(&fixture.source(), &fixture.home()).unwrap();
+            assert_eq!(std::fs::read(&target).unwrap(), br#"{"hooks":{}}"#);
+            assert!(!replaceable_link(&target).unwrap());
+            assert_eq!(
+                saved_bytes(&fixture, "hooks.json"),
+                vec![b"previous shared hooks".to_vec()]
+            );
+            let archive = std::fs::read_dir(fixture.home().join(".monocode-conflicts"))
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap()
+                .path()
+                .join("hooks.json");
+            assert!(!std::fs::symlink_metadata(&archive)
+                .unwrap()
+                .file_type()
+                .is_symlink());
+            assert_ne!(entry_identity(&archive).unwrap(), account_id);
+            assert_eq!(entry_identity(&account).unwrap(), account_id);
+            std::fs::write(&account, b"later account hooks").unwrap();
+            assert_eq!(std::fs::read(&archive).unwrap(), b"previous shared hooks");
+            assert_eq!(std::fs::read(&target).unwrap(), br#"{"hooks":{}}"#);
+            prepare_files(&fixture.source(), &fixture.home()).unwrap();
+            assert_eq!(saved_bytes(&fixture, "hooks.json").len(), 1);
+        }
+    }
+
+    #[test]
+    fn storage_hooks_atomic_account_rewrites_never_change_or_block_isolated_hooks() {
+        let fixture = Fixture::new();
+        std::fs::create_dir_all(fixture.source()).unwrap();
+        std::fs::write(fixture.source().join("hooks.json"), b"account hooks").unwrap();
+        prepare_files(&fixture.source(), &fixture.home()).unwrap();
+        for content in [b"rewritten hooks".as_slice(), b"next account hooks"] {
+            let replacement = fixture.source().join("replacement");
+            std::fs::write(&replacement, content).unwrap();
+            replace_link(&replacement, &fixture.source().join("hooks.json")).unwrap();
+            prepare_files(&fixture.source(), &fixture.home()).unwrap();
+            assert_eq!(
+                std::fs::read(fixture.home().join("hooks.json")).unwrap(),
+                br#"{"hooks":{}}"#
+            );
+            assert_eq!(
+                std::fs::read(fixture.source().join("hooks.json")).unwrap(),
+                content
+            );
+        }
+    }
+
+    #[test]
+    fn storage_hooks_explicit_opt_in_shares_only_selected_account_home() {
+        let fixture = Fixture::new();
+        std::fs::create_dir_all(fixture.source()).unwrap();
+        std::fs::write(fixture.source().join("hooks.json"), b"account hooks").unwrap();
+        opt_in_hooks(&fixture);
+        prepare_files(&fixture.source(), &fixture.home()).unwrap();
+        assert!(same_entry(
+            &fixture.source().join("hooks.json"),
+            &fixture.home().join("hooks.json")
+        ));
+        let other_home = fixture.0.join("other-mono");
+        prepare_files(&fixture.source(), &other_home).unwrap();
+        assert_eq!(
+            std::fs::read(other_home.join("hooks.json")).unwrap(),
+            br#"{"hooks":{}}"#
+        );
+        assert!(!same_entry(
+            &fixture.source().join("hooks.json"),
+            &other_home.join("hooks.json")
+        ));
+    }
+
+    #[test]
+    fn storage_hooks_policy_getter_is_read_only_and_malformed_json_stays_isolated() {
+        let fixture = Fixture::new();
+        assert!(!hooks_shared(&fixture.home()).unwrap());
+        assert!(!fixture.home().exists());
+        std::fs::create_dir_all(fixture.home()).unwrap();
+        let policy = fixture.home().join(".monocode-hooks-policy.json");
+        for bytes in [b"{broken".as_slice(), br#"{"shareHooks":"true"}"#, b"{}"] {
+            std::fs::write(&policy, bytes).unwrap();
+            assert!(!hooks_shared(&fixture.home()).unwrap());
+            prepare_files(&fixture.source(), &fixture.home()).unwrap();
+            assert_eq!(std::fs::read(&policy).unwrap(), bytes);
+            assert_eq!(
+                std::fs::read(fixture.home().join("hooks.json")).unwrap(),
+                br#"{"hooks":{}}"#
+            );
+        }
+    }
+
+    #[test]
+    fn storage_hooks_policy_setter_applies_on_next_prepare_and_avoids_snapshot_name_collision() {
+        let fixture = Fixture::new();
+        std::fs::create_dir_all(fixture.source()).unwrap();
+        std::fs::write(fixture.source().join("hooks.json"), b"account hooks").unwrap();
+        std::fs::write(
+            fixture.source().join("hooks-policy"),
+            b"unrelated optional account file",
+        )
+        .unwrap();
+        prepare_files(&fixture.source(), &fixture.home()).unwrap();
+        set_hooks_shared(&fixture.home(), true).unwrap();
+        assert!(hooks_shared(&fixture.home()).unwrap());
+        assert_eq!(
+            std::fs::read(fixture.home().join("hooks.json")).unwrap(),
+            br#"{"hooks":{}}"#
+        );
+        prepare_files(&fixture.source(), &fixture.home()).unwrap();
+        assert!(hooks_shared(&fixture.home()).unwrap());
+        assert!(same_entry(
+            &fixture.source().join("hooks.json"),
+            &fixture.home().join("hooks.json")
+        ));
+        assert_eq!(
+            saved_bytes(&fixture, "hooks.json"),
+            vec![br#"{"hooks":{}}"#.to_vec()]
+        );
+        set_hooks_shared(&fixture.home(), false).unwrap();
+        assert!(same_entry(
+            &fixture.source().join("hooks.json"),
+            &fixture.home().join("hooks.json")
+        ));
+        prepare_files(&fixture.source(), &fixture.home()).unwrap();
+        assert_eq!(
+            std::fs::read(fixture.home().join("hooks.json")).unwrap(),
+            br#"{"hooks":{}}"#
+        );
+        assert_eq!(saved_bytes(&fixture, "hooks.json").len(), 2);
+        assert_eq!(
+            std::fs::read(fixture.source().join("hooks.json")).unwrap(),
+            b"account hooks"
+        );
+    }
+
+    #[test]
+    fn storage_hooks_opt_in_refreshes_prior_private_override_without_authorizing_custom_bytes() {
+        let (fixture, conflict) =
+            conflict_fixture("hooks.json", b"private hooks", b"account hooks");
+        resolve_files(
+            &fixture.source(),
+            &fixture.home(),
+            &conflict,
+            StorageResolution::KeepMonoVersion,
+        )
+        .unwrap();
+        set_hooks_shared(&fixture.home(), true).unwrap();
+        assert!(
+            read_snapshot(&fixture.home(), "hooks.json")
+                .unwrap()
+                .unwrap()
+                .private_override
+        );
+        set_hooks_shared(&fixture.home(), false).unwrap();
+        prepare_files(&fixture.source(), &fixture.home()).unwrap();
+        set_hooks_shared(&fixture.home(), true).unwrap();
+        let snapshot = read_snapshot(&fixture.home(), "hooks.json")
+            .unwrap()
+            .unwrap();
+        assert!(!snapshot.private_override && !snapshot.invalid && snapshot.fingerprint.is_empty());
+        let error = prepare_files(&fixture.source(), &fixture.home()).unwrap_err();
+        let fresh: StorageConflict = serde_json::from_str(&error).unwrap();
+        assert_eq!(
+            std::fs::read(fixture.home().join("hooks.json")).unwrap(),
+            b"private hooks"
+        );
+        assert!(!fixture.home().join(".monocode-conflicts").exists());
+        resolve_files(
+            &fixture.source(),
+            &fixture.home(),
+            &fresh,
+            StorageResolution::UseAccountVersion,
+        )
+        .unwrap();
+        assert_eq!(
+            saved_bytes(&fixture, "hooks.json"),
+            vec![b"private hooks".to_vec()]
+        );
+    }
+
+    #[test]
+    fn storage_hooks_isolation_claim_preserves_concurrent_custom_file() {
+        let fixture = Fixture::new();
+        std::fs::create_dir_all(fixture.source()).unwrap();
+        std::fs::create_dir_all(fixture.home()).unwrap();
+        let account = fixture.source().join("hooks.json");
+        let target = fixture.home().join("hooks.json");
+        std::fs::write(&account, b"account hooks").unwrap();
+        create_link(&account, &target).unwrap();
+        let racing_target = target.clone();
+        synchronized_claim_writer(move || {
+            std::fs::remove_file(&racing_target).unwrap();
+            std::fs::write(racing_target, b"concurrent private custom hooks").unwrap();
+        });
+        prepare_files(&fixture.source(), &fixture.home()).unwrap();
+        assert_eq!(
+            std::fs::read(target).unwrap(),
+            b"concurrent private custom hooks"
+        );
+        assert_eq!(std::fs::read(account).unwrap(), b"account hooks");
+        assert!(!fixture.home().join(".monocode-conflicts").exists());
+    }
+
+    #[test]
+    fn storage_hooks_isolated_resolution_rejects_stale_choices_and_actual_windows_alias() {
+        let (fixture, conflict) =
+            conflict_fixture("hooks.json", b"private hooks", b"account hooks");
+        set_hooks_shared(&fixture.home(), false).unwrap();
+        let mut names = vec!["hooks.json".to_owned()];
+        #[cfg(windows)]
+        names.push(short_name(&fixture.home().join("hooks.json")));
+        for name in names {
+            for resolution in [
+                StorageResolution::UseAccountVersion,
+                StorageResolution::KeepMonoVersion,
+            ] {
+                let mut stale: StorageConflict =
+                    serde_json::from_value(serde_json::to_value(&conflict).unwrap()).unwrap();
+                stale.entry = name.clone();
+                let error = resolve_files(&fixture.source(), &fixture.home(), &stale, resolution)
+                    .unwrap_err();
+                assert!(error.contains("hooks are isolated"), "{error}");
+            }
+        }
+        prepare_files(&fixture.source(), &fixture.home()).unwrap();
+        assert_eq!(
+            std::fs::read(fixture.home().join("hooks.json")).unwrap(),
+            b"private hooks"
+        );
+        assert_eq!(
+            std::fs::read(fixture.source().join("hooks.json")).unwrap(),
+            b"account hooks"
+        );
+        assert!(!fixture.home().join(".monocode-conflicts").exists());
+    }
+
+    #[test]
+    fn storage_hooks_dangling_link_is_retained_with_actionable_error() {
+        let fixture = Fixture::new();
+        std::fs::create_dir_all(fixture.source()).unwrap();
+        std::fs::create_dir_all(fixture.home()).unwrap();
+        let missing = fixture.0.join("missing-hooks");
+        let target = fixture.home().join("hooks.json");
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_file(&missing, &target).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&missing, &target).unwrap();
+        let error = prepare_files(&fixture.source(), &fixture.home()).unwrap_err();
+        assert!(
+            error.contains("Could not read linked Mono hooks") && error.contains("preserved"),
+            "{error}"
+        );
+        assert!(std::fs::symlink_metadata(&target)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert!(!missing.exists());
+        assert!(!fixture.home().join(".monocode-conflicts").exists());
+    }
+
+    #[test]
+    fn storage_hooks_policy_rejects_linked_metadata_without_modifying_referent() {
+        for hardlink in [false, true] {
+            let fixture = Fixture::new();
+            std::fs::create_dir_all(fixture.home()).unwrap();
+            let outside = fixture.0.join("outside-policy");
+            let policy = fixture.home().join(".monocode-hooks-policy.json");
+            std::fs::write(&outside, br#"{"shareHooks":true}"#).unwrap();
+            if hardlink {
+                std::fs::hard_link(&outside, &policy).unwrap();
+            } else {
+                #[cfg(windows)]
+                std::os::windows::fs::symlink_file(&outside, &policy).unwrap();
+                #[cfg(unix)]
+                std::os::unix::fs::symlink(&outside, &policy).unwrap();
+            }
+            assert!(hooks_shared(&fixture.home()).is_err());
+            assert!(set_hooks_shared(&fixture.home(), false).is_err());
+            assert_eq!(std::fs::read(outside).unwrap(), br#"{"shareHooks":true}"#);
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn storage_hooks_busy_symlink_referent_and_hardlink_preserve_all_bytes() {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        };
+        for hardlink in [false, true] {
+            let fixture = Fixture::new();
+            std::fs::create_dir_all(fixture.source()).unwrap();
+            std::fs::create_dir_all(fixture.home()).unwrap();
+            let account = fixture.source().join("hooks.json");
+            let target = fixture.home().join("hooks.json");
+            std::fs::write(&account, b"busy shared hooks").unwrap();
+            if hardlink {
+                std::fs::hard_link(&account, &target).unwrap();
+            } else {
+                create_link(&account, &target).unwrap();
+            }
+            let mut writer = std::fs::OpenOptions::new()
+                .write(true)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+                .open(&account)
+                .unwrap();
+            assert!(prepare_files(&fixture.source(), &fixture.home()).is_err());
+            assert_eq!(std::fs::read(&target).unwrap(), b"busy shared hooks");
+            assert!(!fixture.home().join(".monocode-conflicts").exists());
+            writer.write_all(b"new account hooks").unwrap();
+            drop(writer);
+            prepare_files(&fixture.source(), &fixture.home()).unwrap();
+            assert_eq!(
+                saved_bytes(&fixture, "hooks.json"),
+                vec![b"new account hooks".to_vec()]
+            );
+            assert_eq!(std::fs::read(target).unwrap(), br#"{"hooks":{}}"#);
+        }
     }
 
     fn synchronized_claim_writer(writer: impl FnOnce() + Send + 'static) {
@@ -2729,6 +3354,7 @@ mod tests {
     #[test]
     fn link_safety_relinks_backup_hardlinks_between_homes() {
         let fixture = Fixture::new();
+        opt_in_hooks(&fixture);
         let other = fixture.0.join("other-account");
         for (source, content) in [(&other, "old hooks"), (&fixture.source(), "new hooks")] {
             std::fs::create_dir_all(source).unwrap();
@@ -2765,6 +3391,7 @@ mod tests {
     #[test]
     fn link_safety_optional_real_conflicts_are_preserved_and_do_not_block() {
         let fixture = Fixture::new();
+        opt_in_hooks(&fixture);
         std::fs::create_dir_all(fixture.source()).unwrap();
         std::fs::create_dir_all(fixture.home()).unwrap();
         for name in ["hooks.json.bak", "models_cache.json", "cache"] {
@@ -2809,6 +3436,7 @@ mod tests {
         use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE};
         for name in ["hooks.json.bak", "hooks.json"] {
             let fixture = Fixture::new();
+            opt_in_hooks(&fixture);
             let other = fixture.0.join("other-account");
             std::fs::create_dir_all(&other).unwrap();
             std::fs::create_dir_all(fixture.source()).unwrap();

@@ -147,7 +147,7 @@ it("streams each open Mono on transcript commits without waiting for a poll", as
   await act(async () => root.render(createElement(Harness, { sessions })));
   expect(native.invoke).toHaveBeenCalledExactlyOnceWith("mono_chat_publish", {
     monoId: "first",
-    session: { ...sessions[0], monoLiveState: { status: "working", activity: "Thinking", teamWorking: 1 } },
+    session: { ...sessions[0], monoLiveState: { status: "working", activity: "Thinking", liveState: { status: "thinking", detail: "Thinking" }, teamWorking: 1 } },
   });
 });
 

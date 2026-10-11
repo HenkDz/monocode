@@ -11,11 +11,7 @@ import {
   resolveTabGroupMascot,
   TAB_GROUP_COLORS,
 } from "../../workspace/model/tabGroups";
-import {
-  hasPendingApproval,
-  type Block,
-  type Session,
-} from "../../sessions/model/session";
+import { agentLiveStateLabel, selectAgentLiveState, type AgentLiveSession, type AgentLiveState, type AgentLiveContext } from "../../agents/model/agentLiveState";
 import {
   PROJECT_MASCOTS,
   projectMascot,
@@ -706,24 +702,12 @@ export function monoProjectsPhrase(projects: readonly MonoProject[]): string {
   return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
 
-/** Plain one-line take on a step's title, for the Mono's status. */
-function plainLine(text: string): string {
-  return text
-    .replace(/```[\s\S]*?```/g, " ")
-    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
-    .replace(/^\s*(?:#{1,6}|>)\s*/gm, "")
-    .replace(/[`*_]/g, "")
-    .replace(/^\s*[-\d.]+\s+/gm, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
 /** What the agent is doing right now, as the Monos roster shows it. */
 export type MonoStatus = "working" | "needs-you" | "idle";
 
 export type MonoState = {
   status: MonoStatus;
-  storageBlocked?: boolean;
+  liveState?: AgentLiveState;
   /** Short present-tense note while working or waiting. */
   activity?: string;
   /** Descendant activity does not make this Mono busy. */
@@ -738,65 +722,18 @@ export const MONO_STATUS_LABEL: Record<MonoStatus, string> = {
 };
 
 export const monoStatusLabel = (state: MonoState) =>
-  state.storageBlocked ? "Blocked · storage" : `${MONO_STATUS_LABEL[state.status]}${state.status === "needs-you" && state.attentionLocation ? ` · in ${state.attentionLocation}` : ""}`;
+  `${state.liveState && !["thinking", "running-tool", "needs-you"].includes(state.liveState.status) ? agentLiveStateLabel(state.liveState) : MONO_STATUS_LABEL[state.status]}${state.status === "needs-you" && state.attentionLocation ? ` · in ${state.attentionLocation}` : ""}`;
+
+export const monoLiveStatusLabel = (state: MonoState) => state.attentionLocation
+  ? monoStatusLabel(state) : state.liveState ? agentLiveStateLabel(state.liveState) : monoStatusLabel(state);
 
 export const monoTeamWorkingLabel = (state: MonoState) =>
   state.teamWorking ? `${state.teamWorking} working below` : undefined;
 
 /** The agent's state, with the step it is on or the call it is waiting for. */
-export function monoState(
-  session: Pick<
-    Session,
-    "blocks" | "busy" | "pendingQuestion" | "worktreeRemoved" | "usageLimit" | "codexStorageError"
-  >,
-): MonoState {
-  const { blocks, pendingQuestion: question } = session;
-  if (!session.worktreeRemoved && session.codexStorageError) {
-    return { status: "needs-you", storageBlocked: true };
-  }
-  if (!session.worktreeRemoved && question) {
-    return {
-      status: "needs-you",
-      activity: question.title?.trim() || question.questions[0]?.prompt.trim(),
-    };
-  }
-  if (!session.worktreeRemoved && hasPendingApproval(blocks)) {
-    const approval = latest(
-      blocks,
-      (block) => !!block.approval && !block.approval.decided,
-    );
-    return {
-      status: "needs-you",
-      activity: approval?.tool?.title
-        ? `Approve ${plainLine(approval.tool.title)}`
-        : "Waiting for approval",
-    };
-  }
-  if (!session.worktreeRemoved && session.usageLimit) {
-    return { status: "needs-you", activity: "Usage limit reached" };
-  }
-  if (!session.busy) return { status: "idle" };
-  const last = blocks[blocks.length - 1];
-  if (last?.role === "assistant" && !last.tool && last.streaming) {
-    return { status: "working", activity: "Writing a reply" };
-  }
-  // Only a step from the current turn says what it is doing now.
-  for (let i = blocks.length - 1; i >= 0; i--) {
-    const block = blocks[i];
-    if (block.role === "user") break;
-    if (block.tool?.title) {
-      return { status: "working", activity: plainLine(block.tool.title) };
-    }
-  }
-  return { status: "working", activity: "Thinking" };
-}
-
-function latest(
-  blocks: readonly Block[],
-  match: (block: Block) => boolean,
-): Block | undefined {
-  for (let i = blocks.length - 1; i >= 0; i--) {
-    if (match(blocks[i])) return blocks[i];
-  }
-  return undefined;
+export function monoState(session?: AgentLiveSession, context?: AgentLiveContext): MonoState {
+  const liveState = selectAgentLiveState(session, context);
+  const status = ["thinking", "running-tool", "compacting"].includes(liveState.status) ? "working"
+    : ["blocked", "failed", "needs-you"].includes(liveState.status) ? "needs-you" : "idle";
+  return { status, liveState, ...(liveState.detail ? { activity: liveState.detail } : {}) };
 }

@@ -127,6 +127,26 @@ describe("Pi live session", () => {
     await stopPiSession("pi-compact");
   });
 
+  it("normalizes compaction boundaries and completed model usage without counting partial updates", async () => {
+    const events: HarnessEvent[] = [];
+    await compactPiContext({ sessionId: "pi-metrics", cwd: "/repo", model: "pi:default",
+      runtimeMode: "supervised", onEvent: event => events.push(event) });
+    const frame = mocks.frames[0]!;
+    frame({ type: "compaction_start" });
+    frame({ type: "compaction_end" });
+    frame({ type: "message_update", assistantMessageEvent: { partial: { usage: { input: 100, output: 10 } } } });
+    frame({ type: "message_end", message: { role: "assistant", timestamp: 1_000,
+      usage: { input: 100, output: 20, cacheRead: 80 } } });
+    expect(events.filter(event => event.type === "turn.compaction")).toEqual([
+      { type: "turn.compaction", phase: "started" }, { type: "turn.compaction", phase: "completed" },
+    ]);
+    expect(events.filter(event => event.type === "turn.metrics")).toEqual([
+      { type: "turn.metrics", modelCallId: "pi:1000", inputTokens: 100, outputTokens: 20,
+        cacheReadTokens: 80, cacheHitPercent: 80 / 180 * 100 },
+    ]);
+    await stopPiSession("pi-metrics");
+  });
+
   it("publishes readable Ponytail status and extension notifications", async () => {
     const events: HarnessEvent[] = [];
     await compactPiContext({

@@ -490,6 +490,10 @@ export function mapCodexNotification(
     return mapTokenUsage(rec);
   }
 
+  if (method === "thread/compacted") {
+    return { events: [{ type: "turn.compaction", phase: "completed", legacy: true }] };
+  }
+
   if (method === "turn/started") {
     const turn = asRecord(rec.turn);
     const turnId = stringField(turn, "id");
@@ -570,6 +574,12 @@ function mapTokenUsage(rec: Record<string, unknown>): MappedCodexNotification {
   const cacheReadTokens = numberField(last, "cachedInputTokens");
   const cacheWriteTokens = numberField(last, "cacheWriteInputTokens");
   const outputTokens = numberField(last, "outputTokens");
+  const total = asRecord(usage?.total);
+  const modelCallId = numberField(total, "totalTokens") > 0
+    ? ["totalTokens", "inputTokens", "cachedInputTokens", "outputTokens"]
+      .map(key => numberField(total, key)).join(":")
+    : undefined;
+  const providerTurnId = stringField(rec, "turnId");
   const cacheReported =
     "cachedInputTokens" in last || "cacheWriteInputTokens" in last;
   const metrics: TurnMetrics = {
@@ -597,7 +607,10 @@ function mapTokenUsage(rec: Record<string, unknown>): MappedCodexNotification {
             },
           ]
         : []),
-      ...(hasMetrics ? [{ type: "turn.metrics" as const, ...metrics }] : []),
+      ...(hasMetrics ? [{ type: "turn.metrics" as const, ...metrics,
+        ...(modelCallId ? { modelCallId } : {}),
+        ...(providerTurnId ? { providerTurnId } : {}),
+      }] : []),
     ],
   };
 }
@@ -653,6 +666,11 @@ function mapItemLifecycle(
   if (!callId) return { events: [] };
   const itemType = stringField(item, "type") ?? "";
   const completed = method === "item/completed";
+
+  if (itemType === "contextCompaction") {
+    return { events: [{ type: "turn.compaction", id: callId,
+      phase: completed ? "completed" : "started" }] };
+  }
 
   if (SILENT_ITEM_TYPES.has(itemType)) {
     return { events: [] };

@@ -5,7 +5,9 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import { formatLiveElapsed } from "../../sessions/model/liveAgents";
+import { selectAgentLiveState } from "../../agents/model/agentLiveState";
+import { selectTaskMetrics } from "../../agents/model/agentMetrics";
+import { TaskMetricsLine } from "../../agents/ui/TaskMetricsLine";
 import { listMonos, monoLook, monoState } from "../model/mono";
 import { ArtifactText } from "../../artifacts/ui/ArtifactReference";
 import {
@@ -165,10 +167,6 @@ export function MonoTeamActivity({
     const dispatch = run.dispatches?.find(
       (d) => d.id === (task.activeDispatchId ?? task.lastDispatchId),
     );
-    const turn = session?.blocks.find(
-      (block) => block.role === "user" && block.startedAt !== undefined,
-    );
-    const startedAt = dispatch?.startedAt ?? turn?.startedAt;
     const ready = section === "Ready to merge";
     const title = activityTaskTitle(
       task,
@@ -252,18 +250,13 @@ export function MonoTeamActivity({
               monoId={task.memberId ?? run.ownerMonoId}
             />
           </p>
-          {startedAt !== undefined && (
-            <span className="shrink-0">
-              {formatLiveElapsed(
-                startedAt,
-                task.status === "running"
-                  ? now
-                  : (dispatch?.updatedAt ??
-                      startedAt + (turn?.durationMs ?? 0)),
-              )}
-            </span>
-          )}
         </div>
+        <TaskMetricsLine
+          metrics={selectTaskMetrics(task, run.dispatches ?? [], sessions, now)}
+          state={selectAgentLiveState(session, { task, tasks: run.tasks, runStatus: run.status })}
+          startedAt={dispatch?.turnStartedAt ?? dispatch?.startedAt}
+          endedAt={dispatch?.finishedAt ?? (!["running", "queued", "cancelling"].includes(task.status) ? dispatch?.updatedAt : undefined)}
+        />
         {entry.decisions.map(decision)}
       </article>
     );

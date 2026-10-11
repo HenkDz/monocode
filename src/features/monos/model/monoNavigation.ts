@@ -1,6 +1,6 @@
-import { findMono, monoForSession, monoState, type Mono, type MonoStatus, type MonoState } from "./mono";
+import { findMono, monoForSession, monoState, type Mono, type MonoState } from "./mono";
 import type { Session } from "../../sessions/model/session";
-import { activityTaskEvent, orgDescendants, teamDecisions } from "./monoTeamActivity";
+import { orgDescendants, teamDecisions } from "./monoTeamActivity";
 import type { OrchestrationRun } from "../../orchestration/model/orchestrationState";
 import { projectName } from "../../../shared/lib/paths";
 
@@ -28,38 +28,15 @@ export function memberTasks(runs: readonly OrchestrationRun[], memberId: string)
   }))).sort((a, b) => b.started - a.started || b.order - a.order).map(entry => entry.task);
 }
 
-/** Current work wins over historical failures; completed work is no longer busy. */
-export function memberAvailability(
-  tasks: ReturnType<typeof memberTasks>,
-  attention: ReadonlySet<string> = new Set(),
-  busy: ReadonlySet<string> = new Set(),
-  memberSessionId?: string,
-): MonoStatus {
-  const active = tasks.filter(task => ["queued", "running", "cancelling"].includes(task.status));
-  const current = active.length ? active : tasks.slice(0, 1);
-  if ((memberSessionId && attention.has(memberSessionId)) || current.some(task =>
-    attention.has(task.sessionId) || ["blocked", "failed", "interrupted"].includes(task.status),
-  )) return "needs-you";
-  if ((memberSessionId && busy.has(memberSessionId)) || current.some(task =>
-    busy.has(task.sessionId) || ["running", "cancelling"].includes(task.status),
-  )) return "working";
-  return "idle";
-}
-
 export function memberMonoState(runs: readonly OrchestrationRun[], memberId: string, sessions: readonly Session[], memberSessionId?: string): MonoState {
   const tasks = memberTasks(runs, memberId);
   const task = tasks.find(t => ["queued", "running", "cancelling"].includes(t.status)) ?? tasks[0];
   const session = sessions.find(s => s.id === memberSessionId);
   const own = session && monoState(session);
-  const worker = task && sessions.find(s => s.id === task.sessionId);
-  const workerState = worker && monoState(worker);
-  if (own?.storageBlocked) return own;
-  if (workerState?.storageBlocked) return workerState;
-  const attention = new Set(sessions.filter(s => monoState(s).status === "needs-you").map(s => s.id));
-  const busy = new Set(sessions.filter(s => monoState(s).status === "working").map(s => s.id));
-  const status = memberAvailability(tasks, attention, busy, memberSessionId);
-  const activity = own?.status === status && own.activity ? own.activity : task ? activityTaskEvent(task, worker) : undefined;
-  return { status, ...(status !== "idle" && activity ? { activity } : {}) };
+  const worker = monoState(sessions.find(s => s.id === task?.sessionId), { task, tasks });
+  if (own?.status === "needs-you" || worker.status === "needs-you") return own?.status === "needs-you" ? own : worker;
+  if (own && own.liveState?.status !== "idle") return own;
+  return worker;
 }
 
 /** Own work controls the pulse; only attention rolls up from the team. */
@@ -70,9 +47,14 @@ export function monoLiveState(roster: readonly Mono[], runs: readonly Orchestrat
   const decisions = teamDecisions(roster, sessions, runs, monoId).filter(decision => decision.owner.archivedAt == null);
   const states = roster.filter(entry => scope.has(entry.id) && entry.archivedAt == null).map(entry => {
     const session = sessions.find(value => value.id === entry.sessionId);
-    const state = entry.role === "member" ? memberMonoState(runs, entry.id, sessions, entry.sessionId) : session ? monoState(session) : { status: "idle" as const };
+    const owned = runs.filter(run => run.ownerMonoId === entry.id || !!entry.sessionId && run.ownerSessionId === entry.sessionId);
+    const state = entry.role === "member" ? memberMonoState(runs, entry.id, sessions, entry.sessionId) : monoState(session, {
+      tasks: owned.flatMap(run => run.tasks),
+      runStatus: owned.find(run => run.status === "paused")?.status ?? owned.find(run => run.status === "active")?.status ?? owned[0]?.status,
+      pauseReason: owned.find(run => run.status === "paused")?.lastPauseReason,
+    });
     const decision = decisions.find(value => value.owner.id === entry.id);
-    return { mono: entry, state: decision ? { ...state, status: "needs-you" as const, activity: decision.resume?.reason ?? state.activity } : state };
+    return { mono: entry, state: decision ? { ...state, status: "needs-you" as const, liveState: { status: "needs-you" as const, reason: "decision" as const, detail: decision.resume?.reason ?? state.activity }, activity: decision.resume?.reason ?? state.activity } : state };
   });
   const own = states.find(entry => entry.mono.id === monoId)!.state;
   const below = states.filter(entry => entry.mono.id !== monoId);
@@ -84,7 +66,7 @@ export function monoLiveState(roster: readonly Mono[], runs: readonly Orchestrat
     ...own,
     ...(teamWorking ? { teamWorking } : {}),
     ...(attention ? { status: "needs-you", attentionLocation: location ? projectName(location) : attention.mono.name ?? attention.mono.id,
-      activity: attention.state.activity } : {}),
+      liveState: attention.state.liveState, activity: attention.state.activity } : {}),
   };
 }
 

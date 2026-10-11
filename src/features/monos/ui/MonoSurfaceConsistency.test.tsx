@@ -104,7 +104,7 @@ it("keeps sidebar, title, centered header and org nodes consistent on start, att
       expect(host.querySelector("[data-mono-title]")?.textContent).toContain(label);
       expect(host.querySelector("header")?.textContent).toContain(label);
       expect(host.querySelector('[data-org-member="o"]')?.firstElementChild?.textContent).toContain(label);
-      expect(host.querySelector('[aria-label="Open project manager"]')?.textContent).toContain(MONO_STATUS_LABEL[status]);
+      expect(host.querySelector('[aria-label="Open project manager"]')?.textContent).toContain(status === "working" ? "Thinking" : MONO_STATUS_LABEL[status]);
       expect(host.querySelector(`[aria-label="GRAND ORCH, ${label}${status === "working" ? ", 1 working below" : ""}"]`)).not.toBeNull();
       if (status === "working") {
         expect(host.querySelector("[data-mono-title]")?.textContent).toContain("1 working below");

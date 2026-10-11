@@ -3,6 +3,7 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { SearchableProjectPicker } from "./SearchableProjectPicker";
+import { monoState, type MonoState } from "../../monos/model/mono";
 
 let root: Root;
 let container: HTMLElement;
@@ -24,7 +25,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function render(activeId?: string) {
+function render(activeId?: string, state?: MonoState) {
   const onSelectProject = vi.fn();
   const onOpen = vi.fn();
   act(() =>
@@ -35,7 +36,7 @@ function render(activeId?: string) {
         compact: true,
         onSelectProject,
         monos: {
-          items: [{ id: "m1", name: "MonoCat", mascot: "cat", color: "#fff" }],
+          items: [{ id: "m1", name: "MonoCat", mascot: "cat", color: "#fff", state }],
           activeId,
           onOpen,
         },
@@ -66,4 +67,16 @@ it("shows the open mono, and lets the current project lead back out of it", () =
   )!;
   act(() => project.click());
   expect(onSelectProject).toHaveBeenCalledWith("/code/app");
+});
+
+it("keeps blocked and preparing Monos honest in the compact picker trigger", () => {
+  for (const [patch, label] of [
+    [{ codexStorageError: "Repair AGENTS.md" }, "Blocked · storage"],
+    [{ codexStoragePreparing: true }, "Queued · waiting for storage"],
+  ] as const) {
+    const { trigger } = render("m1", monoState({ blocks: [], queuedMessages: [{ id: "q", text: "review", attachments: [] }], ...patch }));
+    expect(trigger.getAttribute("aria-label")).toContain(label);
+    expect(trigger.title).toContain(label);
+    expect(trigger.getAttribute("aria-label")).not.toContain("Idle");
+  }
 });

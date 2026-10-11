@@ -4,7 +4,9 @@ import ts from "typescript";
 import { newSession, type Block, type Session } from "../model/session";
 import { isMonoSession } from "../../monos/model/mono";
 import { appendMonoGoalCard, appendMonoGoalOrigin, type MonoGoalSubmission } from "../../monos/model/monoGoalRouting";
-import type { MonoManagerGoal } from "../../monos/model/monoManagerGoals";
+import { MonoManagerGoals, type MonoManagerGoal } from "../../monos/model/monoManagerGoals";
+import { archiveMonoConversation } from "../../monos/model/monoArchive";
+import { canDispatchQueuedHead } from "../model/messageQueue";
 import { getMonoGoalRecoveryBlocks, mergeMonoGoalRecoverySession, monoGoalRecoveryLiveSession } from "./monoGoalRecovery";
 
 const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }));
@@ -265,4 +267,89 @@ it("repeated recovery leaves exactly one historical origin and one historical ro
   expect(f.writes).toHaveLength(1);
   expect(f.disk().filter(block => block.id === submission.userMessageId)).toHaveLength(1);
   expect(f.disk().filter(block => block.id === `route-${submission.userMessageId}`)).toHaveLength(1);
+});
+
+it("the App archive callback preserves an acknowledged goal delivered while cancellation waits", async () => {
+  const f = fixture("absent");
+  const ref = { current: [(await getSession(f.session.id))!] };
+  const app = readFileSync("src/app/App.tsx", "utf8");
+  const source = ts.createSourceFile("App.tsx", app, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  let archive: ts.Expression | undefined;
+  let delivery: ts.Expression | undefined;
+  const deliveryStart = app.indexOf("    deliver: async (goal, message, receiptId, cancel)");
+  const deliveryEnd = app.indexOf("  const goalRoutingForMono", deliveryStart);
+  function visit(node: ts.Node) {
+    if (ts.isCallExpression(node) && node.expression.getText(source) === "archiveProjectMonos") archive = node.arguments[2];
+    if (ts.isPropertyAssignment(node) && node.name.getText(source) === "deliver" &&
+        node.getStart(source) >= deliveryStart && node.end < deliveryEnd) delivery = node.initializer;
+    ts.forEachChild(node, visit);
+  }
+  visit(source);
+  expect(archive).toBeDefined();
+  expect(delivery).toBeDefined();
+  const code = (expression: ts.Expression) => ts.transpileModule(`return ${expression.getText(source)};`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  let releaseHydrate!: () => void;
+  let hydrationStarted = false;
+  const hydrationGate = new Promise<void>(resolve => { releaseHydrate = resolve; });
+  const manager = { id: "atlas-manager", role: "manager", projects: ["C:/synthetic/Atlas"],
+    sessionId: f.session.id, reportsTo: "grand", archivedAt: undefined as number | undefined };
+  const grand = { id: "grand", role: "orchestrator", projects: ["C:/synthetic/Atlas"] };
+  const project = { id: goal.projectId, folder: "C:/synthetic/Atlas", name: "Atlas", managerId: goal.managerId,
+    managerMonoId: manager.id, managerExists: true, running: 0, needsDecision: 0, ready: 0, blocked: [], goals: [] };
+  const engine = { run: () => ({ ownerMonoId: manager.id }), registerMonoEngine: () => {},
+    hydrate: async () => { hydrationStarted = true; await hydrationGate; } };
+  const deliver = new Function("findMono", "managerGoalHost", "listMonos", "projectKey", "remoteProjectFor", "orchestrator",
+    "dedicatedMono", "ensureProjectManager", "sessionsRef", "adoptManagerMono", "assertDirectReport", "ensureMonoSession",
+    "homeDir", "ensureOpenSession", "saveMonoPermissions", "newDefaultSession", "sessionDefaults", "setSessions",
+    "monoEngineId", "monoLook", "upsertSession", code(delivery!))(
+    (id: string) => id === grand.id ? grand : manager.archivedAt == null ? manager : undefined,
+    { current: { projects: async () => [project] } }, () => [grand, manager], (text: string) => text.toLowerCase(),
+    () => undefined, engine, () => manager, () => { throw Error("No Manager creation expected"); }, ref,
+    () => manager, () => {}, async () => ref.current[0], "synthetic", () => ref.current[0], () => {}, () => {}, {}, () => {},
+    async () => goal.managerId, () => ({ name: "Grand", mascot: "g", color: "#123456" }), exactSessionWrite(ref),
+  );
+  const ledger = new MonoManagerGoals({ load: async () => null, save: async () => {} });
+  const host = { mayDelegate: () => true, projects: async () => [{ ...project, managerExists: manager.archivedAt == null }],
+    status: async () => ({}), ready: async () => [], deliver };
+  const incoming = ledger.handle("grand", { kind: "user", messageId: submission.userMessageId }, "archive-request",
+    "goals.assign", { projectId: goal.projectId, goal: "Synthetic original routed goal" }, host,
+    { managerMonoId: manager.id, projectId: goal.projectId, managerId: goal.managerId, reason: "Exact project name",
+      override: "auto", sourceUserMessageId: submission.userMessageId });
+  await vi.waitFor(() => expect(hydrationStarted).toBe(true));
+  manager.archivedAt = 1;
+  let releaseCancel!: () => void;
+  let cancelStarted = false;
+  const cancelGate = new Promise<void>(resolve => { releaseCancel = resolve; });
+  const stop = new Function("sessionsRef", "getSession", "turnGen", "sessionChildHarnesses", "cancelHarnessTurn",
+    "archiveMonoConversation", "upsertSession", "persistSession", code(archive!))(
+    ref, getSession, { current: new Map() }, () => ["codex"], async () => { cancelStarted = true; await cancelGate; },
+    archiveMonoConversation, exactSessionWrite(ref), exactOrdinaryPersist(ref, ref.current[0]),
+  );
+  const stopping = stop(f.session.id);
+  await vi.waitFor(() => expect(cancelStarted).toBe(true));
+  releaseHydrate();
+  await incoming;
+  const receiptId = "mono-goal-grand-archive-request";
+  expect(f.writes.at(-1).session.queuedMessages.some((message: { id: string }) => message.id === receiptId)).toBe(true);
+  expect(ledger.deliveryPending("grand", "archive-request")).toBe(false);
+  releaseCancel();
+  await stopping;
+  await flushSessionWrites();
+  const beforeRecover = f.writes.length;
+  manager.archivedAt = undefined;
+  await ledger.recover("grand", host);
+  expect(f.writes).toHaveLength(beforeRecover);
+  console.log("CC5CH archive receipt", JSON.stringify({ writes: f.writes.length,
+    queue: ref.current[0].queuedMessages?.map(message => message.id) ?? [],
+    persistedQueue: f.writes.at(-1).session.queuedMessages?.map((message: { id: string }) => message.id) ?? [],
+    queueStatus: ref.current[0].queueStatus, deliveryPending: ledger.deliveryPending("grand", "archive-request") }));
+  for (const session of [ref.current[0], f.writes.at(-1).session]) {
+    expect((session.queuedMessages ?? []).filter((message: { id: string }) => message.id === receiptId)).toHaveLength(1);
+    expect(session.queueStatus).toBe("paused");
+    expect(canDispatchQueuedHead(session)).toBe(false);
+  }
+  expect(ref.current[0]).toMatchObject({ busy: false, turnReady: false });
+  expect(ledger.goals("grand")[0].state).toBe("queued");
 });

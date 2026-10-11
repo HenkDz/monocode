@@ -23,7 +23,11 @@ export function mergeMonoGoalRecoverySession(live: Session, history: readonly Bl
   let start = firstId ? history.findIndex(block => block.id === firstId) : history.length;
   if (start < 0 && live.monoTranscript?.firstBlockId == null) start = history.length;
   if (start < 0) throw Error("The originating transcript changed during recovery");
-  const blocks = [...history.slice(0, start), ...live.blocks];
+  const liveIds = new Set(live.blocks.map(block => block.id));
+  // A committed goal may be absent from the live tail after its save acknowledgement failed.
+  const retainedOrigins = history.slice(start).filter(block =>
+    block.role === "user" && block.monoGoalSubmission && !liveIds.has(block.id));
+  const blocks = [...history.slice(0, start), ...live.blocks, ...retainedOrigins];
   if (new Set(blocks.map(block => block.id)).size !== blocks.length)
     throw Error("Goal recovery would duplicate a historical message identity");
   return { ...live, blocks,
@@ -33,6 +37,10 @@ export function mergeMonoGoalRecoverySession(live: Session, history: readonly Bl
 export function monoGoalRecoveryLiveSession(live: Session, next: Session, previousHistory: readonly Block[]): Session {
   const historicalIds = new Set(previousHistory.map(block => block.id));
   const liveIds = new Set(live.blocks.map(block => block.id));
+  const firstId = live.monoTranscript?.firstBlockId ?? live.blocks[0]?.id;
+  const start = firstId ? previousHistory.findIndex(block => block.id === firstId) : previousHistory.length;
+  const retainedOriginIds = new Set(previousHistory.slice(Math.max(0, start)).filter(block =>
+    block.role === "user" && block.monoGoalSubmission).map(block => block.id));
   return { ...next, monoTranscript: live.monoTranscript,
-    blocks: next.blocks.filter(block => liveIds.has(block.id) || !historicalIds.has(block.id)) };
+    blocks: next.blocks.filter(block => liveIds.has(block.id) || !historicalIds.has(block.id) || retainedOriginIds.has(block.id)) };
 }

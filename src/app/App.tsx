@@ -6754,10 +6754,7 @@ function Workspace({
           turnGen.current.set(id, (turnGen.current.get(id) ?? 0) + 1);
           await Promise.all(sessionChildHarnesses(session).map((child) => cancelHarnessTurn(child, id)));
           // Pending goal receipts must not restart a restored team without explicit Resume.
-          const stopped = archiveMonoConversation(session);
-          sessionsRef.current = sessionsRef.current.map((entry) => entry.id === id ? stopped : entry);
-          await upsertSession(stopped);
-          persistSession(stopped);
+          await upsertSession(session, archiveMonoConversation);
         });
         // Removing a managed project is archival, even from the old Delete entry point.
         if (team.length) options = { purgeData: false };
@@ -12335,8 +12332,23 @@ function Workspace({
         return (await managerGoalHost.current.projects(mono.id)).find(entry => pathKey(entry.folder) === pathKey(folder));
       },
       persistOrigin: (origin, prompt) => update(session => appendMonoGoalOrigin(session, origin, prompt)),
-      hasOrigin: origin => !!(history ?? sessionsRef.current.find(session => session.id === sessionId)?.blocks)
-        ?.some(block => block.id === origin.userMessageId && block.monoGoalSubmission?.requestId === origin.requestId),
+      hasOrigin: origin => writeSession(sessionId, async () => {
+        const live = sessionsRef.current.find(session => session.id === sessionId);
+        if (!live) throw Error("The originating chat is unavailable");
+        if (live.blocks.some(block => block.id === origin.userMessageId)) {
+          appendMonoGoalOrigin(live, origin, text);
+          return true;
+        }
+        if (!origin.projectId && !recovery) return false;
+        try {
+          history = await getMonoGoalRecoveryBlocks(sessionId);
+        } catch {
+          throw Error("Checking previous send… Retry original when storage is available.");
+        }
+        if (!history.some(block => block.id === origin.userMessageId)) return false;
+        appendMonoGoalOrigin({ ...live, blocks: history }, origin, text);
+        return true;
+      }),
       persistPending: (origin, error) => update(session => appendMonoGoalPendingCard(session, origin, error)),
       persistCard: (origin, goal) => update(session => appendMonoGoalCard(session, origin, goal)),
       grand: () => submitSession(sessionId, text, attachments),

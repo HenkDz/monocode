@@ -4,7 +4,7 @@ import ts from "typescript";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { newSession, sessionWorkCwd, type Block, type HarnessId, type Session } from "../../features/sessions/model/session";
 import * as migration from "../../features/monos/model/monoWorkingDirectoryMigration";
-import { loadMonoRotation, MONO_ROTATION_READ_ERROR } from "../../features/monos/model/monoRotation";
+import { assertMonoRotationCurrent, loadMonoRotation, MONO_ROTATION_READ_ERROR } from "../../features/monos/model/monoRotation";
 import { sameProviderAccountId } from "../../features/providers/model/providerAccounts";
 import { canResumeMonoAfterCwdChange } from "../../integrations/harness/providers/monoCwdResume";
 import { buildPiSpawnArgs } from "../../integrations/harness/providers/pi/piProtocol";
@@ -104,9 +104,11 @@ async function fixture(harness: HarnessId = "pi") {
     sidebarCwdRef: { current: "" }, setHistory: vi.fn(), mergeProjectHistorySummary: vi.fn(),
   });
   const prepareContext = vi.fn(async (text: string) => text);
+  const rotationReceipt = loadMonoRotation(original.id);
   const prepare = (provider?: string) => callback<(provider?: string) => Promise<string>>("prepareText", {
     ...dependencies, ...migration, sameProviderAccountId, upsertSession: upsert, current: sessionsRef.current[0], sessionId: original.id,
-    contextProvider: undefined, prepareContext, text: "First relocated turn", loadMonoRotation, MONO_ROTATION_READ_ERROR,
+    contextProvider: undefined, prepareContext, text: "First relocated turn", assertMonoRotationCurrent,
+    rotationReceipt,
   })(provider);
   const accepted = callback<() => void>("onAccepted", {
     ...dependencies, ...migration, sessionId: original.id, gen: 1, turnGen: { current: new Map([[original.id, 1]]) },

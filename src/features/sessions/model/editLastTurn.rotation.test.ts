@@ -6,6 +6,21 @@ import { newSession } from "./session";
 
 beforeEach(() => localStorage.clear());
 
+it.each([undefined, "", " \n "])("refuses edited preparation for incomplete pending continuity (%j)", pendingBrief => {
+  const session = { ...newSession("pi", "/synthetic"), id: "incomplete-edit", blocks: [
+    { id: "original", role: "user" as const, text: "Keep the original scope." },
+  ] };
+  const key = "monocode:mono-rotations";
+  localStorage.setItem(key, JSON.stringify({ [session.id]: {
+    at: 1, reason: "context", earlier: [], pendingBrief, pendingInput: "Original assignment.",
+    userRequests: [{ id: "scope", text: "Never publish." }],
+  } }));
+  const before = localStorage.getItem(key);
+  expect(prepareEditedResend(session)).toBeNull();
+  expect(createEditedResendAttempt(session)).toBeNull();
+  expect(localStorage.getItem(key)).toBe(before);
+});
+
 it("refuses edit preparation during a read outage and recovers when an absent carry is readable", () => {
   const session = { ...newSession("pi", "/synthetic"), blocks: [
     { id: "original", role: "user" as const, text: "Keep the original scope." },

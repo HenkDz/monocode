@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Block } from "../../sessions/model/session";
 import {
   acceptMonoRotation,
+  assertMonoRotationCurrent,
   discardMonoRotationPendingInputs,
   forgetMonoRotation,
   loadMonoRotation,
@@ -54,6 +55,74 @@ function stored(id: string): MonoRotation | undefined {
 it("distinguishes a readable absent carry from an unreadable store", () => {
   expect(loadMonoRotation("missing")).toBeUndefined();
   expect(sessionRotationStatus({ id: "missing", blocks: [] })).toEqual({});
+});
+
+it.each([
+  null, [], {},
+  { at: "1" }, { reason: "unknown" }, { earlier: [false] },
+  { afterBlockId: 1 }, { references: [null] }, { discardedInputIds: "scope" },
+  { userRequests: [{ id: "scope" }] }, { userRequests: false },
+  { pendingBrief: undefined }, { pendingBrief: "" }, { pendingBrief: " \n " },
+  { pendingBrief: null }, { pendingInput: false }, { pendingInputs: [null] },
+  { futureAuthority: "Do not discard unknown restrictions." },
+])("rejects malformed entries without replacing their protected bytes: %j", change => {
+  const id = "invalid-entry";
+  const original = pending(id);
+  const broken = change && !Array.isArray(change) && Object.keys(change).length
+    ? { ...original, ...change } : change;
+  localStorage.setItem(KEY, JSON.stringify({ [id]: broken }));
+  const before = localStorage.getItem(KEY);
+  expect(loadMonoRotation(id)).toBeNull();
+  expect(sessionRotationStatus({ id, blocks: [] }, "Retry")).toEqual({ deferredReason: MONO_ROTATION_READ_ERROR });
+  expect(() => assertMonoRotationCurrent(id, original)).toThrow(MONO_ROTATION_READ_ERROR);
+  expect(saveMonoRotation(id, original)).toBe(false);
+  forgetMonoRotation(id);
+  expect(localStorage.getItem(KEY)).toBe(before);
+  localStorage.setItem(KEY, JSON.stringify({ [id]: original }));
+  expect(sessionRotationStatus({ id, blocks: [] }, "Retry").plan?.brief(id)).toContain(original.pendingInput);
+});
+
+it.each(["idle", "restart", "context"] as const)("keeps valid settled and legacy %s carries readable", reason => {
+  const settled: MonoRotation = { at: 0, reason, earlier: ["Prior exchange."], userRequests: [{ id: "scope", text: "Keep the scope." }] };
+  expect(saveMonoRotation("legacy", settled)).toBe(true);
+  expect(loadMonoRotation("legacy")).toEqual(settled);
+  const legacy = { ...settled, pendingBrief: "Retained scope and assignment." };
+  expect(saveMonoRotation("legacy", legacy)).toBe(true);
+  expect(loadMonoRotation("legacy")).toEqual(legacy);
+  expect(sessionRotationStatus({ id: "legacy", blocks: [] }, "Retry").plan?.brief("legacy")).toContain(legacy.pendingBrief);
+  expect(loadMonoRotation("toString")).toBeUndefined();
+});
+
+it.each([false, true])("compare-and-save preserves a carry changed after planning (existing: %s)", existing => {
+  const id = "plan-race";
+  if (existing) pending(id);
+  const session = { id, blocks: [], providerSessionId: "old", context: { used: 700, window: 1000 } };
+  const plan = sessionRotationStatus(session, "Retry").plan!;
+  const newer = { ...plan.rotation, pendingInputs: ["Never publish; keep every result local."] };
+  expect(saveMonoRotation(id, newer)).toBe(true);
+  const before = localStorage.getItem(KEY);
+  expect(saveMonoRotation(id, plan.rotation, plan.expected)).toBe(false);
+  expect(() => assertMonoRotationCurrent(id, plan.expected)).toThrow("carry changed");
+  expect(localStorage.getItem(KEY)).toBe(before);
+  const retry = sessionRotationStatus(session, "Retry").plan!;
+  expect(retry.brief(id)).toContain(newer.pendingInputs[0]);
+  expect(saveMonoRotation(id, retry.rotation, retry.expected)).toBe(true);
+});
+
+it("compares accepted settled receipts while durable clearing is still retrying", () => {
+  vi.useFakeTimers();
+  const id = "settled-receipt";
+  const receipt = pending(id);
+  vi.spyOn(localStorage, "setItem").mockImplementationOnce(() => { throw Error("full"); });
+  acceptMonoRotation(id, receipt.at, undefined, receipt);
+  const settled = loadMonoRotation(id)!;
+  expect(settled.pendingBrief).toBeUndefined();
+  expect(() => assertMonoRotationCurrent(id, settled)).not.toThrow();
+  const plan = sessionRotationStatus({ id, blocks: [], providerSessionId: "accepted", context: { used: 700, window: 1000 } }, "Continue").plan!;
+  expect(plan.expected).toEqual(settled);
+  expect(saveMonoRotation(id, plan.rotation, plan.expected)).toBe(true);
+  vi.advanceTimersByTime(60_000);
+  expect(stored(id)).toEqual(plan.rotation);
 });
 
 it.each(["throws", "{invalid", "null", "[]", "false", "42", '"text"'])(

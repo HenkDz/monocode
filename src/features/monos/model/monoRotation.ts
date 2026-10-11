@@ -82,7 +82,7 @@ export function planSessionRotation(
     Partial<Session>,
   nextText = "",
   taskContext = "",
-): ReturnType<typeof planRotation> | undefined {
+): ReturnType<typeof sessionRotationStatus>["plan"] {
   return sessionRotationStatus(session, nextText, taskContext).plan;
 }
 
@@ -93,7 +93,7 @@ export function sessionRotationStatus(
   nextText = "",
   taskContext = "",
   replacedBlocks: readonly Block[] = [],
-): { plan?: ReturnType<typeof planRotation>; deferredReason?: string } {
+): { plan?: ReturnType<typeof planRotation> & { expected: MonoRotation | null }; deferredReason?: string } {
   const previous = loadMonoRotation(session.id);
   if (previous === null) return { deferredReason: MONO_ROTATION_READ_ERROR };
   if (previous?.pendingBrief && replacedBlocks.length)
@@ -171,6 +171,7 @@ export function sessionRotationStatus(
       };
     return {
       plan: {
+        expected: previous,
         rotation: { ...previous, userRequests, references: [...references], pendingInputs },
         brief,
       },
@@ -207,7 +208,8 @@ export function sessionRotationStatus(
     return {
       deferredReason: `Context refresh deferred: brief and next input too large (${chars} chars; limit 14,000). Compact manually or trim the next input.`,
     };
-  return { plan: { rotation: plan.rotation, brief } };
+  plan.rotation.pendingBrief = brief(session.id);
+  return { plan: { expected: previous ?? null, rotation: plan.rotation, brief } };
 }
 
 /** Replace only provider context. The transcript and selected scope/profile survive. */
@@ -500,17 +502,42 @@ function cancelAcceptanceRetry(sessionId: string): void {
 function readRotations(): Record<string, MonoRotation> | undefined {
   try {
     const parsed = JSON.parse(localStorage.getItem(ROTATIONS_KEY) ?? "{}");
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : undefined;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) &&
+      Object.values(parsed).every(isMonoRotation) ? parsed : undefined;
   } catch {
     return undefined;
   }
+}
+
+function isMonoRotation(value: unknown): value is MonoRotation {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const rotation = value as Record<string, unknown>;
+  const strings = (values: unknown) => Array.isArray(values) && values.every(value => typeof value === "string");
+  // Unknown fields may contain authority from a newer schema; never drop them.
+  if (Object.keys(rotation).some(key => ![
+    "at", "reason", "afterBlockId", "earlier", "userRequests", "references",
+    "pendingBrief", "pendingInput", "pendingInputs", "discardedInputIds",
+  ].includes(key))) return false;
+  return typeof rotation.at === "number" && Number.isFinite(rotation.at) &&
+    ["context", "idle", "restart"].includes(rotation.reason as string) &&
+    strings(rotation.earlier) &&
+    ["afterBlockId", "pendingBrief", "pendingInput"].every(key =>
+      rotation[key] === undefined || typeof rotation[key] === "string") &&
+    ["references", "pendingInputs", "discardedInputIds"].every(key =>
+      rotation[key] === undefined || strings(rotation[key])) &&
+    (rotation.userRequests === undefined || (Array.isArray(rotation.userRequests) &&
+      rotation.userRequests.every(request => request && typeof request === "object" &&
+        typeof request.id === "string" && typeof request.text === "string"))) &&
+    (rotation.pendingBrief === undefined || !!(rotation.pendingBrief as string).trim()) &&
+    ((rotation.pendingInput === undefined && rotation.pendingInputs === undefined) ||
+      typeof rotation.pendingBrief === "string");
 }
 
 /** Undefined means no saved carry; null means continuity could not be read. */
 export function loadMonoRotation(sessionId: string): MonoRotation | undefined | null {
   const rotations = readRotations();
   if (!rotations) return null;
-  const rotation = rotations[sessionId];
+  const rotation = Object.prototype.hasOwnProperty.call(rotations, sessionId) ? rotations[sessionId] : undefined;
   const accepted = acceptedRotations.get(sessionId);
   if (!accepted) return rotation;
   if (JSON.stringify(rotation) === accepted.identity) return accepted.settled;
@@ -518,13 +545,26 @@ export function loadMonoRotation(sessionId: string): MonoRotation | undefined | 
   return rotation;
 }
 
+/** A readable but changed receipt cannot authorize an already prepared prompt. */
+export function assertMonoRotationCurrent(sessionId: string, expected: MonoRotation | null | undefined): void {
+  const current = loadMonoRotation(sessionId);
+  if (current === null) throw new Error(MONO_ROTATION_READ_ERROR);
+  if (JSON.stringify(current ?? null) !== JSON.stringify(expected ?? null))
+    throw new Error("The saved context carry changed. Retry to include its latest constraints.");
+}
+
 export function saveMonoRotation(
   sessionId: string,
   rotation: MonoRotation,
+  expected?: MonoRotation | null,
 ): boolean {
   try {
     const rotations = readRotations();
-    if (!rotations) return false;
+    if (!rotations || !isMonoRotation(rotation)) return false;
+    const current = Object.prototype.hasOwnProperty.call(rotations, sessionId) ? rotations[sessionId] : undefined;
+    const accepted = acceptedRotations.get(sessionId);
+    const receipt = accepted && JSON.stringify(current) === accepted.identity ? accepted.settled : current;
+    if (expected !== undefined && JSON.stringify(receipt ?? null) !== JSON.stringify(expected)) return false;
     localStorage.setItem(
       ROTATIONS_KEY,
       JSON.stringify({ ...rotations, [sessionId]: rotation }),

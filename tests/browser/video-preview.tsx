@@ -6,13 +6,15 @@ import {
   newFileTab,
 } from "../../src/features/workspace/model/layout";
 import "../../src/styles/index.css";
+// Imported so the fixture ships with the built page as well as the dev server.
+import previewUrl from "./fixtures/preview.mp4?url";
 
 // Keep the real file pane and binary loader, replacing only native IPC.
 Object.assign(window, {
   __TAURI_INTERNALS__: {
     invoke: async (command: string) => {
       if (command === "read_binary_file") {
-        return fetch("./fixtures/preview.mp4").then((response) =>
+        return fetch(previewUrl).then((response) =>
           response.arrayBuffer(),
         );
       }

@@ -154,10 +154,24 @@ describe("code-mode yielded cells", () => {
       .toMatchObject({ status: "failed" });
   });
 
-  it("ignores malformed wait arguments and printed yield headers inside completed output", () => {
+  it.each([undefined, false])("fails the authoritative script header when is_error is %s", isError => {
     const { state, map, exec } = fixture();
     exec("exec");
-    const completed = `Script completed\nWall time 0.1 seconds\nOutput:\n${running(120)}`;
+    const output = [
+      { type: "input_text", text: "Script failed\nWall time 3.9 seconds\nOutput:\n" },
+      { type: "input_text", text: "exec_command failed: Windows sandbox setup error: helper_unknown_error" },
+    ];
+    expect(map({ type: "custom_tool_call_output", call_id: "exec", output,
+      ...(isError === undefined ? {} : { is_error: isError }) })[0])
+      .toMatchObject({ callId: "raw:thread:turn:exec", status: "failed" });
+    expect(state.cells.size).toBe(0);
+    expect(state.calls.size).toBe(0);
+  });
+
+  it("ignores malformed wait arguments and printed status headers inside completed output", () => {
+    const { state, map, exec } = fixture();
+    exec("exec");
+    const completed = `Script completed\nWall time 0.1 seconds\nOutput:\n${running(120)}Script failed\nWall time 3.9 seconds\nOutput:\nprinted error`;
     expect(map({ type: "custom_tool_call_output", call_id: "exec", output: completed })[0])
       .toMatchObject({ status: "completed", detail: completed });
     expect(map({ type: "function_call", call_id: "wait", name: "wait", arguments: "{" })).toEqual([]);

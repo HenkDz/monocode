@@ -426,7 +426,8 @@ export function mapCodexNotification(
     if (type !== "custom_tool_call_output" && !(type === "function_call_output" && codeMode?.calls.has(callId))) return { events: [] };
     const output = typeof item.output === "string" ? item.output : Array.isArray(item.output)
       ? item.output.map(part => stringField(asRecord(part) ?? {}, "text") ?? "").filter(Boolean).join("\n") : undefined;
-    const running = item.is_error !== true && /^Script running with cell ID (\S+)\r?\n/.exec(output ?? "");
+    const failed = item.is_error === true || /^Script failed\r?\nWall time \d+(?:\.\d+)? seconds(?:\r?\n|$)/.test(output ?? "");
+    const running = !failed && /^Script running with cell ID (\S+)\r?\n/.exec(output ?? "");
     if (running) {
       const progress = /^Script running with cell ID \S+\r?\nWall time (\d+(?:\.\d+)?) seconds\r?\nOutput:\r?\n([\s\S]*)$/.exec(output ?? "");
       if (progress) {
@@ -446,7 +447,7 @@ export function mapCodexNotification(
     const blocked = running && cell.shell && cell.silentMs >= 60_000;
     const detail = blocked ? `${output}\nShell command has returned no output for 60 seconds. It may still be running. Check pending approvals or the Windows sandbox; Stop to retry.` : output;
     return { events: [{ type: "tool.updated", callId: cell.callId, kind: "execute",
-      status: item.is_error === true ? "failed" : blocked ? "blocked" : running ? "in_progress" : "completed",
+      status: failed ? "failed" : blocked ? "blocked" : running ? "in_progress" : "completed",
       ...(detail ? { detail } : {}) }] };
   }
 

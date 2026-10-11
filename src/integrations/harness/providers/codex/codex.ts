@@ -49,6 +49,7 @@ import {
 import { codexMcpConfirmation } from "./codexElicitation";
 import { snapshotRemainder } from "../../core/streamText";
 import { prepareCodexMonoContext } from "./codexStore";
+import { forgetAgentContext } from "../../../../features/monos/model/monoFiles";
 import type {
   ApprovalDecision,
   CompactContextInput,
@@ -149,6 +150,8 @@ type Resume = {
 
 const liveByThread = new Map<string, Live>();
 const resumeByThread = new Map<string, Resume>();
+// Parking keeps receipts, so retain their instruction-home identity too.
+const instructionHomes = new Map<string, string>();
 const cancelledThreads = new Set<string>();
 
 let resolveCodexBinaryImpl: () => Promise<{ path: string }> =
@@ -468,6 +471,7 @@ export async function stopCodexSession(sessionId: string): Promise<void> {
 
 export async function forgetCodexSession(sessionId: string): Promise<void> {
   resumeByThread.delete(sessionId);
+  instructionHomes.delete(sessionId);
   await stopCodexSession(sessionId);
 }
 
@@ -585,6 +589,11 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
         })
       : undefined;
   const storeConfig = store?.config;
+  const instructionHome = JSON.stringify([codexStore, skillsSignature, store?.skillsContextId]);
+  if (instructionHomes.has(input.sessionId) && instructionHomes.get(input.sessionId) !== instructionHome) {
+    forgetAgentContext(input.sessionId);
+  }
+  instructionHomes.set(input.sessionId, instructionHome);
   const liveRef: { current: Live | null } = { current: null };
 
   const rpc = new JsonRpcClient(
@@ -1645,6 +1654,7 @@ function autoApproval(
 export function __codexTestReset(): void {
   liveByThread.clear();
   resumeByThread.clear();
+  instructionHomes.clear();
   cancelledThreads.clear();
 }
 

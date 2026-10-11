@@ -1,5 +1,7 @@
 import { createPortal } from "react-dom";
 import { TeamMapNav } from "../../features/teamMap/navigation";
+// CC7C entry point stays outside CC7A's ProjectRail.
+import { MissionControlNav } from "../../features/commandCenter/ui/MissionControl";
 import { openPullRequests } from "../../features/pullRequests/model/pullRequestView";
 import { NO_BRANCH_LABEL } from "../../features/source-control/model/worktrees";
 import {
@@ -334,6 +336,7 @@ type Props = {
   onOpenNotes?: () => void;
   onOpenAutomations?: () => void;
   onOpenTeamMap?: () => void;
+  onOpenMissionControl?: () => void;
   onGoToFile?: () => void;
   searchActive?: boolean;
   inboxActive?: boolean;
@@ -436,6 +439,7 @@ function SidebarComponent({
   onOpenNotes,
   onOpenAutomations,
   onOpenTeamMap,
+  onOpenMissionControl,
   onGoToFile,
   searchActive = false,
   inboxActive = false,
@@ -1776,6 +1780,7 @@ function SidebarComponent({
               onOpenNotes={notesEnabled ? onOpenNotes : undefined}
               onOpenAutomations={onOpenAutomations}
               onOpenTeamMap={onOpenTeamMap}
+              onOpenMissionControl={onOpenMissionControl}
               searchActive={searchActive}
               inboxActive={inboxActive}
           pullRequestsActive={pullRequestsActive}
@@ -2302,6 +2307,7 @@ function SidebarComponent({
           onOpenAutomations={onOpenAutomations}
           automationsActive={automationsActive}
           onOpenTeamMap={onOpenTeamMap}
+          onOpenMissionControl={onOpenMissionControl}
           onOpenSettings={onOpenSettings}
           onTogglePanel={onToggleProjectRail}
           onLeaveActive={onGoBack}
@@ -2312,6 +2318,7 @@ function SidebarComponent({
       ) : null}
       {railMounted.current && onSelectProject && onOpenProject ? (
         <div className={railVisible ? "flex min-h-0 flex-col [&>nav]:min-h-0 [&>nav]:flex-1" : "hidden"}>
+        {onOpenMissionControl && <MissionControlNav onOpen={onOpenMissionControl} />}
         {onOpenTeamMap && <TeamMapNav onOpen={onOpenTeamMap} />}
         <ProjectRail
           sessions={sessions}
@@ -2422,6 +2429,7 @@ function SidebarProjectPicker({
   onOpenNotes,
   onOpenAutomations,
   onOpenTeamMap,
+  onOpenMissionControl,
   searchActive = false,
   inboxActive = false,
   pullRequestsActive = false,
@@ -2442,6 +2450,7 @@ function SidebarProjectPicker({
   onOpenNotes?: () => void;
   onOpenAutomations?: () => void;
   onOpenTeamMap?: () => void;
+  onOpenMissionControl?: () => void;
   searchActive?: boolean;
   inboxActive?: boolean;
   pullRequestsActive?: boolean;
@@ -2513,6 +2522,7 @@ function SidebarProjectPicker({
             <StickyNote className="size-3.5" strokeWidth={1.75} />
           </IconButton>
         ) : null}
+        {onOpenMissionControl && <MissionControlNav compact onOpen={onOpenMissionControl} />}
         {onOpenTeamMap && <TeamMapNav compact onOpen={onOpenTeamMap} />}
         {onOpenAutomations ? (
           <IconButton
@@ -2563,6 +2573,7 @@ function CompactProjectRail({
   notesActive,
   onOpenAutomations,
   onOpenTeamMap,
+  onOpenMissionControl,
   automationsActive,
   onOpenSettings,
   onTogglePanel,
@@ -2594,6 +2605,7 @@ function CompactProjectRail({
   notesActive: boolean;
   onOpenAutomations?: () => void;
   onOpenTeamMap?: () => void;
+  onOpenMissionControl?: () => void;
   automationsActive: boolean;
   onOpenSettings?: () => void;
   onTogglePanel?: () => void;
@@ -2771,6 +2783,7 @@ function CompactProjectRail({
           active={automationsActive}
           onClick={action(automationsActive, onOpenAutomations)}
         />
+        {onOpenMissionControl && <MissionControlNav compact onOpen={onOpenMissionControl} />}
         {onOpenTeamMap && <TeamMapNav compact onOpen={onOpenTeamMap} />}
       </div>
       <div className="min-h-2 flex-1" />

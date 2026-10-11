@@ -13,6 +13,9 @@ import { archiveMonoConversation, archiveProjectMonos, offerProjectMonoRestore, 
 import { loadMonoView, saveMonoView, monoForView, monoViewProject, memberDetailsView, selectedOrgMono, monoLiveState } from "../features/monos/model/monoNavigation";
 import { MonoTeamActivity } from "../features/monos/ui/MonoTeamActivity";
 import { TeamMap } from "../features/teamMap/TeamMap";
+// CC7C integration: Mission control uses the existing full-view navigation.
+import { MissionControl, MISSION_CONTROL_SCOPE } from "../features/commandCenter/ui/MissionControl";
+import { openGoalTarget } from "../features/commandCenter/model/goalView";
 import { TeamMapHeaderAction, useTeamMap } from "../features/teamMap/navigation";
 import { recordCrewDecision } from "../features/monos/model/monoCrewEvents";
 import { teamDecisions } from "../features/monos/model/monoTeamActivity";
@@ -15145,6 +15148,7 @@ function Workspace({
               onOpenNotes={notesEnabled ? onOpenNotes : undefined}
               onOpenAutomations={onOpenAutomations}
               onOpenTeamMap={monosEnabled ? () => onOpenTeamMap() : undefined}
+              onOpenMissionControl={monosEnabled ? () => onOpenTeamMap(MISSION_CONTROL_SCOPE) : undefined}
               onGoToFile={onGoToFile}
               searchActive={searchViewOpen}
               inboxActive={inboxViewOpen && pullRequestsViewScope === null}
@@ -15192,7 +15196,11 @@ function Workspace({
               />
             )}
             <div className="body-glass flex min-h-0 min-w-0 flex-1 flex-col">
-              {teamMap.open && <TeamMap key={teamMap.scope ?? "org"} sessions={sessions} runs={orchestrationRuns} statuses={managerPrStatuses} scope={teamMap.scope} onClose={teamMap.close} onOpenMono={id => void onOpenMono(id)} />}
+              <MissionControl sessions={sessions} runs={orchestrationRuns} open={teamMap.open && teamMap.scope === MISSION_CONTROL_SCOPE}
+                onClose={teamMap.close} onOpenTarget={target => openGoalTarget(target, {
+                  close: teamMap.close, request: onOpenApprovalSession, mono: onOpenMono, session: onOpenMonoLaunchedSession,
+                })} />
+              {teamMap.open && teamMap.scope !== MISSION_CONTROL_SCOPE && <TeamMap key={teamMap.scope ?? "org"} sessions={sessions} runs={orchestrationRuns} statuses={managerPrStatuses} scope={teamMap.scope} onClose={teamMap.close} onOpenMono={id => void onOpenMono(id)} />}
               <div
                 className={
                   teamMap.open ||

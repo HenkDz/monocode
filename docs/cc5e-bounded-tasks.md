@@ -68,6 +68,29 @@ carry cannot fit, submission reports the reason before another detach or
 startup can omit it. Acceptance clears the pending inputs only after the
 provider receives them.
 
+CC5EG counts the next input before the first refresh using the same protected
+text accounting as retries, and reserves room for its retry wrapper within the
+14,000-character allowance. Identical request text is counted once while request
+IDs remain retained. An oversized initial input keeps the current provider;
+shortening the draft or successfully compacting that provider allows progress.
+A rejected pending retry returns before committing its user block, so it stays
+correctable and cannot poison later short retries.
+
+An edited resend with a pending carry replaces only the edited unaccepted input.
+The original brief, earlier constraints, retained assignment and other failed
+inputs are reattached. App saves the updated carry before provider rewind and
+requires a valid plan even during a switch or other unsafe state. The planner
+checks removed blocks for unresolved activity and verifies that the edit follows
+the saved rotation boundary. The visible task composer uses the same edited
+input and boundary. Storage failure stops the edit before provider history changes.
+
+Compaction cannot shrink saved pending inputs; their guidance now says so.
+Supported retained task chats can explicitly edit an oversized failed input.
+Primary Mono/org chats still retain their existing no-Edit policy, and provider
+editing requires a rewindable history. Older pre-release oversized carries on
+those surfaces remain protected rather than being silently reset. The new initial
+bounds prevent creating such carries through the reviewed startup sequence.
+
 Context and configuration events retain their submitted harness/model/settings
 identity until the event queue reaches the reducer. A changed selection rejects
 old limits and configuration while keeping occupancy, transcript, billing and
@@ -162,3 +185,16 @@ passed; focused native control CLI tests passed 23/23. The first full run
 had one unchanged CRLF editor timeout under concurrent compilation; that file
 passed unchanged alone and the complete rerun passed without concurrent
 compilation. The repair merged CC5E only into its own branch.
+
+## CC5EG recovery repair validation
+
+Implementation: `1bac845d915d41d60c76409ecaf9781a76aa08fb`.
+The focused five-file recovery suite passes 145 tests, zero failed or skipped.
+It includes the actual OpenCode adapter's stored-prompt/lost-response fault,
+Stop cleanup and successful rewind, plus real App compaction and the visible
+context meter. Full Vitest passes 590 files with 2 skipped: 7,063 tests passed,
+13 skipped, zero failed. TypeScript and production build pass; no native source
+changed. Full validation details and the final documentation revision are
+recorded in `docs/cc5eg-rotation-recovery.md` and
+`C:/Users/nooro/AppData/Local/Temp/monocode-cc/cc5eg/REPORT.md`.
+Logs and machine-readable receipts are in that round's `validation/` directory.

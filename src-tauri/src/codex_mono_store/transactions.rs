@@ -7,6 +7,11 @@ pub(super) enum ClaimIntent {
     UseAccount,
     IsolateHooks,
     IsolateSkills,
+    CloneHooks,
+    CloneRollout,
+    CloneMemory,
+    RetainRollouts { preserved: String },
+    RetainMemory { preserved: String },
     Relink,
     CorruptSnapshot { preserved: String },
 }
@@ -84,6 +89,74 @@ fn filename(path: &Path) -> Result<String, String> {
 }
 
 impl ClaimJournal {
+    pub(super) fn clone_hooks(target: &Path, staged: &RecordedEntry) -> Result<Self, String> {
+        Self::clone_file(target, staged, ClaimIntent::CloneHooks)
+    }
+
+    pub(super) fn clone_rollout(target: &Path, staged: &RecordedEntry) -> Result<Self, String> {
+        Self::clone_file(target, staged, ClaimIntent::CloneRollout)
+    }
+
+    pub(super) fn clone_memory(target: &Path, staged: &RecordedEntry) -> Result<Self, String> {
+        Self::clone_file(target, staged, ClaimIntent::CloneMemory)
+    }
+
+    fn clone_file(
+        target: &Path,
+        staged: &RecordedEntry,
+        intent: ClaimIntent,
+    ) -> Result<Self, String> {
+        let id = uuid::Uuid::new_v4();
+        let mut writing = staged.clone();
+        writing.fingerprint = None;
+        let journal = Self {
+            path: target.with_file_name(format!(".monocode-txn-{id}.json")),
+            transaction: Transaction {
+                entry: filename(target)?,
+                intent,
+                claim: RecordedEntry {
+                    name: format!(".monocode-claim-{id}"),
+                    ..staged.clone()
+                },
+                staged: Some(writing),
+                verified: false,
+                archive: None,
+            },
+        };
+        create_json(&journal.path, &journal.transaction)?;
+        Ok(journal)
+    }
+
+    pub(super) fn verify_clone(&mut self, path: &Path) -> Result<(), String> {
+        let staged = self
+            .transaction
+            .staged
+            .as_mut()
+            .ok_or("Missing hook clone")?;
+        if !matches_record(path, staged)
+            .map_err(|error| format!("Could not verify clone identity: {error}"))?
+        {
+            return Err("Private hook clone changed during preparation; it was preserved".into());
+        }
+        staged.fingerprint = Some(
+            fingerprint(path)
+                .map_err(|error| format!("Could not verify clone contents: {error}"))?,
+        );
+        self.verify(None)
+            .map_err(|error| format!("Could not journal completed clone: {error}"))
+    }
+
+    pub(super) fn publish_clone(&self, path: &Path, target: &Path) -> Result<(), String> {
+        if !self.transaction.verified || filename(target)? != self.transaction.entry {
+            return Err("Unverified private file clone cannot be published".into());
+        }
+        self.transaction
+            .staged
+            .as_ref()
+            .ok_or("Missing file clone")?
+            .publish(path, target)
+    }
+
     pub(super) fn new(
         target: &Path,
         claim: &Path,
@@ -229,7 +302,28 @@ fn read_journal(path: &Path) -> Result<ClaimJournal, String> {
     }
     let transaction: Transaction =
         serde_json::from_reader(file.take(64 * 1024)).map_err(|e| e.to_string())?;
-    validate_entry(&transaction.entry)?;
+    if matches!(transaction.intent, ClaimIntent::CloneMemory) {
+        if transaction.entry.is_empty()
+            || matches!(transaction.entry.as_str(), "." | "..")
+            || transaction
+                .entry
+                .contains(['/', '\\', ':', '\0', '<', '>', '"', '|', '?', '*'])
+            || transaction.entry.ends_with(['.', ' '])
+            || transaction.entry.starts_with(".monocode-")
+        {
+            return Err("Invalid native memory filename".into());
+        }
+    } else if matches!(transaction.intent, ClaimIntent::RetainMemory { .. }) {
+        if transaction.entry != "memories" {
+            return Err("Memory retention cannot target another entry".into());
+        }
+    } else if matches!(transaction.intent, ClaimIntent::RetainRollouts { .. }) {
+        if !matches!(transaction.entry.as_str(), "sessions" | "archived_sessions") {
+            return Err("Rollout retention cannot target another entry".into());
+        }
+    } else {
+        validate_entry(&transaction.entry)?;
+    }
     let id = filename(path)?;
     let id = id
         .strip_prefix(".monocode-txn-")
@@ -267,14 +361,39 @@ fn read_journal(path: &Path) -> Result<ClaimJournal, String> {
         {
             return Err("Shared entry transactions cannot target link metadata".into());
         }
-        if matches!(transaction.intent, ClaimIntent::IsolateHooks)
-            && transaction.entry != "hooks.json"
+        if matches!(
+            transaction.intent,
+            ClaimIntent::IsolateHooks | ClaimIntent::CloneHooks
+        ) && transaction.entry != "hooks.json"
         {
             return Err("Hook isolation cannot target another entry".into());
+        }
+        if matches!(transaction.intent, ClaimIntent::CloneRollout)
+            && (!transaction.entry.starts_with("rollout-")
+                || !(transaction.entry.ends_with(".jsonl")
+                    || transaction.entry.ends_with(".jsonl.zst")))
+        {
+            return Err("Rollout cloning cannot target another entry".into());
+        }
+        if matches!(
+            transaction.intent,
+            ClaimIntent::CloneHooks | ClaimIntent::CloneRollout | ClaimIntent::CloneMemory
+        ) && (transaction.staged.is_none() || transaction.archive.is_some())
+        {
+            return Err("Invalid private hook clone transaction".into());
         }
         if matches!(transaction.intent, ClaimIntent::IsolateSkills) && transaction.entry != "skills"
         {
             return Err("Skill isolation cannot target another entry".into());
+        }
+        if let ClaimIntent::RetainRollouts { preserved } | ClaimIntent::RetainMemory { preserved } =
+            &transaction.intent
+        {
+            let prefix = format!(".monocode-retained-{}-", transaction.entry);
+            let id = preserved
+                .strip_prefix(&prefix)
+                .ok_or("Invalid retained rollout path")?;
+            uuid::Uuid::parse_str(id).map_err(|e| e.to_string())?;
         }
     }
     Ok(ClaimJournal {
@@ -346,6 +465,25 @@ fn reconcile_journal(home: &Path, journal: ClaimJournal) -> Result<(), String> {
     let occupied = exists(&original)?;
     let claimed = exists(&claim)?;
     let paths = [original.clone(), claim.clone(), journal.path.clone()];
+    if matches!(
+        journal.transaction.intent,
+        ClaimIntent::CloneHooks | ClaimIntent::CloneRollout | ClaimIntent::CloneMemory
+    ) {
+        let staged = journal
+            .transaction
+            .staged
+            .as_ref()
+            .ok_or("Missing hook clone")?;
+        if claimed
+            || (occupied && (!journal.transaction.verified || !matches_record(&original, staged)?))
+        {
+            return Err(recovery(
+                "An interrupted hook clone has an unfamiliar entry; all recovery entries were preserved.",
+                &paths,
+            ));
+        }
+        return journal.finish();
+    }
     if claimed && !matches_record(&claim, &journal.transaction.claim)? {
         return Err(recovery(
             "An interrupted claim changed; all recovery entries were preserved.",
@@ -380,6 +518,29 @@ fn reconcile_journal(home: &Path, journal: ClaimJournal) -> Result<(), String> {
         .as_ref()
         .is_some_and(|stage| occupied && matches_record(&original, stage).unwrap_or(false));
     if published && journal.transaction.verified {
+        if let ClaimIntent::RetainRollouts { preserved } | ClaimIntent::RetainMemory { preserved } =
+            &journal.transaction.intent
+        {
+            let retained = parent.join(preserved);
+            let path = if claimed { &claim } else { &retained };
+            if !exists(path)?
+                || !matches_record(path, &journal.transaction.claim)?
+                || !std::fs::symlink_metadata(path)
+                    .map_err(|e| e.to_string())?
+                    .is_dir()
+                || replaceable_link(path)?
+                || !replaceable_link(&original)?
+            {
+                return Err(recovery(
+                    "Interrupted rollout retention contains an unexpected entry; it was preserved.",
+                    &paths,
+                ));
+            }
+            if claimed {
+                journal.transaction.claim.publish(&claim, &retained)?;
+            }
+            return journal.finish();
+        }
         if matches!(journal.transaction.intent, ClaimIntent::IsolateSkills)
             && (!std::fs::symlink_metadata(&original)
                 .map_err(|e| e.to_string())?

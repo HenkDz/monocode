@@ -222,11 +222,16 @@ fn plugin_skills(
 
 pub(super) fn catalog(
     source: &Path,
+    base: &Path,
     user_home: Option<&Path>,
     project: Option<&Path>,
 ) -> Result<Catalog, String> {
     let mut skills = Vec::new();
     scan(&source.join("skills"), "account", None, &mut skills)?;
+    let private = base.join("skills");
+    if private.is_dir() && !replaceable_link(&private)? {
+        scan(&private, "mono", None, &mut skills)?;
+    }
     let mut plugins = BTreeSet::new();
     plugin_skills(source, &mut skills, &mut plugins)?;
     if let Some(user) = user_home {
@@ -307,6 +312,15 @@ pub(super) fn catalog(
             &mut skills,
         )?;
     }
+    let discovered = skills
+        .iter()
+        .filter(|skill| skill.source != "mono")
+        .map(|skill| canonical_skill_path(Path::new(&skill.path)))
+        .collect::<HashSet<_>>();
+    skills.retain(|skill| {
+        skill.source != "mono"
+            || !discovered.contains(&canonical_skill_path(Path::new(&skill.path)))
+    });
     skills.sort_by(|a, b| a.id.cmp(&b.id));
     skills.dedup_by(|a, b| a.id == b.id);
     let disabled = disabled_skills(source, &skills)?;
@@ -484,7 +498,7 @@ pub(super) fn prepare(
     let _lock = STORAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     transactions::reconcile(home)?;
     let user_home = crate::dirs_home().map(PathBuf::from);
-    let catalog = catalog(source, user_home.as_deref(), project)?;
+    let catalog = catalog(source, home, user_home.as_deref(), project)?;
     let id = context_id(source, home, project, role, policy, &catalog)?;
     with_context_home(home, &id, |context| {
         prepare_context_files(source, home, context)?;
@@ -547,6 +561,7 @@ pub(super) fn with_context_home<T>(
 }
 
 pub(super) fn prepare_context_files(source: &Path, base: &Path, home: &Path) -> Result<(), String> {
+    transactions::reconcile(home)?;
     let share_hooks = hooks_shared(base)?;
     if !share_hooks {
         let source = base.join("hooks.json");
@@ -568,32 +583,46 @@ pub(super) fn prepare_context_files(source: &Path, base: &Path, home: &Path) -> 
             let expected = fingerprint_file(&mut original)?;
             original.rewind().map_err(|e| e.to_string())?;
             let temp = home.join(format!(".monocode-link-{}", uuid::Uuid::new_v4()));
-            let mut copy = std::fs::OpenOptions::new()
-                .create_new(true)
-                .write(true)
-                .open(&temp)
-                .map_err(|e| e.to_string())?;
-            std::io::copy(&mut original, &mut copy).map_err(|e| e.to_string())?;
-            copy.sync_all().map_err(|e| e.to_string())?;
-            drop(copy);
+            let mut options = std::fs::OpenOptions::new();
+            options.create_new(true).write(true);
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::OpenOptionsExt;
+                options.share_mode(windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ);
+            }
+            let mut copy = options.open(&temp).map_err(|e| e.to_string())?;
             let staged = transactions::RecordedEntry::new(&temp)?;
+            let mut journal = match transactions::ClaimJournal::clone_hooks(&target, &staged) {
+                Ok(journal) => journal,
+                Err(error) => {
+                    drop(copy);
+                    staged.cleanup(&temp)?;
+                    return Err(error);
+                }
+            };
             let result: Result<(), String> = (|| {
+                #[cfg(test)]
+                crash_tests::checkpoint("skills-hooks-before-copy");
+                std::io::copy(&mut original, &mut copy).map_err(|e| e.to_string())?;
+                copy.sync_all().map_err(|e| e.to_string())?;
+                journal.verify_clone(&temp)?;
+                drop(copy);
                 if fingerprint(&temp)? != expected || fingerprint_file(&mut original)? != expected {
                     return Err("Private Mono hooks changed during preparation; retry with the preserved original".into());
                 }
                 #[cfg(test)]
                 crash_tests::checkpoint("skills-hooks-before-publish");
-                staged.publish(&temp, &target)?;
+                journal.publish_clone(&temp, &target)?;
                 #[cfg(test)]
                 crash_tests::checkpoint("skills-hooks-after-publish");
                 Ok(())
             })();
-            staged.cleanup(&temp)?;
+            journal.finish()?;
             result?;
         }
     }
     set_hooks_shared(home, share_hooks)?;
-    prepare_files_locked(source, home)?;
+    prepare_files_with_state_locked(source, home, Some(base))?;
     for entry in std::fs::read_dir(base).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
         let name = entry.file_name();
@@ -613,6 +642,80 @@ pub(super) fn prepare_context_files(source: &Path, base: &Path, home: &Path) -> 
             link_entry(&entry.path(), &home.join(name))?;
         }
     }
+    archive::prepare_memory_state(base, home)?;
+    for name in [".sandbox", ".sandbox-bin", ".sandbox-secrets", "cap_sid"] {
+        let entry = base.join(name);
+        if std::fs::symlink_metadata(&entry).is_ok() {
+            link_entry(&entry, &home.join(name))?;
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn validate_sandbox(base: &Path) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        if read_config(base)?
+            .get("windows")
+            .and_then(|value| value.get("sandbox"))
+            .and_then(toml::Value::as_str)
+            != Some("elevated")
+        {
+            return Ok(());
+        }
+        #[derive(Deserialize)]
+        struct Marker {
+            version: u32,
+            offline_username: String,
+            online_username: String,
+            #[serde(default)]
+            created_at: Option<String>,
+            #[serde(default)]
+            proxy_ports: Vec<u16>,
+            #[serde(default)]
+            allow_local_binding: bool,
+        }
+        #[derive(Deserialize)]
+        struct User {
+            username: String,
+            password: String,
+        }
+        #[derive(Deserialize)]
+        struct Users {
+            version: u32,
+            offline: User,
+            online: User,
+        }
+        let marker = std::fs::read(base.join(".sandbox/setup_marker.json"))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Marker>(&bytes).ok());
+        let users = std::fs::read(base.join(".sandbox-secrets/sandbox_users.json"))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Users>(&bytes).ok());
+        // shortcut: Codex 0.162.1 uses setup version 5; recheck this guard when upgrading its sandbox schema.
+        if marker.is_none_or(|marker| {
+            let _ = (
+                marker.created_at,
+                marker.proxy_ports,
+                marker.allow_local_binding,
+            );
+            marker.version != 5
+                || marker.offline_username.is_empty()
+                || marker.online_username.is_empty()
+        }) || users.is_none_or(|users| {
+            users.version != 5
+                || users.offline.username.is_empty()
+                || users.online.username.is_empty()
+                || users.offline.password.is_empty()
+                || users.online.password.is_empty()
+        }) || !base.join(".sandbox-bin").is_dir()
+            || !std::fs::read(base.join("cap_sid")).is_ok_and(|bytes| !bytes.is_empty())
+        {
+            return Err("The existing Mono Windows sandbox is missing or incompatible; skill changes cannot run fresh or elevated setup. Use full access or repair the original sandbox explicitly.".into());
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = base;
     Ok(())
 }
 

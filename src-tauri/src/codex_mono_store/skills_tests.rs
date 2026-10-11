@@ -2,6 +2,10 @@ use super::*;
 
 struct Fixture(PathBuf);
 
+const SANDBOX_MARKER: &[u8] =
+    br#"{"version":5,"offline_username":"SyntheticOffline","online_username":"SyntheticOnline"}"#;
+const SANDBOX_USERS: &[u8] = br#"{"version":5,"offline":{"username":"SyntheticOffline","password":"synthetic-encrypted-password"},"online":{"username":"SyntheticOnline","password":"synthetic-encrypted-password"}}"#;
+
 impl Fixture {
     fn new() -> Self {
         let root =
@@ -26,7 +30,24 @@ impl Fixture {
     }
 
     fn catalog(&self) -> Catalog {
-        catalog(&self.account(), None, None).unwrap()
+        catalog(&self.account(), &self.home(), None, None).unwrap()
+    }
+
+    fn sandbox(&self) {
+        for name in [".sandbox", ".sandbox-bin", ".sandbox-secrets"] {
+            std::fs::create_dir(self.home().join(name)).unwrap();
+        }
+        std::fs::write(
+            self.home().join(".sandbox/setup_marker.json"),
+            SANDBOX_MARKER,
+        )
+        .unwrap();
+        std::fs::write(
+            self.home().join(".sandbox-secrets/sandbox_users.json"),
+            SANDBOX_USERS,
+        )
+        .unwrap();
+        std::fs::write(self.home().join("cap_sid"), b"synthetic SID").unwrap();
     }
 }
 
@@ -70,7 +91,7 @@ fn role_defaults_are_small_inventory_matched_and_project_skills_are_included() {
     fixture.skill(&repo, ".codex/skills/project-own", "project-own");
     fixture.skill(&repo, ".claude/skills/claude-own", "claude-own");
     std::fs::write(repo.join(".git"), "synthetic root marker").unwrap();
-    let catalog = catalog(&fixture.account(), None, Some(&repo)).unwrap();
+    let catalog = catalog(&fixture.account(), &fixture.home(), None, Some(&repo)).unwrap();
     for (role, count) in [
         ("grand_orchestrator", 5),
         ("manager", 6),
@@ -179,7 +200,7 @@ fn account_switch_adds_selected_source_without_redirecting_previous_links() {
     assert!(same_entry(&linked, &first));
     let other = fixture.0.join("other-account");
     let second = fixture.skill(&other, "skills/orca-cli", "orca-cli");
-    let next = super::catalog(&other, None, None).unwrap();
+    let next = super::catalog(&other, &fixture.home(), None, None).unwrap();
     prepare_catalog(&fixture.home(), &next, "manager", &SkillsPolicy::default()).unwrap();
     let next_link = fixture.home().join("skills").join(alias(&next.skills[0]));
     assert!(same_entry(&linked, &first));
@@ -341,7 +362,7 @@ fn project_ancestor_skills_stop_at_configured_root_marker() {
     fixture.skill(&fixture.0, ".agents/skills/outside", "outside");
     fixture.skill(&root, ".agents/skills/root-own", "root-own");
     fixture.skill(&cwd, ".agents/skills/app-own", "app-own");
-    let catalog = catalog(&fixture.account(), None, Some(&cwd)).unwrap();
+    let catalog = catalog(&fixture.account(), &fixture.home(), None, Some(&cwd)).unwrap();
     assert_eq!(catalog.skills.len(), 2);
     assert!(!catalog.skills.iter().any(|skill| skill.name == "outside"));
     assert_eq!(catalog.role_defaults["manager"].len(), 2);
@@ -387,7 +408,7 @@ fn non_git_project_under_user_home_does_not_promote_global_skills_to_project_def
     std::fs::write(fixture.0.join(".git"), "synthetic enclosing marker").unwrap();
     fixture.skill(&user, ".agents/skills/hunt-rce", "hunt-rce");
     fixture.skill(&cwd, ".agents/skills/local", "local");
-    let catalog = catalog(&fixture.account(), Some(&user), Some(&cwd)).unwrap();
+    let catalog = catalog(&fixture.account(), &fixture.home(), Some(&user), Some(&cwd)).unwrap();
     assert_eq!(catalog.skills.len(), 2);
     assert_eq!(catalog.role_defaults["manager"].len(), 1);
     assert_eq!(
@@ -451,7 +472,8 @@ fn fixture_context(
     policy: &SkillsPolicy,
 ) -> (String, PathBuf, serde_json::Value) {
     prepare_files(&fixture.account(), &fixture.home()).unwrap();
-    let catalog = catalog(&fixture.account(), None, project).unwrap();
+    archive::prepare_base_state(&fixture.home()).unwrap();
+    let catalog = catalog(&fixture.account(), &fixture.home(), None, project).unwrap();
     let id = context_id(
         &fixture.account(),
         &fixture.home(),
@@ -518,7 +540,7 @@ fn context_ids_reject_arbitrary_paths_and_source_account_changes_resolve_separat
     let (first, _, _) = fixture_context(&fixture, None, "manager", &SkillsPolicy::default());
     let account_b = fixture.0.join("other-account");
     fixture.skill(&account_b, "skills/orca-cli", "orca-cli");
-    let catalog_b = catalog(&account_b, None, None).unwrap();
+    let catalog_b = catalog(&account_b, &fixture.home(), None, None).unwrap();
     let second = context_id(
         &account_b,
         &fixture.home(),
@@ -616,7 +638,7 @@ fn contexts_follow_explicit_shared_hooks_and_kept_private_configuration() {
 }
 
 #[test]
-fn historical_rollouts_are_located_across_contexts_without_state_links_or_moves() {
+fn historical_rollouts_are_located_across_contexts_with_shared_state_and_private_skills() {
     let fixture = Fixture::new();
     let (_, first, _) = fixture_context(&fixture, None, "manager", &SkillsPolicy::default());
     let (_, second, _) = fixture_context(&fixture, None, "reviewer", &SkillsPolicy::default());
@@ -639,14 +661,16 @@ fn historical_rollouts_are_located_across_contexts_without_state_links_or_moves(
         std::fs::read(&prior).unwrap(),
         b"prior context native rollout bytes"
     );
-    assert!(!second
-        .join("sessions")
-        .join(prior.file_name().unwrap())
-        .exists());
+    assert!(same_entry(
+        &prior,
+        &second.join("sessions").join(prior.file_name().unwrap())
+    ));
     for home in [first, second] {
-        for state in ["sessions", "skills"] {
-            assert!(!replaceable_link(&home.join(state)).unwrap());
-        }
+        assert!(same_entry(
+            &fixture.home().join("sessions"),
+            &home.join("sessions")
+        ));
+        assert!(!replaceable_link(&home.join("skills")).unwrap());
     }
 }
 
@@ -670,4 +694,325 @@ fn plugin_local_cache_matches_codex_preference_over_numeric_releases() {
         canonical_skill_path(Path::new(&catalog.skills[0].path)),
         local.join("SKILL.md").canonicalize().unwrap()
     );
+}
+
+#[test]
+fn base_only_sandbox_identity_is_shared_across_policy_changes() {
+    let fixture = Fixture::new();
+    std::fs::write(
+        fixture.account().join("config.toml"),
+        "[windows]\nsandbox='elevated'\n",
+    )
+    .unwrap();
+    fixture.sandbox();
+    let entries = [".sandbox", ".sandbox-bin", ".sandbox-secrets", "cap_sid"];
+    let identities = entries.map(|name| entry_identity(&fixture.home().join(name)).unwrap());
+    let (_, first, _) = fixture_context(&fixture, None, "worker", &SkillsPolicy::default());
+    let (_, second, _) = fixture_context(
+        &fixture,
+        None,
+        "worker",
+        &SkillsPolicy {
+            mode: SkillsMode::All,
+            ..Default::default()
+        },
+    );
+    assert_ne!(first, second);
+    for context in [&first, &second] {
+        for (name, identity) in entries.into_iter().zip(identities) {
+            assert!(!fixture.account().join(name).exists());
+            assert!(
+                same_entry(&fixture.home().join(name), &context.join(name)),
+                "{name}"
+            );
+            assert_eq!(
+                entry_identity(&fixture.home().join(name)).unwrap(),
+                identity
+            );
+        }
+        assert_eq!(
+            std::fs::read(context.join("cap_sid")).unwrap(),
+            b"synthetic SID"
+        );
+        assert_eq!(
+            std::fs::read(context.join(".sandbox/setup_marker.json")).unwrap(),
+            SANDBOX_MARKER
+        );
+    }
+    let (_, repeated, _) = fixture_context(&fixture, None, "worker", &SkillsPolicy::default());
+    assert_eq!(first, repeated);
+    assert!(same_entry(
+        &fixture.home().join(".sandbox"),
+        &repeated.join(".sandbox")
+    ));
+}
+
+#[cfg(windows)]
+#[test]
+fn sandboxed_preparation_rejects_incomplete_or_incompatible_identity_without_setup() {
+    for case in [
+        "missing-marker",
+        "malformed-marker",
+        "old-marker",
+        "missing-users",
+        "malformed-users",
+        "old-users",
+        "missing-bin",
+        "empty-sid",
+    ] {
+        let fixture = Fixture::new();
+        std::fs::write(
+            fixture.account().join("config.toml"),
+            "[windows]\nsandbox='elevated'\n",
+        )
+        .unwrap();
+        fixture.sandbox();
+        prepare_files(&fixture.account(), &fixture.home()).unwrap();
+        validate_sandbox(&fixture.home()).unwrap();
+        let marker = fixture.home().join(".sandbox/setup_marker.json");
+        let users = fixture.home().join(".sandbox-secrets/sandbox_users.json");
+        match case {
+            "missing-marker" => std::fs::remove_file(&marker).unwrap(),
+            "malformed-marker" => std::fs::write(&marker, b"{}").unwrap(),
+            "old-marker" => std::fs::write(&marker, br#"{"version":4,"offline_username":"SyntheticOffline","online_username":"SyntheticOnline"}"#).unwrap(),
+            "missing-users" => std::fs::remove_file(&users).unwrap(),
+            "malformed-users" => std::fs::write(&users, b"{}").unwrap(),
+            "old-users" => {
+                let mut value: serde_json::Value = serde_json::from_slice(SANDBOX_USERS).unwrap();
+                value["version"] = 4.into();
+                std::fs::write(&users, serde_json::to_vec(&value).unwrap()).unwrap();
+            }
+            "missing-bin" => std::fs::remove_dir(fixture.home().join(".sandbox-bin")).unwrap(),
+            "empty-sid" => std::fs::write(fixture.home().join("cap_sid"), b"").unwrap(),
+            _ => unreachable!(),
+        }
+        let started = std::time::Instant::now();
+        let error = validate_sandbox(&fixture.home()).unwrap_err();
+        assert!(
+            error.contains("cannot run fresh or elevated setup"),
+            "{case}: {error}"
+        );
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        assert!(!fixture.account().join(".sandbox").exists());
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn full_access_context_preparation_does_not_require_sandbox_provisioning() {
+    let fixture = Fixture::new();
+    std::fs::write(
+        fixture.account().join("config.toml"),
+        "sandbox_mode='danger-full-access'\n[windows]\nsandbox='elevated'\n",
+    )
+    .unwrap();
+    let (_, home, _) = fixture_context(&fixture, None, "worker", &SkillsPolicy::default());
+    assert!(!home.join(".sandbox").exists());
+    assert!(validate_sandbox(&fixture.home()).is_err());
+}
+
+#[test]
+fn native_memory_is_shared_on_first_and_later_selections() {
+    let fixture = Fixture::new();
+    let memory = fixture.home().join("memories");
+    std::fs::create_dir(&memory).unwrap();
+    std::fs::write(
+        memory.join("memory_summary.md"),
+        b"Synthetic Mono memory summary",
+    )
+    .unwrap();
+    std::fs::write(memory.join("MEMORY.md"), b"Referenced native Mono memory").unwrap();
+    let identity = entry_identity(&memory).unwrap();
+    let (_, first, _) = fixture_context(&fixture, None, "worker", &SkillsPolicy::default());
+    let (_, second, _) = fixture_context(
+        &fixture,
+        None,
+        "worker",
+        &SkillsPolicy {
+            mode: SkillsMode::All,
+            ..Default::default()
+        },
+    );
+    for home in [&first, &second] {
+        assert!(same_entry(&memory, &home.join("memories")));
+        assert_eq!(
+            std::fs::read(home.join("memories/memory_summary.md")).unwrap(),
+            b"Synthetic Mono memory summary"
+        );
+        assert_eq!(
+            std::fs::read(home.join("memories/MEMORY.md")).unwrap(),
+            b"Referenced native Mono memory"
+        );
+    }
+    std::fs::write(
+        first.join("memories/memory_summary.md"),
+        b"Updated shared Mono memory",
+    )
+    .unwrap();
+    let (_, repeated, _) = fixture_context(&fixture, None, "worker", &SkillsPolicy::default());
+    assert_eq!(first, repeated);
+    assert_eq!(
+        std::fs::read(second.join("memories/memory_summary.md")).unwrap(),
+        b"Updated shared Mono memory"
+    );
+    assert_eq!(entry_identity(&memory).unwrap(), identity);
+    assert!(!replaceable_link(&memory).unwrap());
+}
+
+#[test]
+fn legacy_context_memory_is_shared_without_overwriting_divergent_bytes() {
+    for case in ["empty", "base-empty", "disjoint", "identical", "divergent"] {
+        let fixture = Fixture::new();
+        let (_, home, _) = fixture_context(&fixture, None, "worker", &SkillsPolicy::default());
+        let base_memory = fixture.home().join("memories");
+        if case != "base-empty" {
+            std::fs::write(base_memory.join("memory_summary.md"), b"Base native memory").unwrap();
+        }
+        let context_memory = home.join("memories");
+        remove_link(&context_memory).unwrap();
+        std::fs::create_dir(&context_memory).unwrap();
+        let identity = entry_identity(&context_memory).unwrap();
+        if matches!(case, "base-empty" | "divergent") {
+            std::fs::write(
+                context_memory.join("memory_summary.md"),
+                b"Private context memory",
+            )
+            .unwrap();
+        } else if case == "identical" {
+            std::fs::write(
+                context_memory.join("memory_summary.md"),
+                b"Base native memory",
+            )
+            .unwrap();
+        }
+        if case == "disjoint" {
+            std::fs::create_dir(context_memory.join("rollout_summaries")).unwrap();
+            std::fs::write(
+                context_memory.join("rollout_summaries/context.md"),
+                b"Referenced context memory",
+            )
+            .unwrap();
+        }
+        let result = archive::prepare_base_state(&fixture.home());
+        if case == "divergent" {
+            assert!(result.unwrap_err().contains("preserved"));
+            assert_eq!(entry_identity(&context_memory).unwrap(), identity);
+            assert_eq!(
+                std::fs::read(context_memory.join("memory_summary.md")).unwrap(),
+                b"Private context memory"
+            );
+            assert!(!replaceable_link(&context_memory).unwrap());
+        } else {
+            result.unwrap();
+            assert!(same_entry(&base_memory, &context_memory));
+            let retained = std::fs::read_dir(&home)
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .find(|path| {
+                    path.file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .starts_with(".monocode-retained-memories-")
+                })
+                .unwrap();
+            assert_eq!(entry_identity(&retained).unwrap(), identity);
+            if case == "empty" {
+                assert_eq!(std::fs::read_dir(retained).unwrap().count(), 0);
+            }
+            let (_, next, _) = fixture_context(
+                &fixture,
+                None,
+                "worker",
+                &SkillsPolicy {
+                    mode: SkillsMode::All,
+                    ..Default::default()
+                },
+            );
+            assert!(same_entry(&base_memory, &next.join("memories")));
+            if case == "disjoint" {
+                assert_eq!(
+                    std::fs::read(next.join("memories/rollout_summaries/context.md")).unwrap(),
+                    b"Referenced context memory"
+                );
+            }
+        }
+        assert_eq!(
+            std::fs::read(base_memory.join("memory_summary.md")).unwrap(),
+            if case == "base-empty" {
+                b"Private context memory".as_slice()
+            } else {
+                b"Base native memory".as_slice()
+            }
+        );
+        assert!(std::fs::read_dir(&home).unwrap().all(|entry| {
+            let name = entry.unwrap().file_name().to_string_lossy().into_owned();
+            !name.starts_with(".monocode-txn-")
+                && !name.starts_with(".monocode-link-")
+                && !name.starts_with(".monocode-claim-")
+        }));
+    }
+}
+
+#[test]
+fn preserved_private_mono_skills_are_catalogued_selected_and_available_in_all_mode() {
+    let fixture = Fixture::new();
+    let private = fixture.skill(
+        &fixture.home(),
+        "skills/my-private-skill",
+        "my-private-skill",
+    );
+    let skill = private.join("SKILL.md");
+    let original = std::fs::read(&skill).unwrap();
+    let identity = entry_identity(&skill).unwrap();
+    let catalog = fixture.catalog();
+    let entry = catalog
+        .skills
+        .iter()
+        .find(|entry| entry.name == "my-private-skill")
+        .unwrap();
+    assert_eq!(entry.id, "mono:my-private-skill");
+    assert_eq!(entry.source, "mono");
+    let policy = SkillsPolicy {
+        mode: SkillsMode::Custom,
+        enabled: vec![entry.id.clone()],
+        ..Default::default()
+    };
+    let (_, curated, config) = fixture_context(&fixture, None, "worker", &policy);
+    assert!(enabled(&config, &skill));
+    assert!(same_entry(
+        &private,
+        &curated.join("skills").join(alias(entry))
+    ));
+    let (_, all, all_config) = fixture_context(
+        &fixture,
+        None,
+        "worker",
+        &SkillsPolicy {
+            mode: SkillsMode::All,
+            ..Default::default()
+        },
+    );
+    assert!(enabled(&all_config, &skill));
+    assert!(same_entry(&private, &all.join("skills").join(alias(entry))));
+    let (_, _, defaults) = fixture_context(&fixture, None, "worker", &SkillsPolicy::default());
+    assert!(!enabled(&defaults, &skill));
+    assert_eq!(std::fs::read(&skill).unwrap(), original);
+    assert_eq!(entry_identity(&skill).unwrap(), identity);
+}
+
+#[test]
+fn mono_catalog_does_not_duplicate_a_skill_already_discovered_through_another_source() {
+    let fixture = Fixture::new();
+    fixture.skill(&fixture.account(), "skills/orca-cli", "orca-cli");
+    let catalog = fixture.catalog();
+    prepare_catalog(
+        &fixture.home(),
+        &catalog,
+        "manager",
+        &SkillsPolicy::default(),
+    )
+    .unwrap();
+    let refreshed = fixture.catalog();
+    assert_eq!(refreshed.skills.len(), 1);
+    assert_eq!(refreshed.skills[0].id, "account:orca-cli");
 }

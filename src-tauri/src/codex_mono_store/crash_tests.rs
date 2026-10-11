@@ -135,7 +135,18 @@ impl Fixture {
     }
 
     fn assert_clean(&self) {
-        for directory in [self.home(), self.home().join(".monocode-links")] {
+        let mut directories = vec![self.home(), self.home().join(".monocode-links")];
+        if self.home().join(".monocode-skill-contexts").is_dir() {
+            for entry in std::fs::read_dir(self.home().join(".monocode-skill-contexts")).unwrap() {
+                let context = entry.unwrap().path();
+                directories.extend([
+                    context.clone(),
+                    context.join(".monocode-links"),
+                    context.join("skills"),
+                ]);
+            }
+        }
+        for directory in directories {
             let entries = match std::fs::read_dir(&directory) {
                 Ok(entries) => entries,
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
@@ -205,12 +216,18 @@ fn crash_child() {
     let result = match std::env::var("CC0G_CRASH_OPERATION").unwrap().as_str() {
         "prepare" => prepare_files(&source, &home),
         "isolate-skills" => prepare_files(&source, &home),
-        "skills-context" => (|| {
+        "skills-context" | "memory-context" => (|| {
             prepare_files(&source, &home)?;
-            let catalog = skills::catalog(&source, None, None)?;
+            let catalog = skills::catalog(&source, &home, None, None)?;
             let policy = skills::SkillsPolicy::default();
             let id = skills::context_id(&source, &home, None, "worker", &policy, &catalog)?;
             skills::with_context_home(&home, &id, |context| {
+                transactions::reconcile(context)?;
+                if std::env::var("CC0G_CRASH_OPERATION").unwrap() == "memory-context"
+                    && !context.join("memories").exists()
+                {
+                    std::fs::create_dir(context.join("memories")).map_err(|e| e.to_string())?;
+                }
                 skills::prepare_context_files(&source, &home, context)
             })
         })(),
@@ -314,7 +331,11 @@ fn killed_skill_junction_migration_preserves_source_and_restarts() {
 
 #[test]
 fn killed_private_hook_context_copy_never_publishes_partial_hooks() {
-    for point in ["skills-hooks-before-publish", "skills-hooks-after-publish"] {
+    for point in [
+        "skills-hooks-before-copy",
+        "skills-hooks-before-publish",
+        "skills-hooks-after-publish",
+    ] {
         let fixture = Fixture::new(&format!("context-hooks-{point}"));
         let hooks = fixture.home().join("hooks.json");
         let chosen = br#"{"hooks":{"Stop":[{"command":"synthetic-private-context-hook"}]}}"#;
@@ -337,6 +358,39 @@ fn killed_private_hook_context_copy_never_publishes_partial_hooks() {
         assert_eq!(std::fs::read(&hooks).unwrap(), chosen);
         fixture.assert_clean();
         println!("context private hooks {point}: {}", fixture.0.display());
+    }
+}
+
+#[test]
+fn killed_empty_legacy_memory_migration_preserves_shared_memory_and_restarts() {
+    for point in [
+        "after-journal",
+        "after-claim",
+        "memory-before-publish",
+        "memory-after-publish",
+    ] {
+        let fixture = Fixture::new(&format!("context-memory-{point}"));
+        let memory = fixture.home().join("memories");
+        std::fs::create_dir(&memory).unwrap();
+        std::fs::write(memory.join("memory_summary.md"), MONO_BYTES).unwrap();
+        std::fs::write(fixture.home().join("hooks.json"), EMPTY_HOOKS).unwrap();
+        fixture.kill_at("memory-context", "memories", point);
+        fixture
+            .run("memory-context", "memories", "restart")
+            .unwrap();
+        let contexts = std::fs::read_dir(fixture.home().join(".monocode-skill-contexts"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect::<Vec<_>>();
+        assert_eq!(contexts.len(), 1);
+        assert!(same_entry(&memory, &contexts[0].join("memories")));
+        assert_eq!(
+            std::fs::read(contexts[0].join("memories/memory_summary.md")).unwrap(),
+            MONO_BYTES
+        );
+        assert!(!replaceable_link(&memory).unwrap());
+        fixture.assert_clean();
+        println!("context native memory {point}: {}", fixture.0.display());
     }
 }
 

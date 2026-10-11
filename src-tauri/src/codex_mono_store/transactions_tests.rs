@@ -1,4 +1,5 @@
 use super::*;
+use transactions::RecordedEntry;
 
 const PRIVATE: &[u8] = b"Synthetic private instructions; preserve these bytes";
 const ACCOUNT: &[u8] = b"Synthetic account instructions";
@@ -299,5 +300,91 @@ fn recovery_preserves_claims_when_an_archive_is_changed_or_escapes_storage() {
         assert_eq!(std::fs::read(&fixture.claim).unwrap(), PRIVATE);
         assert_eq!(std::fs::read(&fixture.original).unwrap(), ACCOUNT);
         assert!(archive.exists());
+    }
+}
+
+#[test]
+fn hook_clone_recovery_cleans_only_the_recorded_staging_file() {
+    for completed in [false, true] {
+        let fixture = TransactionFixture::new(ClaimIntent::Keep);
+        fixture.journal.finish().unwrap();
+        let staged = fixture
+            .home
+            .join(format!(".monocode-link-{}", uuid::Uuid::new_v4()));
+        std::fs::write(&staged, b"").unwrap();
+        let record = RecordedEntry::new(&staged).unwrap();
+        let mut journal =
+            ClaimJournal::clone_hooks(&fixture.home.join("hooks.json"), &record).unwrap();
+        std::fs::write(&staged, b"Synthetic partial or complete clone").unwrap();
+        if completed {
+            journal.verify_clone(&staged).unwrap();
+        }
+        let unrelated = fixture
+            .home
+            .join(format!(".monocode-link-{}", uuid::Uuid::new_v4()));
+        std::fs::write(&unrelated, b"Unfamiliar file to preserve").unwrap();
+        transactions::reconcile(&fixture.home).unwrap();
+        assert!(!staged.exists());
+        assert_eq!(
+            std::fs::read(unrelated).unwrap(),
+            b"Unfamiliar file to preserve"
+        );
+    }
+}
+
+#[test]
+fn hook_clone_recovery_preserves_replaced_or_modified_staging_files() {
+    for replaced in [false, true] {
+        let fixture = TransactionFixture::new(ClaimIntent::Keep);
+        fixture.journal.finish().unwrap();
+        let staged = fixture
+            .home
+            .join(format!(".monocode-link-{}", uuid::Uuid::new_v4()));
+        std::fs::write(&staged, PRIVATE).unwrap();
+        let record = RecordedEntry::new(&staged).unwrap();
+        let mut journal =
+            ClaimJournal::clone_hooks(&fixture.home.join("hooks.json"), &record).unwrap();
+        journal.verify_clone(&staged).unwrap();
+        if replaced {
+            std::fs::rename(&staged, fixture.root.join("preserved-original-stage")).unwrap();
+        }
+        std::fs::write(&staged, b"Unfamiliar replacement bytes").unwrap();
+        assert!(transactions::reconcile(&fixture.home).is_err());
+        assert_eq!(
+            std::fs::read(&staged).unwrap(),
+            b"Unfamiliar replacement bytes"
+        );
+    }
+}
+
+#[test]
+fn hook_clone_recovery_preserves_a_racing_target_and_rejects_other_entries() {
+    for name in ["hooks.json", "AGENTS.md"] {
+        let fixture = TransactionFixture::new(ClaimIntent::Keep);
+        fixture.journal.finish().unwrap();
+        let staged = fixture
+            .home
+            .join(format!(".monocode-link-{}", uuid::Uuid::new_v4()));
+        std::fs::write(&staged, PRIVATE).unwrap();
+        let record = RecordedEntry::new(&staged).unwrap();
+        let target = fixture.home.join(name);
+        let mut journal = ClaimJournal::clone_hooks(&target, &record).unwrap();
+        journal.verify_clone(&staged).unwrap();
+        std::fs::write(&target, b"Unfamiliar target bytes").unwrap();
+        assert!(transactions::reconcile(&fixture.home).is_err());
+        assert_eq!(std::fs::read(&target).unwrap(), b"Unfamiliar target bytes");
+        assert_eq!(std::fs::read(&staged).unwrap(), PRIVATE);
+    }
+}
+
+#[test]
+fn rollout_retention_rejects_other_entries_and_escaping_preserved_paths() {
+    for entry in ["AGENTS.md", "sessions"] {
+        let fixture = TransactionFixture::new(ClaimIntent::RetainRollouts {
+            preserved: "../outside".into(),
+        });
+        fixture.change_journal(|value| value["entry"] = serde_json::json!(entry));
+        fixture.assert_blocked();
+        assert_eq!(std::fs::read(&fixture.original).unwrap(), PRIVATE);
     }
 }

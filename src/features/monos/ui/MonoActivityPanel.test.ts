@@ -51,12 +51,7 @@ function render(blocks: Block[], live = false) {
   );
 }
 
-function openWork() {
-  act(() => [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Show work")!.click());
-  return document.querySelector('[role="dialog"]')!;
-}
-
-it("shows the complete chronological trail", () => {
+it("shows the meaningful chronological trail with messages and output available in details", () => {
   render([
     { id: "user", role: "user", text: "Update my instructions" },
     {
@@ -87,16 +82,33 @@ it("shows the complete chronological trail", () => {
   expect(container.querySelector("aside")?.getAttribute("aria-label")).toBe(
     "Captain Awesome activity",
   );
-  expect(container.querySelector("[data-mono-activity-block]")).toBeNull();
-  const reader = openWork();
   expect(
-    Array.from(reader.querySelectorAll("[data-mono-activity-block]")).map(
+    Array.from(container.querySelectorAll("[data-mono-activity-block]")).map(
       (el) => el.getAttribute("data-mono-activity-block"),
     ),
-  ).toEqual(["thinking", "intro", "read", "progress", "write", "reply"]);
-  expect(reader.textContent).toContain("Current soul contents");
-  expect(reader.textContent).toContain("Saved soul");
-  act(() => reader.querySelector<HTMLButtonElement>('[aria-label="Close"]')!.click());
+  ).toEqual(["user", "intro", "read", "progress", "write", "reply"]);
+  expect(container.querySelector("[aria-expanded]")).toBeNull();
+  for (const [id, output] of [
+    ["read", "Current soul contents"],
+    ["write", "Saved soul"],
+  ]) {
+    expect(container.textContent).not.toContain(output);
+    act(() =>
+      [
+        ...container.querySelectorAll<HTMLButtonElement>(
+          `[data-mono-activity-block="${id}"] button`,
+        ),
+      ]
+        .find((button) => button.textContent === "View full output")!
+        .click(),
+    );
+    const reader = document.querySelector('[role="dialog"]')!;
+    expect(reader.querySelector("pre")?.textContent).toBe(output);
+    act(() =>
+      reader.querySelector<HTMLButtonElement>('[aria-label="Close"]')!.click(),
+    );
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+  }
   act(() =>
     container
       .querySelector<HTMLButtonElement>('[aria-label="Hide activity"]')!
@@ -116,8 +128,7 @@ it("updates a live trail and keeps approval controls actionable", () => {
     },
   ];
   render(blocks, true);
-  const reader = openWork();
-  const call = reader.querySelector('[data-mono-activity-block="call"]');
+  const call = container.querySelector('[data-mono-activity-block="call"]');
   render(
     [
       blocks[0],
@@ -135,24 +146,35 @@ it("updates a live trail and keeps approval controls actionable", () => {
     ],
     true,
   );
-  expect(reader.querySelector('[data-mono-activity-block="call"]')).toBe(call);
-  expect(reader.querySelectorAll("[data-mono-activity-block]")).toHaveLength(2);
-  expect(reader.textContent).toContain("Complete output");
+  expect(container.querySelector('[data-mono-activity-block="call"]')).toBe(
+    call,
+  );
+  expect(container.querySelectorAll("[data-mono-activity-block]")).toHaveLength(
+    3,
+  );
+  expect(container.textContent).toContain("Complete output");
   expect(container.textContent).toContain("Working");
-  const allow = Array.from(reader.querySelectorAll("button")).find(
+  const allow = Array.from(container.querySelectorAll("button")).find(
     (button) => button.textContent === "Allow",
   )!;
   act(() => allow.click());
   expect(onApproval).toHaveBeenCalledWith(42, "allow");
 });
 
-it("dismisses Show work when opening its document reader", async () => {
+it("opens the document reader directly from flat activity", async () => {
   const opened = vi.fn();
   window.addEventListener("monocode:open-artifact", opened);
   try {
-    render([{ id: "report", role: "assistant", text: "See artifact-work-report" }]);
-    const reader = openWork();
-    await act(async () => reader.querySelector<HTMLButtonElement>('[data-org-artifact="artifact-work-report"]')!.click());
+    render([
+      { id: "report", role: "assistant", text: "See artifact-work-report" },
+    ]);
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(
+          '[data-org-artifact="artifact-work-report"]',
+        )!
+        .click(),
+    );
     expect(opened.mock.calls[0][0].detail.id).toBe("artifact-work-report");
     expect(document.querySelector('[role="dialog"]')).toBeNull();
   } finally {

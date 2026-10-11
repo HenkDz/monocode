@@ -628,9 +628,10 @@ it("separates current work, queued assignments and review from collapsed complet
         ?.textContent,
     ).toBe("Review checkout permissions");
     expect(
-      host.querySelector('[data-member-task="blocked"] [data-task-reason]')
+      host.querySelector('[data-member-task="blocked"] [data-transcript-error="transport"]')
         ?.textContent,
-    ).toBe("Worker lost its connection");
+    ).toContain("provider connection interrupted");
+    expect(host.querySelector('[data-member-task="blocked"]')?.textContent).not.toContain("Worker lost its connection");
     expect(
       host.querySelector('[data-member-task="review"] [data-task-metrics]')
         ?.textContent,

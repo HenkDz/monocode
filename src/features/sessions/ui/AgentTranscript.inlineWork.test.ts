@@ -113,7 +113,7 @@ it("renders incoming team messages inline with sender identity, clamping and no 
   const incoming = container.querySelector('[data-team-message="sender"]')!;
   expect(incoming.className).toContain("mr-auto");
   expect(incoming.textContent).toContain("Backend");
-  expect(incoming.textContent).toContain("Team message");
+  expect(incoming.textContent).toContain("report");
   expect(incoming.querySelector("details")).toBeNull();
   expect(incoming.textContent).toContain("Long investigation update.");
   expect(incoming.querySelector(".line-clamp-4")).not.toBeNull();
@@ -878,6 +878,7 @@ it("copies and saves only the final answer while the activity trail retains ever
       ...container.querySelectorAll<HTMLElement>("[data-mono-activity-block]"),
     ].map((row) => row.dataset.monoActivityBlock),
   ).toEqual([
+    "user",
     "intro",
     "reasoning",
     "first",

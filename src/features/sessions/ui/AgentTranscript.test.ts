@@ -80,15 +80,15 @@ describe("AgentTranscript collapsed work", () => {
     expect(markup).toContain("Using MonoCode");
     expect(markup).toContain('data-monocode-tool-call="--help"');
     expect(markup).toContain('data-monocode-tool-call="notes.list"');
-    expect(markup).toContain("monocode app --help");
-    expect(markup).toContain("monocode app notes.list");
-    expect(markup).toContain("Ran");
+    expect(markup).toContain("View CLI commands");
+    expect(markup).toContain("List notes");
     expect(markup).toContain("Running");
+    expect(markup).not.toContain("monocode app");
     expect(markup).not.toContain("Contents/MacOS/monocode");
     expect(markup).not.toContain("Show error details for MonoCode");
   });
 
-  it("shows the full command before approving a MonoCode CLI call", () => {
+  it("offers command details and approval controls for a MonoCode CLI call", () => {
     const command = "monocode app sessions.send --json '{\"prompt\":\"private-marker\"}'";
     const markup = renderToStaticMarkup(
       createElement(AgentTranscript, {
@@ -107,7 +107,10 @@ describe("AgentTranscript collapsed work", () => {
       }),
     );
     expect(markup).toContain('data-monocode-tool-call="sessions.send"');
-    expect(markup).toContain("private-marker");
+    expect(markup).toContain("Continue a session");
+    expect(markup).toContain("View command");
+    expect(markup).toContain('aria-haspopup="dialog"');
+    expect(markup).not.toContain("private-marker");
     expect(markup).toContain("Allow</button>");
 
     const compound = renderToStaticMarkup(
@@ -142,9 +145,11 @@ describe("AgentTranscript collapsed work", () => {
       },
     ]);
     expect(markup).toContain('data-monocode-tool-call="notes.list"');
-    expect(markup).toContain("Ran");
-    expect(markup).toContain("monocode app notes.list");
-    expect(markup).toContain("Show error details for MonoCode: List notes");
+    expect(markup).toContain("List notes");
+    expect(markup).toContain('data-transcript-error="transport"');
+    expect(markup).toContain("Open details");
+    expect(markup).toContain("Copy diagnostics");
+    expect(markup).not.toContain("aria-expanded");
     expect(markup).not.toContain("Connection refused");
   });
 
@@ -669,7 +674,10 @@ describe("AgentTranscript collapsed work", () => {
       },
     ]);
 
-    expect(markup).toContain("Show error details for npm test");
+    expect(markup).toContain('data-transcript-error="other"');
+    expect(markup).toContain("Open details");
+    expect(markup).toContain("Copy diagnostics");
+    expect(markup).not.toContain("Tests failed: assertion error");
   });
 
   it("counts a failed step on a folded subagent row, so it is not hidden", () => {

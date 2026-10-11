@@ -2,6 +2,7 @@ import { AiIdea, CircleDashed, PanelRight, Play } from "../../../shared/ui/icons
 import { planSummary, planTitle } from "../model/plan";
 import type { HarnessId, PlanBlockMeta, PlanBuildTarget } from "../model/session";
 import { BuildTargetButton } from "./SecondOpinionButton";
+import { presentationText } from "../model/transcriptPresentation";
 
 type Props = {
   text: string;
@@ -16,7 +17,7 @@ type Props = {
 };
 
 export function PlanPreview({
-  text,
+  text: sourceText,
   streaming,
   busy,
   plan,
@@ -26,6 +27,7 @@ export function PlanPreview({
   onOpen,
   onBuild,
 }: Props) {
+  const text = presentationText(sourceText);
   const title = planTitle(text);
   const summary = planSummary(text);
   const buildDisabled =

@@ -35,6 +35,32 @@ for (const width of [1440, 1100]) {
         await expect(composer).toBeInViewport();
         await expect(header.locator("[data-workbench-metrics]")).toHaveCount(1);
         await expect(header).not.toContainText("cached");
+        if (scenario !== "zero") {
+          const transcript = page.getByRole("tabpanel", {
+            name: "Conversation",
+            exact: true,
+          });
+          await expect(
+            transcript.getByText(
+              "I’ll check the window lifecycle, then follow the activation route into the selected browser. I’ll keep source evidence and live acceptance separate.",
+              { exact: true },
+            ),
+          ).toBeVisible();
+          await expect(
+            transcript.getByLabel(
+              "Tool call: Read window lifecycle and routing",
+              { exact: true },
+            ),
+          ).toBeVisible();
+          await expect(
+            transcript.getByLabel("Tool call: Run focused routing checks", {
+              exact: true,
+            }),
+          ).toBeVisible();
+          await expect(
+            transcript.locator("button[aria-expanded], details, summary"),
+          ).toHaveCount(0);
+        }
         if (scenario === "failed") {
           await expect(
             work.getByRole("status", { name: "Conversation couldn’t start" }),
@@ -352,3 +378,201 @@ test("flat sidebar pages preserve selected, unread, attention and dirty task row
     ),
   ).toBe(true);
 });
+
+for (const kind of ["member", "session"]) {
+  test(`flat ${kind} Conversation opens exact saved tool output by pointer and keyboard`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1100, height: 1000 });
+    await page.goto(
+      `/tests/browser/cc7u-workbench.html?scenario=failed&kind=${kind}`,
+      { waitUntil: "commit" },
+    );
+    const transcript = page.getByRole("tabpanel", {
+      name: "Conversation",
+      exact: true,
+    });
+    await expect(transcript).toBeVisible({ timeout: 90_000 });
+    await expect(transcript).toContainText(
+      "I’ll check the window lifecycle, then follow the activation route into the selected browser.",
+    );
+    const read = transcript
+      .getByLabel("Tool call: Read window lifecycle and routing", {
+        exact: true,
+      })
+      .locator("..")
+      .getByRole("button", { name: "View full output", exact: true });
+    const checks = transcript
+      .getByLabel("Tool call: Run focused routing checks", { exact: true })
+      .locator("..")
+      .getByRole("button", { name: "View full output", exact: true });
+    await expect(read).toBeVisible();
+    await read.click();
+    await expect(
+      page.getByRole("dialog", {
+        name: "Read window lifecycle and routing",
+        exact: true,
+      }),
+    ).toContainText(
+      "3 files read. Window lifecycle, foreground routing, acceptance brief.",
+    );
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(read).toBeFocused();
+    await expect(checks).toBeVisible();
+    await checks.focus();
+    await page.keyboard.press("Enter");
+    await expect(
+      page.getByRole("dialog", {
+        name: "Run focused routing checks",
+        exact: true,
+      }),
+    ).toContainText("24 passed · 0 failed. Saved synthetic output.");
+    await page.keyboard.press("Escape");
+    await expect(checks).toBeFocused();
+    await expect(
+      transcript.locator("button[aria-expanded], details, summary"),
+    ).toHaveCount(0);
+    const composer = page
+      .locator("[data-session-composer]")
+      .getByRole("textbox");
+    await expect(composer).toHaveValue("Keep my draft");
+    await page.getByRole("tab", { name: "Activity", exact: true }).click();
+    await page.getByRole("tab", { name: "Conversation", exact: true }).click();
+    await expect(composer).toHaveValue("Keep my draft");
+    expect(
+      await page.evaluate(() =>
+        (
+          window as unknown as {
+            workbenchFixture: { events: { action: string }[] };
+          }
+        ).workbenchFixture.events.filter((event) => event.action === "submit"),
+      ),
+    ).toEqual([]);
+  });
+}
+
+for (const [label, decision] of [
+  ["Allow", "allow"],
+  ["Deny", "deny"],
+] as const) {
+  test(`flat Conversation ${label} preserves the exact pending command and request identity`, async ({
+    page,
+  }) => {
+    await page.goto(
+      "/tests/browser/cc7u-workbench.html?scenario=working&approval=yes",
+      { waitUntil: "commit" },
+    );
+    const transcript = page.getByRole("tabpanel", {
+      name: "Conversation",
+      exact: true,
+    });
+    await expect(transcript).toBeVisible({ timeout: 90_000 });
+    await expect(
+      transcript.getByLabel("Command awaiting approval", { exact: true }),
+    ).toHaveText(
+      "printf '%s\\n' '<monocode_context>keep the exact command</monocode_context>'",
+    );
+    await expect(
+      page
+        .locator("[data-workbench-header]")
+        .getByRole("button", { name: "Steer", exact: true }),
+    ).toBeDisabled();
+    const button = transcript.getByRole("button", { name: label, exact: true });
+    if (decision === "allow") await button.click();
+    else {
+      await button.focus();
+      await page.keyboard.press("Enter");
+    }
+    expect(
+      await page.evaluate(() =>
+        (
+          window as unknown as {
+            workbenchFixture: {
+              events: { action: string; text?: string; options?: unknown }[];
+            };
+          }
+        ).workbenchFixture.events.filter(
+          (event) => event.action === "approval",
+        ),
+      ),
+    ).toEqual([
+      {
+        action: "approval",
+        text: "member-conversation",
+        options: { requestId: 7001, decision },
+      },
+    ]);
+    expect(
+      await page.evaluate(() =>
+        (
+          window as unknown as {
+            workbenchFixture: { events: { action: string }[] };
+          }
+        ).workbenchFixture.events.filter((event) => event.action === "submit"),
+      ),
+    ).toEqual([]);
+  });
+}
+
+for (const activation of ["pointer", "keyboard"]) {
+  test(`flat delegated Conversation reader supports nested output and Escape focus by ${activation}`, async ({
+    page,
+  }) => {
+    await page.goto(
+      "/tests/browser/cc7u-workbench.html?scenario=failed&child=yes",
+      { waitUntil: "commit" },
+    );
+    const transcript = page.getByRole("tabpanel", {
+      name: "Conversation",
+      exact: true,
+    });
+    await expect(transcript).toBeVisible({ timeout: 90_000 });
+    const opener = transcript
+      .locator("[data-flat-subagent]")
+      .getByRole("button", { name: "View full output", exact: true });
+    if (activation === "pointer") await opener.click();
+    else {
+      await opener.focus();
+      await page.keyboard.press("Enter");
+    }
+    const reader = page.getByRole("dialog", {
+      name: "Routing review",
+      exact: true,
+    });
+    await expect(reader).toContainText(
+      "Delegated review report: retained routing paths checked.",
+    );
+    await expect(reader).toContainText(
+      "The retained routing paths match the saved review boundary.",
+    );
+    await expect(
+      reader.locator("button[aria-expanded], details, summary"),
+    ).toHaveCount(0);
+    const nested = reader
+      .getByLabel("Tool call: Inspect routing", { exact: true })
+      .locator("..")
+      .getByRole("button", { name: "View full output", exact: true });
+    await nested.focus();
+    await page.keyboard.press("Enter");
+    await expect(
+      page.getByRole("dialog", { name: "Inspect routing", exact: true }),
+    ).toContainText("Child routing check: 7 assertions passed.");
+    await page.keyboard.press("Escape");
+    await expect(reader).toBeVisible();
+    await expect(page.getByRole("dialog")).toHaveCount(1);
+    await expect(nested).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(opener).toBeFocused();
+    expect(
+      await page.evaluate(() =>
+        (
+          window as unknown as {
+            workbenchFixture: { events: { action: string }[] };
+          }
+        ).workbenchFixture.events.filter((event) => event.action === "submit"),
+      ),
+    ).toEqual([]);
+  });
+}

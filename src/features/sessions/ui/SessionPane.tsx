@@ -1681,6 +1681,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
                         }
                         bottomAligned={!!agent}
                         inlineWork={!!agent}
+                        flatWork={workbench}
                         messageDeliveries={messageDeliveries}
                         onRetryMessage={() => onResumeQueue(session.id)}
                         onShowWork={
@@ -1915,6 +1916,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
                 >
                   <MonoActivityContent
                     member={workbenchMember}
+                    flatWork={workbench}
                     blocks={session.blocks.filter(
                       (block) => !queuedBlockIds.has(block.id),
                     )}

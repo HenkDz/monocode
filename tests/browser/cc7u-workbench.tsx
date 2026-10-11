@@ -32,6 +32,10 @@ const scenario = params.get("scenario") ?? "failed";
 const workerSession = params.get("kind") === "session";
 const waiting = scenario === "waiting";
 const working = scenario === "working";
+const approval = params.get("approval") === "yes";
+const child = params.get("child") === "yes";
+const approvalCommand =
+  "printf '%s\\n' '<monocode_context>keep the exact command</monocode_context>'";
 const zero = scenario === "zero";
 const memberName = waiting || working ? "Native Core" : "Reviewer";
 const now = Date.now();
@@ -325,6 +329,51 @@ const blocks: Block[] = zero
             : "The earlier conversation is saved. The new review attempt has not started because Codex couldn’t open storage.",
       },
     ];
+if (child)
+  blocks.push({
+    id: "child-review",
+    role: "tool",
+    text: "Review the retained routing paths",
+    tool: {
+      kind: "agent",
+      title: "Routing review",
+      status: "completed",
+      detail: "Delegated review report: retained routing paths checked.",
+    },
+    agentRun: {
+      name: "Routing review",
+      agentType: "code-reviewer",
+      model: "synthetic-review",
+      steps: [
+        {
+          id: "child-read",
+          kind: "tool",
+          text: "Inspect routing",
+          toolKind: "shell",
+          status: "completed",
+          detail: "Child routing check: 7 assertions passed.",
+        },
+        {
+          id: "child-reply",
+          kind: "message",
+          text: "The retained routing paths match the saved review boundary.",
+        },
+      ],
+    },
+  });
+if (approval)
+  blocks.push({
+    id: "approval-command",
+    role: "approval",
+    text: approvalCommand,
+    tool: {
+      kind: "shell",
+      title: approvalCommand,
+      status: "waiting",
+      preview: { kind: "shell", title: approvalCommand },
+    },
+    approval: { requestId: 7001 },
+  });
 const initialSession: Session = {
   id: sessionId,
   harness: "codex",
@@ -375,21 +424,29 @@ if (!zero)
     text: "Review the saved change after storage recovery. Keep the current branch. No merge or live model turn is requested.",
     at: now - 60_000,
   });
-const liveState: AgentLiveState = zero
-  ? { status: "idle", detail: "Available · no assignment" }
-  : waiting
-    ? {
-        status: "waiting-on-member",
-        reason: "dependency",
-        waitingOn: "Reviewer",
-        detail: "Reviewer failed",
-      }
-    : working
-      ? { status: "running-tool", detail: "Checking saved window activation" }
-      : { status: "blocked", reason: "storage", detail: current.error };
+const liveState: AgentLiveState = approval
+  ? selectAgentLiveState(initialSession)
+  : zero
+    ? { status: "idle", detail: "Available · no assignment" }
+    : waiting
+      ? {
+          status: "waiting-on-member",
+          reason: "dependency",
+          waitingOn: "Reviewer",
+          detail: "Reviewer failed",
+        }
+      : working
+        ? { status: "running-tool", detail: "Checking saved window activation" }
+        : { status: "blocked", reason: "storage", detail: current.error };
 publishCardSessions(
   [
-    { id: sessionId, title: initialSession.title, harness: "codex", liveState },
+    {
+      id: sessionId,
+      title: initialSession.title,
+      harness: "codex",
+      liveState,
+      needsInput: approval,
+    },
     ...tasks
       .filter((value) => value.id !== "current")
       .map((value) => ({
@@ -551,7 +608,13 @@ function Fixture() {
       monoContent: "Saved Mono instructions",
       sourceContent: "Saved account instructions",
     }),
-    onApproval: noop,
+    onApproval: (id, requestId, decision) => {
+      events.push({
+        action: "approval",
+        text: id,
+        options: { requestId, decision },
+      });
+    },
     onQuestionReply: noop,
     onOpenFile: noop,
     onOpenDiff: noop,

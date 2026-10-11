@@ -306,6 +306,29 @@
 .cc7u-work-toggle {
   display: none;
 }
+.cc7u-conversation [data-flat-work-call],
+.cc7u-conversation [data-flat-subagent] {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--color-stroke);
+  border-radius: 6px;
+  padding: 8px 12px;
+  background: color-mix(in srgb, var(--color-content) 2%, transparent);
+}
+.cc7u-conversation [data-flat-work-call] .font-mono {
+  font-family: var(--font-sans);
+  font-size: 11px;
+}
+.cc7u-conversation [data-flat-work-call] [data-tool-output] {
+  padding: 0;
+}
+.cc7u-conversation [data-flat-work-call] [data-tool-output] button,
+.cc7u-conversation [data-flat-subagent] > button {
+  white-space: nowrap;
+  font-size: 10px;
+}
 /* Modal supplies focus trapping, Escape and return focus; only placement changes. */
 div:has(> .cc7u-drawer) {
   position: absolute;

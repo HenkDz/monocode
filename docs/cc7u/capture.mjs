@@ -214,6 +214,43 @@ try {
         await page
           .locator("[data-workbench-header]")
           .waitFor({ timeout: 90_000 });
+        if (scenario !== "zero") {
+          const transcript = page.getByRole("tabpanel", {
+            name: "Conversation",
+            exact: true,
+          });
+          const narration = transcript.getByText(
+            "I’ll check the window lifecycle, then follow the activation route into the selected browser. I’ll keep source evidence and live acceptance separate.",
+            { exact: true },
+          );
+          await narration.waitFor({ timeout: 90_000 });
+          check(
+            `${width}-${theme}-${scenario}: preliminary prose visible`,
+            await narration.isVisible(),
+          );
+          check(
+            `${width}-${theme}-${scenario}: Read files visible`,
+            await transcript
+              .getByLabel("Tool call: Read window lifecycle and routing", {
+                exact: true,
+              })
+              .isVisible(),
+          );
+          check(
+            `${width}-${theme}-${scenario}: Run checks visible`,
+            await transcript
+              .getByLabel("Tool call: Run focused routing checks", {
+                exact: true,
+              })
+              .isVisible(),
+          );
+          check(
+            `${width}-${theme}-${scenario}: no expandable transcript groups`,
+            (await transcript
+              .locator("button[aria-expanded], details, summary")
+              .count()) === 0,
+          );
+        }
         if (scenario === "long-history")
           await page
             .locator("[data-member-work]")

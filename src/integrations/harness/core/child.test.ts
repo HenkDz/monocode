@@ -63,6 +63,15 @@ describe("isCurrentChildExit", () => {
   });
 });
 
+it("persists hooks sharing for the specified Codex account without preparing or changing active storage", async () => {
+  const { setMonoCodexHooksShared } = await loadChild();
+  mocks.invoke.mockResolvedValue(undefined);
+  await setMonoCodexHooksShared("synthetic-account", true);
+  expect(mocks.invoke).toHaveBeenCalledExactlyOnceWith("codex_mono_store_set_hooks_shared", {
+    providerAccountId: "synthetic-account", shared: true,
+  });
+});
+
 describe("child bridge", () => {
   it("waits until every listener is installed", async () => {
     const pending = deferred<UnlistenFn>();

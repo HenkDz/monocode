@@ -723,6 +723,7 @@ export type MonoStatus = "working" | "needs-you" | "idle";
 
 export type MonoState = {
   status: MonoStatus;
+  storageBlocked?: boolean;
   /** Short present-tense note while working or waiting. */
   activity?: string;
   /** Descendant activity does not make this Mono busy. */
@@ -737,7 +738,7 @@ export const MONO_STATUS_LABEL: Record<MonoStatus, string> = {
 };
 
 export const monoStatusLabel = (state: MonoState) =>
-  `${MONO_STATUS_LABEL[state.status]}${state.status === "needs-you" && state.attentionLocation ? ` · in ${state.attentionLocation}` : ""}`;
+  state.storageBlocked ? "Blocked · storage" : `${MONO_STATUS_LABEL[state.status]}${state.status === "needs-you" && state.attentionLocation ? ` · in ${state.attentionLocation}` : ""}`;
 
 export const monoTeamWorkingLabel = (state: MonoState) =>
   state.teamWorking ? `${state.teamWorking} working below` : undefined;
@@ -746,10 +747,13 @@ export const monoTeamWorkingLabel = (state: MonoState) =>
 export function monoState(
   session: Pick<
     Session,
-    "blocks" | "busy" | "pendingQuestion" | "worktreeRemoved" | "usageLimit"
+    "blocks" | "busy" | "pendingQuestion" | "worktreeRemoved" | "usageLimit" | "codexStorageError"
   >,
 ): MonoState {
   const { blocks, pendingQuestion: question } = session;
+  if (!session.worktreeRemoved && session.codexStorageError) {
+    return { status: "needs-you", storageBlocked: true };
+  }
   if (!session.worktreeRemoved && question) {
     return {
       status: "needs-you",

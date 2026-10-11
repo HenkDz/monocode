@@ -48,13 +48,17 @@ export function memberAvailability(
 
 export function memberMonoState(runs: readonly OrchestrationRun[], memberId: string, sessions: readonly Session[], memberSessionId?: string): MonoState {
   const tasks = memberTasks(runs, memberId);
-  const attention = new Set(sessions.filter(s => monoState(s).status === "needs-you").map(s => s.id));
-  const busy = new Set(sessions.filter(s => monoState(s).status === "working").map(s => s.id));
-  const status = memberAvailability(tasks, attention, busy, memberSessionId);
   const task = tasks.find(t => ["queued", "running", "cancelling"].includes(t.status)) ?? tasks[0];
   const session = sessions.find(s => s.id === memberSessionId);
   const own = session && monoState(session);
-  const activity = own?.status === status && own.activity ? own.activity : task ? activityTaskEvent(task, sessions.find(s => s.id === task.sessionId)) : undefined;
+  const worker = task && sessions.find(s => s.id === task.sessionId);
+  const workerState = worker && monoState(worker);
+  if (own?.storageBlocked) return own;
+  if (workerState?.storageBlocked) return workerState;
+  const attention = new Set(sessions.filter(s => monoState(s).status === "needs-you").map(s => s.id));
+  const busy = new Set(sessions.filter(s => monoState(s).status === "working").map(s => s.id));
+  const status = memberAvailability(tasks, attention, busy, memberSessionId);
+  const activity = own?.status === status && own.activity ? own.activity : task ? activityTaskEvent(task, worker) : undefined;
   return { status, ...(status !== "idle" && activity ? { activity } : {}) };
 }
 

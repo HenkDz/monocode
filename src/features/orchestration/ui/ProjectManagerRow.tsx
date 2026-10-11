@@ -4,7 +4,6 @@ import {
   listMonos,
   monoLook,
   monosSnapshot,
-  MONO_STATUS_LABEL,
   monoStatusLabel,
   monoTeamWorkingLabel,
   subscribeMonos,
@@ -184,7 +183,8 @@ export function ProjectManagerRow({
           const look = monoLook(member);
           const tasks = memberTasks(runs, member.id);
           const task = tasks.find(task => ["queued", "running", "cancelling"].includes(task.status)) ?? tasks[0];
-          const availability = sessions ? monoLiveState(listMonos(), runs, sessions, member.id).status : memberAvailability(tasks, approvalSessionIds, busySessionIds, member.sessionId);
+          const state = sessions ? monoLiveState(listMonos(), runs, sessions, member.id) : { status: memberAvailability(tasks, approvalSessionIds, busySessionIds, member.sessionId) };
+          const availability = state.status;
           const memberSelected = member.id === selectedMemberId;
           return (
             <button
@@ -209,7 +209,7 @@ export function ProjectManagerRow({
               />
               <span className="min-w-0 truncate">{look.name}</span>
               <span role="status" className={`ml-auto shrink-0 text-[10px] ${availability === "needs-you" ? "text-amber-700 dark:text-amber-400" : availability === "working" ? "text-accent" : "text-content/40"}`}>
-                {MONO_STATUS_LABEL[availability]}
+                {monoStatusLabel(state)}
               </span>
             </button>
           );

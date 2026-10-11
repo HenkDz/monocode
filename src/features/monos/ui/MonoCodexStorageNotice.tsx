@@ -1,96 +1,163 @@
 import { useEffect, useState } from "react";
 import { copyText } from "../../../platform/tauri/clipboard";
+import { SecondaryButton } from "../../../shared/ui/SecondaryButton";
+import {
+  codexStorageIssueTitle,
+  parseCodexStorageConflict,
+  type CodexStorageComparison,
+  type CodexStorageResolution,
+} from "../model/monoCodexStorage";
 
 export function MonoCodexStorageNotice({
   onRepair,
   detail,
+  blockedContext,
+  onResolve,
+  onCompare,
+  onReveal,
 }: {
   onRepair: () => Promise<void>;
   detail?: string;
+  blockedContext?: string;
+  onResolve?: (resolution: CodexStorageResolution) => Promise<void>;
+  onCompare?: () => Promise<CodexStorageComparison>;
+  onReveal?: () => Promise<void>;
 }) {
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<"repair" | "compare" | "reveal">();
   const [error, setError] = useState<string>();
   const [success, setSuccess] = useState(false);
   const [copyStatus, setCopyStatus] = useState<string>();
+  const [comparison, setComparison] = useState<CodexStorageComparison>();
+  const [conflict, setConflict] = useState(() => parseCodexStorageConflict(detail));
   useEffect(() => {
+    setConflict(parseCodexStorageConflict(detail));
     if (detail) {
       setSuccess(false);
       setError(undefined);
       setCopyStatus(undefined);
+      setComparison(undefined);
     }
   }, [detail]);
+
   const details = error ?? detail;
+  const title = success ? "Codex storage repaired" : conflict ? codexStorageIssueTitle(conflict) : "Codex storage needs repair";
+  async function run(action: "repair" | "compare" | "reveal", operation: () => Promise<unknown>) {
+    if (busy) return;
+    setBusy(action);
+    setError(undefined);
+    setCopyStatus(undefined);
+    try {
+      await operation();
+      if (action === "repair") {
+        setSuccess(true);
+        setComparison(undefined);
+      }
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+      const updatedConflict = parseCodexStorageConflict(reason);
+      if (updatedConflict) setConflict(updatedConflict);
+    } finally {
+      setBusy(undefined);
+    }
+  }
+
   if (!details && !busy && !success) return null;
   return (
     <section
       role="status"
       aria-live="polite"
-      aria-busy={busy}
-      aria-label={
-        success ? "Codex storage repaired" : "Codex storage needs repair"
-      }
+      aria-busy={!!busy}
+      aria-label={title}
       className="mx-4 my-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-sm"
     >
-      <p className="font-medium">
-        {success ? "Codex storage repaired" : "Codex storage needs repair"}
-      </p>
+      <p className="font-medium">{title}</p>
       {success ? (
-        <button
-          type="button"
-          className="mt-2 rounded px-2 py-1 text-accent hover:bg-content/5 focus-visible:outline-accent"
-          onClick={() => setSuccess(false)}
-        >
-          Dismiss
-        </button>
+        <div className="mt-2 flex items-center gap-3">
+          <p className="text-xs text-content/70">Waiting messages can continue.</p>
+          <SecondaryButton onClick={() => setSuccess(false)}>Dismiss</SecondaryButton>
+        </div>
       ) : (
         <>
-          <button
-            type="button"
-            disabled={busy}
-            className="mt-2 rounded px-2 py-1 text-accent hover:bg-content/5 focus-visible:outline-accent disabled:opacity-50"
-            onClick={() => {
-              setBusy(true);
-              setError(undefined);
-              setCopyStatus(undefined);
-              void onRepair()
-                .then(() => setSuccess(true))
-                .catch((reason) => {
-                  setError(
-                    reason instanceof Error ? reason.message : String(reason),
-                  );
-                })
-                .finally(() => setBusy(false));
-            }}
-          >
-            {busy ? "Repairing…" : "Repair"}
-          </button>
+          {blockedContext && <p className="mt-1 text-xs text-content/70">{blockedContext}</p>}
+          {conflict && (
+            <p className="mt-1 text-xs text-content/70">
+              Choose the file this Codex account should use. Both versions will be preserved.
+            </p>
+          )}
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            {conflict && onResolve ? (
+              <>
+                <SecondaryButton
+                  disabled={!!busy}
+                  title={conflict.sourcePath}
+                  onClick={() => void run("repair", () => onResolve("use_account_version"))}
+                >
+                  {busy === "repair" ? "Repairing…" : /[\\/]\.codex[\\/]/.test(conflict.sourcePath) ? "Use ~/.codex version" : "Use account version"}
+                  <span className="text-content/50">Recommended</span>
+                </SecondaryButton>
+                <SecondaryButton
+                  disabled={!!busy || !conflict.canKeepMono}
+                  title={conflict.canKeepMono ? conflict.monoPath : "Credential files must use the account version"}
+                  onClick={() => void run("repair", () => onResolve("keep_mono_version"))}
+                >Keep MonoCode version</SecondaryButton>
+              </>
+            ) : (
+              <SecondaryButton disabled={!!busy} onClick={() => void run("repair", onRepair)}>
+                {busy === "repair" ? "Repairing…" : "Repair"}
+              </SecondaryButton>
+            )}
+            {conflict && onCompare && (
+              <SecondaryButton disabled={!!busy} onClick={() => void run("compare", async () => setComparison(await onCompare()))}>
+                {busy === "compare" ? "Loading…" : "Compare"}
+              </SecondaryButton>
+            )}
+            {conflict && onReveal && (
+              <SecondaryButton disabled={!!busy} onClick={() => void run("reveal", onReveal)}>Show in folder</SecondaryButton>
+            )}
+            {error && conflict && (
+              <SecondaryButton disabled={!!busy} onClick={() => void run("repair", onRepair)}>Refresh issue</SecondaryButton>
+            )}
+          </div>
+          {comparison && conflict && (
+            <div className="mt-3 rounded-md border border-content/10 p-2 text-xs">
+              {comparison.unavailable ? <p>{comparison.unavailable}</p> : (
+                <>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    {[
+                      { label: "Account version", path: conflict.sourcePath, bytes: conflict.sourceBytes, content: comparison.sourceContent },
+                      { label: "MonoCode version", path: conflict.monoPath, bytes: conflict.monoBytes, content: comparison.monoContent },
+                    ].map(version => (
+                      <section key={version.label} aria-label={version.label} className="min-w-0">
+                        <p className="font-medium">{version.label} · {version.bytes.toLocaleString()} bytes</p>
+                        <p className="mt-1 break-all text-content/50">{version.path}</p>
+                        <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded bg-content/5 p-2">{version.content?.slice(0, 65536) ?? "Content unavailable"}</pre>
+                      </section>
+                    ))}
+                  </div>
+                  {(comparison.truncated || (comparison.sourceContent?.length ?? 0) > 65536 || (comparison.monoContent?.length ?? 0) > 65536) &&
+                    <p className="mt-2 text-content/60">Preview truncated. Full files are preserved on disk.</p>}
+                </>
+              )}
+              <div className="mt-2"><SecondaryButton onClick={() => setComparison(undefined)}>Close comparison</SecondaryButton></div>
+            </div>
+          )}
+          {error && <p role="alert" className="mt-2 break-all text-xs text-content/70">{parseCodexStorageConflict(error) ? "The file changed again. Review the latest versions before choosing." : error}</p>}
           {details && (
-            <>
-              <p
-                role="alert"
-                className="mt-1 break-all text-xs text-content/70"
-              >
-                {details}
-              </p>
-              <button
-                type="button"
-                className="mt-2 rounded px-2 py-1 text-accent hover:bg-content/5 focus-visible:outline-accent"
-                onClick={() => {
+            <details className="mt-2 text-xs text-content/70">
+              <summary className="cursor-pointer select-none rounded focus-visible:outline-accent">Details</summary>
+              <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-all">{details}</pre>
+              <div className="mt-2">
+                <SecondaryButton onClick={() => {
                   void copyText(details).then(
                     () => setCopyStatus("Copied details"),
-                    (reason) =>
-                      setCopyStatus(
-                        `Could not copy details: ${reason instanceof Error ? reason.message : String(reason)}`,
-                      ),
+                    reason => setCopyStatus(
+                      `Could not copy details: ${reason instanceof Error ? reason.message : String(reason)}`,
+                    ),
                   );
-                }}
-              >
-                Copy details
-              </button>
-              {copyStatus && (
-                <p className="mt-1 text-xs text-content/70">{copyStatus}</p>
-              )}
-            </>
+                }}>Copy details</SecondaryButton>
+              </div>
+              {copyStatus && <p className="mt-1">{copyStatus}</p>}
+            </details>
           )}
         </>
       )}

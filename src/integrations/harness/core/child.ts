@@ -38,10 +38,15 @@ export type MonoCodexStorageInfo = {
   home: string;
   sourceHome: string;
   sourceKind: "account" | "CODEX_HOME" | "default";
+  shareHooks: boolean;
 };
 
 export function monoCodexStorageInfo(providerAccountId?: string): Promise<MonoCodexStorageInfo> {
   return invoke("codex_mono_store_info", { providerAccountId });
+}
+
+export function setMonoCodexHooksShared(providerAccountId: string, shared: boolean): Promise<void> {
+  return invoke("codex_mono_store_set_hooks_shared", { providerAccountId, shared });
 }
 
 export function prepareMonoCodexStore(

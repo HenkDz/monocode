@@ -91,6 +91,8 @@ import { MonoHeader } from "../../monos/ui/MonoHeader";
 import { MonoComposer } from "../../monos/ui/MonoComposer";
 import { MonoUsageLimitNotice } from "../../monos/ui/MonoUsageLimitNotice";
 import { MonoCodexStorageNotice } from "../../monos/ui/MonoCodexStorageNotice";
+import { codexStorageBlockedContext } from "../../monos/model/monoCodexStorageIssues";
+import type { CodexStorageResolution, CodexStorageComparison } from "../../monos/model/monoCodexStorage";
 import { QuestionForm } from "./QuestionForm";
 import { MemberWorkLog } from "../../monos/ui/MemberWorkLog";
 import {
@@ -213,7 +215,9 @@ export type SessionPaneProps = {
   onSteerQueuedMessage: (sessionId: string, messageId: string) => void;
   onResumeQueue: (sessionId: string) => void;
   onUsageLimitResume: (sessionId: string) => void;
-  onCodexStorageRepair?: (sessionId: string) => Promise<void>;
+  onCodexStorageRepair?: (sessionId: string, resolution?: CodexStorageResolution) => Promise<void>;
+  onCodexStorageCompare?: (sessionId: string) => Promise<CodexStorageComparison>;
+  onCodexStorageReveal?: (sessionId: string) => Promise<void>;
   onUsageLimitResumeAtReset: (sessionId: string, enabled: boolean) => void;
   onUsageLimitDismiss: (sessionId: string) => void;
   onUsageLimitAccountChange?: (sessionId: string, accountId: string) => void;
@@ -350,6 +354,8 @@ const LocalSessionPane = memo(function LocalSessionPane({
   onResumeQueue,
   onUsageLimitResume,
   onCodexStorageRepair,
+  onCodexStorageCompare,
+  onCodexStorageReveal,
   onUsageLimitResumeAtReset,
   onUsageLimitDismiss,
   onUsageLimitAccountChange,
@@ -833,6 +839,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
       onPlaceInFolder={(target) => onPlaceSessionInFolder(session.id, target)}
       queuedMessages={session.queuedMessages}
       queueStatus={session.queueStatus}
+      storageBlocked={!!session.codexStorageError}
       onDeleteQueuedMessage={(messageId) =>
         onDeleteQueuedMessage(session.id, messageId)
       }
@@ -1278,7 +1285,15 @@ const LocalSessionPane = memo(function LocalSessionPane({
           {mono?.role === "member" && <MemberWorkLog key={mono.id} member={mono} />}
           {onCodexStorageRepair && (
             <div className="mx-auto w-full max-w-4xl shrink-0">
-              <MonoCodexStorageNotice key={session.id} detail={session.codexStorageError} onRepair={() => onCodexStorageRepair(session.id)} />
+              <MonoCodexStorageNotice
+                key={session.id}
+                detail={session.codexStorageError}
+                blockedContext={codexStorageBlockedContext(session, agent?.name ?? session.title)}
+                onRepair={() => onCodexStorageRepair(session.id)}
+                onResolve={resolution => onCodexStorageRepair(session.id, resolution)}
+                onCompare={onCodexStorageCompare ? () => onCodexStorageCompare(session.id) : undefined}
+                onReveal={onCodexStorageReveal ? () => onCodexStorageReveal(session.id) : undefined}
+              />
             </div>
           )}
           {dockComposer ? (

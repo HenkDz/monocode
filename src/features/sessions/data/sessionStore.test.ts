@@ -975,10 +975,11 @@ describe("persistFingerprint", () => {
 
   it("ignores state that is never written", () => {
     const before = base();
-    const preparing = { ...before, codexStoragePreparing: true, codexStorageError: "Codex storage needs repair: AGENTS.md" };
+    const preparing = { ...before, codexStoragePreparing: true, codexStorageError: "Codex storage needs repair: AGENTS.md", codexStorageAccountId: "original-account" };
     expect(persistFingerprint(preparing)).toBe(persistFingerprint(before));
     expect(sanitizeSessionForPersist(preparing)).not.toHaveProperty("codexStoragePreparing");
     expect(sanitizeSessionForPersist(preparing)).not.toHaveProperty("codexStorageError");
+    expect(sanitizeSessionForPersist(preparing)).not.toHaveProperty("codexStorageAccountId");
     expect(persistFingerprint({ ...before, busy: true })).toBe(
       persistFingerprint(before),
     );

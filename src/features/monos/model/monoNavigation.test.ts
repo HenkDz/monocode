@@ -105,6 +105,33 @@ it("keeps canonical blockers above rolled-up decisions in the same agent", () =>
   expect(monoStatusLabel(state)).toBe("Blocked · storage");
 });
 
+it("shows held updates across the manager's owned runs without attributing them to its parent", () => {
+  const roster = [
+    { id: "o", role: "orchestrator", sessionId: "orch", projects: [] },
+    { id: "m", role: "manager", reportsTo: "o", sessionId: "manager", projects: ["/app"] },
+  ] as Mono[];
+  const runs = [
+    { ownerMonoId: "m", status: "active", tasks: [{ id: "one", status: "running", activeDispatchId: "one" }], wakeState: {
+      waves: [{ id: "wave-one", dispatchIds: ["one"], sealedAt: 1 }],
+      events: [{ id: "one", kind: "info", at: 1, text: "Progress" }, { id: "two", kind: "info", at: 2, text: "Progress" }],
+    } },
+    { ownerSessionId: "manager", status: "active", tasks: [{ id: "two", status: "cancelling", lastDispatchId: "two" }], wakeState: {
+      waves: [{ id: "wave-two", dispatchIds: ["two"], sealedAt: 1 }],
+      events: [{ id: "three", kind: "info", at: 3, text: "Progress" }, { id: "seen", kind: "info", at: 0, text: "Seen", acknowledgedAt: 0 }],
+    } },
+    { ownerMonoId: "other", status: "active", tasks: [], wakeState: { waves: [], events: [{ id: "other", kind: "info", at: 1, text: "Other manager" }] } },
+  ] as unknown as OrchestrationRun[];
+  const manager = { ...newSession("codex", "/app"), id: "manager" };
+  const state = monoLiveState(roster, runs, [manager], "m");
+  expect(state.liveState).toEqual({ status: "waiting-on-member", reason: "held-updates", detail: "Waiting for 2 workers · 3 updates held" });
+  expect(state.status).toBe("idle");
+  expect(monoStatusLabel(state)).toBe("Waiting for 2 workers · 3 updates held");
+  expect(monoLiveState(roster, runs, [manager], "o").liveState).toEqual({ status: "idle" });
+  const blocked = monoLiveState(roster, runs, [{ ...manager, codexStorageError: "Repair required" }], "m");
+  expect(blocked.liveState).toEqual({ status: "blocked", reason: "storage", detail: "Repair required" });
+  expect(monoStatusLabel(blocked)).toBe("Blocked · storage");
+});
+
 it("shows current member availability without historical task outcomes dominating", () => {
   const current = { id: "current", memberId: "backend", status: "running", sessionId: "worker" } as OrchestrationRun["tasks"][number];
   const old = { id: "old", memberId: "backend", status: "failed", sessionId: "old-worker" } as OrchestrationRun["tasks"][number];

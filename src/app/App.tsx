@@ -19,7 +19,8 @@ import { openGoalTarget } from "../features/commandCenter/model/goalView";
 import { TeamMapHeaderAction, useTeamMap } from "../features/teamMap/navigation";
 import { recordCrewDecision } from "../features/monos/model/monoCrewEvents";
 import { teamDecisions } from "../features/monos/model/monoTeamActivity";
-import { crewMessages, deliverCrewMessage, teamMessageRequiresReply } from "../features/monos/model/monoCrewEvents";
+import { crewMessages, deliverCrewMessage, recordCrewMessage, teamMessageKind, teamMessageRequiresReply } from "../features/monos/model/monoCrewEvents";
+import { acceptManagerWakeQueue } from "../features/orchestration/model/managerWake";
 import { requestMemberWork } from "../features/monos/model/memberWorkRequest";
 import {
   assertDirectReport,
@@ -9766,6 +9767,7 @@ function Workspace({
                       appRequestId: head.id,
                     }
                   : {}),
+                ...(head.managerWake ? { managed: true } : {}),
               },
             );
             // A preflight rejection must not repeatedly retry or hide the message.
@@ -11622,6 +11624,19 @@ function Workspace({
         onResumeQueue(id);
         return session.queueStatus === "paused" || session.queueStatus === "active";
       },
+      acceptManagerDigest: (id, receipt) => acceptManagerWakeQueue(receipt, id, {
+        session: () => sessionsRef.current.find(session => session.id === id),
+        delivered: () => invoke<boolean>("mono_session_event_delivered", { sessionId: id, eventId: receipt.id, text: receipt.body }),
+        save: async session => {
+          const saved = await upsertSession(session);
+          if (!saved) throw new Error("Manager digest could not be saved");
+          return saved;
+        },
+        publish: session => {
+          sessionsRef.current = sessionsRef.current.map(entry => entry.id === id ? session : entry);
+          flushSync(() => setSessions(sessionsRef.current));
+        },
+      }),
       submit: (id, text, done) => {
         void submitWithSettlement({
           submit: (onSettled) => {
@@ -12358,18 +12373,38 @@ function Workspace({
           const actor = workerMember ?? monoForSession(source.id) ?? findMono(habitRunMono(source.id) ?? "");
           const input: Record<string, unknown> = goalProgress?.input ?? (peerRecipient ? { memberId: peerRecipient.id, text: payload.input.prompt, topic: "general" } : payload.input);
           if (!actor?.role || !source.busy) throw new Error("Team messages require an active team turn");
-          if (Object.keys(input).some(field => !["memberId", "text", "topic", "requiresReply"].includes(field)) || typeof input.memberId !== "string" || typeof input.text !== "string" || !input.text.trim() || input.text.length > (goalProgress ? 8000 : 6000) || (input.topic != null && (typeof input.topic !== "string" || input.topic.length > 120))) throw new Error("Choose a memberId, nonempty text under 6000 characters and an optional short topic");
-          const requiresReply = teamMessageRequiresReply(input.requiresReply);
+          if (Object.keys(input).some(field => !["memberId", "text", "topic", "requiresReply", "kind"].includes(field)) || typeof input.memberId !== "string" || typeof input.text !== "string" || !input.text.trim() || input.text.length > (goalProgress ? 8000 : 6000) || (input.topic != null && (typeof input.topic !== "string" || input.topic.length > 120))) throw new Error("Choose a memberId, nonempty text under 6000 characters and an optional short topic");
+          const kind = teamMessageKind(input.kind);
+          const requiresReply = teamMessageRequiresReply(input.requiresReply, kind);
           const messageText = input.text;
           const eventId = `${source.id}:${payload.requestId}`;
           const topic = typeof input.topic === "string" ? input.topic.trim() : "general";
           const events = crewMessages();
           const prior = events.find(event => event.id === eventId);
-          if (prior && (prior.text !== input.text || prior.recipientId !== input.memberId || prior.topic !== topic || (prior.requiresReply !== false) !== requiresReply)) throw new Error("Request ID was already used with different input");
+          if (prior && (prior.text !== input.text || prior.recipientId !== input.memberId || prior.topic !== topic || prior.kind !== kind || (prior.requiresReply !== false) !== requiresReply)) throw new Error("Request ID was already used with different input");
           const exchanges = events.filter(event => event.topic === topic && ((event.senderId === actor.id && event.recipientId === input.memberId) || (event.recipientId === actor.id && event.senderId === input.memberId))).length;
           const route = teamMessageRoute(listMonos(), actor.id, input.memberId, exchanges);
-          if (!prior) {
-            await deliverCrewMessage({ id: eventId, managerId: route.managerId ?? route.target.id, senderId: actor.id, recipientId: input.memberId, topic, text: input.text, at: Date.now(), requiresReply }, async () => {
+          if (route.target.role === "manager") {
+            const target = await ensureMonoSession(route.target.id, {
+              home: homeDir, load: ensureOpenSession, save: saveMonoPermissions,
+              create: path => newDefaultSession(path, sessionDefaults?.runtimeMode),
+              add: session => { sessionsRef.current = [...sessionsRef.current, session]; setSessions(sessionsRef.current); },
+            });
+            if (!target) throw new Error("Recipient conversation is unavailable");
+            const project = route.target.projects.find(project => sameProjectPath(project, memberRun?.cwd ?? source.cwd)) ?? route.target.projects[0];
+            if (!project) throw new Error("Recipient Manager needs an assigned project");
+            const engineId = await monoEngineId(route.target, project);
+            orchestrator.registerMonoEngine(engineId, target.id, route.target.id, project);
+            await orchestrator.hydrate(engineId);
+            if (!orchestrator.run(engineId) || orchestrator.run(engineId)?.status === "finished") await orchestrator.start(engineId, HARNESSES.filter(isHarnessAvailable), 4, undefined, true);
+            if (!prior || orchestrator.run(engineId)?.wakeState?.events.some(event => event.id === eventId)) await orchestrator.queueManagerMessage(engineId, { id: eventId, at: prior?.at ?? Date.now(),
+              kind: requiresReply ? kind ?? "question" : "info", requestId: payload.requestId,
+              signature: JSON.stringify([actor.id, input.memberId, kind, requiresReply, topic, messageText]),
+              taskId: workerMember ? memberRun?.tasks.find(task => task.sessionId === source.id)?.id : undefined,
+              text: teamMessageEnvelope(actor, route.target, topic, messageText, route.hint) });
+            recordCrewMessage({ id: eventId, managerId: route.target.id, senderId: actor.id, recipientId: input.memberId, topic, text: messageText, at: prior?.at ?? Date.now(), requiresReply, kind });
+          } else if (!prior) {
+            await deliverCrewMessage({ id: eventId, managerId: route.managerId ?? route.target.id, senderId: actor.id, recipientId: input.memberId, topic, text: input.text, at: Date.now(), requiresReply, kind }, async () => {
               const text = teamMessageEnvelope(actor, route.target, topic, messageText, route.hint);
               const worker = route.target.role === "member" && teamMessageWorker(orchestrator.snapshot(), route.target.id);
               if (worker) {

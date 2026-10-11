@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { newSession, type Session } from "../../sessions/model/session";
 import type { OrchestrationTask } from "../../orchestration/model/orchestrationState";
+import type { ManagerWakeState } from "../../orchestration/model/managerWake";
 import { agentLiveStateLabel, agentLiveStateTooltip, selectAgentLiveState, type AgentLiveStatus } from "./agentLiveState";
 import { appendUser, applyHarnessEvent, stopStreaming } from "../../../integrations/harness/core/apply";
 import { acknowledgeMonoMessage, enqueueMonoMessage } from "../../monos/model/monoMessaging";
@@ -145,6 +146,60 @@ describe("selectAgentLiveState", () => {
     expect(selectAgentLiveState(session({ busy: true }), { tasks: [reviewer] }).status).toBe("thinking");
     expect(selectAgentLiveState(session(), { tasks: [worker], runStatus: "paused", pauseReason: "Choose the next step" })).toEqual({ status: "needs-you", reason: "decision", detail: "Choose the next step" });
     expect(selectAgentLiveState(session(), { runStatus: "finished" })).toEqual({ status: "done" });
+  });
+
+  it("counts held events and only workers in active waves, including a stopping worker", () => {
+    const wakeState = {
+      waves: [
+        { id: "wave", dispatchIds: ["one", "two", "queued", "retry"], sealedAt: 1 },
+        { id: "retired", dispatchIds: ["retired"], retiredAt: 0 },
+        { id: "completed", dispatchIds: ["completed"], completedAt: 0 },
+      ],
+      events: [
+        ...[1, 2, 3].map(id => ({ id: String(id), kind: "info", at: id, text: "Progress" })),
+        { id: "ack", kind: "info", at: 0, text: "Seen", acknowledgedAt: 0 },
+      ],
+    } as ManagerWakeState;
+    const tasks = [
+      task("running", { id: "one", activeDispatchId: "one" }),
+      task("cancelling", { id: "two", lastDispatchId: "two" }),
+      task("queued", { id: "queued", lastDispatchId: "queued" }),
+      task("running", { id: "retired", activeDispatchId: "retired" }),
+      task("running", { id: "completed", activeDispatchId: "completed" }),
+      task("running", { id: "unrelated", activeDispatchId: "unrelated" }),
+      task("running", { id: "retry", activeDispatchId: "new-retry", lastDispatchId: "retry" }),
+    ];
+    const state = selectAgentLiveState(session(), { tasks, wakeStates: [wakeState, { waves: [{ id: "overlap", dispatchIds: ["one"] }], events: [] } as ManagerWakeState] });
+    expect(state).toEqual({ status: "waiting-on-member", reason: "held-updates", detail: "Waiting for 2 workers · 3 updates held" });
+    expect(agentLiveStateLabel(state)).toBe(state.detail);
+    expect(agentLiveStateTooltip(state)).toBe(state.detail);
+  });
+
+  it("keeps held info visible without workers and clears it only after acknowledgement", () => {
+    const event = { id: "info", kind: "info", at: 1, text: "Progress" };
+    const wakeState = { waves: [], events: [event] } as ManagerWakeState;
+    expect(agentLiveStateLabel(selectAgentLiveState(session(), { wakeStates: [wakeState] }))).toBe("1 update held");
+    expect(selectAgentLiveState(session(), { wakeStates: [{ ...wakeState, events: [{ ...wakeState.events[0], acknowledgedAt: 0 }] }] })).toEqual({ status: "idle" });
+    expect(agentLiveStateLabel(selectAgentLiveState(session(), {
+      tasks: [task("running", { activeDispatchId: "worker" })],
+      wakeStates: [{ waves: [{ id: "wave", dispatchIds: ["worker"] }], events: [] } as ManagerWakeState],
+    }))).toBe("Waiting for 1 worker · 0 updates held");
+  });
+
+  it.each([
+    [{ codexStorageError: "Repair required" }, "blocked", "storage"],
+    [{ usageLimit: {} }, "blocked", "usage-limit"],
+    [{ codexStoragePreparing: true }, "queued", "preparing-storage"],
+    [{ pendingQuestion: { requestId: 1, title: "Choose", questions: [] } }, "needs-you", "decision"],
+    [{ blocks: [{ id: "approval", role: "tool", text: "", approval: { requestId: 1 } }] }, "needs-you", "approval"],
+    [{ busy: true }, "thinking", undefined],
+    [{ queuedMessages: [queued] }, "queued", undefined],
+    [{ blocks: [{ id: "error", role: "system", text: "Provider stopped", notice: "error" }] }, "failed", "error"],
+  ] as [Partial<Session>, AgentLiveStatus, string | undefined][])("preserves current state above held updates: %s", (patch, status, reason) => {
+    const wakeStates = [{ waves: [], events: [{ id: "info", kind: "info", at: 1, text: "Progress" }] }] as ManagerWakeState[];
+    expect(selectAgentLiveState(session(patch), { wakeStates })).toMatchObject({ status, ...(reason ? { reason } : {}) });
+    expect(selectAgentLiveState(session(), { wakeStates, runStatus: "paused", pauseReason: "Choose next step" }))
+      .toEqual({ status: "needs-you", reason: "decision", detail: "Choose next step" });
   });
 });
 

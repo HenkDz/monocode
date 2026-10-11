@@ -51,6 +51,7 @@ export function monoLiveState(roster: readonly Mono[], runs: readonly Orchestrat
     const owned = runs.filter(run => run.ownerMonoId === entry.id || !!entry.sessionId && run.ownerSessionId === entry.sessionId);
     const state = entry.role === "member" ? memberMonoState(runs, entry.id, sessions, entry.sessionId) : monoState(session, {
       tasks: owned.flatMap(run => run.tasks),
+      wakeStates: owned.flatMap(run => run.wakeState ? [run.wakeState] : []),
       runStatus: owned.find(run => run.status === "paused")?.status ?? owned.find(run => run.status === "active")?.status ?? owned[0]?.status,
       pauseReason: owned.find(run => run.status === "paused")?.lastPauseReason,
     });

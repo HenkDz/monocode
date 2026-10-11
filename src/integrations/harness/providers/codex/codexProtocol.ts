@@ -29,7 +29,7 @@ export function codexAppServerArgs(readOnly: boolean, windows: boolean): string[
   // Windows read-only workers retain filesystem denial with the restricted-token
   // fallback when elevated setup is unavailable; network isolation is weaker.
   // https://learn.chatgpt.com/docs/windows/windows-sandbox
-  return windows && readOnly ? ["-c", 'windows.sandbox="unelevated"', "app-server"] : ["app-server"];
+  return windows && readOnly ? ["app-server", "-c", 'windows.sandbox="unelevated"'] : ["app-server"];
 }
 
 /** Codex approval / sandbox settings for thread/start and turn/start. */

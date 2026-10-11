@@ -5,6 +5,7 @@ const mock = vi.hoisted(() => ({
   sent: [] as { method: string; params?: Record<string, unknown> }[],
   archived: false,
   missing: false,
+  sourceConfig: {} as Record<string, unknown>,
   unloadedThread: undefined as string | undefined,
   loaded: false,
   failure: undefined as { method: string; message: string } | undefined,
@@ -17,9 +18,11 @@ const mock = vi.hoisted(() => ({
     hasThread: false,
   })),
   copy: vi.fn(async (..._args: unknown[]): Promise<string | undefined> => undefined),
+  sandboxCheck: vi.fn(async (_input: unknown) => undefined),
 }));
 
 vi.mock("../../core/child", () => ({
+  checkMonoCodexSandbox: mock.sandboxCheck,
   acquireHarnessBridge: async () => mock.release,
   prepareMonoCodexStore: mock.prepare,
   copyMonoCodexThreads: mock.copy,
@@ -44,6 +47,7 @@ vi.mock("../../core/child", () => ({
           instructions: "Shared account instructions",
           sqlite_home: "/ordinary",
           model_instructions_file: "/ordinary/instructions.md",
+          ...mock.sourceConfig,
         },
       };
     } else if (request.method === "thread/read") {
@@ -100,6 +104,8 @@ const input = {
 };
 
 beforeEach(() => {
+  mock.sourceConfig = {};
+  mock.sandboxCheck.mockReset();
   mock.handlers.clear();
   mock.sent.length = 0;
   mock.archived = false;
@@ -221,7 +227,7 @@ it("keeps the saved context intact when native unarchive fails", async () => {
   expect(mock.handlers.size).toBe(0);
 });
 
-it("forwards sandbox continuity requirements without coalescing full-access preparation", async () => {
+it("does not coalesce sandbox readiness with full-access preparation", async () => {
   let accept: (() => void) | undefined;
   mock.prepare.mockImplementationOnce(async () => {
     await new Promise<void>(resolve => { accept = resolve; });
@@ -234,8 +240,50 @@ it("forwards sandbox continuity requirements without coalescing full-access prep
   await Promise.all([fullAccess, sandboxed]);
   expect(mock.prepare).toHaveBeenCalledTimes(2);
   expect(mock.prepare.mock.calls.map(call => call[2])).toEqual([
-    expect.objectContaining({ sandboxRequired: false }), expect.objectContaining({ sandboxRequired: true }),
+    expect.objectContaining({ sandboxRequired: false }), expect.objectContaining({ sandboxRequired: false }),
   ]);
+  expect(mock.sandboxCheck).toHaveBeenCalledTimes(1);
+});
+
+it("keeps an explicit unelevated read-only launch effective over an elevated account config", async () => {
+  mock.sourceConfig = { windows: { sandbox: "elevated", other: "preserved" } };
+  const prepared = await prepareCodexMonoContext({ ...input, sandboxRequired: true, windowsSandbox: "unelevated", sandboxNetworkAccess: false });
+  expect(mock.prepare).toHaveBeenLastCalledWith("account", undefined, expect.objectContaining({ sandboxRequired: false, windowsSandbox: "unelevated", sandboxNetworkAccess: false }));
+  expect(prepared.config.windows).toEqual({ sandbox: "unelevated", other: "preserved" });
+  expect(mock.sandboxCheck).toHaveBeenLastCalledWith(expect.objectContaining({ windowsSandbox: "unelevated", sandboxConfig: expect.objectContaining({ windows: { sandbox: "unelevated", other: "preserved" } }) }));
+});
+
+it("reads effective project settings before testing elevated artifact readiness", async () => {
+  mock.sourceConfig = { windows: { sandbox: "unelevated" } };
+  mock.prepare.mockImplementationOnce(async (_account, _thread, settings) => {
+    if ((settings as { sandboxRequired?: boolean }).sandboxRequired) throw new Error("Raw account config is elevated and has no artifacts");
+    return { home: "/mono/default", hasThread: false };
+  });
+  const prepared = await prepareCodexMonoContext({ ...input, sandboxRequired: true, sandboxNetworkAccess: false });
+  expect(prepared.config.windows).toEqual({ sandbox: "unelevated" });
+  expect(mock.sandboxCheck).toHaveBeenCalledWith(expect.objectContaining({ sandboxRequired: true, sandboxConfig: expect.objectContaining({ windows: { sandbox: "unelevated" } }) }));
+});
+
+it("does not coalesce checks for different effective engines or network policies", async () => {
+  let accept: (() => void) | undefined;
+  mock.prepare.mockImplementationOnce(async () => {
+    await new Promise<void>(resolve => { accept = resolve; });
+    return { home: "/mono/default", hasThread: false };
+  });
+  const elevated = prepareCodexMonoContext({ ...input, sandboxRequired: true, sandboxNetworkAccess: false });
+  const unelevated = prepareCodexMonoContext({ ...input, sandboxRequired: true, windowsSandbox: "unelevated", sandboxNetworkAccess: false });
+  const online = prepareCodexMonoContext({ ...input, sandboxRequired: true, sandboxNetworkAccess: true });
+  accept?.();
+  await Promise.all([elevated, unelevated, online]);
+  expect(mock.prepare).toHaveBeenCalledTimes(3);
+  expect(mock.sandboxCheck).toHaveBeenCalledTimes(3);
+});
+
+it("blocks on the merged effective settings before any thread recovery or turn RPC", async () => {
+  mock.sandboxCheck.mockRejectedValueOnce(new Error("Codex storage needs repair: sandbox proxy ports changed"));
+  await expect(prepareCodexMonoContext({ ...input, sandboxRequired: true, threadId: "root" })).rejects.toThrow("proxy ports changed");
+  expect(mock.sent.some(message => ["thread/read", "thread/resume", "turn/start"].includes(message.method))).toBe(false);
+  expect(mock.kill).toHaveBeenCalledOnce();
 });
 
 it("replaces inherited skill and plugin enablement while preserving account paths and other settings", () => {

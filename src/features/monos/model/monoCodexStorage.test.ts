@@ -1,5 +1,31 @@
 import { expect, it, vi } from "vitest";
-import { codexStorageIssueTitle, isCodexStorageError, MonoCodexStorageRecovery, parseCodexStorageConflict, parseCodexStorageRecoveryConflict } from "./monoCodexStorage";
+import { codexStorageIssueTitle, isCodexStorageError, MonoCodexStorageRecovery, parseCodexStorageConflict, parseCodexStorageRecoveryConflict, parseCodexSandboxBlocker, codexSandboxRepairSettings } from "./monoCodexStorage";
+import type { Session } from "../../sessions/model/session";
+
+it("parses actionable sandbox blockers without treating them as file conflicts", () => {
+  const blocker = { sandbox: true, reason: "Sandbox machine account is disabled", setupCommand: "codex sandbox -P :workspace -- powershell.exe -Command 'echo ready'" };
+  const error = `Codex storage needs repair: ${JSON.stringify(blocker)}`;
+  expect(parseCodexSandboxBlocker(error)).toEqual(blocker);
+  expect(parseCodexStorageConflict(error)).toBeUndefined();
+  expect(parseCodexStorageRecoveryConflict(error)).toBeUndefined();
+  expect(isCodexStorageError(error)).toBe(true);
+  for (const invalid of [{ ...blocker, sandbox: "true" }, { ...blocker, reason: "" }, { ...blocker, setupCommand: "" }, { ...blocker, setupCommand: 1 }])
+    expect(parseCodexSandboxBlocker(`Codex storage needs repair: ${JSON.stringify(invalid)}`)).toBeUndefined();
+  expect(parseCodexSandboxBlocker("Provider failed")).toBeUndefined();
+  expect(parseCodexSandboxBlocker("Codex storage needs repair: broken")).toBeUndefined();
+});
+
+it("keeps read-only and Plan repair restricted while allowing explicit full-access default turns", () => {
+  const session = { runtimeMode: "full-access", blocks: [] } as unknown as Session;
+  expect(codexSandboxRepairSettings(session, true, true)).toEqual({ sandboxRequired: false, windowsSandbox: undefined, sandboxNetworkAccess: true });
+  expect(codexSandboxRepairSettings({ ...session, readOnly: true }, true, false)).toEqual({ sandboxRequired: true, windowsSandbox: "unelevated", sandboxNetworkAccess: false });
+  expect(codexSandboxRepairSettings({ ...session, readOnly: true }, false, false).windowsSandbox).toBeUndefined();
+  for (const intent of ["plan", "orchestrate"] as const) {
+    expect(codexSandboxRepairSettings({ ...session, blocks: [{ id: "plan", role: "user", text: "Plan", intent }] }, true, false).sandboxRequired).toBe(true);
+    expect(codexSandboxRepairSettings({ ...session, queuedMessages: [{ id: "plan", text: "Plan", attachments: [], intent }] }, true, false).sandboxRequired).toBe(true);
+  }
+  expect(codexSandboxRepairSettings({ ...session, runtimeMode: "auto" }, true, false).sandboxRequired).toBe(true);
+});
 
 const conflict = {
   entry: "hooks.json", monoPath: "C:/mono/hooks.json", sourcePath: "C:/account/hooks.json",

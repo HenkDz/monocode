@@ -57,9 +57,20 @@ export function monoCodexSkillsCatalog(providerAccountId?: string, projectPath?:
 export function prepareMonoCodexStore(
   providerAccountId?: string,
   threadId?: string,
-  skills?: MonoSkillsContext & { projectPath?: string; sandboxRequired?: boolean },
+  skills?: MonoSkillsContext & { projectPath?: string; sandboxRequired?: boolean; windowsSandbox?: "unelevated"; sandboxNetworkAccess?: boolean },
 ): Promise<MonoCodexStorageInfo & { hasThread: boolean; skillsConfig?: Record<string, unknown>; skillArgs?: string[]; skillsContextId?: string; threadPath?: string }> {
   return invoke("codex_mono_store_prepare", { providerAccountId, threadId, ...skills });
+}
+
+export function checkMonoCodexSandbox(input: {
+  providerAccountId?: string;
+  sandboxRequired: boolean;
+  windowsSandbox?: "unelevated";
+  sandboxNetworkAccess: boolean;
+  skillsContextId?: string;
+  sandboxConfig?: Record<string, unknown>;
+}): Promise<void> {
+  return invoke("codex_mono_sandbox_check", input);
 }
 
 export function copyMonoCodexThreads(

@@ -1,0 +1,6 @@
+{
+  "args": ["app-server", "-c", "windows.sandbox=\"unelevated\""],
+  "codexStore": "mono",
+  "sandbox": "read-only",
+  "approvalPolicy": "never"
+}

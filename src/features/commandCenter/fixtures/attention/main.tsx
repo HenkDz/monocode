@@ -11,6 +11,7 @@ type HarnessControls = {
   settleApproval: () => void;
   replaceApproval: () => void;
   changeSourceWithoutRender: () => void;
+  showSandboxBlocker: (reason: string, setupCommand: string) => void;
 };
 declare global { interface Window { attentionFixture: HarnessControls } }
 document.documentElement.classList.toggle("theme-light", new URLSearchParams(location.search).get("theme") === "light");
@@ -69,6 +70,9 @@ function Harness() {
     settleApproval: () => finishApproval.current(),
     replaceApproval: () => update({ ...current.current, sessions: current.current.sessions.map(session => session.id === "manager" ? { ...session, blocks: [approval(73, "Replacement permission request")] } : session) }),
     changeSourceWithoutRender: () => { current.current = { ...current.current, sessions: current.current.sessions.map(session => session.id === "manager" ? { ...session, blocks: [approval(74, "New source request")] } : session) }; },
+    showSandboxBlocker: (reason, setupCommand) => update({ ...current.current, sessions: current.current.sessions.map(session => session.codexStorageError ? {
+      ...session, codexStorageError: `Codex storage needs repair: ${JSON.stringify({ sandbox: true, reason, setupCommand })}`,
+    } : session) }),
   };
   return <main className="flex h-screen min-w-0 flex-col bg-background-base font-sans text-content">
     <p className="shrink-0 border-b border-stroke px-4 py-2 text-xs text-content/70">Synthetic CC7D fixture · isolated browser · no provider or profile writes</p>

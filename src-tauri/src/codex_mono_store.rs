@@ -11,6 +11,15 @@ use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager};
 
 mod archive;
+mod sandbox;
+mod sandbox_config;
+#[tauri::command(async)]
+pub fn codex_mono_use_unelevated_sandbox(
+    app: AppHandle,
+    provider_account_id: Option<String>,
+) -> Result<sandbox_config::SandboxConfigChange, String> {
+    sandbox_config::codex_mono_use_unelevated_sandbox(app, provider_account_id)
+}
 mod skills;
 mod transactions;
 use transactions::{ClaimIntent, ClaimJournal};
@@ -284,6 +293,8 @@ pub fn codex_mono_store_prepare(
     skills_policy: Option<skills::SkillsPolicy>,
     project_path: Option<String>,
     sandbox_required: Option<bool>,
+    windows_sandbox: Option<String>,
+    sandbox_network_access: Option<bool>,
 ) -> Result<PreparedStore, String> {
     let (source, home, source_kind) =
         locations(&app, provider_account_id.as_deref()).map_err(storage_error)?;
@@ -292,15 +303,30 @@ pub fn codex_mono_store_prepare(
         let _lock = STORAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         archive::prepare_base_state(&home).map_err(storage_error)?;
     }
-    if sandbox_required.unwrap_or(false) {
-        skills::validate_sandbox(&home).map_err(storage_error)?;
-    }
+    sandbox::validate(
+        &home,
+        &home,
+        sandbox_required.unwrap_or(false),
+        windows_sandbox.as_deref(),
+        sandbox_network_access,
+        None,
+    )
+    .map_err(storage_error)?;
     let (skills_context_id, skill_home, skills_config, skill_args) = skills::prepare(
         &source,
         &home,
         project_path.as_deref().map(Path::new),
         skills_role.as_deref().unwrap_or("worker"),
         &skills_policy.unwrap_or_default(),
+    )
+    .map_err(storage_error)?;
+    sandbox::validate(
+        &home,
+        &skill_home,
+        sandbox_required.unwrap_or(false),
+        windows_sandbox.as_deref(),
+        sandbox_network_access,
+        None,
     )
     .map_err(storage_error)?;
     let thread_path = match thread_id {
@@ -326,6 +352,47 @@ pub fn codex_mono_store_prepare(
         skill_home: crate::fs::path_to_js(&skill_home),
         thread_path: thread_path.as_deref().map(crate::fs::path_to_js),
     })
+}
+
+#[tauri::command(async)]
+pub fn codex_mono_sandbox_check(
+    app: AppHandle,
+    provider_account_id: Option<String>,
+    sandbox_required: Option<bool>,
+    windows_sandbox: Option<String>,
+    sandbox_network_access: Option<bool>,
+    skills_context_id: Option<String>,
+    sandbox_config: Option<serde_json::Value>,
+) -> Result<(), String> {
+    let (_, home, _) = locations(&app, provider_account_id.as_deref()).map_err(storage_error)?;
+    let config_home = if let Some(id) = skills_context_id {
+        if id.len() != 64
+            || !id
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        {
+            return Err(storage_error("Invalid Mono skills context id".into()));
+        }
+        let contexts = home.join(".monocode-skill-contexts");
+        let context = contexts.join(id);
+        if replaceable_link(&contexts)? || replaceable_link(&context)? || !context.is_dir() {
+            return Err(storage_error(
+                "Mono skills context is missing or is not a private directory".into(),
+            ));
+        }
+        context
+    } else {
+        home.clone()
+    };
+    sandbox::validate(
+        &home,
+        &config_home,
+        sandbox_required.unwrap_or(false),
+        windows_sandbox.as_deref(),
+        sandbox_network_access,
+        sandbox_config.as_ref(),
+    )
+    .map_err(storage_error)
 }
 
 #[tauri::command(async)]

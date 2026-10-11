@@ -319,16 +319,18 @@ fn hook_clone_recovery_cleans_only_the_recorded_staging_file() {
         if completed {
             journal.verify_clone(&staged).unwrap();
         }
-        let unrelated = fixture
-            .home
-            .join(format!(".monocode-link-{}", uuid::Uuid::new_v4()));
-        std::fs::write(&unrelated, b"Unfamiliar file to preserve").unwrap();
+        let unrelated = [b"".as_slice(), b"Unfamiliar file to preserve".as_slice()].map(|bytes| {
+            let path = fixture
+                .home
+                .join(format!(".monocode-link-{}", uuid::Uuid::new_v4()));
+            std::fs::write(&path, bytes).unwrap();
+            (path, bytes)
+        });
         transactions::reconcile(&fixture.home).unwrap();
         assert!(!staged.exists());
-        assert_eq!(
-            std::fs::read(unrelated).unwrap(),
-            b"Unfamiliar file to preserve"
-        );
+        for (path, bytes) in unrelated {
+            assert_eq!(std::fs::read(path).unwrap(), bytes);
+        }
     }
 }
 

@@ -182,9 +182,9 @@ import { ProviderSignInDialog } from "../features/sessions/ui/ProviderSignInDial
 import { TitleBar, type Tab as TitleTab } from "./shell/TitleBar";
 import { WindowControls } from "./shell/WindowControls";
 import { MonoDetails } from "../features/monos/ui/MonoDetails";
-import { MonoCodexStorageRecovery, isCodexStorageError, parseCodexStorageConflict, parseCodexStorageRecoveryConflict, type CodexStorageResolution, type CodexStorageComparison } from "../features/monos/model/monoCodexStorage";
+import { MonoCodexStorageRecovery, isCodexStorageError, parseCodexStorageConflict, parseCodexStorageRecoveryConflict, parseCodexSandboxBlocker, codexSandboxRepairSettings, type CodexStorageResolution, type CodexStorageComparison } from "../features/monos/model/monoCodexStorage";
 import { codexStorageAccountId, monoCodexStorageIssues } from "../features/monos/model/monoCodexStorageIssues";
-import { prepareMonoCodexStore } from "../integrations/harness/core/child";
+import { prepareMonoCodexStore, resolveCodexBinary } from "../integrations/harness/core/child";
 import { monoSkillsForSession } from "./model/monoSkillsForSession";
 import { handleMonoTeam, isTeamReviewer, lockMonoField } from "../features/monos/model/monoTeam";
 import { monoTeamHost, registerTeamCards } from "../features/monos/model/monoTeamRuntime";
@@ -253,7 +253,7 @@ import {
   loadProjectSidebarTab,
   saveProjectSidebarTab,
 } from "../features/settings/model/projectSidebarTab";
-import { HAS_NATIVE_GLASS, IS_MAC } from "../platform/tauri/platform";
+import { HAS_NATIVE_GLASS, IS_MAC, IS_WIN } from "../platform/tauri/platform";
 import {
   applyUiScale,
   loadUiScale,
@@ -412,6 +412,7 @@ import {
   type UserQuestionReply,
 } from "../integrations/harness";
 import { supportsHarnessLogin } from "../integrations/harness/core/authSupport";
+import { prepareCodexMonoContext } from "../integrations/harness/providers/codex/codexStore";
 import { bindTurnContextProfile } from "../integrations/harness/core/contextProfile";
 import {
   appendPreparingHandoff,
@@ -10089,25 +10090,58 @@ function Workspace({
     const session = sessionsRef.current.find(entry => entry.id === sessionId);
     if (!session) throw new Error("The conversation is no longer available. Reopen it before repairing Codex storage.");
     if (session.busy) throw new Error("The conversation is busy. Wait for its current turn to finish, then try Repair again.");
+    if (remoteProjectFor(session.cwd)) throw new Error("Repair this sandbox on its remote host.");
     const accountId = codexStorageAccountId(session, selectedProviderAccountId("codex", session.cwd));
-    const affectedIds = sessionsRef.current.filter(entry => entry.harness === "codex" && (entry.codexStorageError || entry.codexStoragePreparing) &&
+    const sandboxChoice = resolution === "use_unelevated_sandbox" || resolution === "use_mono_full_access";
+    if (sandboxChoice && codexStorageRecovery.current.isRepairingAccount(accountId)) throw new Error("This account already has a recovery action pending. Wait for it to finish.");
+    if (sandboxChoice && !parseCodexSandboxBlocker(session.codexStorageError)) throw new Error("Refresh the sandbox issue before choosing an engine or access mode.");
+    if (resolution === "use_mono_full_access" && session.readOnly) throw new Error("Read-only investigations must retain their filesystem restrictions.");
+    const affectedIds = resolution === "use_mono_full_access" ? [sessionId] : sessionsRef.current.filter(entry => entry.harness === "codex" && (entry.codexStorageError || entry.codexStoragePreparing) &&
       !remoteProjectFor(entry.cwd) && codexStorageAccountId(entry, selectedProviderAccountId("codex", entry.cwd)) === accountId).map(entry => entry.id);
     if (!affectedIds.includes(sessionId)) affectedIds.push(sessionId);
     try {
-      await codexStorageRecovery.current.repairAccount(accountId, affectedIds, async () => {
+      const relink = async () => {
         await codexStorageRecovery.current.waitForPreparations(affectedIds);
-        if (resolution) {
+        if (resolution === "use_unelevated_sandbox") {
+          const accountSessions = sessionsRef.current.filter(entry => entry.harness === "codex" && !remoteProjectFor(entry.cwd) &&
+            codexStorageAccountId(entry, selectedProviderAccountId("codex", entry.cwd)) === accountId);
+          if (accountSessions.some(entry => entry.busy || entry.codexStoragePreparing)) throw new Error("Wait for this account's current turns and storage preparations to finish before switching its sandbox.");
+          for (const entry of accountSessions) await stopHarnessSession("codex", entry.id);
+          const changed = await invoke<{ configPath: string; backupPaths: string[] }>("codex_mono_use_unelevated_sandbox", { providerAccountId: accountId });
+          flushSync(() => setSessions(previous => previous.map(entry => entry.id === sessionId ? { ...entry, blocks: [...entry.blocks,
+            { id: crypto.randomUUID(), role: "system", text: `This account now uses the unelevated Codex sandbox. Config: ${changed.configPath}\nBackups: ${changed.backupPaths.join("\n")}\nRestore each backup over its config to undo this choice, then restart the account's idle conversations.` }] } : entry)));
+        } else if (resolution === "use_mono_full_access") {
+          await stopHarnessSession("codex", sessionId);
+          const mono = monoForSession(sessionId);
+          if (mono) saveMonoRuntimeMode(mono.id, "full-access");
+          flushSync(() => setSessions(previous => previous.map(entry => entry.id === sessionId ? { ...entry, runtimeMode: "full-access" } : entry)));
+          const updated = sessionsRef.current.find(entry => entry.id === sessionId)!;
+          await upsertSession(updated);
+        } else if (resolution) {
           const conflict = parseCodexStorageConflict(session.codexStorageError);
           if (!conflict) throw new Error("Refresh the storage issue before choosing a version.");
           await invoke("codex_mono_store_resolve", { providerAccountId: accountId, conflict, resolution });
         }
-        await prepareMonoCodexStore(accountId, session.providerSessionId, { ...monoSkillsForSession(sessionId), projectPath: sessionWorkCwd(session) });
-      }, resumingId => {
+        const latest = sessionsRef.current.find(entry => entry.id === sessionId)!;
+        if (parseCodexSandboxBlocker(session.codexStorageError)) {
+          await prepareCodexMonoContext({ sessionId, path: (await resolveCodexBinary()).path, cwd: sessionWorkCwd(session),
+            providerAccountId: accountId, threadId: session.providerSessionId, ...monoSkillsForSession(sessionId),
+            ...codexSandboxRepairSettings(latest, IS_WIN, orchestrator.forSession(sessionId)?.status === "active") });
+        } else {
+          await prepareMonoCodexStore(accountId, session.providerSessionId, { ...monoSkillsForSession(sessionId), projectPath: sessionWorkCwd(session) });
+        }
+      };
+      const beforeResume = (resumingId: string) => {
         if (!affectedIds.includes(resumingId)) affectedIds.push(resumingId);
         // Keep the dispatcher held until the saved submissions have resumed.
         flushSync(() => setSessions(previous => previous.map(entry => entry.id === resumingId
           ? { ...entry, codexStorageError: undefined, codexStoragePreparing: true } : entry)));
-      });
+      };
+      if (resolution === "use_mono_full_access") {
+        await codexStorageRecovery.current.repair(sessionId, async () => { await relink(); beforeResume(sessionId); });
+      } else {
+        await codexStorageRecovery.current.repairAccount(accountId, affectedIds, relink, beforeResume);
+      }
       const failure = sessionsRef.current.find(entry => affectedIds.includes(entry.id) && entry.codexStorageError)?.codexStorageError;
       if (failure) throw new Error(failure);
       setCodexStorageRepaired(true);
@@ -10115,7 +10149,7 @@ function Workspace({
       const storageFailure = isCodexStorageError(error);
       flushSync(() => setSessions(previous => previous.map(entry => affectedIds.includes(entry.id) &&
         (storageFailure || codexStorageRecovery.current.hasPending(entry.id))
-        ? { ...entry, codexStorageError: storageFailure ? String(error) :
+        ? { ...entry, codexStorageError: storageFailure ? String(error) : parseCodexSandboxBlocker(entry.codexStorageError) ? entry.codexStorageError :
           `Codex storage needs repair: The files are ready, but a held message could not resume. Try Repair again. ${String(error)}`,
           codexStorageAccountId: accountId } : entry)));
       throw error;

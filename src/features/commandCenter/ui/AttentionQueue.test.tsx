@@ -37,6 +37,28 @@ const deferred = () => {
 };
 
 describe("Attention queue", () => {
+  it("shows actionable sandbox setup inline in the Mission control panel and passes explicit account choices", async () => {
+    const input = inputFor("storage"), calls = callbacks();
+    const setupCommand = "$env:CODEX_HOME = 'C:/synthetic/account'; codex sandbox -P :workspace -- echo ready";
+    input.sessions = input.sessions.map(session => ({ ...session, codexStorageError: `Codex storage needs repair: ${JSON.stringify({ sandbox: true, reason: "Sandbox proxy ports changed", setupCommand })}` }));
+    await act(async () => root.render(<AttentionQueueView input={input} callbacks={calls} open onClose={() => {}} presentation="panel" />));
+    expect(rows()[0].querySelector("h2")?.textContent).toBe("Codex sandbox needs setup");
+    expect(rows()[0].textContent).toContain("Sandbox proxy ports changed");
+    expect(rows()[0].querySelector('[aria-label="Sandbox setup command"]')?.textContent).toBe(setupCommand);
+    expect(rows()[0].querySelector("[data-attention-details]")).toBeNull();
+    expect(calls.repair).not.toHaveBeenCalled();
+    await act(async () => button("Switch this account to unelevated").click());
+    expect(calls.repair).toHaveBeenCalledExactlyOnceWith("storage", "use_unelevated_sandbox");
+  });
+
+  it("passes explicit full access from the sandbox blocker only for the selected conversation", async () => {
+    const input = inputFor("storage", "storage-peer"), calls = callbacks();
+    input.sessions = input.sessions.map(session => ({ ...session, codexStorageError: `Codex storage needs repair: ${JSON.stringify({ sandbox: true, reason: "Sandbox account missing", setupCommand: "codex sandbox -P :workspace -- echo ready" })}` }));
+    await act(async () => root.render(<AttentionQueueView input={input} callbacks={calls} open onClose={() => {}} />));
+    await act(async () => button("Use full access for this Mono").click());
+    expect(calls.repair).toHaveBeenCalledExactlyOnceWith("storage", "use_mono_full_access");
+  });
+
   it("keeps worker approvals and questions with the lead while exposing a separate escalation", async () => {
     const input = inputFor("worker", "decision");
     input.sessions = input.sessions.map(session => session.id === "worker"

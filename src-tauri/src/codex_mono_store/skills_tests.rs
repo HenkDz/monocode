@@ -3,8 +3,22 @@ use super::*;
 struct Fixture(PathBuf);
 
 const SANDBOX_MARKER: &[u8] =
-    br#"{"version":5,"offline_username":"SyntheticOffline","online_username":"SyntheticOnline"}"#;
-const SANDBOX_USERS: &[u8] = br#"{"version":5,"offline":{"username":"SyntheticOffline","password":"synthetic-encrypted-password"},"online":{"username":"SyntheticOnline","password":"synthetic-encrypted-password"}}"#;
+    br#"{"version":5,"offline_username":"CodexSandboxOffline","online_username":"CodexSandboxOnline"}"#;
+const SANDBOX_USERS: &[u8] = br#"{"version":5,"offline":{"username":"CodexSandboxOffline","password":"synthetic-encrypted-password"},"online":{"username":"CodexSandboxOnline","password":"synthetic-encrypted-password"}}"#;
+
+#[cfg(windows)]
+fn validate_sandbox(base: &Path) -> Result<(), String> {
+    // Synthetic identities use read-only injected flags; no machine accounts are created.
+    sandbox::validate_with(
+        base,
+        &serde_json::to_value(read_config(base)?).unwrap(),
+        true,
+        None,
+        Some(false),
+        &Default::default(),
+        |_| Ok(Some(0)),
+    )
+}
 
 impl Fixture {
     fn new() -> Self {
@@ -788,10 +802,18 @@ fn sandboxed_preparation_rejects_incomplete_or_incompatible_identity_without_set
         }
         let started = std::time::Instant::now();
         let error = validate_sandbox(&fixture.home()).unwrap_err();
-        assert!(
-            error.contains("cannot run fresh or elevated setup"),
-            "{case}: {error}"
-        );
+        let reason = match case {
+            "missing-marker" => "Could not read .sandbox/setup_marker.json",
+            "malformed-marker" => "setup_marker.json is malformed",
+            "old-marker" => "setup marker is incompatible",
+            "missing-users" => "Could not read .sandbox-secrets/sandbox_users.json",
+            "malformed-users" => "sandbox_users.json is malformed",
+            "old-users" => "recorded sandbox users",
+            "missing-bin" => ".sandbox-bin is missing",
+            "empty-sid" => "cap_sid is missing or empty",
+            _ => unreachable!(),
+        };
+        assert!(error.contains(reason), "{case}: {error}");
         assert!(started.elapsed() < std::time::Duration::from_secs(1));
         assert!(!fixture.account().join(".sandbox").exists());
     }

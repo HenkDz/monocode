@@ -14,6 +14,31 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Attention", exact: true })).toBeVisible();
 });
 
+for (const variant of [{ width: 1440, presentation: "page" }, { width: 390, presentation: "panel" }]) {
+  test(`sandbox setup uses real inline controls at ${variant.width}px`, async ({ page }) => {
+    await page.setViewportSize({ width: variant.width, height: 1000 });
+    await page.goto(`/?presentation=${variant.presentation}`);
+    const setupCommand = "$env:CODEX_HOME = 'C:/synthetic/mono'; codex sandbox -c 'windows.sandbox=\"elevated\"' -P :workspace -- powershell.exe -NoProfile -Command 'Write-Output \"Codex sandbox setup complete\"'";
+    await page.evaluate(command => window.attentionFixture.showSandboxBlocker("The recorded sandbox machine account is disabled", command), setupCommand);
+    await filter(page, "Blockers");
+    const blocker = page.getByRole("article", { name: "Codex sandbox needs setup", exact: true });
+    await expect(blocker).toBeVisible();
+    await expect(blocker).toContainText("The recorded sandbox machine account is disabled");
+    await expect(blocker.locator('[aria-label="Sandbox setup command"]')).toHaveText(setupCommand);
+    await expect(blocker.locator("details, summary, [data-attention-details]")).toHaveCount(0);
+    expect(await events(page)).toEqual([]);
+    await blocker.getByRole("button", { name: "Switch this account to unelevated", exact: true }).click();
+    await expect(blocker.getByRole("alert").first()).toContainText("file is busy");
+    await blocker.getByRole("button", { name: "Use full access for this Mono", exact: true }).click();
+    expect(await events(page)).toEqual([
+      { action: "repair", sessionId: "storage", payload: "use_unelevated_sandbox" },
+      { action: "repair", sessionId: "storage", payload: "use_mono_full_access" },
+    ]);
+    const directory = join(evidence, "screenshots"); mkdirSync(directory, { recursive: true });
+    await page.screenshot({ path: join(directory, `sandbox-blocker-${variant.width}.png`), fullPage: true });
+  });
+}
+
 test("deduplicates shared-account storage and renders approval ownership", async ({ page }) => {
   await expect(row(page, "storage")).toHaveCount(1);
   await expect(row(page, "storage")).toContainText("Affects 2 conversations");

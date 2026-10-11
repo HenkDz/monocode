@@ -38,6 +38,30 @@ Existing SQLite-indexed threads resume by ID across instruction homes. A first c
 
 Large path inventories travel through thread RPC, avoiding Windows' 32,767-character command-line limit. Only the compact bundled-skills setting and complete plugin map travel in startup arguments. Account configuration, permissions and credentials keep their existing preparation rules.
 
+## Sandbox readiness
+
+CC6G checks the effective Windows engine before restricted Mono turns.
+Elevated readiness requires a compatible version-5 marker, matching offline
+proxy ports and local-binding settings, and existing, enabled sandbox accounts
+without expired passwords. The read-only account lookup and artifact checks
+never perform setup or delete shared identity files. Warm turns check again.
+The explicit unelevated read-only worker path skips elevated artifacts and
+puts `app-server` before config overrides, retaining read-only permissions.
+
+The CC4 blocker displays **Codex sandbox needs setup**, the precise reason
+and a copyable setup command. Account engine changes require an explicit
+user action with configuration backups; full access is scoped to the chosen
+Mono and Plan remains restricted. Sandbox remediation uses no accordions.
+
+Stock Codex 0.162.1 also repairs saved-password logon failures by deleting
+the users file and entering full setup. Side-effect-free account flags cannot
+rule this path out, and the runtime exposes no switch to disable it. The launch
+guard consequently blocks every elevated Mono turn, including an otherwise
+intact identity. The pure readiness control still passes; it does not authorize
+a runtime that can provision later. Elevated launches require a runtime with
+a no-provisioning execution contract. This does not repair DX1's ACL-refresh hang.
+See [CC6G](cc6g-sandbox-readiness.md) for evidence, validation and limits.
+
 ## Prompt measurements
 
 Actual outgoing Responses requests were captured by a **loopback-only unauthenticated stub**, using synthetic copies of skill names/frontmatter. No real model provider was contacted. The matched before snapshot uses current user/account skill metadata and the configured enabled plugin versions. It discovered 212 enabled entries; the model's catalog budget displayed 211. The broader 299-entry all-cache experiment remains separate stress evidence.

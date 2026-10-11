@@ -1,5 +1,6 @@
 import { modelsFor } from "../../../../features/sessions/model/models";
 import {
+  checkMonoCodexSandbox,
   killChild,
   resolveCodexBinary,
   restoreMonoCodexAgentState,
@@ -39,6 +40,7 @@ type LiveText = {
   codexStore?: "mono";
   skillsContext?: MonoSkillsContext;
   skillsSignature?: string;
+  skillsContextId?: string;
   storeConfig?: Record<string, unknown>;
   model: string;
   effort: string;
@@ -128,6 +130,15 @@ export async function runCodexTextPrompt(
 async function promptOnLive(input: TextPromptInput): Promise<string> {
   input.signal?.throwIfAborted();
   const session = await ensureLive(input);
+  if (session.codexStore === "mono") {
+    await checkMonoCodexSandbox({
+      providerAccountId: session.providerAccountId,
+      sandboxRequired: true,
+      sandboxNetworkAccess: false,
+      skillsContextId: session.skillsContextId,
+      sandboxConfig: session.storeConfig,
+    });
+  }
   input.signal?.throwIfAborted();
   session.output = "";
   session.collecting = true;
@@ -300,6 +311,7 @@ async function startLive(
           skillsRole: skillsContext.skillsRole,
           skillsPolicy: skillsContext.skillsPolicy,
           sandboxRequired: true,
+          sandboxNetworkAccess: false,
           threadId: requestedThreadId,
         })
       : undefined;
@@ -325,6 +337,7 @@ async function startLive(
     ephemeral,
     codexStore,
     skillsContext,
+    skillsContextId: store?.skillsContextId,
     skillsSignature: codexStore === "mono" ? JSON.stringify([skillsContext.skillsRole, skillsContext.skillsPolicy]) : undefined,
     model,
     effort,
@@ -413,9 +426,11 @@ async function openThread(
         skillsRole: session.skillsContext?.skillsRole,
         skillsPolicy: session.skillsContext?.skillsPolicy,
         sandboxRequired: true,
+        sandboxNetworkAccess: false,
         threadId: requestedThreadId,
       }));
     session.storeConfig = store.config;
+    session.skillsContextId = store.skillsContextId;
     hasSavedContext = store.hasThread;
     threadPath = store.threadPath;
     if (requestedThreadId && hasSavedContext)

@@ -585,6 +585,7 @@ it("steers through the existing submission boundary and retains a rejected draft
   render(pane);
   const steer = [...container.querySelectorAll<HTMLButtonElement>("header button")].find((button) => button.textContent === "Steer")!;
   expect(steer.disabled).toBe(false);
+  expect(container.querySelector(".cc7u-delivery")?.textContent).toBe("Message will join the current turn.");
   act(() => steer.click());
   expect(container.querySelector(".cc7u-delivery")?.textContent).toContain("steer the current turn");
   await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Send"]')!.click());

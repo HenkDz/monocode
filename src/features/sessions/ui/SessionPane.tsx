@@ -1223,7 +1223,9 @@ const LocalSessionPane = memo(function LocalSessionPane({
           : session.queueStatus === "paused"
             ? "Message will queue until you resume delivery."
             : session.busy
-              ? "Message will queue for the next turn."
+              ? isMember && canSteer
+                ? "Message will join the current turn."
+                : "Message will follow the current turn."
               : conversationLiveState.status === "needs-you"
                 ? "Message will queue until the pending request is resolved."
                 : ["queued", "blocked", "failed"].includes(

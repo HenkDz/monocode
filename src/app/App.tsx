@@ -14,7 +14,8 @@ import { loadMonoView, saveMonoView, monoForView, monoViewProject, memberDetails
 import { MonoTeamActivity } from "../features/monos/ui/MonoTeamActivity";
 import { TeamMap } from "../features/teamMap/TeamMap";
 // CC7C integration: Mission control uses the existing full-view navigation.
-import { MissionControl, MISSION_CONTROL_SCOPE } from "../features/commandCenter/ui/MissionControl";
+import { MISSION_CONTROL_SCOPE } from "../features/commandCenter/ui/MissionControl";
+import { DelegationTimelineRoute as MissionControl } from "../features/commandCenter/ui/DelegationTimeline"; // CC7E route hook
 import { AttentionQueue, ATTENTION_QUEUE_SCOPE } from "../features/commandCenter/ui/AttentionQueue";
 import { openGoalTarget } from "../features/commandCenter/model/goalView";
 import { TeamMapHeaderAction, useTeamMap } from "../features/teamMap/navigation";

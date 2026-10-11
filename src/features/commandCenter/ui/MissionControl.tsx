@@ -29,6 +29,7 @@ function GoalRow({ view, onOpenTarget }: { view: GoalView; onOpenTarget: (target
     {view.rosterIssue && <p className="mc-roster-issue">{view.rosterIssue}</p>}
     <GoalChain view={view} onOpenTarget={onOpenTarget} />
     {view.nodes.some(node => node.shared) && <p className="mc-goal-note">Shared conversations contribute only their linked goal turns. Goal totals can overlap.</p>}
+    <a className="mc-link" style={{ display: "inline-block", margin: "0 20px 16px" }} href={`#goal-timeline-${encodeURIComponent(view.goal.id)}`} data-goal-timeline={view.goal.id}>View timeline →</a>{/* CC7E route hook */}
   </article>;
 }
 

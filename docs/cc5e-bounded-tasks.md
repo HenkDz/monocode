@@ -142,8 +142,8 @@ Validation receipts and logs: `target/cc5e-verification/`.
 Final inventory, commit and validation totals:
 `C:/Users/nooro/AppData/Local/Temp/monocode-cc/cc5e/REPORT.md`.
 
-No live model turn, desktop preview, profile/database mutation, native storage
-change, skills change, routing/wake batching change, push or merge was made.
+The original CC5E run made no live model turn, desktop preview, profile/database
+mutation, native storage, skills or routing/wake batching change, push or merge.
 Native runtime/provider acceptance and latency improvement remain coordinator
 rollout checks. Oversized or incompletely loaded constraints deliberately
 defer automatic refresh; task segmentation remains the safeguard for those
@@ -155,3 +155,10 @@ The review's four findings and their committed reproductions are documented
 in `docs/cc5ef-rotation-fixes.md`. Current repair evidence is under
 `C:/Users/nooro/AppData/Local/Temp/monocode-cc/cc5ef/`; `REPORT.md` records the
 integrated branch revisions, exact checks and remaining rollout limits.
+
+CC5EF at source revision `83a667d` passed 573 Vitest files with 2 skipped:
+6,542 tests passed, 13 skipped, zero failed. TypeScript and production build
+passed; focused native control CLI tests passed 23/23. The first full run
+had one unchanged CRLF editor timeout under concurrent compilation; that file
+passed unchanged alone and the complete rerun passed without concurrent
+compilation. The repair merged CC5E only into its own branch.

@@ -58,6 +58,34 @@ Repair receipts and logs:
 `C:/Users/nooro/AppData/Local/Temp/monocode-cc/cc5ef/validation/` and `evidence/`.
 Branch revision and final check counts are recorded in that round's `REPORT.md`.
 
+## Validation
+
+Windows, Node 26.5.0; all web checks used
+`NODE_OPTIONS=--no-experimental-webstorage`. Source revision: `83a667d`.
+
+| Check | Result |
+| --- | --- |
+| Full `npx vitest run --maxWorkers 4` | 573 files passed, 2 skipped, zero failed; 6,542 tests passed, 13 skipped, zero failed; 108.42 s runner |
+| `npx tsc --noEmit` | Exit 0, no diagnostics; 32.647 s wall |
+| `npm run build` | Exit 0; 3,680 modules, 33.91 s Vite, 76.024 s wall |
+| Native `cargo test --manifest-path src-tauri/Cargo.toml --lib control_cli::tests -- --test-threads=1` | 23 passed, zero failed/ignored/measured, 669 filtered; 23.487 s wall |
+| Focused retry/planner/context/continuity | 4 files, 49 tests passed, zero failed/skipped |
+| Focused profile/event/metrics/cancellation | 7 files, 233 tests passed, zero failed/skipped |
+| Focused actual composer/meter/pane | 4 files, 101 tests passed, zero failed/skipped |
+
+The first full run failed one unchanged CRLF editor test's 5-second timeout
+under concurrent compilation: 572 files passed, 2 skipped, 1 failed; 6,541
+tests passed, 13 skipped, 1 failed. Its four tests passed unchanged alone,
+then the complete suite passed without concurrent compilation. Initial UI
+tests had six failures because their synthetic fixture had not registered
+harness capabilities; the fixture was corrected without weakening production
+guards. A preliminary TypeScript check found two new test-fixture annotation
+errors; those were corrected before the final clean check. Attempt receipts
+and explanations are preserved in the round's validation/evidence folders.
+
+The final documentation commit keeps all validated application/native source
+trees, package files and embedded delegation guidance identical to `83a667d`.
+
 ## Limits
 
 No live model turn, native desktop preview, deployment, push, merge into `nour`,

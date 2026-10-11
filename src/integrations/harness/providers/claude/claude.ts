@@ -130,6 +130,7 @@ type BackgroundTask = {
 type Live = {
   cwd: string;
   claudeSessionId: string;
+  sessionConfirmed: boolean;
   providerAccountId?: string;
   runtimeMode: RuntimeMode;
   planning: boolean;
@@ -491,6 +492,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   const live: Live = {
     cwd: input.cwd,
     claudeSessionId,
+    sessionConfirmed: false,
     providerAccountId: input.providerAccountId,
     runtimeMode: input.runtimeMode,
     planning,
@@ -587,9 +589,10 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
 }
 
 async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
+  const text = input.prepareText ? await input.prepareText(live.sessionConfirmed ? live.claudeSessionId : undefined) : input.text;
   const effort = input.modelSettings?.effort;
   const message = buildClaudeUserMessage({
-    text: input.text,
+    text,
     attachments: input.attachments,
     effort,
   });
@@ -684,6 +687,7 @@ function handleLine(sessionId: string, live: Live, line: string): void {
       (compactSessionId && live.claudeSessionId && compactSessionId !== live.claudeSessionId))) return;
 
   const sessionIdFromLine = sessionIdFromMessage(rec);
+  if (sessionIdFromLine && !isSubagentMessage(rec)) live.sessionConfirmed = true;
   if (sessionIdFromLine && sessionIdFromLine !== live.claudeSessionId) {
     live.claudeSessionId = sessionIdFromLine;
     // A different conversation starts with its own task ids.

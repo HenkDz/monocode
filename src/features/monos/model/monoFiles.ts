@@ -224,9 +224,9 @@ type Handed = {
   memoryHash: string;
 };
 
-// Failed storage writes must not let readable receipts survive invalidation.
-const invalidatedAgentContexts = new Set<string>();
-const invalidatedOrgContexts = new Set<string>();
+// Restored receipts cannot prove history survived a prior process's invalidation.
+const deliveredAgentContexts = new Set<string>();
+const deliveredOrgContexts = new Set<string>();
 
 function readHanded(): Record<string, Handed> {
   migrateLegacyMonoStorage();
@@ -266,13 +266,11 @@ export function planAgentContext(
   files: Pick<MonoFiles, "soulHash" | "memoryHash">,
 ): AgentContextPlan {
   const handed = readHanded()[sessionId];
-  // The provider id arrives with the first reply, so a record made before it
-  // belongs to whatever session that reply started.
   const sameSession =
-    !invalidatedAgentContexts.has(sessionId) &&
+    deliveredAgentContexts.has(sessionId) &&
     !!handed &&
     !!providerSessionId &&
-    (handed.provider == null || handed.provider === providerSessionId);
+    handed.provider === providerSessionId;
   if (!sameSession) return { soul: true, memory: true };
   const soul = handed.soulHash !== handedSoul(files.soulHash);
   return { soul, memory: soul || handed.memoryHash !== files.memoryHash };
@@ -283,7 +281,9 @@ export function recordAgentContext(
   sessionId: string,
   providerSessionId: string | undefined,
   files: Pick<MonoFiles, "soulHash" | "memoryHash">,
+  delivery?: { plan: AgentContextPlan; provider?: string },
 ): void {
+  if (delivery && (!delivery.plan.soul || !delivery.plan.memory) && delivery.provider !== providerSessionId) return;
   const next = {
     ...readHanded(),
     [sessionId]: {
@@ -294,7 +294,7 @@ export function recordAgentContext(
   };
   try {
     localStorage.setItem(HANDED_KEY, JSON.stringify(next));
-    invalidatedAgentContexts.delete(sessionId);
+    deliveredAgentContexts.add(sessionId);
   } catch {
     // Without the record the next turn resends everything, which is safe.
   }
@@ -302,8 +302,8 @@ export function recordAgentContext(
 
 /** Re-hand context after provider history is compacted, rewound or deleted. */
 export function forgetAgentContext(sessionId: string): void {
-  invalidatedAgentContexts.add(sessionId);
-  invalidatedOrgContexts.add(sessionId);
+  deliveredAgentContexts.delete(sessionId);
+  deliveredOrgContexts.delete(sessionId);
   const handed = readHanded();
   delete handed[sessionId];
   try {
@@ -321,10 +321,10 @@ export function forgetAgentContext(sessionId: string): void {
 }
 
 /** Bumped when the fixed rules below change, so live chats get them again. */
-export const MONO_PROMPT_VERSION = 25;
+export const MONO_PROMPT_VERSION = 26;
 
 const ORG_HANDED_KEY = "monocode:org-handed";
-export type OrgContextPlan = { hash: string; model: string; text?: string };
+export type OrgContextPlan = { hash: string; model: string; provider?: string; text?: string };
 type OrgHanded = Pick<OrgContextPlan, "hash" | "model"> & { provider?: string };
 
 function readOrgHanded(): Record<string, OrgHanded> {
@@ -346,18 +346,19 @@ export async function planOrgContext(
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${MONO_PROMPT_VERSION}\0${context}`));
   const hash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
   const handed = readOrgHanded()[sessionId];
-  const sameSession = !invalidatedOrgContexts.has(sessionId) && !!providerSessionId && !!handed &&
-    (handed.provider == null || handed.provider === providerSessionId) && handed.model === model;
-  return { hash, model, ...(sameSession && handed.hash === hash ? {} : { text: context }) };
+  const sameSession = deliveredOrgContexts.has(sessionId) && !!providerSessionId && !!handed &&
+    handed.provider === providerSessionId && handed.model === model;
+  return { hash, model, provider: providerSessionId, ...(sameSession && handed.hash === hash ? {} : { text: context }) };
 }
 
 /** Call only once the provider accepts this prompt, never on a rejected send. */
 export function recordOrgContext(sessionId: string, providerSessionId: string | undefined, plan: OrgContextPlan): void {
+  if (plan.text == null && plan.provider !== providerSessionId) return;
   try {
     localStorage.setItem(ORG_HANDED_KEY, JSON.stringify({ ...readOrgHanded(), [sessionId]: {
       hash: plan.hash, model: plan.model, ...(providerSessionId ? { provider: providerSessionId } : {}),
     } }));
-    invalidatedOrgContexts.delete(sessionId);
+    deliveredOrgContexts.add(sessionId);
   } catch {
     // Without a receipt the next turn safely resends the full org context.
   }

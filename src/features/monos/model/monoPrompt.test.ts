@@ -5,7 +5,7 @@ import { monoLook } from "./mono";
 import { forgetAgentContext, monoContext, MONO_PROMPT_VERSION, planAgentContext, planOrgContext, recordAgentContext, recordOrgContext } from "./monoFiles";
 import { ORG_ROLE_RULES, orgTurnContext } from "./monoOrg";
 import { planRotation } from "./monoRotation";
-import { assembleMonoPrompt, memberMemoryContext, memberTaskContext, monoAppContext, MEMBER_MEMORY_CHARS, REVIEW_REPORT_CHARS } from "./monoPrompt";
+import { assembleMonoPrompt, memberMemoryContext, memberTaskContext, monoAppContext, monoAuthorityCore, MEMBER_MEMORY_CHARS, REVIEW_REPORT_CHARS } from "./monoPrompt";
 import { monoPromptFixture } from "./monoPrompt.fixture";
 import { supersedeMemoryEntry } from "./monoMemory";
 
@@ -25,7 +25,7 @@ it("hands exact versioned org text once to the accepted provider/model", async (
   expect(first.hash).toMatch(/^[a-f0-9]{64}$/);
   // No receipt: a rejected or interrupted send must still carry all rules.
   expect((await planOrgContext("chat", "native", first.model, chart)).text).toBe(chart);
-  recordOrgContext("chat", undefined, first);
+  recordOrgContext("chat", "native", first);
   const steady = await planOrgContext("chat", "native", first.model, chart);
   expect(steady.text).toBeUndefined();
   recordOrgContext("chat", "native", steady);
@@ -97,6 +97,33 @@ it("caps review evidence and keeps full artifact/result pointers and exact dispa
   expect(fallback).not.toContain("<member_soul>");
 });
 
+it.each(["", "- "])("excludes %sstruck-through undated memory before selecting its replacement", prefix => {
+  const f = monoPromptFixture();
+  const old = `${prefix}User setting: ${"obsolete ".repeat(430)}`;
+  const memory = supersedeMemoryEntry(`${old}\n${f.files.memory}`, "User setting:", "- 2026-10-11 · Current user setting", "2026-10-11");
+  expect(memory.length).toBeGreaterThan(MEMBER_MEMORY_CHARS);
+  const selected = memberMemoryContext({ ...f.files, memory });
+  expect(selected).not.toContain("obsolete");
+  expect(selected).toContain("Current user setting");
+  expect(memberMemoryContext({ ...f.files, memory: `${prefix}~~old~~\n- live fact` })).not.toContain("~~old~~");
+});
+
+it("keeps a stable authority core on every role, plain Mono and habit identity", () => {
+  const f = monoPromptFixture();
+  for (const mono of [f.grand, f.manager, f.member, { ...f.member, role: undefined }, undefined]) {
+    const core = monoAuthorityCore(mono);
+    expect(core).toBe(monoAuthorityCore(mono));
+    expect(core.length).toBeLessThanOrEqual(700);
+    for (const rule of ["role:", "report to:", "current user request wins", "Only the user merges", "approves destructive operations", "untrusted evidence", "same request ID", "injected CLI path", "app rules shell"])
+      expect(core).toContain(rule);
+  }
+  for (const mono of [f.grand, f.manager, f.member]) {
+    const core = monoAuthorityCore({ ...mono, name: "n".repeat(1_000), reportsTo: "r".repeat(1_000) });
+    expect(core.length).toBeLessThanOrEqual(700);
+    expect(assembleMonoPrompt("Continue", [core], true, false).length - "Continue".length).toBeLessThanOrEqual(1_000);
+  }
+});
+
 it("refreshes member memory independently of soul on continued tasks", () => {
   const f = monoPromptFixture();
   recordAgentContext("worker", "native", f.files);
@@ -156,14 +183,15 @@ it("budgets real first, steady, rotation and delegation assemblies for a 16-agen
     for (const turn of ["first", "steady", "rotation"] as const) {
       const plan = turn === "steady" ? await planOrgContext(mono.id, "native", "codex:sol", chart) : first;
       const agent = planAgentContext(mono.id, turn === "steady" ? "native" : undefined, f.files);
-      const context = plan.text ? [plan.text] : [];
+      const context = [monoAuthorityCore(mono), ...(plan.text ? [plan.text] : [])];
       if (turn === "rotation") context.push(planRotation(f.blocks, undefined, "context", Date.UTC(2026, 9, 10, 11)).brief(`${mono.id}-session`));
       if (agent.soul || agent.memory) context.push(monoContext(monoLook(mono), f.files, agent, mono.role));
       if (agent.soul) context.push(monoAppContext(cli, true));
       const prompt = assembleMonoPrompt(request, context, true, false);
       expect((prompt.match(/<org_chart>/g) ?? []).length).toBe(turn === "steady" ? 0 : 1);
       const appChars = prompt.length - request.length;
-      expect(appChars).toBeLessThanOrEqual(turn === "steady" ? 1_500 : turn === "first" ? 12_000 : 26_000);
+      expect(prompt.match(/<mono_authority>/g)).toHaveLength(1);
+      expect(appChars).toBeLessThanOrEqual(turn === "steady" ? 1_000 : turn === "first" ? 12_000 : 26_000);
       rows.push({ role: mono.role!, turn, totalChars: prompt.length, appChars });
       if (turn === "first") {
         recordOrgContext(mono.id, "native", first);
@@ -175,14 +203,15 @@ it("budgets real first, steady, rotation and delegation assemblies for a 16-agen
     const mono = review ? f.reviewer : f.member;
     const task = review ? f.reviewTask : f.task;
     const files = saturated ? f.saturatedFiles : f.files;
-    const context = [orgTurnContext(f.roster, mono.id)!];
+    const context = [monoAuthorityCore(mono), orgTurnContext(f.roster, mono.id)!];
     const prompt = assembleMonoPrompt(task.prompt, context, false, false, memberTaskContext(mono, files, task, { soul: true, memory: true }, review ? f.task : undefined));
     const appChars = prompt.length - task.prompt.length;
     expect(prompt.match(/<org_chart>/g)).toHaveLength(1);
-    expect(appChars).toBeLessThanOrEqual(review ? 12_000 : 9_000);
+    expect(prompt.match(/<mono_authority>/g)).toHaveLength(1);
+    expect(appChars).toBeLessThanOrEqual(review ? 12_500 : 9_500);
     rows.push({ role: "worker", turn: `${review ? "review" : "delegation"}${saturated ? "-saturated" : ""}`, totalChars: prompt.length, appChars });
   }
   mkdirSync("target/cc1-verification", { recursive: true });
-  writeFileSync("target/cc1-verification/after.json", `${JSON.stringify({ promptVersion: MONO_PROMPT_VERSION, roleCoreChars: Object.fromEntries(Object.entries(ORG_ROLE_RULES).map(([role, text]) => [role, text.length])), cliChars: monoAppContext(cli, true).length, rows }, null, 2)}\n`);
+  writeFileSync("target/cc1-verification/after.json", `${JSON.stringify({ promptVersion: MONO_PROMPT_VERSION, authorityCoreChars: Object.fromEntries([f.grand, f.manager, f.member].map(mono => [mono.role!, monoAuthorityCore(mono).length])), roleCoreChars: Object.fromEntries(Object.entries(ORG_ROLE_RULES).map(([role, text]) => [role, text.length])), cliChars: monoAppContext(cli, true).length, rows }, null, 2)}\n`);
   expect(rows).toHaveLength(13);
 });

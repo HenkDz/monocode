@@ -499,7 +499,7 @@ async function startLive(
   const live: Live = {
     rpc,
     cwd: input.cwd,
-    providerSessionId: resume ?? "",
+    providerSessionId: "",
     nativeModel: native,
     thinking: input.modelSettings?.thinking ?? "",
     fastModeEnabled: undefined,
@@ -598,6 +598,7 @@ async function runTurn(
   input: SendTurnInput,
 ): Promise<void> {
   await applyModel(flavor, live, input);
+  const text = input.prepareText ? await input.prepareText(live.providerSessionId || undefined) : input.text;
   live.emittedAssistant = "";
   live.emittedReasoning = "";
   live.turnError = null;
@@ -622,7 +623,7 @@ async function runTurn(
       live.rpc.request(
         {
           ...buildPiPrompt({
-            text: input.text,
+            text,
             attachments: input.attachments,
           }),
           id: promptId,

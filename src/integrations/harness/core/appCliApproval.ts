@@ -35,8 +35,8 @@ export function powerShellAppTokens(script: string): string[] | undefined {
   const inner = script.startsWith("& ") ? script.slice(2) : script;
   if (inner.includes("&")) return;
   const head = (script.startsWith("& ")
-    ? /^'([^']+)' +app +([a-z][a-zA-Z0-9]*(?:\.[a-zA-Z0-9]+)+)(?= |$)/
-    : /^([A-Za-z]:[/\\][A-Za-z0-9._:/\\-]+) +app +([a-z][a-zA-Z0-9]*(?:\.[a-zA-Z0-9]+)+)(?= |$)/).exec(inner);
+    ? /^'([^']+)' +app +(rules|[a-z][a-zA-Z0-9]*(?:\.[a-zA-Z0-9]+)+)(?= |$)/
+    : /^([A-Za-z]:[/\\][A-Za-z0-9._:/\\-]+) +app +(rules|[a-z][a-zA-Z0-9]*(?:\.[a-zA-Z0-9]+)+)(?= |$)/).exec(inner);
   if (!head) return;
   const tokens = [head[1], "app", head[2]];
   let rest = inner.slice(head[0].length);
@@ -114,6 +114,10 @@ export function isDirectAppCliCommand(
   const normalize = (path: string) => windows ? path.replace(/\\/g, "/").replace(/\/+/g, "/").toLowerCase() : path;
   if (normalize(tokens[0] ?? "") !== normalize(executable) || tokens[1] !== "app" ||
       !policy.actions.includes(tokens[2])) return false;
+  if (tokens[2] === "rules") {
+    if (splitCommandTokens(command, false)?.[0] === policy.trustedRtk) return false;
+    return tokens.length === 4 && ["team", "shell", "artifacts", "delegation", "memory", "habits"].includes(tokens[3]);
+  }
   let input = false, requestId = false;
   for (let i = 3; i < tokens.length; i += 2) {
     const flag = tokens[i], value = tokens[i + 1];

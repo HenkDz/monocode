@@ -1,12 +1,27 @@
 # CC1: smaller Mono application context
 
-Branch: `HenkDz/cc1-prompt-diet`, based on
+Original branch: `HenkDz/cc1-prompt-diet`, based on
 `de8edc3b389c3362134cc5a521458b241496b4c2` (`nour` at round start).
+CC1F integrates it with CC5-A on `HenkDz/cc1f-prompt-fixes`; final fixes and
+validation are documented in `docs/cc1f-prompt-fixes.md`.
 
-Mono turns now carry each app block once. The org chart and role rules are
+Mono turns carry each app block once. A fixed authority core accompanies
+every Mono, member and habit turn, including steady turns and the current
+input during compaction. It identifies the agent, role and reporting line,
+prioritizes the user request, preserves user-only merges/destructive approvals,
+frames repository/report/artifact text as evidence, and requires stable retry
+IDs and the injected CLI path with a prior `app rules shell` read. Fixture
+cores are 399/391/385 characters; configured identity fields are bounded so
+the whole core always stays within 700 characters.
+
+The org chart and detailed role rules are
 sent again only when their exact SHA-256 content/version changes, the
-provider conversation changes, or the harness/model/account changes. Prompt
-version is 25. Receipt writes happen on provider acceptance; rejected sends
+provider conversation changes, or the harness/model/account changes, and
+once per restored conversation after process start. Prompt version is 26.
+Providers rebuild the prompt after resume/create confirms their conversation
+and before serializing input. Unknown continuity forces full context; an
+omitted plan cannot be recorded for a replacement provider. Receipt writes
+happen on provider acceptance; rejected sends
 and unavailable storage safely resend. Successful edit/rewind clears receipts
 because the provider may have discarded the only copy of those instructions.
 Deletion clears both identity and org receipts. The same handling covers
@@ -45,10 +60,13 @@ the native executable. Fetch it with the injected executable:
 ```
 
 `app rules` lists topics; `app --help` retains action/JSON documentation.
-Rules are local text and need no connection credentials. Unknown topics,
-paths and extra arguments are rejected. The action allowlist and automatic
-approval grammar are unchanged: guidance/help follow ordinary harness
-permissions. Read shell guidance once before the first CLI action, and the
+Rules are local text and need no connection credentials. Exactly the verified
+current executable plus `app rules <known topic>` is auto-approved, including
+the constrained trusted PowerShell form. Unknown topics, paths, extra tokens,
+flags, chaining and proxies are rejected. Rules cannot enter the credential
+action dispatcher; help follows ordinary permissions. The offline rules route
+uses CC5-A's checked output writer and fails with a controlled nonzero result
+when stdout is unavailable. Read shell guidance once before the first CLI action, and the
 other topics before the relevant work. A native rebuild is required to ship
 these embedded texts.
 
@@ -57,7 +75,8 @@ the exact action reference remains available with `app --help`.
 
 Worker memory uses at most 4,000 characters of whole lines. Under pressure it
 keeps user-owned undated lines, then newest live dated facts, with original
-file order restored for reading; superseded dated lines are excluded. Facts
+file order restored for reading; both `- ~~` and `~~` superseded forms are
+excluded before selection, even when memory already fits. Facts
 updated in place remain eligible by their new date. Oversized lines are
 omitted, never rewritten. The full MEMORY.md path stays in the prompt for
 read-only access; workers can ask their Manager for topic/archive searches.
@@ -85,25 +104,26 @@ its wrapper, excluding the user/task request.
 
 | Role / turn | Before | After | Reduction |
 | --- | ---: | ---: | ---: |
-| Grand Orch / first | 45,252 | 9,502 | 79.0% |
-| Grand Orch / steady | 7,300 | 0 | 100.0% |
-| Grand Orch / rotation | 71,020 | 22,386 | 68.5% |
-| Manager / first | 49,766 | 10,336 | 79.2% |
-| Manager / steady | 11,980 | 0 | 100.0% |
-| Manager / rotation | 75,542 | 23,224 | 69.3% |
-| Member home / first | 46,118 | 9,560 | 79.3% |
-| Member home / steady | 8,350 | 0 | 100.0% |
-| Member home / rotation | 71,910 | 22,456 | 68.8% |
-| Worker / delegation | 9,103 | 8,147 | 10.5% |
-| Worker / review | 17,856 | 10,985 | 38.5% |
-| Worker / saturated delegation | 29,903 | 8,947 | 70.1% |
-| Worker / saturated review | 38,656 | 11,785 | 69.5% |
+| Grand Orch / first | 45,252 | 9,903 | 78.1% |
+| Grand Orch / steady | 7,300 | 871 | 88.1% |
+| Grand Orch / rotation | 71,020 | 22,787 | 67.9% |
+| Manager / first | 49,766 | 10,729 | 78.4% |
+| Manager / steady | 11,980 | 863 | 92.8% |
+| Manager / rotation | 75,542 | 23,617 | 68.7% |
+| Member home / first | 46,118 | 9,947 | 78.4% |
+| Member home / steady | 8,350 | 857 | 89.7% |
+| Member home / rotation | 71,910 | 22,843 | 68.2% |
+| Worker / delegation | 9,103 | 8,534 | 6.3% |
+| Worker / review | 17,856 | 11,373 | 36.3% |
+| Worker / saturated delegation | 29,903 | 9,334 | 68.8% |
+| Worker / saturated review | 38,656 | 12,173 | 68.5% |
 
 First Mono turns are capped at 12,000 characters: full role/chart, identity,
 soul, fixture memory and CLI, with approximately 1,600 characters of headroom
-for the largest role. Steady unchanged turns cap at 1,500 and currently add
-zero. Rotation caps at 26,000, retaining the existing approximately 13,000
-character recap. Worker delegation caps at 9,000 and review at 12,000, including
+for the largest role. Steady unchanged turns cap at 1,000 and add 857–871
+characters including the authority core and wrapper. Rotation caps at 26,000,
+retaining the existing approximately 13,000-character recap. Worker delegation
+caps at 9,500 and review at 12,500, allowing the fixed authority core, including
 the saturated memory/report cases. These intentional bounds are fixture
 regressions, not enforced truncation of arbitrary user-authored souls or
 task briefs. They exclude unchanged orchestration/native suffixes, global
@@ -135,14 +155,17 @@ Recorded call durations and turn-minus-unioned-tool-time/call estimates are
 labelled separately. Worker completion to the next lead turn is an upper
 bound, and unmatched dispatches/unknown roles remain visible.
 
-Self-tests use synthetic nested trees, token fallback, duplicate compaction
+Usage falls back per turn, with detailed usage authoritative within that turn.
+Compactions are deduplicated by identity and timestamp across record formats,
+preserving event-only history. Records lacking timestamps remain distinct.
+Self-tests use synthetic nested trees, mixed-history token fallback, duplicate compaction
 records, overlapping tools and an uncheckpointed WAL. A sanitized size-only
 fixture from the allowed copied prompt extracts reproduced first Manager
 62,428, later Manager 22,131, Grand Orch 40,452 and worker 22,905/18,537
 user-message characters. No production latency improvement is claimed:
 copied rollout JSONLs were unavailable and no live model turns were sent.
 
-## Validation and evidence
+## Original CC1 validation and evidence
 
 The required checks use Node 26 with
 `NODE_OPTIONS=--no-experimental-webstorage`; native checks cover the changed
@@ -174,7 +197,7 @@ analyzer source-byte/mtime checks. The original copied prompts/scripts are
 under that program's `evidence/` folder. No push, merge, preview/model turn,
 real agent-data edit, scheduler/effort change or skills/storage change was made.
 
-## Compaction follow-up
+## Original CC1 compaction follow-up
 
 Provider compaction replaces the history that held the once-delivered org,
 identity, soul and memory. Receipt identity alone cannot detect that loss.
@@ -211,7 +234,9 @@ Usage decreases and display strings are not compaction evidence.
 Synthetic registry tests assemble the real first-turn/steady context and prove
 auto compaction before/after acceptance, manual compact with/without a signal,
 compaction followed by failures, failed storage writes, unaffected sessions
-and restoration of zero app-added steady context after fresh delivery.
+and restoration of omission after fresh delivery. CC1F adds the authority
+core to those steady inputs and rejects cross-process persisted receipts
+until a fresh accepted delivery is stored, even when invalidation writes fail.
 
 | Check | Result |
 | --- | --- |

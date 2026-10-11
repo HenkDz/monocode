@@ -106,7 +106,8 @@ const ACTIONS: [&str; 13] = [
     "list", "delegate", "get", "steer", "message", "retry", "reassign", "cancel", "wait", "review",
     "finish", "respond", "answer",
 ];
-const APP_ACTIONS: [&str; 48] = [
+const APP_ACTIONS: [&str; 49] = [
+    "rules",
     "tasks.request",
     "team.answer",
     "team.list",
@@ -162,7 +163,8 @@ Usage: {exe} app ACTION [--json JSON | --input FILE|-] [--request-id ID]
        {exe} app rules <team|shell|artifacts|delegation|memory|habits>
 
 rules prints read-only Markdown guidance without an app connection or credentials.
-Run app rules --help for topics. It uses your ordinary command permissions.
+Exact app rules <topic> reads are auto-approved through the verified executable.
+Run app rules --help for topics; help uses your ordinary command permissions.
 
 A Mono works on several projects: add "project":"<path or name>" to the
 sessions.*, worktrees.* and folders.* actions to choose which one. It may be
@@ -756,7 +758,8 @@ pub(crate) fn validate_app_request(
     input: &Value,
     request_id: &str,
 ) -> Result<(), String> {
-    if !APP_ACTIONS.contains(&action) {
+    // Rules is an offline approval action, never an authenticated app request.
+    if action == "rules" || !APP_ACTIONS.contains(&action) {
         return Err(format!("Unknown app action: {action}"));
     }
     if request_id.is_empty()
@@ -977,10 +980,7 @@ fn run_mode(args: Vec<String>, app_mode: bool) -> i32 {
         Parsed::Help => {
             return print_output(&if app_mode { app_help() } else { help() }, 0, None);
         }
-        Parsed::Rules(text) => {
-            print!("{text}");
-            return 0;
-        }
+        Parsed::Rules(text) => return print_output(text, 0, None),
         Parsed::Call(action, input, request_id) => (action, input, request_id),
     };
     let (response, code) = response(send(&action, &input, &request_id, app_mode), &request_id);
@@ -1359,6 +1359,36 @@ mod tests {
         assert!(diagnostic.contains("--request-id lost-receipt"));
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn offline_rules_with_detached_stdout_cannot_succeed() {
+        const CHILD: &str = "MONOCODE_TEST_RULES_DETACHED_STDOUT";
+        if std::env::var_os(CHILD).is_some() {
+            use windows_sys::Win32::System::Console::{SetStdHandle, STD_OUTPUT_HANDLE};
+            assert!(std::env::var_os("MONOCODE_APP_ENDPOINT").is_none());
+            assert!(std::env::var_os("MONOCODE_APP_TOKEN").is_none());
+            unsafe { SetStdHandle(STD_OUTPUT_HANDLE, std::ptr::null_mut()) };
+            std::process::exit(maybe_run(args(&["app", "rules", "shell"])).unwrap());
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "control_cli::tests::offline_rules_with_detached_stdout_cannot_succeed",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env_remove("MONOCODE_APP_ENDPOINT")
+            .env_remove("MONOCODE_APP_TOKEN")
+            .env_remove("MONOCODE_CONTROL_ENDPOINT")
+            .env_remove("MONOCODE_CONTROL_TOKEN")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        let diagnostic = String::from_utf8_lossy(&output.stderr);
+        assert!(diagnostic.contains("MonoCode stdout failed: No stdout handle"));
+        assert!(!diagnostic.contains("--request-id"));
+    }
+
     #[test]
     fn response_failures_retain_unknown_outcome_ids_and_denials_stay_nonretryable() {
         for result in [
@@ -1415,7 +1445,8 @@ mod tests {
                 panic!("rules did not resolve local guidance");
             };
             assert!(text.starts_with("# "), "missing Markdown for {topic}");
-            assert!(!APP_ACTIONS.contains(&"rules"));
+            assert!(APP_ACTIONS.contains(&"rules"));
+            assert!(validate_app_request("rules", &json!({"topic":topic}), "read-1").is_err());
             assert!(parse_args_for(&args(&["rules", topic]), false).is_err());
         }
         for extra in ["--json", "--input", "--request-id", "--help", "team"] {
@@ -1432,7 +1463,8 @@ mod tests {
             ));
         }
         assert!(app_help().contains("app rules"));
-        assert!(app_help().contains("ordinary command permissions"));
+        assert!(app_help().contains("reads are auto-approved through the verified executable"));
+        assert!(app_help().contains("help uses your ordinary command permissions"));
     }
 
     #[test]

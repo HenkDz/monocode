@@ -315,12 +315,17 @@ export function sendHarnessTurn(input: SendTurnInput & { harness: HarnessId }) {
       ? await invoke<AppCliApprovalPolicy>("app_cli_approval_policy", { cwd: input.cwd, sessionId: input.sessionId }).catch(() => undefined)
       : undefined;
     const automaticApprovals = new Set<number>();
+    const cliText = (text: string) => appCli
+      ? `${text}\n\n<monocode_cli_input>The current running MonoCode executable is ${appCli.executable}. Use this exact executable for app CLI calls; it overrides executable paths from earlier turns. ${appCli.tempDir ? `If you choose --input, the only auto-approved input location is this session's private folder: ${appCli.tempDir}.` : "Private input scoping is unavailable; --input will not be auto-approved."} Temporary input files are optional, not required. Never use another session's folder.</monocode_cli_input>`
+      : text;
+    const prepareText = input.prepareText;
     let compacted = false;
     activeTurnSessions.add(input.sessionId);
     try {
       await adapter.sendTurn({
         ...input,
-        ...(appCli ? { text: `${input.text}\n\n<monocode_cli_input>The current running MonoCode executable is ${appCli.executable}. Use this exact executable for app CLI calls; it overrides executable paths from earlier turns. ${appCli.tempDir ? `If you choose --input, the only auto-approved input location is this session's private folder: ${appCli.tempDir}.` : "Private input scoping is unavailable; --input will not be auto-approved."} Temporary input files are optional, not required. Never use another session's folder.</monocode_cli_input>` } : {}),
+        text: cliText(input.text),
+        prepareText: prepareText ? async provider => cliText(await prepareText(provider)) : undefined,
         onEvent: (event) => {
           if (event.type === "context.compacted") {
             compacted = true;

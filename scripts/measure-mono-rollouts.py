@@ -176,10 +176,10 @@ class Turn:
 def read_rollout(path):
     turns, current, buffered = [], None, []
     session_id, role, base_chars, malformed = path.stem, "Unknown", 0, 0
-    compactions, compact_events = [], []
-    has_usage_records, last_usage_total = False, None
+    compactions, compact_events = defaultdict(set), defaultdict(set)
+    last_usage_total = None
     with path.open(encoding="utf-8") as stream:
-        for line in stream:
+        for line_number, line in enumerate(stream):
             try:
                 record = json.loads(line)
                 if not isinstance(record, dict):
@@ -218,12 +218,14 @@ def read_rollout(path):
                     else:
                         getattr(current, message_role).append(text)
             elif kind == "compacted" or (kind == "event_msg" and subtype == "context_compacted"):
-                (compactions if kind == "compacted" else compact_events).append(at)
+                identity = payload.get("compaction_id") or payload.get("id") or record.get("id")
+                if not isinstance(identity, (str, int)):
+                    identity = None
+                (compactions if kind == "compacted" else compact_events)[at if at is not None else line_number].add(identity)
                 if current:
                     current.compacted = True
             elif current is not None:
                 if kind == "token_usage_record":
-                    has_usage_records = True
                     usage = payload.get("usage") or {}
                     if isinstance(usage, dict):
                         current.calls.append((usage, payload.get("duration_ms")))
@@ -245,11 +247,21 @@ def read_rollout(path):
                     current.end, current.duration_ms = at, payload.get("duration_ms")
                     current.ttft_ms = payload.get("time_to_first_token_ms")
                     current = None
-    if not has_usage_records:
-        for turn in turns:
+    for turn in turns:
+        if not turn.calls:
             turn.calls = turn.fallback_calls
+    for at, identities in compactions.items():
+        events = compact_events.get(at, set())
+        for identity in sorted(identities, key=lambda item: item is None):
+            if identity in events:
+                events.remove(identity)
+            elif identity is not None and None in events:
+                events.remove(None)
+            elif identity is None and events:
+                events.pop()
     return {"id": session_id, "role": role, "base": base_chars, "turns": turns,
-            "compactions": len(compactions or compact_events), "malformed": malformed}
+            "compactions": sum(map(len, compactions.values())) + sum(map(len, compact_events.values())),
+            "malformed": malformed}
 
 
 def collect(directories, db_path):
@@ -323,7 +335,7 @@ def report(sessions, gaps, counts):
         durations = [turn.duration() for turn in turns if turn.duration() is not None]
         print(f"{role} | {len(calls)} | {stats([usage.get('input_tokens', 0) for usage, _ in calls])} | "
               f"{stats(recorded)} ({len(recorded)}) | {stats(estimates)} ({len(estimates)}) | {stats(durations)}")
-    print("\nCompactions: explicit compacted records, or context_compacted events when records are absent.")
+    print("\nCompactions: compacted records and context_compacted events deduplicated by identity and timestamp.")
     print("Role | compactions | affected turns | compacted TTFT s | other TTFT s")
     for role, group in sorted(groups.items()):
         turns = [turn for session in group for turn in session["turns"]]
@@ -407,6 +419,52 @@ def self_test():
         assert sessions["mgr-rollout"]["compactions"] == 1
         assert gaps["dispatch -> Worker"] == [10] and gaps["goal -> Manager"] == [10]
         assert gaps["Worker turn end -> next lead turn (upper bound)"] == [10]
+
+        def record(kind, at=None, **payload):
+            return {"type": kind, "timestamp": at, "payload": payload}
+
+        mixed_path = root / "mixed-history.jsonl"
+        older_usage = {"last_token_usage": {"input_tokens": 123}, "total_token_usage": {"input_tokens": 123}}
+        newer_usage = {"last_token_usage": {"input_tokens": 999}, "total_token_usage": {"input_tokens": 1122}}
+        mixed_records = [
+            record("event_msg", "2026-10-09T10:00:00Z", type="task_started"),
+            record("event_msg", "2026-10-09T10:00:01Z", type="token_count", info=older_usage),
+            record("event_msg", "2026-10-09T10:00:01Z", type="token_count", info=older_usage),
+            record("event_msg", "2026-10-09T10:00:02Z", type="context_compacted"),
+            record("event_msg", "2026-10-09T10:00:03Z", type="task_complete"),
+            record("event_msg", "2026-10-11T10:00:00Z", type="task_started"),
+            record("event_msg", "2026-10-11T10:00:01Z", type="token_count", info=newer_usage),
+            record("token_usage_record", "2026-10-11T10:00:01Z", usage={"input_tokens": 456}, duration_ms=1000),
+            record("compacted", "2026-10-11T10:00:02Z", message="synthetic summary"),
+            record("event_msg", "2026-10-11T10:00:02Z", type="context_compacted"),
+            record("event_msg", "2026-10-11T10:00:03Z", type="task_complete"),
+        ]
+        mixed_path.write_text("\n".join(map(json.dumps, mixed_records)) + "\n", encoding="utf-8")
+        mixed = read_rollout(mixed_path)
+        assert [len(turn.calls) for turn in mixed["turns"]] == [1, 1]
+        assert mixed["turns"][0].calls == [({"input_tokens": 123}, None)]
+        assert mixed["turns"][1].calls == [({"input_tokens": 456}, 1000)]
+        assert mixed["compactions"] == 2 and sum(turn.compacted for turn in mixed["turns"]) == 2
+
+        compaction_path = root / "compaction-identities.jsonl"
+        compaction_records = [
+            record("compacted", "2026-10-11T10:00:00Z", compaction_id="a"),
+            record("event_msg", "2026-10-11T10:00:00Z", type="context_compacted", compaction_id="a"),
+            record("compacted", "2026-10-11T10:00:00Z", id="b"),
+            record("event_msg", "2026-10-11T10:00:00Z", type="context_compacted", id="b"),
+            record("compacted", "2026-10-11T10:00:01Z", compaction_id="a"),
+            record("compacted", "2026-10-11T10:00:02Z"),
+            record("event_msg", "2026-10-11T10:00:02+00:00", type="context_compacted"),
+            record("compacted"),
+            record("event_msg", type="context_compacted"),
+            record("compacted", "2026-10-11T10:00:03Z", compaction_id="c"),
+            record("event_msg", "2026-10-11T10:00:03Z", type="context_compacted"),
+            record("compacted", "2026-10-11T10:00:04Z", id=["unsupported-identity"]),
+            record("event_msg", "2026-10-11T10:00:04Z", type="context_compacted", compaction_id="d"),
+        ]
+        compaction_path.write_text("\n".join(map(json.dumps, compaction_records)) + "\n", encoding="utf-8")
+        assert read_rollout(compaction_path)["compactions"] == 8
+
         output = io.StringIO()
         with redirect_stdout(output):
             report(sessions, gaps, counts)
@@ -432,7 +490,8 @@ def self_test():
             after = [(hashlib.sha256(source.read_bytes()).digest(), source.stat().st_mtime_ns) for source in sources]
             assert before == after, "Analyzer modified a supplied DB/WAL/SHM file"
         print("Self-test passed: nested trees, role mapping, unknown roles, Unicode/context counts, "
-              "overlapping tools, token fallback deduplication, compaction deduplication, "
+              "overlapping tools, per-turn mixed-history token fallback, detailed usage precedence, "
+              "token fallback deduplication, compaction identity/timestamp deduplication, "
               "10s hand-offs, no prompt disclosure, denied writes, WAL visibility, and unchanged DB/WAL/SHM.")
 
 

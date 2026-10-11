@@ -625,7 +625,8 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
       "OpenCode models use provider/model ids. Wait for the catalog to load, then pick a model.",
     );
   }
-  const parts = toOpenCodePromptParts(input.text, input.attachments);
+  const text = input.prepareText ? await input.prepareText(live.openCodeSessionId) : input.text;
+  const parts = toOpenCodePromptParts(text, input.attachments);
   if (parts.length === 0) return;
 
   const turnPromise = new Promise<void>((resolve, reject) => {

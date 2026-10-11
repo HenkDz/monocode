@@ -374,7 +374,8 @@ async function applyRuntimeMode(
 
 async function prompt(live: Live, input: SendTurnInput): Promise<void> {
   try {
-    let blocks = hermesPromptBlocks(input.text, input.attachments);
+    const text = input.prepareText ? await input.prepareText(live.acpSessionId) : input.text;
+    let blocks = hermesPromptBlocks(text, input.attachments);
     if (blocks.length === 0) return;
     let accepted = false;
     for (;;) {

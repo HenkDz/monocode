@@ -59,11 +59,11 @@ it("hands a new native session everything, then nothing it already has", () => {
     soul: true,
     memory: true,
   });
-  // The first turn is recorded before its reply names the provider session.
+  // An unidentified acceptance cannot prove which conversation received it.
   recordAgentContext("chat", undefined, files());
   expect(planAgentContext("chat", "native-1", files())).toEqual({
-    soul: false,
-    memory: false,
+    soul: true,
+    memory: true,
   });
   recordAgentContext("chat", "native-1", files());
   expect(planAgentContext("chat", "native-1", files())).toEqual({

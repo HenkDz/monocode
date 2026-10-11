@@ -199,6 +199,8 @@ export type SendTurnInput = HarnessSessionInput & {
   orgMonoId?: string;
   text: string;
   attachments?: Attachment[];
+  /** Rebuild context after the provider confirms its conversation, before submission. */
+  prepareText?: (providerSessionId?: string) => Promise<string>;
   /** Called once the provider has accepted the user turn. */
   onAccepted?: () => void;
 };

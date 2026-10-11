@@ -31,6 +31,7 @@ import { MonoComposer } from "./MonoComposer";
 import { MonoStatusDot } from "./MonoRailMascot";
 import { MonoStatus } from "./MonoStatus";
 import { MONO_PAGE_TURNS } from "../../sessions/data/sessionStore";
+import { monoSubmissionFailure } from "../model/monoSubmissionAcceptance";
 
 const EMPTY: FloatingMonoView = {
   monos: [],
@@ -125,7 +126,8 @@ export function FloatingMonoChat({ onShown }: { onShown: () => void }) {
         return true;
       } catch (reason) {
         if (selectedId.current === id)
-          setError(reason instanceof Error ? reason.message : String(reason));
+          setError(monoSubmissionFailure(reason).error);
+        if (next.kind === "submit" && next.monoGoal) throw reason;
         return false;
       }
     },

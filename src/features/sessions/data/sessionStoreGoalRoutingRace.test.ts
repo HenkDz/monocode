@@ -3,11 +3,10 @@ import { readFileSync } from "node:fs";
 import ts from "typescript";
 import { newSession, type Session } from "../model/session";
 import { appendMonoGoalOrigin, type MonoGoalSubmission } from "../../monos/model/monoGoalRouting";
-import { serializeMonoGoalUpdate } from "../../monos/model/monoGoalUpdates";
 
 const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
-const { upsertSession } = await import("./sessionStore");
+const { writeSession } = await import("./sessionStore");
 
 it("retains both durable user origins when embedded and floating submissions overlap", async () => {
   const source = newSession("codex", "C:/synthetic/Atlas");
@@ -40,8 +39,8 @@ it("retains both durable user origins when embedded and floating submissions ove
   const code = ts.transpileModule(app.slice(start, end) + "\nreturn update;", {
     compilerOptions: { target: ts.ScriptTarget.ES2022 },
   }).outputText;
-  const update = new Function("sessionsRef", "upsertSession", "setSessions", "sessionId", "serializeMonoGoalUpdate", "history", code)(
-    sessionsRef, upsertSession, () => {}, source.id, serializeMonoGoalUpdate, undefined,
+  const update = new Function("sessionsRef", "setSessions", "sessionId", "writeSession", "history", code)(
+    sessionsRef, () => {}, source.id, writeSession, undefined,
   ) as (change: (session: Session) => Session) => Promise<void>;
   const submission = (suffix: string): MonoGoalSubmission => ({
     ownerId: "grand", requestId: `request-${suffix}`, userMessageId: `user-${suffix}`,

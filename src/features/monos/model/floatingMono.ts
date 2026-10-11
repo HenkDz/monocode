@@ -6,6 +6,7 @@ import { displayAttachments } from "../../sessions/model/attachments";
 import { listMonos, monoLook, monoState, type Mono, type MonoState, type MonoStatus } from "./mono";
 import { pixelLayers } from "../../projects/model/pixelMascots";
 import type { MonoGoalRoutingContext, MonoGoalSubmission } from "./monoGoalRouting";
+import { MONO_SUBMISSION_REJECTED } from "./monoSubmissionAcceptance";
 
 export const FLOATING_MONO_CHANGED = "mono_chat_changed";
 export const FLOATING_MONO_REQUEST = "mono_chat_request";
@@ -141,7 +142,9 @@ export async function deliverFloatingMonoRequest(
       if (await host.submit(session.id, action.text, action.attachments,
         ...(action.monoGoal ? [{ monoGoal: action.monoGoal }] : [])) === false)
         throw new Error(
-          "The message could not be sent. Try again in a moment.",
+          action.monoGoal
+            ? MONO_SUBMISSION_REJECTED
+            : "The message could not be sent. Try again in a moment.",
         );
       break;
     case "stop":

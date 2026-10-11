@@ -116,7 +116,7 @@ export async function handleQuitRequested(): Promise<boolean> {
     quitting = true;
     try {
       await persistQuitState(
-        liveWorkspace.sessions(),
+        liveWorkspace.sessions,
         liveWorkspace.tabs(),
         liveWorkspace.activeTabId(),
         liveWorkspace.projectCwd(),
@@ -198,7 +198,7 @@ export async function closeBusyWindow(): Promise<void> {
   if (!liveWorkspace) return;
   liveWorkspace.flush();
   await confirmAndCloseWindow(
-    liveWorkspace.sessions(),
+    liveWorkspace.sessions,
     liveWorkspace.tabs(),
     liveWorkspace.activeTabId(),
     liveWorkspace.projectCwd(),
@@ -367,17 +367,18 @@ export async function confirmReload(
 }
 
 export async function persistLiveTranscripts(
-  sessions: Session[],
+  source: Session[] | (() => Session[]),
 ): Promise<void> {
+  const read = typeof source === "function" ? source : () => source;
   await Promise.all(
-    sessions
+    read()
       .filter(shouldPersistSession)
-      .map((session) => upsertSession(session).catch(() => null)),
+      .map(session => upsertSession(() => read().find(current => current.id === session.id)).catch(() => null)),
   );
 }
 
 export async function persistQuitState(
-  sessions: Session[],
+  source: Session[] | (() => Session[]),
   tabs: WorkspaceTab[],
   activeTabId: string,
   projectCwd: string,
@@ -387,6 +388,8 @@ export async function persistQuitState(
   lastDockSide?: DockSide,
   keepTab?: (tab: WorkspaceTab) => boolean,
 ): Promise<void> {
+  const read = typeof source === "function" ? source : () => source;
+  const sessions = read();
   const refs = inFlightRefs(sessions, tabs);
   const interrupted = new Set(refs.map((ref) => ref.sessionId));
   // A quit ends the process, so a swallowed write is work that never comes
@@ -398,10 +401,10 @@ export async function persistQuitState(
   await Promise.all(
     sessions.map(async (session) => {
       if (!shouldPersistSession(session)) return;
-      const payload = interrupted.has(session.id)
-        ? markTurnInterrupted(session)
-        : session;
-      await write(upsertSession(payload));
+      await write(upsertSession(() => {
+        const current = read().find(entry => entry.id === session.id);
+        return current && (interrupted.has(current.id) ? markTurnInterrupted(current) : current);
+      }));
     }),
   );
   await write(
@@ -453,7 +456,7 @@ async function persistBootingResume(workspace: ResumedWorkspace): Promise<void> 
 }
 
 async function confirmAndCloseWindow(
-  sessions: Session[],
+  sessions: () => Session[],
   tabs: WorkspaceTab[],
   activeTabId: string,
   projectCwd: string,
@@ -464,7 +467,7 @@ async function confirmAndCloseWindow(
   if (quitDialogOpen) return;
   quitDialogOpen = true;
   try {
-    const refs = inFlightRefs(sessions, tabs);
+    const refs = inFlightRefs(sessions(), tabs);
     if (refs.length > 0) {
       const ok = await ask(
         "Close this window and stop its running chats? Other windows will stay open.",
@@ -484,7 +487,7 @@ async function confirmAndCloseWindow(
         projectTerminals,
         lastDockSide,
       );
-      await reapWindowRuntime(sessions, tabs, projectTerminals, false);
+      await reapWindowRuntime(sessions(), tabs, projectTerminals, false);
       await closeCurrentWindow();
     } catch {
       quitting = false;

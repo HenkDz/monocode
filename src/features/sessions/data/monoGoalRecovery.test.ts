@@ -4,12 +4,11 @@ import ts from "typescript";
 import { newSession, type Block, type Session } from "../model/session";
 import { appendMonoGoalCard, appendMonoGoalOrigin, type MonoGoalSubmission } from "../../monos/model/monoGoalRouting";
 import type { MonoManagerGoal } from "../../monos/model/monoManagerGoals";
-import { serializeMonoGoalUpdate } from "../../monos/model/monoGoalUpdates";
 import { getMonoGoalRecoveryBlocks, mergeMonoGoalRecoverySession, monoGoalRecoveryLiveSession } from "./monoGoalRecovery";
 
 const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
-const { getSession, upsertSession } = await import("./sessionStore");
+const { getSession, upsertSession, writeSession } = await import("./sessionStore");
 
 const submission: MonoGoalSubmission = {
   ownerId: "grand", requestId: "pending-request", userMessageId: "pending-user",
@@ -111,9 +110,9 @@ it.each([true, false])("the App recovery updater repairs an older %s pending car
   const code = ts.transpileModule(app.slice(start, end) + "\nreturn update;", {
     compilerOptions: { target: ts.ScriptTarget.ES2022 },
   }).outputText;
-  const update = new Function("sessionsRef", "upsertSession", "setSessions", "sessionId", "serializeMonoGoalUpdate",
+  const update = new Function("sessionsRef", "setSessions", "sessionId", "writeSession",
     "history", "getMonoGoalRecoveryBlocks", "mergeMonoGoalRecoverySession", "monoGoalRecoveryLiveSession", code)(
-    sessionsRef, upsertSession, () => {}, f.session.id, serializeMonoGoalUpdate,
+    sessionsRef, () => {}, f.session.id, writeSession,
     history, getMonoGoalRecoveryBlocks, mergeMonoGoalRecoverySession, monoGoalRecoveryLiveSession,
   ) as (change: (session: Session) => Session) => Promise<void>;
 

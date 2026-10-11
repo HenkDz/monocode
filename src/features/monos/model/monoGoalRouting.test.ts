@@ -1,8 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve, sep } from "node:path";
 import { newSession } from "../../sessions/model/session";
 import { enqueueMonoMessage } from "./monoMessaging";
 import { deliverFloatingMonoRequest, type FloatingMonoHost } from "./floatingMono";
 import { MonoManagerGoals, type GoalLedger, type ManagerGoalHost } from "./monoManagerGoals";
+import { MONO_SUBMISSION_REJECTED } from "./monoSubmissionAcceptance";
 import type { Mono } from "./mono";
 import {
   appendMonoGoalCard, appendMonoGoalOrigin, appendMonoGoalPendingCard, decideMonoGoalRoute, monoGoalRoutingContext,
@@ -21,7 +25,7 @@ const decide = (text: string, other: Partial<Parameters<typeof decideMonoGoalRou
   decideMonoGoalRoute({ text, choice, context: context(), attachmentCount: 0, ...other });
 
 describe("exact project routes", () => {
-  it.each(["Fix Atlas login", "Fix c:\\CODE\\ATLAS login", "Fix C:/code/atlas/ login"])("matches %s", text => {
+  it.each(["Fix Atlas login", "Fix ATLAS login", "Fix (Atlas) login", "Fix `Atlas` login"])("matches %s", text => {
     expect(decide(text)).toMatchObject({ kind: "manager", project: { id: "c:/code/atlas", managerMonoId: "atlas-manager" } });
   });
   it("respects boundaries and overlapping names", () => {
@@ -35,59 +39,50 @@ describe("exact project routes", () => {
     ctx.projects[1].name = "Atlas";
     expect(decide("Fix Atlas login", { context: ctx })).toMatchObject({ kind: "grand" });
   });
-  it("uses the exact nested repository, never its parent or an unregistered descendant", () => {
-    const ctx = context();
-    ctx.projects.push({ ...ctx.projects[1], id: "c:/code/atlas/nested", path: "C:/code/Atlas/nested", name: "Nested" });
-    expect(decide("Fix C:/code/Atlas/nested", { context: ctx })).toMatchObject({ kind: "manager", project: { name: "Nested" } });
-    expect(decide("Fix C:/code/Atlas/unknown", { context: ctx })).toMatchObject({ kind: "grand" });
-    expect(decide("Fix C:/code/Atlas and C:/code/Atlas/nested", { context: ctx })).toMatchObject({ kind: "grand" });
-  });
   it.each(["Fix Atlas and Beacon", "Compare Atlas costs", "Atlas versus alternatives", "Update across projects", "Atlas compared to alternatives", "Update both repos"])("falls back for %s", text => {
     expect(decide(text)).toMatchObject({ kind: "grand" });
   });
   it.each([
-    "Update Atlas and C:/code/Beacon",
-    "Update Atlas and C:/code/Beacon/src/index.ts in the same change",
-    "Update Atlas and c:\\CODE\\BEACON\\src\\index.ts in the same change",
-  ])("counts a second project referenced by path: %s", text => {
-    expect(decide(text)).toMatchObject({ kind: "grand", reason: "More than one project mentioned" });
+    "C:/code/Atlas", "c:\\CODE\\ATLAS\\", "C:/code/Beacon/src/index.ts",
+    "C:/code/Beacon-old/src/index.ts", "C:/code/Atlas/nested/src/index.ts",
+    "C:/scratch/beacon-junction/src/index.ts", "C:/code/Atlas/linked-beacon/src/index.ts",
+    "C:/code/Atlas/../Beacon/src/index.ts", "/code/Beacon/src/index.ts", "/code/beacon/src/index.ts",
+    "src/index.ts", "./src/index.ts", "../Beacon/src/index.ts", ".\\src\\index.ts", "..\\Beacon\\src\\index.ts",
+    "\\\\server\\share\\Beacon\\src\\index.ts", "//server/share/Beacon/src/index.ts", "\\\\?\\C:\\code\\Beacon",
+    "~/code/Beacon", "C:README", "C:Beacon", "README.md", "index.test.ts", "@index.ts", "文件.ts",
+    ".env", ".gitignore", ".", "..", "/", "\\", "`src/index.ts`", '".env"',
+  ])("requires explicit selection for path-like token %s", path => {
+    for (const text of [`Update ${path}`, `Update Atlas and ${path}`])
+      expect(decide(text)).toMatchObject({ kind: "grand", reason: "Contains file paths: choose a project or send to Grand Orchestrator" });
+    expect(decide(`Update ${path}`, {
+      choice: { mode: "goal", override: "manager", projectId: "c:/code/atlas" },
+    })).toMatchObject({ kind: "manager", project: { name: "Atlas" },
+      reason: "Contains file paths: routed to Atlas because you selected it" });
   });
-  it("counts an unavailable second project referenced by a descendant path", () => {
+  it("keeps paths at Grand when their project is unavailable", () => {
     expect(decide("Update Atlas and C:/code/Beacon/src/index.ts", {
       context: monoGoalRoutingContext(owner, roster, projects, ["C:/code/Beacon"]),
-    })).toMatchObject({ kind: "grand", reason: "More than one project mentioned" });
+    })).toMatchObject({ kind: "grand", reason: "Contains file paths: choose a project or send to Grand Orchestrator" });
   });
-  it("counts Unix descendant paths while preserving case and project boundaries", () => {
-    const ctx = { ...context(), projects: context().projects.map(project => ({ ...project, path: `/code/${project.name}` })) };
-    expect(decide("Update Atlas and /code/Beacon/src/index.ts", { context: ctx }))
-      .toMatchObject({ kind: "grand", reason: "More than one project mentioned" });
-    expect(decide("Update Atlas and /code/beacon/src/index.ts", { context: ctx }))
-      .toMatchObject({ kind: "manager", project: { name: "Atlas" } });
-    expect(decide("Update Atlas and C:/code/Beacon-old/src/index.ts"))
-      .toMatchObject({ kind: "manager", project: { name: "Atlas" } });
-  });
-  it("uses descendant references for ambiguity without authorizing an automatic route", () => {
-    for (const path of ["src/index.ts", "@index.ts", ".env"])
-      expect(decide(`Update C:/code/Atlas/${path}`))
-        .toMatchObject({ kind: "grand", reason: "Choose a project or mention its exact name or path" });
-    expect(decide("Update Atlas and C:/code/Atlas/src/index.ts"))
-      .toMatchObject({ kind: "manager", project: { name: "Atlas" }, reason: "Exact project name" });
-    expect(decide("Update C:/code/Atlas/src/index.ts", {
-      choice: { mode: "goal", override: "manager", projectId: "c:/code/atlas" },
-    })).toMatchObject({ kind: "manager", project: { name: "Atlas" } });
-    expect(decide("Update C:/code/Beacon/src/index.ts", {
-      choice: { mode: "goal", override: "manager", projectId: "c:/code/atlas" },
-    })).toMatchObject({ kind: "grand", reason: "Selected project differs from the text" });
-  });
-  it("keeps descendant references attached to the most specific registered root", () => {
+  it("routes nested projects by their unique name and keeps their paths at Grand", () => {
     const ctx = context();
     ctx.projects.push({ ...ctx.projects[1], id: "c:/code/atlas/nested", path: "C:/code/Atlas/nested", name: "Nested" });
-    expect(decide("Update Nested and C:/code/Atlas/nested/src/index.ts", { context: ctx }))
+    expect(decide("Update Nested login", { context: ctx }))
       .toMatchObject({ kind: "manager", project: { name: "Nested" }, reason: "Exact project name" });
-    expect(decide("Update Atlas and C:/code/Atlas/nested/src/index.ts", { context: ctx }))
+    expect(decide("Update Nested and C:/code/Atlas/nested/src/index.ts", { context: ctx }))
+      .toMatchObject({ kind: "grand" });
+  });
+  it("preserves textual scope and availability guards for a selected project with paths", () => {
+    const selection = { mode: "goal" as const, override: "manager" as const, projectId: "c:/code/atlas" };
+    expect(decide("Update Atlas and Beacon in src/index.ts", { choice: selection }))
       .toMatchObject({ kind: "grand", reason: "More than one project mentioned" });
-    expect(decide("Update C:/code/Atlas/nested/src/index.ts", { context: ctx }))
-      .toMatchObject({ kind: "grand", reason: "Choose a project or mention its exact name or path" });
+    expect(decide("Update Beacon in src/index.ts", { choice: selection }))
+      .toMatchObject({ kind: "grand", reason: "Selected project differs from the text" });
+    expect(decide("Compare Atlas versions in src/index.ts", { choice: selection }))
+      .toMatchObject({ kind: "grand", reason: "Comparison or cross-project goal" });
+    expect(decide("Update src/index.ts", {
+      choice: selection, context: monoGoalRoutingContext(owner, roster, projects, ["C:/code/Atlas"]),
+    })).toMatchObject({ kind: "grand", reason: "Project has no available local Manager" });
   });
   it("lets the user select a project with no name in the goal, and override to Grand", () => {
     expect(decide("Fix login", { choice: { mode: "goal", override: "manager", projectId: "c:/code/atlas" } })).toMatchObject({ kind: "manager" });
@@ -108,10 +103,13 @@ describe("exact project routes", () => {
     expect(decide("Fix Atlas", { context: monoGoalRoutingContext(owner, roster, projects.slice(1)) })).toMatchObject({ kind: "grand" });
     expect(decide("Fix Atlas", { context: monoGoalRoutingContext(owner, [...roster, { ...roster[1], id: "duplicate" }], projects) })).toMatchObject({ kind: "grand" });
   });
-  it("keeps Unix path case significant", () => {
+  it("does not use paths to disambiguate duplicate names", () => {
     const ctx: MonoGoalRoutingContext = { ownerId: "grand", projects: [{ id: "/code/Atlas", path: "/code/Atlas", name: "Unique project", managerMonoId: "manager", available: true }] };
-    expect(decide("Fix /code/Atlas", { context: ctx })).toMatchObject({ kind: "manager" });
+    expect(decide("Fix /code/Atlas", { context: ctx })).toMatchObject({ kind: "grand" });
     expect(decide("Fix /code/atlas", { context: ctx })).toMatchObject({ kind: "grand" });
+    const duplicate = context();
+    duplicate.projects[1].name = "Atlas";
+    expect(decide("Fix Atlas in C:/code/Atlas", { context: duplicate })).toMatchObject({ kind: "grand" });
   });
 });
 
@@ -145,6 +143,65 @@ function setup() {
 }
 
 describe("shared user submission boundary", () => {
+  it("places a missing route card after its visible origin and preserves later messages", async () => {
+    const f = setup();
+    await submitMonoGoal(f.input, f.host);
+    const goal = f.host.ledger.goals("grand")[0];
+    const ordinary = { id: "ordinary-user", role: "user" as const, text: "Continue the conversation" };
+    const delayed = { ...f.source(), blocks: [f.source().blocks[0], ordinary] };
+    const repaired = appendMonoGoalCard(delayed, f.input.submission, goal);
+    expect(repaired.blocks.map(block => block.id)).toEqual(["user-1", "route-user-1", "ordinary-user"]);
+    expect(appendMonoGoalCard(repaired, f.input.submission, goal)).toBe(repaired);
+    const hiddenOrigin = { ...delayed, blocks: [ordinary] };
+    expect(appendMonoGoalCard(hiddenOrigin, f.input.submission, goal).blocks.map(block => block.id))
+      .toEqual(["ordinary-user", "route-user-1"]);
+  });
+  it.each(["junction", "nested-junction", "dot-segment"] as const)("keeps a physical second-project %s reference at Grand", async variant => {
+    const scratch = mkdtempSync(join(tmpdir(), "cc5cg-routing-"));
+    try {
+      const atlas = join(scratch, "Atlas");
+      const beacon = join(scratch, "Beacon");
+      mkdirSync(atlas);
+      mkdirSync(join(beacon, "src"), { recursive: true });
+      writeFileSync(join(beacon, "src", "index.ts"), "// synthetic fixture\n");
+      const alias = variant === "nested-junction" ? join(atlas, "linked-beacon") : join(scratch, "beacon-junction");
+      if (variant !== "dot-segment") symlinkSync(beacon, alias, "junction");
+      const path = variant === "dot-segment" ? `${atlas}/../Beacon/src/index.ts` : `${alias}/src/index.ts`;
+      expect(realpathSync(path)).toBe(realpathSync(join(beacon, "src", "index.ts")));
+      const f = setup();
+      const ctx = context();
+      ctx.projects[0].path = atlas;
+      ctx.projects[1].path = beacon;
+      f.setContext(ctx);
+      f.input.text = `Fix Atlas and ${path}`;
+      const decision = decide(f.input.text, { context: ctx });
+      expect(decision.kind).toBe("grand");
+      f.input.submission = { ...f.input.submission, projectId: undefined, managerMonoId: undefined, reason: decision.reason };
+      expect(await submitMonoGoal(f.input, f.host)).toBe(true);
+      expect(f.host.grand).toHaveBeenCalledOnce();
+      expect(f.host.resolve).not.toHaveBeenCalled();
+      expect(f.host.persistOrigin).not.toHaveBeenCalled();
+      expect(f.host.ledger.goals("grand")).toHaveLength(0);
+      expect(f.deliver).not.toHaveBeenCalled();
+    } finally {
+      const root = resolve(scratch);
+      if (!root.startsWith(resolve(tmpdir()) + sep) || !root.includes("cc5cg-routing-"))
+        throw Error("Unexpected synthetic cleanup path");
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+  it("delivers a path-bearing goal only after explicit project selection and preserves its reason", async () => {
+    const f = setup();
+    f.input.text = "Fix C:/code/Beacon/src/index.ts";
+    f.input.submission.choice = { mode: "goal", override: "manager", projectId: f.project.id };
+    f.input.submission.reason = "Contains file paths: routed to Atlas because you selected it";
+    expect(await submitMonoGoal(f.input, f.host)).toBe(true);
+    expect(f.host.grand).not.toHaveBeenCalled();
+    expect(f.deliver).toHaveBeenCalledOnce();
+    expect(f.host.ledger.goals("grand")[0].route?.reason).toBe(f.input.submission.reason);
+    expect(f.source().blocks[0].monoGoalSubmission).toEqual(f.input.submission);
+    expect(f.source().blocks[1].text).toContain(f.input.submission.reason);
+  });
   it("awaits the same goal adapter through the floating user bridge", async () => {
     const f = setup();
     const runtime: FloatingMonoHost = {
@@ -163,7 +220,7 @@ describe("shared user submission boundary", () => {
     runtime.submit = async () => false;
     await expect(deliverFloatingMonoRequest({ id: 2, monoId: "grand", action: {
       kind: "submit", text: f.input.text, attachments: [], monoGoal: f.input.submission,
-    } }, runtime, async () => true)).rejects.toThrow("could not be sent");
+    } }, runtime, async () => true)).rejects.toThrow(MONO_SUBMISSION_REJECTED);
   });
   it.each(Array.from({ length: 100 }, (_, index) => index))("routes scoped fixture %i with zero Grand calls", async index => {
     const f = setup();

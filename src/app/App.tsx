@@ -55,7 +55,6 @@ import {
   type MonoGoalSubmission,
 } from "../features/monos/model/monoGoalRouting";
 import { readMonoConversation } from "../features/monos/model/monoConversation";
-import { serializeMonoGoalUpdate } from "../features/monos/model/monoGoalUpdates";
 import {
   getMonoGoalRecoveryBlocks,
   mergeMonoGoalRecoverySession,
@@ -617,7 +616,7 @@ import {
   setSessionLinkedWorkItem,
   setSessionPinned,
   shouldPersistSession,
-  upsertSession,
+  writeSession,
   flushSessionWrites,
   type SessionSummary,
 } from "../features/sessions/data/sessionStore";
@@ -1919,7 +1918,7 @@ function Workspace({
     const reap = () => {
       if (isAppQuitting()) return;
       void persistQuitState(
-        sessionsRef.current,
+        () => sessionsRef.current,
         tabsRef.current,
         activeTabIdRef.current,
         projectCwdRef.current,
@@ -2527,7 +2526,7 @@ function Workspace({
           (await invoke<boolean>("mono_chat_keep_alive").catch(() => false))
         ) {
           flushHarnessEvents();
-          void persistLiveTranscripts(sessionsRef.current);
+          void persistLiveTranscripts(() => sessionsRef.current);
           void hideCurrentWindow();
           return;
         }
@@ -2539,12 +2538,12 @@ function Workspace({
             return;
           }
           // Not `persistQuitState`: that marks the live turns interrupted.
-          void persistLiveTranscripts(sessionsRef.current);
+          void persistLiveTranscripts(() => sessionsRef.current);
           void hideCurrentWindow();
           return;
         }
         void persistQuitState(
-          sessionsRef.current,
+          () => sessionsRef.current,
           tabsRef.current,
           activeTabIdRef.current,
           projectCwdRef.current,
@@ -2636,6 +2635,20 @@ function Workspace({
     prefetchProjectFiles(gitCwd);
   }, [gitCwd]);
 
+  const upsertSession = useCallback((session: Session, change?: (current: Session) => Session) => {
+    return writeSession(session.id, async save => {
+      const live = sessionsRef.current.find(entry => entry.id === session.id);
+      const current = live && (change || live.monoTranscript || isMonoSession(live.id)) ? live : session;
+      const next = change ? change(current) : current;
+      const summary = await save(next);
+      if (summary && change) {
+        sessionsRef.current = sessionsRef.current.map(entry => entry.id === session.id ? change(entry) : entry);
+        setSessions(sessionsRef.current);
+      }
+      return summary;
+    });
+  }, []);
+
   const persistSession = useCallback((session: Session | undefined) => {
     if (
       !session ||
@@ -2644,18 +2657,19 @@ function Workspace({
       switchingWorktrees.current.has(session.id)
     )
       return;
-    const fingerprint = persistFingerprint(session);
-    // Leaving a session flushes it. An unchanged one would still rewrite and
-    // re-diff its whole transcript under the store lock, stalling the next load.
-    if (lastPersisted.current.get(session.id) === fingerprint) return;
-    void upsertSession(session)
-      .then((summary) => {
-        if (!summary) return;
-        lastPersisted.current.set(session.id, fingerprint);
-        if (summary.cwd === sidebarCwdRef.current) {
-          setHistory((current) => mergeProjectHistorySummary(current, summary));
-        }
-      })
+    void writeSession(session.id, async save => {
+      const current = sessionsRef.current.find(entry => entry.id === session.id) ?? session;
+      if (removingSessionIds.current.has(current.id) || switchingWorktrees.current.has(current.id)) return;
+      const fingerprint = persistFingerprint(current);
+      // An unchanged session does not need another transcript diff under the store lock.
+      if (lastPersisted.current.get(current.id) === fingerprint) return;
+      const summary = await save(current);
+      if (!summary) return;
+      lastPersisted.current.set(current.id, fingerprint);
+      if (summary.cwd === sidebarCwdRef.current) {
+        setHistory(history => mergeProjectHistorySummary(history, summary));
+      }
+    })
       .catch(() => undefined);
   }, []);
 
@@ -2715,25 +2729,7 @@ function Workspace({
     const timer = window.setTimeout(() => {
       const dirty = [...pendingPersist.current.values()];
       pendingPersist.current.clear();
-      void Promise.all(
-        dirty.map(async (session) => {
-          if (
-            removingSessionIds.current.has(session.id) ||
-            switchingWorktrees.current.has(session.id)
-          )
-            return;
-          const fingerprint = persistFingerprint(session);
-          if (lastPersisted.current.get(session.id) === fingerprint) return;
-          const summary = await upsertSession(session).catch(() => null);
-          if (!summary) return;
-          lastPersisted.current.set(session.id, fingerprint);
-          if (summary.cwd === sidebarCwdRef.current) {
-            setHistory((current) =>
-              mergeProjectHistorySummary(current, summary),
-            );
-          }
-        }),
-      );
+      dirty.forEach(persistSession);
     }, 650);
     return () => window.clearTimeout(timer);
   }, [persistSession, sessions]);
@@ -5020,10 +5016,7 @@ function Workspace({
 
   /** A Mono's conversation is a view over the existing workspace tabs. */
   const saveMonoPermissions = useCallback(async (session: Session) => {
-    const saved = await upsertSession(session);
-    sessionsRef.current = sessionsRef.current.map(current => current.id === session.id ? { ...current, runtimeMode: session.runtimeMode } : current);
-    setSessions(sessionsRef.current);
-    return saved;
+    return upsertSession(session, current => ({ ...current, runtimeMode: session.runtimeMode }));
   }, []);
 
   const onOpenMono = useCallback(
@@ -5514,9 +5507,8 @@ function Workspace({
       if (open) {
         const title = formatSessionTitle(open.harness, trimmed);
         const updated = { ...open, title };
-        setSessions((prev) =>
-          prev.map((session) => (session.id === sessionId ? updated : session)),
-        );
+        sessionsRef.current = sessionsRef.current.map(session => session.id === sessionId ? updated : session);
+        setSessions(sessionsRef.current);
         loadedSessionCache.current.delete(sessionId);
         persistSession(updated);
       } else {
@@ -5529,7 +5521,7 @@ function Workspace({
           ...restored,
           title: formatSessionTitle(restored.harness, trimmed),
         };
-        const saved = await upsertSession(updated).catch(() => null);
+        const saved = await upsertSession(updated, current => ({ ...current, title: updated.title })).catch(() => null);
         if (saved) {
           rememberLoadedSession(loadedSessionCache.current, updated);
           lastPersisted.current.set(sessionId, persistFingerprint(updated));
@@ -6485,11 +6477,11 @@ function Workspace({
         if (latest.worktreeRemoved)
           await keepSessionChanges(sessionId, target.path);
         pendingPersist.current.delete(sessionId);
-        if (shouldPersistSession(next)) await upsertSession(next);
+        if (shouldPersistSession(next)) await upsertSession(next, current => sessionInWorktree(current, target));
         if (!isCurrent()) return;
         invalidateLoadedSession(sessionId);
         sessionsRef.current = sessionsRef.current.map((s) =>
-          s.id === sessionId ? next : s,
+          s.id === sessionId ? sessionInWorktree(s, target) : s,
         );
         setSessions(sessionsRef.current);
         notifyGitChanged();
@@ -11411,12 +11403,11 @@ function Workspace({
             readOnly: task.readOnly,
             orchestrationLeadId: run.leadId,
           };
-          await upsertSession(synced);
-          const next = sessionsRef.current.map((session) =>
-            session.id === synced.id ? synced : session,
-          );
-          sessionsRef.current = next;
-          setSessions(next);
+          await upsertSession(existing, current => ({ ...current,
+            cwd: synced.cwd, worktreeCwd: synced.worktreeCwd, branch: synced.branch,
+            worktreeRemoved: false, runtimeMode: workerMode, readOnly: task.readOnly,
+            orchestrationLeadId: run.leadId,
+          }));
           return { scratchDir, workspace, modelSettings: { ...synced.modelSettings }, effortSource: synced.effortSource ?? "user" };
         }
         const restored = await getSession(task.sessionId);
@@ -11482,13 +11473,10 @@ function Workspace({
       },
       handoff: async (fromSessionId, toSessionId, note) => {
         const ids = new Set([fromSessionId, toSessionId]);
-        const changed = sessionsRef.current.filter(session => ids.has(session.id)).map(session => ({
-          ...session, blocks: [...session.blocks, { id: crypto.randomUUID(), role: "assistant" as const, text: note }],
-        }));
-        for (const session of changed) await upsertSession(session);
-        const next = sessionsRef.current.map(session => changed.find(entry => entry.id === session.id) ?? session);
-        sessionsRef.current = next;
-        setSessions(next);
+        for (const session of sessionsRef.current.filter(session => ids.has(session.id))) {
+          const block = { id: crypto.randomUUID(), role: "assistant" as const, text: note };
+          await upsertSession(session, current => ({ ...current, blocks: [...current.blocks, block] }));
+        }
       },
       notifyReady: (leadId, task) => {
         const ownerId = orchestrator.run(leadId)?.ownerSessionId ?? leadId;
@@ -11650,11 +11638,11 @@ function Workspace({
         onResumeQueue(id);
         return session.queueStatus === "paused" || session.queueStatus === "active";
       },
-      acceptManagerDigest: (id, receipt) => acceptManagerWakeQueue(receipt, id, {
+      acceptManagerDigest: (id, receipt) => writeSession(id, save => acceptManagerWakeQueue(receipt, id, {
         session: () => sessionsRef.current.find(session => session.id === id),
         delivered: () => invoke<boolean>("mono_session_event_delivered", { sessionId: id, eventId: receipt.id, text: receipt.body }),
         save: async session => {
-          const saved = await upsertSession(session);
+          const saved = await save(session);
           if (!saved) throw new Error("Manager digest could not be saved");
           return saved;
         },
@@ -11663,7 +11651,7 @@ function Workspace({
           sessionsRef.current = sessionsRef.current.map(entry => entry.id === id ? session : entry);
           flushSync(() => setSessions(sessionsRef.current));
         },
-      }),
+      })),
       submit: (id, text, done) => {
         void submitWithSettlement({
           submit: (onSettled) => {
@@ -12230,7 +12218,8 @@ function Workspace({
       )
         return;
       const look = monoLook(mono);
-      const next = {
+      await upsertSession(current, current => current.blocks.some(block => block.appRequestId === receiptId) ||
+        current.queuedMessages?.some(item => item.id === receiptId) ? current : ({
         ...current,
         queuedMessages: [
           ...(current.queuedMessages ?? []),
@@ -12248,12 +12237,7 @@ function Workspace({
           },
         ],
         queueStatus: current.queueStatus ?? ("active" as const),
-      };
-      await upsertSession(next);
-      sessionsRef.current = sessionsRef.current.map((session) =>
-        session.id === id ? next : session,
-      );
-      setSessions(sessionsRef.current);
+      }));
     },
   };
 
@@ -12271,7 +12255,7 @@ function Workspace({
       throw Error("That Grand Orchestrator is no longer available");
     let history = recovery ? await getMonoGoalRecoveryBlocks(sessionId) : undefined;
     const update = async (change: (session: Session) => Session) => {
-      return serializeMonoGoalUpdate(sessionId, async () => {
+      return writeSession(sessionId, async save => {
         if (history) history = await getMonoGoalRecoveryBlocks(sessionId);
         const live = sessionsRef.current.find(entry => entry.id === sessionId);
         if (!live) throw Error("The originating chat is unavailable");
@@ -12279,7 +12263,7 @@ function Workspace({
         const next = change(session);
         if (next === session) return;
         const nextLive = history ? monoGoalRecoveryLiveSession(live, next, history) : next;
-        if (!await upsertSession(next, history ? { monoBaseline: history, monoLiveBlocks: nextLive.blocks } : undefined))
+        if (!await save(next, history ? { monoBaseline: history, monoLiveBlocks: nextLive.blocks } : undefined))
           throw Error("The originating chat could not be saved");
         sessionsRef.current = sessionsRef.current.map(entry => entry.id === sessionId
           ? history
@@ -13101,34 +13085,11 @@ function Workspace({
               if (!target) throw new Error("Mono chat is unavailable");
               const id = `mono-card-${payload.requestId}`;
               if (target.blocks.some((block) => block.id === id)) return;
-              const next: Session = {
-                ...target,
-                blocks: [
-                  ...target.blocks,
-                  {
-                    id,
-                    role: "assistant",
-                    text: "",
-                    monoCard: card,
-                    monoCardOwner: sourceMono.id,
-                  },
-                ],
-              };
-              await upsertSession(next);
-              setSessions((previous) =>
-                previous.map((session) =>
-                  session.id === target.id &&
-                  !session.blocks.some((block) => block.id === id)
-                    ? {
-                        ...session,
-                        blocks: [
-                          ...session.blocks,
-                          next.blocks[next.blocks.length - 1],
-                        ],
-                      }
-                    : session,
-                ),
-              );
+              await upsertSession(target, current => current.blocks.some(block => block.id === id) ? current : {
+                ...current, blocks: [...current.blocks, {
+                  id, role: "assistant", text: "", monoCard: card, monoCardOwner: sourceMono.id,
+                }],
+              });
             },
             isHabitRun: (id) => isHabitRun(id),
             monoOf: (id) => {

@@ -30,6 +30,12 @@ for (const surface of ["embedded", "floating"]) {
       await page.screenshot({
         path: testInfo.outputPath(`${surface}-${theme}-auto.png`),
       });
+      const composer = page.getByRole("textbox", {
+        name: "Message Grand Orchestrator", exact: true,
+      });
+      await composer.fill("Fix DZDistro and C:/fixtures/monocode/../other/src/index.ts");
+      await expect(page.getByRole("status")).toContainText("Send to Grand Orch");
+      await expect(page.getByRole("status")).toContainText("Contains file paths");
       await page
         .getByRole("button", { name: "Goal route: Auto route", exact: true })
         .click();
@@ -45,7 +51,9 @@ for (const surface of ["embedded", "floating"]) {
       await page
         .getByRole("option", { name: "DZDistro Manager", exact: true })
         .click();
-      await expect(page.getByRole("status")).toContainText("Project selected");
+      await expect(page.getByRole("status")).toContainText(
+        "Contains file paths: routed to DZDistro because you selected it",
+      );
       await page.screenshot({
         path: testInfo.outputPath(`${surface}-${theme}-override.png`),
       });
@@ -55,6 +63,9 @@ for (const surface of ["embedded", "floating"]) {
       );
       await expect(page.locator("[data-submission]")).toContainText(
         '"override":"manager"',
+      );
+      await expect(page.locator("[data-submission]")).toContainText(
+        '"reason":"Contains file paths: routed to DZDistro because you selected it"',
       );
       await expect(
         page.getByRole("textbox", {

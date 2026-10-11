@@ -599,6 +599,7 @@ async function runTurn(
 ): Promise<void> {
   await applyModel(flavor, live, input);
   const text = input.prepareText ? await input.prepareText(live.providerSessionId || undefined) : input.text;
+  if (live.cancelled || live.muteUpdates) return;
   live.emittedAssistant = "";
   live.emittedReasoning = "";
   live.turnError = null;

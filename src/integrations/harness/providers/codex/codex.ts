@@ -835,6 +835,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
 
 async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
   const text = input.prepareText ? await input.prepareText(live.threadId) : input.text;
+  if (live.cancelled || live.muteUpdates) return;
   const model = nativeModelId(input.model);
   const effort = input.modelSettings?.reasoningEffort;
   const serviceTier = input.modelSettings?.serviceTier;

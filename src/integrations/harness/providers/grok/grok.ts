@@ -456,6 +456,7 @@ async function applyModelSelection(
 async function prompt(live: Live, input: SendTurnInput): Promise<void> {
   try {
     const text = input.prepareText ? await input.prepareText(live.acpSessionId) : input.text;
+    if (live.cancelled || liveByThread.get(input.sessionId) !== live) return;
     const blocks = grokPromptBlocks(text, input.attachments);
     if (blocks.length === 0) return;
     await live.acp.request(

@@ -626,6 +626,7 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
     );
   }
   const text = input.prepareText ? await input.prepareText(live.openCodeSessionId) : input.text;
+  if (live.cancelled || live.muteUpdates) return;
   const parts = toOpenCodePromptParts(text, input.attachments);
   if (parts.length === 0) return;
 

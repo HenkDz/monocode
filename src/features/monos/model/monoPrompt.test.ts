@@ -172,7 +172,7 @@ it("keeps role cores small and authority boundaries present before fetching guid
   expect(orgTurnContext(f.roster, f.member.id)).toContain("never request new tasks");
 });
 
-it("budgets real first, steady, rotation and delegation assemblies for a 16-agent org", async () => {
+it("budgets the assembled context region before registry suffixes for a 16-agent org", async () => {
   const f = monoPromptFixture();
   const cli = '"C:/Program Files/MonoCode/monocode.exe" app';
   const request = "Continue the authorized task and report only new findings.";
@@ -212,6 +212,6 @@ it("budgets real first, steady, rotation and delegation assemblies for a 16-agen
     rows.push({ role: "worker", turn: `${review ? "review" : "delegation"}${saturated ? "-saturated" : ""}`, totalChars: prompt.length, appChars });
   }
   mkdirSync("target/cc1-verification", { recursive: true });
-  writeFileSync("target/cc1-verification/after.json", `${JSON.stringify({ promptVersion: MONO_PROMPT_VERSION, authorityCoreChars: Object.fromEntries([f.grand, f.manager, f.member].map(mono => [mono.role!, monoAuthorityCore(mono).length])), roleCoreChars: Object.fromEntries(Object.entries(ORG_ROLE_RULES).map(([role, text]) => [role, text.length])), cliChars: monoAppContext(cli, true).length, rows }, null, 2)}\n`);
+  writeFileSync("target/cc1-verification/after.json", `${JSON.stringify({ scope: "assembled context region; excludes user request and registry suffixes", promptVersion: MONO_PROMPT_VERSION, authorityCoreChars: Object.fromEntries([f.grand, f.manager, f.member].map(mono => [mono.role!, monoAuthorityCore(mono).length])), roleCoreChars: Object.fromEntries(Object.entries(ORG_ROLE_RULES).map(([role, text]) => [role, text.length])), cliChars: monoAppContext(cli, true).length, rows }, null, 2)}\n`);
   expect(rows).toHaveLength(13);
 });

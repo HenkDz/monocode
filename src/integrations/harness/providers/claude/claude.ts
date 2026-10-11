@@ -590,6 +590,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
 
 async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
   const text = input.prepareText ? await input.prepareText(live.sessionConfirmed ? live.claudeSessionId : undefined) : input.text;
+  if (live.cancelled || live.muteUpdates) return;
   const effort = input.modelSettings?.effort;
   const message = buildClaudeUserMessage({
     text,

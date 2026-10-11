@@ -499,7 +499,7 @@ async function startLive(
   const live: Live = {
     rpc,
     cwd: input.cwd,
-    providerSessionId: resume ?? "",
+    providerSessionId: "",
     nativeModel: native,
     thinking: input.modelSettings?.thinking ?? "",
     fastModeEnabled: undefined,
@@ -598,6 +598,7 @@ async function runTurn(
   input: SendTurnInput,
 ): Promise<void> {
   await applyModel(flavor, live, input);
+  const text = input.prepareText ? await input.prepareText(live.providerSessionId || undefined) : input.text;
   live.emittedAssistant = "";
   live.emittedReasoning = "";
   live.turnError = null;
@@ -622,7 +623,7 @@ async function runTurn(
       live.rpc.request(
         {
           ...buildPiPrompt({
-            text: input.text,
+            text,
             attachments: input.attachments,
           }),
           id: promptId,
@@ -852,8 +853,13 @@ function handleFrame(
     }
     if (type === "agent_end" && rec.isTerminal === false) return;
   }
-  if (type === "compaction_start") live.compacting = true;
-  if (type === "compaction_end") live.compacting = false;
+  if (type === "compaction_start" || type === "auto_compaction_start") live.compacting = true;
+  if (type === "compaction_end" || type === "auto_compaction_end") {
+    live.compacting = false;
+    if (asRecord(rec.result) && rec.aborted !== true && rec.skipped !== true && !stringField(rec, "errorMessage")) {
+      live.onEvent({ type: "context.compacted" });
+    }
+  }
   if (type === "auto_retry_start") live.retrying = true;
   if (type === "auto_retry_end") live.retrying = false;
 

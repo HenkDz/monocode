@@ -449,7 +449,8 @@ async function setConfigOption(
 
 async function prompt(live: Live, input: SendTurnInput): Promise<void> {
   try {
-    const blocks = promptBlocks(input.text, input.attachments);
+    const text = input.prepareText ? await input.prepareText(live.acpSessionId) : input.text;
+    const blocks = promptBlocks(text, input.attachments);
     if (blocks.length === 0) return;
     live.agentTools.clear();
     retireCursorSubagentPolling(live);

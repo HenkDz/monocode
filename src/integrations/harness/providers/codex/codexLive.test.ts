@@ -182,6 +182,22 @@ async function startTurn(
 }
 
 describe("codex live turn sequence", () => {
+  it("keeps compaction signals scoped to the parent thread and ignores child notifications", async () => {
+    const { events, turn } = await startTurn("codex-compact-signal");
+    notify("thread/compacted", { threadId: "unrelated", turnId: "turn_1" });
+    notify("item/completed", { threadId: "child", turnId: "turn_child", item: { type: "contextCompaction", id: "child-compact" } });
+    notify("thread/compacted", { turnId: "turn_1" });
+    notify("item/started", { threadId: "thr_1", turnId: "turn_1", item: { type: "contextCompaction", id: "compact" } });
+    expect(events.filter(event => event.type === "context.compacted")).toEqual([]);
+    notify("thread/compacted", { threadId: "thr_1", turnId: "turn_1" });
+    notify("item/completed", { threadId: "thr_1", turnId: "turn_1", item: { type: "contextCompaction", id: "compact" } });
+    expect(events.filter(event => event.type === "context.compacted")).toEqual([
+      { type: "context.compacted" }, { type: "context.compacted" },
+    ]);
+    notify("turn/completed", { threadId: "thr_1", turn: { id: "turn_1", status: "completed" } });
+    await turn;
+  });
+
   it("labels only a rejected turn/start RPC without accepting or replacing its retained thread", async () => {
     bindCodexSession("codex-live", "thr_1", "/repo");
     const events: HarnessEvent[] = [];
@@ -447,6 +463,39 @@ describe("codex live turn sequence", () => {
     );
     await rejected;
     expect(parse().some((m) => m.method === "thread/start")).toBe(false);
+  });
+
+  it.each(["missing", "missing-private", "account", "cwd", "ephemeral"])("prepares fresh context before turn/start after a %s fallback", async mode => {
+    bindCodexSession("codex-live", "old", mode === "cwd" ? "/other" : "/repo", mode === "account" ? "old-account" : undefined);
+    if (mode === "missing-private") prepareCodexMonoContext.mockResolvedValueOnce({ config: { sqlite_home: "/private/mono", instructions: "Account instructions" }, hasThread: false });
+    const prepareText = vi.fn(async (provider?: string) => {
+      expect(provider).toBe("fresh");
+      expect(parse().some(message => message.method === "turn/start")).toBe(false);
+      return "Full org, soul and memory\nContinue";
+    });
+    const turn = sendCodexTurn({
+      sessionId: "codex-live", cwd: "/repo", model: "codex:gpt-5.4", runtimeMode: "supervised",
+      ...(mode === "missing-private" ? { codexStore: "mono" as const } : {}),
+      ephemeral: mode === "ephemeral", providerAccountId: mode === "account" ? "new-account" : undefined,
+      text: "Continue", prepareText, onEvent() {},
+    });
+    await waitFor(() => parse().some(message => message.method === "initialize"), "initialize");
+    reply(parse().find(message => message.method === "initialize")!.id as number, {});
+    if (mode.startsWith("missing")) {
+      await waitFor(() => parse().some(message => message.method === "thread/resume"), "resume");
+      expect(prepareText).not.toHaveBeenCalled();
+      onLine!(JSON.stringify({ id: parse().find(message => message.method === "thread/resume")!.id, error: { message: "thread not found" } }));
+    }
+    await waitFor(() => parse().some(message => message.method === "thread/start"), "replacement");
+    expect(prepareText).not.toHaveBeenCalled();
+    reply(parse().find(message => message.method === "thread/start")!.id as number, { thread: { id: "fresh" } });
+    await waitFor(() => parse().some(message => message.method === "turn/start"), "turn/start");
+    expect(prepareText).toHaveBeenCalledExactlyOnceWith("fresh");
+    const request = parse().find(message => message.method === "turn/start")!;
+    expect(request.params).toMatchObject({ threadId: "fresh", input: [{ type: "text", text: "Full org, soul and memory\nContinue" }] });
+    reply(request.id as number, { turn: { id: "replacement-turn", status: "inProgress" } });
+    notify("turn/completed", { threadId: "fresh", turn: { id: "replacement-turn", status: "completed" } });
+    await turn;
   });
 
   it("does not reopen a parked ephemeral helper just to rewind or compact it", async () => {

@@ -155,6 +155,8 @@ export type HarnessEvent =
     }
   /** Context-window level after the harness's latest request. */
   | { type: "context"; used?: number; window?: number }
+  /** Provider history was compacted; standing app context must be handed again. */
+  | { type: "context.compacted" }
   /** Provider token accounting for the active user turn. */
   | ({ type: "turn.metrics" } & TurnMetrics);
 
@@ -197,6 +199,8 @@ export type SendTurnInput = HarnessSessionInput & {
   orgMonoId?: string;
   text: string;
   attachments?: Attachment[];
+  /** Rebuild context after the provider confirms its conversation, before submission. */
+  prepareText?: (providerSessionId?: string) => Promise<string>;
   /** Called once the provider has accepted the user turn. */
   onAccepted?: () => void;
 };

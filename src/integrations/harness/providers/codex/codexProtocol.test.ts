@@ -14,6 +14,17 @@ import {
 } from "./codexProtocol";
 import { parseCodexModelList } from "./codexCatalog";
 
+it("maps explicit completed Codex compaction notifications without finishing the turn", () => {
+  const scope = { threadId: "thread", turnId: "turn" };
+  expect(mapCodexNotification("thread/compacted", scope)).toEqual({ events: [{ type: "context.compacted" }] });
+  expect(mapCodexNotification("item/completed", { ...scope, item: { type: "contextCompaction", id: "compact" } }))
+    .toEqual({ events: [{ type: "context.compacted" }] });
+  expect(mapCodexNotification("item/started", { ...scope, item: { type: "contextCompaction", id: "compact" } }).events).toEqual([]);
+  expect(mapCodexNotification("thread/compacted", {}).events).toEqual([]);
+  expect(mapCodexNotification("item/completed", { item: { type: "contextCompaction", id: "compact" } }).events).toEqual([]);
+  expect(mapCodexNotification("warning", { message: "Compacted context" }).events).toEqual([{ type: "status", text: "Compacted context" }]);
+});
+
 it("uses the restricted-token fallback only for Windows read-only worker processes", () => {
   expect(codexAppServerArgs(true, true)).toEqual(["-c", 'windows.sandbox="unelevated"', "app-server"]);
   expect(buildThreadStartParams({ cwd: "/repo", readOnly: true, runtimeMode: "full-access" })).toMatchObject({ sandbox: "read-only", approvalPolicy: "never" });

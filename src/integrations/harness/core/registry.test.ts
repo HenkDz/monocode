@@ -53,6 +53,73 @@ function stub(
 }
 
 describe("harness registry", () => {
+  it("adds the current CLI identity after provider-specific text preparation", async () => {
+    vi.mocked(isTauri).mockReturnValue(true);
+    vi.mocked(invoke).mockImplementation(async command => command === "app_cli_approval_policy" ? {
+      executable: "C:/preview/current.exe", tempDir: "C:/Temp", actions: ["projects.list"],
+    } : undefined);
+    let submitted = "";
+    registerHarness(stub("codex", { async sendTurn(input) { submitted = await input.prepareText!("fresh"); } }));
+    const prepareText = vi.fn(async () => "Full replacement context");
+    await sendHarnessTurn({ harness: "codex", sessionId: "prepared-cli", cwd: "/tmp", model: "test", runtimeMode: "supervised", orgMono: true, text: "Full fallback", prepareText, onEvent() {} });
+    expect(prepareText).toHaveBeenCalledExactlyOnceWith("fresh");
+    expect(submitted).toContain("Full replacement context");
+    expect(submitted).toContain("current running MonoCode executable is C:/preview/current.exe");
+    expect(submitted.match(/<monocode_cli_input>/g)).toHaveLength(1);
+    expect(submitted).not.toContain("Full fallback");
+  });
+
+  it.each([
+    ["team", true], ["shell", true], ["artifacts", true], ["delegation", true], ["memory", true], ["habits", true],
+    ["unknown", false], ["shell extra", false], ["C:/Temp/shell.md", false], ["shell; echo injected", false],
+  ])("auto-approves only a canonical offline rules read: %s", async (topic, allowed) => {
+    vi.mocked(isTauri).mockReturnValue(true);
+    vi.mocked(invoke).mockImplementation(async command => command === "app_cli_approval_policy" ? {
+      executable: "C:/preview/current.exe", tempDir: "C:/Temp", actions: ["projects.list", "rules"],
+    } : undefined);
+    const onEvent = vi.fn(), respondApproval = vi.fn();
+    registerHarness(stub("codex", { respondApproval, async sendTurn(input) {
+      input.onEvent({ type: "approval.requested", requestId: 9, title: "Read guidance", command: `C:/preview/current.exe app rules ${topic}` });
+      await new Promise(resolve => setTimeout(resolve, 0));
+    } }));
+    await sendHarnessTurn({ harness: "codex", sessionId: "rules-cli", cwd: "/tmp", model: "test", runtimeMode: "supervised", orgMono: true, text: "Read rules", onEvent });
+    if (allowed) { expect(respondApproval).toHaveBeenCalledWith("rules-cli", 9, "allow"); expect(onEvent).not.toHaveBeenCalled(); }
+    else { expect(respondApproval).not.toHaveBeenCalled(); expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({ type: "approval.requested" })); }
+  });
+
+  it.each([true, false])("verifies another executable's identity before an offline rules approval (%s)", async matches => {
+    vi.mocked(isTauri).mockReturnValue(true);
+    vi.mocked(invoke).mockImplementation(async command => command === "app_cli_approval_policy" ? {
+      executable: "C:/preview/current.exe", actions: ["projects.list", "rules"],
+    } : command === "app_cli_executable_matches" ? matches : undefined);
+    const onEvent = vi.fn(), respondApproval = vi.fn();
+    registerHarness(stub("codex", { respondApproval, async sendTurn(input) {
+      input.onEvent({ type: "approval.requested", requestId: 10, title: "Read guidance", command: ["C:/preview/copy.exe", "app", "rules", "shell"] });
+      await new Promise(resolve => setTimeout(resolve, 0));
+    } }));
+    await sendHarnessTurn({ harness: "codex", sessionId: "rules-copy", cwd: "/tmp", model: "test", runtimeMode: "supervised", orgMono: true, text: "Read rules", onEvent });
+    expect(invoke).toHaveBeenCalledWith("app_cli_executable_matches", { path: "C:/preview/copy.exe" });
+    if (matches) expect(respondApproval).toHaveBeenCalledWith("rules-copy", 10, "allow");
+    else expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({ type: "approval.requested", autoApprovalReason: expect.stringContaining("does not resolve") }));
+  });
+
+  it.each([true, false])("verifies PowerShell before an offline rules approval (%s)", async trusted => {
+    vi.mocked(isTauri).mockReturnValue(true);
+    const pwsh = "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe";
+    vi.mocked(invoke).mockImplementation(async command => command === "app_cli_approval_policy" ? {
+      executable: "C:/preview/current.exe", actions: ["rules"], trustedPowerShell: [pwsh],
+    } : command === "app_cli_powershell_is_trusted" ? trusted : undefined);
+    const onEvent = vi.fn(), respondApproval = vi.fn();
+    registerHarness(stub("codex", { respondApproval, async sendTurn(input) {
+      input.onEvent({ type: "approval.requested", requestId: 11, title: "Read guidance", cwd: "C:/other",
+        command: [pwsh, "-NoProfile", "-Command", "C:/preview/current.exe app rules shell"] });
+      await new Promise(resolve => setTimeout(resolve, 0));
+    } }));
+    await sendHarnessTurn({ harness: "codex", sessionId: "rules-shell", cwd: "/tmp", model: "test", runtimeMode: "supervised", orgMono: true, text: "Read rules", onEvent });
+    expect(invoke).toHaveBeenCalledWith("app_cli_powershell_is_trusted", { path: pwsh, cwd: "C:/other" });
+    if (trusted) expect(respondApproval).toHaveBeenCalledWith("rules-shell", 11, "allow");
+    else expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({ type: "approval.requested", autoApprovalReason: expect.stringContaining("PowerShell is untrusted") }));
+  });
   it("never emits a late approval after a mode change resolves its held native identity check", async () => {
     vi.mocked(isTauri).mockReturnValue(true);
     let finishCheck!: (allowed: boolean) => void, release!: () => void;

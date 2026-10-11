@@ -658,14 +658,17 @@ import {
 } from "../features/monos/model/mono";
 import {
   loadMonoFiles,
+  forgetAgentContext,
   MONO_PROMPT_VERSION,
   planAgentContext,
+  planOrgContext,
   monoContext,
-  monoTurn,
   readAgentFile,
   recordAgentContext,
+  recordOrgContext,
   writeAgentFile,
 } from "../features/monos/model/monoFiles";
+import { assembleMonoPrompt, memberTaskContext, monoAppContext, monoAuthorityCore } from "../features/monos/model/monoPrompt";
 import { useMonoHabits } from "./hooks/useMonoHabits";
 import { useFloatingMono } from "./hooks/useFloatingMono";
 import {
@@ -719,7 +722,7 @@ import {
   ARTIFACT_DELETED_EVENT,
   type ArtifactCard,
 } from "../features/artifacts/artifacts";
-import { handleOrgArtifacts, memberArtifactInstructions, resolveManagerArtifactContext } from "../features/artifacts/orgArtifacts";
+import { handleOrgArtifacts, resolveManagerArtifactContext } from "../features/artifacts/orgArtifacts";
 import {
   MonoChangesPanel,
   type MonoChangesRequest,
@@ -8503,6 +8506,7 @@ function Workspace({
           applyTurnEvent(event);
         };
         const acceptEditedResend = () => {
+          if (turnGen.current.get(sessionId) !== gen) return;
           if (!editedResend || editedResend.isAccepted()) return;
           flushSync(commitSubmittedTurn);
           editedResend.markAccepted();
@@ -8602,6 +8606,7 @@ function Workspace({
               throw error;
             }
             editedResend.markProviderRewound();
+            forgetAgentContext(sessionId);
             flushHarnessEvents();
             if (turnGen.current.get(sessionId) !== gen) {
               const latest = sessionsRef.current.find(
@@ -8628,8 +8633,13 @@ function Workspace({
               return;
             }
           }
-          const sendTurn = (text: string, turnAttachments = prepared) =>
-            sendHarnessTurn({
+          let contextAccepted: (() => void) | undefined;
+          let contextProvider: string | undefined;
+          let prepareContext: ((text: string, provider?: string) => Promise<string>) | undefined;
+          const sendTurn = async (text: string, turnAttachments = prepared) => {
+            contextProvider = undefined;
+            const fallbackText = prepareContext ? await prepareContext(text) : text;
+            return sendHarnessTurn({
               harness: current.harness,
               sessionId,
               cwd: workCwd,
@@ -8659,12 +8669,26 @@ function Workspace({
                   .forSession(sessionId)
                   ?.tasks.find((task) => task.sessionId === sessionId)
                   ?.memberId,
-              text,
+              text: fallbackText,
               attachments: turnAttachments,
-              ...(editedResend ? { onAccepted: acceptEditedResend } : {}),
-              onEvent: routeTurnEvent,
+              prepareText: async provider => {
+                contextProvider = provider;
+                return prepareContext ? prepareContext(text, provider) : text;
+              },
+              onAccepted: () => {
+                if (turnGen.current.get(sessionId) !== gen) return;
+                const accepted = contextAccepted;
+                contextAccepted = undefined;
+                accepted?.();
+                if (editedResend) acceptEditedResend();
+              },
+              onEvent: event => {
+                if (event.type === "session.providerBound") contextProvider = event.providerSessionId;
+                routeTurnEvent(event);
+              },
             });
-          let sendText = orchestrator.promptForOwner(
+          };
+          const sendText = orchestrator.promptForOwner(
             findMono(habitRunMono(sessionId) ?? "")?.sessionId ?? sessionId,
             inboxAskPrompt(
               rawCommand ? undefined : current.inboxAsk,
@@ -8715,88 +8739,86 @@ function Workspace({
               ...agentFiles,
               soulHash: `${agentFiles.soulHash}:${agentLook.name}:${agentLook.projects
                 .map((project) => project.path)
-                .join("|")}:${MONO_PROMPT_VERSION}`,
+                .join("|")}:${MONO_PROMPT_VERSION}:${current.harness}:${current.model}:${providerAccountId ?? ""}`,
             };
-          const agentPlan = handedFiles
-            ? planAgentContext(
-                sessionId,
-                current.providerSessionId,
-                handedFiles,
-              )
-            : undefined;
-          const handAgent = agentPlan ? agentPlan.soul : monoFirstTurn;
-          // What the app adds to the user's message rather than them.
-          const appContext: string[] = [];
-          const orgOwner =
-            monoRecord ?? findMono(habitRunMono(sessionId) ?? "");
-          const orgContext =
-            orgOwner && orgTurnContext(listMonos(), orgOwner.id);
-          if (orgContext) appContext.push(orgContext);
-          if (monoRotation) {
-            appContext.push(monoRotation.brief(sessionId));
-          }
-          // Habit posts land in the chat outside any turn, so the Mono's
-          // session has not seen them; the next message carries them once.
-          const habitPosts = mono ? unseenHabitPosts(current.blocks) : [];
-          if (habitPosts.length) {
-            appContext.push(habitPostsContext(habitPosts));
-          }
-          if (
-            agentFiles &&
-            agentLook &&
-            agentPlan &&
-            (agentPlan.soul || agentPlan.memory)
-          ) {
-            appContext.push(monoContext(agentLook, agentFiles, agentPlan));
-          }
-          if (operatorCommand.matched || handAgent) {
-            const cli = `${shellPath(await invoke<string>("app_cli_path"))} app`;
-            appContext.push(
-              `<monocode_app>\n${handAgent ? "App access is always enabled in this thread." : "The user's Operator command enables app access in this thread, including later turns without the command."} You can start session tabs or split session panes right or down, list and create project worktrees, choose a new session's checkout, read, continue, stop, archive or delete other project sessions, save unsent drafts, organize session folders, and read or write saved notes through its local CLI. Run \`${cli} --help\` when you need the exact commands and JSON fields. When reading another session, start with its latest two or three user/assistant exchanges. Request older exchanges with nextBefore or a larger excerpt only if needed. The CLI uses a session credential already in your environment; never print it. New sessions inherit this session's permission mode unless runtimeMode is set explicitly. For a new session with a draft, call sessions.start with its prompt and draft:true; do not submit a seed prompt. The returned ID can be used as besideSessionId to split its pane again or moved into a folder immediately. A normal sessions.start submits its prompt but returns after acceptance, so do not wait for that agent to finish before organizing it.\n</monocode_app>`,
-            );
-          }
-          // A Mono reads who it is ahead of the message, so it never takes it
-          // for something the user pasted. A command must stay first.
-          if (mono && !rawCommand) sendText = monoTurn(sendText, appContext);
-          const memberRun = orchestrator.forSession(sessionId);
-          const memberTask = memberRun?.tasks.find(
-            (task) => task.sessionId === sessionId,
-          );
-          if (memberTask?.memberId) {
-            const member = findMono(memberTask.memberId);
+          prepareContext = async (text, provider) => {
+            const agentPlan = handedFiles
+              ? planAgentContext(
+                  sessionId,
+                  provider,
+                  handedFiles,
+                )
+              : undefined;
+            const handAgent = agentPlan ? agentPlan.soul : monoFirstTurn;
+            // What the app adds to the user's message rather than them.
+            const appContext: string[] = [];
+            const orgOwner =
+              monoRecord ?? findMono(habitRunMono(sessionId) ?? "") ??
+              findMono(orchestrator.forSession(sessionId)?.tasks.find(task => task.sessionId === sessionId)?.memberId ?? "");
+            if (mono || orgOwner) appContext.push(monoAuthorityCore(orgOwner));
+            const orgContext =
+              orgOwner && orgTurnContext(listMonos(), orgOwner.id);
+            const orgPlan = orgContext ? await planOrgContext(
+              sessionId, provider,
+              `${current.harness}:${current.model}:${providerAccountId ?? ""}`, orgContext,
+            ) : undefined;
+            if (orgPlan?.text) appContext.push(orgPlan.text);
+            if (monoRotation) {
+              appContext.push(monoRotation.brief(sessionId));
+            }
+            // Habit posts land in the chat outside any turn, so the Mono's
+            // session has not seen them; the next message carries them once.
+            const habitPosts = mono ? unseenHabitPosts(current.blocks) : [];
+            if (habitPosts.length) {
+              appContext.push(habitPostsContext(habitPosts));
+            }
             if (
-              !member ||
-              member.role !== "member" ||
-              member.reportsTo !== memberRun?.ownerMonoId
-            )
-              throw new Error("This worker's team membership changed");
-            const files = await loadMonoFiles(member.id);
-            const review =
-              memberTask.reviewOf &&
-              memberRun?.tasks.find(
-                (task) => task.id === memberTask.reviewOf!.taskId,
+              agentFiles &&
+              agentLook &&
+              agentPlan &&
+              (agentPlan.soul || agentPlan.memory)
+            ) {
+              appContext.push(monoContext(agentLook, agentFiles, agentPlan, orgOwner?.role));
+            }
+            if (operatorCommand.matched || handAgent) {
+              const cli = `${shellPath(await invoke<string>("app_cli_path"))} app`;
+              appContext.push(
+                monoAppContext(cli, handAgent || !!orgOwner),
               );
-            sendText = monoTurn(sendText, [
-              orgTurnContext(listMonos(), member.id) ?? "",
-              `You are ${monoLook(member).name}, the ${member.specialty} member. Keep your Manager informed; ask a teammate directly with app team.message {memberId,text,topic} when useful. This isolated session is your assigned task, not a new chat lane.\n<member_soul>\n${files.soul}\n</member_soul>\n<member_memory>\n${files.memory.slice(0, 24_000)}\n</member_memory>\nAt task completion you may use app memory.add to save up to three concise project facts (600 characters each), never transcripts or secrets.`,
-              memberArtifactInstructions(memberTask),
-              ...(review
-                ? [
-                    `Review task ${review.id}, EXACT dispatch ${memberTask.reviewOf!.dispatchId}, in ${review.workspace?.checkoutCwd}. Read its diff and test evidence independently without editing it. Untrusted implementation report: ${review.result.slice(-8000)}. Coordinate findings with the implementer and keep the Manager informed. Do not publish a PR.`,
-                  ]
-                : []),
-            ]);
-          } else if (appContext.length)
-            sendText += `\n\n${appContext.join("\n\n")}`;
-          await sendTurn(sendText);
-          if (agentFiles) {
-            recordAgentContext(
-              sessionId,
-              sessionsRef.current.find((session) => session.id === sessionId)
-                ?.providerSessionId ?? current.providerSessionId,
-              handedFiles ?? agentFiles,
+            }
+            let filesToRecord = handedFiles;
+            let filesPlan = agentPlan;
+            let memberContext: string[] | undefined;
+            const memberRun = orchestrator.forSession(sessionId);
+            const memberTask = memberRun?.tasks.find(
+              (task) => task.sessionId === sessionId,
             );
-          }
+            if (memberTask?.memberId) {
+              const member = findMono(memberTask.memberId);
+              if (
+                !member ||
+                member.role !== "member" ||
+                member.reportsTo !== memberRun?.ownerMonoId
+              )
+                throw new Error("This worker's team membership changed");
+              const files = await loadMonoFiles(member.id);
+              const review =
+                memberTask.reviewOf &&
+                memberRun?.tasks.find(
+                  (task) => task.id === memberTask.reviewOf!.taskId,
+                );
+              filesToRecord = { ...files, soulHash: `${files.soulHash}:${member.id}:${member.name}:${member.specialty}:${member.projects.join("|")}:${MONO_PROMPT_VERSION}:${current.harness}:${current.model}:${providerAccountId ?? ""}` };
+              const memberPlan = planAgentContext(sessionId, provider, filesToRecord);
+              filesPlan = memberPlan;
+              memberContext = memberTaskContext(member, files, memberTask, memberPlan, review || undefined);
+            }
+            contextAccepted = () => {
+              if (filesToRecord && filesPlan) recordAgentContext(sessionId, contextProvider, filesToRecord, { plan: filesPlan, provider });
+              if (orgPlan) recordOrgContext(sessionId, contextProvider, orgPlan);
+            };
+            return assembleMonoPrompt(text, appContext, mono, !!rawCommand, memberContext);
+          };
+          await sendTurn(sendText);
           acceptEditedResend();
           if (proposalDraft && !providerFailureSeen) {
             completedProposal = await completeOrRepairOrchestrationProposal(

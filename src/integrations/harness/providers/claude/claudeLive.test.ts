@@ -970,6 +970,25 @@ describe("claude model switching", () => {
 });
 
 describe("claude legacy account resume", () => {
+  it.each(["unknown", "replaced", "retained"])("prepares context using provider proof after a %s saved conversation", async mode => {
+    bindClaudeSession("claude-context", "old", "/repo");
+    const provider = mode === "unknown" ? undefined : mode === "retained" ? "old" : "fresh";
+    const prepareText = vi.fn(async (confirmed?: string) => {
+      expect(confirmed).toBe(provider);
+      return confirmed === "old" ? "Continue" : "Full context\nContinue";
+    });
+    const turn = sendClaudeTurn({ sessionId: "claude-context", cwd: "/repo", model: "claude:claude-sonnet-5", runtimeMode: "supervised", text: "Continue", prepareText, onEvent() {} });
+    try {
+      await waitFor(() => parse().some(message => (message.request as Record<string, unknown> | undefined)?.subtype === "initialize"), "initialize");
+      if (provider) emit({ type: "system", subtype: "init", session_id: provider });
+      emit({ type: "control_response", response: { subtype: "success", request_id: "monocode_1" } });
+      await waitFor(() => parse().some(message => message.type === "user"), "user prompt");
+      expect(prepareText).toHaveBeenCalledExactlyOnceWith(provider);
+      expect(parse().find(message => message.type === "user")).toMatchObject({ message: { content: [{ type: "text", text: provider === "old" ? "Continue" : "Full context\nContinue" }] } });
+      emit({ type: "result", subtype: "success", session_id: provider ?? "fresh" });
+      await turn;
+    } finally { await stopClaudeSession("claude-context"); }
+  });
   it("resumes a legacy thread when the missing account resolves to default", async () => {
     bindClaudeSession("s1", "legacy-session", "/repo");
     const { turn } = await startTurn("s1", {
@@ -2047,6 +2066,19 @@ describe("claude plan permissions", () => {
 });
 
 describe("claude manual compaction", () => {
+  it("maps only a compact boundary in the current parent session", async () => {
+    const { events, turn } = await startTurn("claude-compact-signal");
+    emit({ type: "system", subtype: "compact_boundary", session_id: "child", parent_tool_use_id: "toolu_child" });
+    emit({ type: "system", subtype: "compact_boundary", session_id: "unrelated" });
+    emit({ type: "system", subtype: "status", session_id: "sess_1", message: "Compacted context" });
+    expect(events.filter(event => event.type === "context.compacted")).toEqual([]);
+    expect(events).not.toContainEqual({ type: "session.providerBound", providerSessionId: "unrelated" });
+    emit({ type: "system", subtype: "compact_boundary", session_id: "sess_1", compact_metadata: { trigger: "auto" } });
+    expect(events.filter(event => event.type === "context.compacted")).toEqual([{ type: "context.compacted" }]);
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+  });
+
   it("runs the built-in command and requires a compact boundary", async () => {
     const { turn } = await startTurn("s1");
     emit({ type: "result", subtype: "success", session_id: "sess_1" });
@@ -2086,6 +2118,7 @@ describe("claude manual compaction", () => {
       type: "status",
       text: "Compacted context",
     });
+    expect(events).toContainEqual({ type: "context.compacted" });
     expect(events.some((event) => event.type === "message.delta")).toBe(false);
   });
 });

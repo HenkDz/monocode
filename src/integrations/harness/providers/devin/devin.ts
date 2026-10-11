@@ -124,7 +124,8 @@ export async function sendDevinTurn(input: SendTurnInput): Promise<void> {
     if (live.cancelled) return;
     await applyRuntimeMode(live, input.runtimeMode, live.planning);
     if (live.cancelled) return;
-    await prompt(live, devinPromptBlocks(input.text, input.attachments));
+    const text = input.prepareText ? await input.prepareText(live.acpSessionId) : input.text;
+    await prompt(live, devinPromptBlocks(text, input.attachments));
   });
 }
 

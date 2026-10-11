@@ -1,4 +1,4 @@
-//! The desktop executable also provides a small, JSON-only control client.
+//! The desktop executable also provides a control client and offline app guidance.
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::time::Duration;
@@ -106,7 +106,8 @@ const ACTIONS: [&str; 13] = [
     "list", "delegate", "get", "steer", "message", "retry", "reassign", "cancel", "wait", "review",
     "finish", "respond", "answer",
 ];
-const APP_ACTIONS: [&str; 48] = [
+const APP_ACTIONS: [&str; 49] = [
+    "rules",
     "tasks.request",
     "team.answer",
     "team.list",
@@ -159,6 +160,11 @@ const APP_ACTIONS: [&str; 48] = [
 const APP_USAGE: &str = r#"MonoCode app access — use in a thread enabled by /operator.
 
 Usage: {exe} app ACTION [--json JSON | --input FILE|-] [--request-id ID]
+       {exe} app rules <team|shell|artifacts|delegation|memory|habits>
+
+rules prints read-only Markdown guidance without an app connection or credentials.
+Exact app rules <topic> reads are auto-approved through the verified executable.
+Run app rules --help for topics; help uses your ordinary command permissions.
 
 A Mono works on several projects: add "project":"<path or name>" to the
 sessions.*, worktrees.* and folders.* actions to choose which one. It may be
@@ -343,6 +349,20 @@ The output is one JSON line: {"ok":true,"result":...} or {"ok":false,"error":"..
 Use --input - to pass JSON on stdin. Never print MonoCode credentials.
 Keep the same --request-id when retrying a call after an uncertain result.
 "#;
+
+const RULES_USAGE: &str = "MonoCode rules — read-only guidance available without an app connection.\n\nUsage: app rules <topic>\nTopics: team, shell, artifacts, delegation, memory, habits\n";
+
+fn rules(topic: &str) -> Result<&'static str, String> {
+    match topic {
+        "team" => Ok(include_str!("../../docs/mono-rules/team.md")),
+        "shell" => Ok(include_str!("../../docs/mono-rules/shell.md")),
+        "artifacts" => Ok(include_str!("../../docs/mono-rules/artifacts.md")),
+        "delegation" => Ok(include_str!("../../docs/mono-rules/delegation.md")),
+        "memory" => Ok(include_str!("../../docs/mono-rules/memory.md")),
+        "habits" => Ok(include_str!("../../docs/mono-rules/habits.md")),
+        _ => Err(format!("Unknown rules topic: {topic}. {RULES_USAGE}")),
+    }
+}
 
 /// Quote for the shell the lead agent actually runs commands in, and only when
 /// the path needs it. The path is absolute, so a leading slash means a POSIX
@@ -729,6 +749,7 @@ fn temp_input_within(path: &std::path::Path, root: &std::path::Path) -> bool {
 
 enum Parsed {
     Help,
+    Rules(&'static str),
     Call(String, Value, String),
 }
 
@@ -737,7 +758,8 @@ pub(crate) fn validate_app_request(
     input: &Value,
     request_id: &str,
 ) -> Result<(), String> {
-    if !APP_ACTIONS.contains(&action) {
+    // Rules is an offline approval action, never an authenticated app request.
+    if action == "rules" || !APP_ACTIONS.contains(&action) {
         return Err(format!("Unknown app action: {action}"));
     }
     if request_id.is_empty()
@@ -958,6 +980,7 @@ fn run_mode(args: Vec<String>, app_mode: bool) -> i32 {
         Parsed::Help => {
             return print_output(&if app_mode { app_help() } else { help() }, 0, None);
         }
+        Parsed::Rules(text) => return print_output(text, 0, None),
         Parsed::Call(action, input, request_id) => (action, input, request_id),
     };
     let (response, code) = response(send(&action, &input, &request_id, app_mode), &request_id);
@@ -1146,6 +1169,16 @@ fn parse_args_for(args: &[String], app_mode: bool) -> Result<Parsed, String> {
     if is_help(action) {
         return Ok(Parsed::Help);
     }
+    if app_mode && action == "rules" {
+        if args.len() > 2 {
+            return Err(format!("Unexpected arguments for app rules. {RULES_USAGE}"));
+        }
+        return match args.get(1) {
+            None => Ok(Parsed::Rules(RULES_USAGE)),
+            Some(topic) if is_help(topic) => Ok(Parsed::Rules(RULES_USAGE)),
+            Some(topic) => rules(topic).map(Parsed::Rules),
+        };
+    }
     let action = action.clone();
     let allowed = if app_mode {
         APP_ACTIONS.contains(&action.as_str())
@@ -1237,7 +1270,7 @@ mod tests {
     fn call(values: &[&str]) -> Result<(String, Value, String), String> {
         match parse_args(&args(values))? {
             Parsed::Call(action, input, id) => Ok((action, input, id)),
-            Parsed::Help => Err("help".into()),
+            Parsed::Help | Parsed::Rules(_) => Err("help".into()),
         }
     }
 
@@ -1326,6 +1359,36 @@ mod tests {
         assert!(diagnostic.contains("--request-id lost-receipt"));
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn offline_rules_with_detached_stdout_cannot_succeed() {
+        const CHILD: &str = "MONOCODE_TEST_RULES_DETACHED_STDOUT";
+        if std::env::var_os(CHILD).is_some() {
+            use windows_sys::Win32::System::Console::{SetStdHandle, STD_OUTPUT_HANDLE};
+            assert!(std::env::var_os("MONOCODE_APP_ENDPOINT").is_none());
+            assert!(std::env::var_os("MONOCODE_APP_TOKEN").is_none());
+            unsafe { SetStdHandle(STD_OUTPUT_HANDLE, std::ptr::null_mut()) };
+            std::process::exit(maybe_run(args(&["app", "rules", "shell"])).unwrap());
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "control_cli::tests::offline_rules_with_detached_stdout_cannot_succeed",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env_remove("MONOCODE_APP_ENDPOINT")
+            .env_remove("MONOCODE_APP_TOKEN")
+            .env_remove("MONOCODE_CONTROL_ENDPOINT")
+            .env_remove("MONOCODE_CONTROL_TOKEN")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        let diagnostic = String::from_utf8_lossy(&output.stderr);
+        assert!(diagnostic.contains("MonoCode stdout failed: No stdout handle"));
+        assert!(!diagnostic.contains("--request-id"));
+    }
+
     #[test]
     fn response_failures_retain_unknown_outcome_ids_and_denials_stay_nonretryable() {
         for result in [
@@ -1365,6 +1428,100 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
         assert!(app_help().contains(CLI_SHELL_GUIDANCE));
         assert!(help().contains(CLI_SHELL_GUIDANCE));
+    }
+
+    #[test]
+    fn rules_validate_topics_and_reject_action_arguments() {
+        for topic in [
+            "team",
+            "shell",
+            "artifacts",
+            "delegation",
+            "memory",
+            "habits",
+        ] {
+            let Parsed::Rules(text) = parse_args_for(&args(&["rules", topic]), true).unwrap()
+            else {
+                panic!("rules did not resolve local guidance");
+            };
+            assert!(text.starts_with("# "), "missing Markdown for {topic}");
+            assert!(APP_ACTIONS.contains(&"rules"));
+            assert!(validate_app_request("rules", &json!({"topic":topic}), "read-1").is_err());
+            assert!(parse_args_for(&args(&["rules", topic]), false).is_err());
+        }
+        for extra in ["--json", "--input", "--request-id", "--help", "team"] {
+            assert!(parse_args_for(&args(&["rules", "shell", extra]), true).is_err());
+        }
+        assert!(parse_args_for(&args(&["rules", "../../SOUL.md"]), true)
+            .err()
+            .unwrap()
+            .contains("Unknown rules topic"));
+        for values in [vec!["rules"], vec!["rules", "--help"]] {
+            assert!(matches!(
+                parse_args_for(&args(&values), true),
+                Ok(Parsed::Rules(RULES_USAGE))
+            ));
+        }
+        assert!(app_help().contains("app rules"));
+        assert!(app_help().contains("reads are auto-approved through the verified executable"));
+        assert!(app_help().contains("help uses your ordinary command permissions"));
+    }
+
+    #[test]
+    fn rules_dispatch_offline_before_desktop_startup() {
+        const CHILD: &str = "MONOCODE_TEST_OFFLINE_RULES";
+        if std::env::var_os(CHILD).is_some() {
+            assert!(std::env::var_os("MONOCODE_APP_ENDPOINT").is_none());
+            assert!(std::env::var_os("MONOCODE_APP_TOKEN").is_none());
+            for topic in [
+                "team",
+                "shell",
+                "artifacts",
+                "delegation",
+                "memory",
+                "habits",
+            ] {
+                assert_eq!(maybe_run(args(&["app", "rules", topic])), Some(0));
+            }
+            assert_eq!(maybe_run(args(&["app", "rules", "unknown"])), Some(1));
+            assert_eq!(
+                maybe_run(args(&["app", "rules", "shell", "--json", "{}"])),
+                Some(1)
+            );
+            return;
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "control_cli::tests::rules_dispatch_offline_before_desktop_startup",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env_remove("MONOCODE_APP_ENDPOINT")
+            .env_remove("MONOCODE_APP_TOKEN")
+            .env_remove("MONOCODE_CONTROL_ENDPOINT")
+            .env_remove("MONOCODE_CONTROL_TOKEN")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "offline rules failed: {}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for heading in [
+            "# Team",
+            "# Shell",
+            "# Artifacts",
+            "# Delegation",
+            "# Memory",
+            "# Habits",
+        ] {
+            assert!(stdout.contains(heading), "offline output omits {heading}");
+        }
+        assert!(stdout.contains("Unknown rules topic"));
+        assert!(!stdout.contains("No MonoCode app connection"));
     }
     #[test]
     fn cli_probes_exit_before_desktop_startup() {

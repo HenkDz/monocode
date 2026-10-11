@@ -698,6 +698,7 @@ async function prompt(live: Live, input: SendTurnInput): Promise<void> {
     if (blocks.length === 0) return;
     live.promptInFlight = true;
     noteActivity(live);
+    input.validateDispatch?.();
     const result = await live.acp.request(
       "session/prompt",
       {

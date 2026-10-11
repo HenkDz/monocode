@@ -293,3 +293,22 @@ remain unproven. No native source changed, and no preview or model turn ran.
 Design, fixture adaptations, failed setup attempts, exact checks and evidence:
 `docs/cc5ej-rotation-continuity.md` and
 `C:/Users/nooro/AppData/Local/Temp/monocode-cc/cc5ej/REPORT.md`.
+
+## CC5EK dispatch authority repair
+
+The final authority check now runs synchronously at each connected provider's
+prompt/steer transport boundary, including OpenCode v2's awaited configuration,
+Cursor's awaited steer fallback and Hermes background continuation. App's turn
+generation and complete receipt remain authoritative there. Newer receipts after
+an issued request survive acceptance; unknown nested user request fields refuse
+dispatch with saved bytes unchanged. Rejected direct follow-ups preserve the
+original active turn, tool and canonical live state.
+
+Connected source suites pass 686 tests across 19 files. CC5EJ-R's five red safety
+cases become 37/37 lifecycle passes; original nine and combined binding nine pass.
+Historical 129 external / 627 source tests and every assertion runner pass.
+These overlapping counts are source evidence, not live provider acceptance.
+Full web gates await the coordinator's heavy slot; no source-stage SHIP is claimed.
+Dispatch semantics, caller inventory, fixture adaptations and remaining renderer
+transaction/durability limits: `docs/cc5ek-dispatch-authority.md` and
+`C:/Users/nooro/AppData/Local/Temp/monocode-cc/cc5ek/REPORT.md`.

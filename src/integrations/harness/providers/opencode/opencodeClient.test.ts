@@ -14,6 +14,47 @@ vi.mock("../../core/child", () => ({
 }));
 
 import { OpenCodeClient } from "./opencodeClient";
+import { assertMonoRotationCurrent, saveMonoRotation, type MonoRotation } from "../../../../features/monos/model/monoRotation";
+
+it.each(["queue", "steer"] as const)("rechecks authority after awaited v2 configuration for %s delivery", async delivery => {
+  const bytes = new Map<string, string>();
+  vi.stubGlobal("localStorage", { getItem: (key: string) => bytes.get(key) ?? null, setItem: (key: string, value: string) => bytes.set(key, value) });
+  const receipt: MonoRotation = { at: 1, reason: "context", earlier: [], userRequests: [{ id: "scope", text: "Parser only." }] };
+  expect(saveMonoRotation("v2-dispatch", receipt)).toBe(true);
+  const newer = { ...receipt, userRequests: [...receipt.userRequests!, { id: "restriction", text: "Never publish." }] };
+  mocks.harnessHttp.mockReset();
+  mocks.harnessHttp.mockImplementation(async ({ url }: { url: string }) => {
+    if (new URL(url).pathname.endsWith("/model")) {
+      await Promise.resolve();
+      expect(saveMonoRotation("v2-dispatch", newer)).toBe(true);
+    }
+    return { status: 204, body: "" };
+  });
+  const validateDispatch = vi.fn(() => assertMonoRotationCurrent("v2-dispatch", receipt));
+  try {
+    const client = new OpenCodeClient("http://127.0.0.1:4096", "/synthetic", "v2");
+    await expect(client.promptAsync({ sessionID: "original-session", model: { providerID: "openai", modelID: "test" },
+      parts: [{ type: "text", text: "Parser only." }], delivery, validateDispatch })).rejects.toThrow("carry changed");
+    expect(validateDispatch).toHaveBeenCalledOnce();
+    expect(mocks.harnessHttp.mock.calls.map(([request]) => new URL(request.url).pathname)).toEqual(["/api/session/original-session/model"]);
+    expect(JSON.parse(bytes.get("monocode:mono-rotations")!)["v2-dispatch"]).toEqual(newer);
+  } finally { vi.unstubAllGlobals(); }
+});
+
+it.each(["v1", "v2"] as const)("validates once before %s prompt transport, never after the issued request", async generation => {
+  mocks.harnessHttp.mockReset();
+  let issued = false;
+  const validateDispatch = vi.fn(() => { if (issued) throw new Error("New authority after committed dispatch"); });
+  mocks.harnessHttp.mockImplementation(async ({ url }: { url: string }) => {
+    if (/\/prompt(?:_async)?$/.test(new URL(url).pathname)) issued = true;
+    return { status: 204, body: "" };
+  });
+  const client = new OpenCodeClient("http://127.0.0.1:4096", "/synthetic", generation);
+  await expect(client.promptAsync({ sessionID: "original-session", model: { providerID: "openai", modelID: "test" },
+    parts: [{ type: "text", text: "Parser only." }], validateDispatch })).resolves.toBeUndefined();
+  expect(validateDispatch).toHaveBeenCalledOnce();
+  expect(issued).toBe(true);
+});
 
 describe("OpenCodeClient.summarizeSession", () => {
   beforeEach(() => {

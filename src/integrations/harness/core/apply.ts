@@ -167,7 +167,7 @@ export function applyHarnessEvent(
       return upsertPlan(session, event);
     case "session.error":
       return appendBlock(
-        event.message === MONO_ROTATION_READ_ERROR && session.busy ? session : failStreaming({
+        (event.followUp || event.message === MONO_ROTATION_READ_ERROR) && session.busy ? session : failStreaming({
           ...session,
           usageLimit: session.usageLimit ?? usageLimitFromError(event.message),
           // Do not drain remaining messages into the same failed connection.

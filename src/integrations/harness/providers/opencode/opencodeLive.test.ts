@@ -142,6 +142,7 @@ const {
   respondOpenCodeQuestion,
   rewindOpenCodeLastTurn,
   sendOpenCodeTurn,
+  steerOpenCodeTurn,
   stopOpenCodeSession,
 } = await import("./opencode");
 import type { HarnessEvent } from "../../core/types";
@@ -150,6 +151,7 @@ const { canEditLastTurn, createEditedResendAttempt } = await import(
 );
 const {
   acceptMonoRotation,
+  assertMonoRotationCurrent,
   loadMonoRotation,
   rotateProviderContext,
   saveMonoRotation,
@@ -248,6 +250,60 @@ beforeEach(() => {
 afterEach(async () => {
   await stopOpenCodeSession("opencode-live");
   __openCodeTestReset();
+});
+
+describe.each(["prompt", "steer"] as const)("OpenCode v2 authority at actual %s dispatch", delivery => {
+  it.each(["newer", "deleted", "unreadable", "cancel", "stop"])("refuses %s during awaited model configuration", async change => {
+    openCodeVersion = "opencode v2.0.19";
+    const bytes = new Map<string, string>();
+    vi.stubGlobal("localStorage", { getItem: (key: string) => bytes.get(key) ?? null, setItem: (key: string, value: string) => bytes.set(key, value) });
+    const receipt = { at: 1, reason: "context" as const, earlier: [], userRequests: [{ id: "scope", text: "Parser only." }] };
+    expect(saveMonoRotation("opencode-live", receipt)).toBe(true);
+    const newer = { ...receipt, userRequests: [...receipt.userRequests, { id: "restriction", text: "Never publish." }] };
+    const events: HarnessEvent[] = [];
+    const originalHttp = harnessHttp.getMockImplementation()!;
+    let original: Promise<void> | undefined;
+    let submitted: Promise<void> | undefined;
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    try {
+      if (delivery === "steer") {
+        original = turn(events);
+        await waitFor(() => harnessHttp.mock.calls.some(([request]) => new URL(request.url).pathname.endsWith("/prompt")), "original prompt");
+      }
+      harnessHttp.mockClear();
+      harnessHttp.mockImplementation(async request => {
+        if (new URL(request.url).pathname.endsWith("/model")) await gate;
+        return originalHttp(request);
+      });
+      const validateDispatch = vi.fn(() => assertMonoRotationCurrent("opencode-live", receipt));
+      const onAccepted = vi.fn();
+      const input = { sessionId: "opencode-live", cwd: "/repo", model: "opencode:openrouter/anthropic/claude-sonnet-4.6",
+        modelSettings: { variant: "next" }, runtimeMode: "supervised" as const, text: "Follow up", validateDispatch, onAccepted,
+        onEvent: (event: HarnessEvent) => events.push(event) };
+      submitted = delivery === "prompt" ? sendOpenCodeTurn(input) : steerOpenCodeTurn(input);
+      const observed = submitted.then(() => undefined, error => error);
+      await waitFor(() => harnessHttp.mock.calls.some(([request]) => new URL(request.url).pathname.endsWith("/model")), "pending model configuration");
+      if (change === "newer") expect(saveMonoRotation("opencode-live", newer)).toBe(true);
+      else if (change === "deleted") bytes.clear();
+      else if (change === "unreadable") bytes.set("monocode:mono-rotations", "{unknown");
+      else if (change === "cancel") await cancelOpenCodeTurn("opencode-live");
+      else await stopOpenCodeSession("opencode-live");
+      const savedBytes = bytes.get("monocode:mono-rotations");
+      release();
+      const result = await observed;
+      if ((change === "cancel" || change === "stop") && delivery === "prompt") expect(result).toBeUndefined();
+      else expect(result).toBeInstanceOf(Error);
+      expect(harnessHttp.mock.calls.filter(([request]) => /\/prompt$/.test(new URL(request.url).pathname))).toHaveLength(0);
+      expect(onAccepted).not.toHaveBeenCalled();
+      expect(bytes.get("monocode:mono-rotations")).toBe(savedBytes);
+      if (delivery === "steer" || change === "cancel" || change === "stop") expect(events).not.toContainEqual(expect.objectContaining({ type: "session.error" }));
+    } finally {
+      release(); harnessHttp.mockImplementation(originalHttp);
+      await stopOpenCodeSession("opencode-live"); await submitted?.catch(() => undefined); await original;
+      vi.unstubAllGlobals();
+    }
+  });
 });
 
 it.each(["v1", "v2"])("routes explicit %s compaction only to its session", async generation => {

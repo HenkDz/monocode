@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { SendTurnInput } from "../core/types";
+import { assertMonoRotationCurrent, saveMonoRotation, type MonoRotation } from "../../../features/monos/model/monoRotation";
 
 // Ported from CC1FR's prepare-acp.test.ts; only the child transport is synthetic.
 const mock = vi.hoisted(() => ({
@@ -13,6 +14,7 @@ const mock = vi.hoisted(() => ({
   failRestore: false,
   setupId: "fresh",
   cancelGate: undefined as Promise<void> | undefined,
+  rejectSteer: undefined as (() => void) | undefined,
 }));
 
 vi.mock("../core/child", () => ({
@@ -31,6 +33,10 @@ vi.mock("../core/child", () => ({
   writeChild: async (child: string, line: string) => {
     const message = JSON.parse(line);
     mock.writes.push({ child, ...message });
+    if (message.method === "session/steer" && mock.rejectSteer) {
+      mock.rejectSteer();
+      throw new Error("synthetic first steer write failure");
+    }
     if (message.method === "session/cancel" && mock.cancelGate) return mock.cancelGate;
     if (message.id == null || !message.method) return;
     queueMicrotask(() => {
@@ -74,6 +80,63 @@ const providers = [
   { id: "antigravity", send: agy.sendAntigravityTurn, bind: agy.bindAntigravitySession, forget: agy.forgetAntigravitySession, cancel: agy.cancelAntigravityTurn, stop: agy.stopAntigravitySession, attachments: true, accepts: false },
 ];
 let sequence = 0;
+
+it("Cursor revalidates before its awaited steer fallback and retains the newer receipt", async () => {
+  const id = `cursor-fallback-${++sequence}`;
+  mock.writes.length = 0;
+  mock.failRestore = false;
+  mock.setupId = "fresh";
+  const bytes = new Map<string, string>();
+  vi.stubGlobal("localStorage", { getItem: (key: string) => bytes.get(key) ?? null, setItem: (key: string, value: string) => bytes.set(key, value) });
+  const receipt: MonoRotation = { at: 1, reason: "context", earlier: [], userRequests: [{ id: "scope", text: "Parser only." }] };
+  expect(saveMonoRotation(id, receipt)).toBe(true);
+  const newer = { ...receipt, userRequests: [...receipt.userRequests!, { id: "restriction", text: "Never publish." }] };
+  const base = input(providers[0], id);
+  try {
+    await cursor.sendCursorTurn(base);
+    const validateDispatch = vi.fn(() => assertMonoRotationCurrent(id, receipt));
+    await cursor.steerCursorTurn({ ...base, text: "Valid follow up", validateDispatch });
+    expect(validateDispatch).toHaveBeenCalledOnce();
+    mock.writes.length = 0;
+    mock.rejectSteer = () => { expect(saveMonoRotation(id, newer)).toBe(true); };
+    await expect(cursor.steerCursorTurn({ ...base, text: "Follow up", validateDispatch })).rejects.toThrow("carry changed");
+    expect(validateDispatch).toHaveBeenCalledTimes(3);
+    expect(mock.writes.map(message => message.method)).toEqual(["session/steer"]);
+    expect(JSON.parse(bytes.get("monocode:mono-rotations")!)[id]).toEqual(newer);
+  } finally { mock.rejectSteer = undefined; await cursor.forgetCursorSession(id); vi.unstubAllGlobals(); }
+});
+
+it.each([
+  { id: "devin", steer: devin.steerDevinTurn }, { id: "fx", steer: fx.steerFxTurn },
+  { id: "grok", steer: grok.steerGrokTurn },
+  { id: "antigravity", steer: agy.steerAntigravityTurn },
+])("$id retains its explicit unsupported steer refusal", async provider => {
+  mock.writes.length = 0;
+  await expect(provider.steer({ sessionId: "unsupported", cwd: "/synthetic", model: `${provider.id}:m1`, text: "Follow up", validateDispatch: () => { throw new Error("Must not dispatch"); } })).rejects.toThrow("does not support steering an in-flight turn");
+  expect(mock.writes).toHaveLength(0);
+});
+
+it.each([
+  { provider: providers[0], steer: cursor.steerCursorTurn },
+  { provider: providers[4], steer: hermes.steerHermesTurn },
+])("$provider.id validates supported steering at the existing ACP session", async ({ provider, steer }) => {
+  const id = `steer-${provider.id}-${++sequence}`;
+  mock.writes.length = 0; mock.failRestore = false; mock.setupId = "fresh";
+  const base = input(provider, id);
+  try {
+    await provider.send(base);
+    const count = mock.writes.length;
+    const validateDispatch = vi.fn(() => { throw new Error("newer protected receipt"); });
+    await expect(steer({ ...base, text: "Follow up", validateDispatch })).rejects.toThrow("newer protected receipt");
+    expect(validateDispatch).toHaveBeenCalledOnce();
+    expect(mock.writes).toHaveLength(count);
+    const valid = vi.fn();
+    await steer({ ...base, text: "Follow up", validateDispatch: valid });
+    expect(valid).toHaveBeenCalledOnce();
+    expect(mock.writes).toHaveLength(count + 1);
+    expect(mock.writes.at(-1)).toMatchObject({ params: { sessionId: "fresh" } });
+  } finally { await provider.forget(id); }
+});
 const image = { id: "image", name: "synthetic.png", mimeType: "image/png", kind: "image" as const, size: 3, data: "YWJj" };
 const input = (provider: (typeof providers)[number], id: string) => ({
   sessionId: id, cwd: "/synthetic", model: `${provider.id}:m1`, runtimeMode: "supervised" as const,
@@ -83,6 +146,42 @@ const input = (provider: (typeof providers)[number], id: string) => ({
 const prompts = () => mock.writes.filter(message => message.method === "session/prompt");
 
 describe.each(providers)("$id preparation with a synthetic ACP child", provider => {
+  it.each(["newer", "deleted", "unreadable", "stopped"])("refuses %s authority after the final preparation microtask, before transport", async change => {
+    mock.writes.length = 0;
+    mock.failRestore = false;
+    mock.setupId = "fresh";
+    const id = `authority-${provider.id}-${++sequence}`;
+    const bytes = new Map<string, string>();
+    vi.stubGlobal("localStorage", { getItem: (key: string) => bytes.get(key) ?? null, setItem: (key: string, value: string) => bytes.set(key, value) });
+    const receipt: MonoRotation = { at: 1, reason: "context", earlier: [], userRequests: [{ id: "scope", text: "Parser only." }] };
+    expect(saveMonoRotation(id, receipt)).toBe(true);
+    let generation = 1;
+    let changedBytes: string | undefined;
+    const prepareText = async () => {
+      queueMicrotask(() => queueMicrotask(() => {
+        if (change === "newer") expect(saveMonoRotation(id, { ...receipt, userRequests: [...receipt.userRequests!, { id: "new", text: "Never publish." }] })).toBe(true);
+        else if (change === "deleted") bytes.clear();
+        else if (change === "unreadable") bytes.set("monocode:mono-rotations", "{unknown");
+        else generation++;
+        changedBytes = bytes.get("monocode:mono-rotations");
+      }));
+      await Promise.resolve();
+      assertMonoRotationCurrent(id, receipt);
+      return "Parser only.";
+    };
+    const validateDispatch = vi.fn(() => {
+      if (generation !== 1) throw new Error("stopped generation");
+      assertMonoRotationCurrent(id, receipt);
+    });
+    const base = input(provider, id);
+    try {
+      await expect(provider.send({ ...base, prepareText, validateDispatch })).rejects.toThrow();
+      expect(validateDispatch).toHaveBeenCalledOnce();
+      expect(prompts()).toHaveLength(0);
+      expect(base.onAccepted).not.toHaveBeenCalled();
+      expect(bytes.get("monocode:mono-rotations")).toBe(changedBytes);
+    } finally { await provider.forget(id); vi.unstubAllGlobals(); }
+  });
   it.each([false, true])("prepares once before serialization, retained=%s, and keeps attachments", async retained => {
     const id = `hook-${provider.id}-${++sequence}`;
     mock.writes.length = 0;

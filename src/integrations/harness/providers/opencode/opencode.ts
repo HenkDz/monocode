@@ -297,6 +297,11 @@ export async function steerOpenCodeTurn(input: SteerTurnInput): Promise<void> {
     variant: input.modelSettings?.variant,
     parts,
     delivery: "steer",
+    validateDispatch: () => {
+      if (live.cancelled || live.muteUpdates || liveByThread.get(input.sessionId) !== live || !live.activeTurn)
+        throw new TurnNotReadyError("The OpenCode turn ended before the follow-up could be sent.");
+      input.validateDispatch?.();
+    },
   });
 }
 
@@ -668,6 +673,11 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
       agent: openCodeAgentForTurn(input),
       variant: input.modelSettings?.variant,
       parts,
+      validateDispatch: () => {
+        if (live.cancelled || live.muteUpdates || liveByThread.get(input.sessionId) !== live)
+          throw new TurnNotReadyError("The OpenCode turn was stopped before its prompt could be sent.");
+        input.validateDispatch?.();
+      },
     });
     input.onAccepted?.();
     if (v2) {
@@ -676,7 +686,7 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
     settlePendingTurn(live);
     await turnPromise;
   } catch (error) {
-    if (live.cancelled) return;
+    if (live.cancelled || (live.muteUpdates && error instanceof TurnNotReadyError)) return;
     live.onEvent({
       type: "session.error",
       message: error instanceof Error ? error.message : String(error),

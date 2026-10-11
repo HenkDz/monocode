@@ -98,7 +98,7 @@ const afterPreparation = new Function("sessionId", "loadMonoRotation", "MONO_ROT
   ts.transpile(`return (async () => { ${beforeRewind.getText(app)} await rewind(); await dispatch(); })();`, { target: ts.ScriptTarget.ES2022 }));
 const providerPreparation = findNode(node => ts.isPropertyAssignment(node) && node.name.getText(app) === "prepareText" && node.getText(app).includes("const preparedText")) as ts.PropertyAssignment;
 const prepareForProvider = new Function("sessionId", "loadMonoRotation", "MONO_ROTATION_READ_ERROR", "prepareContext", "text",
-  ts.transpile(`let contextProvider; return ${providerPreparation.initializer.getText(app)};`, { target: ts.ScriptTarget.ES2022 }));
+  ts.transpile(`let contextProvider; const monoWorkingDirectoryMigrationPending = () => false; return ${providerPreparation.initializer.getText(app)};`, { target: ts.ScriptTarget.ES2022 }));
 const sendTurn = findNode(node => ts.isVariableDeclaration(node) && node.name.getText(app) === "sendTurn") as ts.VariableDeclaration;
 const sendAfterContext = new Function("sessionId", "loadMonoRotation", "MONO_ROTATION_READ_ERROR", "prepareContext", "sendHarnessTurn",
   ts.transpile(`let contextProvider; return ${sendTurn.initializer!.getText(app)};`, { target: ts.ScriptTarget.ES2022 }));

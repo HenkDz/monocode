@@ -126,10 +126,32 @@ fn topics(dir: &Path) -> Vec<String> {
 
 fn monos_root(app: &AppHandle) -> Result<PathBuf, String> {
     let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    monos_root_at(&data)
+}
+
+fn monos_root_at(data: &Path) -> Result<PathBuf, String> {
+    let _guard = FILES_LOCK.lock().map_err(|e| e.to_string())?;
+    validate_real_path(data, true)?;
     let root = data.join(MONOS_DIR);
+    validate_real_path(&root, true)?;
     let legacy = data.join(LEGACY_DIR);
-    if !root.exists() && legacy.join(INDEX_FILE).is_file() {
-        let _ = std::fs::rename(&legacy, &root);
+    if !root.exists() {
+        validate_real_path(&legacy, true)?;
+        validate_index_files(&legacy)?;
+        if legacy.join(INDEX_FILE).is_file() {
+            for entry in
+                std::fs::read_dir(&legacy).map_err(|e| format!("{}: {e}", legacy.display()))?
+            {
+                let entry = entry.map_err(|e| e.to_string())?;
+                let kind = entry.file_type().map_err(|e| e.to_string())?;
+                if valid_id(&entry.file_name().to_string_lossy())
+                    && (kind.is_dir() || kind.is_symlink())
+                {
+                    validate_agent_directory(&entry.path())?;
+                }
+            }
+            let _ = std::fs::rename(&legacy, &root);
+        }
     }
     Ok(root)
 }
@@ -147,6 +169,8 @@ fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
     use std::io::Write;
 
     let temp = path.with_extension("md.tmp");
+    validate_real_path(path, false)?;
+    validate_real_path(&temp, false)?;
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);
     #[cfg(unix)]
@@ -171,6 +195,7 @@ fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
 }
 
 fn read_optional(path: &Path) -> Result<Option<String>, String> {
+    validate_real_path(path, false)?;
     match std::fs::read_to_string(path) {
         Ok(text) => Ok(Some(text)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -192,14 +217,12 @@ fn valid_id(id: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
 }
 
-fn ensure_real_directory(path: &Path) -> Result<(), String> {
-    match std::fs::create_dir(path) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+fn validate_real_path(path: &Path, directory: bool) -> Result<(), String> {
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(format!("{}: {error}", path.display())),
-    }
-    let metadata =
-        std::fs::symlink_metadata(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    };
     let linked = metadata.file_type().is_symlink();
     #[cfg(windows)]
     let linked = {
@@ -207,11 +230,58 @@ fn ensure_real_directory(path: &Path) -> Result<(), String> {
         use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
         linked || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
     };
-    if !metadata.is_dir() || linked {
+    if linked || (directory && !metadata.is_dir()) || (!directory && !metadata.is_file()) {
+        let kind = if directory { "directories" } else { "files" };
         return Err(format!(
-            "Mono workspace must use real directories: {}",
+            "Mono files must use real {kind}: {}",
             path.display()
         ));
+    }
+    Ok(())
+}
+
+fn ensure_real_directory(path: &Path) -> Result<(), String> {
+    validate_real_path(path, true)?;
+    match std::fs::create_dir(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(format!("{}: {error}", path.display())),
+    }
+    validate_real_path(path, true)
+}
+
+fn validate_index_files(root: &Path) -> Result<(), String> {
+    validate_real_path(&root.join(INDEX_FILE), false)?;
+    validate_real_path(&root.join("index.json.tmp"), false)
+}
+
+fn validate_agent_directory(dir: &Path) -> Result<(), String> {
+    for path in [
+        dir.to_path_buf(),
+        dir.join(MEMORY_DIR),
+        dir.join("workspace"),
+    ] {
+        validate_real_path(&path, true)?;
+    }
+    for name in [SOUL_FILE, MEMORY_FILE, HABITS_FILE] {
+        let path = dir.join(name);
+        validate_real_path(&path, false)?;
+        validate_real_path(&path.with_extension("md.tmp"), false)?;
+    }
+    let memory = dir.join(MEMORY_DIR);
+    match std::fs::read_dir(&memory) {
+        Ok(entries) => {
+            for entry in entries {
+                let entry = entry.map_err(|e| format!("{}: {e}", memory.display()))?;
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                if name.ends_with(".md") || name.ends_with(".md.tmp") {
+                    validate_real_path(&entry.path(), false)?;
+                }
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("{}: {error}", memory.display())),
     }
     Ok(())
 }
@@ -221,11 +291,14 @@ fn ensure_workspace(data: &Path, id: &str) -> Result<PathBuf, String> {
         return Err("Not a Mono id".into());
     }
     let _guard = FILES_LOCK.lock().map_err(|e| e.to_string())?;
-    std::fs::create_dir_all(data).map_err(|e| format!("{}: {e}", data.display()))?;
-    ensure_real_directory(data)?;
     let root = data.join(MONOS_DIR);
     let dir = root.join(id);
     let workspace = dir.join("workspace");
+    validate_real_path(data, true)?;
+    validate_real_path(&root, true)?;
+    validate_agent_directory(&dir)?;
+    std::fs::create_dir_all(data).map_err(|e| format!("{}: {e}", data.display()))?;
+    ensure_real_directory(data)?;
     for path in [&root, &dir, &workspace] {
         ensure_real_directory(path)?;
     }
@@ -238,12 +311,18 @@ fn agent_dir(root: &Path, mono: &str, legacy_project: Option<&str>) -> Result<Pa
     if !valid_id(mono) {
         return Err("Not a Mono id".into());
     }
-    std::fs::create_dir_all(root).map_err(|e| format!("{}: {e}", root.display()))?;
+    let data = root.parent().ok_or("Not a Mono data directory")?;
+    validate_real_path(data, true)?;
+    validate_real_path(root, true)?;
     let dir = root.join(mono);
+    validate_agent_directory(&dir)?;
+    std::fs::create_dir_all(data).map_err(|e| format!("{}: {e}", data.display()))?;
+    ensure_real_directory(root)?;
     if let Some(project) = legacy_project.filter(|project| !project.trim().is_empty()) {
         adopt_legacy_folder(root, &dir, project)?;
     }
-    std::fs::create_dir_all(dir.join(MEMORY_DIR)).map_err(|e| format!("{}: {e}", dir.display()))?;
+    ensure_real_directory(&dir)?;
+    ensure_real_directory(&dir.join(MEMORY_DIR))?;
     let memory = dir.join(MEMORY_FILE);
     if !memory.exists() {
         write_atomic(&memory, "")?;
@@ -255,6 +334,7 @@ fn agent_dir(root: &Path, mono: &str, legacy_project: Option<&str>) -> Result<Pa
 /// the index so no other Mono can take it too.
 fn adopt_legacy_folder(root: &Path, dir: &Path, project: &str) -> Result<(), String> {
     let _guard = INDEX_LOCK.lock().map_err(|e| e.to_string())?;
+    validate_index_files(root)?;
     let mut index = read_index(root);
     let Some(position) = index
         .agents
@@ -265,6 +345,7 @@ fn adopt_legacy_folder(root: &Path, dir: &Path, project: &str) -> Result<(), Str
     };
     let entry = index.agents.remove(position);
     let legacy = root.join(&entry.id);
+    validate_agent_directory(&legacy)?;
     if !dir.exists() && legacy.is_dir() && legacy != dir {
         std::fs::rename(&legacy, dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }
@@ -503,6 +584,218 @@ mod tests {
             std::fs::remove_dir_all(data).unwrap();
             std::fs::remove_dir_all(outside).unwrap();
         }
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn complete_preparation_rejects_links_before_initializing_identity() {
+        let mut failures = Vec::new();
+        for relative in [
+            "linked-data",
+            "monos",
+            "monos/mono-a",
+            "monos/mono-a/memory",
+            "monos/mono-a/workspace",
+        ] {
+            let data = temp_root();
+            let outside = temp_root();
+            let link = data.join(relative);
+            std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(&outside, &link).unwrap();
+            #[cfg(windows)]
+            junction::create(&outside, &link).unwrap();
+            let app_data = if relative == "linked-data" {
+                &link
+            } else {
+                &data
+            };
+            let root = app_data.join(MONOS_DIR);
+            // Match loadMonoFiles' initialization before mono_workspace_ensure.
+            let result = monos_root_at(app_data)
+                .and_then(|root| load(&root, "mono-a", None))
+                .and_then(|files| {
+                    if files.soul.is_none() {
+                        save(
+                            &root,
+                            "mono-a",
+                            None,
+                            SOUL_FILE,
+                            "# Soul\nfixture",
+                            Some(&files.soul_hash),
+                        )?;
+                    }
+                    ensure_workspace(app_data, "mono-a")
+                });
+            let target_entries = std::fs::read_dir(&outside).unwrap().count();
+            let initialized = root.join("mono-a").join(MEMORY_FILE).exists()
+                || root.join("mono-a").join(SOUL_FILE).exists();
+            eprintln!("preparation {relative}: {result:?}; target entries={target_entries}; initialized={initialized}");
+            if result.is_ok() || target_entries != 0 || initialized {
+                failures.push(relative);
+            }
+            #[cfg(unix)]
+            std::fs::remove_file(&link).unwrap();
+            #[cfg(windows)]
+            junction::delete(&link).unwrap();
+            std::fs::remove_dir_all(data).unwrap();
+            std::fs::remove_dir_all(outside).unwrap();
+        }
+        assert!(
+            failures.is_empty(),
+            "identity initialized through {failures:?}"
+        );
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn identity_refuses_linked_files_and_temporary_files_before_writing() {
+        for relative in [
+            "SOUL.md",
+            "MEMORY.md",
+            "habits.json",
+            "SOUL.md.tmp",
+            "MEMORY.md.tmp",
+            "habits.md.tmp",
+            "memory/topic.md",
+            "memory/topic.md.tmp",
+        ] {
+            let data = temp_root();
+            let outside = temp_root();
+            let target = outside.join("private.txt");
+            std::fs::write(&target, "private").unwrap();
+            let root = data.join(MONOS_DIR);
+            let dir = root.join("mono-a");
+            let link = dir.join(relative);
+            std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(&target, &link).unwrap();
+            // Junction leaves exercise the reparse check without requiring symlink privileges.
+            #[cfg(windows)]
+            junction::create(&outside, &link).unwrap();
+            assert!(load(&root, "mono-a", None).is_err(), "{relative}");
+            assert!(read(&root, "mono-a", None, relative).is_err(), "{relative}");
+            assert!(
+                save(&root, "mono-a", None, relative, "replace", None).is_err(),
+                "{relative}"
+            );
+            assert_eq!(std::fs::read_to_string(&target).unwrap(), "private");
+            assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 1);
+            if relative != MEMORY_FILE {
+                assert!(!dir.join(MEMORY_FILE).exists(), "{relative}");
+            }
+            #[cfg(unix)]
+            std::fs::remove_file(&link).unwrap();
+            #[cfg(windows)]
+            junction::delete(&link).unwrap();
+            std::fs::remove_dir_all(data).unwrap();
+            std::fs::remove_dir_all(outside).unwrap();
+        }
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn legacy_adoption_rejects_links_without_moving_or_initializing_them() {
+        for relative in [
+            "old-id",
+            "old-id/memory",
+            "old-id/workspace",
+            "mono-a",
+            INDEX_FILE,
+            "index.json.tmp",
+        ] {
+            let data = temp_root();
+            let root = data.join(MONOS_DIR);
+            let outside = temp_root();
+            let link = root.join(relative);
+            std::fs::create_dir_all(root.join("old-id")).unwrap();
+            let index = r#"{"agents":[{"id":"old-id","projects":["/code/app"]}]}"#;
+            if relative != INDEX_FILE {
+                std::fs::write(root.join(INDEX_FILE), index).unwrap();
+            }
+            if relative == "old-id" {
+                std::fs::remove_dir(&link).unwrap();
+            }
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(&outside, &link).unwrap();
+            #[cfg(windows)]
+            junction::create(&outside, &link).unwrap();
+            let result = load(&root, "mono-a", Some("/code/app"));
+            assert!(result.is_err(), "{relative}: {result:?}");
+            assert!(root.join("old-id").is_dir(), "{relative}");
+            assert!(!root.join("mono-a").join(MEMORY_FILE).exists());
+            assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
+            if relative != INDEX_FILE {
+                assert_eq!(
+                    std::fs::read_to_string(root.join(INDEX_FILE)).unwrap(),
+                    index
+                );
+            }
+            #[cfg(unix)]
+            std::fs::remove_file(&link).unwrap();
+            #[cfg(windows)]
+            junction::delete(&link).unwrap();
+            std::fs::remove_dir_all(data).unwrap();
+            std::fs::remove_dir_all(outside).unwrap();
+        }
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn legacy_root_rejects_links_before_renaming() {
+        for relative in [
+            "agents",
+            "agents/old-id",
+            "agents/old-id/memory",
+            "agents/index.json.tmp",
+        ] {
+            let data = temp_root();
+            let outside = temp_root();
+            let legacy = data.join(LEGACY_DIR);
+            let link = data.join(relative);
+            std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(&outside, &link).unwrap();
+            #[cfg(windows)]
+            junction::create(&outside, &link).unwrap();
+            // Root adoption is eligible, including when the root itself is linked.
+            std::fs::write(legacy.join(INDEX_FILE), r#"{"agents":[]}"#).unwrap();
+            let before = std::fs::read_dir(&outside).unwrap().count();
+            assert!(monos_root_at(&data).is_err(), "{relative}");
+            assert!(!data.join(MONOS_DIR).exists(), "{relative}");
+            assert_eq!(std::fs::read_dir(&outside).unwrap().count(), before);
+            #[cfg(unix)]
+            std::fs::remove_file(&link).unwrap();
+            #[cfg(windows)]
+            junction::delete(&link).unwrap();
+            std::fs::remove_dir_all(data).unwrap();
+            std::fs::remove_dir_all(outside).unwrap();
+        }
+    }
+
+    #[test]
+    fn legacy_root_is_adopted_before_creating_the_mono_folder() {
+        let data = temp_root();
+        let legacy = data.join(LEGACY_DIR);
+        std::fs::create_dir_all(legacy.join("old-id/memory")).unwrap();
+        std::fs::write(legacy.join("old-id").join(SOUL_FILE), "old soul").unwrap();
+        std::fs::write(legacy.join("old-id").join(MEMORY_FILE), "old memory").unwrap();
+        std::fs::write(legacy.join("old-id/memory/topic.md"), "old topic").unwrap();
+        std::fs::write(
+            legacy.join(INDEX_FILE),
+            r#"{"agents":[{"id":"old-id","projects":["/code/app"]}]}"#,
+        )
+        .unwrap();
+        let root = monos_root_at(&data).unwrap();
+        assert!(!root.join("mono-a").exists());
+        let files = load(&root, "mono-a", Some("/code/app")).unwrap();
+        assert_eq!(files.soul.as_deref(), Some("old soul"));
+        assert_eq!(files.memory, "old memory");
+        assert_eq!(files.topics, ["topic"]);
+        assert!(!legacy.exists());
+        assert!(!root.join("old-id").exists());
+        assert!(ensure_workspace(&data, "mono-a").unwrap().is_dir());
+        std::fs::remove_dir_all(data).unwrap();
     }
 
     #[test]

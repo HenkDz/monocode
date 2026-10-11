@@ -512,6 +512,8 @@ export type Session = {
   /** Account that failed preparation, even if the project selection changes. */
   codexStorageAccountId?: string;
   codexStoragePreparing?: boolean;
+  /** Provider accepted the carry; its durable clearing is being retried. In-memory only. */
+  rotationWarning?: string;
   /**
    * Lives only in memory: never saved, never listed with the project's chats.
    * A Mono's habit runs are, and disappear when the run ends.

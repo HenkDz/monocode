@@ -249,6 +249,7 @@ type Props = {
   onSecondOpinion?: (target: ModelTarget, turn: Block[]) => void;
   onHandoff?: (target: ModelTarget, turn: Block[]) => void;
   onEditLastTurn?: () => void;
+  editLastTurnDisabledReason?: string;
   editingLastTurn?: boolean;
   onJumpToBottomChange?: (show: boolean) => void;
 
@@ -321,6 +322,7 @@ function AgentTranscriptComponent({
   onSecondOpinion,
   onHandoff,
   onEditLastTurn,
+  editLastTurnDisabledReason,
   editingLastTurn = false,
   onJumpToBottomChange,
   onJumpToBottomReady,
@@ -1382,6 +1384,7 @@ function AgentTranscriptComponent({
                     ? onEditLastTurn
                     : undefined
                 }
+                editLastTurnDisabledReason={editLastTurnDisabledReason}
                 editing={
                   editingLastTurn &&
                   item.block.role === "user" &&
@@ -2166,23 +2169,26 @@ function SaveNoteButton({
 
 function EditLastTurnButton({
   onEdit,
+  disabledReason,
   editing = false,
 }: {
   onEdit: () => void;
+  disabledReason?: string;
   editing?: boolean;
 }) {
   const label = editing ? "Cancel edit" : "Edit and resend";
   return (
     <button
       type="button"
-      title={label}
+      title={disabledReason ?? label}
       aria-label={label}
       aria-pressed={editing}
+      disabled={!!disabledReason}
       onClick={(event) => {
         event.stopPropagation();
         onEdit();
       }}
-      className={`rounded-md p-1 transition-[background-color,color] duration-150 focus-visible:ring-1 focus-visible:ring-accent ${
+      className={`rounded-md p-1 transition-[background-color,color] duration-150 focus-visible:ring-1 focus-visible:ring-accent disabled:opacity-50 ${
         editing
           ? "edit-last-turn-button"
           : "text-content/40 hover:bg-content/8 hover:text-content/70"
@@ -2219,6 +2225,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
   planModel,
   planModelSettings,
   onEditLastTurn,
+  editLastTurnDisabledReason,
   editing = false,
 }: {
   block: Block;
@@ -2248,6 +2255,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
   planModel?: string;
   planModelSettings?: Record<string, string>;
   onEditLastTurn?: () => void;
+  editLastTurnDisabledReason?: string;
   editing?: boolean;
 }) {
   const incoming = teamMessage(block);
@@ -2267,6 +2275,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
         stickyIndex={stickyIndex}
         cwd={cwd}
         onEdit={onEditLastTurn}
+        editDisabledReason={editLastTurnDisabledReason}
         editing={editing}
         onSaveNote={onSaveNote}
         onSendDraft={onSendDraft}
@@ -2420,6 +2429,7 @@ function UserMessageBlock({
   visible,
   stickyIndex,
   onEdit,
+  editDisabledReason,
   editing = false,
   cwd,
   onSaveNote,
@@ -2435,6 +2445,7 @@ function UserMessageBlock({
   visible: boolean;
   stickyIndex: number;
   onEdit?: () => void;
+  editDisabledReason?: string;
   editing?: boolean;
   cwd?: string;
   onSaveNote?: (text: string) => void | Promise<void>;
@@ -2791,7 +2802,7 @@ function UserMessageBlock({
         {deliveryControl}
         {!compactFollowUp &&
         (text || block.attachments?.length || messageAt != null || onEdit) ? (
-          <div className="user-message-actions flex items-center gap-1 px-3 pt-1">
+          <div className={`${onEdit && editDisabledReason ? "" : "user-message-actions "}flex flex-wrap items-center gap-1 px-3 pt-1`}>
             {text || block.attachments?.length ? (
               <CopyTurnButton
                 text={text}
@@ -2800,7 +2811,16 @@ function UserMessageBlock({
               />
             ) : null}
             {onEdit ? (
-              <EditLastTurnButton onEdit={onEdit} editing={editing} />
+              <EditLastTurnButton
+                onEdit={onEdit}
+                disabledReason={editDisabledReason}
+                editing={editing}
+              />
+            ) : null}
+            {onEdit && editDisabledReason ? (
+              <span role="status" className="text-xs text-content/55">
+                {editDisabledReason}
+              </span>
             ) : null}
             {text && onSaveNote ? (
               <SaveNoteButton text={text} onSave={onSaveNote} />

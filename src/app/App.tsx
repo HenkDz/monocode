@@ -715,12 +715,15 @@ import {
 } from "../features/monos/model/monoHabits";
 import {
   acceptMonoRotation,
+  discardMonoRotationPendingInputs,
   loadMonoRotation,
   sessionRotationStatus,
   rotateProviderContext,
   saveMonoRotation,
+  type MonoRotationDiscardPreview,
 } from "../features/monos/model/monoRotation";
 import { retainedTaskContext } from "../features/orchestration/model/memberContinuity";
+import { canRotateContext } from "../features/orchestration/model/taskContextBudget";
 import {
   detachMonoTabs,
   ensureMonoSession,
@@ -7378,6 +7381,14 @@ function Workspace({
           options,
         );
       if (editedResends.isActive(sessionId)) return false;
+      if (options?.resendEdited && loadMonoRotation(sessionId)?.pendingBrief) {
+        const message = "Retry the original first. Editing is available after it's accepted.";
+        options.onResendRejected?.({ providerRewound: false });
+        enqueueHarnessEvent(sessionId, { type: "status", text: message });
+        flushHarnessEvents();
+        options.onSettled?.({ status: "failed", text: "", error: message });
+        return false;
+      }
       if (remote?.harness === "codex" && (owner || isProjectManager(sessionId)) && !options?.codexStoragePrepared && !options?.codexStorageResuming && !options?.codexStorageRetryBlockId &&
         codexStorageRecovery.current.isRepairingAccount(codexStorageAccountId(remote, selectedProviderAccountId("codex", remote.cwd)))) return false;
       if (remote?.codexStorageError || (codexStorageRecovery.current.isPreparing(sessionId) && !options?.codexStoragePrepared)) {
@@ -8059,9 +8070,8 @@ function Workspace({
       const taskContext = rotationTask && rotationRun
         ? retainedTaskContext(rotationRun, rotationTask) : "";
       const pendingRotation = loadMonoRotation(sessionId)?.pendingBrief;
-      const rotationStatus = (mono || rotationTask || pendingRotation) && !pendingSwitch && (!editedResend || pendingRotation)
-        ? sessionRotationStatus(current, harnessText, taskContext,
-          editedResend ? draftCleared.blocks.slice(editedResend.blocks.length) : []) : undefined;
+      const rotationStatus = (mono || rotationTask || pendingRotation) && !pendingSwitch && !editedResend
+        ? sessionRotationStatus(current, harnessText, taskContext) : undefined;
       const monoRotation = rotationStatus?.plan;
       if (pendingRotation && !monoRotation) {
         const message = rotationStatus?.deferredReason ?? "Context refresh is pending. Finish pending operations or decisions before retrying.";
@@ -8071,17 +8081,6 @@ function Workspace({
         options?.onSettled?.({ status: "failed", text: "", error: message });
         return false;
       }
-      // Preserve the replacement carry before a rewind can remove its provider copy.
-      if (editedResend && monoRotation && !saveMonoRotation(sessionId, {
-        ...monoRotation.rotation, pendingBrief: monoRotation.rotation.pendingBrief ?? monoRotation.brief(sessionId),
-      })) {
-        editedResend.reject();
-        enqueueHarnessEvent(sessionId, { type: "session.error", message: "The context refresh brief could not be saved. Try again when storage is available." });
-        flushHarnessEvents();
-        options?.onSettled?.({ status: "failed", text: "", error: "The context refresh brief could not be saved." });
-        return false;
-      }
-
       const gen = (turnGen.current.get(sessionId) ?? 0) + 1;
       turnGen.current.set(sessionId, gen);
       if (monoForSession(sessionId) || isHabitRun(sessionId)) {
@@ -8771,7 +8770,14 @@ function Workspace({
                 const accepted = contextAccepted;
                 contextAccepted = undefined;
                 accepted?.();
-                if (monoRotation) acceptMonoRotation(sessionId, monoRotation.rotation.at);
+                if (monoRotation) acceptMonoRotation(sessionId, monoRotation.rotation.at, warning => {
+                  const update = (session: Session) => session.id === sessionId
+                    ? { ...session, rotationWarning: warning } : session;
+                  sessionsRef.current = sessionsRef.current.map(update);
+                  setSessions(previous => previous.map(update));
+                }, {
+                  ...monoRotation.rotation, pendingBrief: monoRotation.rotation.pendingBrief ?? monoRotation.brief(sessionId),
+                });
                 if (editedResend) acceptEditedResend();
               },
               onEvent: event => {
@@ -10969,6 +10975,18 @@ function Workspace({
     }, 0);
     return () => window.clearTimeout(timer);
   }, [autoContinueKey, onSubmit]);
+
+  const onDiscardRotationPendingInput = useCallback(
+    (sessionId: string, preview: MonoRotationDiscardPreview) => {
+      const current = sessionsRef.current.find(session => session.id === sessionId);
+      if (!current || remoteProjectFor(current.cwd) || !canRotateContext(current) || current.worktreeRemoved)
+        return false;
+      if (!discardMonoRotationPendingInputs(current, preview)) return false;
+      setSessions(previous => [...previous]);
+      return true;
+    },
+    [],
+  );
 
   const onCompactContext = useCallback(
     (sessionId: string) => {
@@ -14810,6 +14828,7 @@ function Workspace({
       submitMonoGoalRef.current(sessionId, text, attachments, submission),
     onStop,
     onCompactContext,
+    onDiscardRotationPendingInput,
     onPlaceSessionInFolder,
     onDeleteQueuedMessage,
     onEditQueuedMessage,

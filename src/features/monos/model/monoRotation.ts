@@ -42,6 +42,8 @@ export type MonoRotation = {
   pendingBrief?: string;
   pendingInput?: string;
   pendingInputs?: string[];
+  /** Explicitly discarded failed turns stay visible but are not carried again. */
+  discardedInputIds?: string[];
 };
 
 type Exchange = {
@@ -91,21 +93,18 @@ export function sessionRotationStatus(
   replacedBlocks: readonly Block[] = [],
 ): { plan?: ReturnType<typeof planRotation>; deferredReason?: string } {
   const previous = loadMonoRotation(session.id);
+  if (previous?.pendingBrief && replacedBlocks.length)
+    return { deferredReason: "Retry the original first. Editing is available after it's accepted." };
   if (!canRotateContext({ ...session, blocks: [...session.blocks, ...replacedBlocks] }))
     return previous?.pendingBrief ? {
       deferredReason: "Context refresh is pending. Finish pending operations or decisions before retrying.",
     } : {};
   if (!previous?.pendingBrief && !rotationReason(session, nextText)) return {};
-  if (previous?.pendingBrief &&
-    replacedBlocks.some(block => block.id === previous.afterBlockId))
-    return { deferredReason: "Context refresh deferred: earlier constraints cannot be edited while a refresh is pending. Retry without editing." };
+  const discardedIds = new Set(previous?.discardedInputIds ?? []);
   const replacedIds = new Set(replacedBlocks.map(block => block.id));
-  const replacedTexts = new Set(replacedBlocks.filter(block => block.role === "user" && !block.internal).map(block => block.text));
   const after = previous?.afterBlockId
     ? session.blocks.findIndex((block) => block.id === previous.afterBlockId)
     : -1;
-  if (previous?.pendingBrief && replacedBlocks.length && previous.afterBlockId && after < 0)
-    return { deferredReason: "Context refresh deferred: the edited input's boundary is not loaded. Load the earlier conversation or retry without editing." };
   // A paged archive cannot prove all older constraints without a complete carry.
   if (
     session.monoTranscript?.before != null &&
@@ -115,7 +114,7 @@ export function sessionRotationStatus(
       deferredReason: "Context refresh deferred: older constraints are not fully loaded. Compact manually or load the earlier conversation.",
     };
   const requests = new Map(
-    (previous?.userRequests ?? []).filter(request => !replacedIds.has(request.id))
+    (previous?.userRequests ?? []).filter(request => !discardedIds.has(request.id) && !replacedIds.has(request.id))
       .map((request) => [request.id, request]),
   );
   for (const block of session.blocks) {
@@ -123,6 +122,7 @@ export function sessionRotationStatus(
       block.role === "user" &&
       !block.internal &&
       !block.draft &&
+      !discardedIds.has(block.id) &&
       block.text.trim()
     )
       requests.set(block.id, { id: block.id, text: block.text });
@@ -140,14 +140,11 @@ export function sessionRotationStatus(
   const referenceText = [...references].join("\n");
   const requestTexts = new Set(userRequests.map(request => request.text));
   const constraints = [...requestTexts].join("\n\n");
-  const savedInputs = previous?.pendingBrief ? [
-    ...(previous.pendingInputs ?? []),
-    ...(previous.pendingInput ? [previous.pendingInput] : []),
-  ] : [];
+  const savedInputs = previous?.pendingBrief ? monoRotationPendingInputs(previous) : [];
   const pendingInputs = [...new Set([
-    ...savedInputs.filter(text => !replacedTexts.has(text) || requestTexts.has(text)),
+    ...savedInputs,
     ...(previous?.pendingBrief ? session.blocks.slice(after + 1)
-      .filter(block => block.role === "user" && !block.internal && !block.draft)
+      .filter(block => block.role === "user" && !block.internal && !block.draft && !discardedIds.has(block.id))
       .map(block => block.text) : []),
     nextText,
   ].filter(text => text.trim()))];
@@ -155,7 +152,7 @@ export function sessionRotationStatus(
     taskContext.length + referenceText.length;
   if (protectedChars > 8_000)
     return {
-      deferredReason: `Context refresh deferred: constraints, scope or references too large (${protectedChars} chars; limit 8,000). ${previous?.pendingBrief ? "Trim the next input or edit the unaccepted input; compaction cannot shrink saved inputs." : "Compact manually or trim the next input."}`,
+      deferredReason: `Context refresh deferred: constraints, scope or references too large (${protectedChars} chars; limit 8,000). ${previous?.pendingBrief ? "Trim the next input or discard pending input; compaction cannot shrink saved inputs." : "Compact manually or trim the next input."}`,
     };
   const retryBrief = (base: string) => [base,
     ...(pendingInputs.length ? [
@@ -167,11 +164,11 @@ export function sessionRotationStatus(
     const chars = brief().length + nextText.length + 120;
     if (chars > 14_000)
       return {
-        deferredReason: `Context refresh deferred: brief and next input too large (${chars} chars; limit 14,000). Trim the next input or edit the unaccepted input; compaction cannot shrink saved inputs.`,
+        deferredReason: `Context refresh deferred: brief and next input too large (${chars} chars; limit 14,000). Trim the next input or discard pending input; compaction cannot shrink saved inputs.`,
       };
     return {
       plan: {
-        rotation: { ...previous, userRequests, references: [...references], pendingInput: replacedBlocks.length ? undefined : previous.pendingInput, pendingInputs },
+        rotation: { ...previous, userRequests, references: [...references], pendingInputs },
         brief,
       },
     };
@@ -224,16 +221,94 @@ export async function rotateProviderContext(
   return { ...session, providerSessionId: undefined, context: undefined };
 }
 
-export function acceptMonoRotation(sessionId: string, at: number): void {
-  const rotation = loadMonoRotation(sessionId);
+export function acceptMonoRotation(
+  sessionId: string,
+  at: number,
+  onWarning?: (warning?: string) => void,
+  receipt?: MonoRotation,
+): void {
+  const rotations = readRotations();
+  const rotation = rotations?.[sessionId] ?? (rotations ? undefined : receipt);
   if (!rotation || rotation.at !== at || !rotation.pendingBrief) return;
+  const identity = JSON.stringify(rotation);
+  if (receipt && JSON.stringify(receipt) !== identity) return;
+  if (acceptedRotations.get(sessionId)?.identity === identity) return;
+  cancelAcceptanceRetry(sessionId);
   const {
     pendingBrief: _accepted,
     pendingInput: _input,
     pendingInputs: _inputs,
     ...settled
   } = rotation;
-  saveMonoRotation(sessionId, settled);
+  const accepted: AcceptanceRetry = { identity, settled, onWarning, delay: 250, warned: false };
+  acceptedRotations.set(sessionId, accepted);
+  const clear = () => {
+    if (acceptedRotations.get(sessionId) !== accepted) return;
+    const current = readRotations();
+    if (current && JSON.stringify(current[sessionId]) !== identity) {
+      cancelAcceptanceRetry(sessionId);
+      return;
+    }
+    if (saveMonoRotation(sessionId, settled)) return;
+    if (!accepted.warned) {
+      accepted.warned = true;
+      onWarning?.("The provider accepted this turn, but its context carry could not be cleared. Retrying storage.");
+    }
+    accepted.timer = setTimeout(clear, accepted.delay);
+    accepted.delay = Math.min(accepted.delay * 2, 30_000);
+  };
+  clear();
+}
+
+export type MonoRotationDiscardPreview = {
+  identity: string;
+  inputs: string[];
+  blockIds: string[];
+};
+
+function monoRotationPendingInputs(rotation: MonoRotation): string[] {
+  return [...new Set([
+    ...(rotation.pendingInputs ?? []),
+    ...(rotation.pendingInput ? [rotation.pendingInput] : []),
+  ].filter(text => text.trim()))];
+}
+
+/** A preview never guesses whether an unloaded request precedes the carry. */
+export function previewMonoRotationDiscard(
+  session: Pick<Session, "id" | "blocks">,
+): MonoRotationDiscardPreview | undefined {
+  const rotation = loadMonoRotation(session.id);
+  if (!rotation?.pendingBrief) return;
+  const after = rotation.afterBlockId
+    ? session.blocks.findIndex(block => block.id === rotation.afterBlockId)
+    : -1;
+  if (rotation.afterBlockId ? after < 0 : rotation.userRequests?.length) return;
+  const blocks = session.blocks.slice(after + 1)
+    .filter(block => block.role === "user" && !block.internal && !block.draft &&
+      !rotation.discardedInputIds?.includes(block.id) && block.text.trim());
+  const inputs = [...new Set([...monoRotationPendingInputs(rotation), ...blocks.map(block => block.text)])];
+  if (!inputs.length) return;
+  const blockIds = blocks.map(block => block.id);
+  return { identity: JSON.stringify(rotation), inputs, blockIds };
+}
+
+/** Only an unchanged, explicitly confirmed carry can drop unaccepted input. */
+export function discardMonoRotationPendingInputs(
+  session: Pick<Session, "id" | "blocks">,
+  preview: MonoRotationDiscardPreview,
+): boolean {
+  const current = previewMonoRotationDiscard(session);
+  if (!current || JSON.stringify(current) !== JSON.stringify(preview)) return false;
+  const rotation = loadMonoRotation(session.id)!;
+  const { pendingInput: _input, pendingInputs: _inputs, ...retained } = rotation;
+  const discardedInputIds = [...new Set([
+    ...(rotation.discardedInputIds ?? []), ...preview.blockIds,
+  ])];
+  return saveMonoRotation(session.id, {
+    ...retained,
+    userRequests: rotation.userRequests?.filter(request => !discardedInputIds.includes(request.id)),
+    discardedInputIds,
+  });
 }
 
 /** The user's turns and what the Mono finally said in each. */
@@ -351,6 +426,7 @@ export function planRotation(
   now: number,
   taskContinuation = false,
 ): { rotation: MonoRotation; brief: (sessionId: string) => string } {
+  blocks = blocks.filter(block => !previous?.discardedInputIds?.includes(block.id));
   const segment = exchanges(blocks, previous?.afterBlockId, taskContinuation);
   const verbatim = segment.slice(-VERBATIM_EXCHANGES);
   const lines = segment
@@ -369,6 +445,7 @@ export function planRotation(
     ...(blocks.length ? { afterBlockId: blocks[blocks.length - 1].id } : {}),
     // The next rotation sees these turns as earlier ones.
     earlier: newestWithin(carried, EARLIER_CHARS),
+    ...(previous?.discardedInputIds?.length ? { discardedInputIds: previous.discardedInputIds } : {}),
   };
   const brief = (sessionId: string) => {
     const parts = [
@@ -399,17 +476,41 @@ export function planRotation(
 
 const ROTATIONS_KEY = "monocode:mono-rotations";
 
-function readRotations(): Record<string, MonoRotation> {
+type AcceptanceRetry = {
+  identity: string;
+  settled: MonoRotation;
+  onWarning?: (warning?: string) => void;
+  delay: number;
+  warned: boolean;
+  timer?: ReturnType<typeof setTimeout>;
+};
+const acceptedRotations = new Map<string, AcceptanceRetry>();
+
+function cancelAcceptanceRetry(sessionId: string): void {
+  const accepted = acceptedRotations.get(sessionId);
+  if (!accepted) return;
+  clearTimeout(accepted.timer);
+  acceptedRotations.delete(sessionId);
+  if (accepted.warned) accepted.onWarning?.();
+}
+
+function readRotations(): Record<string, MonoRotation> | undefined {
   try {
     const parsed = JSON.parse(localStorage.getItem(ROTATIONS_KEY) ?? "{}");
-    return parsed && typeof parsed === "object" ? parsed : {};
+    return parsed && typeof parsed === "object" ? parsed : undefined;
   } catch {
-    return {};
+    return undefined;
   }
 }
 
 export function loadMonoRotation(sessionId: string): MonoRotation | undefined {
-  return readRotations()[sessionId];
+  const rotations = readRotations();
+  const rotation = rotations?.[sessionId];
+  const accepted = acceptedRotations.get(sessionId);
+  if (!accepted) return rotation;
+  if (!rotations || JSON.stringify(rotation) === accepted.identity) return accepted.settled;
+  cancelAcceptanceRetry(sessionId);
+  return rotation;
 }
 
 export function saveMonoRotation(
@@ -417,10 +518,13 @@ export function saveMonoRotation(
   rotation: MonoRotation,
 ): boolean {
   try {
+    const rotations = readRotations();
+    if (!rotations) return false;
     localStorage.setItem(
       ROTATIONS_KEY,
-      JSON.stringify({ ...readRotations(), [sessionId]: rotation }),
+      JSON.stringify({ ...rotations, [sessionId]: rotation }),
     );
+    cancelAcceptanceRetry(sessionId);
     return true;
   } catch {
     // Do not replace a thread when its continuity cannot be retained.
@@ -430,7 +534,9 @@ export function saveMonoRotation(
 
 /** Delete the conversation brief along with its transcript. */
 export function forgetMonoRotation(sessionId: string): void {
+  cancelAcceptanceRetry(sessionId);
   const rotations = readRotations();
+  if (!rotations) return;
   delete rotations[sessionId];
   try {
     localStorage.setItem(ROTATIONS_KEY, JSON.stringify(rotations));

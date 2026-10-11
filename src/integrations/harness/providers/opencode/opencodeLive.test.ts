@@ -1062,7 +1062,7 @@ describe("OpenCode event stream recovery", () => {
 });
 
 describe("OpenCode edit recovery", () => {
-  it("reattaches pending constraints after a lost rotation response, stop cleanup and edited resend rewind", async () => {
+  it("keeps pending input through a lost rotation response and Stop, blocks Edit, then retries the original", async () => {
     const stored = new Map<string, string>();
     vi.stubGlobal("localStorage", {
       getItem: (key: string) => stored.get(key) ?? null,
@@ -1154,22 +1154,15 @@ describe("OpenCode edit recovery", () => {
       )).toBe(true);
       expect(canEditLastTurn(fresh)).toBe(true);
       const edited = createEditedResendAttempt(fresh);
-      expect(edited).not.toBeNull();
-      const retryText = "Verify tests only.";
-      const retry = sessionRotationStatus(
-        { ...fresh, blocks: edited!.blocks },
-        retryText,
-        assignment,
-        fresh.blocks.slice(edited!.blocks.length),
-      ).plan!;
+      expect(edited).toBeNull();
+      const retryText = "Retry the original.";
+      const retry = sessionRotationStatus(fresh, retryText, assignment).plan!;
       expect(retry).toBeDefined();
       expect(saveMonoRotation(fresh.id, retry.rotation)).toBe(true);
-      await expect(rewindOpenCodeLastTurn(input)).resolves.toEqual({ submitted: false });
-      edited!.markProviderRewound();
       expect(harnessHttp.mock.calls.some(([request]) =>
         new URL(request.url).pathname.endsWith("/revert"),
-      )).toBe(true);
-      expect(sessionMessages).toHaveLength(0);
+      )).toBe(false);
+      expect(sessionMessages).toHaveLength(1);
       expect(loadMonoRotation(fresh.id)?.pendingBrief).toContain(restriction);
       const done = sendOpenCodeTurn({
         ...input,
@@ -1186,12 +1179,14 @@ describe("OpenCode edit recovery", () => {
       expect(sentTexts[1]).toContain(restriction);
       expect(sentTexts[1]).toContain(assignment);
       expect(sentTexts[1]).toContain(retryText);
-      expect(sentTexts[1]).not.toContain(firstRequest);
+      expect(sentTexts[1]).toContain(firstRequest);
+      expect(sentTexts[1]).not.toContain("Verify tests only.");
       expect(accepted).toHaveBeenCalledOnce();
       expect(loadMonoRotation(fresh.id)?.pendingBrief).toBeUndefined();
       expect(loadMonoRotation(fresh.id)?.pendingInput).toBeUndefined();
       expect(loadMonoRotation(fresh.id)?.pendingInputs).toBeUndefined();
       expect(canEditLastTurn(fresh)).toBe(true);
+      expect(createEditedResendAttempt(fresh)).not.toBeNull();
     } finally {
       harnessHttp.mockImplementation(baseHttp);
       vi.unstubAllGlobals();

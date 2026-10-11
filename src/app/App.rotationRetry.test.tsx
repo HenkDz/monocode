@@ -7,6 +7,7 @@ import {
   planSessionRotation,
   saveMonoRotation,
   sessionRotationStatus,
+  acceptMonoRotation,
 } from "../features/monos/model/monoRotation";
 import { applyHarnessEvent } from "../integrations/harness/core/apply";
 import { bindTurnContextProfile } from "../integrations/harness/core/contextProfile";
@@ -26,7 +27,7 @@ function guard(text: string): string {
 }
 const persist = new Function("monoRotation", "sessionId", "saveMonoRotation", guard("!saveMonoRotation("));
 const rejectDeferred = new Function("rotationStatus", "pendingRotation", "sessionId", "editedResend", "enqueueHarnessEvent", "flushHarnessEvents", "options", `const monoRotation = rotationStatus?.plan; ${guard("pendingRotation && !monoRotation")}`);
-const persistEdited = new Function("editedResend", "monoRotation", "sessionId", "saveMonoRotation", "enqueueHarnessEvent", "flushHarnessEvents", "options", guard("editedResend && monoRotation"));
+const rejectPendingEdit = new Function("sessionId", "loadMonoRotation", "enqueueHarnessEvent", "flushHarnessEvents", "options", guard("options?.resendEdited && loadMonoRotation"));
 
 beforeEach(() => localStorage.clear());
 
@@ -84,20 +85,79 @@ it("refuses pending edited resends when a switch or other unsafe state prevents 
   expect(events.mock.calls[0][1].message).toContain("Finish pending operations or decisions");
 });
 
-it("saves an edited pending carry before rewind and refuses edits if storage fails", () => {
+it.each(["preparation", "rewind"])("blocks pending edits before failed %s can stage replacement text, then reload retries only the original", failure => {
   const session = { id: "app-edit-carry", providerSessionId: "old", context: { used: 700, window: 1000 }, blocks: [] };
-  const first = planSessionRotation(session, "Do not publish.")!;
-  persist(first, session.id, saveMonoRotation);
-  const before = loadMonoRotation(session.id);
-  const replacement = planSessionRotation(session, "Use account B.")!;
-  const edit = { reject: vi.fn() };
-  expect(persistEdited(edit, replacement, session.id, () => false, vi.fn(), vi.fn(), undefined)).toBe(false);
-  expect(edit.reject).toHaveBeenCalledOnce();
-  expect(loadMonoRotation(session.id)).toEqual(before);
-  expect(persistEdited(edit, replacement, session.id, saveMonoRotation, vi.fn(), vi.fn(), undefined)).toBeUndefined();
-  expect(loadMonoRotation(session.id)?.pendingInputs).toContain("Use account B.");
-  const preflight = source.text.indexOf("if (editedResend && monoRotation");
+  persist(planSessionRotation(session, "Do not publish.")!, session.id, saveMonoRotation);
+  const stored = localStorage.getItem("monocode:mono-rotations");
+  const rejected = vi.fn();
+  const settled = vi.fn();
+  const events = vi.fn();
+  const options = { resendEdited: true, onResendRejected: rejected, onSettled: settled };
+  const prepare = vi.fn(() => { if (failure === "preparation") throw Error("preparation failed"); });
+  const rewind = vi.fn(() => { throw Error("rewind failed"); });
+  const attempt = new Function("sessionId", "loadMonoRotation", "enqueueHarnessEvent", "flushHarnessEvents", "options", "prepare", "rewind",
+    `${guard("options?.resendEdited && loadMonoRotation")} prepare(); rewind();`);
+  expect(attempt(session.id, loadMonoRotation, events, vi.fn(), options, prepare, rewind)).toBe(false);
+  expect(prepare).not.toHaveBeenCalled();
+  expect(rewind).not.toHaveBeenCalled();
+  expect(rejected).toHaveBeenCalledWith({ providerRewound: false });
+  expect(events).toHaveBeenCalledWith(session.id, { type: "status", text: "Retry the original first. Editing is available after it's accepted." });
+  expect(settled).toHaveBeenCalledWith(expect.objectContaining({ status: "failed" }));
+  expect(localStorage.getItem("monocode:mono-rotations")).toBe(stored);
+  localStorage.clear();
+  localStorage.setItem("monocode:mono-rotations", stored!);
+  const retry = planSessionRotation({ ...session, providerSessionId: undefined, context: undefined }, "Retry")!;
+  expect(retry.rotation.pendingInputs).toEqual(["Do not publish.", "Retry"]);
+  expect(retry.brief(session.id)).not.toContain("Use account B.");
+  const preflight = source.text.indexOf("if (options?.resendEdited && loadMonoRotation");
+  expect(preflight).toBeLessThan(source.text.indexOf("codexStorageRecovery.current.prepare(", preflight));
+  expect(preflight).toBeLessThan(source.text.indexOf("createEditedResendAttempt(current", preflight));
   expect(preflight).toBeLessThan(source.text.indexOf("await rewindHarnessLastTurn(", preflight));
+  expect(source.text).not.toContain("if (editedResend && monoRotation");
+});
+
+it("allows existing edited resend preparation when no rotation carry is pending", () => {
+  expect(rejectPendingEdit("accepted", loadMonoRotation, vi.fn(), vi.fn(), { resendEdited: true })).toBeUndefined();
+});
+
+it("actual App acceptance succeeds and surfaces a storage warning until durable clearing recovers", () => {
+  vi.useFakeTimers();
+  const session = { ...newSession("pi", "/synthetic"), id: "accepted-warning", busy: true,
+    providerSessionId: "replacement", context: { used: 0, window: 1000 } };
+  const monoRotation = { rotation: { at: 123, reason: "context" as const, earlier: [], pendingInput: "Original input." }, brief: () => "Original constraints." };
+  const receipt = { ...monoRotation.rotation, pendingBrief: monoRotation.brief() };
+  saveMonoRotation(session.id, receipt);
+  const sessionsRef = { current: [session] };
+  const acceptedContext = vi.fn();
+  const scope = { sessionsRef, sessionId: session.id, monoRotation, acceptMonoRotation, editedResend: undefined,
+    acceptEditedResend: vi.fn(), turnGen: { current: new Map([[session.id, 1]]) }, gen: 1,
+    setSessions: vi.fn(), contextAccepted: acceptedContext };
+  let callback: ts.Node | undefined;
+  function visit(node: ts.Node) {
+    if (ts.isPropertyAssignment(node) && node.name.getText(source) === "onAccepted" && node.getText(source).includes("acceptMonoRotation")) callback = node.initializer;
+    else ts.forEachChild(node, visit);
+  }
+  visit(source);
+  const accept = new Function(...Object.keys(scope), ts.transpile(`return ${callback!.getText(source)};`, { target: ts.ScriptTarget.ES2022 }))(...Object.values(scope));
+  const storage = localStorage;
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => storage.getItem(key),
+    setItem: () => { throw Error("quota"); },
+  });
+  try {
+    expect(() => accept()).not.toThrow();
+    expect(acceptedContext).toHaveBeenCalledOnce();
+    expect(sessionsRef.current[0].busy).toBe(true);
+    expect(sessionsRef.current[0]).toHaveProperty("rotationWarning", expect.stringContaining("accepted"));
+    expect(loadMonoRotation(session.id)?.pendingBrief).toBeUndefined();
+    vi.unstubAllGlobals();
+    vi.advanceTimersByTime(250);
+    expect(sessionsRef.current[0]).toHaveProperty("rotationWarning", undefined);
+    expect(JSON.parse(localStorage.getItem("monocode:mono-rotations")!)[session.id].pendingBrief).toBeUndefined();
+  } finally {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  }
 });
 
 it("App stops when saving an updated retry carry fails", () => {

@@ -30,7 +30,12 @@ import { currentTurnIndex } from "../../agents/model/turnMetrics";
 import { selectAgentMetrics } from "../../agents/model/agentMetrics";
 import { TaskMetricsLine } from "../../agents/ui/TaskMetricsLine";
 import { AgentStatusLabel } from "../../agents/ui/AgentStatusLabel";
-import { sessionRotationStatus } from "../../monos/model/monoRotation";
+import {
+  loadMonoRotation,
+  previewMonoRotationDiscard,
+  sessionRotationStatus,
+  type MonoRotationDiscardPreview,
+} from "../../monos/model/monoRotation";
 import { retainedTaskContext } from "../../orchestration/model/memberContinuity";
 import { canRotateContext } from "../../orchestration/model/taskContextBudget";
 import type { Worktree } from "../../source-control/model/worktrees";
@@ -169,6 +174,7 @@ import { RemoteSession } from "../../connections/ui/RemoteSession";
 import { isRemoteProjectPath } from "../../projects/model/recents";
 import type { HostSession } from "../../connections/model/protocol";
 import { SessionRightPanel, shouldShowContextPanel } from "./SessionRightPanel";
+import { RotationPendingInput } from "./RotationPendingInput";
 
 export type SessionPaneProps = {
   session: Session;
@@ -241,6 +247,10 @@ export type SessionPaneProps = {
   onRemoveDraft: (sessionId: string, draftBlockId: string) => boolean | void;
   onStop: (sessionId: string) => void;
   onCompactContext: (sessionId: string) => boolean;
+  onDiscardRotationPendingInput?: (
+    sessionId: string,
+    preview: MonoRotationDiscardPreview,
+  ) => boolean;
   onPlaceSessionInFolder: (
     sessionId: string,
     target: SessionFolderTarget,
@@ -393,6 +403,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
   monoGoalRouting,
   onStop,
   onCompactContext,
+  onDiscardRotationPendingInput,
   onPlaceSessionInFolder,
   onDeleteQueuedMessage,
   onEditQueuedMessage,
@@ -473,7 +484,12 @@ const LocalSessionPane = memo(function LocalSessionPane({
   // A Mono's chat is a running conversation; what was said stays said.
   const editLastTurnSupported =
     !remote && !monoForSession(session.id) && canEditLastTurn(session);
-  const turnRecall = editLastTurnSupported ? lastTurnRecall(session) : null;
+  const editLastTurnDisabledReason =
+    !remote && loadMonoRotation(session.id)?.pendingBrief
+      ? "Retry the original first. Editing is available after it's accepted."
+      : undefined;
+  const editLastTurnEnabled = editLastTurnSupported && !editLastTurnDisabledReason;
+  const turnRecall = editLastTurnEnabled ? lastTurnRecall(session) : null;
   const draftBlock = sessionDraftBlock(session);
   useSyncExternalStore(
     subscribeProjectChatBackground,
@@ -586,6 +602,10 @@ const LocalSessionPane = memo(function LocalSessionPane({
   const quoteRequestId = useRef(0);
   const jumpVisibility = useTranscriptJumpVisibility();
   const [editingLastTurn, setEditingLastTurn] = useState(false);
+  const editingLastTurnChanged = useCallback(
+    (editing: boolean) => setEditingLastTurn(editing && editLastTurnEnabled),
+    [editLastTurnEnabled],
+  );
   const [sessionPanelChoice, setSessionPanelChoice] = useState<
     "auto" | "open" | "closed"
   >("auto");
@@ -593,7 +613,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
   const sessionPanelTrigger = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     setEditingLastTurn(false);
-  }, [session.id, editLastTurnSupported]);
+  }, [session.id, editLastTurnEnabled]);
   const modelWelcomeSequence = useRef(0);
   const [modelWelcome, setModelWelcome] = useState<{
     kind: "astra" | "opus";
@@ -865,8 +885,26 @@ const LocalSessionPane = memo(function LocalSessionPane({
           editingLastTurn ? session.blocks.slice(truncateBeforeLastEditableTurn(session).length) : [],
         )
       : {};
+  const rotationRecovery = (
+    <>
+      {session.rotationWarning && (
+        <p role="status" className="px-3 py-1 text-xs text-content/55">
+          {session.rotationWarning}
+        </p>
+      )}
+      {!remote && onDiscardRotationPendingInput &&
+      rotationStatus.deferredReason?.includes("too large") && (
+        <RotationPendingInput
+          key={session.id}
+          preview={previewMonoRotationDiscard(session)}
+          onDiscard={(preview) => onDiscardRotationPendingInput(session.id, preview)}
+        />
+      )}
+    </>
+  );
   const composer = (
     <>
+      {rotationRecovery}
       {checkoutNotice && (
         <p role="status" className="px-3 py-1 text-xs text-content/55">
           {checkoutNotice}
@@ -1007,12 +1045,12 @@ const LocalSessionPane = memo(function LocalSessionPane({
         onUsageLimitDismiss={() => onUsageLimitDismiss(session.id)}
         onOpenFile={onOpenFile}
         busy={!!session.busy}
-        editLastTurnSupported={editLastTurnSupported}
+        editLastTurnSupported={editLastTurnEnabled}
         lastTurnRecall={turnRecall}
         onRecallLastTurnReady={(recall) => {
           recallLastTurnRef.current = recall;
         }}
-        onEditingLastTurnChange={setEditingLastTurn}
+        onEditingLastTurnChange={editingLastTurnChanged}
       />
     </>
   );
@@ -1587,9 +1625,11 @@ const LocalSessionPane = memo(function LocalSessionPane({
                     }
                     onScrollerChange={setTranscriptScroller}
                     editingLastTurn={editingLastTurn}
+                    editLastTurnDisabledReason={editLastTurnDisabledReason}
                     onEditLastTurn={
                       editLastTurnSupported && !monoTranscript.viewingOlderPage
                         ? () => {
+                            if (loadMonoRotation(session.id)?.pendingBrief) return;
                             onFocus(session.id);
                             recallLastTurnRef.current?.();
                           }
@@ -1713,6 +1753,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
             >
               {agent ? (
                 <>
+                  {rotationRecovery}
                   {!isMember && monoNotices}
                   {isMember && (
                     <p

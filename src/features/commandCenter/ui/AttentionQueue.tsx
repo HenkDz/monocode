@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { agentLiveStateLabel } from "../../agents/model/agentLiveState";
 import { listMonos, monosSnapshot, subscribeMonos } from "../../monos/model/mono";
 import { monoManagerGoals } from "../../monos/model/monoManagerGoals";
@@ -10,17 +10,19 @@ import { listAutomations, peekAutomations, subscribeAutomations } from "../../au
 import { goalElapsedLabel } from "../model/goalView";
 import { attentionHistory, executeAttentionAction, selectAttention, type AttentionAction, type AttentionCallbacks, type AttentionCategory, type AttentionInput, type AttentionItem, type AttentionReceipt } from "../model/attention";
 import "./attentionQueue.css";
+import { AttentionDetails } from "./AttentionDetails";
+import { CircleAlert } from "../../../shared/ui/icons";
 
 // CC7D shell hook: reuse Team map's full-view lifecycle and request routing.
 export const ATTENTION_QUEUE_SCOPE = "command-center:attention";
 export function AttentionQueueNav({ onOpen, compact = false }: { onOpen: () => void; compact?: boolean }) {
   return <button type="button" onClick={onOpen} title="Attention queue" aria-label="Attention queue"
     className={`flex shrink-0 items-center gap-2 rounded-md text-[13px] text-content/65 hover:bg-content/8 hover:text-content focus-visible:outline-accent ${compact ? "mx-auto size-8 justify-center" : "mx-2 my-1 h-8 px-2"}`}>
-    <span aria-hidden="true">△</span>{!compact && "Attention"}
+    <CircleAlert className="size-3.5" strokeWidth={1.75} aria-hidden="true" />{!compact && "Attention"}
   </button>;
 }
 
-type Props = {
+export type AttentionQueueViewProps = {
   input: AttentionInput;
   callbacks: AttentionCallbacks;
   readInput?: () => AttentionInput;
@@ -28,9 +30,12 @@ type Props = {
   onClose: () => void;
   onOpenMissionControl?: () => void;
   sourceError?: string;
+  presentation?: "page" | "panel";
 };
 
-export function AttentionQueueView({ input, callbacks, readInput, open, onClose, onOpenMissionControl, sourceError }: Props) {
+export function AttentionQueueView({ input, callbacks, readInput, open, onClose, onOpenMissionControl, sourceError, presentation = "page" }: AttentionQueueViewProps) {
+  const titleId = useId();
+  const Heading = presentation === "panel" ? "h2" : "h1";
   const current = useMemo(() => selectAttention(input), [input]);
   const [filter, setFilter] = useState<"open" | "history" | AttentionCategory>("open");
   const [receipts, setReceipts] = useState<Record<string, AttentionReceipt>>({});
@@ -52,6 +57,7 @@ export function AttentionQueueView({ input, callbacks, readInput, open, onClose,
     const timer = setInterval(() => setNow(Date.now()), 30_000);
     const key = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (event.target instanceof Element && event.target.closest("[data-attention-details]")) return;
       event.preventDefault(); event.stopPropagation(); onClose();
     };
     window.addEventListener("keydown", key, true);
@@ -101,6 +107,7 @@ export function AttentionQueueView({ input, callbacks, readInput, open, onClose,
         {item.detail && item.source !== "storage" && !(item.source === "question" && item.route === "user") && <pre className="aq-evidence">{item.detail}</pre>}
         {!settled && <>
           {item.source === "storage" && item.repairable !== false ? <fieldset className="aq-question" disabled={locked}><legend className="sr-only">Storage recovery</legend><MonoCodexStorageNotice key={item.revision} detail={item.detail} blockedContext={item.state.detail}
+            renderDetails={content => open && <AttentionDetails title="Storage evidence">{content}</AttentionDetails>}
             onRepair={async () => { await run(item, "repair"); }} onResolve={async resolution => { await run(item, "repair", { resolution }); }}
             onCompare={callbacks.compare ? async () => (await run(item, "compare"))! : undefined}
             onReveal={callbacks.reveal ? async () => { await run(item, "reveal"); } : undefined} /></fieldset> : null}
@@ -130,9 +137,9 @@ export function AttentionQueueView({ input, callbacks, readInput, open, onClose,
       <time className="aq-time" title={item.createdAt == null ? undefined : new Date(item.createdAt).toLocaleString()}>{item.createdAt == null ? "Age unavailable" : goalElapsedLabel(Math.max(0, now - item.createdAt))}</time>
     </article>;
   }
-  return <section className="attention-queue" aria-labelledby="attention-queue-title" hidden={!open} inert={!open || undefined}>
-    <header className="aq-toolbar"><div><p className="aq-eyebrow">Command center</p><h1 id="attention-queue-title">Attention</h1><p>Requests and blockers across your loaded conversations and team runs.</p></div>
-      <div className="aq-actions">{onOpenMissionControl && <button type="button" onClick={onOpenMissionControl}>Back to goals</button>}<button type="button" onClick={onClose}>Back to conversation</button></div>
+  return <section className="attention-queue" data-presentation={presentation} aria-labelledby={titleId} hidden={!open} inert={!open || undefined}>
+    <header className="aq-toolbar"><div>{presentation === "page" && <p className="aq-eyebrow">Command center</p>}<Heading className="aq-title" id={titleId}>Attention</Heading>{presentation === "page" && <p>Requests and blockers across your loaded conversations and team runs.</p>}</div>
+      <div className="aq-actions">{presentation === "page" && onOpenMissionControl && <button type="button" onClick={onOpenMissionControl}>Back to goals</button>}<button type="button" onClick={onClose}>{presentation === "panel" ? "Close" : "Back to conversation"}</button></div>
     </header>
     <div className="aq-scroll"><nav className="aq-filters" aria-label="Attention filters">{filters.map(([value, label]) => <button type="button" key={value} aria-pressed={filter === value} onClick={() => setFilter(value)}>
       {label} · {all.filter(item => value === "history" ? item.status !== "open" : item.status === "open" && (value === "open" || item.category === value)).length}
@@ -146,7 +153,7 @@ export function AttentionQueueView({ input, callbacks, readInput, open, onClose,
   </section>;
 }
 
-export function AttentionQueue({ sessions, runs, callbacks, selectedAccount, isLocalSession, readSessions, readRuns, ...props }: Omit<Props, "input" | "readInput"> & {
+export function AttentionQueue({ sessions, runs, callbacks, selectedAccount, isLocalSession, readSessions, readRuns, ...props }: Omit<AttentionQueueViewProps, "input" | "readInput"> & {
   sessions: AttentionInput["sessions"]; runs: AttentionInput["runs"]; selectedAccount?: AttentionInput["selectedAccount"];
   isLocalSession?: AttentionInput["isLocalSession"];
   readSessions: () => AttentionInput["sessions"]; readRuns: () => AttentionInput["runs"];

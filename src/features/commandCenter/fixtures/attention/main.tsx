@@ -14,6 +14,7 @@ type HarnessControls = {
 };
 declare global { interface Window { attentionFixture: HarnessControls } }
 document.documentElement.classList.toggle("theme-light", new URLSearchParams(location.search).get("theme") === "light");
+const presentation = new URLSearchParams(location.search).get("presentation") === "panel" ? "panel" : "page";
 
 function Harness() {
   const [input, setInput] = useState<AttentionInput>(syntheticAttention);
@@ -71,7 +72,7 @@ function Harness() {
   };
   return <main className="flex h-screen min-w-0 flex-col bg-background-base font-sans text-content">
     <p className="shrink-0 border-b border-stroke px-4 py-2 text-xs text-content/70">Synthetic CC7D fixture · isolated browser · no provider or profile writes</p>
-    <AttentionQueueView input={input} readInput={() => current.current} callbacks={callbacks} open={open}
+    <AttentionQueueView input={input} readInput={() => current.current} callbacks={callbacks} open={open} presentation={presentation}
       onClose={() => { setOpen(false); setCloseCount(count => count + 1); }} />
     {!open && <section className="p-6" aria-label="Synthetic conversation">
       <h1 className="mb-4 text-xl">{target ? `Conversation: ${target}` : "Attention closed"}</h1>

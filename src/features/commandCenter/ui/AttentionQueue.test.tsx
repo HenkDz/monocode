@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AttentionQueueNav, AttentionQueueView } from "./AttentionQueue";
+import { AttentionQueueNav, AttentionQueueView, type AttentionQueueViewProps } from "./AttentionQueue";
 import { MissionControlView } from "./MissionControl";
 import { syntheticAttention } from "../fixtures/attention/syntheticAttention";
 import { goals, roster, runs, sessions, now } from "../fixtures/syntheticMission";
@@ -18,7 +18,7 @@ beforeEach(() => {
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
 });
 afterEach(async () => {
-  await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals();
+  await act(async () => root.unmount()); host.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals();
 });
 const inputFor = (...ids: string[]): AttentionInput => {
   const input = syntheticAttention();
@@ -110,6 +110,109 @@ describe("Attention queue", () => {
     await act(async () => pending.resolve());
     expect(rows()[0].getAttribute("data-attention-status")).toBe("open");
     expect(rows()[0].querySelector<HTMLFieldSetElement>("fieldset")?.disabled).toBe(true);
+  });
+
+  it("shows storage evidence in a copyable popover without queue accordions", async () => {
+    const input = syntheticAttention(), calls = callbacks();
+    const copy = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
+    await act(async () => root.render(<AttentionQueueView input={input} callbacks={calls} open onClose={() => {}} />));
+    expect(host.querySelector("details, summary")).toBeNull();
+    expect(document.querySelector('[role="dialog"][aria-label="Storage evidence"]')).toBeNull();
+    const evidence = button("Evidence");
+    expect(evidence.getAttribute("aria-expanded")).toBe("false");
+    await act(async () => evidence.click());
+    const dialog = document.querySelector<HTMLElement>('[role="dialog"][aria-label="Storage evidence"]')!;
+    expect(dialog).not.toBeNull();
+    expect(host.contains(dialog)).toBe(false);
+    expect(dialog.querySelector("details, summary")).toBeNull();
+    const detail = input.sessions.find(session => session.id === "storage")!.codexStorageError!;
+    expect(dialog.querySelector("pre")?.textContent).toBe(detail);
+    expect(evidence.getAttribute("aria-expanded")).toBe("true");
+    expect(evidence.getAttribute("aria-controls")).toBe(dialog.id);
+    await act(async () => button("Copy details", dialog).click());
+    expect(copy).toHaveBeenCalledExactlyOnceWith(detail);
+    expect(dialog.textContent).toContain("Copied details");
+    expect(calls.repair).not.toHaveBeenCalled();
+  });
+
+  it("restores focus to the evidence trigger after closing its popover", async () => {
+    await act(async () => root.render(<AttentionQueueView input={inputFor("storage")} callbacks={callbacks()} open onClose={() => {}} />));
+    const evidence = button("Evidence");
+    evidence.focus();
+    await act(async () => evidence.click());
+    const dialog = document.querySelector<HTMLElement>('[role="dialog"][aria-label="Storage evidence"]')!;
+    expect(document.activeElement).toBe(dialog);
+    await act(async () => dialog.querySelector<HTMLButtonElement>('button[aria-label="Close evidence"]')!.click());
+    expect(document.querySelector('[role="dialog"][aria-label="Storage evidence"]')).toBeNull();
+    expect(document.activeElement).toBe(evidence);
+    expect(evidence.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("closes evidence on the first Escape and the queue on the next Escape", async () => {
+    const close = vi.fn();
+    await act(async () => root.render(<AttentionQueueView input={inputFor("storage")} callbacks={callbacks()} open onClose={close} />));
+    const evidence = button("Evidence"); evidence.focus();
+    await act(async () => evidence.click());
+    const dialog = document.querySelector<HTMLElement>('[role="dialog"][aria-label="Storage evidence"]')!;
+    const first = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    await act(async () => dialog.dispatchEvent(first));
+    expect(first.defaultPrevented).toBe(true);
+    expect(close).not.toHaveBeenCalled();
+    expect(document.querySelector('[role="dialog"][aria-label="Storage evidence"]')).toBeNull();
+    expect(document.activeElement).toBe(evidence);
+    const second = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    await act(async () => evidence.dispatchEvent(second));
+    expect(second.defaultPrevented).toBe(true);
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("removes portalled evidence when its queue hides and reopens with evidence closed", async () => {
+    const input = inputFor("storage"), calls = callbacks();
+    const render = (open: boolean) => root.render(<AttentionQueueView input={input} callbacks={calls} open={open} onClose={() => {}} />);
+    await act(async () => render(true));
+    await act(async () => button("Evidence").click());
+    expect(document.querySelector('[role="dialog"][aria-label="Storage evidence"]')).not.toBeNull();
+    await act(async () => render(false));
+    expect(host.querySelector<HTMLElement>(".attention-queue")?.hidden).toBe(true);
+    expect(document.querySelector('[role="dialog"][aria-label="Storage evidence"]')).toBeNull();
+    await act(async () => render(true));
+    expect(button("Evidence").getAttribute("aria-expanded")).toBe("false");
+    expect(document.querySelector('[role="dialog"][aria-label="Storage evidence"]')).toBeNull();
+    expect(button("Use account version")).toBeDefined();
+    expect(calls.repair).not.toHaveBeenCalled();
+  });
+
+  it("offers a compact panel header while retaining the same request and close callbacks", async () => {
+    const close = vi.fn(), mission = vi.fn(), calls = callbacks();
+    const props: AttentionQueueViewProps = { input: inputFor("manager"), callbacks: calls, open: true,
+      onClose: close, onOpenMissionControl: mission, presentation: "panel" };
+    await act(async () => root.render(<AttentionQueueView {...props} />));
+    const queue = host.querySelector<HTMLElement>(".attention-queue")!;
+    const toolbar = host.querySelector<HTMLElement>(".aq-toolbar")!;
+    const title = toolbar.querySelector(".aq-title")!;
+    expect(queue.dataset.presentation).toBe("panel");
+    expect(title.tagName).toBe("H2");
+    expect(title.textContent).toBe("Attention");
+    expect(queue.getAttribute("aria-labelledby")).toBe(title.id);
+    expect(toolbar.querySelector(".aq-eyebrow")).toBeNull();
+    expect(toolbar.querySelector("p")).toBeNull();
+    expect(buttons(toolbar).map(button => button.textContent)).toEqual(["Close"]);
+    expect(host.querySelector("details, summary")).toBeNull();
+    await act(async () => button("Allow once").click());
+    expect(calls.approval).toHaveBeenCalledExactlyOnceWith("manager", 71, "allow");
+    await act(async () => button("Close", toolbar).click());
+    expect(close).toHaveBeenCalledOnce();
+    expect(mission).not.toHaveBeenCalled();
+  });
+
+  it("retains page navigation to Mission control when requested", async () => {
+    const mission = vi.fn();
+    await act(async () => root.render(<AttentionQueueView input={inputFor("manager")} callbacks={callbacks()} open
+      onClose={() => {}} onOpenMissionControl={mission} />));
+    expect(host.querySelector<HTMLElement>(".attention-queue")?.dataset.presentation).toBe("page");
+    expect(host.querySelector(".aq-toolbar .aq-title")?.tagName).toBe("H1");
+    await act(async () => button("Back to goals").click());
+    expect(mission).toHaveBeenCalledOnce();
   });
 
   it.each(["synchronous", "asynchronous"] as const)("keeps %s approval errors visible and enables a deliberate retry", async kind => {

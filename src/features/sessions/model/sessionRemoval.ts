@@ -164,7 +164,7 @@ async function removeSession(
     });
   } else {
     if (stopped && shouldPersistSession(stopped)) {
-      const saved = await upsertSession(stopped);
+      const saved = await upsertSession(() => options.workspace.snapshot().sessions.find(session => session.id === sessionId) ?? stopped);
       if (!saved) throw new Error("The conversation could not be saved.");
       savedSummary = saved;
     }

@@ -36,6 +36,11 @@ import {
   type MonoGoalSubmission,
 } from "../model/monoGoalRouting";
 import { MonoGoalRoute } from "./MonoGoalRoute";
+import {
+  monoSubmissionAcceptance,
+  monoSubmissionFailure,
+  type MonoSubmissionAcceptance,
+} from "../model/monoSubmissionAcceptance";
 
 const DROP_STATE = { current: { attachmentsSupported: true, remote: false } };
 
@@ -250,10 +255,14 @@ export function MonoComposer({
     const files = attachmentsRef.current;
     if (!message && !files.length) return;
     const generation = readGeneration.current;
-    const clear = (accepted: boolean | void) => {
-      if (accepted === false) {
-        if (goalRequest.current) goalRequest.current.rejected = true;
-        if (generation === readGeneration.current) setRetainedGoalRoute(null);
+    const clear = (accepted: MonoSubmissionAcceptance) => {
+      if (accepted.kind !== "accepted") {
+        if (accepted.kind === "rejected") {
+          if (goalRequest.current) goalRequest.current.rejected = true;
+          if (generation === readGeneration.current) setRetainedGoalRoute(null);
+        }
+        if (generation === readGeneration.current && accepted.error)
+          setDropError(accepted.error);
         return;
       }
       goalRequest.current = null;
@@ -327,18 +336,13 @@ export function MonoComposer({
       submittingRef.current = true;
       setSubmitting(true);
       void result
-        .then(clear)
-        .catch((reason: unknown) => {
-          if (generation === readGeneration.current)
-            setDropError(
-              reason instanceof Error ? reason.message : String(reason),
-            );
-        })
+        .then((accepted) => clear(monoSubmissionAcceptance(accepted)))
+        .catch((reason: unknown) => clear(monoSubmissionFailure(reason)))
         .finally(() => {
           submittingRef.current = false;
           if (generation === readGeneration.current) setSubmitting(false);
         });
-    } else clear(result);
+    } else clear(monoSubmissionAcceptance(result));
   };
 
   return (

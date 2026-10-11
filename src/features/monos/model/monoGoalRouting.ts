@@ -1,4 +1,4 @@
-import { pathKey, projectKey } from "../../../shared/lib/paths";
+import { projectKey } from "../../../shared/lib/paths";
 import type { Mono, MonoProject } from "./mono";
 import type { Session } from "../../sessions/model/session";
 import type {
@@ -61,32 +61,23 @@ export function monoGoalRoutingContext(
   };
 }
 
-type Mention = { id: string; start: number; end: number; reason: string; exact: boolean };
+type Mention = { id: string; start: number; end: number };
 function mentions(text: string, projects: readonly MonoGoalProject[]): Mention[] {
-  const normalized = text.replace(/\\/g, "/");
+  const haystack = text.toLowerCase();
   const found: Mention[] = [];
   for (const project of projects) {
-    for (const [identity, reason, isPath] of [
-      [project.name, "Exact project name", false],
-      [pathKey(project.path), "Exact registered project path", true],
-    ] as const) {
-      if (!identity) continue;
-      const insensitive = !isPath || /^[a-z]:\//i.test(identity) || identity.startsWith("//");
-      const haystack = insensitive ? normalized.toLowerCase() : normalized;
-      const needle = insensitive ? identity.toLowerCase() : identity;
-      let start = haystack.indexOf(needle);
-      while (start >= 0) {
-        const end = start + needle.length;
-        const boundary = /[\p{L}\p{N}_./-]/u;
-        const before = haystack[start - 1];
-        const descendant = isPath && haystack[end] === "/" &&
-          /[^\s"'`()\[\]{}<>]/u.test(haystack[end + 1] ?? "");
-        const after = haystack[end] === "/" && isPath &&
-          !boundary.test(haystack[end + 1] ?? "") ? haystack[end + 1] : haystack[end];
-        if ((!before || !boundary.test(before)) && (descendant || !after || !boundary.test(after)))
-          found.push({ id: project.id, start, end, reason, exact: !descendant });
-        start = haystack.indexOf(needle, end);
-      }
+    if (!project.name) continue;
+    const needle = project.name.toLowerCase();
+    let start = haystack.indexOf(needle);
+    while (start >= 0) {
+      const end = start + needle.length;
+      const boundary = /[\p{L}\p{N}_./\\-]/u;
+      const before = haystack[start - 1];
+      const after = haystack[end];
+      const drivePrefix = /^[a-z]:$/i.test(haystack.slice(start - 2, start));
+      if (!drivePrefix && (!before || !boundary.test(before)) && (!after || !boundary.test(after)))
+        found.push({ id: project.id, start, end });
+      start = haystack.indexOf(needle, end);
     }
   }
   return found.filter(mention => !found.some(other =>
@@ -106,19 +97,24 @@ export function decideMonoGoalRoute(input: {
   if (choice.override === "grand") return grand("Grand Orchestrator selected");
   if (attachmentCount) return grand("Attachments need the full Grand submission");
   if (!text.trim() || text.length > 8000) return grand("Goals must contain 1–8,000 characters");
+  const hasPaths = (text.match(/[^\s"'`()\[\]{}<>]+/g) ?? []).some(token =>
+    /[/\\]|^[a-z]:|^\.{1,2}$|^\.[\p{L}\p{N}_-]|[\p{L}\p{N}_-]\.[\p{L}\p{N}_-]/iu.test(token));
+  if (hasPaths && choice.override !== "manager")
+    return grand("Contains file paths: choose a project or send to Grand Orchestrator");
   if (/\b(compare|compares|compared|comparing|comparisons?|versus|vs\.?|cross[- ]project)\b|\b(across|all|both|multiple|between)\s+(the\s+)?(projects|repositories|repos)\b/i.test(text))
     return grand("Comparison or cross-project goal");
   const matches = mentions(text, context.projects);
   const ids = new Set(matches.map(match => match.id));
   if (ids.size > 1) return grand("More than one project mentioned");
-  const selected = choice.override === "manager" ? choice.projectId : matches.find(match => match.exact)?.id;
-  if (!selected) return grand("Choose a project or mention its exact name or path");
+  const selected = choice.override === "manager" ? choice.projectId : matches[0]?.id;
+  if (!selected) return grand("Choose a project or mention its exact name");
   if (ids.size && !ids.has(selected)) return grand("Selected project differs from the text");
   const project = context.projects.find(project => project.id === selected);
   if (!project?.available || !project.managerMonoId)
     return grand("Project has no available local Manager");
   return { kind: "manager", project,
-    reason: choice.override === "manager" ? "Project selected" : matches.find(match => match.id === selected && match.exact)!.reason };
+    reason: hasPaths ? `Contains file paths: routed to ${project.name} because you selected it`
+      : choice.override === "manager" ? "Project selected" : "Exact project name" };
 }
 
 export type MonoGoalSubmitHost = {
@@ -158,8 +154,11 @@ export function appendMonoGoalCard(session: Session, submission: MonoGoalSubmiss
     id, role: "assistant", text: `Goal sent to the project Manager · ${goal.route?.reason ?? submission.reason}`,
     monoCard: { type: "dispatch", goalIds: [goal.id] }, monoCardOwner: goal.monoId,
   };
+  const origin = session.blocks.findIndex(block => block.id === submission.userMessageId && block.role === "user");
+  const position = origin < 0 ? session.blocks.length : origin + 1;
   return { ...session, blocks: session.blocks.some(block => block.id === id)
-    ? session.blocks.map(block => block.id === id ? card : block) : [...session.blocks, card] };
+    ? session.blocks.map(block => block.id === id ? card : block)
+    : [...session.blocks.slice(0, position), card, ...session.blocks.slice(position)] };
 }
 
 export function appendMonoGoalPendingCard(session: Session, submission: MonoGoalSubmission, error: unknown): Session {

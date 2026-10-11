@@ -409,9 +409,36 @@ function enqueueSessionWrite<T>(
   return run;
 }
 
-export async function upsertSession(
+type MonoRecoveryWrite = { monoBaseline: readonly Block[]; monoLiveBlocks: Block[] };
+
+/** Keep snapshot construction and publication inside the same boundary as every save. */
+export function writeSession<T>(
+  sessionId: string,
+  operation: (save: typeof saveSessionSnapshot) => Promise<T>,
+): Promise<T> {
+  return enqueueSessionWrite(sessionId, () => operation((session, recovery) => {
+    if (session.id !== sessionId) throw Error("The session identity changed before saving");
+    return saveSessionSnapshot(session, recovery);
+  }));
+}
+
+export function upsertSession(
+  source: Session | (() => Session | undefined),
+  recovery?: MonoRecoveryWrite,
+): Promise<SessionSummary | null> {
+  const session = typeof source === "function" ? source() : source;
+  if (!session) return Promise.resolve(null);
+  if (session.orchestrationLeadId) sessionWriteLeadById.set(session.id, session.orchestrationLeadId);
+  return writeSession(session.id, save => {
+    const current = typeof source === "function" ? source() : source;
+    if (!current) return Promise.resolve(null);
+    return save(current, recovery);
+  });
+}
+
+async function saveSessionSnapshot(
   session: Session,
-  recovery?: { monoBaseline: readonly Block[]; monoLiveBlocks: Block[] },
+  recovery?: MonoRecoveryWrite,
 ): Promise<SessionSummary | null> {
   if (!shouldPersistSession(session) || deletedSessionIds.has(session.id)) {
     return null;
@@ -429,7 +456,7 @@ export async function upsertSession(
   } else {
     sessionWriteLeadById.delete(session.id);
   }
-  const summary = await enqueueSessionWrite(session.id, async () => {
+  const summary = await (async () => {
     if (deletedSessionIds.has(session.id)) return null;
     if (mono) {
       const previous = recovery?.monoBaseline ?? monoSavedBlocks.get(session.id);
@@ -478,7 +505,7 @@ export async function upsertSession(
         ),
       },
     });
-  });
+  })();
   return summary ? normalizeSummary(summary) : null;
 }
 
@@ -652,7 +679,11 @@ export async function readPersistedSession(sessionId: string): Promise<Session |
   return record ? recordToSession(record) : null;
 }
 
-export async function getSession(sessionId: string): Promise<Session | null> {
+export function getSession(sessionId: string): Promise<Session | null> {
+  return writeSession(sessionId, save => loadSession(sessionId, save));
+}
+
+async function loadSession(sessionId: string, save: typeof saveSessionSnapshot): Promise<Session | null> {
   const session = await readPersistedSession(sessionId);
   if (!session) return null;
   if (session.monoTranscript) monoSavedBlocks.set(sessionId, session.blocks);
@@ -668,7 +699,7 @@ export async function getSession(sessionId: string): Promise<Session | null> {
         const blocks = backfillClaudeShellCommands(session.blocks, commands);
         if (blocks !== session.blocks) {
           session.blocks = blocks;
-          await upsertSession(session);
+          await save(session);
         }
       } catch {
         // A missing or unreadable Claude transcript must not block the session.
@@ -684,7 +715,7 @@ export async function getSession(sessionId: string): Promise<Session | null> {
       session.blocks = blocks;
       // A failed write must not cost the reader the session. The repair stays
       // in memory and the next load retries it.
-      await upsertSession(session).catch(() => undefined);
+      await save(session).catch(() => undefined);
     }
   }
   if (session.harness !== "omp" || !session.providerSessionId) {
@@ -702,7 +733,7 @@ export async function getSession(sessionId: string): Promise<Session | null> {
       // Persist before exposing the restored session to a new live turn.
       // Re-reading the source on later loads allows partial repairs to retry;
       // deterministic IDs ensure already repaired transcripts are not written.
-      await upsertSession(session);
+      await save(session);
     }
   } catch {
     // Source logs may be absent/unreadable. Even a failed write must not stop

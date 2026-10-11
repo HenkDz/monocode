@@ -3,7 +3,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { forgetHarnessSession } from "../../integrations/harness/core/registry";
 import { killAllChildren } from "../../integrations/harness/core/child";
-import { newSession } from "../../features/sessions/model/session";
+import { newSession, type Session } from "../../features/sessions/model/session";
+import { appendMonoGoalOrigin, type MonoGoalSubmission } from "../../features/monos/model/monoGoalRouting";
 import { newTab } from "../../features/workspace/model/layout";
 import {
   askQuitConfirmation,
@@ -265,6 +266,33 @@ describe("closing a busy window", () => {
       expect(forgetHarnessSession).not.toHaveBeenCalled();
       expect(killAllChildren).not.toHaveBeenCalled();
       expect(invoke).not.toHaveBeenCalled();
+    } finally {
+      release();
+    }
+  });
+
+  it("saves a Mono goal origin added while close confirmation is open", async () => {
+    let current: Session = { ...newSession("codex", "C:/test"), id: "cc5cg-close-goal", busy: true,
+      monoTranscript: { before: null, firstBlockId: "chat" },
+      blocks: [{ id: "chat", role: "user", text: "Earlier chat" }] };
+    const tab = newTab(current.id);
+    const origin: MonoGoalSubmission = { ownerId: "grand", requestId: "close-goal-request", userMessageId: "close-goal-user",
+      choice: { mode: "goal", override: "auto" }, reason: "Exact project name",
+      projectId: "atlas", managerMonoId: "atlas-manager" };
+    let confirm!: (accepted: boolean) => void;
+    vi.mocked(ask).mockReturnValueOnce(new Promise<boolean>(resolve => { confirm = resolve; }));
+    const release = setQuitWorkspace(() => [current], () => [tab], () => tab.id, () => current.cwd,
+      () => [], () => new Map(), vi.fn());
+    try {
+      const pending = closeBusyWindow();
+      expect(ask).toHaveBeenCalledOnce();
+      current = appendMonoGoalOrigin(current, origin, "Fix Atlas checkout");
+      confirm(true);
+      await pending;
+      const saved = vi.mocked(invoke).mock.calls.find(([command]) => command === "mono_session_upsert")?.[1] as
+        { session: { blocks: Session["blocks"] } };
+      expect(saved.session.blocks).toContainEqual(expect.objectContaining({ id: origin.userMessageId, monoGoalSubmission: origin }));
+      expect(invoke).toHaveBeenCalledWith("destroy_window");
     } finally {
       release();
     }

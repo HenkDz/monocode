@@ -5,6 +5,21 @@ import { expect, it, vi } from "vitest";
 import { monoSessionCompletionMessage } from "../../monos/model/monoSessionCompletion";
 import { MessageQueue } from "./MessageQueue";
 
+it.each(["active", "paused", "resuming"] as const)("holds %s queues visibly for storage repair with no steer or resume", (status) => {
+  const message = { id: "held", text: "What have you done today?", attachments: [] };
+  const container = document.createElement("div");
+  container.innerHTML = renderToStaticMarkup(createElement(MessageQueue, {
+    messages: [message], status, storageBlocked: true,
+    onSteer: vi.fn(), onResume: vi.fn(), variant: "messages",
+  }));
+  expect(container.querySelector('[role="status"]')?.textContent).toBe("Waiting for storage repair");
+  expect(container.textContent).toContain(message.text);
+  expect(container.textContent).not.toMatch(/Steer|Resume|Retry|Waiting to send|Sending/);
+  expect(container.querySelector<HTMLButtonElement>('[aria-label="Edit queued message"]')?.disabled).toBe(false);
+  expect(container.querySelector<HTMLButtonElement>('[aria-label="Remove queued message"]')?.disabled).toBe(false);
+  expect(message).toEqual({ id: "held", text: "What have you done today?", attachments: [] });
+});
+
 it("never exposes internal notifications in the user's outbox", () => {
   const message = monoSessionCompletionMessage({
     sessionId: "worker",

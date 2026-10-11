@@ -156,7 +156,7 @@ export function MonoChatCard({
         onClick={() => openCardSession(card.sessionId)}
       >
         {session?.title ?? "Session"} ·{" "}
-        {session?.needsInput ? "Needs you" : session?.busy ? "Running" : "Idle"}
+        {session?.storageBlocked ? "Blocked · storage" : session?.needsInput ? "Needs you" : session?.busy ? "Running" : "Idle"}
         {card.note && <p>{card.note}</p>}
       </button>
     );

@@ -493,6 +493,8 @@ export type Session = {
   usageLimit?: UsageLimit;
   /** Storage preparation failed; hold automatic turns until Repair succeeds. */
   codexStorageError?: string;
+  /** Account that failed preparation, even if the project selection changes. */
+  codexStorageAccountId?: string;
   codexStoragePreparing?: boolean;
   /**
    * Lives only in memory: never saved, never listed with the project's chats.

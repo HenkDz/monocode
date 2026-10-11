@@ -2,6 +2,7 @@
 //! Configuration and credentials remain shared with the selected provider account.
 
 use std::collections::HashSet;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 
@@ -85,6 +86,45 @@ pub struct StorageInfo {
     source_kind: &'static str,
 }
 
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageConflict {
+    entry: String,
+    mono_path: String,
+    source_path: String,
+    mono_bytes: u64,
+    source_bytes: u64,
+    mono_mtime: Option<u64>,
+    source_mtime: Option<u64>,
+    identical: bool,
+    mono_fingerprint: String,
+    source_fingerprint: String,
+    can_keep_mono: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StorageResolution {
+    UseAccountVersion,
+    KeepMonoVersion,
+}
+
+#[derive(Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageComparison {
+    mono_content: Option<String>,
+    source_content: Option<String>,
+    truncated: bool,
+    unavailable: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Default)]
+struct LinkSnapshot {
+    fingerprint: String,
+    #[serde(default)]
+    private_override: bool,
+}
+
 fn locations(
     app: &AppHandle,
     account_id: Option<&str>,
@@ -133,6 +173,42 @@ pub fn codex_mono_store_info(
         source_home: crate::fs::path_to_js(&source),
         source_kind,
     })
+}
+
+#[tauri::command(async)]
+pub fn codex_mono_store_resolve(
+    app: AppHandle,
+    provider_account_id: Option<String>,
+    conflict: StorageConflict,
+    resolution: StorageResolution,
+) -> Result<(), String> {
+    let (source, home, _) = locations(&app, provider_account_id.as_deref())?;
+    resolve_files(&source, &home, &conflict, resolution)
+}
+
+#[tauri::command(async)]
+pub fn codex_mono_store_compare(
+    app: AppHandle,
+    provider_account_id: Option<String>,
+    conflict: StorageConflict,
+) -> Result<StorageComparison, String> {
+    let (source, home, _) = locations(&app, provider_account_id.as_deref())?;
+    let _lock = STORAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (source, home) = storage_roots(&source, &home)?;
+    check_conflict(&source, &home, &conflict)?;
+    compare_files(&source, &home, &conflict.entry)
+}
+
+#[tauri::command(async)]
+pub async fn codex_mono_store_reveal(
+    app: AppHandle,
+    provider_account_id: Option<String>,
+    entry: String,
+) -> Result<(), String> {
+    validate_entry(&entry)?;
+    let (_, home, _) = locations(&app, provider_account_id.as_deref())?;
+    // Resolve the account directory here; never accept a client supplied path.
+    crate::fs::reveal_path(crate::fs::path_to_js(&home.join(entry))).await
 }
 
 #[tauri::command(async)]
@@ -224,15 +300,19 @@ fn log_storage_issue(issue: String) {
 }
 
 fn required_entry(name: &str) -> bool {
+    let normalized = name.to_ascii_lowercase();
+    let name = normalized.as_str();
     !name.ends_with(".bak")
         && (matches!(
             name,
-            "auth.json" | ".credentials.json" | "secrets" | "AGENTS.md" | "skills" | "hooks.json"
+            "auth.json" | ".credentials.json" | "secrets" | "agents.md" | "skills" | "hooks.json"
         ) || name == "config"
             || name.starts_with("config."))
 }
 
 fn private_entry(name: &str) -> bool {
+    let normalized = name.to_ascii_lowercase();
+    let name = normalized.as_str();
     STATE_NAMES.contains(&name)
         || name.contains(".sqlite")
         || name.ends_with(".db")
@@ -241,8 +321,25 @@ fn private_entry(name: &str) -> bool {
         || name.starts_with(".monocode-")
 }
 
-fn prepare_files(source: &Path, home: &Path) -> Result<(), String> {
-    let _lock = STORAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+fn validate_entry(name: &str) -> Result<(), String> {
+    if name.is_empty()
+        || matches!(name, "." | "..")
+        || name.contains(['/', '\\', ':', '\0', '<', '>', '"', '|', '?', '*'])
+        || name.ends_with(['.', ' '])
+        || private_entry(name)
+    {
+        return Err("Invalid shared Codex storage entry".into());
+    }
+    Ok(())
+}
+
+fn login_entry(name: &str) -> bool {
+    ["auth.json", ".credentials.json", "secrets"]
+        .iter()
+        .any(|entry| name.eq_ignore_ascii_case(entry))
+}
+
+fn storage_roots(source: &Path, home: &Path) -> Result<(PathBuf, PathBuf), String> {
     std::fs::create_dir_all(source)
         .map_err(|e| format!("Could not open the Codex account directory: {e}"))?;
     std::fs::create_dir_all(home)
@@ -258,12 +355,252 @@ fn prepare_files(source: &Path, home: &Path) -> Result<(), String> {
     if canonical_home.starts_with(&source) || source.starts_with(&canonical_home) {
         return Err("Mono Codex storage must be separate from the normal Codex home".into());
     }
+    Ok((source, canonical_home))
+}
+
+fn private_directory(home: &Path, name: &str) -> Result<PathBuf, String> {
+    let path = home.join(name);
+    match std::fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
+        Ok(_) => {
+            return Err(format!(
+                "Private Codex metadata must be a real directory: {}",
+                path.display()
+            ))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::create_dir(&path).map_err(|e| e.to_string())?;
+        }
+        Err(error) => return Err(error.to_string()),
+    }
+    Ok(path)
+}
+
+fn snapshot_path(home: &Path, name: &str) -> Result<PathBuf, String> {
+    validate_entry(name)?;
+    let path = private_directory(home, ".monocode-links")?.join(format!("{name}.json"));
+    if std::fs::symlink_metadata(&path).is_ok_and(|m| !m.is_file() || m.file_type().is_symlink()) {
+        return Err("Codex link metadata must be a real file".into());
+    }
+    Ok(path)
+}
+
+fn read_snapshot(home: &Path, name: &str) -> Result<Option<LinkSnapshot>, String> {
+    let path = snapshot_path(home, name)?;
+    match std::fs::read(path) {
+        Ok(bytes) => serde_json::from_slice(&bytes)
+            .map(Some)
+            .map_err(|e| format!("Invalid Codex link metadata: {e}")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn write_snapshot(home: &Path, name: &str, snapshot: &LinkSnapshot) -> Result<(), String> {
+    let path = snapshot_path(home, name)?;
+    let temp = path.with_file_name(format!(".monocode-link-{}", uuid::Uuid::new_v4()));
+    let result = (|| {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)
+            .map_err(|e| e.to_string())?;
+        file.write_all(&serde_json::to_vec(snapshot).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+        file.sync_all().map_err(|e| e.to_string())?;
+        drop(file);
+        replace_link(&temp, &path)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(temp);
+    }
+    result
+}
+
+fn fingerprint(path: &Path) -> Result<String, String> {
+    let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut hash = Sha256::new();
+    let mut buffer = [0u8; 8192];
+    loop {
+        let read = file.read(&mut buffer).map_err(|e| e.to_string())?;
+        if read == 0 {
+            break;
+        }
+        hash.update(&buffer[..read]);
+    }
+    Ok(format!("{:x}", hash.finalize()))
+}
+
+fn file_conflict(source: &Path, home: &Path, name: &str) -> Result<StorageConflict, String> {
+    validate_entry(name)?;
+    let mono = home.join(name);
+    let account = source.join(name);
+    let mono_meta = std::fs::symlink_metadata(&mono).map_err(|e| e.to_string())?;
+    let source_meta = std::fs::metadata(&account).map_err(|e| e.to_string())?;
+    if !mono_meta.is_file() || mono_meta.file_type().is_symlink() || !source_meta.is_file() {
+        return Err("Only conflicting real files can be resolved".into());
+    }
+    let mono_fingerprint = fingerprint(&mono)?;
+    let source_fingerprint = fingerprint(&account)?;
+    let mtime = |meta: &std::fs::Metadata| {
+        meta.modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .and_then(|d| d.as_millis().try_into().ok())
+    };
+    Ok(StorageConflict {
+        entry: name.into(),
+        mono_path: crate::fs::path_to_js(&mono),
+        source_path: crate::fs::path_to_js(&account),
+        mono_bytes: mono_meta.len(),
+        source_bytes: source_meta.len(),
+        mono_mtime: mtime(&mono_meta),
+        source_mtime: mtime(&source_meta),
+        identical: mono_fingerprint == source_fingerprint,
+        mono_fingerprint,
+        source_fingerprint,
+        can_keep_mono: !login_entry(name),
+    })
+}
+
+fn check_conflict(source: &Path, home: &Path, expected: &StorageConflict) -> Result<(), String> {
+    validate_entry(&expected.entry)?;
+    if same_entry(&source.join(&expected.entry), &home.join(&expected.entry)) {
+        return Err(
+            "Codex files changed since this issue was shown. Retry repair to refresh it.".into(),
+        );
+    }
+    let actual = file_conflict(source, home, &expected.entry)?;
+    if actual != *expected {
+        return Err(storage_error(
+            serde_json::to_string(&actual).map_err(|e| e.to_string())?,
+        ));
+    }
+    Ok(())
+}
+
+fn backup_and_relink(source: &Path, home: &Path, name: &str) -> Result<(), String> {
+    let target = home.join(name);
+    let temp = home.join(format!(".monocode-link-{}", uuid::Uuid::new_v4()));
+    create_link(&source.join(name), &temp)?;
+    let result = (|| {
+        let root = private_directory(home, ".monocode-conflicts")?;
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| e.to_string())?
+            .as_millis();
+        let backup = root.join(format!("{timestamp}-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&backup).map_err(|e| e.to_string())?;
+        let saved = backup.join(name);
+        // Move the original bytes before publishing a new link; retain them on every failure.
+        std::fs::rename(&target, &saved).map_err(|e| e.to_string())?;
+        publish_recovery_link(&source.join(name), &target, &saved)
+    })();
+    if std::fs::symlink_metadata(&temp).is_ok() {
+        let _ = remove_link(&temp);
+    }
+    result
+}
+
+fn publish_recovery_link(source: &Path, target: &Path, saved: &Path) -> Result<(), String> {
+    // Create-new semantics preserve a file recreated by another writer after the archive move.
+    if let Err(error) = create_link(source, target) {
+        if let Ok(mut restored) = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(target)
+        {
+            if let Ok(mut original) = std::fs::File::open(saved) {
+                let _ = std::io::copy(&mut original, &mut restored);
+            }
+        }
+        return Err(format!(
+            "Could not relink Codex storage; preserved {}: {error}",
+            saved.display()
+        ));
+    }
+    Ok(())
+}
+
+fn resolve_files(
+    source: &Path,
+    home: &Path,
+    conflict: &StorageConflict,
+    resolution: StorageResolution,
+) -> Result<(), String> {
+    let _lock = STORAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (source, home) = storage_roots(source, home)?;
+    validate_entry(&conflict.entry)?;
+    check_conflict(&source, &home, conflict)?;
+    snapshot_path(&home, &conflict.entry)?;
+    // Linked files already share writes; a stale UI must never make a shared login private.
+    if replaceable_link(&home.join(&conflict.entry))? {
+        return Err("Codex storage entry is already linked. Retry repair.".into());
+    }
+    match resolution {
+        StorageResolution::UseAccountVersion => {
+            backup_and_relink(&source, &home, &conflict.entry)?;
+            write_snapshot(
+                &home,
+                &conflict.entry,
+                &LinkSnapshot {
+                    fingerprint: fingerprint(&home.join(&conflict.entry))?,
+                    private_override: false,
+                },
+            )?;
+        }
+        StorageResolution::KeepMonoVersion => {
+            if login_entry(&conflict.entry) {
+                return Err("Login files must remain shared with the selected account".into());
+            }
+            write_snapshot(
+                &home,
+                &conflict.entry,
+                &LinkSnapshot {
+                    fingerprint: fingerprint(&home.join(&conflict.entry))?,
+                    private_override: true,
+                },
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn compare_files(source: &Path, home: &Path, name: &str) -> Result<StorageComparison, String> {
+    if !matches!(name, "hooks.json" | "AGENTS.md") {
+        return Ok(StorageComparison { unavailable: Some("Open these files locally to compare. Configuration and login files may contain secrets.".into()), ..StorageComparison::default() });
+    }
+    const LIMIT: u64 = 64 * 1024;
+    let read = |path: PathBuf| -> Result<(String, bool), String> {
+        let mut bytes = Vec::new();
+        std::fs::File::open(path)
+            .map_err(|e| e.to_string())?
+            .take(LIMIT + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|e| e.to_string())?;
+        let truncated = bytes.len() > LIMIT as usize;
+        bytes.truncate(LIMIT as usize);
+        Ok((String::from_utf8_lossy(&bytes).into_owned(), truncated))
+    };
+    let (mono, mono_truncated) = read(home.join(name))?;
+    let (account, source_truncated) = read(source.join(name))?;
+    Ok(StorageComparison {
+        mono_content: Some(mono),
+        source_content: Some(account),
+        truncated: mono_truncated || source_truncated,
+        unavailable: None,
+    })
+}
+
+fn prepare_files(source: &Path, home: &Path) -> Result<(), String> {
+    let _lock = STORAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (source, home) = storage_roots(source, home)?;
     for name in STATE_NAMES {
         if std::fs::symlink_metadata(home.join(name)).is_ok_and(|m| m.file_type().is_symlink()) {
             return Err("Mono Codex state must remain in its private storage directory".into());
         }
     }
-    for entry in std::fs::read_dir(home).map_err(|e| e.to_string())? {
+    for entry in std::fs::read_dir(&home).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
         let name = entry.file_name();
         if private_entry(&name.to_string_lossy()) {
@@ -273,7 +610,7 @@ fn prepare_files(source: &Path, home: &Path) -> Result<(), String> {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => (|| {
                 if replaceable_link(&entry.path())? {
                     remove_link(&entry.path())?;
-                } else if name == "auth.json" || name == ".credentials.json" {
+                } else if login_entry(&name.to_string_lossy()) {
                     return Err(format!(
                         "Real login entry conflicts with the selected Codex home; preserved: {}",
                         entry.path().display()
@@ -305,7 +642,60 @@ fn prepare_files(source: &Path, home: &Path) -> Result<(), String> {
         }
         let target = home.join(&name);
         let result = (|| {
-            if (name == "config.toml" || name == "config.toml.bak")
+            let name = name
+                .to_str()
+                .ok_or("Invalid Codex configuration filename")?;
+            let normalized_name = name.to_ascii_lowercase();
+            let snapshot = if entry.path().is_file() {
+                read_snapshot(&home, name)?
+            } else {
+                None
+            };
+            if snapshot.as_ref().is_some_and(|s| s.private_override) {
+                match std::fs::symlink_metadata(&target) {
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Ok(metadata)
+                        if metadata.is_file()
+                            && !metadata.file_type().is_symlink()
+                            && !replaceable_link(&target)?
+                            && !login_entry(name) =>
+                    {
+                        return Ok(())
+                    }
+                    _ => {
+                        return Err(
+                            "Private Codex override must remain a real configuration file".into(),
+                        )
+                    }
+                }
+            }
+            if entry.path().is_file()
+                && std::fs::symlink_metadata(&target)
+                    .is_ok_and(|m| m.is_file() && !m.file_type().is_symlink())
+                && !replaceable_link(&target)?
+                && !same_entry(&entry.path(), &target)
+            {
+                let conflict = file_conflict(&source, &home, name)?;
+                let empty_hooks = normalized_name == "hooks.json"
+                    && conflict.mono_bytes <= 64 * 1024
+                    && std::fs::read(&target)
+                        .ok()
+                        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+                        .is_some_and(|v| v == serde_json::json!({"hooks":{}}));
+                if conflict.identical
+                    || empty_hooks
+                    || snapshot
+                        .as_ref()
+                        .is_some_and(|s| s.fingerprint == conflict.mono_fingerprint)
+                {
+                    backup_and_relink(&source, &home, name)?;
+                } else if normalized_name != "config.toml" && normalized_name != "config.toml.bak" {
+                    return Err(serde_json::to_string(&conflict).map_err(|e| e.to_string())?);
+                } else if snapshot.is_some() {
+                    return Err(serde_json::to_string(&conflict).map_err(|e| e.to_string())?);
+                }
+            }
+            if (normalized_name == "config.toml" || normalized_name == "config.toml.bak")
                 && std::fs::symlink_metadata(&target).is_ok_and(|m| m.is_file())
                 && !replaceable_link(&target)?
             {
@@ -316,9 +706,23 @@ fn prepare_files(source: &Path, home: &Path) -> Result<(), String> {
                 ));
                 return Ok(());
             }
-            link_entry(&entry.path(), &target)
+            link_entry(&entry.path(), &target)?;
+            if entry.path().is_file() {
+                write_snapshot(
+                    &home,
+                    name,
+                    &LinkSnapshot {
+                        fingerprint: fingerprint(&target)?,
+                        private_override: false,
+                    },
+                )?;
+            }
+            Ok(())
         })();
         if let Err(error) = result {
+            if error.starts_with('{') && required_entry(&name.to_string_lossy()) {
+                return Err(error);
+            }
             let error = format!("Codex storage entry {}: {error}", target.display());
             if required_entry(&name.to_string_lossy()) {
                 return Err(error);
@@ -563,8 +967,16 @@ fn create_link(source: &Path, target: &Path) -> Result<(), String> {
             junction::create(source, target)
                 .map_err(|e| format!("Could not share the Codex configuration directory: {e}"))?;
         } else if source.is_file() {
-            std::fs::hard_link(source, target)
-                .map_err(|e| format!("Could not share Codex configuration: {e}"))?;
+            // A file symlink follows temp+rename writes; hardlinks need snapshot recovery on prepare.
+            if std::os::windows::fs::symlink_file(source, target).is_err() {
+                std::fs::hard_link(source, target)
+                    .map_err(|e| format!("Could not share Codex configuration: {e}"))?;
+            }
+        } else {
+            return Err(format!(
+                "Codex account entry is missing or unsupported: {}",
+                source.display()
+            ));
         }
     }
     Ok(())
@@ -1030,6 +1442,505 @@ mod tests {
     }
     // Keep isolated fixtures for inspection; never recursively clean Codex homes.
 
+    fn conflict_fixture(name: &str, mono: &[u8], account: &[u8]) -> (Fixture, StorageConflict) {
+        let fixture = Fixture::new();
+        std::fs::create_dir_all(fixture.source()).unwrap();
+        std::fs::create_dir_all(fixture.home()).unwrap();
+        std::fs::write(fixture.source().join(name), account).unwrap();
+        std::fs::write(fixture.home().join(name), mono).unwrap();
+        let (source, home) = storage_roots(&fixture.source(), &fixture.home()).unwrap();
+        let conflict = file_conflict(&source, &home, name).unwrap();
+        (fixture, conflict)
+    }
+
+    fn saved_bytes(fixture: &Fixture, name: &str) -> Vec<Vec<u8>> {
+        std::fs::read_dir(fixture.home().join(".monocode-conflicts"))
+            .unwrap()
+            .map(|e| std::fs::read(e.unwrap().path().join(name)).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn storage_repair_atomic_source_replacement_detaches_hardlink_and_recovers_snapshot() {
+        for name in ["hooks.json", "AGENTS.md", "config.toml"] {
+            let fixture = Fixture::new();
+            std::fs::create_dir_all(fixture.source()).unwrap();
+            std::fs::create_dir_all(fixture.home()).unwrap();
+            let source = fixture.source().join(name);
+            let target = fixture.home().join(name);
+            std::fs::write(&source, b"tracked native bytes\0").unwrap();
+            std::fs::hard_link(&source, &target).unwrap();
+            prepare_files(&fixture.source(), &fixture.home()).unwrap();
+            let temp = fixture.source().join("replacement");
+            std::fs::write(&temp, b"new account bytes").unwrap();
+            replace_link(&temp, &source).unwrap();
+            assert!(!same_entry(&source, &target));
+            #[cfg(windows)]
+            assert_eq!(file_info(&target).unwrap().nNumberOfLinks, 1);
+            assert_eq!(std::fs::read(&target).unwrap(), b"tracked native bytes\0");
+            prepare_files(&fixture.source(), &fixture.home()).unwrap();
+            assert!(same_entry(&source, &target));
+            assert_eq!(
+                saved_bytes(&fixture, name),
+                vec![b"tracked native bytes\0".to_vec()]
+            );
+            prepare_files(&fixture.source(), &fixture.home()).unwrap();
+            assert_eq!(saved_bytes(&fixture, name).len(), 1);
+            println!(
+                "atomic-replacement {name}: preserved and relinked {}",
+                fixture.0.display()
+            );
+        }
+    }
+
+    #[test]
+    fn storage_repair_recovers_legacy_empty_hooks_and_identical_bytes_without_discarding_them() {
+        for (mono, account) in [
+            (
+                br#"{ "hooks": {} }"#.as_slice(),
+                b"changed hooks".as_slice(),
+            ),
+            (b"same bytes".as_slice(), b"same bytes".as_slice()),
+        ] {
+            let (fixture, _) = conflict_fixture("hooks.json", mono, account);
+            prepare_files(&fixture.source(), &fixture.home()).unwrap();
+            assert!(same_entry(
+                &fixture.source().join("hooks.json"),
+                &fixture.home().join("hooks.json")
+            ));
+            assert_eq!(saved_bytes(&fixture, "hooks.json"), vec![mono.to_vec()]);
+            assert_eq!(
+                std::fs::read(fixture.source().join("hooks.json")).unwrap(),
+                account
+            );
+        }
+    }
+
+    #[test]
+    fn storage_repair_unknown_bytes_need_explicit_choice_and_account_choice_preserves_bytes() {
+        let (fixture, _) = conflict_fixture("hooks.json", b"unique mono bytes\0", b"account hooks");
+        let error = prepare_files(&fixture.source(), &fixture.home()).unwrap_err();
+        let conflict: StorageConflict = serde_json::from_str(&error).unwrap();
+        assert!(!conflict.identical);
+        assert_eq!(conflict.mono_bytes, 18);
+        resolve_files(
+            &fixture.source(),
+            &fixture.home(),
+            &conflict,
+            StorageResolution::UseAccountVersion,
+        )
+        .unwrap();
+        assert_eq!(
+            saved_bytes(&fixture, "hooks.json"),
+            vec![b"unique mono bytes\0".to_vec()]
+        );
+        assert_eq!(
+            std::fs::read(fixture.source().join("hooks.json")).unwrap(),
+            b"account hooks"
+        );
+        prepare_files(&fixture.source(), &fixture.home()).unwrap();
+    }
+
+    #[test]
+    fn storage_repair_keep_mono_is_durable_and_independent_per_entry() {
+        let (fixture, conflict) =
+            conflict_fixture("hooks.json", b"private hooks", b"account hooks");
+        std::fs::write(fixture.source().join("AGENTS.md"), b"account instructions").unwrap();
+        resolve_files(
+            &fixture.source(),
+            &fixture.home(),
+            &conflict,
+            StorageResolution::KeepMonoVersion,
+        )
+        .unwrap();
+        prepare_files(&fixture.source(), &fixture.home()).unwrap();
+        std::fs::write(fixture.source().join("hooks.json"), b"later account hooks").unwrap();
+        std::fs::write(fixture.home().join("hooks.json"), b"later private hooks").unwrap();
+        prepare_files(&fixture.source(), &fixture.home()).unwrap();
+        assert_eq!(
+            std::fs::read(fixture.home().join("hooks.json")).unwrap(),
+            b"later private hooks"
+        );
+        assert_eq!(
+            std::fs::read(fixture.source().join("hooks.json")).unwrap(),
+            b"later account hooks"
+        );
+        assert!(same_entry(
+            &fixture.source().join("AGENTS.md"),
+            &fixture.home().join("AGENTS.md")
+        ));
+    }
+
+    #[test]
+    fn storage_repair_deleted_private_override_returns_to_account_link() {
+        let (fixture, conflict) =
+            conflict_fixture("hooks.json", b"private hooks", b"account hooks");
+        resolve_files(
+            &fixture.source(),
+            &fixture.home(),
+            &conflict,
+            StorageResolution::KeepMonoVersion,
+        )
+        .unwrap();
+        std::fs::remove_file(fixture.home().join("hooks.json")).unwrap();
+        prepare_files(&fixture.source(), &fixture.home()).unwrap();
+        assert!(same_entry(
+            &fixture.source().join("hooks.json"),
+            &fixture.home().join("hooks.json")
+        ));
+        assert!(
+            !read_snapshot(&fixture.home(), "hooks.json")
+                .unwrap()
+                .unwrap()
+                .private_override
+        );
+        prepare_files(&fixture.source(), &fixture.home()).unwrap();
+    }
+
+    #[test]
+    fn storage_repair_stale_choice_refreshes_conflict_without_changing_any_bytes() {
+        for change_mono in [false, true] {
+            let (fixture, conflict) = conflict_fixture("hooks.json", b"private", b"account");
+            let path = if change_mono {
+                fixture.home()
+            } else {
+                fixture.source()
+            }
+            .join("hooks.json");
+            std::fs::write(&path, b"changed concurrently").unwrap();
+            let error = resolve_files(
+                &fixture.source(),
+                &fixture.home(),
+                &conflict,
+                StorageResolution::UseAccountVersion,
+            )
+            .unwrap_err();
+            let fresh: StorageConflict =
+                serde_json::from_str(error.strip_prefix("Codex storage needs repair: ").unwrap())
+                    .unwrap();
+            assert_ne!(fresh, conflict);
+            assert_eq!(std::fs::read(path).unwrap(), b"changed concurrently");
+            assert!(!fixture.home().join(".monocode-conflicts").exists());
+        }
+    }
+
+    #[test]
+    fn storage_repair_rejects_other_account_paths_state_traversal_directories_and_missing_source() {
+        let (fixture, mut conflict) = conflict_fixture("hooks.json", b"private", b"account");
+        conflict.source_path.push_str("/other-account");
+        assert!(resolve_files(
+            &fixture.source(),
+            &fixture.home(),
+            &conflict,
+            StorageResolution::UseAccountVersion
+        )
+        .is_err());
+        for name in [
+            "../hooks.json",
+            "other/hooks.json",
+            "C:\\hooks.json",
+            "sessions",
+            "state_5.sqlite",
+            ".monocode-links",
+            "..",
+            "",
+            "auth.json.",
+            "auth.json ",
+            "HISTORY.JSONL",
+        ] {
+            conflict.entry = name.into();
+            assert!(
+                resolve_files(
+                    &fixture.source(),
+                    &fixture.home(),
+                    &conflict,
+                    StorageResolution::KeepMonoVersion
+                )
+                .is_err(),
+                "{name}"
+            );
+        }
+        let (fixture, conflict) = conflict_fixture("hooks.json", b"private", b"account");
+        std::fs::remove_file(fixture.source().join("hooks.json")).unwrap();
+        assert!(resolve_files(
+            &fixture.source(),
+            &fixture.home(),
+            &conflict,
+            StorageResolution::UseAccountVersion
+        )
+        .is_err());
+        assert_eq!(
+            std::fs::read(fixture.home().join("hooks.json")).unwrap(),
+            b"private"
+        );
+        let fixture = Fixture::new();
+        std::fs::create_dir_all(fixture.source().join("skills")).unwrap();
+        std::fs::create_dir_all(fixture.home().join("skills")).unwrap();
+        assert!(file_conflict(&fixture.source(), &fixture.home(), "skills").is_err());
+    }
+
+    #[test]
+    fn storage_repair_auth_cannot_be_private_and_comparison_does_not_export_configuration_secrets()
+    {
+        for name in [
+            "auth.json",
+            "AUTH.JSON",
+            "Auth.Json",
+            ".credentials.json",
+            ".CrEdEnTiAlS.JsOn",
+            "config.toml",
+            "config.json",
+        ] {
+            let (fixture, conflict) = conflict_fixture(name, b"private token", b"account token");
+            let comparison = compare_files(&fixture.source(), &fixture.home(), name).unwrap();
+            assert!(comparison.mono_content.is_none());
+            assert!(comparison.source_content.is_none());
+            assert!(comparison.unavailable.is_some());
+            if login_entry(name) {
+                assert!(!conflict.can_keep_mono);
+                assert!(resolve_files(
+                    &fixture.source(),
+                    &fixture.home(),
+                    &conflict,
+                    StorageResolution::KeepMonoVersion
+                )
+                .is_err());
+                assert_eq!(
+                    std::fs::read(fixture.home().join(name)).unwrap(),
+                    b"private token"
+                );
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn storage_repair_windows_name_aliases_keep_auth_required_and_state_private() {
+        let (fixture, _) = conflict_fixture("AuTh.JsOn", b"private login", b"account login");
+        let error = prepare_files(&fixture.source(), &fixture.home()).unwrap_err();
+        let conflict: StorageConflict = serde_json::from_str(&error).unwrap();
+        assert!(!conflict.can_keep_mono);
+        assert!(resolve_files(
+            &fixture.source(),
+            &fixture.home(),
+            &conflict,
+            StorageResolution::KeepMonoVersion
+        )
+        .is_err());
+        assert_eq!(
+            std::fs::read(fixture.home().join("auth.json")).unwrap(),
+            b"private login"
+        );
+        let fixture = Fixture::new();
+        std::fs::create_dir_all(fixture.source().join("SESSIONS")).unwrap();
+        std::fs::write(
+            fixture.source().join("SESSIONS/account-history"),
+            b"account history",
+        )
+        .unwrap();
+        std::fs::write(fixture.source().join("HISTORY.JSONL"), b"account history").unwrap();
+        prepare_files(&fixture.source(), &fixture.home()).unwrap();
+        assert!(!fixture.home().join("sessions/account-history").exists());
+        assert!(!fixture.home().join("history.jsonl").exists());
+        assert!(!std::fs::symlink_metadata(fixture.home().join("sessions"))
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        for name in [
+            "AUTH.JSON",
+            ".CrEdEnTiAlS.JsOn",
+            "SeCrEtS",
+            "HOOKS.JSON",
+            "AGENTS.md",
+            "CONFIG.TOML",
+        ] {
+            assert!(required_entry(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn storage_repair_comparison_is_plain_bounded_text() {
+        let bytes = vec![b'x'; 70 * 1024];
+        let (fixture, _) = conflict_fixture("hooks.json", &bytes, b"<script>plain text</script>");
+        let comparison = compare_files(&fixture.source(), &fixture.home(), "hooks.json").unwrap();
+        assert!(comparison.truncated);
+        assert_eq!(comparison.mono_content.unwrap().len(), 64 * 1024);
+        assert_eq!(
+            comparison.source_content.unwrap(),
+            "<script>plain text</script>"
+        );
+    }
+
+    #[test]
+    fn storage_repair_recreated_target_is_not_overwritten_after_original_is_archived() {
+        let (fixture, _) = conflict_fixture("hooks.json", b"concurrent writer", b"account");
+        let saved = fixture.home().join("archived-original");
+        std::fs::write(&saved, b"original").unwrap();
+        assert!(publish_recovery_link(
+            &fixture.source().join("hooks.json"),
+            &fixture.home().join("hooks.json"),
+            &saved
+        )
+        .is_err());
+        assert_eq!(
+            std::fs::read(fixture.home().join("hooks.json")).unwrap(),
+            b"concurrent writer"
+        );
+        assert_eq!(std::fs::read(saved).unwrap(), b"original");
+        assert_eq!(
+            std::fs::read(fixture.source().join("hooks.json")).unwrap(),
+            b"account"
+        );
+    }
+
+    #[test]
+    fn storage_repair_failed_publication_restores_original_and_retains_archived_bytes() {
+        let fixture = Fixture::new();
+        std::fs::create_dir_all(fixture.home()).unwrap();
+        let source = fixture.0.join("invalid-source/parent/entry");
+        std::fs::write(fixture.0.join("invalid-source"), b"cannot be a directory").unwrap();
+        let target = fixture.home().join("hooks.json");
+        let saved = fixture.home().join("archived-original");
+        std::fs::write(&saved, b"original").unwrap();
+        #[cfg(windows)]
+        {
+            assert!(publish_recovery_link(&source, &target, &saved).is_err());
+            assert_eq!(std::fs::read(&target).unwrap(), b"original");
+        }
+        #[cfg(unix)]
+        {
+            // Unix symlinks can target a missing file; prevent creation with a real target directory.
+            std::fs::create_dir(&target).unwrap();
+            assert!(publish_recovery_link(&source, &target, &saved).is_err());
+            assert!(target.is_dir());
+        }
+        assert_eq!(std::fs::read(saved).unwrap(), b"original");
+    }
+
+    #[test]
+    fn storage_repair_recreated_symlink_and_linked_snapshot_cannot_redirect_writes() {
+        let (fixture, conflict) = conflict_fixture("hooks.json", b"private", b"account");
+        let outside = fixture.0.join("outside-file");
+        let target = fixture.home().join("hooks.json");
+        let saved = fixture.home().join("archived-original");
+        std::fs::rename(&target, &saved).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, &target).unwrap();
+        #[cfg(windows)]
+        if std::os::windows::fs::symlink_file(&outside, &target).is_err() {
+            println!(
+                "File-symlink privilege unavailable; junction metadata rejection tested separately"
+            );
+            return;
+        }
+        assert!(
+            publish_recovery_link(&fixture.source().join("hooks.json"), &target, &saved).is_err()
+        );
+        assert!(!outside.exists());
+        assert_eq!(std::fs::read(&saved).unwrap(), b"private");
+        remove_link(&target).unwrap();
+        std::fs::rename(&saved, &target).unwrap();
+        let metadata = private_directory(&fixture.home(), ".monocode-links")
+            .unwrap()
+            .join("hooks.json.json");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, &metadata).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_file(&outside, &metadata).unwrap();
+        assert!(resolve_files(
+            &fixture.source(),
+            &fixture.home(),
+            &conflict,
+            StorageResolution::UseAccountVersion
+        )
+        .is_err());
+        assert!(!outside.exists());
+        assert_eq!(std::fs::read(target).unwrap(), b"private");
+    }
+
+    #[test]
+    fn storage_repair_linked_metadata_directories_cannot_redirect_backups_or_overrides() {
+        for name in [".monocode-links", ".monocode-conflicts"] {
+            let (fixture, conflict) = conflict_fixture("hooks.json", b"private", b"account");
+            let outside = fixture.0.join("outside");
+            std::fs::create_dir(&outside).unwrap();
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(&outside, fixture.home().join(name)).unwrap();
+            #[cfg(windows)]
+            junction::create(&outside, fixture.home().join(name)).unwrap();
+            let choice = if name == ".monocode-links" {
+                StorageResolution::KeepMonoVersion
+            } else {
+                StorageResolution::UseAccountVersion
+            };
+            assert!(resolve_files(&fixture.source(), &fixture.home(), &conflict, choice).is_err());
+            assert_eq!(std::fs::read_dir(outside).unwrap().count(), 0);
+            assert_eq!(
+                std::fs::read(fixture.home().join("hooks.json")).unwrap(),
+                b"private"
+            );
+            assert_eq!(
+                std::fs::read(fixture.source().join("hooks.json")).unwrap(),
+                b"account"
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn storage_repair_busy_detached_target_keeps_all_bytes_and_cleans_staged_link() {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE};
+        let (fixture, conflict) = conflict_fixture("hooks.json", b"private", b"account");
+        let _busy = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .open(fixture.home().join("hooks.json"))
+            .unwrap();
+        assert!(resolve_files(
+            &fixture.source(),
+            &fixture.home(),
+            &conflict,
+            StorageResolution::UseAccountVersion
+        )
+        .is_err());
+        assert_eq!(
+            std::fs::read(fixture.home().join("hooks.json")).unwrap(),
+            b"private"
+        );
+        assert_eq!(
+            std::fs::read(fixture.source().join("hooks.json")).unwrap(),
+            b"account"
+        );
+        assert!(std::fs::read_dir(fixture.home()).unwrap().all(|e| !e
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".monocode-link-")));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn storage_repair_file_symlinks_follow_account_atomic_replacement_when_permitted() {
+        let fixture = Fixture::new();
+        std::fs::create_dir_all(fixture.source()).unwrap();
+        std::fs::create_dir_all(fixture.home()).unwrap();
+        let source = fixture.source().join("hooks.json");
+        let target = fixture.home().join("hooks.json");
+        std::fs::write(&source, b"old").unwrap();
+        if std::os::windows::fs::symlink_file(&source, &target).is_err() {
+            println!(
+                "File-symlink privilege unavailable; snapshot hardlink recovery tested separately"
+            );
+            return;
+        }
+        let replacement = fixture.source().join("replacement");
+        std::fs::write(&replacement, b"new").unwrap();
+        replace_link(&replacement, &source).unwrap();
+        assert_eq!(std::fs::read(target).unwrap(), b"new");
+        println!("File-symlink privilege available; source rename followed without prepare");
+    }
+
     #[test]
     fn shares_settings_and_login_but_not_codex_state() {
         let fixture = Fixture::new();
@@ -1262,6 +2173,9 @@ mod tests {
             std::fs::write(other.join(name), "old hooks").unwrap();
             std::fs::write(fixture.source().join(name), "new hooks").unwrap();
             prepare_files(&other, &fixture.home()).unwrap();
+            // Hold the shared file itself: file symlinks can safely be relinked while their referent is busy.
+            remove_link(&fixture.home().join(name)).unwrap();
+            std::fs::hard_link(other.join(name), fixture.home().join(name)).unwrap();
             let _busy = std::fs::OpenOptions::new()
                 .read(true)
                 .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)

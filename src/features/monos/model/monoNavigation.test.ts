@@ -74,6 +74,17 @@ it("uses worker availability and tool activity while the durable member chat is 
   expect(memberMonoState([], "backend", [chat], "member-chat")).toEqual({ status: "working", activity: "Answering your question" });
 });
 
+it("preserves storage blocking from the member chat or current worker above running work", () => {
+  const chat = { ...newSession("codex", "/app"), id: "member-chat", codexStorageError: "hooks.json conflict" };
+  const worker = { ...newSession("codex", "/app"), id: "worker-chat", busy: true };
+  const working = [{ ...runs[0], tasks: [{ ...runs[0].tasks[1], status: "running", title: "Routing", prompt: "Routing" }] }] as OrchestrationRun[];
+  expect(memberMonoState(working, "backend", [worker, chat], chat.id)).toEqual({ status: "needs-you", storageBlocked: true });
+  expect(memberMonoState(working, "backend", [{ ...worker, codexStorageError: "hooks.json conflict" }, { ...chat, codexStorageError: undefined }], chat.id)).toEqual({ status: "needs-you", storageBlocked: true });
+  expect(memberMonoState(working, "backend", [worker, { ...chat, codexStorageError: undefined }], chat.id)).toEqual({ status: "working", activity: "Waiting for the next step" });
+  const roster = [{ id: "backend", role: "member", sessionId: chat.id, projects: [] }] as unknown as Mono[];
+  expect(monoStatusLabel(monoLiveState(roster, working, [worker, chat], "backend"))).toBe("Blocked · storage");
+});
+
 it("shows current member availability without historical task outcomes dominating", () => {
   const task = (status: OrchestrationRun["tasks"][number]["status"], sessionId = "worker") => ({ status, sessionId }) as OrchestrationRun["tasks"][number];
   expect(memberAvailability([])).toBe("idle");

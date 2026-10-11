@@ -18,6 +18,15 @@ function message(id: string): QueuedMessage {
 }
 
 describe("optimistic Mono messages", () => {
+  it("marks held bubbles as waiting for storage repair without changing their payload or hiding them", () => {
+    const queued = enqueueMonoMessage(newSession("codex", "/tmp"), message("held"));
+    const blocked = { ...queued, codexStorageError: "hooks.json conflict" };
+    expect(monoMessageDeliveries(blocked).get("held")).toEqual({ status: "storage-blocked" });
+    expect(monoMessageDeliveries({ ...blocked, queueStatus: "paused", queuedMessages: [{ ...queued.queuedMessages![0], error: "Offline" }] }).get("held")).toEqual({ status: "storage-blocked", error: "Offline" });
+    expect(blocked.queuedMessages).toBe(queued.queuedMessages);
+    expect(blocked.blocks).toBe(queued.blocks);
+    expect(monoMessageDeliveries({ ...blocked, codexStorageError: undefined }).get("held")).toEqual({ status: "pending" });
+  });
   it("preserves teammate event provenance across busy delivery and retry", () => {
     const event = { ...message("teammate"), appRequestId: "worker:question" };
     const queued = enqueueMonoMessage({ ...newSession("codex", "/tmp"), busy: true }, event);

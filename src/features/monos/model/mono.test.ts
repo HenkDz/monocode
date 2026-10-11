@@ -5,6 +5,7 @@ import {
   monoMessages,
   monoReply,
   monoState,
+  monoStatusLabel,
 } from "./mono";
 import type { Block } from "../../sessions/model/session";
 
@@ -12,6 +13,22 @@ it("is idle between turns", () => {
   expect(monoState({ blocks: [], busy: false })).toEqual({
     status: "idle",
   });
+});
+
+it("shows storage repair before idle, work, or provider attention and clears after repair", () => {
+  for (const busy of [false, true]) {
+    const session = {
+      blocks: [],
+      busy,
+      codexStorageError: "Codex storage needs repair: hooks.json",
+      pendingQuestion: { requestId: 1, title: "Choose", questions: [] },
+    };
+    const state = monoState(session);
+    expect(state).toEqual({ status: "needs-you", storageBlocked: true });
+    expect(monoStatusLabel(state)).toBe("Blocked · storage");
+    expect(monoState({ ...session, codexStorageError: undefined }).storageBlocked).toBeUndefined();
+  }
+  expect(monoState({ blocks: [], busy: false, worktreeRemoved: true, codexStorageError: "old conflict" })).toEqual({ status: "idle" });
 });
 
 it("needs the user when a provider usage limit stops the conversation", () => {

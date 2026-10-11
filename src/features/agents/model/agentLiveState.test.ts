@@ -59,6 +59,28 @@ describe("selectAgentLiveState", () => {
     expect(selectAgentLiveState(session({ worktreeRemoved: true, pendingQuestion: { requestId: 1, questions: [] } })).detail).toContain("working copy");
   });
 
+  it("surfaces a stalled shell while preserving approval priority and recovery", () => {
+    const active = session({ busy: true, blocks: [
+      { id: "owner", role: "user", text: "echo hi", startedAt: 1000 },
+      { id: "shell", role: "tool", text: "Run shell command", tool: {
+        callId: "shell", title: "Run shell command", status: "blocked", detail: "Shell command has returned no output. It may still be running. Stop to retry.",
+      } },
+    ] });
+    const state = selectAgentLiveState(active);
+    expect(state).toEqual({ status: "blocked", reason: "tool", detail: active.blocks[1].tool!.detail });
+    expect(agentLiveStateTooltip(state)).toContain("Stop to retry");
+    expect(selectAgentLiveState({ ...active, blocks: [...active.blocks, {
+      id: "approval", role: "approval", text: "Approve echo hi", approval: { requestId: 7 },
+    }] }).status).toBe("needs-you");
+    expect(selectAgentLiveState(applyHarnessEvent(active, {
+      type: "tool.updated", callId: "shell", status: "completed", detail: "hi",
+    })).status).toBe("thinking");
+    expect(selectAgentLiveState(stopStreaming(active)).status).toBe("idle");
+    expect(selectAgentLiveState({ ...active, blocks: [...active.blocks, {
+      id: "retry", role: "user", text: "retry", startedAt: 2000,
+    }] }).status).toBe("thinking");
+  });
+
   it("ignores stale steps, settled tool calls, decided approvals and earlier turn failures", () => {
     expect(selectAgentLiveState(session({ busy: true, blocks: [
       { id: "old", role: "tool", text: "", tool: { title: "old tool", status: "running" } },

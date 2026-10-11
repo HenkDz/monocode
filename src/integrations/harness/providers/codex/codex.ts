@@ -34,6 +34,7 @@ import {
   stringField,
   toCodexApprovalDecision,
   type CodexApprovalKind,
+  type CodexCodeModeState,
 } from "./codexProtocol";
 import { JsonRpcClient, type JsonRpcId } from "../../core/jsonRpc";
 import {
@@ -119,6 +120,7 @@ type Live = {
   emittedReasoningByItem: Map<string, string>;
   emittedGeneratedImages: Set<string>;
   emittedAsyncQuestions: Set<string>;
+  codeMode: CodexCodeModeState;
   turnGeneration: number;
   notificationQueue: Promise<void> | null;
   /** Child thread id -> the agent tool row that spawned it. */
@@ -827,6 +829,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       emittedReasoningByItem: new Map(),
       emittedGeneratedImages: new Set(),
       emittedAsyncQuestions: new Set(),
+      codeMode: { cells: new Map(), calls: new Map() },
       turnGeneration: 0,
       notificationQueue: null,
       subagentThreads: new Map(),
@@ -886,6 +889,8 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
   live.emittedReasoningByItem.clear();
   live.emittedGeneratedImages.clear();
   live.emittedAsyncQuestions.clear();
+  live.codeMode.cells.clear();
+  live.codeMode.calls.clear();
   live.turnGeneration += 1;
 
   const turnPromise = new Promise<void>((resolve, reject) => {
@@ -985,7 +990,7 @@ function handleNotification(
   // mean the turn is over — more tools and messages can still arrive. Only
   // turn/completed (and turn/aborted) settle sendCodexTurn, which is what the
   // UI uses for busy / stop / "Working for".
-  const mapped = mapCodexNotification(method, params);
+  const mapped = mapCodexNotification(method, params, live.codeMode);
   if (mapped.diagnostic) {
     console.debug(
       `[monocode] codex ${live.threadId} ${method}`,
@@ -1401,6 +1406,8 @@ function finishActiveTurn(live: Live, extraEvents: HarnessEvent[] = []): void {
   live.emittedReasoningByItem.clear();
   live.emittedGeneratedImages.clear();
   live.emittedAsyncQuestions.clear();
+  live.codeMode.cells.clear();
+  live.codeMode.calls.clear();
   live.subagentThreads.clear();
   live.pendingSubagent.clear();
   for (const event of extraEvents) {

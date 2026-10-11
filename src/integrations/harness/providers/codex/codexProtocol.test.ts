@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildThreadStartParams,
   codexAppServerArgs,
@@ -11,6 +11,7 @@ import {
   mapCodexSubagentSteps,
   runtimeModeToCodexConfig,
   toCodexApprovalDecision,
+  type CodexCodeModeState,
 } from "./codexProtocol";
 import { parseCodexModelList } from "./codexCatalog";
 
@@ -42,12 +43,141 @@ it("shows code-mode custom tools using raw scoped call identity without parsing 
   const context = { threadId: "thread", turnId: "turn" };
   const started = mapCodexNotification("rawResponseItem/completed", { ...context,
     item: { type: "custom_tool_call", call_id: "call-1", name: "exec", input: "text(await tools.exec_command({cmd:'git status'}))" } });
-  expect(started.events[0]).toMatchObject({ type: "tool.started", callId: "raw:thread:turn:call-1", title: "Run tools", kind: "execute", status: "in_progress" });
+  expect(started.events[0]).toMatchObject({ type: "tool.started", callId: "raw:thread:turn:call-1", title: "Run shell command", kind: "execute", status: "in_progress" });
   const completed = mapCodexNotification("rawResponseItem/completed", { ...context,
     item: { type: "custom_tool_call_output", call_id: "call-1", output: [{ type: "input_text", text: "Script completed" }] } });
   expect(completed.events[0]).toMatchObject({ type: "tool.updated", callId: "raw:thread:turn:call-1", status: "completed", detail: "Script completed" });
   expect(mapCodexNotification("rawResponseItem/completed", { ...context, item: { type: "message", text: "Calling tools" } }).events).toEqual([]);
   expect(mapCodexNotification("rawResponseItem/completed", { item: { type: "custom_tool_call", call_id: "call-1" } }).events).toEqual([]);
+});
+
+describe("code-mode yielded cells", () => {
+  const scope = { threadId: "thread", turnId: "turn" };
+  const running = (seconds: number, output = "", cellId = "1") =>
+    `Script running with cell ID ${cellId}\nWall time ${seconds.toFixed(1)} seconds\nOutput:\n${output}`;
+  function fixture() {
+    const state: CodexCodeModeState = { cells: new Map(), calls: new Map() };
+    const map = (item: Record<string, unknown>, context = scope) =>
+      mapCodexNotification("rawResponseItem/completed", { ...context, item }, state).events;
+    const exec = (id: string, input = 'text(await tools.exec_command({cmd:"echo hi",login:false}));') =>
+      map({ type: "custom_tool_call", call_id: id, name: "exec", input });
+    const wait = (id: string, cellId = "1", context = scope) =>
+      map({ type: "function_call", call_id: id, name: "wait",
+        arguments: JSON.stringify({ cell_id: cellId, max_tokens: 6000, yield_time_ms: 1000 }) }, context);
+    return { state, map, exec, wait };
+  }
+
+  it("keeps repeated waits on the exec row and warns only after a minute without output", () => {
+    const { state, map, exec, wait } = fixture();
+    exec("exec");
+    expect(map({ type: "custom_tool_call_output", call_id: "exec", output: running(31) })[0])
+      .toMatchObject({ callId: "raw:thread:turn:exec", status: "in_progress" });
+    expect(wait("wait1")).toEqual([]);
+    const blocked = map({ type: "function_call_output", call_id: "wait1", output: running(30) });
+    expect(blocked).toHaveLength(1);
+    expect(blocked[0]).toMatchObject({ type: "tool.updated", callId: "raw:thread:turn:exec", status: "blocked" });
+    expect(blocked[0]).toHaveProperty("detail", `${running(30)}\nShell command has returned no output for 60 seconds. It may still be running. Check pending approvals or the Windows sandbox; Stop to retry.`);
+    wait("wait2");
+    expect(map({ type: "function_call_output", call_id: "wait2", output: running(1) })[0])
+      .toMatchObject({ callId: "raw:thread:turn:exec", status: "blocked" });
+    wait("wait3");
+    expect(map({ type: "function_call_output", call_id: "wait3", output: [{ type: "input_text", text: running(1, "hi\n") }] })[0])
+      .toMatchObject({ callId: "raw:thread:turn:exec", status: "in_progress", detail: running(1, "hi\n") });
+    wait("wait4");
+    expect(map({ type: "function_call_output", call_id: "wait4", output: running(30) })[0])
+      .toMatchObject({ callId: "raw:thread:turn:exec", status: "in_progress" });
+    wait("wait5");
+    expect(map({ type: "function_call_output", call_id: "wait5", output: "Script completed\nWall time 0.1 seconds\nOutput:\nhi\n" })[0])
+      .toMatchObject({ callId: "raw:thread:turn:exec", status: "completed" });
+    expect(state.cells.size).toBe(0);
+    expect(state.calls.size).toBe(0);
+  });
+
+  it("keeps long generic JavaScript cells running without a shell warning", () => {
+    const { map, exec, wait } = fixture();
+    expect(exec("exec", "await new Promise(resolve => setTimeout(resolve, 120000));")[0])
+      .toMatchObject({ title: "Run tools" });
+    expect(map({ type: "custom_tool_call_output", call_id: "exec", output: running(120) })[0])
+      .toMatchObject({ status: "in_progress", detail: running(120) });
+    wait("wait");
+    expect(map({ type: "function_call_output", call_id: "wait", output: running(120) })[0])
+      .toMatchObject({ status: "in_progress", detail: running(120) });
+  });
+
+  it("counts silent time between model calls even when the next wait barely runs", () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(0);
+    try {
+      const { map, exec, wait } = fixture();
+      exec("exec");
+      clock.mockReturnValue(31_000);
+      expect(map({ type: "custom_tool_call_output", call_id: "exec", output: running(31) })[0])
+        .toMatchObject({ status: "in_progress" });
+      clock.mockReturnValue(76_001);
+      wait("wait");
+      expect(map({ type: "function_call_output", call_id: "wait", output: running(0.001) })[0])
+        .toMatchObject({ callId: "raw:thread:turn:exec", status: "blocked" });
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("scopes cell identity by thread and turn and does not create rows for unknown waits", () => {
+    const { map, exec, wait } = fixture();
+    exec("first");
+    map({ type: "custom_tool_call_output", call_id: "first", output: running(31) });
+    exec("second");
+    map({ type: "custom_tool_call_output", call_id: "second", output: running(31, "", "3") });
+    expect(wait("unknown", "2")).toEqual([]);
+    expect(map({ type: "function_call_output", call_id: "unknown", output: "Script completed" })).toEqual([]);
+    for (const context of [{ ...scope, threadId: "other" }, { ...scope, turnId: "other" }]) {
+      expect(wait("wait", "1", context)).toEqual([]);
+      expect(map({ type: "function_call_output", call_id: "wait", output: running(31) }, context)).toEqual([]);
+    }
+    wait("first-wait");
+    expect(map({ type: "function_call_output", call_id: "first-wait", output: "Script completed" })[0])
+      .toMatchObject({ callId: "raw:thread:turn:first", status: "completed" });
+    wait("second-wait", "3");
+    expect(map({ type: "function_call_output", call_id: "second-wait", output: running(1, "", "3") })[0])
+      .toMatchObject({ callId: "raw:thread:turn:second", status: "in_progress" });
+  });
+
+  it("fails explicit error outputs and removes their pending cell", () => {
+    const { state, map, exec, wait } = fixture();
+    exec("exec");
+    map({ type: "custom_tool_call_output", call_id: "exec", output: running(31) });
+    wait("wait");
+    expect(map({ type: "function_call_output", call_id: "wait", is_error: true, output: "Script failed\nError: execution stopped" })[0])
+      .toMatchObject({ callId: "raw:thread:turn:exec", status: "failed", detail: "Script failed\nError: execution stopped" });
+    expect(state.cells.size).toBe(0);
+    expect(state.calls.size).toBe(0);
+    expect(map({ type: "custom_tool_call_output", call_id: "error", is_error: true, output: running(120) })[0])
+      .toMatchObject({ status: "failed" });
+  });
+
+  it.each([undefined, false])("fails the authoritative script header when is_error is %s", isError => {
+    const { state, map, exec } = fixture();
+    exec("exec");
+    const output = [
+      { type: "input_text", text: "Script failed\nWall time 3.9 seconds\nOutput:\n" },
+      { type: "input_text", text: "exec_command failed: Windows sandbox setup error: helper_unknown_error" },
+    ];
+    expect(map({ type: "custom_tool_call_output", call_id: "exec", output,
+      ...(isError === undefined ? {} : { is_error: isError }) })[0])
+      .toMatchObject({ callId: "raw:thread:turn:exec", status: "failed" });
+    expect(state.cells.size).toBe(0);
+    expect(state.calls.size).toBe(0);
+  });
+
+  it("ignores malformed wait arguments and printed status headers inside completed output", () => {
+    const { state, map, exec } = fixture();
+    exec("exec");
+    const completed = `Script completed\nWall time 0.1 seconds\nOutput:\n${running(120)}Script failed\nWall time 3.9 seconds\nOutput:\nprinted error`;
+    expect(map({ type: "custom_tool_call_output", call_id: "exec", output: completed })[0])
+      .toMatchObject({ status: "completed", detail: completed });
+    expect(map({ type: "function_call", call_id: "wait", name: "wait", arguments: "{" })).toEqual([]);
+    expect(map({ type: "function_call_output", call_id: "wait", output: "Script completed" })).toEqual([]);
+    expect(state.calls.size).toBe(0);
+  });
 });
 
 it("maps the installed app-server dynamic tool lifecycle and failed output", () => {

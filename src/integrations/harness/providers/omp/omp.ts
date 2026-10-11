@@ -68,8 +68,9 @@ export function bindOmpSession(
   threadId: string,
   providerSessionId: string,
   cwd: string,
+  providerAccountId?: string,
 ): void {
-  bindSession(OMP_FLAVOR, threadId, providerSessionId, cwd);
+  bindSession(OMP_FLAVOR, threadId, providerSessionId, cwd, providerAccountId);
 }
 
 /** Test seam. */

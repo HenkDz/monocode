@@ -7,6 +7,9 @@ import { MonoActivityContent } from "./MonoActivityPanel";
 import { TitleBar } from "../../../app/shell/TitleBar";
 import type { MonoPanelTab } from "./monoPanelParts";
 import { resetHarnessModelOverlays, setHarnessModels } from "../../sessions/model/models";
+import { pickFolders } from "../../../platform/tauri/fs";
+
+vi.mock("../../../platform/tauri/fs", async original => ({ ...await original<object>(), pickFolders: vi.fn() }));
 
 vi.mock("../model/monoFiles", async (original) => ({
   ...(await original<object>()),
@@ -28,6 +31,36 @@ let root: Root;
 let container: HTMLDivElement;
 const agent = { name: "Captain", mascot: "cat", color: "#6ba", projects: [] };
 const noop = () => {};
+
+it.each(["orchestrator", "manager", "member"] as const)("lets %s change its working folder and keeps failures visible", async role => {
+  localStorage.setItem("monocode:mono-roster", JSON.stringify([
+    { id: "manager", role: "manager", projects: ["/repo"], mascot: "cat", color: "#6ba" },
+    { id: "sample", role, reportsTo: role === "member" ? "manager" : undefined, projects: ["/repo"], mascot: "cat", color: "#6ba" },
+  ]));
+  const change = vi.fn().mockRejectedValueOnce(Error("Disk full")).mockResolvedValue(undefined);
+  vi.mocked(pickFolders).mockResolvedValue(["/chosen"]);
+  const props = {
+    open: true, monoId: "sample", cwd: "/scratch", agent, state: { status: "idle" as const },
+    harness: "codex" as const, model: "codex:gpt-5.4", modelSettings: {}, runtimeMode: "auto" as const,
+    onRuntimeModeChange: noop, onModelChange: noop, onModelSettingsChange: noop, onClose: noop,
+    onWorkingDirectoryChange: change,
+  };
+  await act(async () => root.render(createElement(MonoDetails, props)));
+  expect(container.textContent).toContain("Working folder");
+  const button = () => container.querySelector<HTMLButtonElement>('[aria-label="Change working folder"]')!;
+  await act(async () => button().click());
+  expect(change).toHaveBeenCalledWith("/chosen");
+  expect(container.querySelector('[data-mono-folder-error]')?.textContent).toBe("Disk full");
+  await act(async () => button().click());
+  expect(container.querySelector('[data-mono-folder-error]')).toBeNull();
+  await act(async () => root.render(createElement(MonoDetails, { ...props, cwd: "/chosen", busy: true })));
+  expect(container.querySelector('[data-mono-worktree]')?.textContent).toBe("/chosen");
+  expect(button().disabled).toBe(true);
+  const calls = change.mock.calls.length;
+  await act(async () => button().click());
+  expect(change).toHaveBeenCalledTimes(calls);
+  localStorage.removeItem("monocode:mono-roster");
+});
 
 it("labels model and effort as next-turn settings and shows the conversation's exact worktree", async () => {
   await act(async () => root.render(createElement(MonoDetails, {

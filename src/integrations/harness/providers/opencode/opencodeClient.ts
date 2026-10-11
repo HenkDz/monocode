@@ -157,22 +157,21 @@ export class OpenCodeClient {
     );
     if (this.generation === "v1") return forked;
     try {
-      await this.request<unknown>(
-        "POST",
-        this.path(`/session/${enc(forked.id)}/move`),
-        { body: { directory, delivery: "queue" } },
-      );
-      const moved = await this.getSession(forked.id);
-      if (!moved.directory || !sameDirectory(moved.directory, directory)) {
-        throw new Error(
-          `OpenCode did not move the forked session to ${directory}`,
-        );
-      }
-      return moved;
+      return await this.moveSession(forked.id, directory);
     } catch (error) {
       await this.deleteSession(forked.id);
       throw error;
     }
+  }
+
+  async moveSession(sessionID: string, directory: string): Promise<OpenCodeSession> {
+    await this.request<unknown>("POST", this.path(`/session/${enc(sessionID)}/move`), {
+      body: { directory, delivery: "queue" },
+    });
+    const moved = await this.getSession(sessionID);
+    if (!moved.directory || !sameDirectory(moved.directory, directory))
+      throw new Error(`OpenCode did not move the session to ${directory}`);
+    return moved;
   }
 
   async abortSession(sessionID: string): Promise<void> {

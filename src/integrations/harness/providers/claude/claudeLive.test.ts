@@ -19,6 +19,7 @@ import {
 
 const sent: string[] = [];
 const spawned: string[][] = [];
+const spawnedCwds: string[] = [];
 let onLine: ((line: string) => void) | undefined;
 let onExit: ((code?: number | null) => void) | undefined;
 const writeChild = vi.fn(async (_id: string, line: string) => {
@@ -27,8 +28,9 @@ const writeChild = vi.fn(async (_id: string, line: string) => {
 
 vi.mock("../../core/child", () => ({
   resolveClaudeBinary: async () => ({ path: "/fake/claude" }),
-  spawnChild: async (_id: string, _path: string, args: string[]) => {
+  spawnChild: async (_id: string, _path: string, args: string[], cwd: string) => {
     spawned.push(args);
+    spawnedCwds.push(cwd);
   },
   killChild: async () => undefined,
   unwatchChild: () => undefined,
@@ -79,6 +81,8 @@ const waitFor = async (pred: () => boolean, label: string) => {
 async function startTurn(
   sessionId: string,
   options: {
+    cwd?: string;
+    monoSession?: boolean;
     runtimeMode?: RuntimeMode;
     intent?: TurnIntent;
     providerAccountId?: string;
@@ -91,7 +95,8 @@ async function startTurn(
     sendHarnessTurn({ ...input, harness: "claude", orgMono: true, orgMonoId: options.orgMonoId, monoSession: true }) : sendClaudeTurn;
   const turn = send({
     sessionId,
-    cwd: "/repo",
+    cwd: options.cwd ?? "/repo",
+    monoSession: options.monoSession,
     model: "claude:claude-sonnet-5",
     modelSettings: {},
     runtimeMode: options.runtimeMode ?? "supervised",
@@ -272,6 +277,7 @@ function backgroundUpdates(events: HarnessEvent[]): string[][] {
 beforeEach(() => {
   sent.length = 0;
   spawned.length = 0;
+  spawnedCwds.length = 0;
   onLine = undefined;
   onExit = undefined;
   writeChild.mockClear();
@@ -966,6 +972,34 @@ describe("claude model switching", () => {
     );
     emit({ type: "result", subtype: "success", session_id: "sess_1" });
     await second;
+  });
+});
+
+describe("claude Mono working folder changes", () => {
+  it.each(["saved", "live", "parked"])("resumes the same %s Mono conversation from its new folder", async state => {
+    if (state === "saved") bindClaudeSession("s1", "sess_1", "/repo", "work");
+    else {
+      const first = await startTurn("s1", { monoSession: true, providerAccountId: "work" });
+      emit({ type: "result", subtype: "success", session_id: "sess_1" });
+      await first.turn;
+      if (state === "parked") await stopClaudeSession("s1");
+      sent.length = 0;
+    }
+    const next = await startTurn("s1", { monoSession: true, providerAccountId: "work", cwd: "/mono/workspace" });
+    expect(spawned.at(-1)).toEqual(expect.arrayContaining(["--resume", "sess_1"]));
+    expect(spawnedCwds.at(-1)).toBe("/mono/workspace");
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await next.turn;
+  });
+
+  it.each(["ordinary", "other-account"])("keeps a %s conversation outside the Mono folder exception", async kind => {
+    bindClaudeSession("s1", "sess_1", "/repo", "work");
+    const next = await startTurn("s1", {
+      monoSession: kind !== "ordinary", providerAccountId: kind === "other-account" ? "other" : "work", cwd: "/mono/workspace",
+    });
+    expect(spawned.at(-1)).not.toContain("--resume");
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await next.turn;
   });
 });
 

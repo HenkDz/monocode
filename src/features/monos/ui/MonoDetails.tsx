@@ -48,6 +48,7 @@ import { MonoSidebar, MonoSidebarHeader } from "./MonoSidebar";
 import { ArchivedManagerConversation, ArchivedManagerConversations } from "./ArchivedManagerConversations";
 import { PullRequestsList } from "../../pullRequests/ui/PullRequestsList";
 import type { PullRequestContext } from "../../pullRequests/model/pullRequestView";
+import { pickFolders } from "../../../platform/tauri/fs";
 
 /** A page opened directly from Details, or one habit inside its list. */
 type Route =
@@ -77,6 +78,7 @@ type Props = {
   effortSource?: EffortSource;
   runtimeMode: RuntimeMode;
   busy?: boolean;
+  onWorkingDirectoryChange?: (cwd: string) => Promise<void>;
   onModelChange: (harness: HarnessId, model: string) => void;
   onModelSettingsChange: (settings: Record<string, string>, effortSource?: EffortSource) => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
@@ -110,6 +112,8 @@ export function MonoDetails({
   modelSettings,
   effortSource: sessionEffortSource,
   runtimeMode,
+  busy,
+  onWorkingDirectoryChange,
   onModelChange,
   onModelSettingsChange,
   onRuntimeModeChange,
@@ -149,6 +153,19 @@ export function MonoDetails({
   const actions = habitActions(monoId);
   const [routes, setRoutes] = useState<Route[]>([]);
   const [showWork, setShowWork] = useState(false);
+  const [changingFolder, setChangingFolder] = useState(false);
+  const [folderError, setFolderError] = useState<string>();
+  const changeFolder = async () => {
+    if (!onWorkingDirectoryChange || busy || changingFolder) return;
+    setChangingFolder(true);
+    setFolderError(undefined);
+    try {
+      const folders = await pickFolders("Choose working folder");
+      if (folders.length > 1) throw new Error("Choose one working folder.");
+      if (folders[0]) await onWorkingDirectoryChange(folders[0]);
+    } catch (error) { setFolderError(error instanceof Error ? error.message : String(error)); }
+    finally { setChangingFolder(false); }
+  };
   useEffect(() => {
     setShowWork(Boolean(toolActivityOpen));
   }, [monoId, toolActivityOpen, activity?.blocks[0]?.id]);
@@ -300,7 +317,8 @@ export function MonoDetails({
       >
         {tab === "details" && pages.length === 0 && <div className="shrink-0 border-b border-stroke px-4 py-3 text-xs text-content/70" data-mono-next-turn>
           <p>Model and effort changes apply to the next turn.</p>
-          <p className="mt-2 flex min-w-0 gap-2"><span className="shrink-0 text-content/50">Worktree</span><span className="min-w-0 truncate" title={worktreeCwd} data-mono-worktree>{worktreeCwd}</span></p>
+          <p className="mt-2 flex min-w-0 items-center gap-2"><span className="shrink-0 text-content/50">Working folder</span><span className="min-w-0 flex-1 truncate" title={worktreeCwd} data-mono-worktree>{worktreeCwd}</span>{onWorkingDirectoryChange && <button type="button" aria-label="Change working folder" disabled={busy || changingFolder} onClick={() => void changeFolder()} className="shrink-0 rounded px-1 py-0.5 text-content/70 hover:bg-content/5 focus-visible:outline-accent disabled:opacity-40">Change</button>}</p>
+          {folderError && <p role="alert" data-mono-folder-error className="mt-2 text-danger">{folderError}</p>}
         </div>}
         <PanelStack pages={tab === "details" ? pages : tab === "activity" && showWork && teamActivity ? [{
           key: "work",

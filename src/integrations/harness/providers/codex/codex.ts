@@ -556,7 +556,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     // Switch it when this session gains /operator access or loses agent
     // control, so its local CLI socket matches the current policy.
     if (
-      existing.cwd !== input.cwd ||
+      (existing.cwd !== input.cwd && codexStore !== "mono") ||
       !sameProviderAccountId(
         existing.providerAccountId,
         input.providerAccountId,
@@ -571,11 +571,11 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   const canResume =
     !ephemeral &&
     resume != null &&
-    resume.cwd === input.cwd &&
+    (resume.cwd === input.cwd || codexStore === "mono") &&
     sameProviderAccountId(resume.providerAccountId, input.providerAccountId);
   if (
     resume &&
-    (resume.cwd !== input.cwd ||
+    ((resume.cwd !== input.cwd && codexStore !== "mono") ||
       !sameProviderAccountId(resume.providerAccountId, input.providerAccountId))
   ) {
     resumeByThread.delete(input.sessionId);
@@ -596,7 +596,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
         })
       : undefined;
   const storeConfig = store?.config;
-  const instructionHome = JSON.stringify([codexStore, skillsSignature, store?.skillsContextId]);
+  const instructionHome = JSON.stringify([codexStore, input.cwd, skillsSignature, store?.skillsContextId]);
   if (instructionHomes.has(input.sessionId) && instructionHomes.get(input.sessionId) !== instructionHome) {
     forgetAgentContext(input.sessionId);
   }

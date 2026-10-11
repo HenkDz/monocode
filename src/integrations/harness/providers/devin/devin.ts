@@ -1,4 +1,5 @@
 import { nativeModelId } from "../../../../features/sessions/model/models";
+import { canResumeMonoAfterCwdChange } from "../monoCwdResume";
 import type { RuntimeMode } from "../../../../features/sessions/model/session";
 import { AcpSubagents } from "../../core/acpSubagents";
 import { DevinSubagents } from "./devinSubagents";
@@ -81,7 +82,7 @@ type Live = {
   turns: Promise<void>;
 };
 
-type Resume = { acpSessionId: string; cwd: string };
+type Resume = { acpSessionId: string; cwd: string; providerAccountId?: string };
 
 /** A child that is still starting; stop and cancel must reach it before it is live. */
 type Startup = {
@@ -229,10 +230,11 @@ export function bindDevinSession(
   threadId: string,
   acpSessionId: string,
   cwd: string,
+  providerAccountId?: string,
 ): void {
   const sessionId = acpSessionId.trim();
   if (!threadId || !sessionId || !cwd.trim()) return;
-  resumeByThread.set(threadId, { acpSessionId: sessionId, cwd });
+  resumeByThread.set(threadId, { acpSessionId: sessionId, cwd, providerAccountId });
 }
 
 /** The slash commands the live Devin session advertised, if any yet. */
@@ -331,6 +333,7 @@ export async function startDevinAcp(
  * stopped, deleted or cancelled before the child finished starting.
  */
 async function ensureLive(input: HarnessSessionInput): Promise<Live | null> {
+  const preserve = canResumeMonoAfterCwdChange(input, resumeByThread.get(input.sessionId));
   const existing = liveByThread.get(input.sessionId);
   const sameCwd = existing?.cwd === input.cwd;
   if (
@@ -345,8 +348,8 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live | null> {
   }
   if (existing) {
     // Toggling Supervised restarts the child; session/load resumes the same
-    // conversation. Another directory is another conversation.
-    if (!sameCwd) resumeByThread.delete(input.sessionId);
+    // conversation. Mono folder changes also retain their conversation.
+    if (!sameCwd && !preserve) resumeByThread.delete(input.sessionId);
     await stopDevinSession(input.sessionId);
   }
 
@@ -365,7 +368,8 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live | null> {
 
 async function startLive(input: HarnessSessionInput, startup: Startup): Promise<Live> {
   const resume = resumeByThread.get(input.sessionId);
-  const canLoad = resume != null && resume.cwd === input.cwd;
+  const preserve = canResumeMonoAfterCwdChange(input, resume);
+  const canLoad = resume != null && (resume.cwd === input.cwd || preserve);
   if (resume && !canLoad) resumeByThread.delete(input.sessionId);
 
   const liveRef: { current: Live | null } = { current: null };
@@ -434,7 +438,7 @@ async function startLive(input: HarnessSessionInput, startup: Startup): Promise<
       } catch (error) {
         // Only a conversation Devin no longer has may be replaced. A timeout
         // or other failure keeps the binding so the next turn retries it.
-        if (startup.stopped || !devinSessionMissing(error)) {
+        if (startup.stopped || preserve || !devinSessionMissing(error)) {
           throw devinRestoreError(error);
         }
         setup = undefined;
@@ -488,7 +492,7 @@ async function startLive(input: HarnessSessionInput, startup: Startup): Promise<
     };
     liveRef.current = live;
     liveByThread.set(input.sessionId, live);
-    resumeByThread.set(input.sessionId, { acpSessionId, cwd: input.cwd });
+    resumeByThread.set(input.sessionId, { acpSessionId, cwd: input.cwd, providerAccountId: input.providerAccountId });
     live.onEvent({ type: "session.providerBound", providerSessionId: acpSessionId });
     live.onEvent({ type: "session.started" });
     return live;

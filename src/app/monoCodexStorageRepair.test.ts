@@ -51,8 +51,9 @@ if (!ts.isBlock(submission.body)) throw new Error("App submission body missing")
 const transportStart = submission.body.statements.findIndex(statement => ts.isExpressionStatement(statement) &&
   ts.isCallExpression(statement.expression) && statement.expression.expression.getText(app) === "flushHarnessEvents");
 if (transportStart < 0) throw new Error("App submission preflight boundary missing");
-// Exercise App's guards and storage preflight; replace only the later provider transport.
+// Working-folder preparation has its own tests; exercise the downstream storage guards.
 const guardedSubmission = `(${submission.parameters.map(parameter => parameter.getText(app)).join(", ")}) => {
+  options = { ...options, monoWorkingDirectoryPrepared: true };
   ${submission.body.statements.slice(0, transportStart).map(statement => statement.getText(app)).join("\n")}
   return acceptSubmission(sessionId, text, attachments);
 }`;

@@ -174,6 +174,17 @@ it("passes the runtime discovery context separately while SQLite remains in the 
   expect(mock.spawn.mock.calls[0]).toHaveLength(6);
 });
 
+it("prepares a saved Mono's instruction home with its new working folder", async () => {
+  const cwd = "/app-data/monos/orchestrator/workspace";
+  mock.prepare.mockResolvedValueOnce({ home: "/mono/default", hasThread: true });
+  await prepareCodexMonoContext({ ...input, threadId: "root", cwd, skillsRole: "grand_orchestrator" });
+  expect(mock.prepare).toHaveBeenCalledWith("account", "root", {
+    skillsRole: "grand_orchestrator", skillsPolicy: undefined, projectPath: cwd, sandboxRequired: undefined,
+  });
+  expect(mock.sent.find(request => request.method === "config/read")?.params).toEqual({ cwd });
+  expect(mock.spawn.mock.calls[0][3]).toBe(cwd);
+});
+
 it.each(["base", "prior-context"])("retains the native validated %s rollout path independently from SQLite", async location => {
   const threadPath = `/mono/${location}/sessions/rollout-root.jsonl`;
   mock.prepare.mockResolvedValueOnce({ home: "/mono/default", hasThread: true, threadPath });

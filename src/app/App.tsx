@@ -182,6 +182,8 @@ import { ProviderSignInDialog } from "../features/sessions/ui/ProviderSignInDial
 import { TitleBar, type Tab as TitleTab } from "./shell/TitleBar";
 import { WindowControls } from "./shell/WindowControls";
 import { MonoDetails } from "../features/monos/ui/MonoDetails";
+import { changeMonoWorkingDirectory, isMonoHomeDirectory, migrateMonoWorkingDirectory } from "../features/monos/model/monoWorkingDirectory";
+import { acceptMonoWorkingDirectoryMigration } from "../features/monos/model/monoWorkingDirectoryMigration";
 import { MonoCodexStorageRecovery, isCodexStorageError, parseCodexStorageConflict, parseCodexStorageRecoveryConflict, type CodexStorageResolution, type CodexStorageComparison } from "../features/monos/model/monoCodexStorage";
 import { codexStorageAccountId, monoCodexStorageIssues } from "../features/monos/model/monoCodexStorageIssues";
 import { prepareMonoCodexStore } from "../integrations/harness/core/child";
@@ -992,6 +994,7 @@ type SubmitOptions = ComposerTurnOptions & {
   refreshTitle?: boolean;
   /** Internal guard for the retry after resolving a renamed project. */
   projectLocationReady?: boolean;
+  monoWorkingDirectoryPrepared?: boolean;
   codexStoragePrepared?: boolean;
   codexStorageRetryBlockId?: string;
   codexStorageResuming?: boolean;
@@ -7354,6 +7357,20 @@ function Workspace({
   );
 
   const codexStorageRecovery = useRef(new MonoCodexStorageRecovery());
+  // CC8W: serialize folder preparation before storage, rotation and provider resume.
+  const monoWorkingDirectoryPreparing = useRef(new Set<string>());
+  const saveMonoWorkingDirectory = useCallback(async (next: Session, previousCwd: string) => {
+    const folder = { cwd: next.cwd, worktreeCwd: next.worktreeCwd, branch: next.branch, workspaceMode: next.workspaceMode, worktreeBase: next.worktreeBase, worktreeRemoved: next.worktreeRemoved };
+    const saved = await upsertSession(next, latest => {
+      if (latest.cwd !== previousCwd || latest.busy) throw new Error("The conversation changed while its working folder was being saved. Retry.");
+      return { ...latest, ...folder };
+    });
+    if (saved === null && next.providerSessionId) throw new Error("The conversation's working folder could not be saved. Retry before sending a turn.");
+    sessionsRef.current = sessionsRef.current.map(session => session.id === next.id && session.cwd === previousCwd
+      ? { ...session, ...folder } : session);
+    flushSync(() => setSessions(sessionsRef.current));
+    return saved;
+  }, [upsertSession]);
   const [codexStorageRepaired, setCodexStorageRepaired] = useState(false);
   useEffect(() => {
     if (!codexStorageRepaired) return;
@@ -7395,6 +7412,31 @@ function Workspace({
         if (options?.managed) options.onSettled?.({ status: "failed", text: "", error:
           `Codex storage needs repair: ${remote?.codexStorageError ?? "preparation is already pending."}` });
         return false;
+      }
+      // CC8W: saved chats keep their native thread, but stop using the whole home.
+      const workingMono = monoForSession(sessionId) ?? findMono(habitRunMono(sessionId) ?? "");
+      if (remote && workingMono && !remote.busy && !options?.monoWorkingDirectoryPrepared) {
+        if (monoWorkingDirectoryPreparing.current.has(sessionId)) return false;
+        monoWorkingDirectoryPreparing.current.add(sessionId);
+        const generation = turnGen.current.get(sessionId);
+        return migrateMonoWorkingDirectory(workingMono, remote, next => saveMonoWorkingDirectory(next, remote.cwd))
+          .then(async () => {
+            if (!findMono(workingMono.id) || turnGen.current.get(sessionId) !== generation) {
+              if (!options?.managed && !options?.queuedMessageId) saveDraftRef.current(sessionId, text, attachments);
+              options?.onSettled?.({ status: "cancelled", text: "" });
+              return false;
+            }
+            const accepted = await submitSessionRef.current(sessionId, text, attachments, { ...options, monoWorkingDirectoryPrepared: true });
+            if (!accepted && !options?.managed && !options?.queuedMessageId) saveDraftRef.current(sessionId, text, attachments);
+            return accepted;
+          })
+          .catch(error => {
+            if (!options?.managed && !options?.queuedMessageId) saveDraftRef.current(sessionId, text, attachments);
+            enqueueHarnessEvent(sessionId, { type: "session.error", message: String(error) });
+            flushHarnessEvents();
+            options?.onSettled?.({ status: "failed", text: "", error: String(error) });
+            return false;
+          }).finally(() => monoWorkingDirectoryPreparing.current.delete(sessionId));
       }
       if (remote?.harness === "codex" && (owner || isProjectManager(sessionId)) && !remote.busy && !options?.codexStoragePrepared) {
         const providerAccountId = remote.codexStorageAccountId ?? remote.providerAccountId ?? selectedProviderAccountId("codex", remote.cwd);
@@ -8770,6 +8812,7 @@ function Workspace({
                 const accepted = contextAccepted;
                 contextAccepted = undefined;
                 accepted?.();
+                acceptMonoWorkingDirectoryMigration(sessionId);
                 if (monoRotation) acceptMonoRotation(sessionId, monoRotation.rotation.at, warning => {
                   const update = (session: Session) => session.id === sessionId
                     ? { ...session, rotationWarning: warning } : session;
@@ -9130,6 +9173,7 @@ function Workspace({
       dismissNoticesForContinuedSession,
       enqueueHarnessEvent,
       flushHarnessEvents,
+      saveMonoWorkingDirectory,
     ],
   );
   submitAfterProjectSyncRef.current = submitSession;
@@ -14923,6 +14967,16 @@ function Workspace({
         effortSource={monoViewSession.effortSource}
         runtimeMode={monoViewSession.runtimeMode}
         busy={!!monoViewSession.busy}
+        onWorkingDirectoryChange={async cwd => {
+          const current = sessionsRef.current.find(session => session.id === monoViewSession.id);
+          if (!current || current.busy || monoWorkingDirectoryPreparing.current.has(current.id)) throw new Error("Wait for the current turn to finish before changing its working folder.");
+          monoWorkingDirectoryPreparing.current.add(current.id);
+          try {
+            if (isMonoHomeDirectory(cwd, await homeDir())) throw new Error("Choose a project or another dedicated folder instead of the home folder.");
+            await changeMonoWorkingDirectory(current, cwd, next => saveMonoWorkingDirectory({ ...next, worktreeCwd: undefined, branch: undefined, workspaceMode: undefined, worktreeBase: undefined, worktreeRemoved: undefined }, current.cwd));
+          }
+          finally { monoWorkingDirectoryPreparing.current.delete(current.id); }
+        }}
         onModelChange={(harness, model) =>
           onModelChange(monoViewSession.id, harness, model)
         }

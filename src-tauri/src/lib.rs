@@ -557,6 +557,7 @@ pub fn run() {
             notes::notes_save_image,
             notes::notes_image_path,
             mono::mono_load,
+            mono::mono_workspace_ensure,
             mono::mono_read,
             mono::mono_save,
             checkpoint::session_checkpoint_ensure,

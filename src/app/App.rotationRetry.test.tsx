@@ -130,7 +130,7 @@ it("actual App acceptance succeeds and surfaces a storage warning until durable 
   const sessionsRef = { current: [session] };
   const acceptedContext = vi.fn();
   const scope = { sessionsRef, sessionId: session.id, monoRotation, acceptMonoRotation, editedResend: undefined,
-    acceptEditedResend: vi.fn(), turnGen: { current: new Map([[session.id, 1]]) }, gen: 1,
+    acceptEditedResend: vi.fn(), acceptMonoWorkingDirectoryMigration: vi.fn(), turnGen: { current: new Map([[session.id, 1]]) }, gen: 1,
     setSessions: vi.fn(), contextAccepted: acceptedContext };
   let callback: ts.Node | undefined;
   function visit(node: ts.Node) {

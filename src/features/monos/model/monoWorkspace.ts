@@ -24,6 +24,8 @@ import { forgetAgentContext } from "./monoFiles";
 import { forgetMonoRotation } from "./monoRotation";
 import { mergeModelSettings, resolveModel } from "../../sessions/model/models";
 import { resolveMonoRoleEffort } from "./monoRoleEffort";
+import { defaultMonoWorkingDirectory, ensureMonoWorkingDirectory } from "./monoWorkingDirectory";
+import { acceptMonoWorkingDirectoryMigration } from "./monoWorkingDirectoryMigration";
 
 const openingMonos = new Map<string, Promise<Session | undefined>>();
 
@@ -42,13 +44,14 @@ export function monoPermissionSessionIds(monoId: string | undefined, sessionId: 
 
 /**
  * Load the Mono's conversation without opening or replacing a workspace tab.
- * A new one starts with Auto permissions in the home folder: no single
- * project is its own.
+ * A new one starts in its project or a dedicated neutral workspace.
+ * Saved conversations migrate from the home folder at their next turn.
  */
 export function ensureMonoSession(
   monoId: string,
   host: {
     home(): Promise<string>;
+    workspace?(id: string): Promise<string>;
     load(id: string): Promise<Session | null | undefined>;
     create(cwd: string): Session;
     add(session: Session): void;
@@ -82,16 +85,16 @@ async function loadMonoSession(
       return session;
     }
   }
-  const home = await host.home();
-  // Removed while the home folder was looked up.
+  const cwd = await defaultMonoWorkingDirectory(mono, { home: host.home, workspace: host.workspace ?? ensureMonoWorkingDirectory });
+  // Removed while its working folder was looked up.
   const current = findMono(monoId);
   if (!current) return undefined;
-  const defaults = host.create(home);
+  const defaults = host.create(cwd);
   const profile = current.workerProfile;
   // All first-open paths, including a goal arriving before the chat is opened,
   // must use the Mono's profile. Existing chats above keep the user's choice.
   const runtimeMode = monoDefaultRuntimeMode(current);
-  let session = profile ? { ...newSession(profile.harness, home, profile.model, runtimeMode, profile.modelSettings), id: defaults.id } : { ...defaults, runtimeMode };
+  let session = profile ? { ...newSession(profile.harness, cwd, profile.model, runtimeMode, profile.modelSettings), id: defaults.id } : { ...defaults, cwd, runtimeMode };
   if (current.role) {
     const effort = resolveMonoRoleEffort(current, resolveModel(session.harness, session.model), profile?.modelSettings);
     session = { ...session, ...effort };
@@ -134,6 +137,7 @@ export async function resetMonoSession(
   }
   // A failed deletion must leave the original conversation selected.
   await host.remove(stopped);
+  acceptMonoWorkingDirectoryMigration(current.id);
   forgetAgentContext(current.id);
   forgetMonoRotation(current.id);
   if (monoId) saveMonoSessionId(monoId, fresh.id);

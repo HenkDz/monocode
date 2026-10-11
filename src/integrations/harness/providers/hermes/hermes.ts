@@ -1,4 +1,5 @@
 import { TurnNotReadyError } from "../../core/types";
+import { canResumeMonoAfterCwdChange } from "../monoCwdResume";
 import { nativeModelId } from "../../../../features/sessions/model/models";
 import type { RuntimeMode } from "../../../../features/sessions/model/session";
 import { AcpClient, type AcpHandlers } from "../../core/acp";
@@ -53,7 +54,7 @@ type Live = {
   turns: Promise<void>;
 };
 
-type Resume = { acpSessionId: string; cwd: string };
+type Resume = { acpSessionId: string; cwd: string; providerAccountId?: string };
 
 const INIT_TIMEOUT_MS = 20_000;
 const SESSION_TIMEOUT_MS = 45_000;
@@ -173,13 +174,15 @@ export function bindHermesSession(
   threadId: string,
   acpSessionId: string,
   cwd: string,
+  providerAccountId?: string,
 ): void {
   const sessionId = acpSessionId.trim();
   if (!threadId || !sessionId || !cwd.trim()) return;
-  resumeByThread.set(threadId, { acpSessionId: sessionId, cwd });
+  resumeByThread.set(threadId, { acpSessionId: sessionId, cwd, providerAccountId });
 }
 
 async function ensureLive(input: HarnessSessionInput): Promise<Live> {
+  const preserve = canResumeMonoAfterCwdChange(input, resumeByThread.get(input.sessionId));
   const existing = liveByThread.get(input.sessionId);
   if (existing && existing.cwd === input.cwd) {
     existing.onEvent = input.onEvent;
@@ -188,13 +191,13 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     return existing;
   }
   if (existing) {
-    resumeByThread.delete(input.sessionId);
+    if (!preserve) resumeByThread.delete(input.sessionId);
     await stopHermesSession(input.sessionId);
   }
 
   const resume = resumeByThread.get(input.sessionId);
-  const canLoad = resume != null && resume.cwd === input.cwd;
-  if (resume && resume.cwd !== input.cwd)
+  const canLoad = resume != null && (resume.cwd === input.cwd || preserve);
+  if (resume && resume.cwd !== input.cwd && !preserve)
     resumeByThread.delete(input.sessionId);
 
   const { path } = await resolveHermesBinary();
@@ -288,7 +291,8 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
         );
         acpSessionId = hermesSessionId(setup) ?? resume.acpSessionId;
         didLoad = true;
-      } catch {
+      } catch (error) {
+        if (preserve) throw error;
         setup = undefined;
         acpSessionId = undefined;
       } finally {
@@ -329,7 +333,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     };
     liveRef.current = live;
     liveByThread.set(input.sessionId, live);
-    resumeByThread.set(input.sessionId, { acpSessionId, cwd: input.cwd });
+    resumeByThread.set(input.sessionId, { acpSessionId, cwd: input.cwd, providerAccountId: input.providerAccountId });
     live.onEvent({
       type: "session.providerBound",
       providerSessionId: acpSessionId,

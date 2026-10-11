@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { newSession, type RuntimeMode } from "../../../../features/sessions/model/session";
 import { applyHarnessEvent } from "../../core/apply";
+const needsResume = vi.hoisted(() => vi.fn((_id: string, _provider: string | undefined) => false));
+vi.mock("../../../../features/monos/model/monoWorkingDirectoryMigration", () => ({ monoWorkingDirectoryNeedsResume: needsResume }));
 
 let onStdout: ((line: string) => void) | undefined;
 let onChildExit: ((code: number | null) => void) | undefined;
@@ -16,6 +18,7 @@ let v2SessionDirectory = "/repo";
 let v2ForkDirectory: string | undefined;
 let v2MoveApplies = true;
 let v2ForkFailure: { status: number; body: string } | undefined;
+let v1ForkDirectory = "/repo";
 const spawnChild = vi.fn(async () => {
   onStdout?.("opencode server listening on http://127.0.0.1:4096");
 });
@@ -38,6 +41,10 @@ const harnessHttp = vi.fn(
     }
     if (input.method === "GET" && url.pathname === "/api/session/session_1") {
       return v2Session("session_1", v2SessionDirectory);
+    }
+    if (input.method === "POST" && url.pathname === "/api/session/session_1/move") {
+      if (v2MoveApplies) v2SessionDirectory = JSON.parse(input.body ?? "{}").directory;
+      return { status: 204, body: "" };
     }
     if (input.method === "POST" && url.pathname === "/api/session/session_1/fork") {
       if (v2ForkFailure) return v2ForkFailure;
@@ -65,6 +72,12 @@ const harnessHttp = vi.fn(
         status: 200,
         body: JSON.stringify({ id: "session_1", directory: "/repo" }),
       };
+    }
+    if (input.method === "POST" && url.pathname === "/session/session_1/fork") {
+      return { status: 200, body: JSON.stringify({ id: "session_fork", directory: v1ForkDirectory }) };
+    }
+    if (input.method === "GET" && url.pathname === "/session/session_fork") {
+      return { status: 200, body: JSON.stringify({ id: "session_fork", directory: v1ForkDirectory }) };
     }
     if (
       input.method === "GET" &&
@@ -154,11 +167,13 @@ const waitFor = async (predicate: () => boolean, label: string) => {
 
 function turn(
   events: HarnessEvent[],
-  options: { runtimeMode?: RuntimeMode; onAccepted?: () => void } = {},
+  options: { runtimeMode?: RuntimeMode; onAccepted?: () => void; cwd?: string; monoSession?: boolean; providerAccountId?: string } = {},
 ) {
   return sendOpenCodeTurn({
     sessionId: "opencode-live",
-    cwd: "/repo",
+    cwd: options.cwd ?? "/repo",
+    monoSession: options.monoSession,
+    providerAccountId: options.providerAccountId,
     model: "opencode:openrouter/anthropic/claude-sonnet-4.6",
     runtimeMode: options.runtimeMode ?? "supervised",
     text: "delegate the investigation",
@@ -221,6 +236,8 @@ beforeEach(() => {
   v2ForkDirectory = undefined;
   v2MoveApplies = true;
   v2ForkFailure = undefined;
+  v1ForkDirectory = "/repo";
+  needsResume.mockReturnValue(false);
   spawnChild.mockClear();
   killChild.mockClear();
   closeHarnessSse.mockClear();
@@ -400,6 +417,68 @@ it("surfaces a failed v2 execution as a session error", async () => {
   expect(events).toContainEqual({ type: "session.error", message: "Rate limited" });
 });
 
+describe.each(["v1", "v2"])("OpenCode %s Mono working folder migration", generation => {
+  const cwd = "/mono/workspace";
+  const paths = () => harnessHttp.mock.calls.map(([input]) => `${input.method} ${new URL(input.url).pathname}`);
+  const finish = (sessionID: string) => onSseEvent?.(generation === "v2"
+    ? { type: "session.execution.succeeded", data: { sessionID } }
+    : { type: "session.status", properties: { sessionID, status: { type: "idle" } } });
+  const waitPrompt = () => waitFor(() => paths().some(path => /\/prompt(?:_async)?$/.test(path)), "prompt");
+  beforeEach(() => { openCodeVersion = generation === "v1" ? "opencode 1.14.19" : "opencode v2.0.19"; });
+
+  it.each(["saved", "live", "parked"])("preserves a %s Mono's history when its folder moves", async state => {
+    if (state === "saved") bindOpenCodeSession("opencode-live", "session_1", "/repo", "work");
+    else {
+      const first = turn([], { monoSession: true, providerAccountId: "work" });
+      await waitPrompt(); finish("session_1"); await first;
+      if (state === "parked") await stopOpenCodeSession("opencode-live");
+      harnessHttp.mockClear();
+    }
+    v1ForkDirectory = cwd;
+    const events: HarnessEvent[] = [];
+    const next = turn(events, { cwd, monoSession: true, providerAccountId: "work" });
+    await waitPrompt();
+    const providerId = generation === "v2" ? "session_1" : "session_fork";
+    expect(paths()).toContain(generation === "v2" ? "POST /api/session/session_1/move" : "POST /session/session_1/fork");
+    expect(paths()).not.toContain(generation === "v2" ? "POST /api/session" : "POST /session");
+    expect(paths()).not.toContain("DELETE /session/session_1");
+    expect(events).toContainEqual({ type: "session.providerBound", providerSessionId: providerId });
+    finish(providerId); await next;
+  });
+
+  it("keeps the saved conversation and retries if its new folder cannot be confirmed", async () => {
+    bindOpenCodeSession("opencode-live", "session_1", "/repo", "work");
+    v2MoveApplies = false;
+    await expect(turn([], { cwd, monoSession: true, providerAccountId: "work" })).rejects.toThrow(generation === "v2" ? "did not move" : "cannot move the saved conversation");
+    expect(paths().some(path => /\/prompt(?:_async)?$/.test(path))).toBe(false);
+    expect(paths()).not.toContain(generation === "v2" ? "POST /api/session" : "POST /session");
+    expect(paths()).not.toContain(generation === "v2" ? "DELETE /api/session/session_1" : "DELETE /session/session_1");
+    if (generation === "v1") expect(paths()).toContain("DELETE /session/session_fork");
+    v2MoveApplies = true; v1ForkDirectory = cwd; harnessHttp.mockClear();
+    const retry = turn([], { cwd, monoSession: true, providerAccountId: "work" });
+    await waitPrompt(); finish(generation === "v2" ? "session_1" : "session_fork"); await retry;
+    expect(paths()).toContain(generation === "v2" ? "POST /api/session/session_1/move" : "POST /session/session_1/fork");
+  });
+
+  it("does not migrate the previous account's native conversation", async () => {
+    bindOpenCodeSession("opencode-live", "session_1", "/repo", "old-account");
+    const next = turn([], { cwd, monoSession: true, providerAccountId: "other" });
+    await waitPrompt(); finish("session_1"); await next;
+    expect(paths()).toContain(generation === "v2" ? "POST /api/session" : "POST /session");
+    expect(paths().some(path => path.endsWith("/move") || path.endsWith("/fork"))).toBe(false);
+  });
+
+  it("completes a persisted migration after restart before admitting a prompt", async () => {
+    bindOpenCodeSession("opencode-live", "session_1", cwd, "work");
+    needsResume.mockImplementation((_id, nativeId) => nativeId === "session_1");
+    v1ForkDirectory = cwd;
+    const next = turn([], { cwd, monoSession: true, providerAccountId: "work" });
+    await waitPrompt(); finish(generation === "v2" ? "session_1" : "session_fork"); await next;
+    expect(paths()).toContain(generation === "v2" ? "POST /api/session/session_1/move" : "POST /session/session_1/fork");
+    expect(paths()).not.toContain(generation === "v2" ? "POST /api/session" : "POST /session");
+  });
+});
+
 describe("OpenCode 2.x resumed session folders", () => {
   const paths = () =>
     harnessHttp.mock.calls.map(
@@ -451,7 +530,7 @@ describe("OpenCode 2.x resumed session folders", () => {
     v2SessionDirectory = "/repo-old-worktree";
     v2MoveApplies = false;
     bindOpenCodeSession("opencode-live", "session_1", "/repo");
-    await expect(turn([])).rejects.toThrow("did not move the forked session");
+    await expect(turn([])).rejects.toThrow("did not move");
     expect(paths()).toContain("DELETE /api/session/session_fork");
     expect(paths().some((path) => path.endsWith("/prompt"))).toBe(false);
   });

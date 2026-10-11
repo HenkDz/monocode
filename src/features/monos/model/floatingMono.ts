@@ -5,6 +5,7 @@ import type { UserQuestionReply } from "../../sessions/model/userQuestion";
 import { displayAttachments } from "../../sessions/model/attachments";
 import { listMonos, monoLook, monoState, type Mono, type MonoState, type MonoStatus } from "./mono";
 import { pixelLayers } from "../../projects/model/pixelMascots";
+import type { MonoGoalRoutingContext, MonoGoalSubmission } from "./monoGoalRouting";
 
 export const FLOATING_MONO_CHANGED = "mono_chat_changed";
 export const FLOATING_MONO_REQUEST = "mono_chat_request";
@@ -20,12 +21,12 @@ export type FloatingMonoEntry = {
 export type FloatingMonoView = {
   monos: FloatingMonoEntry[];
   monoId: string | null;
-  session: (Session & { monoLiveState?: MonoState }) | null;
+  session: (Session & { monoLiveState?: MonoState; monoGoalRouting?: MonoGoalRoutingContext }) | null;
   error: string | null;
 };
 export type FloatingMonoAction =
   | { kind: "open" }
-  | { kind: "submit"; text: string; attachments: Attachment[] }
+  | { kind: "submit"; text: string; attachments: Attachment[]; monoGoal?: MonoGoalSubmission }
   | { kind: "stop" }
   | { kind: "create" }
   | { kind: "runtimeMode"; mode: RuntimeMode }
@@ -99,7 +100,9 @@ export type FloatingMonoHost = {
     sessionId: string,
     text: string,
     attachments: Attachment[],
-  ): boolean | void;
+    options?: { monoGoal: MonoGoalSubmission },
+  ): boolean | void | Promise<boolean | void>;
+  goalRouting?(monoId: string): MonoGoalRoutingContext | undefined;
   stop(sessionId: string): void;
   approval(
     sessionId: string,
@@ -135,7 +138,8 @@ export async function deliverFloatingMonoRequest(
     case "open":
       break;
     case "submit":
-      if (host.submit(session.id, action.text, action.attachments) === false)
+      if (await host.submit(session.id, action.text, action.attachments,
+        ...(action.monoGoal ? [{ monoGoal: action.monoGoal }] : [])) === false)
         throw new Error(
           "The message could not be sent. Try again in a moment.",
         );

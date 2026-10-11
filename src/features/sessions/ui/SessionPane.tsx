@@ -100,6 +100,10 @@ import { MonoActivityContent } from "../../monos/ui/MonoActivityPanel";
 import { MessageQueue } from "./MessageQueue";
 import { parseTeamMessage } from "../model/teamMessage";
 import { MonoComposer } from "../../monos/ui/MonoComposer";
+import type {
+  MonoGoalRoutingContext,
+  MonoGoalSubmission,
+} from "../../monos/model/monoGoalRouting";
 import { MonoUsageLimitNotice } from "../../monos/ui/MonoUsageLimitNotice";
 import { MonoCodexStorageNotice } from "../../monos/ui/MonoCodexStorageNotice";
 import { codexStorageBlockedContext } from "../../monos/model/monoCodexStorageIssues";
@@ -175,6 +179,7 @@ export type SessionPaneProps = {
   ) => void;
   monoActivityTurnId?: string;
   monoState?: MonoState;
+  monoGoalRouting?: MonoGoalRoutingContext;
   onShowMonoSessions?: (
     sessionId: string,
     turnId: string,
@@ -209,6 +214,12 @@ export type SessionPaneProps = {
     attachments: Attachment[],
     options?: ComposerTurnOptions,
   ) => boolean | void;
+  onSubmitGoal?: (
+    sessionId: string,
+    text: string,
+    attachments: Attachment[],
+    submission: MonoGoalSubmission,
+  ) => Promise<boolean>;
   onSaveDraft: (
     sessionId: string,
     text: string,
@@ -365,6 +376,8 @@ const LocalSessionPane = memo(function LocalSessionPane({
   onSaveDraft,
   onRemoveDraft,
   onSubmit,
+  onSubmitGoal,
+  monoGoalRouting,
   onStop,
   onCompactContext,
   onPlaceSessionInFolder,
@@ -1652,6 +1665,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
                   <MonoComposer
                     key={session.id}
                     sessionId={session.id}
+                    goalRouting={monoGoalRouting}
                     runtimeMode={monoRuntimeMode(mono, session.runtimeMode)}
                     onRuntimeModeChange={(mode) =>
                       onRuntimeModeChange(session.id, mode)
@@ -1669,8 +1683,10 @@ const LocalSessionPane = memo(function LocalSessionPane({
                         : undefined
                     }
                     onFocus={() => onFocus(session.id)}
-                    onSubmit={(text, attachments) =>
-                      onSubmit(session.id, text, attachments)
+                    onSubmit={(text, attachments, monoGoal) =>
+                      monoGoal
+                        ? onSubmitGoal?.(session.id, text, attachments, monoGoal) ?? false
+                        : onSubmit(session.id, text, attachments)
                     }
                   />
                 </>

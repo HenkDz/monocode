@@ -90,6 +90,7 @@ export type EditedResendRejection = {
   providerRewound: boolean;
 };
 export type ComposerTurnOptions = {
+  monoGoal?: import("../../monos/model/monoGoalRouting").MonoGoalSubmission;
   intent?: TurnIntent;
   resendEdited?: boolean;
   /** Restore an edited prompt when the resend rejects asynchronously. */
@@ -327,6 +328,7 @@ export type Block = {
   id: string;
   role: BlockRole;
   text: string;
+  monoGoalSubmission?: import("../../monos/model/monoGoalRouting").MonoGoalSubmission;
   image?: GeneratedImageMeta;
   attachments?: Attachment[];
   streaming?: boolean;

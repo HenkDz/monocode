@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { MonoComposer } from "./MonoComposer";
 import { clearComposerDraft } from "../../sessions/model/draftCache";
 import { saveComposerAutocorrect } from "../../settings/model/displayPrefs";
+import type { MonoGoalRoutingContext, MonoGoalSubmission } from "../model/monoGoalRouting";
 
 const { pick } = vi.hoisted(() => ({ pick: vi.fn() }));
 vi.mock("../../sessions/model/attachments", async (original) => ({
@@ -75,6 +76,127 @@ function submit() {
     .querySelector("form")!
     .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
 }
+const goalRouting: MonoGoalRoutingContext = {
+  ownerId: "grand",
+  projects: [{
+    id: "dzdistro", name: "DZDistro", path: "C:/projects/dzdistro",
+    managerMonoId: "manager", available: true,
+  }],
+};
+function newGoal() {
+  act(() => [...container.querySelectorAll<HTMLButtonElement>("button")]
+    .find(button => button.textContent === "New goal")!.click());
+}
+
+it("keeps ordinary chat on the two-argument submit path even when goal routing is available", () => {
+  const onSubmit = vi.fn(() => true);
+  render({ goalRouting, onSubmit });
+  type("What is DZDistro doing?");
+  act(submit);
+  expect(onSubmit).toHaveBeenCalledExactlyOnceWith("What is DZDistro doing?", []);
+});
+
+it("captures the displayed route with stable IDs on retry and fresh IDs after acceptance", () => {
+  const onSubmit = vi.fn((_text: string, _files: unknown[], _goal?: MonoGoalSubmission) => false);
+  render({ goalRouting, onSubmit });
+  type("Fix DZDistro checkout");
+  newGoal();
+  act(submit);
+  const first = onSubmit.mock.calls[0][2]!;
+  expect(first).toEqual({
+    ownerId: "grand",
+    choice: { mode: "goal", override: "auto" },
+    projectId: "dzdistro", managerMonoId: "manager", reason: "Exact project name",
+    requestId: expect.any(String), userMessageId: expect.any(String),
+  });
+  act(submit);
+  expect(onSubmit.mock.calls[1][2]).toEqual(first);
+  onSubmit.mockReturnValueOnce(true);
+  act(submit);
+  expect(field().value).toBe("");
+  expect(container.querySelector('[data-mono-goal-route] [aria-pressed="true"]')?.textContent).toBe("Chat");
+  expect(container.querySelector('[data-mono-goal-route] [role="status"]')).toBeNull();
+  type("What is DZDistro doing?");
+  act(submit);
+  expect(onSubmit.mock.calls[3]).toEqual(["What is DZDistro doing?", []]);
+  type("Fix DZDistro checkout");
+  newGoal();
+  act(submit);
+  expect(onSubmit.mock.calls[4][2]!.requestId).not.toBe(first.requestId);
+  expect(onSubmit.mock.calls[4][2]!.userMessageId).not.toBe(first.userMessageId);
+});
+
+it("gives an edited rejected goal a new request identity", () => {
+  const onSubmit = vi.fn((_text: string, _files: unknown[], _goal?: MonoGoalSubmission) => false);
+  render({ goalRouting, onSubmit });
+  type("Fix DZDistro checkout");
+  newGoal();
+  act(submit);
+  type("Fix DZDistro checkout and add a regression test");
+  act(submit);
+  expect(onSubmit.mock.calls[1][2]!.requestId).not.toBe(onSubmit.mock.calls[0][2]!.requestId);
+});
+
+it("gives changed route choices and attachments new request identities after rejection", async () => {
+  const onSubmit = vi.fn((_text: string, _files: unknown[], _goal?: MonoGoalSubmission) => false);
+  render({ goalRouting, onSubmit });
+  type("Fix DZDistro checkout");
+  newGoal();
+  act(submit);
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Goal route: Auto route"]')!.click());
+  await act(async () => [...document.querySelectorAll<HTMLButtonElement>('[role="option"]')]
+    .find(button => button.textContent?.trim() === "Grand Orch")!.click());
+  act(submit);
+  expect(onSubmit.mock.calls[1][2]!.requestId).not.toBe(onSubmit.mock.calls[0][2]!.requestId);
+  expect(onSubmit.mock.calls[1][2]!.choice.override).toBe("grand");
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Attach files"]')!.click());
+  act(submit);
+  expect(onSubmit.mock.calls[2][2]!.requestId).not.toBe(onSubmit.mock.calls[1][2]!.requestId);
+  expect(onSubmit.mock.calls[2][1]).toEqual([file]);
+  onSubmit.mockReturnValueOnce(true);
+  act(submit);
+  newGoal();
+  expect(container.querySelector('[aria-label="Goal route: Auto route"]')).not.toBeNull();
+});
+
+it("locks route controls during Send and retains the authorized snapshot while the roster changes", async () => {
+  let resolve!: (accepted: boolean) => void;
+  const onSubmit = vi.fn((_text: string, _files: unknown[], _goal?: MonoGoalSubmission) =>
+    new Promise<boolean>(done => { resolve = done; }));
+  render({ goalRouting, onSubmit });
+  type("Fix DZDistro checkout");
+  newGoal();
+  act(() => { submit(); submit(); });
+  expect(onSubmit).toHaveBeenCalledTimes(1);
+  const first = onSubmit.mock.calls[0][2]!;
+  for (const button of container.querySelectorAll<HTMLButtonElement>("[data-mono-goal-route] button"))
+    expect(button.disabled).toBe(true);
+  render({ goalRouting: { ...goalRouting, projects: [{ ...goalRouting.projects[0], available: false }] }, onSubmit });
+  expect(first.managerMonoId).toBe("manager");
+  await act(async () => resolve(false));
+  expect(container.querySelector('[data-mono-goal-route] [aria-pressed="true"]')?.textContent).toBe("New goal");
+  act(submit);
+  expect(onSubmit.mock.calls[1][2]).toBe(first);
+  expect(onSubmit.mock.calls[1][2]).toEqual(expect.objectContaining({
+    projectId: "dzdistro", managerMonoId: "manager", reason: "Exact project name",
+  }));
+  await act(async () => resolve(true));
+  expect(container.querySelector('[data-mono-goal-route] [aria-pressed="true"]')?.textContent).toBe("Chat");
+});
+
+it("sends attached goals through Grand with their full attachment content", async () => {
+  const onSubmit = vi.fn(() => false);
+  render({ goalRouting, onSubmit });
+  type("Fix DZDistro checkout");
+  newGoal();
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Attach files"]')!.click());
+  act(submit);
+  expect(onSubmit).toHaveBeenCalledWith("Fix DZDistro checkout", [file], expect.objectContaining({
+    reason: "Attachments need the full Grand submission",
+  }));
+  expect(onSubmit.mock.calls[0]).toHaveLength(3);
+  expect(onSubmit.mock.calls[0][2]).not.toHaveProperty("projectId");
+});
 
 it("renders the regular four-mode AccessPicker chip in the Mono composer", async () => {
   const change = vi.fn();

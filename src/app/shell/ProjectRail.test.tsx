@@ -153,7 +153,8 @@ it("passes the existing Mono unread counts to manager members without extra App 
   />));
   await show(1);
   expect(host.querySelector('[aria-label="Open Unread member"]')).not.toBeNull();
+  expect(host.querySelector('[aria-label="Open Unread member"]')?.hasAttribute("data-idle-member")).toBe(false);
   await show(0);
-  expect(host.querySelector('[aria-label="Open Unread member"]')).toBeNull();
-  expect(host.textContent).toContain("1 idle member");
+  expect(host.querySelector('[aria-label="Open Unread member"]')?.hasAttribute("data-idle-member")).toBe(true);
+  expect(host.textContent).toContain("Available 1 idle");
 });

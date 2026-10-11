@@ -1,9 +1,6 @@
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps } from "react";
-import { listMonos, monosSnapshot, subscribeMonos } from "../../monos/model/mono";
-import { monoManagerGoals } from "../../monos/model/monoManagerGoals";
+import { useEffect, useRef, useState } from "react";
 import { goalElapsedLabel, type GoalTarget } from "../model/goalView";
-import { selectGoalTimeline, type GoalTimeline, type TimelineSpan } from "../model/timeline";
-import { MissionControl } from "./MissionControl";
+import { type GoalTimeline, type TimelineSpan } from "../model/timeline";
 import "./delegationTimeline.css";
 
 const duration = (span: TimelineSpan, now: number) => span.start != null && (span.end != null || span.ongoing)
@@ -84,37 +81,4 @@ export function DelegationTimeline({ timeline, onBack, onOpenTarget }: {
       </section>
     </div>
   </section>;
-}
-
-// CC7E route hook: retain Mission control's mounted filters/history/scroll and shell lifecycle.
-export function DelegationTimelineRoute(props: ComponentProps<typeof MissionControl>) {
-  const [goalId, setGoalId] = useState<string>();
-  const invoker = useRef<HTMLAnchorElement | null>(null);
-  const missingBack = useRef<HTMLButtonElement>(null);
-  const rosterVersion = useSyncExternalStore(subscribeMonos, monosSnapshot);
-  const goalsVersion = useSyncExternalStore(monoManagerGoals.subscribe, monoManagerGoals.snapshot);
-  const roster = useMemo(() => listMonos(), [rosterVersion]);
-  const goals = useMemo(() => monoManagerGoals.goals(), [goalsVersion]);
-  const [now, setNow] = useState(Date.now);
-  useEffect(() => {
-    if (!props.open || !goalId) return;
-    setNow(Date.now());
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, [props.open, goalId]);
-  const timeline = useMemo(() => goalId ? selectGoalTimeline({ goalId, goals, roster, runs: props.runs, sessions: props.sessions, now }) : undefined,
-    [goalId, goals, roster, props.runs, props.sessions, now]);
-  useEffect(() => { if (!goalId && props.open) invoker.current?.focus(); }, [goalId, props.open]);
-  const back = () => setGoalId(undefined);
-  useTimelineEscape(back, props.open && !!goalId && !timeline);
-  useEffect(() => { if (props.open && goalId && !timeline) missingBack.current?.focus(); }, [props.open, goalId, timeline]);
-  return <div className="dt-route" hidden={!props.open} inert={!props.open || undefined} onClick={event => {
-    const link = (event.target as HTMLElement).closest<HTMLAnchorElement>("a[data-goal-timeline]");
-    if (!link) return;
-    event.preventDefault(); invoker.current = link; setGoalId(link.dataset.goalTimeline);
-  }}>
-    <MissionControl {...props} open={props.open && !goalId} />
-    {props.open && goalId && (timeline ? <DelegationTimeline timeline={timeline} onBack={back} onOpenTarget={props.onOpenTarget} />
-      : <section className="dt-missing"><p role="status">This goal is no longer available.</p><button ref={missingBack} className="mc-button" onClick={back}>Back to Mission control</button></section>)}
-  </div>;
 }

@@ -167,7 +167,7 @@ export function ProjectWorktrees({
   const [sessionExpansion, setSessionExpansion] = useState<Map<string, boolean>>(() => new Map());
   const [focusedTreePath, setFocusedTreePath] = useState<string>();
   const [showAll, setShowAll] = useState<Set<string>>(() => new Set());
-  const [worktreeLimit, setWorktreeLimit] = useState(WORKTREE_PAGE);
+  const [historyPage, setHistoryPage] = useState(0);
   const [historyError, setHistoryError] = useState(false);
   const [historyPending, setHistoryPending] = useState(true);
   const [menu, setMenu] = useState<{
@@ -183,10 +183,9 @@ export function ProjectWorktrees({
   const [goal, setGoal] = useState("");
   const [givingBusy, setGivingBusy] = useState(false);
   const [creatingPr, setCreatingPr] = useState<Worktree>();
-  const [teamExpanded, setTeamExpanded] = useProjectExpansion(project, "manager-team", true);
-  const [taskExpanded, setTaskExpanded] = useProjectExpansion(project, "task-worktrees", false);
   const [doneExpanded, setDoneExpanded] = useProjectExpansion(project, "finished-worktrees", false);
   const [activeOnly, setActiveOnly] = useActiveWorktrees(project);
+  useEffect(() => setHistoryPage(0), [project]);
   useEffect(() => {
     if (!menu) return;
     let disposed = false;
@@ -302,9 +301,10 @@ export function ProjectWorktrees({
   }).map(tree => pathKey(tree.path)));
   const listedTrees = trees.filter(tree => currentPaths.has(pathKey(tree.path)));
   const historicalTrees = trees.filter(tree => !currentPaths.has(pathKey(tree.path)));
-  const historyTrees = activeOnly ? [] : historicalTrees.slice(0, worktreeLimit);
   const historyExpanded = doneExpanded && !activeOnly;
-  const hiddenTrees = historicalTrees.length - historyTrees.length;
+  const historyPages = Math.max(1, Math.ceil(historicalTrees.length / WORKTREE_PAGE));
+  const page = Math.min(historyPage, historyPages - 1);
+  const historyTrees = activeOnly ? [] : historicalTrees.slice(page * WORKTREE_PAGE, (page + 1) * WORKTREE_PAGE);
   const sections = renderManager
     ? [
         {
@@ -318,7 +318,7 @@ export function ProjectWorktrees({
             { name: "Active task worktrees", trees: listedTrees.filter(tree => taskByPath.has(pathKey(tree.path)) && rank(tree) !== 3).sort((a, b) => rank(a) - rank(b)), expanded: true },
             { name: "Retained task worktrees", trees: listedTrees.filter(tree => taskByPath.has(pathKey(tree.path)) && rank(tree) === 3), expanded: true },
           ],
-          expanded: taskExpanded,
+          expanded: true,
         },
       ]
     : [{ name: "Your worktrees", groups: [{ name: "Your worktrees", trees: listedTrees, expanded: true }], expanded: true }];
@@ -375,9 +375,27 @@ export function ProjectWorktrees({
           </button>
         </p>
       ) : null}
-      {renderManager?.(teamExpanded, () => setTeamExpanded(!teamExpanded),
+      {renderManager?.(true, () => {},
         trees.filter(tree => taskByPath.has(pathKey(tree.path))).length,
       )}
+      {trees.length > 0 && <div className="mb-1 mt-2 px-2">
+        <p className="mb-1.5 flex items-center justify-between text-[11px] text-content/75">Worktrees <span className="tabular-nums">{trees.length}</span></p>
+        <div role="group" aria-label="Worktree filter" className="flex w-fit gap-0.5 rounded-md bg-content/5 p-0.5"
+          onKeyDown={event => {
+            if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+            if (event.key === "ArrowRight" || event.key === "ArrowLeft") {
+              event.preventDefault();
+              const all = event.key === "ArrowRight";
+              setDoneExpanded(all);
+              setActiveOnly(!all);
+              event.currentTarget.querySelectorAll<HTMLButtonElement>("button")[all ? 1 : 0]?.focus();
+            }
+          }}>
+          {[false, true].map(all => <button key={String(all)} type="button" data-sidebar-row aria-pressed={historyExpanded === all}
+            onClick={() => { setDoneExpanded(all); setActiveOnly(!all); }}
+            className="rounded px-2 py-1 text-[11px] text-content/75 aria-pressed:bg-background-base aria-pressed:text-content hover:text-content focus-visible:outline-accent">{all ? "All" : "Active"}</button>)}
+        </div>
+      </div>}
       {sections.map((section) => (
         <div
           key={section.name}
@@ -385,32 +403,14 @@ export function ProjectWorktrees({
           aria-label={section.name}
         >
           {section.name === "Task worktrees" ? (
-            <button
-              type="button"
-              aria-label="Toggle Task worktrees"
-              data-sidebar-row
-              aria-expanded={taskExpanded}
+            <p
               title={section.groups.map(group => `${group.trees.length} ${group.name === "Retained task worktrees" ? "retained" : "active"}`).join(" · ")}
-              onClick={() => {
-                const expanded = !taskExpanded;
-                setTaskExpanded(expanded);
-              }}
-              className="mt-1 flex h-7 w-full items-center gap-1 rounded px-2 text-left text-[11px] text-content/70 hover:bg-content/5 hover:text-content focus-visible:outline-accent"
+              className="mt-1 flex min-h-7 items-center px-2 text-[11px] text-content/75"
             >
-              {taskExpanded ? (
-                <ChevronDown className="size-3" />
-              ) : (
-                <ChevronRight className="size-3" />
-              )}
               Task worktrees · {section.groups[0].trees.length} active{section.groups[1].trees.length ? ` · ${section.groups[1].trees.length} retained` : ""}
-            </button>
+            </p>
           ) : section.name === "History" ? (
-            <button type="button" data-sidebar-row aria-label="Toggle worktree History" aria-expanded={historyExpanded}
-              onClick={() => { setDoneExpanded(!historyExpanded); if (activeOnly) setActiveOnly(false); }}
-              className="mt-1 flex h-7 w-full items-center gap-1 rounded px-2 text-left text-[11px] text-content/70 hover:bg-content/5 hover:text-content focus-visible:outline-accent">
-              {historyExpanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
-              History · {historicalTrees.length}
-            </button>
+            historyExpanded && <p className="mt-1 flex h-7 items-center px-5 text-[11px] text-content/75">Earlier work · {historicalTrees.length}</p>
           ) : <p className="mt-1 flex h-7 items-center px-5 text-[11px] text-content/70">Your worktrees</p>}
           <div
             data-worktree-group-list
@@ -813,28 +813,11 @@ ${openPrUrl}`}
           </div>
         </div>
       ))}
-      {historyExpanded && (hiddenTrees > 0 || worktreeLimit > WORKTREE_PAGE) ? (
-        <div className="flex gap-1 px-1">
-          {hiddenTrees > 0 ? (
-            <button
-              type="button"
-              title="Historical worktrees are shown five at a time. Current work, the focused checkout, dirty changes and sessions needing attention stay visible."
-              className="rounded-md px-2 py-1 text-left text-[11px] text-content/70 hover:bg-content/5 hover:text-content"
-              onClick={() => setWorktreeLimit((limit) => limit + WORKTREE_PAGE)}
-            >
-              Show {Math.min(WORKTREE_PAGE, hiddenTrees)} more
-              <span> · {hiddenTrees} remaining</span>
-            </button>
-          ) : null}
-          {worktreeLimit > WORKTREE_PAGE ? (
-            <button
-              type="button"
-              className="rounded-md px-2 py-1 text-left text-[11px] text-content/70 hover:bg-content/5 hover:text-content"
-              onClick={() => setWorktreeLimit(WORKTREE_PAGE)}
-            >
-              Show less
-            </button>
-          ) : null}
+      {historyExpanded && historyPages > 1 ? (
+        <div aria-label="Worktree pages" className="mt-1 flex items-center justify-between px-2 text-[11px] text-content/75">
+          <button type="button" data-sidebar-row aria-label="Previous worktree page" disabled={page === 0} className={smallButton} onClick={() => setHistoryPage(page - 1)}>←</button>
+          <span className="tabular-nums">{page + 1} / {historyPages}</span>
+          <button type="button" data-sidebar-row aria-label="Next worktree page" disabled={page === historyPages - 1} className={smallButton} onClick={() => setHistoryPage(page + 1)}>→</button>
         </div>
       ) : null}
       {enabled && menu ? (

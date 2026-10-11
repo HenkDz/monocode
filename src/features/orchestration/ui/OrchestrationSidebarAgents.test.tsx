@@ -28,7 +28,7 @@ const task = (sessionId: string, status: OrchestrationTask["status"]): Orchestra
   sessionId, status, title: sessionId, harness: "codex", model: "codex:gpt-5.4",
 });
 
-it("folds all-cancelled groups with clear task counts, persisted history and row expansion, and original order", async () => {
+it("filters all-cancelled groups with persisted Active/All and row expansion, and original order", async () => {
   vi.spyOn(orchestrator, "snapshot").mockReturnValue([]);
   const summary: OrchestrationSummary = { status: "finished", tasks: [task("first", "cancelled"), task("second", "cancelled")] };
   const host = document.createElement("div");
@@ -39,21 +39,21 @@ it("folds all-cancelled groups with clear task counts, persisted history and row
     expect(host.textContent).toContain("2 tasks · all cancelled");
     expect(host.textContent).not.toContain("0/2 done");
     expect(host.querySelectorAll('[data-orchestration-agent]')).toHaveLength(0);
-    const disclosure = host.querySelector<HTMLButtonElement>('button[aria-controls]')!;
-    expect(disclosure.textContent).toBe("History · 2");
-    expect(disclosure.getAttribute("aria-expanded")).toBe("false");
-    await act(async () => disclosure.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", shiftKey: true, bubbles: true })));
-    expect(disclosure.getAttribute("aria-expanded")).toBe("false");
-    await act(async () => disclosure.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
+    const controls = () => host.querySelectorAll<HTMLButtonElement>('[aria-label="Task filter"] button');
+    expect(controls()[0].getAttribute("aria-pressed")).toBe("true");
+    expect(host.querySelector('button[aria-controls]')).toBeNull();
+    await act(async () => controls()[0].dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", shiftKey: true, bubbles: true })));
+    expect(controls()[0].getAttribute("aria-pressed")).toBe("true");
+    await act(async () => controls()[0].dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
     expect([...host.querySelectorAll('[data-orchestration-agent]')].map(row => row.getAttribute("data-orchestration-agent"))).toEqual(["first", "second"]);
     await act(async () => root.unmount());
     root = createRoot(host);
     await render();
-    expect(host.querySelector('button[aria-controls]')?.getAttribute("aria-expanded")).toBe("true");
+    expect(controls()[1].getAttribute("aria-pressed")).toBe("true");
     const first = host.querySelector<HTMLButtonElement>('[aria-label="Agent details: first"]')!;
     await act(async () => first.click());
     expect(first.getAttribute("aria-expanded")).toBe("true");
-    await act(async () => host.querySelector<HTMLButtonElement>('button[aria-controls]')!.click());
+    await act(async () => controls()[0].click());
     await act(async () => root.unmount());
     root = createRoot(host);
     await render();
@@ -88,7 +88,7 @@ it("folds accepted completed work while retaining unfinished review, selected, q
       expect(host.querySelector(`[aria-label="Agent details: ${id}"]`)).not.toBeNull();
     expect(host.querySelector('[aria-label="Agent details: review"]')?.textContent).toContain("Waiting review");
     expect(host.querySelector('[aria-label="Agent details: approval"]')?.getAttribute("aria-expanded")).toBe("true");
-    expect(host.querySelector('button[aria-controls]')?.textContent).toBe("History · 1");
+    expect(host.querySelector('[aria-label="Task filter"] [aria-pressed="true"]')?.textContent).toBe("Active");
     expect(host.textContent).toContain("6 tasks · 2 completed · 2 cancelled · 2 unfinished");
   } finally {
     await act(async () => root.unmount());
@@ -115,7 +115,7 @@ it("retains a focused row when its task finishes and folds it after focus leaves
     expect(host.querySelector('[aria-label="Agent details: focused"]')).toBe(row);
     await act(async () => outside.focus());
     expect(host.querySelector('[aria-label="Agent details: focused"]')).toBeNull();
-    expect(host.querySelector('button[aria-controls]')?.textContent).toBe("History · 1");
+    expect(host.querySelector('[aria-label="Task filter"] [aria-pressed="true"]')?.textContent).toBe("Active");
   } finally {
     await act(async () => root.unmount());
     host.remove(); outside.remove();
@@ -157,7 +157,7 @@ it("retains accepted project tasks with open or unknown PRs and folds merged or 
       expect(host.querySelector(`[aria-label="Agent details: ${name}"]`)).not.toBeNull();
     for (const name of ["merged", "no-changes"])
       expect(host.querySelector(`[aria-label="Agent details: ${name}"]`)).toBeNull();
-    expect(host.querySelector('button[aria-controls]')?.textContent).toBe("History · 2");
+    expect(host.querySelector('[aria-label="Task filter"] [aria-pressed="true"]')?.textContent).toBe("Active");
   } finally {
     await act(async () => root.unmount());
     host.remove();
@@ -174,12 +174,50 @@ it("keeps canonical storage-held tasks visible and makes the reason available on
     await act(async () => root.render(<OrchestrationSidebarAgents leadId="blocked-lead" summary={summary} />));
     const row = host.querySelector<HTMLButtonElement>('[aria-label="Agent details: reviewer"]')!;
     expect(row.textContent).toContain("Blocked · storage");
+    expect(row.querySelector('[role="status"]')?.getAttribute("aria-label")).toBe("Blocked · storage");
     expect(host.querySelector('button[aria-controls]')).toBeNull();
     await act(async () => row.focus());
     const reason = document.getElementById(row.getAttribute("aria-describedby")!);
     expect(reason?.getAttribute("role")).toBe("tooltip");
     expect(reason?.textContent).toContain("Repair AGENTS.md before dispatch");
     expect(row.querySelector("button, [tabindex]")).toBeNull();
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+  }
+});
+
+it("pages terminal tasks while keeping selected and blocked tasks visible on every page", async () => {
+  vi.spyOn(orchestrator, "snapshot").mockReturnValue([]);
+  const summary: OrchestrationSummary = { status: "finished", tasks: [
+    ...Array.from({ length: 12 }, (_, index) => task(`old-${index}`, "cancelled")),
+    task("selected", "cancelled"), task("blocked", "blocked"),
+  ] };
+  const host = document.createElement("div"), root = createRoot(host);
+  document.body.append(host);
+  try {
+    await act(async () => root.render(<OrchestrationWorkers.Provider value={{ selectedId: "selected", inspect: noop }}>
+      <OrchestrationSidebarAgents leadId="paged-lead" summary={summary} />
+    </OrchestrationWorkers.Provider>));
+    const rows = () => [...host.querySelectorAll('[data-orchestration-agent]')].map(row => row.getAttribute("data-orchestration-agent"));
+    expect(rows()).toEqual(["selected", "blocked"]);
+    const all = host.querySelectorAll<HTMLButtonElement>('[aria-label="Task filter"] button')[1];
+    await act(async () => all.click());
+    expect(rows()).toEqual(["old-0", "old-1", "old-2", "old-3", "old-4", "selected", "blocked"]);
+    const next = host.querySelector<HTMLButtonElement>('[aria-label="Next task page"]')!;
+    const previous = host.querySelector<HTMLButtonElement>('[aria-label="Previous task page"]')!;
+    expect(previous.disabled).toBe(true);
+    await act(async () => next.click());
+    expect(rows()).toEqual(["old-5", "old-6", "old-7", "old-8", "old-9", "selected", "blocked"]);
+    expect(host.querySelector('[aria-label="Task pages"]')?.textContent).toContain("2 / 3");
+    await act(async () => next.click());
+    expect(rows()).toEqual(["old-10", "old-11", "selected", "blocked"]);
+    expect(next.disabled).toBe(true);
+    await act(async () => previous.click());
+    expect(rows()).toEqual(["old-5", "old-6", "old-7", "old-8", "old-9", "selected", "blocked"]);
+    await act(async () => all.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true })));
+    expect(rows()).toEqual(["selected", "blocked"]);
+    expect(document.activeElement?.textContent).toBe("Active");
   } finally {
     await act(async () => root.unmount());
     host.remove();

@@ -19,6 +19,7 @@ it("shows the member's storage block instead of idle and clears it after repair"
   try {
     await act(async () => root.render(<ProjectManagerRow project="/repo" onOpen={vi.fn()} sessions={[session]} />));
     expect(host.querySelector('[aria-label="Open Reviewer"] [role="status"]')?.textContent).toBe("Blocked · storage");
+    expect(host.querySelector('[aria-label="Open Reviewer"] [role="status"]')?.getAttribute("aria-label")).toBe("Blocked · storage");
     const reviewer = host.querySelector<HTMLButtonElement>('[aria-label="Open Reviewer"]')!;
     const detailId = reviewer.getAttribute("aria-describedby")!;
     expect(document.getElementById(detailId)?.textContent).toContain("Blocked · storage");
@@ -28,6 +29,10 @@ it("shows the member's storage block instead of idle and clears it after repair"
     expect(reviewer.querySelector("button, [tabindex]")).toBeNull();
     await act(async () => root.render(<ProjectManagerRow project="/repo" onOpen={vi.fn()} sessions={[{ ...session, codexStorageError: undefined }]} />));
     expect(host.querySelector('[aria-label="Open Reviewer"] [role="status"]')?.textContent).toBe("Idle");
+    expect(document.activeElement).toBe(reviewer);
+    expect(reviewer.hasAttribute("data-idle-member")).toBe(false);
+    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Open project manager"]')!.focus());
+    expect(host.querySelector('[aria-label="Open Reviewer"]')?.hasAttribute("data-idle-member")).toBe(true);
   } finally {
     await act(async () => root.unmount());
     host.remove();
@@ -47,8 +52,8 @@ it("selects members with native keyboard-focusable buttons and only one current 
   try {
     await act(async () => root.render(<ProjectManagerRow project="/repo" onOpen={open} onOpenMember={open} selected />));
     expect(host.querySelectorAll('[aria-current="page"]')).toHaveLength(1);
-    await act(async () => host.querySelector<HTMLButtonElement>('button[aria-controls]')!.click());
     const member = host.querySelector<HTMLButtonElement>('[aria-label="Open Backend"]')!;
+    expect(member.closest('[aria-label="Available members"]')).not.toBeNull();
     await act(async () => member.focus());
     expect(document.activeElement).toBe(member);
     await act(async () => member.click());
@@ -83,7 +88,7 @@ it("shows member availability and a task tooltip without repeating its title or 
     expect(member().title).toBe(task.title);
     expect(host.textContent).not.toContain(task.title);
     expect(host.textContent).not.toContain("completed");
-    expect(host.querySelector('[aria-label="Toggle Manager team"]')).not.toBeNull();
+    expect(host.querySelector('[aria-label="Toggle Manager team"]')).toBeNull();
     task.status = "running";
     await render();
     expect(member().textContent).toBe("BackendThinking");
@@ -105,7 +110,7 @@ const trees = vi.hoisted(() => ({
   data: { worktrees: [{}] } as { worktrees: unknown[] } | undefined,
 }));
 
-it("folds idle members while retaining selected, unread, attention, queued, blocked and active rows in saved order", async () => {
+it("lists selected, unread, attention, queued, blocked and active rows with idle chips in saved order", async () => {
   const names = ["Idle first", "Selected", "Unread", "Attention", "Queued", "Blocked", "Active", "Idle last"];
   localStorage.setItem("monocode:mono-roster", JSON.stringify([
     { id: "m", role: "manager", managerProject: "/repo", projects: ["/repo"], mascot: "cat", color: "#aaaaaa" },
@@ -116,6 +121,7 @@ it("folds idle members while retaining selected, unread, attention, queued, bloc
   sessions[5].codexStorageError = "Repair storage";
   sessions[6].busy = true;
   const host = document.createElement("div");
+  document.body.append(host);
   let root = createRoot(host);
   const render = (collapsed = false) => act(async () => root.render(
     <SidebarUnseenCounts.Provider value={new Map([["2", 1]])}>
@@ -125,24 +131,25 @@ it("folds idle members while retaining selected, unread, attention, queued, bloc
   const visibleNames = () => [...host.querySelectorAll<HTMLButtonElement>('button[aria-label^="Open "]')].slice(1).map(button => button.getAttribute("aria-label")?.slice(5));
   try {
     await render();
-    expect(visibleNames()).toEqual(names.slice(1, 7));
-    const disclosure = host.querySelector<HTMLButtonElement>('button[aria-controls]')!;
-    expect(disclosure.textContent).toBe("2 idle members");
-    expect(disclosure.getAttribute("aria-expanded")).toBe("false");
-    await act(async () => disclosure.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", ctrlKey: true, bubbles: true })));
-    expect(disclosure.getAttribute("aria-expanded")).toBe("false");
-    await act(async () => disclosure.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
-    expect(visibleNames()).toEqual(names);
-    expect(disclosure.getAttribute("aria-expanded")).toBe("true");
-    await render(true);
-    expect(visibleNames()).toEqual(names.slice(1, 7));
-    expect(host.querySelector('button[aria-controls]')).toBeNull();
+    expect(visibleNames()).toEqual([...names.slice(1, 7), names[0], names[7]]);
+    const chips = () => [...host.querySelectorAll<HTMLButtonElement>('[data-idle-member]')];
+    expect(chips().map(chip => chip.getAttribute("aria-label"))).toEqual(["Open Idle first", "Open Idle last"]);
+    expect(host.querySelector('[aria-label="Available members"]')?.textContent).toContain("Available 2 idle");
+    expect(host.querySelector('button[aria-controls], button[aria-expanded]')).toBeNull();
+    const first = chips()[0];
+    await act(async () => first.focus());
+    expect(document.activeElement).toBe(first);
     await render();
-    expect(visibleNames()).toEqual(names);
+    expect(chips()[0]).toBe(first);
+    expect(document.activeElement).toBe(first);
+    await render(true);
+    expect(visibleNames()).toEqual([...names.slice(1, 7), names[0], names[7]]);
+    await render();
+    expect(chips()).toHaveLength(2);
     await act(async () => root.unmount());
     root = createRoot(host);
     await act(async () => root.render(<ProjectManagerRow project="/repo" onOpen={vi.fn()} sessions={sessions} />));
-    expect(host.querySelector('button[aria-controls]')?.getAttribute("aria-expanded")).toBe("true");
+    expect(host.querySelector('button[aria-controls]')).toBeNull();
     expect(host.querySelector('[aria-label="Open Idle first"]')).not.toBeNull();
   } finally {
     await act(async () => root.unmount());

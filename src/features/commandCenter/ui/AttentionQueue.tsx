@@ -5,8 +5,7 @@ import { monoManagerGoals } from "../../monos/model/monoManagerGoals";
 import { MonoCodexStorageNotice } from "../../monos/ui/MonoCodexStorageNotice";
 import { QuestionForm } from "../../sessions/ui/QuestionForm";
 import { UsageLimitNotice } from "../../sessions/ui/UsageLimitNotice";
-import { getCiRepairs, subscribeCiRepairs } from "../../inbox/model/ciRepairTracking";
-import { listAutomations, peekAutomations, subscribeAutomations } from "../../automations/model/automations";
+import { useAttentionSources } from "../model/useAttentionSources";
 import { goalElapsedLabel } from "../model/goalView";
 import { attentionHistory, executeAttentionAction, selectAttention, type AttentionAction, type AttentionCallbacks, type AttentionCategory, type AttentionInput, type AttentionItem, type AttentionReceipt } from "../model/attention";
 import "./attentionQueue.css";
@@ -96,18 +95,22 @@ export function AttentionQueueView({ input, callbacks, readInput, open, onClose,
     const settled = item.status !== "open";
     const locked = receipt?.status === "pending" || submitted.current.has(JSON.stringify([item.id, item.revision]));
     const session = input.sessions.find(session => session.id === item.sessionId);
+    const evidence = <>
+      <p className="aq-path">{[item.project, ...item.goals, item.owner].join(" → ")}</p>
+      <p className="aq-owner">{item.route === "lead" ? "Routed through lead · worker requests stay with their lead" : "User-owned request"}
+        {item.taskId && ` · Task ${item.taskId}`}{item.dispatchId && ` · Attempt ${item.dispatchId}`}</p>
+      {item.requestId != null && <p className="aq-owner">Request {item.requestId} · Conversation {item.sessionId}</p>}
+      {item.sessionIds.length > 1 && <p className="aq-owner">Affects {item.sessionIds.length} conversations: {item.sessionIds.join(", ")}</p>}
+      {item.detail && item.source !== "storage" && !(item.source === "question" && item.route === "user") && <pre className="aq-evidence">{item.detail}</pre>}
+    </>;
     return <article className="aq-item" key={item.id} aria-label={item.title} data-attention-source={item.source} data-attention-status={item.status} aria-busy={receipt?.status === "pending"}>
       <span className="aq-symbol" aria-hidden="true">{item.category === "decision" ? "?" : item.category === "failure" ? "×" : "!"}</span>
       <div className="aq-body"><header><h2>{item.title}</h2><span className="aq-state">{settled ? item.status === "resolved" ? "Resolved" : item.status === "replaced" ? "Replaced request" : "No longer available" : agentLiveStateLabel(item.state)}</span></header>
-        <p className="aq-path">{[item.project, ...item.goals, item.owner].join(" → ")}</p>
-        <p className="aq-owner">{item.route === "lead" ? "Routed through lead · worker requests stay with their lead" : "User-owned request"}
-          {item.taskId && ` · Task ${item.taskId}`}{item.dispatchId && ` · Attempt ${item.dispatchId}`}</p>
-        {item.requestId != null && <p className="aq-owner">Request {item.requestId} · Conversation {item.sessionId}</p>}
-        {item.sessionIds.length > 1 && <p className="aq-owner">Affects {item.sessionIds.length} conversations: {item.sessionIds.join(", ")}</p>}
-        {item.detail && item.source !== "storage" && !(item.source === "question" && item.route === "user") && <pre className="aq-evidence">{item.detail}</pre>}
+        {presentation === "page" ? evidence : <><p className="aq-path">{item.project} · {item.owner} · {item.route === "user" ? "User-owned request" : "Routed through lead"}</p>
+          {(item.source !== "storage" || settled || item.repairable === false) && <AttentionDetails title={`${item.title} evidence`}>{evidence}</AttentionDetails>}</>}
         {!settled && <>
           {item.source === "storage" && item.repairable !== false ? <fieldset className="aq-question" disabled={locked}><legend className="sr-only">Storage recovery</legend><MonoCodexStorageNotice key={item.revision} detail={item.detail} blockedContext={item.state.detail}
-            renderDetails={content => open && <AttentionDetails title="Storage evidence">{content}</AttentionDetails>}
+            renderDetails={content => open && <AttentionDetails title="Storage evidence">{presentation === "panel" && evidence}{content}</AttentionDetails>}
             onRepair={async () => { await run(item, "repair"); }} onResolve={async resolution => { await run(item, "repair", { resolution }); }}
             onCompare={callbacks.compare ? async () => (await run(item, "compare"))! : undefined}
             onReveal={callbacks.reveal ? async () => { await run(item, "reveal"); } : undefined} /></fieldset> : null}
@@ -134,7 +137,7 @@ export function AttentionQueueView({ input, callbacks, readInput, open, onClose,
         {receipt && <p className="aq-receipt" role={receipt.status === "error" ? "alert" : "status"}>{receipt.message}</p>}
         {settled && <p className="aq-owner">{item.status === "resolved" ? "The original request is settled." : "Retained for inspection. Actions are disabled; inspect the current conversation."}</p>}
       </div>
-      <time className="aq-time" title={item.createdAt == null ? undefined : new Date(item.createdAt).toLocaleString()}>{item.createdAt == null ? "Age unavailable" : goalElapsedLabel(Math.max(0, now - item.createdAt))}</time>
+      <time className="aq-time" title={item.createdAt == null ? undefined : new Date(item.createdAt).toLocaleString()}>{item.createdAt == null ? presentation === "panel" ? "—" : "Age unavailable" : goalElapsedLabel(Math.max(0, now - item.createdAt))}</time>
     </article>;
   }
   return <section className="attention-queue" data-presentation={presentation} aria-labelledby={titleId} hidden={!open} inert={!open || undefined}>
@@ -160,19 +163,7 @@ export function AttentionQueue({ sessions, runs, callbacks, selectedAccount, isL
 }) {
   const rosterSnapshot = useSyncExternalStore(subscribeMonos, monosSnapshot);
   const goalsSnapshot = useSyncExternalStore(monoManagerGoals.subscribe, monoManagerGoals.snapshot);
-  const repairs = useSyncExternalStore(subscribeCiRepairs, getCiRepairs);
-  const [automations, setAutomations] = useState(() => peekAutomations() ?? []);
-  const [sourceError, setSourceError] = useState<string>();
-  useEffect(() => {
-    if (!props.open) return;
-    let cancelled = false;
-    const refresh = () => { void listAutomations().then(items => {
-      if (!cancelled) { setAutomations(items); setSourceError(undefined); }
-    }, error => { if (!cancelled) setSourceError(`Could not refresh automation failures: ${String(error)}`); }); };
-    refresh();
-    const stop = subscribeAutomations(refresh);
-    return () => { cancelled = true; stop(); };
-  }, [props.open]);
+  const { repairs, automations, sourceError } = useAttentionSources(props.open);
   const input = useMemo(() => ({ sessions, runs, roster: listMonos(), goals: monoManagerGoals.goals(), selectedAccount, isLocalSession, repairs, automations }), [sessions, runs, rosterSnapshot, goalsSnapshot, selectedAccount, isLocalSession, repairs, automations]);
   return <AttentionQueueView {...props} sourceError={sourceError} input={input} callbacks={callbacks}
     readInput={() => ({ ...input, sessions: readSessions(), runs: readRuns(), roster: listMonos(), goals: monoManagerGoals.goals() })} />;

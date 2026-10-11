@@ -112,6 +112,8 @@ const button = (label: string) => {
   expect(found, label).toBeDefined();
   return found!;
 };
+const worktreeFilter = (all: boolean) => container.querySelectorAll<HTMLButtonElement>('[aria-label="Worktree filter"] button')[all ? 1 : 0];
+const taskHeading = () => container.querySelector<HTMLParagraphElement>('[aria-label="Task worktrees"] > p')!;
 const render = async () => {
   await act(async () => root.render(createElement(ProjectWorktrees, props)));
 };
@@ -159,9 +161,9 @@ it("keeps a current worktree visible while a settled session still has keyboard 
   await act(async () => publishCardSessions([{ ...card, liveState: { status: "idle" } }], () => {}));
   expect(document.activeElement).toBe(focused);
   expect(container.querySelector('[aria-label="Your worktrees"] [data-worktree="/protected"]')).not.toBeNull();
-  await act(async () => button("Toggle worktree History").focus());
+  await act(async () => worktreeFilter(false).focus());
   expect(container.querySelector('[aria-label="Your worktrees"] [data-worktree="/protected"]')).toBeNull();
-  expect(button("Toggle worktree History").textContent).toBe("History · 2");
+  expect(worktreeFilter(false).getAttribute("aria-pressed")).toBe("true");
 });
 
 it("shows canonical worker blockers on a worktree without the Manager renderer", async () => {
@@ -263,7 +265,6 @@ it("opens an unloaded task worker from its worktree row without creating a blank
   props.openSessions = [];
   try {
     await render();
-    await act(async () => button("Toggle Task worktrees").click());
     expect(container.querySelector('[aria-label="Task worktrees"] [data-worktree="/trees/a"]')).not.toBeNull();
     expect(container.querySelector('[data-worktree-session="persisted-worker"]')).toBeNull();
     expect(container.querySelector('[data-worktree="/trees/a"] [role="status"]')?.getAttribute("aria-label"))
@@ -293,7 +294,6 @@ it("opens the latest dispatch and lists earlier workers alongside sessions marke
   props.openSessions = [];
   try {
     await render();
-    await act(async () => button("Toggle Task worktrees").click());
     const row = container.querySelector('[data-worktree="/trees/a"]')!;
     expect([...row.querySelectorAll("[data-worktree-session]")].map(item => item.getAttribute("data-worktree-session"))).toEqual(["latest-worker", "middle-worker", "old-worker", "your-chat"]);
     expect(row.querySelector('[data-worktree-session="your-chat"]')?.textContent).toMatch(/yours/i);
@@ -322,8 +322,8 @@ it("keeps the primary checkout's identity and actions when a cancelled task has 
     expect(button("Open worktree main").textContent).toContain("primary");
     expect(button("Open worktree main").title).not.toContain("Cancelled");
     expect(props.renderManager).toHaveBeenLastCalledWith(true, expect.any(Function), 1);
-    expect(button("Toggle Task worktrees").textContent).toContain("0 active");
-    expect(button("Toggle Task worktrees").title).toBe("0 active · 1 retained");
+    expect(taskHeading().textContent).toContain("0 active");
+    expect(taskHeading().title).toBe("0 active · 1 retained");
     const expandedBefore = button("Open worktree main").getAttribute("aria-expanded");
     await act(async () => button("Open worktree main").click());
     expect(button("Open worktree main").getAttribute("aria-expanded")).not.toBe(expandedBefore);
@@ -488,7 +488,7 @@ it("keeps a read-only shared linked checkout in Your worktrees and its enforced 
     expect(your.querySelector('[data-worktree="/trees/a"]')).not.toBeNull();
     expect(queue.querySelector('[data-worktree="/trees/a"]')).toBeNull();
     expect(queue.querySelector('[data-worktree="/trees/b"]')).not.toBeNull();
-    expect(button("Toggle Task worktrees").textContent).toContain("Task worktrees · 1");
+    expect(taskHeading().textContent).toContain("Task worktrees · 1");
   } finally { snapshot.mockRestore(); }
 });
 
@@ -561,11 +561,9 @@ it("keeps retained task outcomes current and clean terminal outcomes in History"
     expect(your.querySelector('[class*="border-l"]')).toBeNull();
     expect(your.parentElement).toBe(queue.parentElement);
     expect(queue.querySelector('[class*="border-l"]')).toBeNull();
-    expect(button("Toggle Task worktrees").getAttribute("aria-expanded")).toBe("false");
-    expect(button("Toggle Task worktrees").textContent).toContain("3 active");
-    expect(button("Toggle Task worktrees").title).toBe("3 active · 1 retained");
-    expect(queue.querySelector<HTMLDivElement>('[data-worktree-group-list]')?.hidden).toBe(true);
-    await act(async () => button("Toggle Task worktrees").click());
+    expect(taskHeading().textContent).toContain("3 active");
+    expect(taskHeading().title).toBe("3 active · 1 retained");
+    expect(queue.querySelector<HTMLDivElement>('[data-worktree-group-list]')?.hidden).toBe(false);
     expect(
       [...queue.querySelectorAll("[data-worktree]")].map((row) =>
         row.getAttribute("data-worktree"),
@@ -595,16 +593,14 @@ it("keeps retained task outcomes current and clean terminal outcomes in History"
     expect(
       done.querySelector<HTMLDivElement>('[data-worktree-group-list]')?.hidden,
     ).toBe(true);
-    await act(async () =>
-      (done.querySelector("button") as HTMLButtonElement).click(),
-    );
+    await act(async () => worktreeFilter(true).click());
     expect(
       done.querySelector<HTMLDivElement>('[data-worktree-group-list]')?.hidden,
     ).toBe(false);
     await act(async () => root.render(null));
     await render();
-    expect(button("Toggle Task worktrees").getAttribute("aria-expanded")).toBe("true");
-    expect(button("Toggle worktree History").getAttribute("aria-expanded")).toBe("true");
+    expect(queue.querySelector<HTMLDivElement>('[data-worktree-group-list]')?.hidden).toBe(false);
+    expect(worktreeFilter(true).getAttribute("aria-pressed")).toBe("true");
     await act(async () => {
       localStorage.setItem("monocode.activeWorktrees:/repo", "1");
       window.dispatchEvent(new Event("storage"));
@@ -622,49 +618,51 @@ it("keeps retained task outcomes current and clean terminal outcomes in History"
   }
 });
 
-it("remembers Task worktrees expansion per project across remounts, independently of the Manager team", async () => {
-  props.renderManager = (expanded, toggle) => createElement("button", { onClick: toggle, "aria-label": "Toggle team", "aria-expanded": expanded }, "Manager");
+it("keeps team and Task worktrees visible despite old collapsed preferences", async () => {
+  localStorage.setItem("monocode:manager-team-expanded:/repo", "0");
+  localStorage.setItem("monocode:task-worktrees-expanded:/repo", "0");
+  props.renderManager = vi.fn((expanded) => createElement("span", { "data-team-visible": expanded }, "Manager"));
   await render();
-  expect(button("Toggle Task worktrees").getAttribute("aria-expanded")).toBe("false");
-  await act(async () => button("Toggle Task worktrees").click());
-  expect(localStorage.getItem("monocode:task-worktrees-expanded:/repo")).toBe("1");
-  await act(async () => button("Toggle team").click());
-  expect(button("Toggle team").getAttribute("aria-expanded")).toBe("false");
-  expect(button("Toggle Task worktrees").getAttribute("aria-expanded")).toBe("true");
+  const visible = () => {
+    expect(props.renderManager).toHaveBeenLastCalledWith(true, expect.any(Function), 0);
+    expect(container.querySelector('[data-team-visible="true"]')).not.toBeNull();
+    expect(container.querySelector<HTMLDivElement>('[aria-label="Task worktrees"] [data-worktree-group-list]')?.hidden).toBe(false);
+    expect(container.querySelector('[aria-label="Toggle Task worktrees"], [aria-label="Toggle Manager team"]')).toBeNull();
+  };
+  visible();
   await act(async () => root.render(null));
   await render();
-  expect(button("Toggle Task worktrees").getAttribute("aria-expanded")).toBe("true");
-  expect(button("Toggle team").getAttribute("aria-expanded")).toBe("false");
+  visible();
   props.project = "/another";
   await render();
-  expect(button("Toggle Task worktrees").getAttribute("aria-expanded")).toBe("false");
-  expect(button("Toggle team").getAttribute("aria-expanded")).toBe("true");
+  visible();
   props.project = "/repo";
   await render();
-  expect(button("Toggle Task worktrees").getAttribute("aria-expanded")).toBe("true");
-  expect(button("Toggle team").getAttribute("aria-expanded")).toBe("false");
+  visible();
 });
 
-it("pages History separately from dirty current worktrees", async () => {
+it("pages All worktrees separately from dirty current worktrees", async () => {
   const worktrees = Array.from({ length: 8 }, (_, i) => ({ ...tree(`/idle/${i}`, `idle-${i}`), dirty: i === 7 }));
   vi.mocked(useProjectWorktrees).mockReturnValue({ data: { worktrees, defaultRoot: "/idle" }, refresh });
   props.history = [];
   props.openSessions = [];
   await render();
-  expect(button("Toggle worktree History").textContent).toContain("History · 7");
+  expect(worktreeFilter(false).getAttribute("aria-pressed")).toBe("true");
   expect(container.querySelector('[aria-label="Your worktrees"] [data-worktree="/idle/7"]')).not.toBeNull();
-  await act(async () => button("Toggle worktree History").click());
-  const more = [...container.querySelectorAll<HTMLButtonElement>("button")].find((item) => item.textContent?.includes("Show 2 more"))!;
-  expect(more.textContent).toContain("2 remaining");
-  expect(more.textContent).not.toContain("inactive");
-  expect(more.title).toContain("shown five at a time");
-  expect(more.title).toContain("focused checkout");
-  expect(more.title).toContain("sessions needing attention");
-  await act(async () => more.click());
-  expect(container.querySelectorAll("[data-worktree]")).toHaveLength(8);
+  await act(async () => worktreeFilter(true).click());
+  expect(container.querySelectorAll("[data-worktree]")).toHaveLength(6);
+  expect(container.querySelector('[aria-label="Worktree pages"]')?.textContent).toContain("1 / 2");
+  expect(button("Previous worktree page").disabled).toBe(true);
+  await act(async () => button("Next worktree page").click());
+  expect([...container.querySelectorAll('[aria-label="History"] [data-worktree]')].map(row => row.getAttribute("data-worktree"))).toEqual(["/idle/5", "/idle/6"]);
+  expect(container.querySelectorAll("[data-worktree]")).toHaveLength(3);
+  expect(container.querySelector('[aria-label="Your worktrees"] [data-worktree="/idle/7"]')).not.toBeNull();
+  expect(button("Next worktree page").disabled).toBe(true);
+  await act(async () => button("Previous worktree page").click());
+  expect([...container.querySelectorAll('[aria-label="History"] [data-worktree]')].map(row => row.getAttribute("data-worktree"))).toEqual(worktrees.slice(0, 5).map(tree => tree.path));
 });
 
-it("folds 72 historical worktrees with persisted expansion and their original order", async () => {
+it("filters 72 historical worktrees with persisted Active/All and their original order", async () => {
   const historical = Array.from({ length: 72 }, (_, i) => tree(`/history/${i}`, `history-${i}`));
   vi.mocked(useProjectWorktrees).mockReturnValue({ data: { worktrees: [tree("/repo", "main", true), ...historical], defaultRoot: "/history" }, refresh });
   props.history = [];
@@ -672,34 +670,36 @@ it("folds 72 historical worktrees with persisted expansion and their original or
   props.busySessionIds = new Set();
   props.approvalSessionIds = new Set();
   await render();
-  const disclosure = () => button("Toggle worktree History");
-  expect(disclosure().textContent).toBe("History · 72");
-  expect(disclosure().getAttribute("aria-expanded")).toBe("false");
-  expect(disclosure().hasAttribute("data-sidebar-row")).toBe(true);
+  expect(worktreeFilter(false).getAttribute("aria-pressed")).toBe("true");
+  expect(worktreeFilter(false).hasAttribute("data-sidebar-row")).toBe(true);
+  expect(container.querySelector('[aria-label="Toggle worktree History"]')).toBeNull();
   expect(container.querySelectorAll('[aria-label="Your worktrees"] [data-worktree]')).toHaveLength(1);
-  await act(async () => disclosure().click());
+  await act(async () => worktreeFilter(false).dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", ctrlKey: true, bubbles: true })));
+  expect(worktreeFilter(false).getAttribute("aria-pressed")).toBe("true");
+  await act(async () => worktreeFilter(false).dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
+  expect(document.activeElement).toBe(worktreeFilter(true));
   const rows = () => [...container.querySelectorAll('[aria-label="History"] [data-worktree]')].map(row => row.getAttribute("data-worktree"));
   expect(rows()).toEqual(historical.slice(0, 5).map(tree => tree.path));
   expect(localStorage.getItem("monocode:finished-worktrees-expanded:/repo")).toBe("1");
   await act(async () => root.render(null));
   await render();
-  expect(disclosure().getAttribute("aria-expanded")).toBe("true");
+  expect(worktreeFilter(true).getAttribute("aria-pressed")).toBe("true");
   expect(rows()).toEqual(historical.slice(0, 5).map(tree => tree.path));
   await act(async () => {
     localStorage.setItem("monocode.activeWorktrees:/repo", "1");
     window.dispatchEvent(new Event("storage"));
   });
   expect(rows()).toEqual([]);
-  expect(disclosure().textContent).toBe("History · 72");
-  await act(async () => disclosure().click());
+  expect(worktreeFilter(false).getAttribute("aria-pressed")).toBe("true");
+  await act(async () => worktreeFilter(true).click());
   expect(rows()).toEqual(historical.slice(0, 5).map(tree => tree.path));
   expect(localStorage.getItem("monocode.activeWorktrees:/repo")).toBe("0");
   props.project = "/other";
   await render();
-  expect(disclosure().getAttribute("aria-expanded")).toBe("false");
+  expect(worktreeFilter(false).getAttribute("aria-pressed")).toBe("true");
   props.project = "/repo";
   await render();
-  expect(disclosure().getAttribute("aria-expanded")).toBe("true");
+  expect(worktreeFilter(true).getAttribute("aria-pressed")).toBe("true");
 });
 
 it.each(["dirty", "detached-dirty", "unpushed", "focused", "approval", "busy", "unseen", "open", "pinned", "draft", "live", "missing"])(
@@ -719,7 +719,7 @@ it.each(["dirty", "detached-dirty", "unpushed", "focused", "approval", "busy", "
     localStorage.setItem("monocode.activeWorktrees:/repo", "1");
     await render();
     expect(container.querySelector('[aria-label="Your worktrees"] [data-worktree="/protected"]')).not.toBeNull();
-    expect(button("Toggle worktree History").textContent).toBe("History · 1");
+    expect(worktreeFilter(false).getAttribute("aria-pressed")).toBe("true");
     expect(container.querySelector('[aria-label="History"] [data-worktree="/protected"]')).toBeNull();
   },
 );
@@ -762,7 +762,7 @@ it.each(["queued", "running", "completed", "blocked", "failed", "interrupted", "
     try {
       await render();
       expect(container.querySelector('[aria-label="Task worktrees"] [data-worktree="/protected"]')).not.toBeNull();
-      expect(button("Toggle worktree History").textContent).toBe("History · 1");
+      expect(worktreeFilter(false).getAttribute("aria-pressed")).toBe("true");
     } finally { snapshot.mockRestore(); }
   },
 );
@@ -1110,21 +1110,20 @@ it("pages worktrees five at a time and keeps busy ones listed", async () => {
   props.approvalSessionIds = new Set();
   await render();
   const listed = () => container.querySelectorAll("[data-worktree]").length;
-  const more = () =>
-    [...container.querySelectorAll("button")].find((item) =>
-      /^Show \d more/.test(item.textContent ?? ""),
-    );
   expect(listed()).toBe(7);
   expect(
     container.querySelector('[data-worktree="/trees/w11"]'),
   ).not.toBeNull();
-  await act(async () => button("Toggle worktree History").click());
-  await act(async () => more()!.click());
-  expect(listed()).toBe(12);
-  expect(more()!.textContent).toContain("Show 1 more");
-  await act(async () => more()!.click());
-  expect(listed()).toBe(13);
-  expect(more()).toBeUndefined();
+  await act(async () => worktreeFilter(true).click());
+  await act(async () => button("Next worktree page").click());
+  expect(listed()).toBe(7);
+  expect(container.querySelector('[data-worktree="/trees/w11"]')).not.toBeNull();
+  expect(container.querySelector('[aria-label="Worktree pages"]')?.textContent).toContain("2 / 3");
+  await act(async () => button("Next worktree page").click());
+  expect(listed()).toBe(3);
+  expect(container.querySelector('[data-worktree="/trees/w11"]')).not.toBeNull();
+  expect(container.querySelector('[aria-label="Worktree pages"]')?.textContent).toContain("3 / 3");
+  expect(button("Next worktree page").disabled).toBe(true);
 });
 
 it.each([

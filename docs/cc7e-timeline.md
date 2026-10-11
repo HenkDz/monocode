@@ -54,6 +54,21 @@ and unrelated turns in shared conversations stay outside the goal.
 
 ## Minimal integration
 
+Coordinator design feedback: Command Center should be super clean, modern,
+practical and flexible, with no disclosure triangles or accordions. The timeline
+already contains no `details`/`summary` widgets or disclosure controls. Its ledger
+is visible inline, precise evidence is available from labelled bars and their
+ledger links, and time columns use tabular numbers. Future filters should use
+segmented controls, tabs or chips; additional detail should use inline/hover
+content, a popover or a right-side drawer.
+
+CC7M will host this view as a panel or drawer. Mount the self-contained
+`DelegationTimeline` with `timeline`, `onBack` and `onOpenTarget`; it does not read
+app stores or own shell routing. `onBack` can close the host panel. The separate
+`DelegationTimelineRoute` is the current Mission control integration adapter,
+not a requirement for embedding the view. Existing Mission control history and
+attempt disclosures belong to its redesign owner and are outside this timeline.
+
 The marked CC7E integration is exactly one link line in
 `ui/MissionControl.tsx` plus the import adapter in `src/app/App.tsx`.
 `DelegationTimelineRoute` owns the local goal route and reuses Mission control's

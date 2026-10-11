@@ -4,6 +4,7 @@ import { SecondaryButton } from "../../../shared/ui/SecondaryButton";
 import {
   codexStorageIssueTitle,
   parseCodexStorageConflict,
+  parseCodexStorageRecoveryConflict,
   type CodexStorageComparison,
   type CodexStorageResolution,
 } from "../model/monoCodexStorage";
@@ -29,8 +30,10 @@ export function MonoCodexStorageNotice({
   const [copyStatus, setCopyStatus] = useState<string>();
   const [comparison, setComparison] = useState<CodexStorageComparison>();
   const [conflict, setConflict] = useState(() => parseCodexStorageConflict(detail));
+  const [recovery, setRecovery] = useState(() => parseCodexStorageRecoveryConflict(detail));
   useEffect(() => {
     setConflict(parseCodexStorageConflict(detail));
+    setRecovery(parseCodexStorageRecoveryConflict(detail));
     if (detail) {
       setSuccess(false);
       setError(undefined);
@@ -40,7 +43,7 @@ export function MonoCodexStorageNotice({
   }, [detail]);
 
   const details = error ?? detail;
-  const title = success ? "Codex storage repaired" : conflict ? codexStorageIssueTitle(conflict) : "Codex storage needs repair";
+  const title = success ? "Codex storage repaired" : recovery ? "Codex recovery files preserved" : conflict ? codexStorageIssueTitle(conflict) : "Codex storage needs repair";
   async function run(action: "repair" | "compare" | "reveal", operation: () => Promise<unknown>) {
     if (busy) return;
     setBusy(action);
@@ -55,7 +58,12 @@ export function MonoCodexStorageNotice({
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
       const updatedConflict = parseCodexStorageConflict(reason);
-      if (updatedConflict) setConflict(updatedConflict);
+      const updatedRecovery = parseCodexStorageRecoveryConflict(reason);
+      if (updatedConflict || updatedRecovery) {
+        setConflict(updatedConflict);
+        setRecovery(updatedRecovery);
+        setComparison(undefined);
+      }
     } finally {
       setBusy(undefined);
     }
@@ -84,6 +92,15 @@ export function MonoCodexStorageNotice({
               Choose the file this Codex account should use. Both versions will be preserved.
             </p>
           )}
+          {recovery && (
+            <div className="mt-1 text-xs text-content/70">
+              <p>{recovery.reason}</p>
+              <p className="mt-1">Review the preserved files in their folder, then refresh this issue.</p>
+              <ul aria-label="Preserved recovery paths" className="mt-1 space-y-1 break-all">
+                {recovery.paths.map(path => <li key={path}>{path}</li>)}
+              </ul>
+            </div>
+          )}
           <div className="mt-2 flex flex-wrap items-center gap-2">
             {conflict && onResolve ? (
               <>
@@ -103,7 +120,7 @@ export function MonoCodexStorageNotice({
               </>
             ) : (
               <SecondaryButton disabled={!!busy} onClick={() => void run("repair", onRepair)}>
-                {busy === "repair" ? "Repairing…" : "Repair"}
+                {busy === "repair" ? "Repairing…" : recovery ? "Refresh issue" : "Repair"}
               </SecondaryButton>
             )}
             {conflict && onCompare && (
@@ -111,7 +128,7 @@ export function MonoCodexStorageNotice({
                 {busy === "compare" ? "Loading…" : "Compare"}
               </SecondaryButton>
             )}
-            {conflict && onReveal && (
+            {(conflict || recovery) && onReveal && (
               <SecondaryButton disabled={!!busy} onClick={() => void run("reveal", onReveal)}>Show in folder</SecondaryButton>
             )}
             {error && conflict && (
@@ -141,7 +158,7 @@ export function MonoCodexStorageNotice({
               <div className="mt-2"><SecondaryButton onClick={() => setComparison(undefined)}>Close comparison</SecondaryButton></div>
             </div>
           )}
-          {error && <p role="alert" className="mt-2 break-all text-xs text-content/70">{parseCodexStorageConflict(error) ? "The file changed again. Review the latest versions before choosing." : error}</p>}
+          {error && <p role="alert" className="mt-2 break-all text-xs text-content/70">{parseCodexStorageRecoveryConflict(error)?.reason ?? (parseCodexStorageConflict(error) ? "The file changed again. Review the latest versions before choosing." : error)}</p>}
           {details && (
             <details className="mt-2 text-xs text-content/70">
               <summary className="cursor-pointer select-none rounded focus-visible:outline-accent">Details</summary>

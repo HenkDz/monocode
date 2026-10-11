@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { codexStorageIssueTitle, isCodexStorageError, MonoCodexStorageRecovery, parseCodexStorageConflict } from "./monoCodexStorage";
+import { codexStorageIssueTitle, isCodexStorageError, MonoCodexStorageRecovery, parseCodexStorageConflict, parseCodexStorageRecoveryConflict } from "./monoCodexStorage";
 
 const conflict = {
   entry: "hooks.json", monoPath: "C:/mono/hooks.json", sourcePath: "C:/account/hooks.json",
@@ -21,6 +21,22 @@ it("keeps legacy and malformed details out of explicit conflict resolution", () 
     { ...conflict, monoFingerprint: undefined }, { ...conflict, canKeepMono: undefined },
     { ...conflict, sourceMtime: "today" },
   ]) expect(parseCodexStorageConflict(`Codex storage needs repair: ${JSON.stringify(invalid)}`)).toBeUndefined();
+});
+
+it("parses preserved recovery paths without allowing ordinary account resolution", () => {
+  const recovery = { recovery: true, reason: "Both files were preserved after an interrupted repair.", paths: ["C:/mono/AGENTS.md", "C:/mono/.monocode-claim-id"] };
+  const error = new Error(`Codex storage needs repair: ${JSON.stringify(recovery)}`);
+  expect(parseCodexStorageRecoveryConflict(error)).toEqual(recovery);
+  expect(parseCodexStorageConflict(error)).toBeUndefined();
+  expect(parseCodexStorageConflict(`Codex storage needs repair: ${JSON.stringify({ ...conflict, ...recovery })}`)).toBeUndefined();
+  expect(isCodexStorageError(error)).toBe(true);
+  expect(parseCodexStorageRecoveryConflict(`Codex storage needs repair: ${JSON.stringify(conflict)}`)).toBeUndefined();
+  expect(parseCodexStorageRecoveryConflict("Provider crashed")).toBeUndefined();
+  expect(parseCodexStorageRecoveryConflict("Codex storage needs repair: invalid json")).toBeUndefined();
+  for (const invalid of [
+    { ...recovery, recovery: "true" }, { ...recovery, reason: "" }, { ...recovery, reason: null },
+    { ...recovery, paths: "C:/mono" }, { ...recovery, paths: [] }, { ...recovery, paths: [""] }, { ...recovery, paths: [1] },
+  ]) expect(parseCodexStorageRecoveryConflict(`Codex storage needs repair: ${JSON.stringify(invalid)}`)).toBeUndefined();
 });
 
 it("recognizes preparation and spawn storage errors without treating provider failures as repairable", () => {

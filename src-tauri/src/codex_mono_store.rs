@@ -10,6 +10,13 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager};
 
+mod transactions;
+use transactions::{ClaimIntent, ClaimJournal};
+#[cfg(test)]
+mod crash_tests;
+#[cfg(test)]
+mod transactions_tests;
+
 // Preparation and Repair share one lock, including harness startup.
 static STORAGE_LOCK: Mutex<()> = Mutex::new(());
 static STORAGE_ISSUES: LazyLock<Mutex<HashSet<String>>> =
@@ -221,7 +228,13 @@ pub fn codex_mono_store_resolve(
     resolution: StorageResolution,
 ) -> Result<(), String> {
     let (source, home, _) = locations(&app, provider_account_id.as_deref())?;
-    resolve_files(&source, &home, &conflict, resolution)
+    resolve_files(&source, &home, &conflict, resolution).map_err(|error| {
+        if error.starts_with('{') {
+            storage_error(error)
+        } else {
+            error
+        }
+    })
 }
 
 #[tauri::command(async)]
@@ -245,7 +258,11 @@ pub async fn codex_mono_store_reveal(
 ) -> Result<(), String> {
     let (_, home, _) = locations(&app, provider_account_id.as_deref())?;
     // Resolve the account directory here; never accept a client supplied path.
-    let path = home.join(shared_entry_name(&home, &entry)?);
+    let path = if entry == ".monocode-recovery" {
+        home
+    } else {
+        home.join(shared_entry_name(&home, &entry)?)
+    };
     crate::fs::reveal_path(crate::fs::path_to_js(&path)).await
 }
 
@@ -545,7 +562,21 @@ fn read_snapshot(home: &Path, name: &str) -> Result<Option<LinkSnapshot>, String
         Ok(bytes) => match serde_json::from_slice(&bytes) {
             Ok(snapshot) => Ok(Some(snapshot)),
             Err(_) => {
-                let mut claimed = ClaimedEntry::new(&path)?;
+                let preserved = format!("{name}.json.corrupt-{}", uuid::Uuid::new_v4());
+                let temp = path.with_file_name(format!(".monocode-link-{}", uuid::Uuid::new_v4()));
+                let snapshot = LinkSnapshot {
+                    invalid: true,
+                    ..LinkSnapshot::default()
+                };
+                transactions::create_json(&temp, &snapshot)?;
+                let staged = transactions::RecordedEntry::new(&temp)?;
+                let mut claimed = ClaimedEntry::new(
+                    &path,
+                    ClaimIntent::CorruptSnapshot {
+                        preserved: preserved.clone(),
+                    },
+                    Some(&staged),
+                )?;
                 let result = (|| {
                     if !claimed.real_file()? {
                         return Err("Codex link metadata must be a real file".into());
@@ -555,22 +586,41 @@ fn read_snapshot(home: &Path, name: &str) -> Result<Option<LinkSnapshot>, String
                         claimed.restore()?;
                         return Ok(Some(snapshot));
                     }
-                    let preserved = path
-                        .with_file_name(format!("{name}.json.corrupt-{}", uuid::Uuid::new_v4()));
-                    claimed.move_to(&preserved)?;
-                    // A durable marker keeps retries from treating corrupt evidence as an absent snapshot.
-                    let snapshot = LinkSnapshot {
-                        invalid: true,
-                        ..LinkSnapshot::default()
-                    };
-                    write_snapshot(home, name, &snapshot)?;
+                    claimed.journal.verify(None)?;
+                    // Publish the invalid guard before moving corrupt bytes out of the claim.
+                    #[cfg(test)]
+                    crash_tests::checkpoint("before-publish");
+                    staged.publish(&temp, &path)?;
+                    #[cfg(test)]
+                    crash_tests::checkpoint("after-publish");
+                    claimed.move_to(&path.with_file_name(preserved))?;
                     claimed.active = false;
+                    #[cfg(test)]
+                    crash_tests::checkpoint("corrupt-after-move");
                     Ok(Some(snapshot))
                 })();
                 claimed.finish(result)
             }
         },
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let prefix = format!("{name}.json.corrupt-");
+            let preserved = std::fs::read_dir(path.parent().ok_or("Missing snapshot parent")?)
+                .map_err(|e| e.to_string())?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?
+                .iter()
+                .any(|entry| entry.file_name().to_string_lossy().starts_with(&prefix));
+            if preserved {
+                let snapshot = LinkSnapshot {
+                    invalid: true,
+                    ..LinkSnapshot::default()
+                };
+                write_snapshot(home, name, &snapshot)?;
+                Ok(Some(snapshot))
+            } else {
+                Ok(None)
+            }
+        }
         Err(error) => Err(error.to_string()),
     }
 }
@@ -679,26 +729,42 @@ struct ClaimedEntry {
     original: PathBuf,
     path: PathBuf,
     active: bool,
+    journal: ClaimJournal,
     #[cfg(windows)]
     file: std::fs::File,
 }
 
 impl ClaimedEntry {
-    fn new(target: &Path) -> Result<Self, String> {
+    fn new(
+        target: &Path,
+        intent: ClaimIntent,
+        staged: Option<&transactions::RecordedEntry>,
+    ) -> Result<Self, String> {
         let path = target.with_file_name(format!(".monocode-claim-{}", uuid::Uuid::new_v4()));
         #[cfg(windows)]
         let file = open_entry(target, true)?;
         #[cfg(windows)]
+        let identity = file_identity(&file)?;
+        #[cfg(unix)]
+        let identity = entry_identity(target)?;
+        let journal = ClaimJournal::new(target, &path, intent, staged, identity)?;
+        #[cfg(test)]
+        crash_tests::checkpoint("after-journal");
+        #[cfg(windows)]
         rename_handle(&file, &path, false)?;
         #[cfg(unix)]
         rename_no_replace(target, &path)?;
-        Ok(Self {
+        let claimed = Self {
             original: target.into(),
             path,
             active: true,
+            journal,
             #[cfg(windows)]
             file,
-        })
+        };
+        #[cfg(test)]
+        crash_tests::checkpoint("after-claim");
+        Ok(claimed)
     }
 
     fn real_file(&self) -> Result<bool, String> {
@@ -725,24 +791,7 @@ impl ClaimedEntry {
 
     fn discard(&mut self) -> Result<(), String> {
         #[cfg(windows)]
-        {
-            use std::os::windows::io::AsRawHandle;
-            use windows_sys::Win32::Storage::FileSystem::{
-                FileDispositionInfoEx, SetFileInformationByHandle, FILE_DISPOSITION_INFO_EX,
-            };
-            let info = FILE_DISPOSITION_INFO_EX { Flags: 3 }; // DELETE | POSIX_SEMANTICS
-            if unsafe {
-                SetFileInformationByHandle(
-                    self.file.as_raw_handle() as _,
-                    FileDispositionInfoEx,
-                    (&info as *const FILE_DISPOSITION_INFO_EX).cast(),
-                    std::mem::size_of_val(&info) as u32,
-                )
-            } == 0
-            {
-                return Err(std::io::Error::last_os_error().to_string());
-            }
-        }
+        discard_handle(&self.file)?;
         #[cfg(unix)]
         std::fs::remove_file(&self.path).map_err(|e| e.to_string())?;
         self.active = false;
@@ -757,10 +806,33 @@ impl ClaimedEntry {
                     self.path.display()
                 ));
             }
+            self.journal.finish()?;
             return Err(error);
         }
+        self.journal.finish()?;
         result
     }
+}
+
+#[cfg(windows)]
+fn discard_handle(file: &std::fs::File) -> Result<(), String> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FileDispositionInfoEx, SetFileInformationByHandle, FILE_DISPOSITION_INFO_EX,
+    };
+    let info = FILE_DISPOSITION_INFO_EX { Flags: 3 }; // DELETE | POSIX_SEMANTICS
+    if unsafe {
+        SetFileInformationByHandle(
+            file.as_raw_handle() as _,
+            FileDispositionInfoEx,
+            (&info as *const FILE_DISPOSITION_INFO_EX).cast(),
+            std::mem::size_of_val(&info) as u32,
+        )
+    } == 0
+    {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    Ok(())
 }
 
 impl Drop for ClaimedEntry {
@@ -770,6 +842,8 @@ impl Drop for ClaimedEntry {
                 "Codex storage claim preserved {}: {error}",
                 self.path.display()
             ));
+        } else if let Err(error) = self.journal.finish() {
+            log_storage_issue(format!("Codex storage transaction preserved: {error}"));
         }
     }
 }
@@ -881,10 +955,16 @@ fn backup_and_relink(
     let target = home.join(name);
     let temp = home.join(format!(".monocode-link-{}", uuid::Uuid::new_v4()));
     create_link(&source.join(name), &temp)?;
+    let staged = transactions::RecordedEntry::new(&temp)?;
     let result = (|| {
         #[cfg(test)]
         before_claim();
-        let mut claimed = ClaimedEntry::new(&target)?;
+        let intent = if matches!(resolution, StorageResolution::KeepMonoVersion) {
+            ClaimIntent::Keep
+        } else {
+            ClaimIntent::UseAccount
+        };
+        let mut claimed = ClaimedEntry::new(&target, intent, Some(&staged))?;
         let result = (|| {
             // The held Windows handle excludes writes and replacements until publication or restoration.
             if !claimed.real_file()?
@@ -906,7 +986,12 @@ fn backup_and_relink(
                 return Err(serde_json::to_string(&actual).map_err(|e| e.to_string())?);
             }
             if matches!(resolution, StorageResolution::KeepMonoVersion) {
+                claimed.journal.verify(None)?;
+                #[cfg(test)]
+                crash_tests::checkpoint("before-publish");
                 claimed.restore()?;
+                #[cfg(test)]
+                crash_tests::checkpoint("after-publish");
                 return write_snapshot(
                     home,
                     name,
@@ -919,20 +1004,23 @@ fn backup_and_relink(
             }
             let mut original = std::fs::File::open(&claimed.path).map_err(|e| e.to_string())?;
             let saved = archive_file(home, name, &mut original, &actual.mono_fingerprint)?;
+            claimed.journal.verify(Some(&saved))?;
             // shortcut: Unix open writers can still change claimed bytes; add writer exclusion before guaranteeing concurrent Unix recovery.
             if fingerprint(&claimed.path)? != actual.mono_fingerprint {
                 return Err(
                     "Codex storage bytes changed during archive creation. Retry repair.".into(),
                 );
             }
-            publish_recovery_link(&source.join(name), &target, &saved)?;
+            #[cfg(test)]
+            crash_tests::checkpoint("before-publish");
+            staged.publish(&temp, &target)?;
+            #[cfg(test)]
+            crash_tests::checkpoint("after-publish");
             claimed.discard()
         })();
         claimed.finish(result)
     })();
-    if std::fs::symlink_metadata(&temp).is_ok() {
-        let _ = remove_link(&temp);
-    }
+    staged.cleanup(&temp)?;
     result
 }
 
@@ -966,15 +1054,14 @@ fn archive_file(
             saved.display()
         ));
     }
+    #[cfg(test)]
+    crash_tests::checkpoint("after-archive");
     Ok(saved)
 }
 
+#[cfg(test)]
 fn publish_new_entry(temp: &Path, target: &Path) -> Result<(), String> {
-    #[cfg(windows)]
-    rename_handle(&open_entry(temp, true)?, target, false)?;
-    #[cfg(unix)]
-    rename_no_replace(temp, target)?;
-    Ok(())
+    transactions::RecordedEntry::new(temp)?.publish(temp, target)
 }
 
 fn prepare_isolated_hooks(home: &Path) -> Result<(), String> {
@@ -986,6 +1073,7 @@ fn prepare_isolated_hooks(home: &Path) -> Result<(), String> {
         Err(error) => return Err(error.to_string()),
     };
     let temp = home.join(format!(".monocode-link-{}", uuid::Uuid::new_v4()));
+    let mut staged = None;
     let result = (|| {
         let mut empty = std::fs::OpenOptions::new()
             .write(true)
@@ -997,12 +1085,14 @@ fn prepare_isolated_hooks(home: &Path) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
         empty.sync_all().map_err(|e| e.to_string())?;
         drop(empty);
+        staged = Some(transactions::RecordedEntry::new(&temp)?);
         if !existing {
-            return publish_new_entry(&temp, &target);
+            return staged.as_ref().unwrap().publish(&temp, &target);
         }
         #[cfg(test)]
         before_claim();
-        let mut claimed = ClaimedEntry::new(&target)?;
+        let stage = staged.as_ref().unwrap();
+        let mut claimed = ClaimedEntry::new(&target, ClaimIntent::IsolateHooks, Some(stage))?;
         let result = (|| {
             if claimed.real_file()? && !replaceable_link(&claimed.path)? {
                 return claimed.restore();
@@ -1034,7 +1124,8 @@ fn prepare_isolated_hooks(home: &Path) -> Result<(), String> {
             }
             let referenced_id = file_identity(&original)?;
             let fingerprint = fingerprint_file(&mut original)?;
-            archive_file(home, "hooks.json", &mut original, &fingerprint)?;
+            let saved = archive_file(home, "hooks.json", &mut original, &fingerprint)?;
+            claimed.journal.verify(Some(&saved))?;
             let current = std::fs::File::open(&claimed.path).map_err(|e| e.to_string())?;
             if entry_identity(&claimed.path)? != claimed_id
                 || file_identity(&current)? != referenced_id
@@ -1042,35 +1133,19 @@ fn prepare_isolated_hooks(home: &Path) -> Result<(), String> {
             {
                 return Err("Linked Mono hooks changed during isolation. The original is preserved; retry preparation.".into());
             }
-            publish_new_entry(&temp, &target)?;
+            #[cfg(test)]
+            crash_tests::checkpoint("before-publish");
+            stage.publish(&temp, &target)?;
+            #[cfg(test)]
+            crash_tests::checkpoint("after-publish");
             claimed.discard()
         })();
         claimed.finish(result)
     })();
-    if std::fs::symlink_metadata(&temp).is_ok() {
-        let _ = std::fs::remove_file(&temp);
+    if let Some(staged) = staged {
+        staged.cleanup(&temp)?;
     }
     result.map_err(|error| format!("Could not isolate Mono hooks {}: {error}", target.display()))
-}
-
-fn publish_recovery_link(source: &Path, target: &Path, saved: &Path) -> Result<(), String> {
-    // Create-new semantics preserve a file recreated by another writer after the archive move.
-    if let Err(error) = create_link(source, target) {
-        if let Ok(mut restored) = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(target)
-        {
-            if let Ok(mut original) = std::fs::File::open(saved) {
-                let _ = std::io::copy(&mut original, &mut restored);
-            }
-        }
-        return Err(format!(
-            "Could not relink Codex storage; preserved {}: {error}",
-            saved.display()
-        ));
-    }
-    Ok(())
 }
 
 fn resolve_files(
@@ -1081,6 +1156,7 @@ fn resolve_files(
 ) -> Result<(), String> {
     let _lock = STORAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let (source, home) = storage_roots(source, home)?;
+    transactions::reconcile(&home)?;
     let name = shared_entry_name(&home, &conflict.entry)?;
     if name.eq_ignore_ascii_case("hooks.json") && !hooks_shared(&home)? {
         return Err("Mono hooks are isolated. Refresh storage details or explicitly enable account hooks sharing.".into());
@@ -1135,6 +1211,7 @@ fn compare_files(source: &Path, home: &Path, name: &str) -> Result<StorageCompar
 fn prepare_files(source: &Path, home: &Path) -> Result<(), String> {
     let _lock = STORAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let (source, home) = storage_roots(source, home)?;
+    transactions::reconcile(&home)?;
     let share_hooks = hooks_shared(&home)?;
     if !share_hooks {
         prepare_isolated_hooks(&home)?;
@@ -1325,10 +1402,11 @@ fn link_entry(source: &Path, target: &Path) -> Result<(), String> {
         let inspected = entry_identity(target)?;
         let temp = target.with_file_name(format!(".monocode-link-{}", uuid::Uuid::new_v4()));
         create_link(source, &temp)?;
+        let staged = transactions::RecordedEntry::new(&temp)?;
         let result = (|| {
             #[cfg(test)]
             before_claim();
-            let mut claimed = ClaimedEntry::new(target)?;
+            let mut claimed = ClaimedEntry::new(target, ClaimIntent::Relink, Some(&staged))?;
             let result = (|| {
                 if entry_identity(&claimed.path)? != inspected || !replaceable_link(&claimed.path)?
                 {
@@ -1337,15 +1415,18 @@ fn link_entry(source: &Path, target: &Path) -> Result<(), String> {
                         target.display()
                     ));
                 }
-                publish_new_entry(&temp, target)?;
+                claimed.journal.verify(None)?;
+                #[cfg(test)]
+                crash_tests::checkpoint("before-publish");
+                staged.publish(&temp, target)?;
+                #[cfg(test)]
+                crash_tests::checkpoint("after-publish");
                 claimed.discard()
             })();
             claimed.finish(result)
         })();
         if let Err(error) = result {
-            if std::fs::symlink_metadata(&temp).is_ok() {
-                let _ = remove_link(&temp);
-            }
+            staged.cleanup(&temp)?;
             return Err(format!(
                 "Could not relink Codex storage {}: {error}",
                 target.display()
@@ -3043,12 +3124,15 @@ mod tests {
         let (fixture, _) = conflict_fixture("hooks.json", b"concurrent writer", b"account");
         let saved = fixture.home().join("archived-original");
         std::fs::write(&saved, b"original").unwrap();
-        assert!(publish_recovery_link(
-            &fixture.source().join("hooks.json"),
-            &fixture.home().join("hooks.json"),
-            &saved
-        )
-        .is_err());
+        let temp = fixture
+            .home()
+            .join(format!(".monocode-link-{}", uuid::Uuid::new_v4()));
+        create_link(&fixture.source().join("hooks.json"), &temp).unwrap();
+        let staged = transactions::RecordedEntry::new(&temp).unwrap();
+        assert!(staged
+            .publish(&temp, &fixture.home().join("hooks.json"))
+            .is_err());
+        staged.cleanup(&temp).unwrap();
         assert_eq!(
             std::fs::read(fixture.home().join("hooks.json")).unwrap(),
             b"concurrent writer"
@@ -3069,18 +3153,11 @@ mod tests {
         let target = fixture.home().join("hooks.json");
         let saved = fixture.home().join("archived-original");
         std::fs::write(&saved, b"original").unwrap();
-        #[cfg(windows)]
-        {
-            assert!(publish_recovery_link(&source, &target, &saved).is_err());
-            assert_eq!(std::fs::read(&target).unwrap(), b"original");
-        }
-        #[cfg(unix)]
-        {
-            // Unix symlinks can target a missing file; prevent creation with a real target directory.
-            std::fs::create_dir(&target).unwrap();
-            assert!(publish_recovery_link(&source, &target, &saved).is_err());
-            assert!(target.is_dir());
-        }
+        std::fs::write(&target, b"original").unwrap();
+        let mut claimed = ClaimedEntry::new(&target, ClaimIntent::UseAccount, None).unwrap();
+        let result = publish_new_entry(&source, &target);
+        assert!(claimed.finish(result).is_err());
+        assert_eq!(std::fs::read(&target).unwrap(), b"original");
         assert_eq!(std::fs::read(saved).unwrap(), b"original");
     }
 
@@ -3100,9 +3177,13 @@ mod tests {
             );
             return;
         }
-        assert!(
-            publish_recovery_link(&fixture.source().join("hooks.json"), &target, &saved).is_err()
-        );
+        let temp = fixture
+            .home()
+            .join(format!(".monocode-link-{}", uuid::Uuid::new_v4()));
+        create_link(&fixture.source().join("hooks.json"), &temp).unwrap();
+        let staged = transactions::RecordedEntry::new(&temp).unwrap();
+        assert!(staged.publish(&temp, &target).is_err());
+        staged.cleanup(&temp).unwrap();
         assert!(!outside.exists());
         assert_eq!(std::fs::read(&saved).unwrap(), b"private");
         remove_link(&target).unwrap();

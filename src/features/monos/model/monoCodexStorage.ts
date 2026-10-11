@@ -14,6 +14,12 @@ export type CodexStorageConflict = {
 
 export type CodexStorageResolution = "use_account_version" | "keep_mono_version";
 
+export type CodexStorageRecoveryConflict = {
+  recovery: true;
+  reason: string;
+  paths: string[];
+};
+
 export type CodexStorageComparison = {
   monoContent?: string | null;
   sourceContent?: string | null;
@@ -29,12 +35,27 @@ export function parseCodexStorageConflict(error: unknown): CodexStorageConflict 
   if (start < 0) return undefined;
   try {
     const value = JSON.parse(message.slice(start + STORAGE_ERROR_PREFIX.length).trim());
-    if (!value || typeof value !== "object" ||
+    if (!value || typeof value !== "object" || value.recovery === true ||
       !["entry", "monoPath", "sourcePath", "monoFingerprint", "sourceFingerprint"].every(key => typeof value[key] === "string" && value[key].length > 0) ||
       !["monoBytes", "sourceBytes"].every(key => Number.isSafeInteger(value[key]) && value[key] >= 0) ||
       !["monoMtime", "sourceMtime"].every(key => value[key] === null || (Number.isFinite(value[key]) && value[key] >= 0)) ||
       typeof value.identical !== "boolean" || typeof value.canKeepMono !== "boolean") return undefined;
     return value as CodexStorageConflict;
+  } catch {
+    return undefined;
+  }
+}
+
+export function parseCodexStorageRecoveryConflict(error: unknown): CodexStorageRecoveryConflict | undefined {
+  const message = error instanceof Error ? error.message : String(error);
+  const start = message.indexOf(STORAGE_ERROR_PREFIX);
+  if (start < 0) return undefined;
+  try {
+    const value = JSON.parse(message.slice(start + STORAGE_ERROR_PREFIX.length).trim());
+    if (!value || value.recovery !== true || typeof value.reason !== "string" || !value.reason.length ||
+      !Array.isArray(value.paths) || !value.paths.length ||
+      !value.paths.every((path: unknown) => typeof path === "string" && path.length > 0)) return undefined;
+    return value as CodexStorageRecoveryConflict;
   } catch {
     return undefined;
   }

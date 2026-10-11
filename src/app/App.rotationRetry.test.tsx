@@ -131,7 +131,7 @@ it("actual App acceptance succeeds and surfaces a storage warning until durable 
   saveMonoRotation(session.id, receipt);
   const sessionsRef = { current: [session] };
   const acceptedContext = vi.fn();
-  const scope = { sessionsRef, sessionId: session.id, monoRotation, acceptMonoRotation, editedResend: undefined,
+  const scope = { sessionsRef, sessionId: session.id, monoRotation, rotationReceipt: receipt, acceptMonoRotation, editedResend: undefined,
     acceptEditedResend: vi.fn(), acceptMonoWorkingDirectoryMigration: vi.fn(), turnGen: { current: new Map([[session.id, 1]]) }, gen: 1,
     setSessions: vi.fn(), contextAccepted: acceptedContext };
   let callback: ts.Node | undefined;
@@ -168,6 +168,16 @@ it("App stops when saving an updated retry carry fails", () => {
   persist(first, session.id, saveMonoRotation);
   const second = planSessionRotation(session, "Use only account B.")!;
   expect(() => persist(second, session.id, () => false)).toThrow("could not be saved");
+});
+
+it("the App save guard refuses a plan made before a newer restriction was saved", () => {
+  const session = { id: "app-stale-save", providerSessionId: "old", context: { used: 700, window: 1000 }, blocks: [] };
+  persist(planSessionRotation(session, "Do not publish.")!, session.id, saveMonoRotation);
+  const stale = planSessionRotation(session, "Retry")!;
+  const newer = { ...loadMonoRotation(session.id)!, pendingInputs: ["Use only account B."] };
+  expect(saveMonoRotation(session.id, newer)).toBe(true);
+  expect(() => persist(stale, session.id, saveMonoRotation)).toThrow("could not be saved");
+  expect(loadMonoRotation(session.id)).toEqual(newer);
 });
 
 it("actual App compaction clears initial oversized-input deferral without saving a pending carry", async () => {

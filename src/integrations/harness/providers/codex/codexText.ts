@@ -1,5 +1,7 @@
 import { modelsFor } from "../../../../features/sessions/model/models";
+import { IS_WIN } from "../../../../platform/tauri/platform";
 import {
+  checkMonoCodexSandbox,
   killChild,
   resolveCodexBinary,
   restoreMonoCodexAgentState,
@@ -9,6 +11,7 @@ import {
 } from "../../core/child";
 import {
   asRecord,
+  codexAppServerArgs,
   buildThreadStartParams,
   buildTurnStartParams,
   isRecoverableThreadResumeError,
@@ -37,8 +40,10 @@ type LiveText = {
   threadId: string;
   ephemeral: boolean;
   codexStore?: "mono";
+  windowsSandbox?: "elevated" | "unelevated";
   skillsContext?: MonoSkillsContext;
   skillsSignature?: string;
+  skillsContextId?: string;
   storeConfig?: Record<string, unknown>;
   model: string;
   effort: string;
@@ -128,6 +133,16 @@ export async function runCodexTextPrompt(
 async function promptOnLive(input: TextPromptInput): Promise<string> {
   input.signal?.throwIfAborted();
   const session = await ensureLive(input);
+  if (session.codexStore === "mono") {
+    await checkMonoCodexSandbox({
+      providerAccountId: session.providerAccountId,
+      sandboxRequired: true,
+      windowsSandbox: session.windowsSandbox,
+      sandboxNetworkAccess: false,
+      skillsContextId: session.skillsContextId,
+      sandboxConfig: session.storeConfig,
+    });
+  }
   input.signal?.throwIfAborted();
   session.output = "";
   session.collecting = true;
@@ -203,6 +218,7 @@ async function ensureLive(input: MonoSkillsContext & {
   modelSettings?: Record<string, string>;
   ephemeral?: boolean;
   codexStore?: "mono";
+  windowsSandbox?: "elevated" | "unelevated";
   threadId?: string;
   onThreadId?: (threadId: string) => void;
 }): Promise<LiveText> {
@@ -216,6 +232,7 @@ async function ensureLive(input: MonoSkillsContext & {
     ? undefined
     : input.threadId?.trim() || undefined;
   const skillsSignature = input.codexStore === "mono" ? JSON.stringify([input.skillsRole, input.skillsPolicy]) : undefined;
+  const windowsSandbox = IS_WIN && input.codexStore === "mono" ? input.windowsSandbox : undefined;
   if (live && !live.closed) {
     if (
       live.cwd === input.cwd &&
@@ -225,6 +242,7 @@ async function ensureLive(input: MonoSkillsContext & {
       live.providerAccountId === input.providerAccountId &&
       live.ephemeral === ephemeral &&
       live.codexStore === input.codexStore &&
+      live.windowsSandbox === windowsSandbox &&
       live.skillsSignature === skillsSignature &&
       (!requestedThreadId || live.threadId === requestedThreadId)
     ) {
@@ -233,7 +251,8 @@ async function ensureLive(input: MonoSkillsContext & {
     }
     if (
       live.providerAccountId !== input.providerAccountId ||
-      live.codexStore !== input.codexStore || live.skillsSignature !== skillsSignature
+      live.codexStore !== input.codexStore || live.skillsSignature !== skillsSignature ||
+      live.windowsSandbox !== windowsSandbox
     ) {
       await dropLive();
       const started = await startLive(
@@ -246,6 +265,7 @@ async function ensureLive(input: MonoSkillsContext & {
         ephemeral,
         input.codexStore,
         input,
+        windowsSandbox,
       );
       input.onThreadId?.(started.threadId);
       return started;
@@ -272,6 +292,7 @@ async function ensureLive(input: MonoSkillsContext & {
     ephemeral,
     input.codexStore,
     input,
+    windowsSandbox,
   );
   input.onThreadId?.(started.threadId);
   return started;
@@ -287,6 +308,7 @@ async function startLive(
   ephemeral = true,
   codexStore?: "mono",
   skillsContext: MonoSkillsContext = {},
+  windowsSandbox?: "elevated" | "unelevated",
 ): Promise<LiveText> {
   await dropLive();
   const { path } = await resolveCodexBinary();
@@ -300,6 +322,8 @@ async function startLive(
           skillsRole: skillsContext.skillsRole,
           skillsPolicy: skillsContext.skillsPolicy,
           sandboxRequired: true,
+          windowsSandbox,
+          sandboxNetworkAccess: false,
           threadId: requestedThreadId,
         })
       : undefined;
@@ -324,7 +348,9 @@ async function startLive(
     threadId: "",
     ephemeral,
     codexStore,
+    windowsSandbox,
     skillsContext,
+    skillsContextId: store?.skillsContextId,
     skillsSignature: codexStore === "mono" ? JSON.stringify([skillsContext.skillsRole, skillsContext.skillsPolicy]) : undefined,
     model,
     effort,
@@ -355,7 +381,7 @@ async function startLive(
     await spawnChild(
       TEXT_CHILD_ID,
       path,
-      ["app-server", ...(store?.skillArgs ?? [])],
+      [...codexAppServerArgs(false, IS_WIN, windowsSandbox), ...(store?.skillArgs ?? [])],
       cwd,
       {
         provider: "codex",
@@ -413,9 +439,12 @@ async function openThread(
         skillsRole: session.skillsContext?.skillsRole,
         skillsPolicy: session.skillsContext?.skillsPolicy,
         sandboxRequired: true,
+        windowsSandbox: session.windowsSandbox,
+        sandboxNetworkAccess: false,
         threadId: requestedThreadId,
       }));
     session.storeConfig = store.config;
+    session.skillsContextId = store.skillsContextId;
     hasSavedContext = store.hasThread;
     threadPath = store.threadPath;
     if (requestedThreadId && hasSavedContext)

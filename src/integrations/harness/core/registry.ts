@@ -40,6 +40,7 @@ export type TextPromptInput = {
   /** Codex defaults to unsaved threads; false allows resumable side questions. */
   ephemeral?: boolean;
   codexStore?: "mono";
+  windowsSandbox?: "elevated" | "unelevated";
   skillsRole?: import("../../../features/monos/model/monoSkills").MonoSkillsRole;
   skillsPolicy?: import("../../../features/monos/model/monoSkills").MonoSkillsPolicy;
   threadId?: string;

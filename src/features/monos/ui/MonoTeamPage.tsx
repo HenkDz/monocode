@@ -3,7 +3,6 @@ import {
   findMono,
   listMonos,
   monoLook,
-  monoDefaultRuntimeMode,
   monosSnapshot,
   subscribeMonos,
   updateMono,
@@ -16,8 +15,7 @@ import { getModelSnapshot, isEffortSettingId, modelEffortSetting, subscribeModel
 import { useModelSource } from "../../sessions/ui/modelSource";
 import { MonoCodexStorageSource } from "./MonoCodexStorageSource";
 import { MonoSkillsSettings } from "./MonoSkillsSettings";
-import { RUNTIME_MODE_LABEL, type RuntimeMode } from "../../sessions/model/session";
-import { AccessPicker } from "../../sessions/ui/AccessPicker";
+import type { RuntimeMode, Session } from "../../sessions/model/session";
 import { usePrStatusCache } from "../../source-control/hooks/usePrStatus";
 import { managerTaskLifecycle, taskPrStatus } from "../../orchestration/model/projectManager";
 import { MemoryPage, SoulPage } from "./MonoFilePages";
@@ -33,6 +31,8 @@ import { MonoFieldLock } from "./MonoFieldLock";
 import { teamReviewerWarning } from "../model/monoOrg";
 import { resetMonoRoleEffort, resolveMonoRoleEffort, switchMonoRoleEffort } from "../model/monoRoleEffort";
 import { MonoRoleEffort } from "./MonoRoleEffort";
+import { resolveMonoRolePermissions } from "../model/monoRolePermissions";
+import { MonoPermissions } from "./MonoPermissions";
 
 function memberFallback(fallback: NonNullable<Mono["workerProfile"]>) {
   return { ...fallback, modelSettings: Object.fromEntries(Object.entries(fallback.modelSettings ?? {}).filter(([id]) => !isEffortSettingId(id))) };
@@ -198,7 +198,12 @@ export function MemberDetails({
   onProfileChange,
   providerAccountId,
   runtimeMode,
+  runtimeModeSource,
+  windowsSandbox,
+  readOnly,
+  busy,
   onRuntimeModeChange,
+  onWindowsSandboxChange,
 }: {
   member: Mono;
   fallback: NonNullable<Mono["workerProfile"]>;
@@ -208,7 +213,12 @@ export function MemberDetails({
   onProfileChange?: (profile: NonNullable<Mono["workerProfile"]>, effortSource?: EffortSource) => void;
   providerAccountId?: string;
   runtimeMode?: RuntimeMode;
-  onRuntimeModeChange?: (mode: RuntimeMode) => void;
+  runtimeModeSource?: Session["runtimeModeSource"];
+  windowsSandbox?: Session["windowsSandbox"];
+  readOnly?: boolean;
+  busy?: boolean;
+  onRuntimeModeChange?: (mode: RuntimeMode, source?: Session["runtimeModeSource"]) => void;
+  onWindowsSandboxChange?: (engine: Session["windowsSandbox"]) => void | Promise<void>;
 }) {
   const [page, setPage] = useState("details");
   const [error, setError] = useState<string>();
@@ -241,7 +251,10 @@ export function MemberDetails({
   const effortControl = (control?: ReactNode) => <MonoRoleEffort mono={member} model={currentModel} values={profile.modelSettings} source={effective.effortSource} onReset={resetEffort}>{control}</MonoRoleEffort>;
   const sessions = useSyncExternalStore(subscribeCardSessions, cardSessionsSnapshot);
   const session = member.sessionId ? sessions.get(member.sessionId) : undefined;
-  const permissionMode = runtimeMode ?? session?.runtimeMode ?? (member.sessionId ? undefined : monoDefaultRuntimeMode(member));
+  const permissionMode = runtimeMode ?? session?.runtimeMode;
+  const permissionOwner = runtimeMode ? { ...member, runtimeModeSource } : session ? { ...member, runtimeModeSource: session.runtimeModeSource } : member;
+  const permissions = permissionMode || !member.sessionId ? resolveMonoRolePermissions(permissionOwner, permissionMode) : undefined;
+  const engine = runtimeMode ? windowsSandbox : session ? session.windowsSandbox : member.sessionId ? undefined : member.windowsSandbox;
   if (page === "settings")
     return (
       <MonoPreferencesPage
@@ -294,7 +307,7 @@ export function MemberDetails({
         <ModelSettingRows harness={profile.harness} model={profile.model} values={profile.modelSettings ?? {}} side="bottom"
           onSettingsChange={changeSettings} row={({ id, label, control }) => <Property label={label}>{id === effortSetting?.id ? effortControl(control) : control}</Property>} />
         {!effortSetting && <Property label="Effort">{effortControl()}</Property>}
-        <Property label="Permissions">{onRuntimeModeChange && permissionMode ? <AccessPicker value={permissionMode} onChange={onRuntimeModeChange} side="bottom" variant="plain" /> : <span className="text-xs" title="Open this teammate's chat to view or change permissions">{permissionMode ? RUNTIME_MODE_LABEL[permissionMode] : "Open chat to view"}</span>}</Property>
+        <MonoPermissions key={member.id} mono={member} harness={runtimeMode ? profile.harness : session?.harness ?? profile.harness} runtimeMode={permissions?.runtimeMode} runtimeModeSource={permissions?.runtimeModeSource} windowsSandbox={engine} readOnly={readOnly ?? session?.readOnly} busy={busy ?? session?.busy} onRuntimeModeChange={onRuntimeModeChange} onWindowsSandboxChange={onWindowsSandboxChange} />
         <Property label="Specialty">
           <input
             aria-label="Member specialty"

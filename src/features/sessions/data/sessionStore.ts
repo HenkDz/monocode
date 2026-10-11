@@ -58,6 +58,8 @@ import type { OrchestrationSummary } from "../../orchestration/model/orchestrati
 // never see this storage marker after hydration.
 const READ_ONLY_SETTING = "__monocodeReadOnly";
 const EFFORT_SOURCE_SETTING = "__monocodeEffortSource";
+const RUNTIME_MODE_SOURCE_SETTING = "__monocodeRuntimeModeSource";
+const WINDOWS_SANDBOX_SETTING = "__monocodeWindowsSandbox";
 const APP_REQUEST_ID = /^[A-Za-z0-9_-]{1,512}$/;
 const LEGACY_MANAGER_DIGEST_ID = /^manager-digest:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -172,6 +174,8 @@ function persistableMeta(
       ...session.modelSettings,
       ...(session.readOnly ? { [READ_ONLY_SETTING]: "true" } : {}),
       ...(session.effortSource ? { [EFFORT_SOURCE_SETTING]: session.effortSource } : {}),
+      ...(session.runtimeModeSource ? { [RUNTIME_MODE_SOURCE_SETTING]: session.runtimeModeSource } : {}),
+      ...(session.windowsSandbox ? { [WINDOWS_SANDBOX_SETTING]: session.windowsSandbox } : {}),
     },
     runtimeMode: session.runtimeMode,
     title: session.title,
@@ -1571,7 +1575,8 @@ function normalizeSummary(summary: SessionSummary): SessionSummary {
 }
 
 function recordToSession(record: SessionRecord): Session {
-  const { [READ_ONLY_SETTING]: readOnly, [EFFORT_SOURCE_SETTING]: effortSource, ...modelSettings } =
+  const { [READ_ONLY_SETTING]: readOnly, [EFFORT_SOURCE_SETTING]: effortSource,
+    [RUNTIME_MODE_SOURCE_SETTING]: runtimeModeSource, [WINDOWS_SANDBOX_SETTING]: windowsSandbox, ...modelSettings } =
     record.modelSettings && typeof record.modelSettings === "object" ? record.modelSettings : {};
   const blocks = Array.isArray(record.blocks)
     ? record.blocks
@@ -1592,6 +1597,8 @@ function recordToSession(record: SessionRecord): Session {
     model: record.model,
     modelSettings,
     ...(effortSource === "role" || effortSource === "user" ? { effortSource } : {}),
+    ...(runtimeModeSource === "role" || runtimeModeSource === "user" ? { runtimeModeSource } : {}),
+    ...(windowsSandbox === "elevated" || windowsSandbox === "unelevated" ? { windowsSandbox } : {}),
     ...(readOnly === "true" ? { readOnly: true } : {}),
     runtimeMode: asRuntimeMode(record.runtimeMode),
     title: record.title,

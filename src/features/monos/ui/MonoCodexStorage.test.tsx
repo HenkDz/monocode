@@ -54,6 +54,49 @@ const conflictDetail = (value = hooksConflict) => `Codex storage needs repair: $
 const buttonNamed = (name: string) => Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
   .find(button => button.textContent?.startsWith(name))!;
 
+it("shows the sandbox reason and exact manual command inline without auto-changing settings", async () => {
+  const sandbox = { sandbox: true, reason: "The recorded sandbox account is disabled", setupCommand: "$env:CODEX_HOME = 'C:/synthetic/account'; codex sandbox -P :workspace -- powershell.exe -Command 'echo ready'" };
+  const resolve = vi.fn(async () => {}), repair = vi.fn(async () => {}), renderDetails = vi.fn();
+  await act(async () => root.render(<MonoCodexStorageNotice detail={`Codex storage needs repair: ${JSON.stringify(sandbox)}`}
+    onRepair={repair} onResolve={resolve} renderDetails={renderDetails} />));
+  expect(container.querySelector('[role="status"]')?.getAttribute("aria-label")).toBe("Codex sandbox needs setup");
+  expect(container.textContent).toContain(sandbox.reason);
+  expect(container.querySelector('[aria-label="Sandbox setup command"]')?.textContent).toBe(sandbox.setupCommand);
+  expect(container.querySelector("details")).toBeNull();
+  expect(renderDetails).not.toHaveBeenCalled();
+  expect(resolve).not.toHaveBeenCalled();
+  expect(repair).not.toHaveBeenCalled();
+  await act(async () => buttonNamed("Copy setup command").click());
+  expect(native.copy).toHaveBeenCalledWith(sandbox.setupCommand);
+  await act(async () => buttonNamed("Switch this account to unelevated").click());
+  expect(resolve).toHaveBeenCalledExactlyOnceWith("use_unelevated_sandbox");
+  expect(container.textContent).toContain("Codex sandbox choice applied");
+});
+
+it("requests full access only on explicit click and disables sandbox choices while pending", async () => {
+  const detail = `Codex storage needs repair: ${JSON.stringify({ sandbox: true, reason: "Sandbox password expired", setupCommand: "codex sandbox -P :workspace -- echo ready" })}`;
+  let finish!: () => void;
+  const resolve = vi.fn(() => new Promise<void>(done => { finish = done; }));
+  await act(async () => root.render(<MonoCodexStorageNotice detail={detail} onRepair={vi.fn()} onResolve={resolve} />));
+  expect(resolve).not.toHaveBeenCalled();
+  await act(async () => { buttonNamed("Use full access for this Mono").click(); });
+  expect(resolve).toHaveBeenCalledExactlyOnceWith("use_mono_full_access");
+  expect(buttonNamed("Switch this account to unelevated").disabled).toBe(true);
+  expect(buttonNamed("Checking").disabled).toBe(true);
+  await act(async () => finish());
+});
+
+it("retains inline sandbox choices after a failed explicit config change", async () => {
+  const detail = `Codex storage needs repair: ${JSON.stringify({ sandbox: true, reason: "Sandbox account is missing", setupCommand: "codex sandbox -P :workspace -- echo ready" })}`;
+  const resolve = vi.fn(async () => { throw new Error("The account is busy; config was not changed"); });
+  await act(async () => root.render(<MonoCodexStorageNotice detail={detail} onRepair={vi.fn()} onResolve={resolve} />));
+  await act(async () => buttonNamed("Switch this account to unelevated").click());
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain("config was not changed");
+  expect(container.textContent).toContain("Sandbox account is missing");
+  expect(buttonNamed("Use full access for this Mono").disabled).toBe(false);
+  expect(container.querySelector("details")).toBeNull();
+});
+
 it("shows preserved recovery paths with refresh and reveal while withholding version choices", async () => {
   const recovery = { recovery: true, reason: "A new file appeared during an interrupted repair; both files are preserved.", paths: ["C:/synthetic/mono/AGENTS.md", "C:/synthetic/mono/.monocode-claim-id"] };
   const detail = `Codex storage needs repair: ${JSON.stringify(recovery)}`;

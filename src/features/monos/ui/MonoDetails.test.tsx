@@ -8,6 +8,7 @@ import { TitleBar } from "../../../app/shell/TitleBar";
 import type { MonoPanelTab } from "./monoPanelParts";
 import { resetHarnessModelOverlays, setHarnessModels } from "../../sessions/model/models";
 import { pickFolders } from "../../../platform/tauri/fs";
+import { IS_WIN } from "../../../platform/tauri/platform";
 
 vi.mock("../../../platform/tauri/fs", async original => ({ ...await original<object>(), pickFolders: vi.fn() }));
 
@@ -95,7 +96,7 @@ it("shows and edits the agent's permission mode in Details", async () => {
   expect(picker).not.toBeNull();
   const settings = picker.closest("dl")!;
   expect([...settings.querySelectorAll("dt")].map(row => row.textContent)).toEqual([
-    "Model", "Reasoning", "Service Tier", "Permissions", "Projects",
+    "Model", "Reasoning", "Service Tier", "Permissions", ...(IS_WIN ? ["Sandbox engine"] : []), "Projects",
   ]);
   expect(container.querySelector('[data-mono-settings]')!.contains(settings)).toBe(true);
   expect(container.querySelectorAll('[data-access-picker-trigger]')).toHaveLength(1);
@@ -122,7 +123,7 @@ it("keeps member settings inside Details and opens org tools as a subpage", asyn
     const permissions = container.querySelector('[data-access-picker-trigger]')!;
     const memberSettings = container.querySelector('[data-mono-settings]')!;
     expect(memberSettings.contains(permissions)).toBe(true);
-    expect([...permissions.closest("dl")!.querySelectorAll("dt")].map(row => row.textContent)).toEqual(["Model", "Reasoning", "Service Tier", "Permissions", "Specialty"]);
+    expect([...permissions.closest("dl")!.querySelectorAll("dt")].map(row => row.textContent)).toEqual(["Model", "Reasoning", "Service Tier", "Permissions", ...(IS_WIN ? ["Sandbox engine"] : []), "Specialty"]);
     const specialty = container.querySelector<HTMLInputElement>('[aria-label="Member specialty"]')!;
     expect(specialty.title).toBe("Backend");
     expect(specialty.classList.contains("truncate")).toBe(true);

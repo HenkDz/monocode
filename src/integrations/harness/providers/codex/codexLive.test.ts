@@ -4,6 +4,9 @@ import { planAgentContext, planOrgContext, recordAgentContext, recordOrgContext 
 import { registerHarness, resetHarnessIdlePark, sendHarnessTurn } from "../../core/registry";
 
 const sent: string[] = [];
+vi.mock("../../../../platform/tauri/platform", async importOriginal => ({
+  ...await importOriginal<typeof import("../../../../platform/tauri/platform")>(), IS_WIN: true,
+}));
 let onLine: ((line: string) => void) | undefined;
 const writeChild = vi.fn(async (_id: string, line: string) => {
   sent.push(line);
@@ -19,6 +22,7 @@ const deleteGeneratedImages = vi.hoisted(() => vi.fn(async () => undefined));
 const spawnChild = vi.hoisted(() =>
   vi.fn(async (..._args: unknown[]) => undefined),
 );
+const checkMonoCodexSandbox = vi.hoisted(() => vi.fn(async (_input: unknown) => undefined));
 const restoreMonoCodexAgentState = vi.hoisted(() =>
   vi.fn(async (..._args: unknown[]) => undefined),
 );
@@ -34,6 +38,7 @@ const prepareCodexMonoContext = vi.hoisted(() =>
 vi.mock("./codexStore", () => ({ prepareCodexMonoContext }));
 
 vi.mock("../../core/child", () => ({
+  checkMonoCodexSandbox,
   resolveCodexBinary: async () => ({ path: "/fake/codex" }),
   spawnChild,
   restoreMonoCodexAgentState,
@@ -130,6 +135,7 @@ async function startTurn(
     readOnly?: boolean;
     ephemeral?: boolean;
     codexStore?: "mono";
+    windowsSandbox?: "elevated" | "unelevated";
     skillsRole?: import("../../../../features/monos/model/monoSkills").MonoSkillsRole;
     skillsPolicy?: import("../../../../features/monos/model/monoSkills").MonoSkillsPolicy;
     prepareText?: Parameters<typeof sendCodexTurn>[0]["prepareText"];
@@ -155,6 +161,7 @@ async function startTurn(
     controlsAgents: options.controlsAgents,
     ephemeral: options.ephemeral,
     codexStore: options.codexStore,
+    windowsSandbox: options.windowsSandbox,
     skillsRole: options.skillsRole,
     skillsPolicy: options.skillsPolicy,
     intent: options.intent,
@@ -301,6 +308,7 @@ describe("codex live turn sequence", () => {
     spawnChild.mockClear();
     restoreMonoCodexAgentState.mockClear();
     prepareCodexMonoContext.mockClear();
+    checkMonoCodexSandbox.mockReset();
   });
 
   afterEach(async () => {
@@ -539,6 +547,92 @@ describe("codex live turn sequence", () => {
     })).rejects.toThrow("not provisioned");
     expect(prepareCodexMonoContext).toHaveBeenLastCalledWith(expect.objectContaining({ sandboxRequired: true }));
     expect(spawnChild).not.toHaveBeenCalled();
+  });
+
+  it("launches a read-only Mono with the unelevated engine and the native guard's argument order", async () => {
+    const { turn } = await startTurn("codex-live", { codexStore: "mono", readOnly: true, runtimeMode: "full-access" });
+    expect(prepareCodexMonoContext).toHaveBeenLastCalledWith(expect.objectContaining({ sandboxRequired: true, windowsSandbox: "unelevated", sandboxNetworkAccess: false }));
+    expect(spawnChild.mock.calls.at(-1)?.[2]).toEqual(["app-server", "-c", 'windows.sandbox="unelevated"']);
+    expect(spawnChild.mock.calls.at(-1)?.[6]).toBe("mono");
+    expect(parse().find(message => message.method === "turn/start")?.params).toMatchObject({ sandboxPolicy: { type: "readOnly" }, approvalPolicy: "never" });
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+  });
+
+  it.each(["auto", "auto-accept-edits"] as const)("launches Windows Mono %s through the private unelevated configuration", async runtimeMode => {
+    const config = { windows: { sandbox: "unelevated" }, sqlite_home: "/private/mono" };
+    prepareCodexMonoContext.mockResolvedValueOnce({ config, hasThread: false });
+    const { turn } = await startTurn("codex-live", { codexStore: "mono", runtimeMode });
+    expect(prepareCodexMonoContext).toHaveBeenLastCalledWith(expect.objectContaining({ sandboxRequired: true, windowsSandbox: "unelevated" }));
+    expect(spawnChild.mock.calls.at(-1)?.[2]).toEqual(["app-server", "-c", 'windows.sandbox="unelevated"']);
+    expect(spawnChild.mock.calls.at(-1)?.[6]).toBe("mono");
+    expect(parse().find(message => message.method === "thread/start")?.params).toMatchObject({ sandbox: "workspace-write", approvalPolicy: "on-request", config });
+    expect(parse().find(message => message.method === "turn/start")?.params).toMatchObject({ sandboxPolicy: { type: "workspaceWrite" }, approvalPolicy: "on-request" });
+    expect(checkMonoCodexSandbox).toHaveBeenLastCalledWith(expect.objectContaining({ sandboxRequired: true, windowsSandbox: "unelevated", sandboxConfig: config }));
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+  });
+
+  it("preserves ordinary Auto launches and ignores a Mono-only engine choice", async () => {
+    const { turn } = await startTurn("codex-live", { runtimeMode: "auto", windowsSandbox: "elevated" });
+    expect(spawnChild.mock.calls.at(-1)?.[2]).toEqual(["app-server"]);
+    expect(prepareCodexMonoContext).not.toHaveBeenCalled();
+    expect(checkMonoCodexSandbox).not.toHaveBeenCalled();
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+  });
+
+  it("keeps full-access Mono Chat outside readiness even with an explicit elevated engine", async () => {
+    const { turn } = await startTurn("codex-live", { codexStore: "mono", runtimeMode: "full-access", windowsSandbox: "elevated" });
+    expect(prepareCodexMonoContext).toHaveBeenLastCalledWith(expect.objectContaining({ sandboxRequired: false, windowsSandbox: "elevated" }));
+    expect(checkMonoCodexSandbox).toHaveBeenLastCalledWith(expect.objectContaining({ sandboxRequired: false, windowsSandbox: "elevated" }));
+    expect(parse().find(message => message.method === "turn/start")?.params).toMatchObject({ sandboxPolicy: { type: "dangerFullAccess" }, approvalPolicy: "never" });
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+  });
+
+  it.each([false, true])("blocks explicit elevated Mono Auto before launch, readOnly=%s", async readOnly => {
+    prepareCodexMonoContext.mockRejectedValueOnce(new Error("Codex storage needs repair: elevated setup cannot be excluded"));
+    await expect(sendCodexTurn({ sessionId: "codex-live", codexStore: "mono", cwd: "/repo", model: "codex:gpt-5.4", runtimeMode: "auto", windowsSandbox: "elevated", readOnly, text: "Continue", onEvent() {} })).rejects.toThrow("elevated setup cannot be excluded");
+    expect(prepareCodexMonoContext).toHaveBeenLastCalledWith(expect.objectContaining({ sandboxRequired: true, windowsSandbox: "elevated" }));
+    expect(spawnChild).not.toHaveBeenCalled();
+    expect(parse().some(message => message.method === "thread/start" || message.method === "turn/start")).toBe(false);
+  });
+
+  it("reuses the same unelevated Auto engine and blocks a later explicit elevated choice", async () => {
+    const first = await startTurn("codex-live", { codexStore: "mono", runtimeMode: "auto" });
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await first.turn;
+    sent.length = 0;
+    const nextInput = { sessionId: "codex-live", codexStore: "mono" as const, cwd: "/repo", model: "codex:gpt-5.4", runtimeMode: "auto-accept-edits" as const, text: "Continue", onEvent() {} };
+    const next = sendCodexTurn(nextInput);
+    await waitFor(() => parse().some(message => message.method === "turn/start"), "warm unelevated turn/start");
+    reply(parse().find(message => message.method === "turn/start")!.id as number, { turn: { id: "turn_2" } });
+    notify("turn/completed", { turn: { id: "turn_2", status: "completed" } });
+    await next;
+    expect(prepareCodexMonoContext).toHaveBeenCalledTimes(1);
+    expect(spawnChild).toHaveBeenCalledTimes(1);
+    expect(checkMonoCodexSandbox).toHaveBeenLastCalledWith(expect.objectContaining({ windowsSandbox: "unelevated" }));
+    sent.length = 0;
+    prepareCodexMonoContext.mockRejectedValueOnce(new Error("Codex storage needs repair: elevated setup cannot be excluded"));
+    await expect(sendCodexTurn({ ...nextInput, windowsSandbox: "elevated" })).rejects.toThrow("elevated setup cannot be excluded");
+    expect(prepareCodexMonoContext).toHaveBeenCalledTimes(2);
+    expect(prepareCodexMonoContext).toHaveBeenLastCalledWith(expect.objectContaining({ windowsSandbox: "elevated", threadId: "thr_1" }));
+    expect(spawnChild).toHaveBeenCalledTimes(1);
+    expect(parse().some(message => message.method === "thread/start" || message.method === "turn/start")).toBe(false);
+  });
+
+  it("blocks an unchanged warm Mono before prompt preparation when its identity becomes unready", async () => {
+    const first = await startTurn("codex-live", { codexStore: "mono" });
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await first.turn;
+    sent.length = 0;
+    const prepareText = vi.fn(async () => "Continue");
+    checkMonoCodexSandbox.mockRejectedValueOnce(new Error("Codex storage needs repair: sandbox account is disabled"));
+    await expect(sendCodexTurn({ sessionId: "codex-live", codexStore: "mono", cwd: "/repo", model: "codex:gpt-5.4", runtimeMode: "supervised", text: "Continue", prepareText, onEvent() {} })).rejects.toThrow("account is disabled");
+    expect(prepareText).not.toHaveBeenCalled();
+    expect(spawnChild).toHaveBeenCalledTimes(1);
+    expect(parse().some(message => message.method === "turn/start")).toBe(false);
   });
 
   it("lets an active Mono turn finish before checking a queued sandbox-mode change", async () => {

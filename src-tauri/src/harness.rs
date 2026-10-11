@@ -945,9 +945,11 @@ pub fn harness_spawn(
     let codex_store = match codex_store.as_deref() {
         None => None,
         Some("mono")
-            if binary_provider.as_deref() == Some("codex")
-                && account.as_ref().is_some_and(|a| a.provider == "codex")
-                && args.first().is_some_and(|a| a == "app-server") =>
+            if mono_storage_launch_allowed(
+                binary_provider.as_deref(),
+                account.as_ref().map(|a| a.provider.as_str()),
+                &args,
+            ) =>
         {
             let store = crate::codex_mono_store::prepare(
                 &app,
@@ -1422,6 +1424,16 @@ const OPENCODE_EXEC_ALLOWED_ARGS: &[&[&str]] = &[
     &["service", "start"],
     &["service", "get", "password"],
 ];
+
+fn mono_storage_launch_allowed(
+    binary_provider: Option<&str>,
+    account_provider: Option<&str>,
+    args: &[String],
+) -> bool {
+    binary_provider == Some("codex")
+        && account_provider == Some("codex")
+        && args.first().is_some_and(|arg| arg == "app-server")
+}
 
 fn exec_args_allowed(binary_provider: Option<&str>, args: &[String]) -> bool {
     let matches = |a: &&[&str]| a.len() == args.len() && a.iter().zip(args).all(|(x, y)| x == y);
@@ -4084,6 +4096,23 @@ mod windows_binary_tests {
     use super::*;
 
     #[test]
+    fn read_only_mono_arguments_pass_the_native_storage_guard() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../src/integrations/harness/providers/codex/fixtures/windows-read-only-mono.json"
+        ))
+        .unwrap();
+        let args: Vec<String> = serde_json::from_value(fixture["args"].clone()).unwrap();
+        assert!(mono_storage_launch_allowed(Some("codex"), Some("codex"), &args));
+        assert!(!mono_storage_launch_allowed(Some("grok"), Some("codex"), &args));
+        assert!(!mono_storage_launch_allowed(Some("codex"), None, &args));
+        assert!(!mono_storage_launch_allowed(
+            Some("codex"),
+            Some("codex"),
+            &["-c".into(), "windows.sandbox=\"unelevated\"".into(), "app-server".into()],
+        ));
+    }
+
+    #[test]
     fn configured_binary_path_accepts_windows_shim_extension() {
         let dir = std::env::temp_dir().join(format!(
             "monocode-configured-windows-binary-{}",
@@ -4101,6 +4130,11 @@ mod windows_binary_tests {
         );
         assert!(is_resolved_harness_binary(
             &shim_path,
+            Some("codex"),
+            Some(&shim_path)
+        ));
+        assert!(!is_resolved_harness_binary(
+            "C:/unresolved/codex.exe",
             Some("codex"),
             Some(&shim_path)
         ));

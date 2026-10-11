@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+vi.mock("../../../../platform/tauri/platform", async importOriginal => ({
+  ...await importOriginal<typeof import("../../../../platform/tauri/platform")>(), IS_WIN: true,
+}));
 
 type Request = {
   id?: number;
@@ -7,6 +10,7 @@ type Request = {
 };
 
 const sent: Request[] = [];
+const checkMonoCodexSandbox = vi.hoisted(() => vi.fn(async (_input: unknown) => undefined));
 let onLine: ((line: string) => void) | undefined;
 let output = "Generated text";
 let threadCount = 0;
@@ -28,6 +32,7 @@ function receive(message: unknown) {
 }
 
 vi.mock("../../core/child", () => ({
+  checkMonoCodexSandbox,
   resolveCodexBinary: async () => ({ path: "/fake/codex" }),
   spawnChild,
   restoreMonoCodexAgentState: async () => undefined,
@@ -115,6 +120,7 @@ beforeEach(() => {
   missingResume = false;
   spawnChild.mockClear();
   prepareCodexMonoContext.mockClear();
+  checkMonoCodexSandbox.mockReset();
 });
 
 afterEach(async () => {
@@ -297,6 +303,34 @@ it("launches a Mono side question in its isolated skills context and keeps ordin
   expect(spawnChild.mock.calls.at(-1)?.[8]).toBe(skillsContextId);
   await runCodexTextPrompt({ cwd: "/repo", prompt: "Ordinary helper" });
   expect(spawnChild.mock.calls.at(-1)?.[8]).toBeUndefined();
+});
+
+it("checks each Mono side question before sending another turn", async () => {
+  const input = { cwd: "/repo", ephemeral: false, codexStore: "mono" as const, prompt: "Mono question" };
+  await runCodexTextPrompt(input);
+  sent.length = 0;
+  checkMonoCodexSandbox.mockRejectedValueOnce(new Error("Codex storage needs repair: sandbox account is missing"));
+  await expect(runCodexTextPrompt(input)).rejects.toThrow("account is missing");
+  expect(sent.some(message => message.method === "turn/start")).toBe(false);
+  expect(spawnChild).toHaveBeenCalledTimes(2);
+});
+
+it("keeps explicit engines private to Mono helpers and rechecks changed engines before a turn", async () => {
+  const input = { cwd: "/repo", ephemeral: false, codexStore: "mono" as const, windowsSandbox: "unelevated" as const, prompt: "Mono question" };
+  prepareCodexMonoContext.mockResolvedValueOnce({ config: { windows: { sandbox: "unelevated" }, sqlite_home: "/private/mono" }, hasThread: true });
+  await runCodexTextPrompt(input);
+  expect(prepareCodexMonoContext).toHaveBeenLastCalledWith(expect.objectContaining({ windowsSandbox: "unelevated", sandboxRequired: true }));
+  expect(spawnChild.mock.calls.at(-1)?.[2]).toEqual(["app-server", "-c", 'windows.sandbox="unelevated"']);
+  expect(checkMonoCodexSandbox).toHaveBeenLastCalledWith(expect.objectContaining({ windowsSandbox: "unelevated", sandboxConfig: expect.objectContaining({ windows: { sandbox: "unelevated" } }) }));
+  sent.length = 0;
+  prepareCodexMonoContext.mockRejectedValueOnce(new Error("Codex storage needs repair: elevated setup cannot be excluded"));
+  await expect(runCodexTextPrompt({ ...input, windowsSandbox: "elevated" })).rejects.toThrow("elevated setup cannot be excluded");
+  expect(prepareCodexMonoContext).toHaveBeenLastCalledWith(expect.objectContaining({ windowsSandbox: "elevated" }));
+  expect(spawnChild).toHaveBeenCalledTimes(1);
+  expect(sent.some(message => message.method === "turn/start")).toBe(false);
+  await runCodexTextPrompt({ cwd: "/repo", windowsSandbox: "unelevated", prompt: "Ordinary helper" });
+  expect(spawnChild.mock.calls.at(-1)?.[2]).toEqual(["app-server"]);
+  expect(spawnChild.mock.calls.at(-1)?.[6]).toBeUndefined();
 });
 
 it.each(["base", "prior-context"])("resumes a saved %s Mono side question with the native rollout path", async location => {

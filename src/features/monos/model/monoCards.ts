@@ -1,5 +1,5 @@
 import { habitSchedule, type HabitSchedule } from "./monoHabits";
-import type { RuntimeMode } from "../../sessions/model/session";
+import type { RuntimeMode, Session } from "../../sessions/model/session";
 import type { AgentLiveState } from "../../agents/model/agentLiveState";
 import type { AgentMetrics } from "../../agents/model/agentMetrics";
 
@@ -153,6 +153,9 @@ export type CardSession = {
   liveState?: AgentLiveState;
   taskMetrics?: Record<string, AgentMetrics>;
   runtimeMode?: RuntimeMode;
+  runtimeModeSource?: Session["runtimeModeSource"];
+  windowsSandbox?: Session["windowsSandbox"];
+  readOnly?: boolean;
   /** The last thing its agent said, on one line. */
   lastLine?: string;
 };

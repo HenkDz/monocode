@@ -1,3 +1,5 @@
+import type { Session } from "../../sessions/model/session";
+
 export type CodexStorageConflict = {
   entry: string;
   monoPath: string;
@@ -12,7 +14,14 @@ export type CodexStorageConflict = {
   canKeepMono: boolean;
 };
 
-export type CodexStorageResolution = "use_account_version" | "keep_mono_version";
+export type CodexStorageResolution = "use_account_version" | "keep_mono_version" |
+  "use_unelevated_sandbox" | "use_mono_full_access";
+
+export type CodexSandboxBlocker = {
+  sandbox: true;
+  reason: string;
+  setupCommand: string;
+};
 
 export type CodexStorageRecoveryConflict = {
   recovery: true;
@@ -28,6 +37,28 @@ export type CodexStorageComparison = {
 };
 
 const STORAGE_ERROR_PREFIX = "Codex storage needs repair:";
+
+export function parseCodexSandboxBlocker(error: unknown): CodexSandboxBlocker | undefined {
+  const message = error instanceof Error ? error.message : String(error);
+  const start = message.indexOf(STORAGE_ERROR_PREFIX);
+  if (start < 0) return undefined;
+  try {
+    const value = JSON.parse(message.slice(start + STORAGE_ERROR_PREFIX.length).trim());
+    if (value?.sandbox !== true || typeof value.reason !== "string" || !value.reason.trim() ||
+      typeof value.setupCommand !== "string" || !value.setupCommand.trim()) return undefined;
+    return value as CodexSandboxBlocker;
+  } catch {
+    return undefined;
+  }
+}
+export function codexSandboxRepairSettings(session: Session, isWindows: boolean, networkAccess: boolean) {
+  const intent = session.queuedMessages?.[0]?.intent ?? [...session.blocks].reverse().find(block => block.role === "user")?.intent;
+  return {
+    sandboxRequired: session.readOnly === true || intent === "plan" || intent === "orchestrate" || session.runtimeMode !== "full-access",
+    windowsSandbox: isWindows ? session.windowsSandbox ?? (session.readOnly || session.runtimeMode === "auto" || session.runtimeMode === "auto-accept-edits" ? "unelevated" as const : undefined) : undefined,
+    sandboxNetworkAccess: networkAccess,
+  };
+}
 
 export function parseCodexStorageConflict(error: unknown): CodexStorageConflict | undefined {
   const message = error instanceof Error ? error.message : String(error);

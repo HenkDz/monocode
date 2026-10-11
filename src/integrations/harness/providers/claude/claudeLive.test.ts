@@ -2047,6 +2047,19 @@ describe("claude plan permissions", () => {
 });
 
 describe("claude manual compaction", () => {
+  it("maps only a compact boundary in the current parent session", async () => {
+    const { events, turn } = await startTurn("claude-compact-signal");
+    emit({ type: "system", subtype: "compact_boundary", session_id: "child", parent_tool_use_id: "toolu_child" });
+    emit({ type: "system", subtype: "compact_boundary", session_id: "unrelated" });
+    emit({ type: "system", subtype: "status", session_id: "sess_1", message: "Compacted context" });
+    expect(events.filter(event => event.type === "context.compacted")).toEqual([]);
+    expect(events).not.toContainEqual({ type: "session.providerBound", providerSessionId: "unrelated" });
+    emit({ type: "system", subtype: "compact_boundary", session_id: "sess_1", compact_metadata: { trigger: "auto" } });
+    expect(events.filter(event => event.type === "context.compacted")).toEqual([{ type: "context.compacted" }]);
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+  });
+
   it("runs the built-in command and requires a compact boundary", async () => {
     const { turn } = await startTurn("s1");
     emit({ type: "result", subtype: "success", session_id: "sess_1" });
@@ -2086,6 +2099,7 @@ describe("claude manual compaction", () => {
       type: "status",
       text: "Compacted context",
     });
+    expect(events).toContainEqual({ type: "context.compacted" });
     expect(events.some((event) => event.type === "message.delta")).toBe(false);
   });
 });

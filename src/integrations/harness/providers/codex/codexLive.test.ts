@@ -182,6 +182,22 @@ async function startTurn(
 }
 
 describe("codex live turn sequence", () => {
+  it("keeps compaction signals scoped to the parent thread and ignores child notifications", async () => {
+    const { events, turn } = await startTurn("codex-compact-signal");
+    notify("thread/compacted", { threadId: "unrelated", turnId: "turn_1" });
+    notify("item/completed", { threadId: "child", turnId: "turn_child", item: { type: "contextCompaction", id: "child-compact" } });
+    notify("thread/compacted", { turnId: "turn_1" });
+    notify("item/started", { threadId: "thr_1", turnId: "turn_1", item: { type: "contextCompaction", id: "compact" } });
+    expect(events.filter(event => event.type === "context.compacted")).toEqual([]);
+    notify("thread/compacted", { threadId: "thr_1", turnId: "turn_1" });
+    notify("item/completed", { threadId: "thr_1", turnId: "turn_1", item: { type: "contextCompaction", id: "compact" } });
+    expect(events.filter(event => event.type === "context.compacted")).toEqual([
+      { type: "context.compacted" }, { type: "context.compacted" },
+    ]);
+    notify("turn/completed", { threadId: "thr_1", turn: { id: "turn_1", status: "completed" } });
+    await turn;
+  });
+
   it("labels only a rejected turn/start RPC without accepting or replacing its retained thread", async () => {
     bindCodexSession("codex-live", "thr_1", "/repo");
     const events: HarnessEvent[] = [];

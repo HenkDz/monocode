@@ -8493,6 +8493,7 @@ function Workspace({
           applyTurnEvent(event);
         };
         const acceptEditedResend = () => {
+          if (turnGen.current.get(sessionId) !== gen) return;
           if (!editedResend || editedResend.isAccepted()) return;
           flushSync(commitSubmittedTurn);
           editedResend.markAccepted();
@@ -8654,6 +8655,7 @@ function Workspace({
               text,
               attachments: turnAttachments,
               onAccepted: () => {
+                if (turnGen.current.get(sessionId) !== gen) return;
                 const accepted = contextAccepted;
                 contextAccepted = undefined;
                 accepted?.();

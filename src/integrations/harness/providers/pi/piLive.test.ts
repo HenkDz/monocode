@@ -127,6 +127,22 @@ describe("Pi live session", () => {
     await stopPiSession("pi-compact");
   });
 
+  it.each(["compaction_end", "auto_compaction_end"])("maps only successful %s frames", async type => {
+    const events: HarnessEvent[] = [];
+    const sessionId = `pi-signal-${type}`;
+    await compactPiContext({ sessionId, cwd: "/repo", model: "pi:default", runtimeMode: "supervised", onEvent: event => events.push(event) });
+    const frame = mocks.frames[0]!;
+    const result = { summary: "Earlier work", firstKeptEntryId: "entry", tokensBefore: 50_000 };
+    for (const rejected of [{ aborted: true }, { skipped: true }, { errorMessage: "Compaction failed" }, { result: undefined }]) {
+      frame({ type, result, aborted: false, willRetry: false, ...rejected });
+    }
+    frame({ type: "compaction_start", reason: "manual" });
+    expect(events.filter(event => event.type === "context.compacted")).toEqual([]);
+    frame({ type, reason: "manual", result, aborted: false, willRetry: false });
+    expect(events.filter(event => event.type === "context.compacted")).toEqual([{ type: "context.compacted" }]);
+    await stopPiSession(sessionId);
+  });
+
   it("publishes readable Ponytail status and extension notifications", async () => {
     const events: HarnessEvent[] = [];
     await compactPiContext({

@@ -224,6 +224,10 @@ type Handed = {
   memoryHash: string;
 };
 
+// Failed storage writes must not let readable receipts survive invalidation.
+const invalidatedAgentContexts = new Set<string>();
+const invalidatedOrgContexts = new Set<string>();
+
 function readHanded(): Record<string, Handed> {
   migrateLegacyMonoStorage();
   try {
@@ -265,6 +269,7 @@ export function planAgentContext(
   // The provider id arrives with the first reply, so a record made before it
   // belongs to whatever session that reply started.
   const sameSession =
+    !invalidatedAgentContexts.has(sessionId) &&
     !!handed &&
     !!providerSessionId &&
     (handed.provider == null || handed.provider === providerSessionId);
@@ -289,26 +294,29 @@ export function recordAgentContext(
   };
   try {
     localStorage.setItem(HANDED_KEY, JSON.stringify(next));
+    invalidatedAgentContexts.delete(sessionId);
   } catch {
     // Without the record the next turn resends everything, which is safe.
   }
 }
 
-/** Drop the context receipt when its conversation is deleted. */
+/** Re-hand context after provider history is compacted, rewound or deleted. */
 export function forgetAgentContext(sessionId: string): void {
+  invalidatedAgentContexts.add(sessionId);
+  invalidatedOrgContexts.add(sessionId);
   const handed = readHanded();
   delete handed[sessionId];
   try {
     localStorage.setItem(HANDED_KEY, JSON.stringify(handed));
   } catch {
-    // A deleted conversation id is never reused.
+    // Runtime invalidation survives until a new accepted receipt can be stored.
   }
   const org = readOrgHanded();
   delete org[sessionId];
   try {
     localStorage.setItem(ORG_HANDED_KEY, JSON.stringify(org));
   } catch {
-    // Failure only causes a safe resend if an id is ever reused.
+    // Runtime invalidation survives until a new accepted receipt can be stored.
   }
 }
 
@@ -338,7 +346,7 @@ export async function planOrgContext(
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${MONO_PROMPT_VERSION}\0${context}`));
   const hash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
   const handed = readOrgHanded()[sessionId];
-  const sameSession = !!providerSessionId && !!handed &&
+  const sameSession = !invalidatedOrgContexts.has(sessionId) && !!providerSessionId && !!handed &&
     (handed.provider == null || handed.provider === providerSessionId) && handed.model === model;
   return { hash, model, ...(sameSession && handed.hash === hash ? {} : { text: context }) };
 }
@@ -349,6 +357,7 @@ export function recordOrgContext(sessionId: string, providerSessionId: string | 
     localStorage.setItem(ORG_HANDED_KEY, JSON.stringify({ ...readOrgHanded(), [sessionId]: {
       hash: plan.hash, model: plan.model, ...(providerSessionId ? { provider: providerSessionId } : {}),
     } }));
+    invalidatedOrgContexts.delete(sessionId);
   } catch {
     // Without a receipt the next turn safely resends the full org context.
   }

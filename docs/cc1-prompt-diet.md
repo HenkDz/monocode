@@ -173,3 +173,67 @@ Evidence lives in `target/cc1-verification/baseline.json`,
 analyzer source-byte/mtime checks. The original copied prompts/scripts are
 under that program's `evidence/` folder. No push, merge, preview/model turn,
 real agent-data edit, scheduler/effort change or skills/storage change was made.
+
+## Compaction follow-up
+
+Provider compaction replaces the history that held the once-delivered org,
+identity, soul and memory. Receipt identity alone cannot detect that loss.
+The shared harness registry now invalidates both receipt types synchronously
+on a normalized `context.compacted` event, before App batches or buffers it.
+Normal turns, manual compaction and rewinds share that event handling; steering
+keeps the installed callback. Successful manual compaction also emits the
+signal when an adapter has no completion notification. Failed attempts without
+an observed compaction keep steady context unchanged.
+
+A per-send flag clears receipts again after acceptance, including when the
+acceptance callback throws, because compaction can precede that callback.
+App generation guards prevent obsolete edited-turn acceptance and fallback
+callbacks from writing receipts or replaying buffered events. Runtime
+invalidation independently protects both planners if receipt-deletion writes
+fail while old receipts remain readable; each clears only after its own fresh
+accepted receipt is stored. No prompt text or budget changed (version stays 25).
+
+Explicit provider completions mapped:
+
+- Codex: deprecated `thread/compacted` and completed `contextCompaction` items,
+  verified against locally generated Codex 0.162.1 app-server types.
+- Claude: parent-session `compact_boundary`, excluding child/foreign messages.
+- OpenCode v1/v2: matching-session `session.compacted` /
+  `session.compaction.ended`, before completion gates can consume them.
+- Pi/OMP: result-bearing compaction end frames; aborted, skipped, failed and
+  child frames are excluded, including OMP's automatic compaction events.
+
+Grok's manual compaction is covered by the shared success fallback; its
+telemetry event was not treated as an unverified automatic protocol signal.
+Remote-host sessions bypass these local Mono/member/habit receipt planners.
+Usage decreases and display strings are not compaction evidence.
+
+Synthetic registry tests assemble the real first-turn/steady context and prove
+auto compaction before/after acceptance, manual compact with/without a signal,
+compaction followed by failures, failed storage writes, unaffected sessions
+and restoration of zero app-added steady context after fresh delivery.
+
+| Check | Result |
+| --- | --- |
+| Full `npx vitest run --maxWorkers 1` | 547 files passed, 2 skipped, 0 failed (549); 5,992 tests passed, 13 skipped, 0 failed/todo (6,005); 600.18 s Vitest / 602.495 s wall |
+| Focused compaction/context/provider/edit-turn suite | 16 files / 539 tests passed, 0 skipped/failed/todo; 24.65 s Vitest / 27.256 s wall |
+| `npx tsc --noEmit` | Exit 0; 27.302 s wall |
+| `npm run build` | Exit 0; Vite 30.31 s / 56.595 s wall; existing large-chunk warning |
+| Earlier provider-only check | 9 files / 401 tests passed, 0 skipped/failed; 21.11 s Vitest / 24.281 s wall |
+| Independent source reviews | No material issues in main or provider changes |
+
+Checks used process-local `NODE_OPTIONS=--no-experimental-webstorage`.
+Evidence is under
+`target/cc1-compaction-verification/run-20261011T105151059989Z/`: raw logs,
+focused/full Vitest JSON, `receipt.json`, and source snapshots at every
+boundary. All 1,424 source/config file hashes stayed unchanged during checks
+(aggregate SHA-256
+`d8dd1679baa7226f3be863c202eaca054011dc231ef459b3b20cd061c4369a09`).
+Provider schema/type proof and the earlier provider-only receipt are under
+`target/cc1-verification/provider-compaction-protocol-evidence.txt` and
+`providers-full-receipt.json`.
+
+No native code changed, so the native suite was not repeated. No live model
+turn, deployment, push or merge was performed; live compaction remains
+unverified.
+

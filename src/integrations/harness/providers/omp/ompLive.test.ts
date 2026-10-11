@@ -136,6 +136,24 @@ async function started(turnInput = input()) {
 }
 
 describe("Pi-family edit recovery", () => {
+  it.each(["omp", "pi"])("routes %s compaction only to its own process session", async flavor => {
+    const firstEvents: HarnessEvent[] = [];
+    const otherEvents: HarnessEvent[] = [];
+    const send = flavor === "omp" ? sendOmpTurn : sendPiTurn;
+    const first = send({ ...input(`${flavor}-compact-first`), model: `${flavor}:default`, onEvent: event => firstEvents.push(event) });
+    await vi.waitFor(() => expect(transport.requests.some(request => request.sessionId === `${flavor}-compact-first` && request.command.type === "prompt")).toBe(true));
+    const other = send({ ...input(`${flavor}-compact-other`), model: `${flavor}:default`, onEvent: event => otherEvents.push(event) });
+    await vi.waitFor(() => expect(transport.requests.some(request => request.sessionId === `${flavor}-compact-other` && request.command.type === "prompt")).toBe(true));
+    frame(`${flavor}-compact-first`, { type: flavor === "omp" ? "auto_compaction_end" : "compaction_end", action: "shake", reason: "threshold", result: { summary: "Earlier work", tokensBefore: 50_000 }, aborted: false, willRetry: false });
+    expect(firstEvents.filter(event => event.type === "context.compacted")).toEqual([{ type: "context.compacted" }]);
+    expect(otherEvents.filter(event => event.type === "context.compacted")).toEqual([]);
+    for (const id of [`${flavor}-compact-first`, `${flavor}-compact-other`]) {
+      frame(id, { type: "agent_end", willRetry: false });
+      frame(id, { type: "agent_settled", aborted: false });
+    }
+    await Promise.all([first, other]);
+  });
+
   it("reads fork cancellation from the RPC data payload", async () => {
     const running = await started();
     frame("omp-test", {

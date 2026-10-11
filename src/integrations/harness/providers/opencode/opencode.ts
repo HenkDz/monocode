@@ -834,6 +834,10 @@ async function handleEvent(
   }
 
   const payloadSessionId = eventSessionId(event);
+  if (payloadSessionId === live.openCodeSessionId &&
+      (type === "session.compacted" || type === "session.compaction.ended")) {
+    live.onEvent({ type: "context.compacted" });
+  }
   if (payloadSessionId && payloadSessionId !== live.openCodeSessionId) {
     if (
       type === "message.updated" ||

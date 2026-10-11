@@ -260,3 +260,36 @@ failures; the pasted-image fixture now waits for its actual error callback.
 Design, regression scenarios, validation receipts and remaining runtime limits
 are recorded in `docs/cc5ei-rotation-failclosed.md` and
 `C:/Users/nooro/AppData/Local/Temp/monocode-cc/cc5ei/REPORT.md`.
+
+## CC5EJ continuity and completion queue recovery
+
+Branch: `HenkDz/cc5ej-rotation-continuity`.
+Base: `f0e368f2b85361bdae7af005ace5c6d2953b7a63`.
+Final implementation: `9e764721b33f0d6f50e69aeaa0de2e8a39da1191`.
+The final documentation commit and branch tip are recorded in the external report.
+
+Saved carries now validate their entry shapes and pending-field consistency.
+Incomplete or unknown authority stays unreadable and unchanged. Settled carries
+and supported legacy reasons remain readable. Planning captures the saved receipt;
+the existing writer compares it before persistence, and submission checks it after
+awaited preparation. Changed continuity refuses delivery until Retry replans from
+the latest carry. Acceptance still clears only its matching receipt, including
+the effective settled projection while durable clearing retries.
+
+Queue refusal, exception handling and Resume now cover both queued user messages
+and pending completion events. The orchestration Resume caller uses that same head.
+
+Full Vitest: 622 files passed, 2 skipped; 7,893 tests passed, 13 skipped, zero
+failed/todo. TypeScript and production build pass. The six changed-area files
+pass 119 tests. Earlier reproductions pass 129 external tests and 625 focused
+source tests, plus all retained assertion runners. CC5EIR's nine-case contract
+changes from 3 passed / 6 failed on the base to 9 passed / 0 failed on this
+implementation. Counts overlap and are not summed as unique coverage.
+
+One malformed entry conservatively makes the rotation store unreadable for local
+sends; no reset or automatic authority reconstruction is attempted. Native disk,
+multi-window transaction timing, renderer-exit replay and live provider acceptance
+remain unproven. No native source changed, and no preview or model turn ran.
+Design, fixture adaptations, failed setup attempts, exact checks and evidence:
+`docs/cc5ej-rotation-continuity.md` and
+`C:/Users/nooro/AppData/Local/Temp/monocode-cc/cc5ej/REPORT.md`.

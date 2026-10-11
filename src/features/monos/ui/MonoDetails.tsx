@@ -272,9 +272,7 @@ export function MonoDetails({
           key: "work",
           node: <div className="flex min-h-0 flex-1 flex-col" data-mono-work>
             <PageHeader title="This agent's work" onBack={() => setShowWork(false)} />
-            <div className="min-h-0 flex-1 overflow-y-auto">
-              <MonoActivityContent {...(activity ?? { blocks: [], live: false })} readOutput />
-            </div>
+            <MonoActivityContent {...(activity ?? { blocks: [], live: false })} readOutput />
           </div>,
         }] : []}>
           {tab === "prs" ? (
@@ -286,15 +284,15 @@ export function MonoDetails({
                   ? { monoId }
                   : sessionId ? { sessionId } : { cwd }} />
           ) : tab === "activity" ? (
-            <div className="min-h-0 flex-1 overflow-y-auto">
-            {teamActivity}
-            {teamActivity ? <div className="border-t border-stroke p-3">
-              <button type="button" onClick={() => setShowWork(true)} className="rounded-md px-2 py-1.5 text-xs text-content/60 hover:bg-content/5 hover:text-content focus-visible:outline-accent">Show work</button>
+            teamActivity ? <div className="min-h-0 flex-1 overflow-y-auto">
+              {teamActivity}
+              <div className="border-t border-stroke p-3">
+                <button type="button" onClick={() => setShowWork(true)} className="rounded-md px-2 py-1.5 text-xs text-content/60 hover:bg-content/5 hover:text-content focus-visible:outline-accent">Show work</button>
+              </div>
             </div> : <MonoActivityContent
               key={activity?.blocks[0]?.id ?? "empty"}
               {...(activity ?? { blocks: [], live: false })}
-            />}
-            </div>
+            />
           ) : findMono(monoId)?.role === "member" ? (
             <MemberDetails member={findMono(monoId)!} fallback={{ harness, model, modelSettings }} onBack={onClose} providerAccountId={providerAccountId} runtimeMode={runtimeMode} onRuntimeModeChange={onRuntimeModeChange} onProfileChange={profile => { onModelChange(profile.harness, profile.model); onModelSettingsChange(profile.modelSettings ?? {}); }} />
           ) : (

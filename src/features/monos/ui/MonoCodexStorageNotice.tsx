@@ -28,7 +28,9 @@ export function MonoCodexStorageNotice({
   const [success, setSuccess] = useState(false);
   const [copyStatus, setCopyStatus] = useState<string>();
   const [comparison, setComparison] = useState<CodexStorageComparison>();
+  const [conflict, setConflict] = useState(() => parseCodexStorageConflict(detail));
   useEffect(() => {
+    setConflict(parseCodexStorageConflict(detail));
     if (detail) {
       setSuccess(false);
       setError(undefined);
@@ -38,7 +40,6 @@ export function MonoCodexStorageNotice({
   }, [detail]);
 
   const details = error ?? detail;
-  const conflict = parseCodexStorageConflict(error) ?? parseCodexStorageConflict(detail);
   const title = success ? "Codex storage repaired" : conflict ? codexStorageIssueTitle(conflict) : "Codex storage needs repair";
   async function run(action: "repair" | "compare" | "reveal", operation: () => Promise<unknown>) {
     if (busy) return;
@@ -53,6 +54,8 @@ export function MonoCodexStorageNotice({
       }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
+      const updatedConflict = parseCodexStorageConflict(reason);
+      if (updatedConflict) setConflict(updatedConflict);
     } finally {
       setBusy(undefined);
     }

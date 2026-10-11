@@ -126,23 +126,44 @@ it("resumes other account members after one restart fails and preserves its exac
 
 it("includes a newly blocked account member while the first held submission is restarting", async () => {
   const recovery = new MonoCodexStorageRecovery();
+  const ready = new Set<string>();
   let started!: () => void;
   const callbackStarted = new Promise<void>(resolve => { started = resolve; });
   let finish!: (accepted: boolean) => void;
   recovery.hold("first", () => {
+    expect(ready.has("first")).toBe(true);
     started();
     return new Promise<boolean>(resolve => { finish = resolve; });
   });
-  const repair = recovery.repairAccount("account", ["first"], async () => {});
+  const repair = recovery.repairAccount("account", ["first"], async () => {}, sessionId => { ready.add(sessionId); });
   await callbackStarted;
   expect(recovery.isRepairingAccount("account")).toBe(true);
-  const second = vi.fn(async () => true);
+  const second = vi.fn(async () => ready.has("second"));
   recovery.hold("second", second);
   expect(recovery.repairAccount("account", ["second"], async () => {})).toBe(repair);
   finish(true);
   await repair;
+  expect([...ready]).toEqual(["first", "second"]);
   expect(second).toHaveBeenCalledOnce();
   expect(recovery.isRepairingAccount("account")).toBe(false);
+});
+
+it("retains a held turn when its state cannot clear and still resumes the other members", async () => {
+  const recovery = new MonoCodexStorageRecovery();
+  const first = vi.fn(() => true);
+  const second = vi.fn(() => true);
+  recovery.hold("first", first);
+  recovery.hold("second", second);
+  await expect(recovery.repairAccount("account", ["first", "second"], async () => {}, sessionId => {
+    if (sessionId === "first") throw new Error("Conversation unavailable");
+  })).rejects.toThrow("Conversation unavailable");
+  expect(first).not.toHaveBeenCalled();
+  expect(second).toHaveBeenCalledOnce();
+  expect(recovery.hasPending("first")).toBe(true);
+  expect(recovery.hasPending("second")).toBe(false);
+  await recovery.repairAccount("account", ["first", "second"], async () => {});
+  expect(first).toHaveBeenCalledOnce();
+  expect(second).toHaveBeenCalledOnce();
 });
 
 it("waits for an in-flight preparation to retain its failed submission before account relinking", async () => {

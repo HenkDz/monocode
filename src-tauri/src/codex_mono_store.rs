@@ -15,6 +15,20 @@ static STORAGE_LOCK: Mutex<()> = Mutex::new(());
 static STORAGE_ISSUES: LazyLock<Mutex<HashSet<String>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
 
+#[cfg(test)]
+thread_local! {
+    static BEFORE_CLAIM: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn before_claim() {
+    BEFORE_CLAIM.with(|hook| {
+        if let Some(writer) = hook.borrow_mut().take() {
+            writer();
+        }
+    });
+}
+
 const STATE_NAMES: &[&str] = &[
     "sessions",
     "archived_sessions",
@@ -123,6 +137,8 @@ struct LinkSnapshot {
     fingerprint: String,
     #[serde(default)]
     private_override: bool,
+    #[serde(default)]
+    invalid: bool,
 }
 
 fn locations(
@@ -205,10 +221,10 @@ pub async fn codex_mono_store_reveal(
     provider_account_id: Option<String>,
     entry: String,
 ) -> Result<(), String> {
-    validate_entry(&entry)?;
     let (_, home, _) = locations(&app, provider_account_id.as_deref())?;
     // Resolve the account directory here; never accept a client supplied path.
-    crate::fs::reveal_path(crate::fs::path_to_js(&home.join(entry))).await
+    let path = home.join(shared_entry_name(&home, &entry)?);
+    crate::fs::reveal_path(crate::fs::path_to_js(&path)).await
 }
 
 #[tauri::command(async)]
@@ -333,6 +349,41 @@ fn validate_entry(name: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn shared_entry_name(home: &Path, name: &str) -> Result<String, String> {
+    validate_entry(name)?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::GetLongPathNameW;
+        // Expand the Mono entry first; account directories can assign different short aliases.
+        let input: Vec<u16> = home
+            .join(name)
+            .as_os_str()
+            .encode_wide()
+            .chain(Some(0))
+            .collect();
+        let mut output = vec![0u16; 32768];
+        let len =
+            unsafe { GetLongPathNameW(input.as_ptr(), output.as_mut_ptr(), output.len() as u32) };
+        if len == 0 || len as usize >= output.len() {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        let long =
+            PathBuf::from(String::from_utf16(&output[..len as usize]).map_err(|e| e.to_string())?);
+        let name = long
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or("Invalid Codex storage filename")?;
+        validate_entry(name)?;
+        Ok(name.into())
+    }
+    #[cfg(unix)]
+    {
+        let _ = home;
+        Ok(name.into())
+    }
+}
+
 fn login_entry(name: &str) -> bool {
     ["auth.json", ".credentials.json", "secrets"]
         .iter()
@@ -387,10 +438,35 @@ fn snapshot_path(home: &Path, name: &str) -> Result<PathBuf, String> {
 
 fn read_snapshot(home: &Path, name: &str) -> Result<Option<LinkSnapshot>, String> {
     let path = snapshot_path(home, name)?;
-    match std::fs::read(path) {
-        Ok(bytes) => serde_json::from_slice(&bytes)
-            .map(Some)
-            .map_err(|e| format!("Invalid Codex link metadata: {e}")),
+    match std::fs::read(&path) {
+        Ok(bytes) => match serde_json::from_slice(&bytes) {
+            Ok(snapshot) => Ok(Some(snapshot)),
+            Err(_) => {
+                let mut claimed = ClaimedEntry::new(&path)?;
+                let result = (|| {
+                    if !claimed.real_file()? {
+                        return Err("Codex link metadata must be a real file".into());
+                    }
+                    let bytes = std::fs::read(&claimed.path).map_err(|e| e.to_string())?;
+                    if let Ok(snapshot) = serde_json::from_slice(&bytes) {
+                        claimed.restore()?;
+                        return Ok(Some(snapshot));
+                    }
+                    let preserved = path
+                        .with_file_name(format!("{name}.json.corrupt-{}", uuid::Uuid::new_v4()));
+                    claimed.move_to(&preserved)?;
+                    // A durable marker keeps retries from treating corrupt evidence as an absent snapshot.
+                    let snapshot = LinkSnapshot {
+                        invalid: true,
+                        ..LinkSnapshot::default()
+                    };
+                    write_snapshot(home, name, &snapshot)?;
+                    claimed.active = false;
+                    Ok(Some(snapshot))
+                })();
+                claimed.finish(result)
+            }
+        },
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error.to_string()),
     }
@@ -432,15 +508,23 @@ fn fingerprint(path: &Path) -> Result<String, String> {
 }
 
 fn file_conflict(source: &Path, home: &Path, name: &str) -> Result<StorageConflict, String> {
-    validate_entry(name)?;
-    let mono = home.join(name);
+    let name = shared_entry_name(home, name)?;
+    file_conflict_at(source, home, &name, &home.join(&name))
+}
+
+fn file_conflict_at(
+    source: &Path,
+    home: &Path,
+    name: &str,
+    mono: &Path,
+) -> Result<StorageConflict, String> {
     let account = source.join(name);
-    let mono_meta = std::fs::symlink_metadata(&mono).map_err(|e| e.to_string())?;
+    let mono_meta = std::fs::symlink_metadata(mono).map_err(|e| e.to_string())?;
     let source_meta = std::fs::metadata(&account).map_err(|e| e.to_string())?;
     if !mono_meta.is_file() || mono_meta.file_type().is_symlink() || !source_meta.is_file() {
         return Err("Only conflicting real files can be resolved".into());
     }
-    let mono_fingerprint = fingerprint(&mono)?;
+    let mono_fingerprint = fingerprint(mono)?;
     let source_fingerprint = fingerprint(&account)?;
     let mtime = |meta: &std::fs::Metadata| {
         meta.modified()
@@ -450,7 +534,7 @@ fn file_conflict(source: &Path, home: &Path, name: &str) -> Result<StorageConfli
     };
     Ok(StorageConflict {
         entry: name.into(),
-        mono_path: crate::fs::path_to_js(&mono),
+        mono_path: crate::fs::path_to_js(&home.join(name)),
         source_path: crate::fs::path_to_js(&account),
         mono_bytes: mono_meta.len(),
         source_bytes: source_meta.len(),
@@ -479,22 +563,265 @@ fn check_conflict(source: &Path, home: &Path, expected: &StorageConflict) -> Res
     Ok(())
 }
 
-fn backup_and_relink(source: &Path, home: &Path, name: &str) -> Result<(), String> {
+struct ClaimedEntry {
+    original: PathBuf,
+    path: PathBuf,
+    active: bool,
+    #[cfg(windows)]
+    file: std::fs::File,
+}
+
+impl ClaimedEntry {
+    fn new(target: &Path) -> Result<Self, String> {
+        let path = target.with_file_name(format!(".monocode-claim-{}", uuid::Uuid::new_v4()));
+        #[cfg(windows)]
+        let file = open_entry(target, true)?;
+        #[cfg(windows)]
+        rename_handle(&file, &path, false)?;
+        #[cfg(unix)]
+        rename_no_replace(target, &path)?;
+        Ok(Self {
+            original: target.into(),
+            path,
+            active: true,
+            #[cfg(windows)]
+            file,
+        })
+    }
+
+    fn real_file(&self) -> Result<bool, String> {
+        let metadata = std::fs::symlink_metadata(&self.path).map_err(|e| e.to_string())?;
+        Ok(metadata.is_file() && !metadata.file_type().is_symlink())
+    }
+
+    fn move_to(&mut self, target: &Path) -> Result<(), String> {
+        #[cfg(windows)]
+        rename_handle(&self.file, target, false)?;
+        #[cfg(unix)]
+        rename_no_replace(&self.path, target)?;
+        self.path = target.into();
+        Ok(())
+    }
+
+    fn restore(&mut self) -> Result<(), String> {
+        if self.active {
+            self.move_to(&self.original.clone())?;
+            self.active = false;
+        }
+        Ok(())
+    }
+
+    fn discard(&mut self) -> Result<(), String> {
+        #[cfg(windows)]
+        {
+            use std::os::windows::io::AsRawHandle;
+            use windows_sys::Win32::Storage::FileSystem::{
+                FileDispositionInfoEx, SetFileInformationByHandle, FILE_DISPOSITION_INFO_EX,
+            };
+            let info = FILE_DISPOSITION_INFO_EX { Flags: 3 }; // DELETE | POSIX_SEMANTICS
+            if unsafe {
+                SetFileInformationByHandle(
+                    self.file.as_raw_handle() as _,
+                    FileDispositionInfoEx,
+                    (&info as *const FILE_DISPOSITION_INFO_EX).cast(),
+                    std::mem::size_of_val(&info) as u32,
+                )
+            } == 0
+            {
+                return Err(std::io::Error::last_os_error().to_string());
+            }
+        }
+        #[cfg(unix)]
+        std::fs::remove_file(&self.path).map_err(|e| e.to_string())?;
+        self.active = false;
+        Ok(())
+    }
+
+    fn finish<T>(&mut self, result: Result<T, String>) -> Result<T, String> {
+        if let Err(error) = result {
+            if let Err(restore) = self.restore() {
+                return Err(format!(
+                    "{error}; concurrent entry was not overwritten; preserved {}: {restore}",
+                    self.path.display()
+                ));
+            }
+            return Err(error);
+        }
+        result
+    }
+}
+
+impl Drop for ClaimedEntry {
+    fn drop(&mut self) {
+        if let Err(error) = self.restore() {
+            log_storage_issue(format!(
+                "Codex storage claim preserved {}: {error}",
+                self.path.display()
+            ));
+        }
+    }
+}
+
+#[cfg(windows)]
+fn open_entry(path: &Path, locked: bool) -> Result<std::fs::File, String> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::{
+        Foundation::GENERIC_READ,
+        Storage::FileSystem::{
+            DELETE, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE,
+            FILE_SHARE_READ, FILE_SHARE_WRITE,
+        },
+    };
+    std::fs::OpenOptions::new()
+        .access_mode(GENERIC_READ | if locked { DELETE } else { 0 })
+        .share_mode(if locked {
+            FILE_SHARE_READ
+        } else {
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
+        })
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+        .map_err(|e| e.to_string())
+}
+
+fn entry_identity(path: &Path) -> Result<(u64, u64), String> {
+    #[cfg(windows)]
+    {
+        let info = handle_file_info(&open_entry(path, false)?)?;
+        Ok((
+            info.dwVolumeSerialNumber as u64,
+            (info.nFileIndexHigh as u64) << 32 | info.nFileIndexLow as u64,
+        ))
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let metadata = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+        Ok((metadata.dev(), metadata.ino()))
+    }
+}
+
+#[cfg(unix)]
+fn rename_no_replace(source: &Path, target: &Path) -> Result<(), String> {
+    use std::os::unix::ffi::OsStrExt;
+    let source =
+        std::ffi::CString::new(source.as_os_str().as_bytes()).map_err(|e| e.to_string())?;
+    let target =
+        std::ffi::CString::new(target.as_os_str().as_bytes()).map_err(|e| e.to_string())?;
+    #[cfg(target_os = "linux")]
+    let result = unsafe {
+        libc::renameat2(
+            libc::AT_FDCWD,
+            source.as_ptr(),
+            libc::AT_FDCWD,
+            target.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+    #[cfg(target_os = "macos")]
+    let result = unsafe { libc::renamex_np(source.as_ptr(), target.as_ptr(), libc::RENAME_EXCL) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error().to_string())
+    }
+}
+
+fn autoheal_allowed(
+    conflict: &StorageConflict,
+    path: &Path,
+    snapshot: Option<&LinkSnapshot>,
+) -> bool {
+    if snapshot.is_some_and(|s| s.invalid) {
+        return false;
+    }
+    conflict.identical
+        || (conflict.entry.eq_ignore_ascii_case("hooks.json")
+            && conflict.mono_bytes <= 64 * 1024
+            && std::fs::read(path)
+                .ok()
+                .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+                .is_some_and(|v| v == serde_json::json!({"hooks":{}})))
+        || snapshot.is_some_and(|s| s.fingerprint == conflict.mono_fingerprint)
+}
+
+fn backup_and_relink(
+    source: &Path,
+    home: &Path,
+    name: &str,
+    expected: Option<&StorageConflict>,
+    snapshot: Option<&LinkSnapshot>,
+    resolution: StorageResolution,
+) -> Result<(), String> {
     let target = home.join(name);
     let temp = home.join(format!(".monocode-link-{}", uuid::Uuid::new_v4()));
     create_link(&source.join(name), &temp)?;
     let result = (|| {
-        let root = private_directory(home, ".monocode-conflicts")?;
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_err(|e| e.to_string())?
-            .as_millis();
-        let backup = root.join(format!("{timestamp}-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir(&backup).map_err(|e| e.to_string())?;
-        let saved = backup.join(name);
-        // Move the original bytes before publishing a new link; retain them on every failure.
-        std::fs::rename(&target, &saved).map_err(|e| e.to_string())?;
-        publish_recovery_link(&source.join(name), &target, &saved)
+        #[cfg(test)]
+        before_claim();
+        let mut claimed = ClaimedEntry::new(&target)?;
+        let result = (|| {
+            // The held Windows handle excludes writes and replacements until publication or restoration.
+            if !claimed.real_file()?
+                || replaceable_link(&claimed.path)?
+                || same_entry(&source.join(name), &claimed.path)
+            {
+                return Err(
+                    "Codex storage entry changed or is already linked. Retry repair.".into(),
+                );
+            }
+            let actual = file_conflict_at(source, home, name, &claimed.path)?;
+            if let Some(expected) = expected {
+                if actual != *expected {
+                    return Err(storage_error(
+                        serde_json::to_string(&actual).map_err(|e| e.to_string())?,
+                    ));
+                }
+            } else if !autoheal_allowed(&actual, &claimed.path, snapshot) {
+                return Err(serde_json::to_string(&actual).map_err(|e| e.to_string())?);
+            }
+            if matches!(resolution, StorageResolution::KeepMonoVersion) {
+                claimed.restore()?;
+                return write_snapshot(
+                    home,
+                    name,
+                    &LinkSnapshot {
+                        fingerprint: actual.mono_fingerprint,
+                        private_override: true,
+                        invalid: false,
+                    },
+                );
+            }
+            let root = private_directory(home, ".monocode-conflicts")?;
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|e| e.to_string())?
+                .as_millis();
+            let backup = root.join(format!("{timestamp}-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir(&backup).map_err(|e| e.to_string())?;
+            let saved = backup.join(name);
+            // Copy into a new inode: an archive must not share bytes with a symlink or an open writer.
+            let mut preserved = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&saved)
+                .map_err(|e| e.to_string())?;
+            let mut original = std::fs::File::open(&claimed.path).map_err(|e| e.to_string())?;
+            std::io::copy(&mut original, &mut preserved).map_err(|e| e.to_string())?;
+            preserved.sync_all().map_err(|e| e.to_string())?;
+            drop(preserved);
+            // shortcut: Unix open writers can still change claimed bytes; add writer exclusion before guaranteeing concurrent Unix recovery.
+            if fingerprint(&saved)? != actual.mono_fingerprint
+                || fingerprint(&claimed.path)? != actual.mono_fingerprint
+            {
+                return Err(
+                    "Codex storage bytes changed during archive creation. Retry repair.".into(),
+                );
+            }
+            publish_recovery_link(&source.join(name), &target, &saved)?;
+            claimed.discard()
+        })();
+        claimed.finish(result)
     })();
     if std::fs::symlink_metadata(&temp).is_ok() {
         let _ = remove_link(&temp);
@@ -530,44 +857,30 @@ fn resolve_files(
 ) -> Result<(), String> {
     let _lock = STORAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let (source, home) = storage_roots(source, home)?;
-    validate_entry(&conflict.entry)?;
-    check_conflict(&source, &home, conflict)?;
-    snapshot_path(&home, &conflict.entry)?;
-    // Linked files already share writes; a stale UI must never make a shared login private.
-    if replaceable_link(&home.join(&conflict.entry))? {
-        return Err("Codex storage entry is already linked. Retry repair.".into());
+    let name = shared_entry_name(&home, &conflict.entry)?;
+    snapshot_path(&home, &name)?;
+    if matches!(resolution, StorageResolution::KeepMonoVersion) && login_entry(&name) {
+        return Err("Login files must remain shared with the selected account".into());
     }
-    match resolution {
-        StorageResolution::UseAccountVersion => {
-            backup_and_relink(&source, &home, &conflict.entry)?;
-            write_snapshot(
-                &home,
-                &conflict.entry,
-                &LinkSnapshot {
-                    fingerprint: fingerprint(&home.join(&conflict.entry))?,
-                    private_override: false,
-                },
-            )?;
-        }
-        StorageResolution::KeepMonoVersion => {
-            if login_entry(&conflict.entry) {
-                return Err("Login files must remain shared with the selected account".into());
-            }
-            write_snapshot(
-                &home,
-                &conflict.entry,
-                &LinkSnapshot {
-                    fingerprint: fingerprint(&home.join(&conflict.entry))?,
-                    private_override: true,
-                },
-            )?;
-        }
+    let use_account = matches!(resolution, StorageResolution::UseAccountVersion);
+    backup_and_relink(&source, &home, &name, Some(conflict), None, resolution)?;
+    if use_account {
+        write_snapshot(
+            &home,
+            &name,
+            &LinkSnapshot {
+                fingerprint: fingerprint(&home.join(&name))?,
+                private_override: false,
+                invalid: false,
+            },
+        )?;
     }
     Ok(())
 }
 
 fn compare_files(source: &Path, home: &Path, name: &str) -> Result<StorageComparison, String> {
-    if !matches!(name, "hooks.json" | "AGENTS.md") {
+    let name = shared_entry_name(home, name)?;
+    if !name.eq_ignore_ascii_case("hooks.json") && !name.eq_ignore_ascii_case("AGENTS.md") {
         return Ok(StorageComparison { unavailable: Some("Open these files locally to compare. Configuration and login files may contain secrets.".into()), ..StorageComparison::default() });
     }
     const LIMIT: u64 = 64 * 1024;
@@ -582,8 +895,8 @@ fn compare_files(source: &Path, home: &Path, name: &str) -> Result<StorageCompar
         bytes.truncate(LIMIT as usize);
         Ok((String::from_utf8_lossy(&bytes).into_owned(), truncated))
     };
-    let (mono, mono_truncated) = read(home.join(name))?;
-    let (account, source_truncated) = read(source.join(name))?;
+    let (mono, mono_truncated) = read(home.join(&name))?;
+    let (account, source_truncated) = read(source.join(&name))?;
     Ok(StorageComparison {
         mono_content: Some(mono),
         source_content: Some(account),
@@ -651,7 +964,10 @@ fn prepare_files(source: &Path, home: &Path) -> Result<(), String> {
             } else {
                 None
             };
-            if snapshot.as_ref().is_some_and(|s| s.private_override) {
+            if snapshot
+                .as_ref()
+                .is_some_and(|s| s.private_override && !s.invalid)
+            {
                 match std::fs::symlink_metadata(&target) {
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                     Ok(metadata)
@@ -676,19 +992,15 @@ fn prepare_files(source: &Path, home: &Path) -> Result<(), String> {
                 && !same_entry(&entry.path(), &target)
             {
                 let conflict = file_conflict(&source, &home, name)?;
-                let empty_hooks = normalized_name == "hooks.json"
-                    && conflict.mono_bytes <= 64 * 1024
-                    && std::fs::read(&target)
-                        .ok()
-                        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
-                        .is_some_and(|v| v == serde_json::json!({"hooks":{}}));
-                if conflict.identical
-                    || empty_hooks
-                    || snapshot
-                        .as_ref()
-                        .is_some_and(|s| s.fingerprint == conflict.mono_fingerprint)
-                {
-                    backup_and_relink(&source, &home, name)?;
+                if autoheal_allowed(&conflict, &target, snapshot.as_ref()) {
+                    backup_and_relink(
+                        &source,
+                        &home,
+                        name,
+                        None,
+                        snapshot.as_ref(),
+                        StorageResolution::UseAccountVersion,
+                    )?;
                 } else if normalized_name != "config.toml" && normalized_name != "config.toml.bak" {
                     return Err(serde_json::to_string(&conflict).map_err(|e| e.to_string())?);
                 } else if snapshot.is_some() {
@@ -714,6 +1026,7 @@ fn prepare_files(source: &Path, home: &Path) -> Result<(), String> {
                     &LinkSnapshot {
                         fingerprint: fingerprint(&target)?,
                         private_override: false,
+                        invalid: false,
                     },
                 )?;
             }
@@ -772,11 +1085,33 @@ fn link_entry(source: &Path, target: &Path) -> Result<(), String> {
         ));
     }
     if existing.is_some() {
+        let inspected = entry_identity(target)?;
         let temp = target.with_file_name(format!(".monocode-link-{}", uuid::Uuid::new_v4()));
         create_link(source, &temp)?;
-        // Publish only a complete link; failed replacement leaves the old link intact.
-        if let Err(error) = replace_link(&temp, target) {
-            remove_link(&temp)?;
+        let result = (|| {
+            #[cfg(test)]
+            before_claim();
+            let mut claimed = ClaimedEntry::new(target)?;
+            let result = (|| {
+                if entry_identity(&claimed.path)? != inspected || !replaceable_link(&claimed.path)?
+                {
+                    return Err(format!(
+                        "Codex storage entry changed; concurrent entry preserved: {}",
+                        target.display()
+                    ));
+                }
+                #[cfg(windows)]
+                rename_handle(&open_entry(&temp, true)?, target, false)?;
+                #[cfg(unix)]
+                rename_no_replace(&temp, target)?;
+                claimed.discard()
+            })();
+            claimed.finish(result)
+        })();
+        if let Err(error) = result {
+            if std::fs::symlink_metadata(&temp).is_ok() {
+                let _ = remove_link(&temp);
+            }
             return Err(format!(
                 "Could not relink Codex storage {}: {error}",
                 target.display()
@@ -821,15 +1156,24 @@ fn same_entry(source: &Path, target: &Path) -> bool {
 fn file_info(
     path: &Path,
 ) -> Result<windows_sys::Win32::Storage::FileSystem::BY_HANDLE_FILE_INFORMATION, String> {
-    use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
-    use windows_sys::Win32::Storage::FileSystem::{
-        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS,
-    };
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
     let file = std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
         .open(path)
         .map_err(|e| e.to_string())?;
+    handle_file_info(&file)
+}
+
+#[cfg(windows)]
+fn handle_file_info(
+    file: &std::fs::File,
+) -> Result<windows_sys::Win32::Storage::FileSystem::BY_HANDLE_FILE_INFORMATION, String> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+    };
     let mut info = BY_HANDLE_FILE_INFORMATION::default();
     if unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, &mut info) } == 0 {
         return Err(std::io::Error::last_os_error().to_string());
@@ -880,10 +1224,9 @@ fn replace_link(temp: &Path, target: &Path) -> Result<(), String> {
 
 #[cfg(windows)]
 fn replace_link(temp: &Path, target: &Path) -> Result<(), String> {
-    use std::os::windows::{ffi::OsStrExt, fs::OpenOptionsExt, io::AsRawHandle};
+    use std::os::windows::{ffi::OsStrExt, fs::OpenOptionsExt};
     use windows_sys::Win32::Storage::FileSystem::{
-        FileRenameInfoEx, MoveFileExW, SetFileInformationByHandle, DELETE,
-        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_RENAME_INFO,
+        MoveFileExW, DELETE, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
         FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, MOVEFILE_REPLACE_EXISTING,
     };
     if std::fs::symlink_metadata(temp)
@@ -912,6 +1255,15 @@ fn replace_link(temp: &Path, target: &Path) -> Result<(), String> {
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
         .open(temp)
         .map_err(|e| e.to_string())?;
+    rename_handle(&file, target, true)
+}
+
+#[cfg(windows)]
+fn rename_handle(file: &std::fs::File, target: &Path, replace: bool) -> Result<(), String> {
+    use std::os::windows::{ffi::OsStrExt, io::AsRawHandle};
+    use windows_sys::Win32::Storage::FileSystem::{
+        FileRenameInfoEx, SetFileInformationByHandle, FILE_RENAME_INFO,
+    };
     let absolute = target
         .parent()
         .ok_or("Missing link parent")?
@@ -931,7 +1283,7 @@ fn replace_link(temp: &Path, target: &Path) -> Result<(), String> {
     let mut buffer = vec![0usize; bytes.div_ceil(std::mem::size_of::<usize>())];
     let info = buffer.as_mut_ptr().cast::<FILE_RENAME_INFO>();
     unsafe {
-        (*info).Anonymous.Flags = 3; // REPLACE_IF_EXISTS | POSIX_SEMANTICS
+        (*info).Anonymous.Flags = if replace { 3 } else { 2 }; // REPLACE_IF_EXISTS | POSIX_SEMANTICS
         (*info).FileNameLength = (name.len() * 2) as u32;
         std::ptr::copy_nonoverlapping(
             name.as_ptr(),
@@ -1769,6 +2121,296 @@ mod tests {
             comparison.source_content.unwrap(),
             "<script>plain text</script>"
         );
+    }
+
+    fn synchronized_claim_writer(writer: impl FnOnce() + Send + 'static) {
+        BEFORE_CLAIM.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move || {
+                std::thread::spawn(writer).join().unwrap();
+            }));
+        });
+    }
+
+    #[cfg(windows)]
+    fn short_name(path: &Path) -> String {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::GetShortPathNameW;
+        let input: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+        let mut output = vec![0u16; 32768];
+        let len =
+            unsafe { GetShortPathNameW(input.as_ptr(), output.as_mut_ptr(), output.len() as u32) };
+        assert!(len > 0 && (len as usize) < output.len());
+        let short = String::from_utf16(&output[..len as usize]).unwrap();
+        Path::new(&short)
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .into()
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn storage_review_short_aliases_cannot_keep_credentials_private() {
+        for name in ["auth.json", ".credentials.json"] {
+            let (fixture, _) =
+                conflict_fixture(name, b"private credentials", b"account credentials");
+            let alias = short_name(&fixture.home().join(name));
+            assert_ne!(
+                alias.to_ascii_lowercase(),
+                name,
+                "NTFS fixture needs an actual 8.3 alias"
+            );
+            let conflict = file_conflict(&fixture.source(), &fixture.home(), &alias).unwrap();
+            assert!(!conflict.can_keep_mono, "{name} -> {alias}");
+            assert!(shared_entry_name(&fixture.home(), &alias)
+                .unwrap()
+                .eq_ignore_ascii_case(name));
+            assert!(resolve_files(
+                &fixture.source(),
+                &fixture.home(),
+                &conflict,
+                StorageResolution::KeepMonoVersion
+            )
+            .is_err());
+            let comparison = compare_files(&fixture.source(), &fixture.home(), &alias).unwrap();
+            assert!(comparison.mono_content.is_none());
+            assert!(comparison.source_content.is_none());
+            assert_eq!(
+                std::fs::read(fixture.home().join(name)).unwrap(),
+                b"private credentials"
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn storage_review_short_aliases_cannot_resolve_or_compare_private_sqlite() {
+        let fixture = Fixture::new();
+        std::fs::create_dir_all(fixture.source()).unwrap();
+        std::fs::create_dir_all(fixture.home()).unwrap();
+        let name = "state_5.sqlite";
+        std::fs::write(fixture.source().join(name), b"account state").unwrap();
+        std::fs::write(fixture.home().join(name), b"private state").unwrap();
+        let alias = short_name(&fixture.home().join(name));
+        assert_ne!(
+            alias.to_ascii_lowercase(),
+            name,
+            "NTFS fixture needs an actual 8.3 alias"
+        );
+        assert!(file_conflict(&fixture.source(), &fixture.home(), &alias).is_err());
+        assert!(compare_files(&fixture.source(), &fixture.home(), &alias).is_err());
+        assert!(shared_entry_name(&fixture.home(), &alias).is_err());
+        std::fs::write(fixture.source().join("hooks.json"), b"account hooks").unwrap();
+        std::fs::write(fixture.home().join("hooks.json"), b"private hooks").unwrap();
+        let mut forged = file_conflict(&fixture.source(), &fixture.home(), "hooks.json").unwrap();
+        forged.entry = alias;
+        assert!(resolve_files(
+            &fixture.source(),
+            &fixture.home(),
+            &forged,
+            StorageResolution::UseAccountVersion
+        )
+        .is_err());
+        assert_eq!(
+            std::fs::read(fixture.home().join(name)).unwrap(),
+            b"private state"
+        );
+        assert!(!fixture.home().join(".monocode-conflicts").exists());
+    }
+
+    #[test]
+    fn storage_review_ordinary_relink_preserves_concurrent_real_file() {
+        let fixture = Fixture::new();
+        std::fs::create_dir_all(fixture.source()).unwrap();
+        std::fs::create_dir_all(fixture.home()).unwrap();
+        let old = fixture.0.join("old-account-hooks");
+        let account = fixture.source().join("hooks.json");
+        let target = fixture.home().join("hooks.json");
+        std::fs::write(&old, b"old shared bytes").unwrap();
+        std::fs::write(&account, b"current account bytes").unwrap();
+        create_link(&old, &target).unwrap();
+        let concurrent_target = target.clone();
+        synchronized_claim_writer(move || {
+            std::fs::remove_file(&concurrent_target).unwrap();
+            std::fs::write(concurrent_target, b"unique concurrent Mono bytes").unwrap();
+        });
+        assert!(link_entry(&account, &target).is_err());
+        assert_eq!(
+            std::fs::read(&target).unwrap(),
+            b"unique concurrent Mono bytes"
+        );
+        assert!(!std::fs::symlink_metadata(&target)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(std::fs::read(account).unwrap(), b"current account bytes");
+    }
+
+    #[test]
+    fn storage_review_autoheal_rechecks_claimed_bytes_after_concurrent_write() {
+        let (fixture, _) = conflict_fixture("hooks.json", br#"{"hooks":{}}"#, b"account hooks");
+        let target = fixture.home().join("hooks.json");
+        let racing_target = target.clone();
+        synchronized_claim_writer(move || {
+            std::fs::write(racing_target, b"new distinct private hooks").unwrap();
+        });
+        let error = prepare_files(&fixture.source(), &fixture.home()).unwrap_err();
+        let fresh: StorageConflict = serde_json::from_str(&error).unwrap();
+        assert_eq!(fresh.mono_bytes, b"new distinct private hooks".len() as u64);
+        assert_eq!(
+            std::fs::read(target).unwrap(),
+            b"new distinct private hooks"
+        );
+        assert!(!fixture.home().join(".monocode-conflicts").exists());
+    }
+
+    #[test]
+    fn storage_review_explicit_resolution_rejects_racing_symlink_without_archiving_it() {
+        for resolution in [
+            StorageResolution::UseAccountVersion,
+            StorageResolution::KeepMonoVersion,
+        ] {
+            let (fixture, conflict) =
+                conflict_fixture("hooks.json", b"reviewed private bytes", b"account bytes");
+            let target = fixture.home().join("hooks.json");
+            let outside = fixture.0.join("external-hooks");
+            std::fs::write(&outside, b"concurrent external bytes").unwrap();
+            let racing_target = target.clone();
+            let racing_outside = outside.clone();
+            synchronized_claim_writer(move || {
+                std::fs::remove_file(&racing_target).unwrap();
+                #[cfg(unix)]
+                std::os::unix::fs::symlink(racing_outside, racing_target).unwrap();
+                #[cfg(windows)]
+                std::os::windows::fs::symlink_file(racing_outside, racing_target).unwrap();
+            });
+            assert!(
+                resolve_files(&fixture.source(), &fixture.home(), &conflict, resolution).is_err()
+            );
+            assert!(std::fs::symlink_metadata(&target)
+                .unwrap()
+                .file_type()
+                .is_symlink());
+            std::fs::write(&outside, b"later external bytes").unwrap();
+            assert_eq!(std::fs::read(target).unwrap(), b"later external bytes");
+            assert!(!fixture.home().join(".monocode-conflicts").exists());
+        }
+    }
+
+    #[test]
+    fn storage_review_corrupt_snapshot_preserves_metadata_and_requires_explicit_choice() {
+        for mono in [
+            b"private hooks".as_slice(),
+            br#"{"hooks":{}}"#,
+            b"account hooks",
+        ] {
+            let (fixture, _) = conflict_fixture("hooks.json", mono, b"account hooks");
+            let metadata = snapshot_path(&fixture.home(), "hooks.json").unwrap();
+            std::fs::write(&metadata, b"{broken").unwrap();
+            let mut conflict = None;
+            for _ in 0..2 {
+                let error = prepare_files(&fixture.source(), &fixture.home()).unwrap_err();
+                conflict = Some(serde_json::from_str::<StorageConflict>(&error).unwrap());
+                assert_eq!(
+                    std::fs::read(fixture.home().join("hooks.json")).unwrap(),
+                    mono
+                );
+                assert!(!fixture.home().join(".monocode-conflicts").exists());
+            }
+            let preserved: Vec<_> = std::fs::read_dir(metadata.parent().unwrap())
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .filter(|path| {
+                    path.file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .contains(".corrupt-")
+                })
+                .collect();
+            assert_eq!(preserved.len(), 1);
+            assert_eq!(std::fs::read(&preserved[0]).unwrap(), b"{broken");
+            assert!(!std::fs::symlink_metadata(&preserved[0])
+                .unwrap()
+                .file_type()
+                .is_symlink());
+            resolve_files(
+                &fixture.source(),
+                &fixture.home(),
+                &conflict.unwrap(),
+                StorageResolution::KeepMonoVersion,
+            )
+            .unwrap();
+            prepare_files(&fixture.source(), &fixture.home()).unwrap();
+            assert_eq!(
+                std::fs::read(fixture.home().join("hooks.json")).unwrap(),
+                mono
+            );
+            assert_eq!(std::fs::read(&preserved[0]).unwrap(), b"{broken");
+        }
+    }
+
+    #[test]
+    fn storage_review_archive_is_a_new_real_file_with_independent_identity() {
+        let (fixture, conflict) =
+            conflict_fixture("hooks.json", b"private native bytes", b"account hooks");
+        let original_id = entry_identity(&fixture.home().join("hooks.json")).unwrap();
+        resolve_files(
+            &fixture.source(),
+            &fixture.home(),
+            &conflict,
+            StorageResolution::UseAccountVersion,
+        )
+        .unwrap();
+        let backup = std::fs::read_dir(fixture.home().join(".monocode-conflicts"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path()
+            .join("hooks.json");
+        let metadata = std::fs::symlink_metadata(&backup).unwrap();
+        assert!(metadata.is_file() && !metadata.file_type().is_symlink());
+        assert_ne!(entry_identity(&backup).unwrap(), original_id);
+        #[cfg(windows)]
+        assert_eq!(file_info(&backup).unwrap().nNumberOfLinks, 1);
+        std::fs::write(fixture.source().join("hooks.json"), b"later account hooks").unwrap();
+        assert_eq!(std::fs::read(&backup).unwrap(), b"private native bytes");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn storage_review_existing_writer_handle_blocks_autoheal_and_both_explicit_choices() {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        };
+        for resolution in [
+            None,
+            Some(StorageResolution::UseAccountVersion),
+            Some(StorageResolution::KeepMonoVersion),
+        ] {
+            let (fixture, conflict) =
+                conflict_fixture("hooks.json", br#"{"hooks":{}}"#, b"account hooks");
+            let mut writer = std::fs::OpenOptions::new()
+                .write(true)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+                .open(fixture.home().join("hooks.json"))
+                .unwrap();
+            let result = match resolution {
+                None => prepare_files(&fixture.source(), &fixture.home()),
+                Some(resolution) => {
+                    resolve_files(&fixture.source(), &fixture.home(), &conflict, resolution)
+                }
+            };
+            assert!(result.is_err());
+            writer.write_all(b"still writable").unwrap();
+            assert_eq!(
+                std::fs::read(fixture.home().join("hooks.json")).unwrap(),
+                b"still writable"
+            );
+            assert!(!fixture.home().join(".monocode-conflicts").exists());
+        }
     }
 
     #[test]

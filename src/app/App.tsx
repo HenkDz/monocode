@@ -9974,8 +9974,10 @@ function Workspace({
           await invoke("codex_mono_store_resolve", { providerAccountId: accountId, conflict, resolution });
         }
         await prepareMonoCodexStore(accountId, session.providerSessionId);
+      }, resumingId => {
+        if (!affectedIds.includes(resumingId)) affectedIds.push(resumingId);
         // Keep the dispatcher held until the saved submissions have resumed.
-        flushSync(() => setSessions(previous => previous.map(entry => affectedIds.includes(entry.id)
+        flushSync(() => setSessions(previous => previous.map(entry => entry.id === resumingId
           ? { ...entry, codexStorageError: undefined, codexStoragePreparing: true } : entry)));
       });
       const failure = sessionsRef.current.find(entry => affectedIds.includes(entry.id) && entry.codexStorageError)?.codexStorageError;

@@ -96,7 +96,7 @@ export class MonoCodexStorageRecovery {
     if (!this.pending.has(sessionId)) this.pending.set(sessionId, retry);
   }
 
-  repairAccount(accountId: string, sessionIds: string[], relink: () => Promise<unknown>): Promise<void> {
+  repairAccount(accountId: string, sessionIds: string[], relink: () => Promise<unknown>, beforeResume?: (sessionId: string) => void): Promise<void> {
     const active = this.accountRepairs.get(accountId);
     if (active) {
       for (const sessionId of sessionIds) active.sessionIds.add(sessionId);
@@ -107,7 +107,7 @@ export class MonoCodexStorageRecovery {
       await relink();
       const failures: unknown[] = [];
       for (const sessionId of affected) {
-        try { await this.repair(sessionId, async () => {}); }
+        try { await this.repair(sessionId, async () => beforeResume?.(sessionId)); }
         catch (error) { failures.push(error); }
       }
       if (failures.length) throw failures[0];

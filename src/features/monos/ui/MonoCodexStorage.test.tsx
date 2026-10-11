@@ -132,6 +132,61 @@ it("offers preparation refresh when a stale conflict is already linked", async (
   expect(container.textContent).toContain("Codex storage repaired");
 });
 
+it.each(["use_account_version", "keep_mono_version"] as const)("unlocks a fresh conflict after corrupt metadata and keeps actions usable until %s", async resolution => {
+  const repair = vi.fn(async () => { throw new Error(conflictDetail()); });
+  const resolve = vi.fn(async () => {});
+  const compare = vi.fn(async () => ({ sourceContent: "account hooks", monoContent: "private hooks" }));
+  const reveal = vi.fn(async () => {});
+  await act(async () => root.render(
+    <MonoCodexStorageNotice detail="Invalid Codex link metadata C:/synthetic/mono/.monocode-links/hooks.json.json"
+      onRepair={repair} onResolve={resolve} onCompare={compare} onReveal={reveal} />,
+  ));
+  expect(buttonNamed("Compare")).toBeUndefined();
+  await act(async () => buttonNamed("Repair").click());
+  expect(repair).toHaveBeenCalledOnce();
+  for (const name of ["Use ~/.codex version", "Keep MonoCode version", "Compare", "Show in folder"])
+    expect(buttonNamed(name).disabled).toBe(false);
+  await act(async () => buttonNamed("Compare").click());
+  expect(compare).toHaveBeenCalledOnce();
+  expect(container.querySelector('[aria-label="Account version"] pre')?.textContent).toBe("account hooks");
+  expect(container.querySelector('[aria-label="MonoCode version"] pre')?.textContent).toBe("private hooks");
+  await act(async () => buttonNamed("Show in folder").click());
+  expect(reveal).toHaveBeenCalledOnce();
+  await act(async () => buttonNamed(resolution === "use_account_version" ? "Use ~/.codex version" : "Keep MonoCode version").click());
+  expect(resolve).toHaveBeenCalledExactlyOnceWith(resolution);
+  expect(container.textContent).toContain("Codex storage repaired");
+});
+
+it("updates stale conflicts from native errors and clears choices when the parent issue changes or resolves", async () => {
+  const changed = { ...hooksConflict, entry: "config.toml", sourcePath: "C:/synthetic/.codex/config.toml", monoPath: "C:/synthetic/mono/config.toml" };
+  let detail: string | undefined = conflictDetail();
+  const resolve = vi.fn(async () => { detail = undefined; renderNotice(); })
+    .mockRejectedValueOnce(new Error(conflictDetail(changed)));
+  const compare = vi.fn(async () => ({ sourceContent: "account config", monoContent: "private config" }));
+  function renderNotice() {
+    root.render(<MonoCodexStorageNotice detail={detail} onRepair={vi.fn()} onResolve={resolve} onCompare={compare} />);
+  }
+  await act(async () => renderNotice());
+  await act(async () => buttonNamed("Use ~/.codex version").click());
+  expect(container.textContent).toContain("Codex config file got out of sync");
+  expect(buttonNamed("Use ~/.codex version").title).toBe(changed.sourcePath);
+  await act(async () => buttonNamed("Compare").click());
+  expect(container.querySelector('[aria-label="Account version"] pre')?.textContent).toBe("account config");
+  detail = conflictDetail({ ...hooksConflict, entry: "AGENTS.md" });
+  await act(async () => renderNotice());
+  expect(container.textContent).toContain("Codex instructions file got out of sync");
+  expect(container.querySelector('[aria-label="Account version"]')).toBeNull();
+  await act(async () => buttonNamed("Use ~/.codex version").click());
+  expect(container.textContent).toContain("Codex storage repaired");
+  await act(async () => buttonNamed("Dismiss").click());
+  expect(container.textContent).toBe("");
+  detail = "Codex storage needs repair: another issue";
+  await act(async () => renderNotice());
+  expect(buttonNamed("Repair").disabled).toBe(false);
+  expect(buttonNamed("Use ~/.codex version")).toBeUndefined();
+  expect(buttonNamed("Keep MonoCode version")).toBeUndefined();
+});
+
 it("shows one system notice with Repair, prevents concurrent clicks, and reports failed repair", async () => {
   let reject!: (error: Error) => void;
   const onRepair = vi.fn(

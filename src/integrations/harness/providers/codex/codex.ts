@@ -521,7 +521,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   const existing = liveByThread.get(input.sessionId);
   const controlsAgents = input.controlsAgents === true;
   const readOnly = input.readOnly === true || existing?.readOnly === true || resumeByThread.get(input.sessionId)?.readOnly === true;
-  const sandboxRequired = readOnly || input.runtimeMode !== "full-access";
+  const sandboxRequired = readOnly || input.intent === "plan" || input.runtimeMode !== "full-access";
   const ephemeral =
     input.ephemeral ??
     existing?.ephemeral ??

@@ -436,7 +436,7 @@ describe("codex live turn sequence", () => {
     await second.turn;
   });
 
-  it.each(["supervised", "auto", "auto-accept-edits"] as const)("checks provisioning before a full-access Mono switches to %s", async runtimeMode => {
+  it.each(["supervised", "auto", "auto-accept-edits", "plan"] as const)("checks provisioning before a full-access Mono switches to %s", async mode => {
     const first = await startTurn("codex-live", { codexStore: "mono", runtimeMode: "full-access" });
     expect(prepareCodexMonoContext).toHaveBeenLastCalledWith(expect.objectContaining({ sandboxRequired: false }));
     notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
@@ -444,12 +444,23 @@ describe("codex live turn sequence", () => {
     sent.length = 0;
     prepareCodexMonoContext.mockRejectedValueOnce(new Error("Mono Windows sandbox is not provisioned"));
     await expect(sendCodexTurn({
-      sessionId: "codex-live", codexStore: "mono", cwd: "/repo", model: "codex:gpt-5.4", runtimeMode,
+      sessionId: "codex-live", codexStore: "mono", cwd: "/repo", model: "codex:gpt-5.4", runtimeMode: mode === "plan" ? "full-access" : mode,
+      ...(mode === "plan" ? { intent: "plan" as const } : {}),
       text: "Continue", onEvent() {},
     })).rejects.toThrow("not provisioned");
     expect(prepareCodexMonoContext).toHaveBeenLastCalledWith(expect.objectContaining({ sandboxRequired: true, threadId: "thr_1" }));
     expect(spawnChild).toHaveBeenCalledTimes(1);
     expect(parse().some(message => message.method === "thread/start" || message.method === "turn/start")).toBe(false);
+  });
+
+  it("checks sandbox provisioning before the first full-access Plan turn", async () => {
+    prepareCodexMonoContext.mockRejectedValueOnce(new Error("Mono Windows sandbox is not provisioned"));
+    await expect(sendCodexTurn({
+      sessionId: "codex-live", codexStore: "mono", cwd: "/repo", model: "codex:gpt-5.4", runtimeMode: "full-access", intent: "plan",
+      text: "Plan", onEvent() {},
+    })).rejects.toThrow("not provisioned");
+    expect(prepareCodexMonoContext).toHaveBeenLastCalledWith(expect.objectContaining({ sandboxRequired: true }));
+    expect(spawnChild).not.toHaveBeenCalled();
   });
 
   it("lets an active Mono turn finish before checking a queued sandbox-mode change", async () => {

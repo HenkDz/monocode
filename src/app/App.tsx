@@ -8640,7 +8640,7 @@ function Workspace({
         };
 
         const pendingEditedEvents: HarnessEvent[] = [];
-        const bindContextProfile = bindTurnContextProfile(current);
+        const bindContextProfile = bindTurnContextProfile({ ...current, providerAccountId });
         const applyTurnEvent = (event: HarnessEvent) => {
           orchestrator.observe(sessionId, event);
           if (options?.onSettled && event.type === "message.delta")
@@ -11155,7 +11155,10 @@ function Workspace({
       const gen = (turnGen.current.get(sessionId) ?? 0) + 1;
       turnGen.current.set(sessionId, gen);
       const workCwd = sessionWorkCwd(current);
-      const bindContextProfile = bindTurnContextProfile(current);
+      const providerAccountId = supportsProviderAccounts(current.harness)
+        ? (current.providerAccountId ?? selectedProviderAccountId(current.harness, current.cwd))
+        : undefined;
+      const bindContextProfile = bindTurnContextProfile({ ...current, providerAccountId });
       const started = sessionsRef.current.map((session) =>
         session.id === sessionId
           ? applyHarnessEvent(
@@ -11176,10 +11179,7 @@ function Workspace({
             cwd: workCwd,
             model: current.model,
             modelSettings: current.modelSettings,
-            providerAccountId: supportsProviderAccounts(current.harness)
-              ? (current.providerAccountId ??
-                selectedProviderAccountId(current.harness, current.cwd))
-              : undefined,
+            providerAccountId,
             runtimeMode: current.runtimeMode,
             readOnly: current.readOnly === true,
             ephemeral: current.ephemeral === true,

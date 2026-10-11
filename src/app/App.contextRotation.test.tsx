@@ -2,11 +2,12 @@
 import { readFileSync } from "node:fs";
 import ts from "typescript";
 import { beforeEach, expect, it, vi } from "vitest";
-import { applyHarnessEvents } from "../integrations/harness/core/apply";
+import { applyHarnessEvent, applyHarnessEvents } from "../integrations/harness/core/apply";
 import { bindTurnContextProfile } from "../integrations/harness/core/contextProfile";
 import type { HarnessEvent } from "../integrations/harness/core/types";
 import { HarnessEventQueue } from "./model/harnessFlush";
 import { dropContextWindow } from "../features/sessions/model/contextUsage";
+import { supportsProviderAccounts } from "../features/providers/model/providerAccounts";
 import {
   formatSessionTitle,
   HARNESS_LABEL,
@@ -234,9 +235,10 @@ it("retains known limits when the settings callback receives an unchanged profil
   expect(unchanged.rendered.context).toBe(previous.context);
 });
 
-function routeTurnEvents(previous: Session, enqueueHarnessEvent: (id: string, event: HarnessEvent) => void) {
+function routeTurnEvents(previous: Session, enqueueHarnessEvent: (id: string, event: HarnessEvent) => void, providerAccountId = previous.providerAccountId) {
   const scope = {
     current: previous,
+    providerAccountId,
     bindTurnContextProfile,
     sessionId: previous.id,
     orchestrator: { observe: vi.fn(), forSession: () => true },
@@ -252,6 +254,57 @@ function routeTurnEvents(previous: Session, enqueueHarnessEvent: (id: string, ev
     { target: ts.ScriptTarget.ES2022 },
   ))(...Object.values(scope)) as (event: HarnessEvent) => void;
 }
+
+it("tags main-turn bindings with the resolved submission account", () => {
+  const previous = { ...resident(), providerAccountId: undefined };
+  const events: HarnessEvent[] = [];
+  routeTurnEvents(previous, (_id, event) => events.push(event), "selected-account")({ type: "session.providerBound", providerSessionId: "selected-native" });
+  expect(applyHarnessEvents({ ...previous, providerAccountId: "selected-account" }, events).providerSessionId).toBe("selected-native");
+  expect(applyHarnessEvents(previous, events).providerSessionId).toBe(previous.providerSessionId);
+});
+
+it.each(["same account", "old harness", "old account", "selected account differs from legacy"])(
+  "actual compaction finally flush preserves binding provenance with %s", async choice => {
+    const previous = { ...resident(), providerAccountId: choice === "selected account differs from legacy" ? undefined : "work" };
+    const sessionsRef: { current: Session[] } = { current: [previous] };
+    const queue = new HarnessEventQueue(() => false, batches => {
+      sessionsRef.current = sessionsRef.current.map(session => applyHarnessEvents(session, batches.get(session.id) ?? []));
+    });
+    let finish!: () => void;
+    const saving = new Promise<void>(resolve => { finish = resolve; });
+    const compactHarnessContext = vi.fn(async (input: { providerAccountId?: string; onEvent: (event: HarnessEvent) => void }) => {
+      input.onEvent({ type: "session.providerBound", providerSessionId: "compact-native" });
+      await saving;
+    });
+    const scope = {
+      sessionsRef, remoteProjectFor: () => undefined, canCompactHarnessContext: () => true,
+      turnGen: { current: new Map<string, number>() }, sessionWorkCwd: () => previous.cwd,
+      supportsProviderAccounts, selectedProviderAccountId: () => "work", bindTurnContextProfile,
+      applyHarnessEvent, syncDockBadge: vi.fn(), setSessions: vi.fn(), compactHarnessContext,
+      monoSkillsForSession: () => ({}), isMonoSession: () => true,
+      enqueueHarnessEvent: queue.enqueue, flushHarnessEvents: queue.flush,
+    };
+    const declaration = findNode(node => ts.isVariableDeclaration(node) && node.name.getText(source) === "onCompactContext") as ts.VariableDeclaration;
+    const compact = new Function(...Object.keys(scope), ts.transpile(
+      `return ${(declaration.initializer as ts.CallExpression).arguments[0].getText(source)};`, { target: ts.ScriptTarget.ES2022 },
+    ))(...Object.values(scope)) as (id: string) => boolean;
+    expect(compact(previous.id)).toBe(true);
+    expect(compactHarnessContext.mock.calls[0][0].providerAccountId).toBe("work");
+    const current = sessionsRef.current[0];
+    sessionsRef.current = [choice === "old harness"
+      ? withHarnessChoice(current, "claude", "claude:sonnet", {})
+      : choice === "old account" ? { ...current, providerAccountId: "other", providerSessionId: undefined }
+      : { ...current, model: "next-model", modelSettings: { effort: "high" }, runtimeMode: "supervised" }];
+    const changed = sessionsRef.current[0];
+    finish();
+    try {
+      for (let step = 0; step < 10; step++) await Promise.resolve();
+      expect(sessionsRef.current[0]).toEqual({ ...changed, busy: false,
+        blocks: [...changed.blocks, expect.objectContaining({ role: "system", text: "Compacted context" })],
+        providerSessionId: choice === "same account" ? "compact-native" : changed.providerSessionId });
+    } finally { queue.cancelScheduled(); }
+  },
+);
 
 it.each(["model", "settings"])("rejects late %s limits while preserving active-turn output and occupancy", change => {
   const previous = { ...resident(), busy: true, blocks: resident().blocks.map(block => ({ ...block, startedAt: 1 })) };

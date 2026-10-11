@@ -12,18 +12,41 @@ const probes = vi.hoisted(() => ({
   transcript: vi.fn(),
   composer: vi.fn(),
   checkoutNotice: vi.fn(),
-  runs: [],
+  runs: [] as {
+    leadId: string;
+    tasks: {
+      id: string;
+      title: string;
+      sessionId: string;
+      memberId: string;
+      status: string;
+    }[];
+    dispatches: [];
+  }[],
 }));
-vi.mock("./Composer", () => ({ Composer: (props: { disabled?: boolean; onSubmit: (text: string, attachments: []) => void }) => {
-  probes.composer(props);
-  return createElement("button", { disabled: props.disabled, onClick: () => props.onSubmit("Continue my work", []) }, "Send user message");
-} }));
+vi.mock("./Composer", () => ({
+  Composer: (props: {
+    disabled?: boolean;
+    onSubmit: (text: string, attachments: []) => void;
+  }) => {
+    probes.composer(props);
+    return createElement(
+      "button",
+      {
+        disabled: props.disabled,
+        onClick: () => props.onSubmit("Continue my work", []),
+      },
+      "Send user message",
+    );
+  },
+}));
 vi.mock("../hooks/useFileDrop", () => ({ useFileDrop: () => false }));
 vi.mock("../model/attachments", async (original) => ({
   ...(await original<typeof import("../model/attachments")>()),
   pickAttachments: probes.pick,
 }));
 vi.mock("./AgentTranscript", () => ({
+  MonoActivityTrail: () => createElement("p", null, "Activity steps"),
   AgentTranscript: (props: { onAddToChat: (text: string) => void }) => {
     probes.transcript(props);
     return createElement(
@@ -64,6 +87,7 @@ let root: Root;
 beforeEach(() => {
   probes.mono = true;
   probes.member = false;
+  probes.runs = [];
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal(
     "ResizeObserver",
@@ -174,6 +198,14 @@ it("shows the member work log without a full-height greeting hiding it below the
     container.querySelector("header")?.classList.contains("min-h-full"),
   ).toBe(false);
   expect(field()).not.toBeNull();
+  expect(
+    container.querySelector("[data-member-work]")!.classList.contains("flex-1"),
+  ).toBe(true);
+  expect(
+    container
+      .querySelector('[role="tabpanel"]')!
+      .classList.contains("shrink-0"),
+  ).toBe(true);
 });
 
 it("updates the member header from live session and roster state", () => {
@@ -209,14 +241,228 @@ it("keeps member tasks outside the transcript for empty and ongoing conversation
   const input = field();
   const log = container.querySelector('[aria-label="Member work log"]')!;
   expect(log).not.toBeNull();
-  expect(probes.transcript.mock.calls.at(-1)![0].latestTurnAccessory).toBeUndefined();
+  expect(
+    probes.transcript.mock.calls.at(-1)![0].latestTurnAccessory,
+  ).toBeUndefined();
   expect(log.contains(input)).toBe(false);
-  expect(log.parentElement).toBe(container.querySelector('[data-session-composer]')!.parentElement);
+  expect(log.closest("[data-member-work]")).not.toBeNull();
+  expect(log.contains(container.querySelector("[data-session-composer]"))).toBe(
+    false,
+  );
   render({ ...pane, session: { ...pane.session, blocks: [] } });
-  expect(container.querySelectorAll('[aria-label="Member work log"]')).toHaveLength(1);
+  expect(
+    container.querySelectorAll('[aria-label="Member work log"]'),
+  ).toHaveLength(1);
   expect(container.querySelector('[aria-label="Member work log"]')).toBe(log);
   expect(field()).toBe(input);
   expect(field().value).toBe("Keep my draft");
+});
+
+it("puts a member's blocked message queue above the conversation and routes edit/remove", () => {
+  probes.member = true;
+  const pane = props();
+  pane.session.codexStorageError = "Synthetic account storage conflict";
+  pane.session.queuedMessages = [
+    {
+      id: "queued",
+      blockId: "queued-block",
+      text: "Review the patch",
+      attachments: [],
+    },
+  ];
+  pane.session.blocks.push({
+    id: "queued-block",
+    role: "user",
+    text: "Review the patch",
+  });
+  pane.onCodexStorageRepair = vi.fn(async () => {});
+  pane.onEditQueuedMessage = vi.fn();
+  pane.onDeleteQueuedMessage = vi.fn();
+  render(pane);
+  const notice = container.querySelector(
+    '[aria-label="Codex storage needs repair"]',
+  )!;
+  const log = container.querySelector('[aria-label="Member work log"]')!;
+  const queue = container.querySelector('[aria-label="Message queue"]')!;
+  const conversation = container.querySelector('[role="tabpanel"]')!;
+  expect(
+    notice.compareDocumentPosition(log) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+  expect(
+    queue.compareDocumentPosition(conversation) &
+      Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+  expect(queue.textContent).toContain(
+    "Message will queue until storage is repaired",
+  );
+  expect(
+    probes.transcript.mock.calls
+      .at(-1)![0]
+      .blocks.map((block: { id: string }) => block.id),
+  ).toEqual(["user"]);
+  act(() =>
+    queue
+      .querySelector<HTMLButtonElement>('[aria-label="Remove queued message"]')!
+      .click(),
+  );
+  expect(pane.onDeleteQueuedMessage).toHaveBeenCalledWith("chat", "queued");
+  act(() =>
+    queue
+      .querySelector<HTMLButtonElement>('[aria-label="Edit queued message"]')!
+      .click(),
+  );
+  const input = queue.querySelector<HTMLTextAreaElement>(
+    '[aria-label="Edit queued message"]',
+  )!;
+  const inputProps = Object.entries(input).find(([key]) =>
+    key.startsWith("__reactProps"),
+  )![1];
+  act(() =>
+    inputProps.onChange({ target: { value: "Review the latest patch" } }),
+  );
+  act(() =>
+    queue
+      .querySelector<HTMLButtonElement>('[aria-label="Save queued message"]')!
+      .click(),
+  );
+  expect(pane.onEditQueuedMessage).toHaveBeenCalledWith(
+    "chat",
+    "queued",
+    "Review the latest patch",
+  );
+});
+
+it("keeps recovery, draft and the transcript mounted while member tabs change by keyboard", () => {
+  probes.member = true;
+  const pane = props();
+  pane.session.codexStorageError = "Synthetic account storage conflict";
+  pane.onCodexStorageRepair = vi.fn(async () => {});
+  setComposerDraft("chat", "Keep my member draft");
+  render(pane);
+  const draft = field();
+  const tabs = container.querySelectorAll<HTMLButtonElement>('[role="tab"]');
+  const conversation =
+    container.querySelector<HTMLElement>('[role="tabpanel"]')!;
+  const notice = container.querySelector(
+    '[aria-label="Codex storage needs repair"]',
+  );
+  act(() =>
+    tabs[0].dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }),
+    ),
+  );
+  expect(tabs[1].getAttribute("aria-selected")).toBe("true");
+  expect(document.activeElement).toBe(tabs[1]);
+  expect(conversation.hidden).toBe(true);
+  expect(
+    container.querySelector('[aria-label="Codex storage needs repair"]'),
+  ).toBe(notice);
+  expect(field()).toBe(draft);
+  expect(field().value).toBe("Keep my member draft");
+  act(() =>
+    tabs[1].dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Home", bubbles: true }),
+    ),
+  );
+  expect(conversation.hidden).toBe(false);
+  expect(tabs[0].getAttribute("aria-selected")).toBe("true");
+  expect(document.activeElement).toBe(tabs[0]);
+});
+
+it("shows the assigned worker's storage recovery at the top and targets that worker", async () => {
+  probes.member = true;
+  probes.runs = [
+    {
+      leadId: "lead",
+      tasks: [
+        {
+          id: "assigned",
+          title: "Review the patch",
+          sessionId: "worker",
+          memberId: "mono",
+          status: "queued",
+        },
+      ],
+      dispatches: [],
+    },
+  ];
+  const pane = props();
+  pane.session.blocks = [];
+  pane.monoState = {
+    status: "needs-you",
+    liveState: {
+      status: "blocked",
+      reason: "storage",
+      detail: "Synthetic worker storage issue",
+    },
+  };
+  pane.onCodexStorageRepair = vi.fn(async () => {});
+  render(pane);
+  const notice = container.querySelector(
+    '[aria-label="Codex storage needs repair"]',
+  )!;
+  expect(notice.textContent).toContain("Assigned worker: Review the patch");
+  const repair = [...notice.querySelectorAll<HTMLButtonElement>("button")].find(
+    (button) => button.textContent === "Repair",
+  )!;
+  await act(async () => repair.click());
+  expect(pane.onCodexStorageRepair).toHaveBeenCalledWith("worker");
+  expect(
+    container.querySelector("[data-session-composer]")!.textContent,
+  ).toContain("Message will start the next turn");
+});
+
+it("labels the running member turn metrics separately from assignments", () => {
+  probes.member = true;
+  const pane = props();
+  pane.session.busy = true;
+  pane.session.blocks[0].startedAt = Date.now() - 60_000;
+  pane.session.blocks[0].turnModel = {
+    harness: "codex",
+    id: "fixture",
+    name: "Fixture",
+  };
+  pane.session.blocks[0].turnMetrics = {
+    inputTokens: 1240,
+    outputTokens: 78,
+    modelCalls: 1,
+  };
+  render(pane);
+  const header = container.querySelector("header")!;
+  expect(header.textContent).toContain("Current conversation turn");
+  expect(header.textContent).toContain("1,240 in");
+  expect(header.textContent).not.toContain("No conversation turn running");
+  render({
+    ...pane,
+    session: {
+      ...pane.session,
+      busy: false,
+      codexStorageError: "Synthetic storage error",
+    },
+  });
+  expect(container.querySelector("header")!.textContent).toContain(
+    "No conversation turn running",
+  );
+  expect(
+    container.querySelector('header [data-agent-state="blocked"]'),
+  ).not.toBeNull();
+  render({
+    ...pane,
+    session: { ...pane.session, busy: false },
+    monoState: {
+      status: "working",
+      liveState: { status: "running-tool", detail: "Checking the worker task" },
+    },
+  });
+  expect(container.querySelector("header")!.textContent).toContain(
+    "Running tool",
+  );
+  expect(container.querySelector("header")!.textContent).toContain(
+    "No conversation turn running",
+  );
+  expect(
+    container.querySelector("[data-session-composer]")!.textContent,
+  ).toContain("Message will start the next turn");
 });
 
 it("keeps the same input, current draft and attachments when a question appears and closes", async () => {
@@ -332,7 +578,9 @@ it("shows pending messages in the conversation and routes retry from the bubble"
 
 it("shows a worker checkout notice while keeping the user's composer send enabled", () => {
   probes.mono = false;
-  probes.checkoutNotice.mockReturnValue("Native Core is working here; your changes may conflict");
+  probes.checkoutNotice.mockReturnValue(
+    "Native Core is working here; your changes may conflict",
+  );
   const pane = props();
   pane.session.worktreeCwd = "/worktrees/native-core";
   pane.onSubmit = vi.fn();
@@ -341,11 +589,17 @@ it("shows a worker checkout notice while keeping the user's composer send enable
     "Native Core is working here; your changes may conflict",
   );
   expect(probes.checkoutNotice).toHaveBeenCalledWith("chat", pane.session);
-  const send = [...container.querySelectorAll<HTMLButtonElement>("button")]
-    .find(button => button.textContent === "Send user message")!;
+  const send = [
+    ...container.querySelectorAll<HTMLButtonElement>("button"),
+  ].find((button) => button.textContent === "Send user message")!;
   expect(send.disabled).toBe(false);
   act(() => send.click());
-  expect(pane.onSubmit).toHaveBeenCalledWith("chat", "Continue my work", [], undefined);
+  expect(pane.onSubmit).toHaveBeenCalledWith(
+    "chat",
+    "Continue my work",
+    [],
+    undefined,
+  );
 });
 
 it.each(["reasoningEffort", "serviceTier"])(
@@ -371,10 +625,15 @@ it("routes a previously blocked user's failed-send Retry through the existing qu
   const pane = props();
   pane.onResumeQueue = vi.fn();
   pane.session.queueStatus = "paused";
-  pane.session.queuedMessages = [{
-    id: "blocked", text: "Continue my work", attachments: [],
-    error: "This checkout has an active orchestrator. Stop that run before starting independent work.",
-  }];
+  pane.session.queuedMessages = [
+    {
+      id: "blocked",
+      text: "Continue my work",
+      attachments: [],
+      error:
+        "This checkout has an active orchestrator. Stop that run before starting independent work.",
+    },
+  ];
   render(pane);
   const transcript = probes.transcript.mock.calls.at(-1)![0];
   expect(transcript.messageDeliveries.get("blocked").status).toBe("failed");

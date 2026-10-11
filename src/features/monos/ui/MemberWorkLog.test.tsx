@@ -527,7 +527,10 @@ it("highlights a task awaiting the user without automatically opening its body",
     needsInput: true,
   } as ReturnType<typeof cardSession>);
   vi.spyOn(orchestrator, "snapshot").mockReturnValue([
-    { tasks: [{ ...base, id: "attention" }], dispatches: [] },
+    {
+      tasks: [{ ...base, id: "attention", status: "running" }],
+      dispatches: [],
+    },
   ] as unknown as OrchestrationRun[]);
   vi.spyOn(orchestrator, "subscribe").mockReturnValue(() => {});
   const host = document.createElement("div"),
@@ -548,5 +551,343 @@ it("highlights a task awaiting the user without automatically opening its body",
   } finally {
     await act(async () => root.unmount());
     vi.mocked(cardSession).mockReset();
+  }
+});
+
+it("separates current work, queued assignments and review from collapsed completed history", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const tasks = [
+    { ...base, id: "running", status: "running" },
+    {
+      ...base,
+      id: "blocked",
+      status: "blocked",
+      error: "Worker lost its connection",
+    },
+    { ...base, id: "queued", status: "queued", dependsOn: ["dependency"] },
+    {
+      ...base,
+      id: "available",
+      status: "queued",
+      dependsOn: ["accepted-dependency"],
+    },
+    { ...base, id: "review" },
+    { ...base, id: "ready", accepted: true, acceptedDispatchId: "dispatch" },
+    {
+      ...base,
+      id: "past",
+      accepted: true,
+      acceptedDispatchId: "dispatch",
+      completionOutcome: "no-changes",
+    },
+    { ...base, id: "cancelled", status: "cancelled" },
+    { ...base, id: "dependency", memberId: "other-member" },
+    {
+      ...base,
+      id: "accepted-dependency",
+      memberId: "other-member",
+      accepted: true,
+    },
+  ] as OrchestrationTask[];
+  const runs = [
+    { leadId: "active-engine", status: "active", tasks, dispatches: [] },
+    {
+      leadId: "paused-engine",
+      status: "paused",
+      lastPauseReason: "Review checkout permissions",
+      tasks: [{ ...base, id: "paused", status: "queued" }],
+      dispatches: [],
+    },
+  ] as unknown as OrchestrationRun[];
+  vi.spyOn(orchestrator, "snapshot").mockReturnValue(runs);
+  vi.spyOn(orchestrator, "subscribe").mockReturnValue(() => {});
+  const host = document.createElement("div"),
+    root = createRoot(host);
+  const ids = (section: string) =>
+    [
+      ...host.querySelectorAll(
+        `[data-member-section="${section}"] [data-member-task]`,
+      ),
+    ].map((card) => card.getAttribute("data-member-task"));
+  try {
+    await act(async () => root.render(<MemberWorkLog member={member} />));
+    expect(ids("current")).toEqual(["blocked", "running"]);
+    expect(ids("queue")).toEqual(["available", "queued", "paused"]);
+    expect(ids("log")).toEqual(["ready", "review"]);
+    expect(host.textContent).toContain("Current assignment");
+    expect(host.textContent).toContain("Queue (3)");
+    expect(host.textContent).toContain("Work log (2)");
+    expect(
+      host.querySelector('[data-member-task="queued"] [data-task-reason]')
+        ?.textContent,
+    ).toBe("Waiting for task dependency");
+    expect(
+      host.querySelector('[data-member-task="available"] [data-task-reason]')
+        ?.textContent,
+    ).toBe("Waiting for an available worker");
+    expect(
+      host.querySelector('[data-member-task="paused"] [data-task-reason]')
+        ?.textContent,
+    ).toBe("Review checkout permissions");
+    expect(
+      host.querySelector('[data-member-task="blocked"] [data-task-reason]')
+        ?.textContent,
+    ).toBe("Worker lost its connection");
+    expect(
+      host.querySelector('[data-member-task="review"] [data-task-metrics]')
+        ?.textContent,
+    ).toContain("Waiting review");
+    expect(host.querySelector('[data-member-task="past"]')).toBeNull();
+    expect(host.querySelector('[data-member-task="cancelled"]')).toBeNull();
+    expect(host.textContent).not.toContain("Assignment instructions");
+  } finally {
+    await act(async () => root.unmount());
+  }
+});
+
+it("shows a blocked queue reason while keeping historical state and task metrics separate from a reused worker", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.mocked(cardSession).mockReturnValue({
+    id: base.sessionId,
+    title: "Worker",
+    harness: "codex",
+    busy: false,
+    needsInput: true,
+    liveState: {
+      status: "blocked",
+      reason: "storage",
+      detail: "Storage must be repaired",
+    },
+    taskMetrics: {
+      review: {
+        turns: 1,
+        startedAt: 1000,
+        endedAt: 6000,
+        elapsedMs: 5000,
+        inputTokens: 4000,
+        outputTokens: 200,
+        partial: false,
+      },
+    },
+  } as ReturnType<typeof cardSession>);
+  const tasks = [
+    { ...base, id: "queued", status: "queued" },
+    { ...base, id: "review" },
+    {
+      ...base,
+      id: "stale",
+      accepted: true,
+      acceptedDispatchId: "old-dispatch",
+    },
+    {
+      ...base,
+      id: "past",
+      accepted: true,
+      acceptedDispatchId: "dispatch",
+      completionOutcome: "no-changes",
+    },
+  ] as OrchestrationTask[];
+  vi.spyOn(orchestrator, "snapshot").mockReturnValue([
+    { tasks, dispatches: [] },
+  ] as unknown as OrchestrationRun[]);
+  vi.spyOn(orchestrator, "subscribe").mockReturnValue(() => {});
+  const host = document.createElement("div"),
+    root = createRoot(host);
+  try {
+    await act(async () => root.render(<MemberWorkLog member={member} />));
+    expect(
+      host.querySelector('[data-member-task="queued"] [data-task-reason]')
+        ?.textContent,
+    ).toBe("Storage must be repaired");
+    expect(
+      host.querySelector('[data-member-task="queued"] [data-task-metrics]')
+        ?.textContent,
+    ).toContain("Blocked");
+    expect(
+      host.querySelector('[data-member-section="current"]')?.textContent,
+    ).toContain("No current assignment");
+    const review = host.querySelector('[data-member-task="review"]')!;
+    expect(review.querySelector("[data-task-status]")?.textContent).toBe(
+      "In review",
+    );
+    expect(review.querySelector("[data-task-metrics]")?.textContent).toContain(
+      "4,000 in / 200 out tokens",
+    );
+    expect(review.querySelector("[data-task-metrics]")?.textContent).toContain(
+      "Waiting review",
+    );
+    expect(review.textContent).not.toContain("Storage must be repaired");
+    expect(
+      host.querySelector('[data-member-task="stale"] [data-task-metrics]')
+        ?.textContent,
+    ).toContain("Waiting review");
+    await act(async () =>
+      host
+        .querySelector<HTMLButtonElement>('button[aria-controls$="-history"]')!
+        .click(),
+    );
+    const past = host.querySelector('[data-member-task="past"]')!;
+    expect(past.querySelector("[data-task-status]")?.textContent).toBe(
+      "Completed (no changes)",
+    );
+    expect(past.textContent).not.toContain("Storage must be repaired");
+    expect(past.querySelector("[data-task-metrics]")?.textContent).toContain(
+      "Done",
+    );
+  } finally {
+    await act(async () => root.unmount());
+  }
+});
+
+it("opens queued workers and cancels the exact task with pending and retryable error feedback", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const task = { ...base, id: "queued", status: "queued" } as OrchestrationTask;
+  vi.spyOn(orchestrator, "snapshot").mockReturnValue([
+    { leadId: "engine", tasks: [task], dispatches: [] },
+  ] as unknown as OrchestrationRun[]);
+  vi.spyOn(orchestrator, "subscribe").mockReturnValue(() => {});
+  let rejectCancel!: (error: Error) => void;
+  const cancel = vi.spyOn(orchestrator, "cancelTask").mockImplementation(
+    () =>
+      new Promise((_, reject) => {
+        rejectCancel = reject;
+      }),
+  );
+  const open = vi.fn();
+  const host = document.createElement("div"),
+    root = createRoot(host);
+  const cancelButton = () =>
+    [...host.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) =>
+        button.textContent === "Cancel task" ||
+        button.textContent === "Cancelling…",
+    )!;
+  try {
+    await act(async () =>
+      root.render(
+        <OrchestrationActions.Provider
+          value={{ update: vi.fn(), confirm: vi.fn(), retry: vi.fn(), open }}
+        >
+          <MemberWorkLog member={member} />
+        </OrchestrationActions.Provider>,
+      ),
+    );
+    await act(async () =>
+      [...host.querySelectorAll<HTMLButtonElement>("button")]
+        .find((button) => button.textContent === "Open worker session")!
+        .click(),
+    );
+    expect(open).toHaveBeenCalledWith(task.sessionId);
+    await act(async () => cancelButton().click());
+    expect(cancel).toHaveBeenCalledWith("engine", task.id);
+    expect(cancelButton().disabled).toBe(true);
+    expect(cancelButton().textContent).toBe("Cancelling…");
+    await act(async () => rejectCancel(new Error("Could not stop worker")));
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain(
+      "Could not stop worker",
+    );
+    expect(cancelButton().disabled).toBe(false);
+    expect(host.querySelector('[data-member-task="queued"]')).not.toBeNull();
+    cancel.mockImplementation(async () => {
+      task.status = "cancelled";
+    });
+    await act(async () => cancelButton().click());
+    expect(cancel).toHaveBeenCalledTimes(2);
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+    expect(host.querySelector('[data-member-task="queued"]')).toBeNull();
+    expect(host.textContent).toContain("History (1)");
+  } finally {
+    await act(async () => root.unmount());
+  }
+});
+
+it("restores focus to the task toggle when an open assignment moves into collapsed history", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const snapshot = vi
+    .spyOn(orchestrator, "snapshot")
+    .mockReturnValue([
+      { tasks: [base], dispatches: [] },
+    ] as unknown as OrchestrationRun[]);
+  vi.spyOn(orchestrator, "subscribe").mockReturnValue(() => {});
+  const host = document.createElement("div"),
+    root = createRoot(host);
+  document.body.append(host);
+  try {
+    await act(async () => root.render(<MemberWorkLog member={member} />));
+    const open = host.querySelector<HTMLButtonElement>(
+      '[aria-haspopup="dialog"]',
+    )!;
+    await act(async () => open.focus());
+    await act(async () => open.click());
+    snapshot.mockReturnValue([
+      {
+        tasks: [
+          {
+            ...base,
+            accepted: true,
+            acceptedDispatchId: "dispatch",
+            completionOutcome: "no-changes",
+          },
+        ],
+        dispatches: [],
+      },
+    ] as unknown as OrchestrationRun[]);
+    await act(async () => root.render(<MemberWorkLog member={member} />));
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(
+          '[role="dialog"] [aria-label="Close"]',
+        )!
+        .click(),
+    );
+    expect(document.activeElement).toBe(
+      host.querySelector(
+        'button[aria-controls]:not([aria-controls$="-history"])',
+      ),
+    );
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+  }
+});
+
+it("dismisses hovered task hints while a reader is open so Escape closes it and restores the same trigger", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.spyOn(orchestrator, "snapshot").mockReturnValue([
+    { tasks: [base], dispatches: [] },
+  ] as unknown as OrchestrationRun[]);
+  vi.spyOn(orchestrator, "subscribe").mockReturnValue(() => {});
+  const host = document.createElement("div"),
+    root = createRoot(host);
+  document.body.append(host);
+  try {
+    await act(async () => root.render(<MemberWorkLog member={member} />));
+    const open = host.querySelector<HTMLButtonElement>(
+      '[aria-haspopup="dialog"]',
+    )!;
+    await act(async () => {
+      open.focus();
+      open.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+    });
+    expect(document.querySelector('[role="tooltip"]')).not.toBeNull();
+    await act(async () => open.click());
+    expect(document.querySelector('[role="tooltip"]')).toBeNull();
+    expect(host.querySelector('[aria-haspopup="dialog"]')).toBe(open);
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    await act(async () =>
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Escape",
+          bubbles: true,
+          cancelable: true,
+        }),
+      ),
+    );
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(host.querySelector('[aria-haspopup="dialog"]')).toBe(open);
+    expect(document.activeElement).toBe(open);
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
   }
 });

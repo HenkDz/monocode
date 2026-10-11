@@ -31,8 +31,8 @@ function GoalRow({ view, onOpenTarget }: { view: GoalView; onOpenTarget: (target
   </article>;
 }
 
-export function MissionControlView({ view, onOpenTarget, onClose, open = true }: {
-  view: GoalViewModel; onOpenTarget: (target: GoalTarget) => void | Promise<void>; onClose: () => void; open?: boolean;
+export function MissionControlView({ view, onOpenTarget, onClose, open = true, onOpenAttention }: {
+  view: GoalViewModel; onOpenTarget: (target: GoalTarget) => void | Promise<void>; onClose: () => void; open?: boolean; onOpenAttention?: () => void;
 }) {
   const [project, setProject] = useState("");
   const [navigationError, setNavigationError] = useState<string>();
@@ -64,7 +64,7 @@ export function MissionControlView({ view, onOpenTarget, onClose, open = true }:
       {!!view.attention.length && <aside className="mc-attention" aria-label="Attention">
         <div><strong>{view.attention.length} {view.attention.length === 1 ? "item needs" : "items need"} you</strong>
           <p>Across all projects · requests and storage or usage blockers in live goal conversations.</p></div>
-        <button type="button" className="mc-button" onClick={() => openTarget(view.attention[0].target!)}>Open conversation →</button>
+        <button type="button" className="mc-button" onClick={onOpenAttention ?? (() => openTarget(view.attention[0].target!))}>{onOpenAttention ? "Open attention queue →" : "Open conversation →"}</button>{/* CC7D banner link */}
       </aside>}
       <div className="mc-list-heading"><h2>Live goals <span>· {live.length}</span></h2><label>Project
         <select aria-label="Filter goals by project" value={project} onChange={event => setProject(event.target.value)}>
@@ -83,9 +83,9 @@ export function MissionControlView({ view, onOpenTarget, onClose, open = true }:
   </section>;
 }
 
-export function MissionControl({ sessions, runs, onOpenTarget, onClose, open }: {
+export function MissionControl({ sessions, runs, onOpenTarget, onClose, open, onOpenAttention }: {
   sessions: readonly Session[]; runs: readonly OrchestrationRun[];
-  onOpenTarget: (target: GoalTarget) => void | Promise<void>; onClose: () => void; open: boolean;
+  onOpenTarget: (target: GoalTarget) => void | Promise<void>; onClose: () => void; open: boolean; onOpenAttention?: () => void;
 }) {
   const rosterSnapshot = useSyncExternalStore(subscribeMonos, monosSnapshot);
   const goalsSnapshot = useSyncExternalStore(monoManagerGoals.subscribe, monoManagerGoals.snapshot);
@@ -99,5 +99,5 @@ export function MissionControl({ sessions, runs, onOpenTarget, onClose, open }: 
     return () => clearInterval(timer);
   }, [open]);
   const view = useMemo(() => selectGoalViews({ goals, roster, runs, sessions, now }), [goals, roster, runs, sessions, now]);
-  return <MissionControlView view={view} onOpenTarget={onOpenTarget} onClose={onClose} open={open} />;
+  return <MissionControlView view={view} onOpenTarget={onOpenTarget} onClose={onClose} open={open} onOpenAttention={onOpenAttention} />;
 }

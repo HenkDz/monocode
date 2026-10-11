@@ -2,6 +2,7 @@ import { createPortal } from "react-dom";
 import { TeamMapNav } from "../../features/teamMap/navigation";
 // CC7C entry point stays outside CC7A's ProjectRail.
 import { MissionControlNav } from "../../features/commandCenter/ui/MissionControl";
+import { AttentionQueueNav } from "../../features/commandCenter/ui/AttentionQueue";
 import { openPullRequests } from "../../features/pullRequests/model/pullRequestView";
 import { NO_BRANCH_LABEL } from "../../features/source-control/model/worktrees";
 import {
@@ -337,6 +338,7 @@ type Props = {
   onOpenAutomations?: () => void;
   onOpenTeamMap?: () => void;
   onOpenMissionControl?: () => void;
+  onOpenAttentionQueue?: () => void; // CC7D shell hook
   onGoToFile?: () => void;
   searchActive?: boolean;
   inboxActive?: boolean;
@@ -440,6 +442,7 @@ function SidebarComponent({
   onOpenAutomations,
   onOpenTeamMap,
   onOpenMissionControl,
+  onOpenAttentionQueue,
   onGoToFile,
   searchActive = false,
   inboxActive = false,
@@ -1781,6 +1784,7 @@ function SidebarComponent({
               onOpenAutomations={onOpenAutomations}
               onOpenTeamMap={onOpenTeamMap}
               onOpenMissionControl={onOpenMissionControl}
+              onOpenAttentionQueue={onOpenAttentionQueue}
               searchActive={searchActive}
               inboxActive={inboxActive}
           pullRequestsActive={pullRequestsActive}
@@ -2308,6 +2312,7 @@ function SidebarComponent({
           automationsActive={automationsActive}
           onOpenTeamMap={onOpenTeamMap}
           onOpenMissionControl={onOpenMissionControl}
+          onOpenAttentionQueue={onOpenAttentionQueue}
           onOpenSettings={onOpenSettings}
           onTogglePanel={onToggleProjectRail}
           onLeaveActive={onGoBack}
@@ -2319,6 +2324,7 @@ function SidebarComponent({
       {railMounted.current && onSelectProject && onOpenProject ? (
         <div className={railVisible ? "flex min-h-0 flex-col [&>nav]:min-h-0 [&>nav]:flex-1" : "hidden"}>
         {onOpenMissionControl && <MissionControlNav onOpen={onOpenMissionControl} />}
+        {onOpenAttentionQueue && <AttentionQueueNav onOpen={onOpenAttentionQueue} />}
         {onOpenTeamMap && <TeamMapNav onOpen={onOpenTeamMap} />}
         <ProjectRail
           sessions={sessions}
@@ -2430,6 +2436,7 @@ function SidebarProjectPicker({
   onOpenAutomations,
   onOpenTeamMap,
   onOpenMissionControl,
+  onOpenAttentionQueue,
   searchActive = false,
   inboxActive = false,
   pullRequestsActive = false,
@@ -2451,6 +2458,7 @@ function SidebarProjectPicker({
   onOpenAutomations?: () => void;
   onOpenTeamMap?: () => void;
   onOpenMissionControl?: () => void;
+  onOpenAttentionQueue?: () => void;
   searchActive?: boolean;
   inboxActive?: boolean;
   pullRequestsActive?: boolean;
@@ -2523,6 +2531,7 @@ function SidebarProjectPicker({
           </IconButton>
         ) : null}
         {onOpenMissionControl && <MissionControlNav compact onOpen={onOpenMissionControl} />}
+        {onOpenAttentionQueue && <AttentionQueueNav compact onOpen={onOpenAttentionQueue} />}
         {onOpenTeamMap && <TeamMapNav compact onOpen={onOpenTeamMap} />}
         {onOpenAutomations ? (
           <IconButton
@@ -2574,6 +2583,7 @@ function CompactProjectRail({
   onOpenAutomations,
   onOpenTeamMap,
   onOpenMissionControl,
+  onOpenAttentionQueue,
   automationsActive,
   onOpenSettings,
   onTogglePanel,
@@ -2606,6 +2616,7 @@ function CompactProjectRail({
   onOpenAutomations?: () => void;
   onOpenTeamMap?: () => void;
   onOpenMissionControl?: () => void;
+  onOpenAttentionQueue?: () => void;
   automationsActive: boolean;
   onOpenSettings?: () => void;
   onTogglePanel?: () => void;
@@ -2784,6 +2795,7 @@ function CompactProjectRail({
           onClick={action(automationsActive, onOpenAutomations)}
         />
         {onOpenMissionControl && <MissionControlNav compact onOpen={onOpenMissionControl} />}
+        {onOpenAttentionQueue && <AttentionQueueNav compact onOpen={onOpenAttentionQueue} />}
         {onOpenTeamMap && <TeamMapNav compact onOpen={onOpenTeamMap} />}
       </div>
       <div className="min-h-2 flex-1" />

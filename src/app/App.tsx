@@ -15,6 +15,7 @@ import { MonoTeamActivity } from "../features/monos/ui/MonoTeamActivity";
 import { TeamMap } from "../features/teamMap/TeamMap";
 // CC7C integration: Mission control uses the existing full-view navigation.
 import { MissionControl, MISSION_CONTROL_SCOPE } from "../features/commandCenter/ui/MissionControl";
+import { AttentionQueue, ATTENTION_QUEUE_SCOPE } from "../features/commandCenter/ui/AttentionQueue";
 import { openGoalTarget } from "../features/commandCenter/model/goalView";
 import { TeamMapHeaderAction, useTeamMap } from "../features/teamMap/navigation";
 import { recordCrewDecision } from "../features/monos/model/monoCrewEvents";
@@ -11177,8 +11178,7 @@ function Workspace({
     (sessionId: string) => {
       const ownerMono = monoForSession(orchestrator.ownerSession(sessionId));
       if (ownerMono) {
-        void onOpenMono(ownerMono.id);
-        return;
+        return onOpenMono(ownerMono.id); // CC7D: retain async navigation errors for action receipts.
       }
       const parentId =
         sessionsRef.current.find((session) => session.id === sessionId)
@@ -11190,9 +11190,9 @@ function Workspace({
         !orchestrator.run(parentId)?.projectManager
       ) {
         setInspectedWorkerId(sessionId);
-        if (!focusOpenSession(parentId)) void onSelectHistorySession(parentId);
+        if (!focusOpenSession(parentId)) return onSelectHistorySession(parentId);
       } else if (!focusOpenSession(sessionId)) {
-        void onSelectHistorySession(sessionId);
+        return onSelectHistorySession(sessionId);
       }
     },
     [focusOpenSession, onSelectHistorySession, onOpenMono],
@@ -15149,6 +15149,7 @@ function Workspace({
               onOpenAutomations={onOpenAutomations}
               onOpenTeamMap={monosEnabled ? () => onOpenTeamMap() : undefined}
               onOpenMissionControl={monosEnabled ? () => onOpenTeamMap(MISSION_CONTROL_SCOPE) : undefined}
+              onOpenAttentionQueue={monosEnabled ? () => onOpenTeamMap(ATTENTION_QUEUE_SCOPE) : undefined}
               onGoToFile={onGoToFile}
               searchActive={searchViewOpen}
               inboxActive={inboxViewOpen && pullRequestsViewScope === null}
@@ -15197,10 +15198,21 @@ function Workspace({
             )}
             <div className="body-glass flex min-h-0 min-w-0 flex-1 flex-col">
               <MissionControl sessions={sessions} runs={orchestrationRuns} open={teamMap.open && teamMap.scope === MISSION_CONTROL_SCOPE}
+                onOpenAttention={() => onOpenTeamMap(ATTENTION_QUEUE_SCOPE)}
                 onClose={teamMap.close} onOpenTarget={target => openGoalTarget(target, {
                   close: teamMap.close, request: onOpenApprovalSession, mono: onOpenMono, session: onOpenMonoLaunchedSession,
                 })} />
-              {teamMap.open && teamMap.scope !== MISSION_CONTROL_SCOPE && <TeamMap key={teamMap.scope ?? "org"} sessions={sessions} runs={orchestrationRuns} statuses={managerPrStatuses} scope={teamMap.scope} onClose={teamMap.close} onOpenMono={id => void onOpenMono(id)} />}
+              {/* CC7D shell hook: existing sources and execution callbacks only. */}
+              <AttentionQueue sessions={sessions} runs={orchestrationRuns} open={teamMap.open && teamMap.scope === ATTENTION_QUEUE_SCOPE}
+                readSessions={() => sessionsRef.current} readRuns={() => orchestrator.snapshot()}
+                selectedAccount={session => selectedProviderAccountId("codex", session.cwd)}
+                isLocalSession={session => !remoteProjectFor(session.cwd)}
+                onClose={teamMap.close} onOpenMissionControl={() => onOpenTeamMap(MISSION_CONTROL_SCOPE)}
+                callbacks={{ approval: onApproval, question: onQuestionReply, questionInteraction: onQuestionInteraction,
+                  repair: onCodexStorageRepair, compare: onCodexStorageCompare, reveal: onCodexStorageReveal,
+                  resume: onUsageLimitResume, resumeAtReset: onUsageLimitResumeAtReset, retryDelivery: onResumeQueue,
+                  continueManager: id => orchestrator.continueManager(id), inspect: id => { teamMap.close(); return onOpenApprovalSession(id); }, inspectAutomation: () => onOpenAutomations() }} />
+              {teamMap.open && teamMap.scope !== MISSION_CONTROL_SCOPE && teamMap.scope !== ATTENTION_QUEUE_SCOPE && <TeamMap key={teamMap.scope ?? "org"} sessions={sessions} runs={orchestrationRuns} statuses={managerPrStatuses} scope={teamMap.scope} onClose={teamMap.close} onOpenMono={id => void onOpenMono(id)} />}
               <div
                 className={
                   teamMap.open ||

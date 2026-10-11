@@ -1138,7 +1138,10 @@ const LocalSessionPane = memo(function LocalSessionPane({
                   <button
                     type="button"
                     className="cc7u-error-details"
-                    onClick={() => setErrorDetailsOpen(true)}
+                    onClick={(event) => {
+                      event.currentTarget.focus();
+                      setErrorDetailsOpen(true);
+                    }}
                   >
                     Error details
                   </button>

@@ -278,9 +278,10 @@ export function MemberWorkLog({
               type="button"
               aria-haspopup="dialog"
               className={`${button} shrink-0 bg-content/8 font-medium`}
-              onClick={() =>
-                setOpenedTask({ id: task.id, leadId: run?.leadId })
-              }
+              onClick={(event) => {
+                event.currentTarget.focus();
+                setOpenedTask({ id: task.id, leadId: run?.leadId });
+              }}
             >
               Open
             </button>
@@ -505,12 +506,13 @@ export function MemberWorkLog({
                       type="button"
                       aria-haspopup="dialog"
                       className="min-w-0 truncate text-left text-xs font-medium hover:text-accent focus-visible:outline-accent"
-                      onClick={() =>
+                      onClick={(click) => {
+                        click.currentTarget.focus();
                         setOpenedTask({
                           id: event.task.id,
                           leadId: taskRuns.get(event.task)?.leadId,
-                        })
-                      }
+                        });
+                      }}
                     >
                       {event.label}
                     </button>

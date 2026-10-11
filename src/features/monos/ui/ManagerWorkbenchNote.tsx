@@ -22,7 +22,10 @@ export function ManagerWorkbenchNote({ member }: { member: Mono }) {
     <aside className="cc7u-manager-note" aria-label="Latest Manager message">
       <h3>From Manager</h3>
       <p>{presentationText(message.text)}</p>
-      <button type="button" onClick={() => setOpened(true)}>
+      <button type="button" onClick={(event) => {
+        event.currentTarget.focus();
+        setOpened(true);
+      }}>
         Read team message →
       </button>
       {opened && (

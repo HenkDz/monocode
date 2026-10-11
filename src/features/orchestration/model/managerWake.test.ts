@@ -129,7 +129,7 @@ describe("durable Manager wake waves", () => {
     const receipt = [...h.accepted.values()][0];
     expect(receipt.eventIds).toHaveLength(4);
     expect(receipt.body).toContain("[Full report](/__monocode_artifact__/artifact:one)");
-    expect(receipt.body).toContain('app sessions.conversation {"sessionId":"worker:two"}');
+    expect(receipt.body).toContain('app sessions.read {"sessionId":"worker:two"}');
     expect(receipt.body).toContain("untrusted evidence");
     expect(h.run.tasks.every(value => value.delivered)).toBe(true);
     expect(h.run.continuations).toBe(1);
@@ -265,7 +265,7 @@ describe("durable Manager wake waves", () => {
     expect(h.run.wakeState?.events[0].acknowledgedAt).toBeUndefined();
     expect(errors).toHaveBeenCalledOnce();
     h.sync();
-    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(1_000);
     expect(h.host.accept).toHaveBeenCalledOnce();
   });
 
@@ -278,7 +278,7 @@ describe("durable Manager wake waves", () => {
     h.host.accept.mockImplementation(async (leadId, receipt) => acceptManagerWakeQueue(receipt, leadId, {
       session: () => h.session,
       delivered: async () => !!durable.queuedMessages?.some(value => value.id === receipt.id) || durable.blocks.some(value => value.appRequestId === receipt.id),
-      save: saveTarget, publish: publishTarget,
+      save: saveTarget, load: async () => durable, publish: publishTarget,
     }));
     const saveRun = h.host.save.getMockImplementation()!;
     h.host.save.mockImplementationOnce(saveRun).mockRejectedValueOnce(Error("acknowledgement lost"));
@@ -295,7 +295,7 @@ describe("durable Manager wake waves", () => {
     h.session = { ...h.session, queuedMessages: [], blocks: [{ id: "accepted-turn", role: "user", text: receipt.body, appRequestId: receipt.id }] };
     durable = clone(h.session);
     h.sync();
-    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(1_000);
     expect(h.host.accept).toHaveBeenCalledTimes(2);
     expect(h.run.wakeState?.receipt?.id).toBe(receipt.id);
     expect(h.run.wakeState?.receipt?.acknowledgedAt).toBe(Date.now());
@@ -332,7 +332,7 @@ describe("durable Manager wake waves", () => {
     expect(h.run.wakeState?.events[0].acknowledgedAt).toBeUndefined();
     expect(h.run.continuations).toBe(0);
     h.sync();
-    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(1_000);
     expect(h.host.accept).toHaveBeenLastCalledWith("manager", receipt);
     expect(h.run.continuations).toBe(1);
   });
@@ -442,7 +442,7 @@ describe("durable Manager wake waves", () => {
     expect(restored.events.slice(1).every(value => value.acknowledgedAt == null)).toBe(true);
     expect(restored.waves).toEqual(latest.wakeState?.waves);
     expect(restored.receipt).toEqual(pending);
-    expect(restored.receipt?.eventIds).toEqual(["new-info", "new-question"]);
+    expect(restored.receipt?.eventIds).toEqual(["new-question", "new-info"]);
   });
 
   it("keeps a later accepted sibling and its deadline when the same wave is restored from a stale snapshot", async () => {
@@ -483,7 +483,7 @@ describe("durable target queue acceptance", () => {
     let durable: Session | undefined;
     const save = vi.fn(async (next: Session) => { expect(current.queuedMessages ?? []).toEqual([]); durable = clone(next); });
     const publish = vi.fn((next: Session) => { expect(durable?.queuedMessages).toEqual(next.queuedMessages); current = next; });
-    const host = { session: () => current, delivered: async () => false, save, publish };
+    const host = { session: () => current, delivered: async () => false, save, load: async () => durable, publish };
     expect(await acceptManagerWakeQueue(receipt(), "manager", host)).toBe(true);
     expect(current.queuedMessages).toEqual([{ id: "digest:stable", appRequestId: "digest:stable", text: "Read the full report", attachments: [], managerWake: { leadId: "manager", receiptId: "digest:stable" } }]);
     expect(await acceptManagerWakeQueue(receipt(), "manager", host)).toBe(true);
@@ -495,7 +495,7 @@ describe("durable target queue acceptance", () => {
     const current = newSession("codex", root);
     const publish = vi.fn();
     const save = vi.fn(async () => { throw Error("target storage failed"); });
-    await expect(acceptManagerWakeQueue(receipt(), "manager", { session: () => current, delivered: async () => false, save, publish })).rejects.toThrow("target storage failed");
+    await expect(acceptManagerWakeQueue(receipt(), "manager", { session: () => current, delivered: async () => false, save, load: async () => null, publish })).rejects.toThrow("target storage failed");
     expect(publish).not.toHaveBeenCalled();
     expect(current.queuedMessages ?? []).toEqual([]);
   });
@@ -503,10 +503,11 @@ describe("durable target queue acceptance", () => {
   it("rebases a user message received during persistence ahead of the digest", async () => {
     let current = newSession("codex", root);
     const user = { id: "user:first", text: "User request", attachments: [] };
-    const save = vi.fn(async (_next: Session) => {});
-    save.mockImplementationOnce(async () => { current = { ...current, queuedMessages: [user] }; });
+    let durable: Session | undefined;
+    const save = vi.fn(async (next: Session) => { durable = clone(next); });
+    save.mockImplementationOnce(async next => { durable = clone(next); current = { ...current, queuedMessages: [user] }; });
     const publish = vi.fn((next: Session) => { current = next; });
-    expect(await acceptManagerWakeQueue(receipt(), "manager", { session: () => current, delivered: async () => false, save, publish })).toBe(true);
+    expect(await acceptManagerWakeQueue(receipt(), "manager", { session: () => current, delivered: async () => false, save, load: async () => durable, publish })).toBe(true);
     expect(save).toHaveBeenCalledTimes(2);
     expect(publish).toHaveBeenCalledOnce();
     expect(current.queuedMessages?.map(value => value.id)).toEqual(["user:first", "digest:stable"]);
@@ -533,7 +534,7 @@ describe("durable target queue acceptance", () => {
       current = next;
       order.push(`publish:${next.queuedMessages!.at(-1)!.id}`);
     });
-    const host = { session: () => current, delivered, save, publish };
+    const host = { session: () => current, delivered, save, load: async () => durable, publish };
     const one = acceptManagerWakeQueue({ ...receipt(), id: "digest:engine-one", body: "Project one" }, "shared-owner", host);
     const two = acceptManagerWakeQueue({ ...receipt(), id: "digest:engine-two", body: "Project two" }, "shared-owner", host);
     await firstSaved;
@@ -556,7 +557,7 @@ describe("durable target queue acceptance", () => {
     const current = newSession("codex", root);
     const save = vi.fn(async (_next: Session) => {});
     const publish = vi.fn();
-    expect(await acceptManagerWakeQueue(receipt(), "manager", { session: () => current, delivered: async () => true, save, publish })).toBe(true);
+    expect(await acceptManagerWakeQueue(receipt(), "manager", { session: () => current, delivered: async () => true, save, load: async () => null, publish })).toBe(true);
     expect(save).not.toHaveBeenCalled();
     expect(publish).not.toHaveBeenCalled();
   });
@@ -565,7 +566,7 @@ describe("durable target queue acceptance", () => {
     expect(canAcceptManagerWake(undefined)).toBe(false);
     const save = vi.fn(async (_next: Session) => {});
     const publish = vi.fn();
-    expect(await acceptManagerWakeQueue(receipt(), "manager", { session: () => undefined, delivered: async () => false, save, publish })).toBe(false);
+    expect(await acceptManagerWakeQueue(receipt(), "manager", { session: () => undefined, delivered: async () => false, save, load: async () => null, publish })).toBe(false);
     expect(save).not.toHaveBeenCalled();
     expect(publish).not.toHaveBeenCalled();
   });

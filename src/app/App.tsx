@@ -11632,6 +11632,7 @@ function Workspace({
           if (!saved) throw new Error("Manager digest could not be saved");
           return saved;
         },
+        load: () => getSession(id),
         publish: session => {
           sessionsRef.current = sessionsRef.current.map(entry => entry.id === id ? session : entry);
           flushSync(() => setSessions(sessionsRef.current));

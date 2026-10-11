@@ -114,6 +114,8 @@ export function selectAgentLiveState(session?: AgentLiveSession, context: AgentL
   if (task?.status === "cancelled") return { status: "done", detail: "Cancelled" };
   if (context.runStatus === "paused")
     return { status: "needs-you", reason: "decision", detail: context.pauseReason || "Orchestration paused" };
+  const deliveryError = context.wakeStates?.find(state => state.delivery?.error)?.delivery?.error;
+  if (deliveryError) return { status: "blocked", reason: "storage", detail: deliveryError };
   const held = context.wakeStates?.reduce((count, state) => count + state.events.filter(event => event.acknowledgedAt == null).length, 0) ?? 0;
   const waitingDispatches = new Set(context.wakeStates?.flatMap(state => state.waves
     .filter(wave => wave.retiredAt == null && wave.completedAt == null).flatMap(wave => wave.dispatchIds)));

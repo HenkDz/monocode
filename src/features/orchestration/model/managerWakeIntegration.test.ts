@@ -56,6 +56,7 @@ function setup() {
             || !!durable?.blocks.some(block => block.appRequestId === receipt.id);
         },
         save: saveTarget,
+        load: async () => durableSessions.get(id),
         publish: publishTarget,
       });
       if (ok) accepted.set(receipt.id, clone(receipt));
@@ -136,7 +137,7 @@ describe("Manager wake engine integration", () => {
     }
     const receipt = [...f.accepted.values()][0];
     expect(receipt.eventIds).toHaveLength(4);
-    expect(receipt.body).toContain(`app sessions.conversation {"sessionId":"${first.sessionId}"}`);
+    expect(receipt.body).toContain(`app sessions.read {"sessionId":"${first.sessionId}"}`);
     expect(f.host.acceptManagerDigest).toHaveBeenCalledWith("manager-chat", expect.objectContaining({ id: receipt.id }));
     expect(f.currentLead().queuedMessages).toHaveLength(1);
     expect(f.durableSessions.get("manager-chat")?.queuedMessages?.[0]).toMatchObject({ id: receipt.id, managerWake: { leadId: "engine", receiptId: receipt.id } });
@@ -289,7 +290,7 @@ describe("Manager wake engine integration", () => {
     expect(f.currentLead().queuedMessages ?? []).toHaveLength(0);
     expect(errors).toHaveBeenCalledOnce();
     f.manager.sync();
-    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(1_000);
     expect(f.host.acceptManagerDigest).toHaveBeenCalledTimes(2);
     expect(f.run().wakeState?.receipt?.id).toBe(receipt.id);
     expect(f.saved.get("engine")?.wakeState?.receipt?.acknowledgedAt).toBe(Date.now());
@@ -400,7 +401,7 @@ describe("Manager wake engine integration", () => {
     expect(f.run().wakeState!.waves.find(wave => receipt.completedWaveIds.includes(wave.id))!.dispatchIds).toEqual([first.activeDispatchId]);
     f.patchLead({ codexStorageError: undefined });
     f.manager.sync();
-    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(1_000);
     expect(f.run().wakeState?.receipt?.id).toBe(receipt.id);
     expect(f.run().tasks.find(task => task.id === late.id)?.delivered).toBe(true);
     expect(f.run().tasks.find(task => task.id === late.id)?.status).toBe("running");

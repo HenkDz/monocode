@@ -8,8 +8,8 @@ import { FloatingMonoChat } from "./FloatingMonoChat";
 import { MonoComposer } from "./MonoComposer";
 import { clearComposerDraft } from "../../sessions/model/draftCache";
 import { newSession, type Block, type Session } from "../../sessions/model/session";
-import { upsertSession, writeSession } from "../../sessions/data/sessionStore";
-import { getMonoGoalRecoveryBlocks, mergeMonoGoalRecoverySession, monoGoalRecoveryLiveSession } from "../../sessions/data/monoGoalRecovery";
+import { getSession, upsertSession, writeSession, flushSessionWrites, persistFingerprint, shouldPersistSession, retainSessionWrite, sessionWriteNeedsReconciliation } from "../../sessions/data/sessionStore";
+import { getMonoGoalRecoveryBlocks, mergeMonoGoalRecoverySession, monoGoalRecoveryLiveSession, reconcileMonoGoalOrigin } from "../../sessions/data/monoGoalRecovery";
 import { deliverFloatingMonoRequest, type FloatingMonoAction, type FloatingMonoView } from "../model/floatingMono";
 import { appendMonoGoalCard, appendMonoGoalOrigin, appendMonoGoalPendingCard, submitMonoGoal, type MonoGoalRoutingContext, type MonoGoalSubmission } from "../model/monoGoalRouting";
 import { MonoManagerGoals, type ManagerGoalHost } from "../model/monoManagerGoals";
@@ -58,14 +58,47 @@ function appSubmit(dependencies: Record<string, unknown>) {
     (sessionId: string, text: string, attachments: unknown[], submission: MonoGoalSubmission) => Promise<boolean>;
 }
 
-async function fixture(surface: "embedded" | "floating", interrupt: boolean, fault?: "before-write" | "after-write") {
+function exactOrdinaryPersist(ref: { current: Session[] }, original: Session) {
+  const app = readFileSync("src/app/App.tsx", "utf8");
+  const start = app.indexOf("  const persistSession = useCallback((session: Session | undefined) => {");
+  const end = app.indexOf("\n  useEffect(() => {", start);
+  expect(start).toBeGreaterThan(0);
+  expect(end).toBeGreaterThan(start);
+  const code = ts.transpileModule(app.slice(start, end) + "\nreturn persistSession;", {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  return new Function("useCallback", "shouldPersistSession", "removingSessionIds", "switchingWorktrees",
+    "persistFingerprint", "lastPersisted", "writeSession", "sessionsRef", "sidebarCwdRef", "setHistory", "mergeProjectHistorySummary", code)(
+    (callback: unknown) => callback, shouldPersistSession, { current: new Set() }, { current: new Set() },
+    persistFingerprint, { current: new Map([[original.id, persistFingerprint(original)]]) }, writeSession, ref,
+    { current: "" }, () => {}, () => {},
+  ) as (session: Session) => void;
+}
+
+function exactChatGate(startProvider: () => boolean) {
+  const app = readFileSync("src/app/App.tsx", "utf8");
+  const start = app.indexOf("      if (sessionWriteNeedsReconciliation(sessionId)) {");
+  const end = app.indexOf("      const owner = monoForSession(sessionId)", start);
+  expect(start).toBeGreaterThan(0);
+  expect(end).toBeGreaterThan(start);
+  const code = ts.transpileModule(app.slice(start, end) + "\nreturn startProvider();", {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  return new Function("sessionWriteNeedsReconciliation", "writeSession", "enqueueHarnessEvent", "flushHarnessEvents", "startProvider",
+    `return function(sessionId, options) { ${code} };`)(
+    sessionWriteNeedsReconciliation, writeSession, () => {}, () => {}, startProvider,
+  ) as (sessionId: string) => boolean;
+}
+
+async function fixture(surface: "embedded" | "floating", interrupt: boolean, fault?: "before-write" | "after-write", empty: boolean | "history" | "removed-draft" = false) {
   let context = interrupt ? initial : { ...initial, projects: initial.projects.map(project => ({ ...project, available: false })) };
   let source: Session = { ...newSession("codex", "C:/code/Atlas"), id: "cc5cg-ack" };
   if (fault) source = { ...source, id: `cc5ch-retry-${surface}-${crypto.randomUUID()}`,
-    blocks: [{ id: "prior-user", role: "user", text: "Previous chat" }],
-    monoTranscript: { before: null, firstBlockId: "prior-user" } };
+    blocks: empty ? [] : [{ id: "prior-user", role: "user", text: "Previous chat" }],
+    monoTranscript: { before: null, firstBlockId: empty === "removed-draft" ? "removed-draft" : empty ? null : "prior-user" } };
   const sessionsRef = { current: [source] };
-  let disk: Block[] = structuredClone(source.blocks);
+  let disk: Block[] = empty === "history" || empty === "removed-draft" ? [{ id: "older-history", role: "user", text: "Retain earlier history" }]
+    : structuredClone(source.blocks);
   let readsBlocked = false;
   const project = { id: "c:/code/atlas", name: "Atlas", folder: "C:/code/Atlas", managerId: "atlas-engine",
     managerMonoId: "atlas-manager", managerExists: true, running: 0, needsDecision: 0, ready: 0, blocked: [], goals: [] };
@@ -85,11 +118,14 @@ async function fixture(surface: "embedded" | "floating", interrupt: boolean, fau
     monoForSession: () => ({ id: "grand", role: "orchestrator" }),
     goalRoutingForMono: () => context, monoManagerGoals: host.ledger, managerGoalHost: { current: goals },
     invoke: native.invoke, pathKey, writeSession, getMonoGoalRecoveryBlocks,
-    mergeMonoGoalRecoverySession, monoGoalRecoveryLiveSession, submitMonoGoal,
+    mergeMonoGoalRecoverySession, monoGoalRecoveryLiveSession, reconcileMonoGoalOrigin, retainSessionWrite, submitMonoGoal,
     appendMonoGoalOrigin, appendMonoGoalPendingCard, appendMonoGoalCard, submitSession: host.grand,
   }) : undefined;
   const submissions: MonoGoalSubmission[] = [];
+  const ordinaryChat = vi.fn(() => true);
+  const submitChat = exactChatGate(ordinaryChat);
   const submit = (text: string, attachments: unknown[], submission: MonoGoalSubmission) => {
+    if (!submission) return submitChat(source.id);
     submissions.push(submission);
     if (adapter) return adapter(source.id, text, attachments, submission);
     return submitMonoGoal({ text, attachmentCount: attachments.length, origin: "user", submission }, host);
@@ -101,6 +137,7 @@ async function fixture(surface: "embedded" | "floating", interrupt: boolean, fau
   native.listen.mockImplementation(async (_name, callback) => { receive = callback; return () => {}; });
   native.invoke.mockImplementation(async (command: string, args?: { action: FloatingMonoAction }) => {
     if (command === "project_root") return project.folder;
+    if (command === "session_get") return { ...source, createdAt: 1, updatedAt: 2 };
     if (command === "mono_session_page") {
       if (readsBlocked) throw Error("Database read unavailable");
       return { blocks: structuredClone(disk), before: null, hasNewer: false };
@@ -120,7 +157,7 @@ async function fixture(surface: "embedded" | "floating", interrupt: boolean, fau
         disk = [...disk.slice(0, start), ...structuredClone(payload.session.blocks)];
         expect(new Set(disk.map(block => block.id)).size).toBe(disk.length);
       }
-      if (fault === "after-write" && !interrupted) {
+      if (fault === "after-write" && !interrupted && payload.session.blocks.some(block => block.monoGoalSubmission)) {
         interrupted = true;
         throw Error("Origin write acknowledgement interrupted before App publication");
       }
@@ -131,7 +168,7 @@ async function fixture(surface: "embedded" | "floating", interrupt: boolean, fau
       try {
         await deliverFloatingMonoRequest({ id: submissions.length + 1, monoId: "grand", action: args!.action }, {
           open: async () => source,
-          submit: (_id, text, attachments, options) => submit(text, attachments, options!.monoGoal),
+          submit: (_id, text, attachments, options) => submit(text, attachments, options?.monoGoal!),
           stop() {}, approval() {}, question() {}, questionInteraction() {}, reveal: async () => {}, openFile() {}, resume() {},
         }, async () => true);
       } catch (reason) {
@@ -140,6 +177,7 @@ async function fixture(surface: "embedded" | "floating", interrupt: boolean, fau
       }
     }
   });
+  if (empty) await getSession(source.id);
   const render = () => surface === "floating"
     ? root.render(createElement(FloatingMonoChat, { onShown() {} }))
     : root.render(createElement(MonoComposer, { sessionId: source.id, name: "Grand", goalRouting: context,
@@ -149,8 +187,19 @@ async function fixture(surface: "embedded" | "floating", interrupt: boolean, fau
   const props = Object.entries(field).find(([key]) => key.startsWith("__reactProps"))![1];
   act(() => props.onChange({ target: { value: "Fix Atlas checkout" } }));
   act(() => [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "New goal")!.click());
-  return { host, goals, submissions, source: () => source, disk: () => disk, field,
+  const persistOrdinary = exactOrdinaryPersist(sessionsRef, source);
+  return { host, goals, submissions, ordinaryChat, source: () => source, disk: () => disk, field,
     blockReads: (blocked: boolean) => { readsBlocked = blocked; },
+    saveOrdinaryBeforeReconcile: async () => {
+      const original = sessionsRef.current[0];
+      const next = original.blocks.some(block => block.id === "ordinary-during-uncertain") ? original
+        : { ...original, blocks: [...original.blocks,
+          { id: "ordinary-during-uncertain", role: "user" as const, text: "Continue chat from another composer" }] };
+      sessionsRef.current = [next];
+      source = next;
+      persistOrdinary(next);
+      await flushSessionWrites();
+    },
     saveChat: async () => {
       const next = { ...source, blocks: [...source.blocks, { id: "later-user", role: "user" as const, text: "Later chat" }] };
       await upsertSession(next);
@@ -255,5 +304,86 @@ it.each(["embedded", "floating"] as const)("blocks the %s original route while d
   await send();
   expect(f.host.grand).not.toHaveBeenCalled();
   expect(f.submissions[2]).toBe(f.submissions[0]);
+  expect(f.disk().filter(block => block.monoGoalSubmission)).toHaveLength(1);
+});
+
+it.each(["embedded", "floating"] as const)("preserves the %s unpublished origin against Chat before retry reconciliation", async surface => {
+  const f = await fixture(surface, true, "after-write");
+  await send();
+  const origin = f.submissions[0];
+  expect(f.source().blocks.some(block => block.id === origin.userMessageId)).toBe(false);
+  expect(f.disk().filter(block => block.monoGoalSubmission)).toHaveLength(1);
+  await f.saveOrdinaryBeforeReconcile();
+  expect(f.disk().filter(block => block.id === origin.userMessageId)).toHaveLength(1);
+  expect(f.disk().some(block => block.id === "ordinary-during-uncertain")).toBe(true);
+  expect(f.source().blocks.filter(block => block.id === origin.userMessageId)).toHaveLength(1);
+  expect(f.host.ledger.goals("grand")).toHaveLength(0);
+  expect(f.goals.deliver).not.toHaveBeenCalled();
+  expect((await getMonoGoalRecoveryBlocks(f.source().id)).filter(block => block.monoGoalSubmission)).toHaveLength(1);
+});
+
+it.each(["embedded", "floating"] as const)("holds %s ordinary saves until unreadable origin history becomes available", async surface => {
+  const f = await fixture(surface, true, "after-write");
+  await send();
+  f.blockReads(true);
+  const writesBefore = native.invoke.mock.calls.filter(call => call[0] === "mono_session_upsert").length;
+  await f.saveOrdinaryBeforeReconcile();
+  expect(native.invoke.mock.calls.filter(call => call[0] === "mono_session_upsert")).toHaveLength(writesBefore);
+  expect(f.disk().filter(block => block.monoGoalSubmission)).toHaveLength(1);
+  expect(sessionWriteNeedsReconciliation(f.source().id)).toBe(true);
+  f.blockReads(false);
+  await f.saveOrdinaryBeforeReconcile();
+  expect(f.disk().filter(block => block.monoGoalSubmission)).toHaveLength(1);
+  expect(sessionWriteNeedsReconciliation(f.source().id)).toBe(false);
+});
+
+it.each(["embedded", "floating"] as const)("preserves the %s first unpublished origin from an initially empty transcript", async surface => {
+  const f = await fixture(surface, true, "after-write", true);
+  await send();
+  await f.saveOrdinaryBeforeReconcile();
+  expect(f.disk().filter(block => block.id === f.submissions[0].userMessageId)).toHaveLength(1);
+  expect(f.disk().some(block => block.id === "ordinary-during-uncertain")).toBe(true);
+});
+
+it.each(["embedded", "floating"] as const)("preserves earlier history before the %s cached-empty writable tail", async surface => {
+  const f = await fixture(surface, true, "after-write", "history");
+  await send();
+  await f.saveOrdinaryBeforeReconcile();
+  expect(f.disk()[0].id).toBe("older-history");
+  expect(f.disk().filter(block => block.id === f.submissions[0].userMessageId)).toHaveLength(1);
+  expect(f.disk().some(block => block.id === "ordinary-during-uncertain")).toBe(true);
+});
+
+it.each(["embedded", "floating"] as const)("reconciles the %s origin after its empty tail's draft anchor was removed", async surface => {
+  const f = await fixture(surface, true, "after-write", "removed-draft");
+  await send();
+  await f.saveOrdinaryBeforeReconcile();
+  expect(f.disk()[0].id).toBe("older-history");
+  expect(f.disk().filter(block => block.id === f.submissions[0].userMessageId)).toHaveLength(1);
+  expect(f.source().monoTranscript?.firstBlockId).toBe(f.submissions[0].userMessageId);
+  expect(sessionWriteNeedsReconciliation(f.source().id)).toBe(false);
+});
+
+it.each(["embedded", "floating"] as const)("retains the %s Chat draft without provider work until reconciliation completes", async surface => {
+  const f = await fixture(surface, true, "after-write");
+  await send();
+  f.blockReads(true);
+  act(() => [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Chat")!.click());
+  const props = Object.entries(f.field).find(([key]) => key.startsWith("__reactProps"))![1];
+  act(() => props.onChange({ target: { value: "Ordinary Chat while the goal is uncertain" } }));
+  await send();
+  await flushSessionWrites();
+  expect(f.ordinaryChat).not.toHaveBeenCalled();
+  expect(f.field.value).toBe("Ordinary Chat while the goal is uncertain");
+  expect(sessionWriteNeedsReconciliation(f.source().id)).toBe(true);
+  f.blockReads(false);
+  await send();
+  await flushSessionWrites();
+  expect(f.ordinaryChat).not.toHaveBeenCalled();
+  expect(f.field.value).toBe("Ordinary Chat while the goal is uncertain");
+  expect(sessionWriteNeedsReconciliation(f.source().id)).toBe(false);
+  await send();
+  expect(f.ordinaryChat).toHaveBeenCalledOnce();
+  expect(f.field.value).toBe("");
   expect(f.disk().filter(block => block.monoGoalSubmission)).toHaveLength(1);
 });

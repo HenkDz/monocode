@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { newSession } from "../model/session";
-import { upsertSession, writeSession, flushSessionWrites, getSession } from "./sessionStore";
+import { upsertSession, writeSession, flushSessionWrites, getSession, retainSessionWrite, sessionWriteNeedsReconciliation, deleteSession } from "./sessionStore";
 
 const { invoke, claudeShellCommands } = vi.hoisted(() => ({ invoke: vi.fn(), claudeShellCommands: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
@@ -21,6 +21,40 @@ it("does not block an unrelated originating session", async () => {
   await expect(writeSession("other-origin", async () => "saved")).resolves.toBe("saved");
   release();
   await pending;
+});
+
+it("holds writers until reconciliation publishes, and retains the guard after a failed read", async () => {
+  const sessionId = "uncertain-origin";
+  let current = "unpublished";
+  const reconcile = vi.fn(async (): Promise<void> => { throw Error("History unavailable"); });
+  retainSessionWrite(sessionId, reconcile);
+  const writer = vi.fn(async () => current);
+  await expect(writeSession(sessionId, writer)).rejects.toThrow("History unavailable");
+  expect(writer).not.toHaveBeenCalled();
+  expect(sessionWriteNeedsReconciliation(sessionId)).toBe(true);
+  await expect(writeSession("unrelated-chat", async () => "saved")).resolves.toBe("saved");
+  let release!: () => void;
+  reconcile.mockImplementationOnce(async () => {
+    await new Promise<void>(resolve => { release = resolve; });
+    current = "published";
+  });
+  const saving = writeSession(sessionId, writer);
+  await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+  expect(writer).not.toHaveBeenCalled();
+  release();
+  await expect(saving).resolves.toBe("published");
+  expect(sessionWriteNeedsReconciliation(sessionId)).toBe(false);
+});
+
+it("drops a retained reconciliation only after a session deletion succeeds", async () => {
+  const sessionId = "deleted-uncertain-origin";
+  retainSessionWrite(sessionId, async () => { throw Error("Unpublished origin"); });
+  invoke.mockRejectedValueOnce(Error("Delete failed"));
+  await expect(deleteSession(sessionId)).rejects.toThrow("Delete failed");
+  expect(sessionWriteNeedsReconciliation(sessionId)).toBe(true);
+  invoke.mockResolvedValueOnce(undefined);
+  await deleteSession(sessionId);
+  expect(sessionWriteNeedsReconciliation(sessionId)).toBe(false);
 });
 
 it("reads an upsert source after the previous write and publication, and flush waits for both", async () => {

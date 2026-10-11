@@ -4,6 +4,7 @@ import ts from "typescript";
 import { expect, it, vi } from "vitest";
 import { MonoCodexStorageRecovery, isCodexStorageError, parseCodexStorageConflict, parseCodexStorageRecoveryConflict } from "../features/monos/model/monoCodexStorage";
 import { codexStorageAccountId } from "../features/monos/model/monoCodexStorageIssues";
+import { sessionWriteNeedsReconciliation } from "../features/sessions/data/sessionStore";
 
 const app = ts.createSourceFile("App.tsx", readFileSync(new URL("./App.tsx", import.meta.url), "utf8"),
   ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
@@ -86,6 +87,7 @@ it.each(["relink", "first replay"])("unblocks a late account member during %s be
     return true;
   });
   const context = {
+    sessionWriteNeedsReconciliation,
     sessionsRef, codexStorageRecovery: { current: recovery }, codexStorageAccountId,
     isCodexStorageError, parseCodexStorageConflict,
     monoSkillsForSession: () => ({ skillsRole: "manager", skillsPolicy: { mode: "role" } }),

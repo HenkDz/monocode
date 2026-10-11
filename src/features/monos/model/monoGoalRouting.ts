@@ -62,12 +62,17 @@ export function monoGoalRoutingContext(
 }
 
 type Mention = { id: string; start: number; end: number };
+function foldProjectText(value: string): string {
+  return value.normalize("NFKC").toLowerCase().replace(/ß/g, "ss")
+    .normalize("NFD").replace(/\p{M}/gu, "");
+}
 function mentions(text: string, projects: readonly MonoGoalProject[]): Mention[] {
-  const haystack = text.toLowerCase();
+  const haystack = text;
   const found: Mention[] = [];
   for (const project of projects) {
     if (!project.name) continue;
-    const needle = project.name.toLowerCase();
+    const needle = foldProjectText(project.name);
+    if (!needle) continue;
     let start = haystack.indexOf(needle);
     while (start >= 0) {
       const end = start + needle.length;
@@ -103,13 +108,22 @@ export function decideMonoGoalRoute(input: {
     return grand("Contains file paths: choose a project or send to Grand Orchestrator");
   if (/\b(compare|compares|compared|comparing|comparisons?|versus|vs\.?|cross[- ]project)\b|\b(across|all|both|multiple|between)\s+(the\s+)?(projects|repositories|repos)\b/i.test(text))
     return grand("Comparison or cross-project goal");
-  const matches = mentions(text, context.projects);
+  const foldedText = foldProjectText(text);
+  if (/[<>]|&(?:#(?:x[0-9a-f]+|\d+)|[a-z][a-z0-9]*);|\]\s*\(/i.test(foldedText))
+    return grand("Markup needs Grand Orchestrator");
+  if (choice.override !== "manager" && /(?=[^a-z])\p{L}/u.test(foldedText))
+    return grand("Non-ASCII letters: choose a project or send to Grand Orchestrator");
+  // A mixed-letter token can hide a second name even when a project chip is selected.
+  if ((foldedText.match(/[\p{L}\p{N}\p{Cf}]+/gu) ?? []).some(token =>
+    /[a-z]/.test(token) && /(?=[^a-z])\p{L}/u.test(token)))
+    return grand("Mixed-script letters need Grand Orchestrator");
+  const matches = mentions(foldedText, context.projects);
   const selected = choice.override === "manager" ? choice.projectId : matches[0]?.id;
   if (!selected) return grand("Choose a project or mention its exact name");
-  const normalize = (value: string) => value.toLowerCase().replace(/[\p{P}\s]/gu, "");
-  const normalizedText = normalize(text);
+  const skeleton = (value: string) => foldProjectText(value).replace(/[^a-z0-9]/g, "");
+  const normalizedText = skeleton(foldedText);
   // Conflict checks deliberately over-block substrings, including unavailable project names.
-  const referenced = context.projects.filter(project => normalizedText.includes(normalize(project.name)));
+  const referenced = context.projects.filter(project => normalizedText.includes(skeleton(project.name)));
   if (referenced.some(project => project.id !== selected))
     return grand(referenced.some(project => project.id === selected)
       ? "More than one project mentioned" : "Selected project differs from the text");

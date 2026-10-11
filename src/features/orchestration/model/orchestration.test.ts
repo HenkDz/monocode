@@ -179,6 +179,66 @@ it("rejects an invalid effort source before creating a worker", async () => {
   expect(f.host.createWorker).not.toHaveBeenCalled();
 });
 
+async function preparingWorkerFixture() {
+  const f = setup();
+  let releaseScopes!: () => void;
+  let enterScopes!: () => void;
+  const entered = new Promise<void>(resolve => { enterScopes = resolve; });
+  const blocked = new Promise<void>(resolve => { releaseScopes = resolve; });
+  const scopes = f.store.scopes.getMockImplementation()!;
+  f.store.scopes.mockImplementation(async (cwd, files) => {
+    if (cwd.startsWith("/worktrees/")) { enterScopes(); await blocked; }
+    return scopes(cwd, files);
+  });
+  const create = f.host.createWorker;
+  f.host.createWorker = vi.fn(async (run, task) => ({
+    ...await create(run, task),
+    modelSettings: { reasoningEffort: "high" },
+    effortSource: "role",
+  }));
+  await f.start();
+  await f.delegate(["src"]);
+  await entered;
+  return { ...f, releaseScopes };
+}
+
+it.each(["cancelled", "stopped", "replaced"] as const)("does not submit or overwrite a %s dispatch when worker scopes return late", async (state) => {
+  const f = await preparingWorkerFixture();
+  const task = f.tasks()[0];
+  const dispatchId = task.activeDispatchId!;
+  if (state === "cancelled") await f.manager.cancelTask("lead", task.id);
+  else if (state === "stopped") await f.manager.stopRun("lead");
+  else {
+    const run = f.manager.run("lead")!;
+    await f.manager.commit({ ...run,
+      tasks: run.tasks.map(entry => entry.id === task.id ? { ...entry, activeDispatchId: "replacement" } : entry),
+      dispatches: run.dispatches!.map(entry => entry.id === dispatchId ? { ...entry, state: "interrupted", stage: "settled" } : entry),
+    });
+  }
+  const current = structuredClone(f.manager.run("lead"));
+  const persisted = structuredClone(f.saved.get("lead"));
+  f.releaseScopes();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(f.manager.run("lead")).toEqual(current);
+  expect(f.saved.get("lead")).toEqual(persisted);
+  expect(f.tasks()[0].status).toBe(state === "replaced" ? "running" : "cancelled");
+  expect(f.tasks()[0].modelSettings).toBeUndefined();
+  expect(f.host.submit).not.toHaveBeenCalled();
+});
+
+it("retains concurrent tasks and dispatches when worker scopes return late", async () => {
+  const f = await preparingWorkerFixture();
+  await f.delegate(["other"]);
+  expect(f.tasks()).toHaveLength(2);
+  f.releaseScopes();
+  await vi.waitFor(() => expect(f.host.submit).toHaveBeenCalledTimes(2));
+  expect(f.tasks()).toHaveLength(2);
+  expect(f.saved.get("lead")!.tasks).toHaveLength(2);
+  expect(f.manager.run("lead")!.dispatches).toHaveLength(2);
+  expect(f.saved.get("lead")!.dispatches).toHaveLength(2);
+  expect(f.tasks().every(task => task.status === "running" && task.effortSource === "role")).toBe(true);
+});
+
 it("rejects an in-flight delegation whose goal was cancelled during async scope checks", async () => {
   const f = setup();
   await f.start();

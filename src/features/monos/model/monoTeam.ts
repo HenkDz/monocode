@@ -5,7 +5,8 @@ import { assertDirectReport, validateMonoOrg, validateMonoOrgTransition, isTeamR
 export { isTeamReviewer } from "./monoOrg";
 import { readAgentFile, writeAgentFile, MonoFileConflict, MEMORY_MAX_BYTES, MEMORY_MAX_LINES, type AgentFilePath } from "./monoFiles";
 import { addMemoryEntry, memoryDate, memoryEntry, memoryLines } from "./monoMemory";
-import { isEffortSettingId } from "../../sessions/model/models";
+import { isEffortSettingId, resolveModel } from "../../sessions/model/models";
+import { switchMonoRoleEffort } from "./monoRoleEffort";
 
 export const TEAM_SOUL_MAX_BYTES = 8 * 1024;
 export const TEAM_DEFAULT_CAP = 6;
@@ -144,6 +145,12 @@ function updateProfile(member: Mono, input: Record<string, unknown>, host: TeamH
   return validateTeamProfile(profile, host.availableProfiles);
 }
 
+// Explicit settings writes were rejected; a model switch can translate an existing locked choice.
+function retainsModelSettingsLock(before: Mono, after: Mono): boolean {
+  return before.userLockedFields?.includes("modelSettings") === true && before.effortSource === after.effortSource &&
+    (before.workerProfile?.harness !== after.workerProfile?.harness || before.workerProfile?.model !== after.workerProfile?.model);
+}
+
 function saveChange(managerId: string, change: TeamChange, member?: Mono): void {
   const roster = listMonos(true);
   assertTeamManager(roster, managerId);
@@ -211,7 +218,7 @@ function reconcileMember(roster: readonly Mono[], managerId: string, change: Tea
   for (const key of ["name", "specialty", "workerProfile", "effortSource", "archivedAt"] as const) {
     if (JSON.stringify(before[key]) === JSON.stringify(change.after[key])) continue;
     const fields: TeamLockedField[] = key === "workerProfile" ? (["harness", "model", "modelSettings"] as const).filter((field) => JSON.stringify(before.workerProfile?.[field]) !== JSON.stringify(change.after.workerProfile?.[field])) : key === "effortSource" ? ["modelSettings"] : key === "archivedAt" ? [] : [key];
-    if (fields.some((field) => current.userLockedFields?.includes(field))) throw new TeamEditConflict("The user locked a field while the team action was saving");
+    if (fields.some((field) => current.userLockedFields?.includes(field) && (field !== "modelSettings" || !retainsModelSettingsLock(before, change.after)))) throw new TeamEditConflict("The user locked a field while the team action was saving");
     if (JSON.stringify(current[key]) !== JSON.stringify(before[key]) && JSON.stringify(current[key]) !== JSON.stringify(change.after[key])) throw new TeamEditConflict("The member changed while the team action was saving");
     Object.assign(after, { [key]: change.after[key] });
   }
@@ -289,7 +296,14 @@ export function handleMonoTeam(managerId: string, requestId: string, action: str
         assertTeamUpdateUnlocked(before, input);
         if (input.name !== undefined) after.name = shortText(input.name, "name");
         if (input.specialty !== undefined) after.specialty = shortText(input.specialty, "specialty");
-        if (["harness", "model", "modelSettings"].some((key) => Object.prototype.hasOwnProperty.call(input, key))) after.workerProfile = updateProfile(before, input, host);
+        if (["harness", "model", "modelSettings"].some((key) => Object.prototype.hasOwnProperty.call(input, key))) {
+          after.workerProfile = updateProfile(before, input, host);
+          if (input.modelSettings === undefined && before.workerProfile && (before.workerProfile.harness !== after.workerProfile.harness || before.workerProfile.model !== after.workerProfile.model)) {
+            const effort = switchMonoRoleEffort(before, resolveModel(before.workerProfile.harness, before.workerProfile.model), resolveModel(after.workerProfile.harness, after.workerProfile.model), before.workerProfile.modelSettings ?? {});
+            after.workerProfile = { ...after.workerProfile, modelSettings: effort.modelSettings };
+            after.effortSource = effort.effortSource;
+          }
+        }
         if (input.modelSettings && Object.keys(input.modelSettings).some(isEffortSettingId)) after.effortSource = undefined;
         if (input.soul !== undefined) files.soul = { before: (await readAgentFile(before.id, "SOUL.md")).text ?? "", after: validateTeamSoul(input.soul) };
       } else if (action.startsWith("team.memory.")) {
@@ -397,7 +411,8 @@ export function undoMonoTeamChanges(
                 (field) =>
                   JSON.stringify(change.before?.workerProfile?.[field]) !==
                     JSON.stringify(change.after.workerProfile?.[field]) &&
-                  member.userLockedFields?.includes(field),
+                  member.userLockedFields?.includes(field) &&
+                  (field !== "modelSettings" || !retainsModelSettingsLock(change.before!, change.after)),
               ))
           )
             throw Error("Undo cannot overwrite a user-locked field");
@@ -490,6 +505,7 @@ export function undoMonoTeamChanges(
           throw Error(
             "This member changed during Undo; a newer edit is retained",
           );
+        // Existing settings locks passed the per-change checks; retain locks added during Undo.
         if (
           ((key === "name" || key === "specialty") &&
             latestMember.userLockedFields?.includes(key)) ||
@@ -499,7 +515,8 @@ export function undoMonoTeamChanges(
               (field) =>
                 JSON.stringify(restored.workerProfile?.[field]) !==
                   JSON.stringify(member.workerProfile?.[field]) &&
-                latestMember.userLockedFields?.includes(field),
+                latestMember.userLockedFields?.includes(field) &&
+                (field !== "modelSettings" || !member.userLockedFields?.includes(field)),
             ))
         )
           throw Error("Undo cannot overwrite a user-locked field");

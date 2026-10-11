@@ -2567,14 +2567,18 @@ export class Orchestrator {
                 ?.status !== "running"
             )
               continue;
-            const preparedRun = this.run(run.leadId)!;
-            const checkoutBaseline = task.checkoutBaseline ?? currentDispatchBaseline(preparedRun, task.id) ??
-              (task.checkoutBaselineUnknown ? undefined : task.readOnlyBaseline) ?? (!task.lastDispatchId &&
-                preparedRun.dispatches?.filter(dispatch => dispatch.taskId === task.id).length === 1 ? snapshot : undefined);
             const writeScopes = await this.store.scopes(
               prepared.workspace.checkoutCwd,
               task.files,
             );
+            const preparedRun = this.run(run.leadId);
+            const preparedTask = preparedRun?.tasks.find((entry) => entry.id === task.id);
+            if (!preparedRun || preparedRun.status !== "active" ||
+                preparedTask?.status !== "running" || preparedTask.activeDispatchId !== dispatchId)
+              continue;
+            const checkoutBaseline = preparedTask.checkoutBaseline ?? currentDispatchBaseline(preparedRun, task.id) ??
+              (preparedTask.checkoutBaselineUnknown ? undefined : preparedTask.readOnlyBaseline) ?? (!preparedTask.lastDispatchId &&
+                preparedRun.dispatches?.filter(dispatch => dispatch.taskId === task.id).length === 1 ? snapshot : undefined);
             await this.commit({
               ...preparedRun,
               tasks: preparedRun.tasks.map((entry) =>
@@ -2608,7 +2612,9 @@ export class Orchestrator {
             if (
               this.run(run.leadId)?.status !== "active" ||
               this.run(run.leadId)?.tasks.find((entry) => entry.id === task.id)
-                ?.status !== "running"
+                ?.status !== "running" ||
+              this.run(run.leadId)?.tasks.find((entry) => entry.id === task.id)
+                ?.activeDispatchId !== dispatchId
             )
               continue;
             const prompt = workerTurnPrompt(

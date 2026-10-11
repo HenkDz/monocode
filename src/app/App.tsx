@@ -1055,6 +1055,10 @@ function withPlanBuildTarget(
     resolved.id,
     modelSettings,
   );
+  const effortSetting = modelEffortSetting(resolved);
+  if (effortSetting && target.modelSettings?.[effortSetting.id] !== undefined) {
+    next.effortSource = "user";
+  }
 
   if (plan.kind === "arm") {
     return { ...next, pendingSwitch: plan.pending };
@@ -7169,16 +7173,17 @@ function Workspace({
   );
 
   const onModelSettingsChange = useCallback(
-    (sessionId: string, modelSettings: Record<string, string>, effortSource?: EffortSource) => {
+    (sessionId: string, modelSettings: Record<string, string>, settingId?: string, effortSource?: EffortSource) => {
       const current = sessionsRef.current.find(session => session.id === sessionId);
       const mono = monoForSession(sessionId);
       const setting = current && modelEffortSetting(resolveModel(current.harness, current.model));
       const effortChanged = !!setting && modelSettings[setting.id] !== current?.modelSettings[setting.id];
-      const source = effortSource ?? (mono?.role && effortChanged ? "user" : current?.effortSource);
+      const effortSelected = effortChanged || (!!setting && settingId === setting.id);
+      const source = effortSource ?? (mono?.role && effortSelected ? "user" : current?.effortSource);
       if (mono?.role && current) {
         updateMono(mono.id, latest => ({ ...latest, effortSource: source,
           workerProfile: { harness: current.harness, model: current.model, modelSettings } }));
-        if (source === "user" && (effortChanged || effortSource === "user")) lockMonoField(mono.id, "modelSettings");
+        if (source === "user" && (effortSelected || effortSource === "user")) lockMonoField(mono.id, "modelSettings");
       } else saveLastModelSettings(modelSettings);
       const applySettings = (s: Session) => s.id === sessionId ? { ...s, modelSettings, effortSource: source } : s;
       sessionsRef.current = sessionsRef.current.map(applySettings);
@@ -8094,6 +8099,12 @@ function Workspace({
 
       dismissNoticesForContinuedSession(sessionId);
       const commitSubmittedTurn = () => {
+        const mono = monoForSession(sessionId);
+        if (options?.buildTarget && mono?.role && current.effortSource === "user") {
+          updateMono(mono.id, latest => ({ ...latest, effortSource: "user",
+            workerProfile: { harness: current.harness, model: current.model, modelSettings: current.modelSettings } }));
+          lockMonoField(mono.id, "modelSettings");
+        }
         setSessions((prev) =>
           prev.map((s) => {
             if (s.id !== sessionId) return s;
@@ -14598,7 +14609,7 @@ function Workspace({
           onModelChange(monoViewSession.id, harness, model)
         }
         onModelSettingsChange={(settings, source) =>
-          onModelSettingsChange(monoViewSession.id, settings, source)
+          onModelSettingsChange(monoViewSession.id, settings, undefined, source)
         }
         onRuntimeModeChange={(mode) =>
           onRuntimeModeChange(monoViewSession.id, mode)

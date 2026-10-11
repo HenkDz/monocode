@@ -18,6 +18,18 @@ Delegation, member work requests, and automatic Reviewer tasks resolve their pro
 
 Both Details surfaces reuse `ModelSettingRows`. Its settings callback optionally supplies the changed setting ID, allowing non-effort edits to retain effort ownership. Live conversation controls use that Session's source, independently of later Team profile changes. The same rows work with the model-source context's advertised remote settings.
 
+## CC5BF review repairs
+
+Composer now forwards the selected setting ID through SessionPane to the ownership callback. Selecting the displayed effort again records a user choice and locks settings; selecting a grouped Fast or Service Tier option keeps role ownership. Details reset still supplies its explicit source independently of the setting ID.
+
+An explicit Plan Build target effort records user ownership on the submitted Session. Once the submission is accepted, its Mono profile receives the selected settings and the settings lock. Details and catalog refresh therefore retain the selected Build effort. A target without an effort choice retains its existing ownership.
+
+Team API harness/model switches without supplied settings use `switchMonoRoleEffort` with both advertised model profiles. Compatible user choices survive changes to the provider's effort setting ID. Translation and Undo retain an existing settings lock; explicit writes, newly added locks, and concurrent profile edits retain their conflict checks.
+
+Worker preparation re-reads the active run after awaited checkout scope discovery, requires a running task with the same dispatch ID, and commits from that current snapshot. Cancelled or replaced dispatches cannot be revived, and unrelated concurrent tasks remain in the saved run. The submit guard also checks dispatch identity after persistence.
+
+The committed reproductions cover the actual Composer and Build controls, App callbacks, Details display/catalog refresh, Team handler/Undo, and the deterministic cancellation preparation window. Final validation and evidence for these repairs are recorded in `docs/cc5bf-effort-fixes.md` and `C:/Users/nooro/AppData/Local/Temp/monocode-cc/cc5bf/REPORT.md`.
+
 ## Scope and alternatives
 
 The core policy lives in a new model module and the origin/reset presentation in a small shared component. Shared-file changes are limited to necessary callers, types, persistence, preparation results, and locking. The extra habit, Manager placeholder, account/stub, Team Undo, and automatic-review paths were found by tracing session creation and required the same policy. No prompt text, goal routing, wake batching, review authority, permissions, publishing, or merge rules changed.

@@ -183,6 +183,7 @@ export type SessionPaneProps = {
   onModelSettingsChange: (
     sessionId: string,
     settings: Record<string, string>,
+    settingId?: string,
   ) => void;
   onRuntimeModeChange: (sessionId: string, mode: RuntimeMode) => void;
   onSubmit: (
@@ -807,8 +808,8 @@ const LocalSessionPane = memo(function LocalSessionPane({
             : null;
         setModelWelcome(kind && { kind, run: ++modelWelcomeSequence.current });
       }}
-      onModelSettingsChange={(settings) =>
-        onModelSettingsChange(session.id, settings)
+      onModelSettingsChange={(settings, settingId) =>
+        onModelSettingsChange(session.id, settings, settingId)
       }
       onRuntimeModeChange={(mode) => onRuntimeModeChange(session.id, mode)}
       canSaveDraft={

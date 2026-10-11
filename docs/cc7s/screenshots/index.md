@@ -1,0 +1,69 @@
+# CC7S screenshots
+
+Chromium captures of synthetic, clickable static HTML at 1440 and 1100 px, dark and light. Each base viewport is 1000 px tall. These show design behavior, not native or provider acceptance.
+
+| Screenshot | Size | SHA-256 |
+| --- | --- | --- |
+| [workbench-1440-dark-reviewer.png](workbench-1440-dark-reviewer.png) | 1440 × 1000 | `4c60cdcc516ac917e3fc61193cf3b249314e5a2929c959b7a9b04e2f0de665bd` |
+| [workbench-1440-dark-native.png](workbench-1440-dark-native.png) | 1440 × 1000 | `99fe2eb3602b858a0272908f11c4b8bd8d293349ac2eee0d44e6042ae4930b87` |
+| [workbench-1440-dark-all.png](workbench-1440-dark-all.png) | 1440 × 1000 | `889be56860e378a180de572f4c3d4952a1037d02460e8b195b896cbfae1d7f11` |
+| [workbench-1440-dark-zero.png](workbench-1440-dark-zero.png) | 1440 × 1000 | `4e501ccabea158bb81de7437238b8029605da2df86f97230712bf506d68f139e` |
+| [workbench-1440-dark-loading.png](workbench-1440-dark-loading.png) | 1440 × 1000 | `1c996628e7095fb4031ecf5e0010d41ed320c1f232f3d2d34d31cdd8e62dd646` |
+| [workbench-1440-dark-error.png](workbench-1440-dark-error.png) | 1440 × 1000 | `a6aea2d9535101ad90ae9308282a1b630ec89a7341e4815ef62980b1c90a1212` |
+| [workbench-1440-light-reviewer.png](workbench-1440-light-reviewer.png) | 1440 × 1000 | `6f838c97a647cab7259d03ff0a28c43de1bf72e1c70c9efe7da38b36ed62a88e` |
+| [workbench-1440-light-native.png](workbench-1440-light-native.png) | 1440 × 1000 | `38921f44037022a5cb31b4c2cf3c09d83c59a93020877378727519dc341a7ea0` |
+| [workbench-1440-light-all.png](workbench-1440-light-all.png) | 1440 × 1000 | `3468eb05d1c047bb25931b562b0720eeb8360b4c5880e72fa98cd1605ab4eb9e` |
+| [workbench-1440-light-zero.png](workbench-1440-light-zero.png) | 1440 × 1000 | `51256cf594b1f15b0b91b33390c6dc5ebc3eac38994d1d98ff3d8e9e571994a0` |
+| [workbench-1440-light-loading.png](workbench-1440-light-loading.png) | 1440 × 1000 | `5a6cfb19eb8e45be68247a74b6a26da6acc1f5cd64ff1a7aea8da50a79c138c9` |
+| [workbench-1440-light-error.png](workbench-1440-light-error.png) | 1440 × 1000 | `9c90bb9baea37f4542825871dc7cdfd94ae03fe2f047a39038a09734cc4e5dc7` |
+| [workbench-1100-dark-reviewer.png](workbench-1100-dark-reviewer.png) | 1100 × 1000 | `db7eea278554087e4c7f23559a8f9927b2cc06cce83824ff8cf9b25da21daab8` |
+| [workbench-1100-dark-native.png](workbench-1100-dark-native.png) | 1100 × 1000 | `8e528eac1d8112f0c8d26add21cbd1014f6b645e168347ffee1fbb387cfbbbbb` |
+| [workbench-1100-dark-all.png](workbench-1100-dark-all.png) | 1100 × 1000 | `fc5197d61284947b803227fdcef57ab080280d0ee0e5095477d6a89b6b707b7b` |
+| [workbench-1100-dark-zero.png](workbench-1100-dark-zero.png) | 1100 × 1000 | `47d92e0973dddab4acda02e152b4edf89e171b2201e92cfe88c054a8c2e90f7b` |
+| [workbench-1100-dark-loading.png](workbench-1100-dark-loading.png) | 1100 × 1000 | `2feeac17767512defb5f51334e79d0f69a4f3ffc25b159248a74e625e62fa5e7` |
+| [workbench-1100-dark-error.png](workbench-1100-dark-error.png) | 1100 × 1000 | `a11d23d8c68503b71aaa52d986be62557ebb12ced5968d69054d1a6ee9ffd88d` |
+| [workbench-1100-light-reviewer.png](workbench-1100-light-reviewer.png) | 1100 × 1000 | `128a9c103d72d774c9ff019ddff33aa8a55781a689efb1a1cfe35469ca198573` |
+| [workbench-1100-light-native.png](workbench-1100-light-native.png) | 1100 × 1000 | `b3a4abf37189a025ca5c2a6b7500828cd9c592b8cc02b00267b510d010bde1bc` |
+| [workbench-1100-light-all.png](workbench-1100-light-all.png) | 1100 × 1000 | `38d06bf377ca2f6db356293b77399dd8e2d3cc69b029237e5545e127eaf7660c` |
+| [workbench-1100-light-zero.png](workbench-1100-light-zero.png) | 1100 × 1000 | `a07d04225ab283723184fa8415750b30bd536aaba2e7c99e0ea5110d53818d3b` |
+| [workbench-1100-light-loading.png](workbench-1100-light-loading.png) | 1100 × 1000 | `61ff95e6d3bf785e6e1c525c61e05e652d5b01449090b4e67628f6e5a3b36b46` |
+| [workbench-1100-light-error.png](workbench-1100-light-error.png) | 1100 × 1000 | `05d5c515cd3a89657ababf168c899beeed3e249a1f99d84f48785b11a2dd9a7e` |
+| [workbench-1440-light-activity.png](workbench-1440-light-activity.png) | 1440 × 1000 | `6a4df2d35a7815770f0e131bc7b17080fb1339fea0f0b85927ddede81b0e8c79` |
+| [workbench-1440-dark-history-keyboard.png](workbench-1440-dark-history-keyboard.png) | 1440 × 1000 | `7fa797fa8b81e4589161e896b1fee02cc9b1c73b34b0700dcd4938d5ab57f118` |
+| [workbench-1440-dark-storage-drawer.png](workbench-1440-dark-storage-drawer.png) | 1440 × 1000 | `243714ac6b360bc3f9be481b0d55d3bd31ab4d05abd2fedc52b2918690cf716c` |
+| [workbench-1440-dark-tool-drawer.png](workbench-1440-dark-tool-drawer.png) | 1440 × 1000 | `3a7bf3266d879bf576d264e1af27f5976e59ef6d04b0c204c9d351bc84766753` |
+| [workbench-1440-dark-long-conversation.png](workbench-1440-dark-long-conversation.png) | 1440 × 1000 | `785d5e983e7ad23466a9158c73c31dd44a38b15522d5bd2ea21a0493d2c07de4` |
+| [workbench-1100-dark-long-conversation.png](workbench-1100-dark-long-conversation.png) | 1100 × 1000 | `556c293168b428c75cd54a57229db67a15ba27cad2fc0acc04644de3b45c9ec5` |
+| [workbench-1440-dark-session.png](workbench-1440-dark-session.png) | 1440 × 1000 | `0e1d59670fab39a3edfd1df42f44627c69e5a3630e263eab09abf5573ee5ca8f` |
+| [workbench-1440-light-session.png](workbench-1440-light-session.png) | 1440 × 1000 | `cb3018ff7cf7619be5db4b7d2170dce71d301ec71d2c235ea21da15dfdf3c00d` |
+| [conversation-1440-dark-reviewer.png](conversation-1440-dark-reviewer.png) | 1440 × 1000 | `9f2c5df489ebcde2f80b30e5a113720a5a8facaa3be9d6f773040d83b20e3574` |
+| [conversation-1440-dark-native.png](conversation-1440-dark-native.png) | 1440 × 1000 | `3a4789ce0c5053643a88eb21539b2940003402c5a1e907ac0779ece9e4925cc8` |
+| [conversation-1440-dark-all.png](conversation-1440-dark-all.png) | 1440 × 1000 | `d5942734e84f5cd52aebf13c71bddc4f6e3447a9feeb46bc69a2629f9fbfa455` |
+| [conversation-1440-dark-zero.png](conversation-1440-dark-zero.png) | 1440 × 1000 | `2e46f3ed66023b382da25103b60d81ebdc1409e22a93ac23cc28c327e0d7a1d0` |
+| [conversation-1440-dark-loading.png](conversation-1440-dark-loading.png) | 1440 × 1000 | `17e58bc462ad9469f4567e5f15fdc32114771933bdac878a04b5df29ac504aa8` |
+| [conversation-1440-dark-error.png](conversation-1440-dark-error.png) | 1440 × 1000 | `54488c49e752ff165fdc560993fbcdac7e577a537a8a32ec5c07b2967facd846` |
+| [conversation-1440-light-reviewer.png](conversation-1440-light-reviewer.png) | 1440 × 1000 | `e4f4743e1974301815cd722dc4bccd891819d309d7e4ce95d82e0510e3b735a6` |
+| [conversation-1440-light-native.png](conversation-1440-light-native.png) | 1440 × 1000 | `99f4088189f4d36073babf1b9a84839e519f1398db6881143f849d2aa087cc97` |
+| [conversation-1440-light-all.png](conversation-1440-light-all.png) | 1440 × 1000 | `8a81e9d23276bc1c1c46b93ed02eedc0362109d4bdf3325173c68e978f62a2d1` |
+| [conversation-1440-light-zero.png](conversation-1440-light-zero.png) | 1440 × 1000 | `4a5c902a1794eba19c87f825a4d0205e92e1b6be7348d61f07c3c6019ece0b25` |
+| [conversation-1440-light-loading.png](conversation-1440-light-loading.png) | 1440 × 1000 | `3eff3973b1dd92aceb1c794041697611b85ee5ed52cbf13237f44f4c7e41dfeb` |
+| [conversation-1440-light-error.png](conversation-1440-light-error.png) | 1440 × 1000 | `d8aeb371fb4ec1143d4d12561b78162d54c7e492d390bf62915adf09ad7358ae` |
+| [conversation-1100-dark-reviewer.png](conversation-1100-dark-reviewer.png) | 1100 × 1000 | `b7bb21ffe8adb267a81d0a2e3d0f6cd1a743f2ce98af84e3e61a6966554a0c5b` |
+| [conversation-1100-dark-native.png](conversation-1100-dark-native.png) | 1100 × 1000 | `f94323746808c031c26bc0c31e9e1f08efbc43585333c5125988ee9d00d52d4a` |
+| [conversation-1100-dark-all.png](conversation-1100-dark-all.png) | 1100 × 1000 | `ab0e86ccf62068eb80951048e97ce7f4546b3a7c101d83fc500be369ebff12e6` |
+| [conversation-1100-dark-zero.png](conversation-1100-dark-zero.png) | 1100 × 1000 | `a08d15255f900fe76d9b448dcfffe23d00bbfae456884e3f5b634f69ce694d22` |
+| [conversation-1100-dark-loading.png](conversation-1100-dark-loading.png) | 1100 × 1000 | `daaeb25479a574ddd670b0f3abb57e134b44d1dc579ab01bc2061a86b1c5f37a` |
+| [conversation-1100-dark-error.png](conversation-1100-dark-error.png) | 1100 × 1000 | `44d343226d5a2acd00774b7de77de55b64a7b44ac08a33ad3cd1c3e54a659a34` |
+| [conversation-1100-light-reviewer.png](conversation-1100-light-reviewer.png) | 1100 × 1000 | `e6d4b125f778a01a5b8180f52f62257af49c024acf9c6885b259cd5baaf23dec` |
+| [conversation-1100-light-native.png](conversation-1100-light-native.png) | 1100 × 1000 | `b790d5a1e750db309c19404c4713c586fcf588938b6efa2b335568035bca440f` |
+| [conversation-1100-light-all.png](conversation-1100-light-all.png) | 1100 × 1000 | `8086f3129ddf3773bffa930a77840c5b7ae6240767a78975456db91b376262d8` |
+| [conversation-1100-light-zero.png](conversation-1100-light-zero.png) | 1100 × 1000 | `be77eb1aaa98a4d072bf9c2182a6d3974b0aca437ea6bef9d8ec93ed42366362` |
+| [conversation-1100-light-loading.png](conversation-1100-light-loading.png) | 1100 × 1000 | `4d9d4f14b475b4fb1f6306eea7be966c4acbc0d29a2aa8eb205f31951fb85d9f` |
+| [conversation-1100-light-error.png](conversation-1100-light-error.png) | 1100 × 1000 | `5d440948326f4610217bac91293e24886608efeb5dfbc58b5e4e3fc23b43ebf1` |
+| [conversation-1440-light-activity.png](conversation-1440-light-activity.png) | 1440 × 1000 | `59e44fc2580fc35dcf95d91af11632229900975bb909eb712c9035efc464914f` |
+| [conversation-1440-dark-storage-drawer.png](conversation-1440-dark-storage-drawer.png) | 1440 × 1000 | `4d74fdc2d92a1cd4cd61bd5c4ce3ce8fe4549fedfedf475cf0a7c25796039ffa` |
+| [conversation-1440-dark-tool-drawer.png](conversation-1440-dark-tool-drawer.png) | 1440 × 1000 | `6f06822c86a2ecb3e2a2118184c6f2351bdc349cbd11c06af7f088a98a60b3e7` |
+| [conversation-1440-dark-long-conversation.png](conversation-1440-dark-long-conversation.png) | 1440 × 1000 | `c5f4a0f7059f59ec798c1984c58c34347ab6179d6bd02be6249d358450e74eba` |
+| [conversation-1100-dark-long-conversation.png](conversation-1100-dark-long-conversation.png) | 1100 × 1000 | `af4753cc0fee2f72f1666f9269a565a9bda05a4da844779c13345c2b22278b44` |
+| [conversation-1440-dark-session.png](conversation-1440-dark-session.png) | 1440 × 1000 | `33dc2bb0c7576355deb3450dac10f34cd05003383b7ccaf069847e14c80dfa04` |
+| [conversation-1440-light-session.png](conversation-1440-light-session.png) | 1440 × 1000 | `441d1690e33e6b9a3846fcea82e86f36c84b3271a1bca2a5963407e3c0618fe0` |

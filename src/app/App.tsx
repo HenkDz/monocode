@@ -14,8 +14,8 @@ import { loadMonoView, saveMonoView, monoForView, monoViewProject, memberDetails
 import { MonoTeamActivity } from "../features/monos/ui/MonoTeamActivity";
 import { TeamMap } from "../features/teamMap/TeamMap";
 // CC7C integration: Mission control uses the existing full-view navigation.
-import { MISSION_CONTROL_SCOPE } from "../features/commandCenter/ui/MissionControl";
-import { DelegationTimelineRoute as MissionControl } from "../features/commandCenter/ui/DelegationTimeline"; // CC7E route hook
+import { MissionControl, MISSION_CONTROL_SCOPE } from "../features/commandCenter/ui/MissionControl";
+import { MissionCommandBar } from "../features/commandCenter/ui/MissionCommandBar";
 import { AttentionQueue, ATTENTION_QUEUE_SCOPE } from "../features/commandCenter/ui/AttentionQueue";
 import { openGoalTarget } from "../features/commandCenter/model/goalView";
 import { TeamMapHeaderAction, useTeamMap } from "../features/teamMap/navigation";
@@ -15322,8 +15322,31 @@ function Workspace({
               />
             )}
             <div className="body-glass flex min-h-0 min-w-0 flex-1 flex-col">
-              <MissionControl sessions={sessions} runs={orchestrationRuns} open={teamMap.open && teamMap.scope === MISSION_CONTROL_SCOPE}
-                onOpenAttention={() => onOpenTeamMap(ATTENTION_QUEUE_SCOPE)}
+              {/* CC7N shell hook: isolated command surface uses the existing submission adapters. */}
+              <MissionControl sessions={sessions} runs={orchestrationRuns} statuses={managerPrStatuses} open={teamMap.open && teamMap.scope === MISSION_CONTROL_SCOPE}
+                selectedAccount={session => selectedProviderAccountId("codex", session.cwd)}
+                isLocalSession={session => !remoteProjectFor(session.cwd)}
+                command={<MissionCommandBar open={teamMap.open && teamMap.scope === MISSION_CONTROL_SCOPE}
+                  goalRouting={goalRoutingForMono(listMonos().find(mono => mono.role === "orchestrator")?.id ?? "")}
+                  onSubmit={async (text, submission) => {
+                    const grand = submission ? findMono(submission.ownerId) : listMonos().find(mono => mono.role === "orchestrator");
+                    if (!grand || grand.role !== "orchestrator" || grand.archivedAt != null)
+                      throw Error("That Grand Orchestrator is no longer available");
+                    const session = await ensureMonoSession(grand.id, {
+                      home: homeDir, load: ensureOpenSession, save: saveMonoPermissions, create: newDefaultSession,
+                      add: created => { sessionsRef.current = [...sessionsRef.current, created]; setSessions(sessionsRef.current); },
+                    });
+                    if (!session) return false;
+                    return submission ? submitMonoGoalRef.current(session.id, text, [], submission) : submitSession(session.id, text, []);
+                  }} />}
+                renderAttention={onClose => <AttentionQueue sessions={sessions} runs={orchestrationRuns} open presentation="panel"
+                  readSessions={() => sessionsRef.current} readRuns={() => orchestrator.snapshot()}
+                  selectedAccount={session => selectedProviderAccountId("codex", session.cwd)}
+                  isLocalSession={session => !remoteProjectFor(session.cwd)} onClose={onClose}
+                  callbacks={{ approval: onApproval, question: onQuestionReply, questionInteraction: onQuestionInteraction,
+                    repair: onCodexStorageRepair, compare: onCodexStorageCompare, reveal: onCodexStorageReveal,
+                    resume: onUsageLimitResume, resumeAtReset: onUsageLimitResumeAtReset, retryDelivery: onResumeQueue,
+                    continueManager: id => orchestrator.continueManager(id), inspect: id => { teamMap.close(); return onOpenApprovalSession(id); }, inspectAutomation: () => onOpenAutomations() }} />}
                 onClose={teamMap.close} onOpenTarget={target => openGoalTarget(target, {
                   close: teamMap.close, request: onOpenApprovalSession, mono: onOpenMono, session: onOpenMonoLaunchedSession,
                 })} />

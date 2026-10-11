@@ -1,4 +1,4 @@
-import { createContext, useContext, useId, useState, useSyncExternalStore } from "react";
+import { createContext, useContext, useState, useSyncExternalStore } from "react";
 import {
   dedicatedMono,
   listMonos,
@@ -15,12 +15,10 @@ import { AgentDetailTooltip } from "../../agents/ui/AgentDetailTooltip";
 import { agentLiveStateTooltip } from "../../agents/model/agentLiveState";
 import type { Session } from "../../sessions/model/session";
 import { PixelMascot } from "../../projects/ui/PixelMascot";
-import { ChevronDown, ChevronRight } from "../../../shared/ui/icons";
 import { ManagerAvatar } from "./ManagerAvatar";
 import { orchestrator, orchestrationPathKey } from "../model/orchestration";
 import type { ManagerAttention } from "../model/projectManager";
 import { useProjectWorktrees } from "../../source-control/hooks/useProjectWorktrees";
-import { useProjectExpansion } from "../../projects/hooks/useProjectExpansion";
 
 export const SidebarUnseenCounts = createContext<ReadonlyMap<string, number>>(new Map());
 
@@ -31,8 +29,6 @@ export function ProjectManagerRow({
   running = false,
   enabled = true,
   selected = false,
-  expanded,
-  onToggle,
   approvalSessionIds,
   busySessionIds,
   selectedMemberId,
@@ -60,8 +56,6 @@ export function ProjectManagerRow({
   const [focusedMemberId, setFocusedMemberId] = useState<string>();
   const inheritedUnseenCounts = useContext(SidebarUnseenCounts);
   const unread = unseenCounts ?? inheritedUnseenCounts;
-  const [idleExpanded, setIdleExpanded] = useProjectExpansion(project, "manager-idle-members", false);
-  const idleGroupId = useId();
   useSyncExternalStore(subscribeMonos, monosSnapshot);
   const mono = dedicatedMono(project);
   const look = mono && monoLook(mono);
@@ -123,24 +117,37 @@ export function ProjectManagerRow({
     return { member, task, state, pinned };
   });
   const idleCount = memberRows.filter(row => !row.pinned).length;
-  return (
-    <div className="relative mb-0.5">
-      {onToggle && members.length > 0 && (
+  const renderMember = ({ member, task, state, pinned }: typeof memberRows[number]) => {
+    const look = monoLook(member);
+    const availability = state.status;
+    const memberSelected = member.id === selectedMemberId;
+    return (
+      <AgentDetailTooltip key={member.id} detail={state.liveState && agentLiveStateTooltip(state.liveState)}>
         <button
           type="button"
           data-sidebar-row
-          aria-label="Toggle Manager team"
-          aria-expanded={expanded}
-          onClick={onToggle}
-          className="absolute left-1 top-2 z-10 grid size-4 place-items-center rounded text-content/75 hover:text-content focus-visible:outline-accent"
+          data-idle-member={!pinned || undefined}
+          aria-current={memberSelected ? "page" : undefined}
+          aria-label={`Open ${look.name}`}
+          onFocus={pinned ? () => setFocusedMemberId(member.id) : undefined}
+          onBlur={pinned ? () => setFocusedMemberId(undefined) : undefined}
+          className={pinned
+            ? `flex h-7 w-full min-w-0 items-center gap-1.5 rounded-md pl-5 pr-2 text-left text-xs focus-visible:outline-accent @max-[240px]/sidebar:h-auto @max-[240px]/sidebar:min-h-7 @max-[240px]/sidebar:flex-wrap @max-[240px]/sidebar:py-1 ${memberSelected ? "bg-selection text-content" : "text-content/75 hover:bg-content/5"}`
+            : "flex max-w-full items-center gap-1 rounded-md border border-stroke px-1.5 py-1 text-[10px] text-content/75 hover:bg-content/5 focus-visible:outline-accent"}
+          title={task?.title ?? `${look.name} · ${monoLiveStatusLabel(state)}`}
+          onClick={() => { setError(undefined); void onOpenMember?.(member.id).catch(reason => setError(String(reason))); }}
         >
-          {expanded ? (
-            <ChevronDown className="size-3" />
-          ) : (
-            <ChevronRight className="size-3" />
-          )}
+          <PixelMascot name={look.mascot} color={look.color} still className="size-4 shrink-0" status={availability} />
+          <span className="min-w-0 flex-1 truncate @max-[240px]/sidebar:overflow-visible @max-[240px]/sidebar:whitespace-normal @max-[240px]/sidebar:break-words">{look.name}</span>
+          <span role="status" aria-label={monoLiveStatusLabel(state)} className={pinned ? "ml-auto shrink-0 text-[10px] @max-[240px]/sidebar:[&_.agent-state-text]:sr-only" : "sr-only"}>
+            {state.liveState ? <AgentStatusLabel state={state.liveState} /> : monoLiveStatusLabel(state)}
+          </span>
         </button>
-      )}
+      </AgentDetailTooltip>
+    );
+  };
+  return (
+    <div className="relative mb-0.5">
       <AgentDetailTooltip detail={live?.liveState && agentLiveStateTooltip(live.liveState)}>
       <button
         type="button"
@@ -199,7 +206,7 @@ export function ProjectManagerRow({
         <span className="min-w-0 flex-1 truncate @max-[240px]/sidebar:overflow-visible @max-[240px]/sidebar:whitespace-normal @max-[240px]/sidebar:break-words">
           {look?.name ?? "Manager"}
         </span>
-        {live && <span role="status" title={live.liveState?.detail} className="ml-auto shrink-0 text-[10px] text-content/75 @max-[240px]/sidebar:ml-6 @max-[240px]/sidebar:basis-full @max-[240px]/sidebar:shrink @max-[240px]/sidebar:whitespace-normal">{live.liveState ? <AgentStatusLabel state={live.liveState} /> : monoLiveStatusLabel(live)}{live.teamWorking ? ` · ${monoTeamWorkingLabel(live)}` : ""}{waiting.length > 1 ? ` (${waiting.length})` : ""}</span>}
+        {live && <span role="status" aria-label={`${monoLiveStatusLabel(live)}${live.teamWorking ? ` · ${monoTeamWorkingLabel(live)}` : ""}${waiting.length > 1 ? ` (${waiting.length})` : ""}`} title={live.liveState && agentLiveStateTooltip(live.liveState)} className="ml-auto shrink-0 text-[10px] text-content/75 @max-[240px]/sidebar:[&_.agent-state-text]:sr-only">{live.liveState ? <AgentStatusLabel state={live.liveState} /> : monoLiveStatusLabel(live)}<span className="@max-[240px]/sidebar:sr-only">{live.teamWorking ? ` · ${monoTeamWorkingLabel(live)}` : ""}{waiting.length > 1 ? ` (${waiting.length})` : ""}</span></span>}
         {label && !live && (
           <span
             role="status"
@@ -212,64 +219,12 @@ export function ProjectManagerRow({
         )}
       </button>
       </AgentDetailTooltip>
-      <div id={idleGroupId}>
-      {memberRows.filter(row => row.pinned || expanded !== false && idleExpanded).map(({ member, task, state }) => {
-          const look = monoLook(member);
-          const availability = state.status;
-          const memberSelected = member.id === selectedMemberId;
-          return (
-            <AgentDetailTooltip key={member.id} detail={state.liveState && agentLiveStateTooltip(state.liveState)}>
-            <button
-              type="button"
-              data-sidebar-row
-              key={member.id}
-              aria-current={memberSelected ? "page" : undefined}
-              aria-label={`Open ${look.name}`}
-              onFocus={() => setFocusedMemberId(member.id)}
-              onBlur={() => setFocusedMemberId(undefined)}
-              className={`flex h-7 w-full min-w-0 items-center gap-1.5 rounded-md pl-9 pr-2 text-left text-xs focus-visible:outline-accent @max-[240px]/sidebar:h-auto @max-[240px]/sidebar:min-h-7 @max-[240px]/sidebar:flex-wrap @max-[240px]/sidebar:py-1 ${memberSelected ? "bg-selection text-content" : "text-content/75 hover:bg-content/5"}`}
-              title={
-                task
-                  ? task.title
-                  : look.name
-              }
-              onClick={() => { setError(undefined); void onOpenMember?.(member.id).catch(reason => setError(String(reason))); }}
-            >
-              <PixelMascot
-                name={look.mascot}
-                color={look.color}
-                still
-                className="size-4 shrink-0"
-                status={availability}
-              />
-              <span className="min-w-0 flex-1 truncate @max-[240px]/sidebar:overflow-visible @max-[240px]/sidebar:whitespace-normal @max-[240px]/sidebar:break-words">{look.name}</span>
-              <span role="status" className={`ml-auto shrink-0 text-[10px] @max-[240px]/sidebar:ml-5 @max-[240px]/sidebar:basis-full @max-[240px]/sidebar:shrink @max-[240px]/sidebar:whitespace-normal ${availability === "needs-you" ? "text-amber-700 dark:text-amber-400" : availability === "working" ? "text-content/75 dark:text-accent" : "text-content/75"}`}>
-                {state.liveState ? <AgentStatusLabel state={state.liveState} /> : monoLiveStatusLabel(state)}
-              </span>
-            </button>
-            </AgentDetailTooltip>
-          );
-        })}
-      </div>
-      {expanded !== false && idleCount > 0 && (
-        <button
-          type="button"
-          data-sidebar-row
-          aria-expanded={idleExpanded}
-          aria-controls={idleGroupId}
-          onClick={() => setIdleExpanded(!idleExpanded)}
-          onKeyDown={(event) => {
-            if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
-            if (event.key === "ArrowRight" || event.key === "ArrowLeft") {
-              event.preventDefault();
-              setIdleExpanded(event.key === "ArrowRight");
-            }
-          }}
-          className="flex h-7 w-full items-center gap-1.5 rounded-md pl-9 pr-2 text-left text-[11px] text-content/75 hover:bg-content/5 focus-visible:outline-accent"
-        >
-          {idleExpanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
-          {idleCount} idle {idleCount === 1 ? "member" : "members"}
-        </button>
+      <div>{memberRows.filter(row => row.pinned).map(renderMember)}</div>
+      {idleCount > 0 && (
+        <section aria-label="Available members" className="py-2 pl-5 pr-2">
+          <p className="mb-1.5 flex items-center justify-between gap-2 text-[11px] text-content/75">Available <span className="tabular-nums">{idleCount} idle</span></p>
+          <div className="flex flex-wrap gap-1.5">{memberRows.filter(row => !row.pinned).map(renderMember)}</div>
+        </section>
       )}
       {error && (
         <p role="alert" className="px-2 text-xs text-red-700 dark:text-red-400">

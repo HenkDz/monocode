@@ -1,4 +1,4 @@
-import { useContext, useEffect, useId, useState, useSyncExternalStore } from "react";
+import { useContext, useEffect, useState, useSyncExternalStore } from "react";
 import { findModel } from "../../sessions/model/models";
 import { orchestrator, type OrchestrationTask } from "../model/orchestration";
 import type { OrchestrationSummary } from "../model/orchestrationSummary";
@@ -20,6 +20,8 @@ import { readFlag, writeFlag } from "../../settings/model/storageFlags";
 import { usePrStatusCache } from "../../source-control/hooks/usePrStatus";
 import { managerTaskFinished, taskPrStatus } from "../model/projectManager";
 
+const TASK_PAGE = 5;
+
 export function OrchestrationSidebarAgents({
   leadId,
   summary,
@@ -39,7 +41,7 @@ export function OrchestrationSidebarAgents({
   const [error, setError] = useState<string>();
   const [pending, setPending] = useState(false);
   const [historyExpanded, setHistoryExpanded] = useProjectExpansion(leadId, "sidebar-task-history", false);
-  const historyId = useId();
+  const [historyPage, setHistoryPage] = useState(0);
   const [focusedId, setFocusedId] = useState<string>();
   const expansionKey = (sessionId: string) => `monocode:sidebar-agent-expanded:${leadId}:${sessionId}`;
   // Rows expand independently, so several agents can be watched side by side.
@@ -49,6 +51,7 @@ export function OrchestrationSidebarAgents({
   useEffect(() => {
     setExpanded(new Set(summary.tasks.filter(task => readFlag(expansionKey(task.sessionId))).map(task => task.sessionId)));
     setFocusedId(undefined);
+    setHistoryPage(0);
   }, [leadId]);
   // Revealing a worker from its toast opens that row without closing others.
   const revealed = workers.selectedId;
@@ -109,6 +112,9 @@ export function OrchestrationSidebarAgents({
     return { task, live, session, state, history };
   });
   const historyCount = taskRows.filter(row => row.history).length;
+  const historyPages = Math.max(1, Math.ceil(historyCount / TASK_PAGE));
+  const page = Math.min(historyPage, historyPages - 1);
+  const historyRows = new Set(taskRows.filter(row => row.history).slice(page * TASK_PAGE, (page + 1) * TASK_PAGE));
   const action =
     "rounded px-1.5 py-0.5 text-[11px] text-content/75 hover:bg-content/10 hover:text-content disabled:opacity-35";
   // Sits inside an already-lit row, so it needs its own surface to read as a
@@ -124,6 +130,21 @@ export function OrchestrationSidebarAgents({
           {cancelled === summary.tasks.length && cancelled > 0 ? " · all cancelled" : ` · ${completed} completed${cancelled ? ` · ${cancelled} cancelled` : ""}${unfinished ? ` · ${unfinished} unfinished` : ""}`}
         </span>
       </div>
+      <div role="group" aria-label="Task filter" className="mb-1 flex w-fit gap-0.5 rounded-md bg-content/5 p-0.5"
+        onClick={event => event.stopPropagation()}
+        onKeyDown={event => {
+          if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+          if (event.key === "ArrowRight" || event.key === "ArrowLeft") {
+            event.preventDefault();
+            const all = event.key === "ArrowRight";
+            setHistoryExpanded(all);
+            event.currentTarget.querySelectorAll<HTMLButtonElement>("button")[all ? 1 : 0]?.focus();
+          }
+        }}>
+        {[false, true].map(all => <button key={String(all)} type="button" data-sidebar-row aria-pressed={historyExpanded === all}
+          onClick={() => setHistoryExpanded(all)}
+          className="rounded px-2 py-1 text-[11px] text-content/75 aria-pressed:bg-background-base aria-pressed:text-content hover:text-content focus-visible:outline-accent">{all ? "All" : "Active"}</button>)}
+      </div>
       {/*
         Offset by the rows' own padding so a chevron lands on the card's
         content edge, under the harness icon of the header above.
@@ -133,13 +154,12 @@ export function OrchestrationSidebarAgents({
         a second scroll region here made rows clip mid-line.
       */}
       <div
-        id={historyId}
         aria-label="Orchestrated agents"
         className="-mx-2 flex touch-pan-y flex-col gap-px"
         onPointerDown={(event) => event.stopPropagation()}
         onClick={(event) => event.stopPropagation()}
       >
-        {taskRows.filter(row => !row.history || historyExpanded).map(({ task, live, session, state }) => {
+        {taskRows.filter(row => !row.history || historyExpanded && historyRows.has(row)).map(({ task, live, session, state }) => {
           // Something waiting on an answer opens itself; it cannot be missed.
           const open = expanded.has(task.sessionId) || !!task.needsInput;
           const label = agentLiveStateLabel(state);
@@ -201,7 +221,9 @@ export function OrchestrationSidebarAgents({
                   {task.title}
                 </span>
                 <span
-                  className="flex shrink-0 items-center gap-1 text-[11px] @max-[240px]/sidebar:ml-5 @max-[240px]/sidebar:basis-full @max-[240px]/sidebar:shrink @max-[240px]/sidebar:whitespace-normal"
+                  role="status"
+                  aria-label={label}
+                  className="flex shrink-0 items-center gap-1 text-[11px] @max-[240px]/sidebar:[&_.agent-state-text]:sr-only"
                 >
                   <AgentStatusLabel state={state} />
                 </span>
@@ -265,25 +287,12 @@ export function OrchestrationSidebarAgents({
           );
         })}
       </div>
-      {historyCount > 0 && (
-        <button
-          type="button"
-          data-sidebar-row
-          aria-expanded={historyExpanded}
-          aria-controls={historyId}
-          onClick={() => setHistoryExpanded(!historyExpanded)}
-          onKeyDown={(event) => {
-            if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
-            if (event.key === "ArrowRight" || event.key === "ArrowLeft") {
-              event.preventDefault();
-              setHistoryExpanded(event.key === "ArrowRight");
-            }
-          }}
-          className="mt-0.5 flex w-full items-center gap-1.5 rounded px-0.5 py-1 text-left text-[11px] text-content/75 hover:bg-content/5 focus-visible:outline-accent"
-        >
-          {historyExpanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
-          History · {historyCount}
-        </button>
+      {historyExpanded && historyPages > 1 && (
+        <div aria-label="Task pages" className="mt-1 flex items-center justify-between px-0.5 text-[11px] text-content/75" onClick={event => event.stopPropagation()}>
+          <button type="button" data-sidebar-row aria-label="Previous task page" disabled={page === 0} className={action} onClick={() => setHistoryPage(page - 1)}>←</button>
+          <span className="tabular-nums">{page + 1} / {historyPages}</span>
+          <button type="button" data-sidebar-row aria-label="Next task page" disabled={page === historyPages - 1} className={action} onClick={() => setHistoryPage(page + 1)}>→</button>
+        </div>
       )}
       {(error || run?.error) && (
         <p role="alert" className="py-1 text-[11px] text-red-700 dark:text-red-400">

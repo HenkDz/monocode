@@ -4,121 +4,135 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MissionControlNav, MissionControlView } from "./MissionControl";
 import { selectGoalViews, type GoalTarget } from "../model/goalView";
+import { selectCockpit } from "../model/cockpit";
+import { selectGoalTimeline } from "../model/timeline";
 import { goals, roster, runs, sessions, now } from "../fixtures/syntheticMission";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => null) }));
-
 let host: HTMLDivElement;
 let root: ReturnType<typeof createRoot>;
-const view = () => selectGoalViews({ goals, roster, runs, sessions, now });
+const fixture = () => structuredClone({ goals, roster, runs, sessions, now });
+const button = (label: string, scope: ParentNode = document) => [...scope.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent?.includes(label))!;
+const key = async (value: string) => { const event = new KeyboardEvent("keydown", { key: value, cancelable: true, bubbles: true }); await act(async () => document.activeElement!.dispatchEvent(event)); return event; };
+function render(input = fixture(), openTarget: (target: GoalTarget) => void | Promise<void> = () => {}, close = vi.fn(), open = true) {
+  const view = selectGoalViews(input);
+  return root.render(<MissionControlView view={view} cockpit={selectCockpit(input)} attentionInput={input}
+    timeline={id => selectGoalTimeline({ ...input, goalId: id })} onOpenTarget={openTarget} onClose={close} open={open} command={<input aria-label="Synthetic command" />} />);
+}
 beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  localStorage.clear(); vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
 });
-afterEach(async () => {
-  await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals();
-});
-const buttons = () => [...host.querySelectorAll<HTMLButtonElement>("button")];
+afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); });
 
-describe("Mission control", () => {
-  it("shows two live goals, honest state reasons, complete long titles and collapsed Finished history", async () => {
-    await act(async () => root.render(<MissionControlView view={view()} onOpenTarget={() => {}} onClose={() => {}} />));
-    const heading = [...host.querySelectorAll(".mc-goal-header h2")].map(node => node.textContent);
-    expect(heading).toContain(goals[0].title);
-    expect(heading).toContain(goals[1].title);
-    expect(host.querySelector(".mc-list-heading h2")?.textContent).toBe("Live goals · 2");
-    expect(host.querySelector<HTMLDetailsElement>(".mc-finished")?.open).toBe(false);
-    expect(host.querySelector(".mc-finished summary")?.textContent).toBe("Finished · 2");
-    expect(host.querySelector('[data-agent-state="blocked"]')?.textContent).toBe("Blocked · storage");
-    expect(host.textContent).toContain(sessions[3].codexStorageError);
-    expect(host.textContent).toContain("cost unavailable");
-    expect(host.textContent).toContain("these totals overlap");
+describe("CC7N Cockpit", () => {
+  it("keeps command, roster, vitals and recent work useful with zero goals", async () => {
+    const input = fixture(); input.goals = [];
+    await act(async () => render(input));
+    expect(host.querySelectorAll("[data-agent]")).toHaveLength(roster.length);
+    expect(host.querySelector('[aria-label="Synthetic command"]')).not.toBeNull();
+    expect(host.querySelector('[aria-label="Organization vitals"]')?.textContent).toContain("Goals in flight");
+    expect(host.querySelector('[aria-label="In flight"]')?.textContent).toContain("No live goals. Ask a question");
+    expect(host.querySelector('[aria-label="Recent activity"]')?.textContent).toContain("Completed");
+    expect(host.querySelectorAll("details, summary")).toHaveLength(0);
   });
-
-  it("opens the blocked review's exact session and keeps the reviewed attempt visible", async () => {
+  it("opens a live goal in a compact drawer with blocked chain and exact session targets", async () => {
     const open = vi.fn<(target: GoalTarget) => void>();
-    await act(async () => root.render(<MissionControlView view={view()} onOpenTarget={open} onClose={() => {}} />));
-    await act(async () => buttons().find(button => button.getAttribute("aria-label") === "Resolve Reviewer")!.click());
+    await act(async () => render(fixture(), open));
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-goal]")!.click());
+    const drawer = document.querySelector('[role="dialog"]')!;
+    expect(drawer.textContent).toContain(goals[0].title);
+    expect(drawer.textContent).toContain("wall elapsed");
+    expect(drawer.querySelectorAll(".mc-chain-node")).toHaveLength(4);
+    expect(drawer.querySelector('[data-agent-state="blocked"]')?.textContent).toBe("Blocked · storage");
+    expect(drawer.querySelectorAll("details, summary")).toHaveLength(0);
+    await act(async () => drawer.querySelector<HTMLButtonElement>('[aria-label="Open Reviewer"]')!.click());
     expect(open).toHaveBeenCalledWith({ sessionId: "synthetic-reviewer-chat" });
-    expect(host.querySelector(".mc-review")?.textContent).toContain("dispatch-synthetic-build");
+    expect(drawer.querySelector('[aria-label="Open Reviewer"]')?.getAttribute("title")).toContain("dispatch-synthetic-build");
   });
-
-  it("discloses metric scopes per node and explains shared conversation overlap once per goal", async () => {
-    await act(async () => root.render(<MissionControlView view={view()} onOpenTarget={() => {}} onClose={() => {}} />));
-    const goal = host.querySelector(".mc-goal")!;
-    expect(goal.querySelectorAll(".mc-goal-note")).toHaveLength(1);
-    expect(goal.querySelectorAll(".mc-node .mc-note")).toHaveLength(0);
-    const metrics = goal.querySelector<HTMLDetailsElement>(".mc-metrics")!;
-    expect(metrics.open).toBe(false);
-    expect(metrics.querySelector("summary")?.textContent).toMatch(/\d+m \d+s · [\d,]+ tokens/);
-    expect(metrics.querySelector("dt")?.textContent).toBe("Observed turn time");
-    metrics.open = true;
-    expect(metrics.querySelector("dl")?.textContent).toContain("Goal contribution");
-    expect(goal.querySelector('[data-role="manager"] [data-agent-state="waiting-on-member"]')?.textContent).toBe("Waiting · Reviewer blocked");
-    expect(goal.querySelector('[data-role="manager"] .mc-reason')).toBeNull();
-    expect(goal.querySelector('[data-role="worker"][data-state="blocked"] .mc-metrics summary')?.textContent).toBe("Elapsed unavailable · Tokens unavailable");
+  it("switches Phases/Ledger and pages recorded evidence without asserting unknown phases", async () => {
+    await act(async () => render());
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-goal]")!.click());
+    const drawer = document.querySelector('[role="dialog"]')!;
+    expect(drawer.querySelectorAll(".mc-phases button")).toHaveLength(5);
+    expect(drawer.textContent).toContain("exact phase boundaries are unavailable");
+    expect(drawer.querySelector("table")).toBeNull();
+    await act(async () => button("Ledger", drawer).click());
+    expect(drawer.querySelectorAll("tbody tr")).toHaveLength(4);
+    const first = drawer.querySelector("tbody")?.textContent;
+    await act(async () => drawer.querySelector<HTMLButtonElement>('[aria-label="Next ledger page"]')!.click());
+    expect(drawer.querySelector("tbody")?.textContent).not.toBe(first);
+    await act(async () => drawer.querySelector<HTMLButtonElement>("tbody button")!.click());
+    expect(drawer.querySelector('[role="status"]')?.textContent).toContain("Start");
+    await act(async () => button("Phases", drawer).click());
+    expect(drawer.querySelector("table")).toBeNull();
   });
-
-  it("restores project filter, history disclosure and scroll after returning from a conversation", async () => {
-    const data = view();
-    const render = (open: boolean) => root.render(<MissionControlView view={data} open={open} onOpenTarget={() => {}} onClose={() => {}} />);
-    await act(async () => render(true));
+  it("hosts attention inside Mission control and blocker action switches the same drawer", async () => {
+    await act(async () => render());
+    expect(host.querySelector(".mc-attention")?.textContent).toContain("Needs attention");
+    await act(async () => button("View all", host).click());
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Codex storage needs repair");
+    await key("Escape");
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-goal]")!.click());
+    await act(async () => button("Resolve blocker").click());
+    expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1);
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Needs attention");
+  });
+  it("persists project/state/density choices and restores the scroll on conversation return", async () => {
+    await act(async () => render());
+    await act(async () => button("Atlas", host.querySelector('[aria-label="Project filter"]')!).click());
+    await act(async () => button("Compact", host.querySelector('[aria-label="Density"]')!).click());
     const select = host.querySelector<HTMLSelectElement>("select")!;
-    await act(async () => { select.value = goals[0].projectId; select.dispatchEvent(new Event("change", { bubbles: true })); });
-    const history = host.querySelector<HTMLDetailsElement>(".mc-finished")!;
-    history.open = true;
-    const scroll = host.querySelector<HTMLDivElement>(".mc-scroll")!; scroll.scrollTop = 240;
-    await act(async () => render(false));
-    expect(host.querySelector<HTMLElement>(".mission-control")?.hidden).toBe(true);
-    await act(async () => render(true));
-    expect(select.value).toBe(goals[0].projectId);
-    expect(history.open).toBe(true);
-    expect(scroll.scrollTop).toBe(240);
+    await act(async () => { select.value = "Needs attention"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+    expect(host.querySelectorAll(".mc-agent-card")).toHaveLength(1);
+    expect(host.querySelector('[data-agent="synthetic-reviewer"]')).not.toBeNull();
+    const scroll = host.querySelector<HTMLElement>(".mc-scroll")!; scroll.scrollTop = 240;
+    await act(async () => render(fixture(), undefined, undefined, false));
+    await act(async () => render());
+    expect(scroll.scrollTop).toBe(240); expect(select.value).toBe("Needs attention");
+    expect(host.querySelector(".mission-control")?.getAttribute("data-density")).toBe("compact");
+    await act(async () => root.unmount()); root = createRoot(host);
+    await act(async () => render());
+    expect(host.querySelector(".mission-control")?.getAttribute("data-density")).toBe("compact");
+    expect(host.querySelector<HTMLSelectElement>("select")?.value).toBe("Needs attention");
   });
-
-  it("filters by project identity even when project names match", async () => {
-    const duplicateNames = selectGoalViews({ goals: [
-      { ...goals[0], projectId: "C:/alpha/repo", managerId: "absent-one" },
-      { ...goals[1], projectId: "D:/beta/repo", managerId: "absent-two" },
-    ], roster, runs: [], sessions, now });
-    await act(async () => root.render(<MissionControlView view={duplicateNames} onOpenTarget={() => {}} onClose={() => {}} />));
-    const select = host.querySelector<HTMLSelectElement>("select")!;
-    expect(select.options).toHaveLength(3);
-    await act(async () => { select.value = "D:/beta/repo"; select.dispatchEvent(new Event("change", { bubbles: true })); });
-    expect(host.querySelectorAll(".mc-goal")).toHaveLength(1);
-    expect(host.querySelector(".mc-goal h2")?.textContent).toBe(goals[1].title);
+  it("j/k navigate cards and goals; Escape closes only the drawer and returns focus", async () => {
+    const close = vi.fn();
+    await act(async () => render(fixture(), undefined, close));
+    await key("j"); expect(document.activeElement).toBe(host.querySelector("[data-mc-roving]"));
+    await key("k"); const goals = host.querySelectorAll("[data-goal]"); expect(document.activeElement).toBe(goals[goals.length - 1]);
+    const trigger = document.activeElement as HTMLButtonElement;
+    await act(async () => trigger.click());
+    await key("Escape");
+    expect(document.querySelector('[role="dialog"]')).toBeNull(); expect(document.activeElement).toBe(trigger); expect(close).not.toHaveBeenCalled();
+    const event = await key("Escape"); expect(event.defaultPrevented).toBe(true); expect(close).toHaveBeenCalledOnce();
+    await act(async () => render(fixture(), undefined, close, false));
+    expect((await key("Escape")).defaultPrevented).toBe(false);
   });
-
-  it("shows conversation navigation failure without losing the goal view", async () => {
-    await act(async () => root.render(<MissionControlView view={view()} onOpenTarget={async () => { throw Error("Session removed"); }} onClose={() => {}} />));
-    await act(async () => buttons().find(button => button.getAttribute("aria-label") === "Resolve Reviewer")!.click());
-    expect(host.querySelector('[role="alert"]')?.textContent).toContain("Session removed");
-    expect(host.querySelector(".mc-list-heading h2")?.textContent).toContain("2");
+  it("text editing retains ordinary j/k keys and navigation errors stay visible in the drawer", async () => {
+    await act(async () => render(fixture(), async () => { throw Error("Session removed"); }));
+    const field = host.querySelector<HTMLInputElement>("input")!; field.focus();
+    expect((await key("j")).defaultPrevented).toBe(false); expect(document.activeElement).toBe(field);
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-goal]")!.click());
+    await act(async () => button("Message Manager").click());
+    expect(document.querySelector('.mc-drawer [role="alert"]')?.textContent).toContain("Session removed");
   });
-
-  it("omits unsupported attention counts and provides a useful empty goal state", async () => {
-    const empty = selectGoalViews({ goals: [], roster: [], runs: [], sessions: [], now });
-    await act(async () => root.render(<MissionControlView view={empty} onOpenTarget={() => {}} onClose={() => {}} />));
-    expect(host.querySelector('[aria-label="Attention"]')).toBeNull();
-    expect(host.textContent).toContain("No live goals yet");
+  it("missing goals keep a closable drawer and hidden routes release it", async () => {
+    await act(async () => render());
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-goal]")!.click());
+    const input = fixture(); input.goals = [];
+    await act(async () => render(input));
+    expect(document.querySelector('[role="dialog"] [role="status"]')?.textContent).toContain("no longer available");
+    await act(async () => render(input, undefined, undefined, false));
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
   });
-
-  it("offers accessible navigation and claims Escape before background session stop handlers", async () => {
-    const open = vi.fn(); const close = vi.fn();
-    await act(async () => root.render(<><MissionControlNav compact onOpen={open} />
-      <MissionControlView view={view()} onOpenTarget={() => {}} onClose={close} /></>));
-    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Mission control"]')!.click());
-    expect(open).toHaveBeenCalledOnce();
-    await act(async () => buttons().find(button => button.textContent === "Back to conversation")!.click());
-    expect(close).toHaveBeenCalledOnce();
-    const escape = new KeyboardEvent("keydown", { key: "Escape", cancelable: true, bubbles: true });
-    await act(async () => document.body.dispatchEvent(escape));
-    expect(escape.defaultPrevented).toBe(true);
-    expect(close).toHaveBeenCalledTimes(2);
-    await act(async () => root.render(<MissionControlView view={view()} open={false} onOpenTarget={() => {}} onClose={close} />));
-    const hiddenEscape = new KeyboardEvent("keydown", { key: "Escape", cancelable: true, bubbles: true });
-    await act(async () => document.body.dispatchEvent(hiddenEscape));
-    expect(hiddenEscape.defaultPrevented).toBe(false);
-    expect(close).toHaveBeenCalledTimes(2);
+  it("goal history opens without disclosures and compact navigation remains accessible", async () => {
+    const open = vi.fn();
+    await act(async () => root.render(<MissionControlNav compact onOpen={open} />));
+    await act(async () => host.querySelector<HTMLButtonElement>("button")!.click()); expect(open).toHaveBeenCalledOnce();
+    await act(async () => render());
+    await act(async () => button("Goals", host.querySelector(".mc-toolbar")!).click());
+    expect(document.querySelectorAll(".mc-goal-row")).toHaveLength(goals.length);
+    expect(document.querySelectorAll("details")).toHaveLength(0);
   });
 });

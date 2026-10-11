@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DelegationTimeline, DelegationTimelineRoute } from "./DelegationTimeline";
+import { DelegationTimeline } from "./DelegationTimeline";
 import { selectGoalTimeline } from "../model/timeline";
 import { goals, roster, runs, sessions, now } from "../fixtures/syntheticMission";
 
@@ -24,7 +24,6 @@ beforeEach(() => {
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
 });
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); });
-const button = (label: string) => [...host.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === label)!;
 
 describe("Delegation timeline and local route", () => {
   it("gives every span an accessible ledger row and explains unknown phase coverage", async () => {
@@ -68,50 +67,4 @@ describe("Delegation timeline and local route", () => {
     window.removeEventListener("keydown", stop);
   });
 
-  it("Mission control's View timeline opens the exact goal and preserves filters, history, scroll and return focus", async () => {
-    const close = vi.fn();
-    await act(async () => root.render(<DelegationTimelineRoute runs={runs} sessions={sessions} open onClose={close} onOpenTarget={() => {}} />));
-    const select = host.querySelector<HTMLSelectElement>("select")!;
-    await act(async () => { select.value = goals[0].projectId; select.dispatchEvent(new Event("change", { bubbles: true })); });
-    const history = host.querySelector<HTMLDetailsElement>(".mc-finished")!; history.open = true;
-    const scroll = host.querySelector<HTMLElement>(".mc-scroll")!; scroll.scrollTop = 240;
-    const link = host.querySelector<HTMLAnchorElement>(`[data-goal-timeline="${goals[0].id}"]`)!;
-    const click = new MouseEvent("click", { bubbles: true, cancelable: true });
-    await act(async () => link.dispatchEvent(click));
-    expect(click.defaultPrevented).toBe(true);
-    expect(host.querySelector(".delegation-timeline h1")?.textContent).toBe(goals[0].title);
-    expect(host.querySelector<HTMLElement>(".mission-control")?.hidden).toBe(true);
-    await act(async () => button("Back to Mission control").click());
-    expect(host.querySelector(".delegation-timeline")).toBeNull();
-    expect(select.value).toBe(goals[0].projectId); expect(history.open).toBe(true); expect(scroll.scrollTop).toBe(240);
-    expect(document.activeElement).toBe(link); expect(close).not.toHaveBeenCalled();
-  });
-
-  it("hidden routes release Escape and stop displaying timeline navigation", async () => {
-    const close = vi.fn();
-    const render = (open: boolean) => root.render(<DelegationTimelineRoute runs={runs} sessions={sessions} open={open} onClose={close} onOpenTarget={() => {}} />);
-    await act(async () => render(true));
-    await act(async () => host.querySelector<HTMLAnchorElement>("[data-goal-timeline]")!.click());
-    await act(async () => render(false));
-    const escape = new KeyboardEvent("keydown", { key: "Escape", cancelable: true, bubbles: true });
-    await act(async () => document.body.dispatchEvent(escape));
-    expect(escape.defaultPrevented).toBe(false); expect(close).not.toHaveBeenCalled();
-    expect(host.querySelector(".delegation-timeline")).toBeNull();
-    expect(host.querySelector<HTMLElement>(".dt-route")?.hidden).toBe(true);
-  });
-
-  it("keeps Escape guarded and moves focus to Back when the selected goal disappears", async () => {
-    const close = vi.fn(), hiddenStop = vi.fn();
-    window.addEventListener("keydown", hiddenStop);
-    await act(async () => root.render(<DelegationTimelineRoute runs={runs} sessions={sessions} open onClose={close} onOpenTarget={() => {}} />));
-    await act(async () => host.querySelector<HTMLAnchorElement>("[data-goal-timeline]")!.click());
-    await act(async () => { storedGoals = []; storeVersion++; listeners.forEach(listener => listener()); });
-    expect(host.querySelector('[role="status"]')?.textContent).toContain("no longer available");
-    expect(document.activeElement).toBe(button("Back to Mission control"));
-    const escape = new KeyboardEvent("keydown", { key: "Escape", cancelable: true, bubbles: true });
-    await act(async () => document.body.dispatchEvent(escape));
-    expect(escape.defaultPrevented).toBe(true); expect(hiddenStop).not.toHaveBeenCalled(); expect(close).not.toHaveBeenCalled();
-    expect(host.querySelector(".dt-missing")).toBeNull();
-    window.removeEventListener("keydown", hiddenStop);
-  });
 });

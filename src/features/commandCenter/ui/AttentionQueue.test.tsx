@@ -397,11 +397,12 @@ describe("Attention queue", () => {
   });
 
   it("opens the queue from the Mission control banner without opening a conversation", async () => {
-    const open = vi.fn(), target = vi.fn();
+    const open = vi.fn(() => <p>Hosted attention queue</p>), target = vi.fn();
     const view = selectGoalViews({ goals, roster, runs, sessions, now });
-    await act(async () => root.render(<MissionControlView view={view} onOpenTarget={target} onClose={() => {}} onOpenAttention={open} />));
-    await act(async () => button("Open attention queue", host.querySelector(".mc-attention")!).click());
-    expect(open).toHaveBeenCalledOnce();
+    await act(async () => root.render(<MissionControlView view={view} attentionInput={{ goals, roster, runs, sessions }} onOpenTarget={target} onClose={() => {}} renderAttention={open} />));
+    await act(async () => button("View all", host.querySelector(".mc-attention")!).click());
+    expect(open).toHaveBeenCalled();
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Hosted attention queue");
     expect(target).not.toHaveBeenCalled();
   });
 
@@ -410,6 +411,19 @@ describe("Attention queue", () => {
       sourceError="Could not refresh automation failures: synthetic network failure" />));
     expect(host.querySelector('[role="alert"]')?.textContent).toContain("synthetic network failure");
     expect(rows()).toHaveLength(1);
+    expect(button("Allow once").disabled).toBe(false);
+  });
+
+  it("keeps panel rows terse and exposes exact request evidence in the existing popover", async () => {
+    await act(async () => root.render(<AttentionQueueView input={inputFor("manager")} callbacks={callbacks()} open onClose={() => {}} presentation="panel" />));
+    expect(host.querySelector(".aq-item .aq-path")?.textContent).toContain("User-owned request");
+    expect(host.querySelector(".aq-item .aq-owner")).toBeNull();
+    expect(host.querySelector(".aq-item .aq-evidence")).toBeNull();
+    await act(async () => button("Evidence").click());
+    const evidence = document.querySelector('[role="dialog"]')!;
+    expect(evidence.textContent).toContain("Request 71");
+    expect(evidence.textContent).toContain("Conversation manager");
+    expect(evidence.textContent).toContain("Run the local release verification command");
     expect(button("Allow once").disabled).toBe(false);
   });
 });

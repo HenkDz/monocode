@@ -1,0 +1,23 @@
+.mc-command-bar { min-width: 0; margin-bottom: 21px; border: 1px solid color-mix(in srgb, var(--color-content) 14%, transparent); border-radius: 10px; background: var(--mc-surface, color-mix(in srgb, var(--color-content) 2%, var(--color-background-base))); box-shadow: 0 4px 14px #00000008; }
+.mc-command-entry { display: flex; align-items: center; gap: 13px; padding: 17px 18px 13px; }
+.mc-command-entry > svg { width: 20px; height: 20px; flex-shrink: 0; color: color-mix(in srgb, var(--color-content) 60%, transparent); }
+.mc-command-entry textarea { flex: 1; min-width: 0; width: 100%; resize: none; border: 0; background: transparent; color: inherit; font: inherit; font-size: 14px; line-height: 1.5; padding: 0; outline: 0; }
+.mc-command-entry textarea::placeholder { color: var(--mc-muted, color-mix(in srgb, var(--color-content) 72%, var(--color-background-base))); }
+.mc-command-bar:focus-within { border-color: color-mix(in srgb, var(--color-accent) 65%, var(--color-stroke)); }
+.mc-command-entry kbd { border: 1px solid var(--color-stroke); border-radius: 4px; padding: 1px 5px; font-size: 10px; color: color-mix(in srgb, var(--color-content) 60%, transparent); }
+.mc-command-bottom { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 12px 11px 16px; }
+.mc-command-routing { display: flex; align-items: center; flex-wrap: wrap; min-width: 0; gap: 12px; }
+.mc-command-bar [data-mono-goal-route] { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding: 0; }
+.mc-command-bar [data-mono-goal-route] [role=group] { padding: 2px; border: 1px solid var(--color-stroke); border-radius: 6px; gap: 1px; }
+.mc-command-bar [data-mono-goal-route] [role=group] button { font-size: 11px; padding: 4px 8px; border-radius: 4px; color: var(--mc-muted, var(--color-content)); }
+.mc-command-bar [data-mono-goal-route] [role=group] button[aria-pressed=true] { background: color-mix(in srgb, var(--color-content) 9%, transparent); color: var(--color-content); }
+.mc-command-bar [data-mono-goal-route] [role=status] { margin: 0; font-size: 11px; }
+.mc-command-bar [data-mono-goal-route] [role=status] > span + span { display: block; margin: 2px 0 0; font-size: 10px; color: var(--mc-muted, var(--color-content)); }
+.mc-command-chat-route { font-size: 11px; color: var(--mc-muted, var(--color-content)); }
+.mc-command-send { display: flex; align-items: center; gap: 8px; flex-shrink: 0; padding: 7px 12px; border: 0; border-radius: 6px; background: var(--color-content); color: var(--color-background-base); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.mc-command-send:not(:disabled):hover { background: color-mix(in srgb, var(--color-content) 85%, var(--color-background-base)); }
+.mc-command-send svg { width: 14px; height: 14px; }
+.mc-command-send:disabled { cursor: default; opacity: .5; }
+.mc-command-notice { margin: 0; padding: 0 18px 12px; font-size: 12px; color: color-mix(in srgb, var(--color-content) 75%, transparent); }
+.mc-command-notice[role=alert] { color: var(--agent-needs-you); }
+@container mission-control (max-width: 620px) { .mc-command-bottom { flex-wrap: wrap; } .mc-command-send { margin-left: auto; } }

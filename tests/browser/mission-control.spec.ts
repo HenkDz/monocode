@@ -1,0 +1,148 @@
+import { expect, test } from "@playwright/test";
+
+test.setTimeout(120_000);
+const route = "/tests/browser/mission-control.html";
+
+for (const [width, theme, zero] of [[1440, "dark", false], [1440, "light", false], [1100, "dark", false], [900, "dark", false], [800, "light", false], [1440, "dark", true]] as const) {
+  test(`Cockpit remains useful at ${width}px ${theme}, ${zero ? "zero" : "live"} goals`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 1000 });
+    const errors: string[] = [];
+    page.on("pageerror", error => errors.push(error.message));
+    await page.goto(`${route}?theme=${theme}&goals=${zero ? "zero" : "live"}`);
+    await expect(page.getByRole("heading", { name: "Mission control", exact: true })).toBeVisible();
+    await expect(page.locator("[data-agent]")).toHaveCount(8);
+    await expect(page.getByRole("textbox", { name: "Ask or assign work" })).toBeEnabled();
+    await expect(page.getByRole("region", { name: "Organization vitals" })).toContainText("Goals in flight");
+    await expect(page.getByRole("region", { name: "Recent activity" })).toContainText("Merged PR #1861");
+    await expect(page.locator("[data-goal]")).toHaveCount(zero ? 0 : 2);
+    await expect(page.locator(".mission-control details, .mission-control summary")).toHaveCount(0);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+    expect(errors).toEqual([]);
+  });
+}
+
+test("filters and density persist while keyboard opens cards and returns from the goal drawer", async ({ page }) => {
+  await page.goto(route);
+  await page.locator('.mc-segmented[aria-label="Project filter"]').getByRole("button", { name: "MonoCode", exact: true }).click();
+  await expect(page.locator("[data-agent]")).toHaveCount(5);
+  await page.getByRole("combobox", { name: "All states", exact: true }).selectOption("Idle");
+  await expect(page.locator("[data-agent]")).toHaveCount(2);
+  await page.getByRole("button", { name: "Compact", exact: true }).click();
+  await page.reload();
+  await expect(page.locator(".mission-control")).toHaveAttribute("data-density", "compact");
+  await expect(page.locator("[data-agent]")).toHaveCount(2);
+  await page.getByRole("combobox", { name: "All states", exact: true }).selectOption("All states");
+  await page.getByRole("button", { name: "All projects", exact: true }).click();
+  await page.keyboard.press("/");
+  const command = page.getByRole("textbox", { name: "Ask or assign work" });
+  await expect(command).toBeFocused();
+  await command.fill("j/k stays normal while typing");
+  await page.keyboard.press("j");
+  await expect(command).toHaveValue("j/k stays normal while typingj");
+  await page.getByRole("heading", { name: "Mission control", exact: true }).click();
+  await page.keyboard.press("j");
+  await expect(page.locator("[data-agent=grand]")).toBeFocused();
+  await page.keyboard.press("j");
+  await expect(page.locator("[data-agent=mono-manager]")).toBeFocused();
+  await page.keyboard.press("k");
+  await page.keyboard.press("Enter");
+  await expect.poll(() => page.evaluate(() => window.missionFixture.events.at(-1))).toEqual({ action: "open", target: { monoId: "grand" } });
+  const goal = page.locator('[data-goal="mc"]');
+  await goal.click();
+  const drawer = page.getByRole("dialog", { name: "Make mission control useful at a glance", exact: true });
+  await expect(drawer).toContainText("Delegation chain");
+  await expect(drawer).toContainText("Reviewer");
+  expect(await drawer.evaluate(element => Math.abs(element.getBoundingClientRect().right - innerWidth))).toBeLessThanOrEqual(1);
+  expect(await drawer.evaluate(element => element.getBoundingClientRect().width)).toBeLessThanOrEqual(470);
+  await expect(drawer.locator("[data-phase]")).toHaveCount(5);
+  await expect(drawer.locator(".mc-ledger")).toHaveCount(0);
+  await drawer.getByRole("button", { name: "Compaction", exact: false }).click();
+  await expect(drawer.locator(".mc-phase-detail")).toContainText("23s");
+  await drawer.getByRole("button", { name: "Ledger", exact: true }).click();
+  await expect(drawer.locator("tbody tr")).toHaveCount(4);
+  await drawer.getByRole("button", { name: "Next ledger page" }).click();
+  await expect(drawer.locator(".mc-paging")).toContainText("2 /");
+  await drawer.locator("tbody tr button").first().click();
+  await expect(drawer.locator(".mc-event-detail")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(goal).toBeFocused();
+});
+
+test("attention stays in Mission control and keeps the source queue intact", async ({ page }) => {
+  await page.goto(route);
+  const all = page.getByRole("button", { name: "View all", exact: false });
+  await all.click();
+  const panel = page.getByRole("dialog", { name: "Needs attention", exact: true });
+  await expect(panel.locator(".aq-item")).toHaveCount(2);
+  const evidence = panel.locator('[data-attention-source="storage"]').getByRole("button", { name: "Evidence", exact: true });
+  await evidence.click();
+  await expect(page.getByRole("dialog", { name: "Storage evidence", exact: true })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog", { name: "Storage evidence", exact: true })).toHaveCount(0);
+  await expect(panel).toBeVisible();
+  await expect(evidence).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(panel).toHaveCount(0);
+  await expect(all).toBeFocused();
+  await all.click();
+  await panel.getByRole("button", { name: "Approvals", exact: false }).click();
+  await expect(panel.locator(".aq-item")).toHaveCount(1);
+  await expect(panel.locator(".aq-item")).toContainText("User-owned request");
+  await panel.getByRole("button", { name: "Allow once", exact: true }).click();
+  await expect(panel.getByRole("button", { name: "Allow once", exact: true })).toBeDisabled();
+  await expect(panel.locator(".aq-item")).toContainText("awaiting source acknowledgement");
+  expect(await page.evaluate(() => window.missionFixture.events.filter(event => event.action === "approval").length)).toBe(1);
+  await panel.getByRole("button", { name: "History", exact: false }).click();
+  await expect(panel).toContainText("No resolved or replaced requests observed yet");
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(all).toBeFocused();
+  await expect(page.getByRole("complementary", { name: "Organization attention" })).toContainText("Needs attention");
+});
+
+test("command uses CC5C route safeguards and accepts each pending submission once", async ({ page }) => {
+  await page.goto(`${route}?submit=deferred`);
+  const command = page.getByRole("textbox", { name: "Ask or assign work" });
+  await command.fill("Improve MonoCode navigation");
+  await page.getByRole("button", { name: "New goal", exact: true }).click();
+  await expect(page.locator("[data-mono-goal-route]")).toContainText("Send to MonoCode Manager");
+  await command.fill("Compare MonoCode and DZDistro");
+  await expect(page.locator("[data-mono-goal-route]")).toContainText("Send to Grand Orch");
+  await page.getByRole("button", { name: "Goal route: Auto route", exact: true }).click();
+  await page.getByRole("option", { name: "DZDistro Manager", exact: true }).click();
+  await expect(page.locator("[data-mono-goal-route]")).toContainText("Send to Grand Orch");
+  await command.fill("Improve keyboard navigation");
+  await expect(page.locator("[data-mono-goal-route]")).toContainText("Send to DZDistro Manager");
+  await page.getByRole("button", { name: "Goal route: DZDistro Manager", exact: true }).click();
+  await page.getByRole("option", { name: "Auto route", exact: true }).click();
+  await command.fill("Improve MonoCode navigation");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await page.locator(".mc-command-bar").evaluate(form => { (form as HTMLFormElement).requestSubmit(); (form as HTMLFormElement).requestSubmit(); });
+  expect(await page.evaluate(() => window.missionFixture.events.filter(event => event.action === "submit").length)).toBe(1);
+  expect(await page.evaluate(() => window.missionFixture.events.at(-1)?.submission?.managerMonoId)).toBe("mono-manager");
+  await page.evaluate(() => window.missionFixture.finishSubmission(true));
+  await expect(command).toHaveValue("");
+  await expect(page.getByRole("button", { name: "Chat", exact: true })).toHaveAttribute("aria-pressed", "true");
+});
+
+test("rejected command preserves the draft and sidebar controls page without hiding dirty work", async ({ page }) => {
+  await page.goto(`${route}?submit=reject`);
+  const command = page.getByRole("textbox", { name: "Ask or assign work" });
+  await command.fill("Keep this draft");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(command).toHaveValue("Keep this draft");
+  await expect(page.getByRole("alert")).toContainText("not accepted");
+  const sidebar = page.getByRole("region", { name: "MonoCode sidebar", exact: true });
+  await expect(sidebar.getByRole("region", { name: "Available members" })).toBeVisible();
+  await sidebar.getByRole("region", { name: "Available members" }).getByRole("button", { name: "Open Designer", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.missionFixture.events.at(-1))).toEqual({ action: "open", target: { monoId: "designer" } });
+  const filters = sidebar.getByRole("group", { name: "Worktree filter" });
+  await filters.getByRole("button", { name: "All", exact: true }).click();
+  await expect(sidebar).toContainText("cc7n-dirty");
+  await sidebar.getByRole("button", { name: "Next worktree page" }).click();
+  await expect(sidebar).toContainText("cc7n-dirty");
+  await expect(sidebar).toContainText("2 / 3");
+  await page.reload();
+  await expect(page.getByRole("region", { name: "MonoCode sidebar", exact: true }).getByRole("group", { name: "Worktree filter" }).getByRole("button", { name: "All", exact: true })).toHaveAttribute("aria-pressed", "true");
+});

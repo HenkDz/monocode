@@ -2,10 +2,13 @@ import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import "../../../styles/index.css";
 import { selectGoalViews, type GoalTarget } from "../model/goalView";
+import { selectCockpit } from "../model/cockpit";
+import { selectGoalTimeline } from "../model/timeline";
 import { MissionControlView } from "../ui/MissionControl";
 import { goals, roster, runs, sessions, now } from "./syntheticMission";
 
-const view = selectGoalViews({ goals, roster, runs, sessions, now });
+const input = { goals, roster, runs, sessions, now };
+const view = selectGoalViews(input);
 
 function Harness() {
   const [target, setTarget] = useState<GoalTarget>();
@@ -15,7 +18,9 @@ function Harness() {
       <div className="shrink-0 border-b border-stroke px-4 py-2 text-xs text-content/70">
         Synthetic CC7C fixture · no app database, provider or native runtime
       </div>
-      <MissionControlView view={view} onOpenTarget={setTarget} onClose={() => setClosed(true)} open={!target && !closed} />
+      <MissionControlView view={view} cockpit={selectCockpit(input)} attentionInput={input}
+        timeline={goalId => selectGoalTimeline({ ...input, goalId })}
+        onOpenTarget={setTarget} onClose={() => setClosed(true)} open={!target && !closed} />
       {target && <section aria-label="Synthetic target view" className="p-6">
         <h1 className="mb-4 text-xl">Synthetic target view</h1>
         <output data-testid="opened-target">{JSON.stringify(target)}</output>

@@ -1,7 +1,7 @@
 import { findMono, monoForSession, monoState, type Mono, type MonoState } from "./mono";
 import type { Session } from "../../sessions/model/session";
 import { orgDescendants, teamDecisions } from "./monoTeamActivity";
-import type { OrchestrationRun } from "../../orchestration/model/orchestrationState";
+import type { OrchestrationRun, OrchestrationTask } from "../../orchestration/model/orchestrationState";
 import { projectName } from "../../../shared/lib/paths";
 
 export const memberDetailsView = (id: string) => `mono-member:${id}`;
@@ -26,6 +26,25 @@ export function memberTasks(runs: readonly OrchestrationRun[], memberId: string)
   return runs.flatMap(run => run.tasks.filter(task => task.memberId === memberId).map((task, index) => ({
     task, order: index, started: Math.max(0, ...(run.dispatches ?? []).filter(dispatch => dispatch.taskId === task.id).map(dispatch => dispatch.startedAt)),
   }))).sort((a, b) => b.started - a.started || b.order - a.order).map(entry => entry.task);
+}
+
+/** A saved worker keeps its dispatch's status and worktree after the task is retried. */
+export function workbenchSessionTask(runs: readonly OrchestrationRun[], sessionId: string): OrchestrationTask | undefined {
+  const current = runs.flatMap(run => run.tasks).find(task => task.sessionId === sessionId && task.memberId);
+  if (current) return current;
+  for (const run of runs) {
+    const dispatch = run.dispatches?.find(entry => entry.sessionId === sessionId);
+    const task = dispatch && run.tasks.find(entry => entry.id === dispatch.taskId && entry.memberId);
+    if (!dispatch || !task) continue;
+    const status = dispatch.state === "starting" ? "queued"
+      : dispatch.state === "start_unknown" || dispatch.state === "stop_unknown" ? "interrupted" : dispatch.state;
+    return {
+      ...task, sessionId, workspace: dispatch.workspace, status,
+      error: dispatch.error ?? dispatch.cleanupError,
+      accepted: !!task.accepted && task.acceptedDispatchId === dispatch.id,
+      activeDispatchId: undefined, lastDispatchId: dispatch.id,
+    };
+  }
 }
 
 export function memberMonoState(runs: readonly OrchestrationRun[], memberId: string, sessions: readonly Session[], memberSessionId?: string): MonoState {

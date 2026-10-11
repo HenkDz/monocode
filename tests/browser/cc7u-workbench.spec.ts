@@ -576,3 +576,144 @@ for (const activation of ["pointer", "keyboard"]) {
     ).toEqual([]);
   });
 }
+
+test("flat saved session Conversation renders its queue once and routes queue actions to that session", async ({
+  page,
+}) => {
+  await page.goto(
+    "/tests/browser/cc7u-workbench.html?scenario=working&kind=session&queue=yes",
+    { waitUntil: "commit" },
+  );
+  await expect(page.locator("[data-workbench-header]")).toBeVisible({
+    timeout: 90_000,
+  });
+  const queue = page.locator("[data-message-queue]");
+  await expect(queue).toHaveCount(1);
+  await expect(page.locator("[data-message-queue-card]")).toHaveCount(1);
+  await expect(
+    page.getByText("Review the saved changes when storage is repaired.", {
+      exact: true,
+    }),
+  ).toHaveCount(1);
+  await expect(
+    queue.getByRole("button", { name: "Steer", exact: true }),
+  ).toHaveCount(1);
+  await expect(
+    queue.getByRole("button", { name: "Edit queued message", exact: true }),
+  ).toHaveCount(1);
+  await expect(
+    queue.getByRole("button", { name: "Remove queued message", exact: true }),
+  ).toHaveCount(1);
+  await queue.getByRole("button", { name: "Steer", exact: true }).click();
+  await queue
+    .getByRole("button", { name: "Edit queued message", exact: true })
+    .click();
+  await queue
+    .getByRole("textbox", { name: "Edit queued message", exact: true })
+    .fill("Keep the selected worker's queue boundary.");
+  await queue
+    .getByRole("button", { name: "Save queued message", exact: true })
+    .click();
+  await expect(
+    page.getByText("Keep the selected worker's queue boundary.", {
+      exact: true,
+    }),
+  ).toHaveCount(1);
+  await queue
+    .getByRole("button", { name: "Remove queued message", exact: true })
+    .click();
+  await expect(page.locator("[data-message-queue]")).toHaveCount(0);
+  expect(
+    await page.evaluate(() =>
+      (
+        window as unknown as {
+          workbenchFixture: {
+            events: { action: string; text?: string; options?: unknown }[];
+          };
+        }
+      ).workbenchFixture.events.filter((event) =>
+        event.action.endsWith("-queue"),
+      ),
+    ),
+  ).toEqual([
+    {
+      action: "steer-queue",
+      text: "queued-review",
+      options: { sessionId: "review-worker" },
+    },
+    {
+      action: "edit-queue",
+      text: "queued-review",
+      options: {
+        sessionId: "review-worker",
+        text: "Keep the selected worker's queue boundary.",
+      },
+    },
+    {
+      action: "remove-queue",
+      text: "queued-review",
+      options: { sessionId: "review-worker" },
+    },
+  ]);
+  await expect(
+    page.locator("[data-session-composer]").getByRole("textbox"),
+  ).toHaveValue("Keep my draft");
+  expect(
+    await page.evaluate(() =>
+      (
+        window as unknown as {
+          workbenchFixture: { events: { action: string }[] };
+        }
+      ).workbenchFixture.events.filter((event) => event.action === "submit"),
+    ),
+  ).toEqual([]);
+});
+
+test("flat historical session Conversation keeps its saved dispatch and queue after a task retry", async ({
+  page,
+}) => {
+  await page.goto(
+    "/tests/browser/cc7u-workbench.html?scenario=failed&kind=historical-session",
+    { waitUntil: "commit" },
+  );
+  await expect(page.locator("[data-member-workbench]")).toBeVisible({
+    timeout: 90_000,
+  });
+  const header = page.locator("[data-workbench-header]");
+  await expect(header).toContainText("Window activation review");
+  await expect(header).not.toContainText("Latest worker failure");
+  await expect(header).not.toContainText("Blocked");
+  await header
+    .getByRole("button", { name: "Open worktree", exact: true })
+    .click();
+  expect(
+    await page.evaluate(() =>
+      (
+        window as unknown as {
+          workbenchFixture: { events: { action: string; text?: string }[] };
+        }
+      ).workbenchFixture.events.filter(
+        (event) => event.action === "open-worktree",
+      ),
+    ),
+  ).toEqual([{ action: "open-worktree", text: "old-review-worker" }]);
+  await expect(page.locator("[data-message-queue]")).toHaveCount(1);
+  await expect(
+    page.getByText("Review the saved changes when storage is repaired.", {
+      exact: true,
+    }),
+  ).toHaveCount(1);
+  await header.getByRole("button", { name: "Details", exact: true }).click();
+  const details = page.getByRole("dialog", {
+    name: "Session details",
+    exact: true,
+  });
+  await expect(details).toContainText("C:/synthetic/BrowserLink/old-attempt");
+  await expect(details).not.toContainText(
+    "C:/synthetic/BrowserLink/new-attempt",
+  );
+  await page.keyboard.press("Escape");
+  await expect(
+    header.getByRole("button", { name: "Details", exact: true }),
+  ).toBeFocused();
+});

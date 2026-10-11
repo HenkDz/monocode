@@ -7,6 +7,8 @@ import { clearComposerDraft, setComposerDraft } from "../model/draftCache";
 import { acceptMonoRotation, discardMonoRotationPendingInputs, loadMonoRotation, MONO_ROTATION_READ_ERROR, saveMonoRotation } from "../../monos/model/monoRotation";
 import { registerBuiltinHarnesses } from "../../../integrations/harness/core/register";
 import { resetHarnessModelOverlays, setHarnessModels } from "../model/models";
+import type { OrchestrationDispatch } from "../../orchestration/model/orchestrationState";
+import { OrchestrationActions } from "../../orchestration/ui/OrchestrationActions";
 
 const probes = vi.hoisted(() => ({
   mono: true,
@@ -28,7 +30,7 @@ const probes = vi.hoisted(() => ({
       status: string;
       prompt?: string;
     }[];
-    dispatches: [];
+    dispatches: OrchestrationDispatch[];
   }[],
 }));
 vi.mock("./ModelPicker", async (original) => {
@@ -383,6 +385,68 @@ it("puts a member's blocked message queue above the conversation and routes edit
     "queued",
     "Review the latest patch",
   );
+});
+
+it("renders a saved worker's queue once and preserves its edit, remove and steer actions", () => {
+  probes.mono = false;
+  probes.actualPane = true;
+  probes.runs = [{ leadId: "lead", tasks: [{
+    id: "task", title: "Review saved changes", sessionId: "chat", memberId: "worker", status: "running",
+  }], dispatches: [] }];
+  const pane = props();
+  pane.session.busy = true;
+  pane.session.queuedMessages = [{ id: "worker-message", text: "Review the saved patch", attachments: [] }];
+  pane.onEditQueuedMessage = vi.fn();
+  pane.onDeleteQueuedMessage = vi.fn();
+  pane.onSteerQueuedMessage = vi.fn();
+  render(pane);
+  expect(container.querySelector('[data-member-workbench="true"]')).not.toBeNull();
+  expect(container.querySelectorAll("[data-message-queue]")).toHaveLength(1);
+  expect(container.querySelector(".cc7u-message-queue")).toBeNull();
+  const queue = container.querySelector("[data-message-queue]")!;
+  expect(queue.closest("[data-session-composer]")).not.toBeNull();
+  const steer = [...queue.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent?.trim() === "Steer")!;
+  expect(steer).toBeDefined();
+  act(() => steer.click());
+  expect(pane.onSteerQueuedMessage).toHaveBeenCalledExactlyOnceWith("chat", "worker-message");
+  act(() => queue.querySelector<HTMLButtonElement>('[aria-label="Edit queued message"]')!.click());
+  const input = queue.querySelector<HTMLTextAreaElement>('[aria-label="Edit queued message"]')!;
+  const inputProps = Object.entries(input).find(([key]) => key.startsWith("__reactProps"))![1];
+  act(() => inputProps.onChange({ target: { value: "Review the latest saved patch" } }));
+  act(() => queue.querySelector<HTMLButtonElement>('[aria-label="Save queued message"]')!.click());
+  expect(pane.onEditQueuedMessage).toHaveBeenCalledExactlyOnceWith("chat", "worker-message", "Review the latest saved patch");
+  act(() => queue.querySelector<HTMLButtonElement>('[aria-label="Remove queued message"]')!.click());
+  expect(pane.onDeleteQueuedMessage).toHaveBeenCalledExactlyOnceWith("chat", "worker-message");
+});
+
+it("keeps an earlier member worker in Workbench and opens its own historical session", () => {
+  probes.mono = false;
+  probes.actualPane = true;
+  probes.runs = [{ leadId: "lead", tasks: [{
+    id: "task", title: "Historical assignment", sessionId: "latest-worker", memberId: "worker", status: "running",
+  }], dispatches: [{
+    id: "old-dispatch", taskId: "task", sessionId: "chat", state: "failed", stage: "settled", startedAt: 1000, updatedAt: 2000,
+    workspace: { id: "checkout:historical", projectCwd: "/repo", checkoutCwd: "/historical-worker", kind: "worktree", branch: "historical" },
+    error: "Historical launch failed",
+  }] }];
+  const pane = props();
+  pane.session.worktreeCwd = "/historical-worker";
+  const openWorker = vi.fn();
+  act(() => root.render(createElement(OrchestrationActions.Provider, { value: {
+    open: vi.fn(), update: vi.fn(), confirm: vi.fn(async () => {}), retry: vi.fn(), openWorker,
+  } }, createElement(SessionPane, pane))));
+  expect(container.querySelector('[data-member-workbench="true"]')).not.toBeNull();
+  const header = container.querySelector("[data-workbench-header]")!;
+  expect(header.textContent).toContain("Saved session");
+  expect(header.querySelector('[data-agent-state="failed"]')).not.toBeNull();
+  expect(header.textContent).toContain("Historical launch failed");
+  expect(container.querySelector('[data-member-work]')?.textContent).toContain("Historical assignment");
+  const open = [...header.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Open worktree")!;
+  expect(open.disabled).toBe(false);
+  act(() => open.click());
+  expect(openWorker).toHaveBeenCalledExactlyOnceWith("chat");
+  expect(probes.runs[0].tasks[0].sessionId).toBe("latest-worker");
+  expect(probes.runs[0].tasks[0].status).toBe("running");
 });
 
 it("keeps recovery, draft and the transcript mounted while member tabs change by keyboard", () => {

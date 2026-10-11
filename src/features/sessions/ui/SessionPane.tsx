@@ -126,7 +126,7 @@ import type {
 } from "../../monos/model/monoCodexStorage";
 import { QuestionForm } from "./QuestionForm";
 import { MemberWorkLog } from "../../monos/ui/MemberWorkLog";
-import { memberTasks } from "../../monos/model/monoNavigation";
+import { memberTasks, workbenchSessionTask } from "../../monos/model/monoNavigation";
 import {
   monoMessageDeliveries,
   monoPendingTranscriptBlocks,
@@ -561,14 +561,15 @@ const LocalSessionPane = memo(function LocalSessionPane({
   const memberTask = orchestrationRuns
     .flatMap((run) => run.tasks)
     .find((task) => task.sessionId === session.id && task.memberId);
+  const savedMemberTask = memberTask ?? workbenchSessionTask(orchestrationRuns, session.id);
   const workbenchMember = isMember
     ? mono
-    : memberTask
-      ? findMono(memberTask.memberId ?? "")
+    : savedMemberTask
+      ? findMono(savedMemberTask.memberId ?? "")
       : undefined;
-  const workbench = isMember || (!mono && !!memberTask);
+  const workbench = isMember || (!mono && !!savedMemberTask);
   const workbenchLook = workbenchMember ? monoLook(workbenchMember) : undefined;
-  const workbenchTask = isMember ? assignedTask : memberTask;
+  const workbenchTask = isMember ? assignedTask : savedMemberTask;
   const workbenchState =
     isMember && memberState.liveState
       ? memberState.liveState
@@ -1319,10 +1320,10 @@ const LocalSessionPane = memo(function LocalSessionPane({
               role={
                 isMember
                   ? (workbenchMember?.specialty ?? "Team member")
-                  : `Saved session · ${workbenchLook?.name ?? memberTask?.memberName ?? "Member"}`
+                  : `Saved session · ${workbenchLook?.name ?? workbenchTask?.memberName ?? "Member"}`
               }
-              mascot={workbenchLook?.mascot ?? memberTask?.memberMascot}
-              color={workbenchLook?.color ?? memberTask?.memberColor}
+              mascot={workbenchLook?.mascot ?? workbenchTask?.memberMascot}
+              color={workbenchLook?.color ?? workbenchTask?.memberColor}
               state={workbenchState}
               onMessage={() => focusWorkbenchComposer()}
               onSteer={() => focusWorkbenchComposer(true)}
@@ -1395,7 +1396,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
                   <section className="cc7u-empty-work">
                     <h2>Assignment</h2>
                     <p>
-                      {memberTask?.title ?? "Assignment details unavailable"}
+                      {workbenchTask?.title ?? "Assignment details unavailable"}
                     </p>
                   </section>
                 )}
@@ -1473,7 +1474,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
                       Session details
                     </button>
                   </div>
-                  {!!memberMessages.length && (
+                {isMember && !!memberMessages.length && (
                     <section
                       aria-label="Message queue"
                       className="cc7u-message-queue"
@@ -1662,14 +1663,14 @@ const LocalSessionPane = memo(function LocalSessionPane({
                           (!workbench || memberTab === "conversation")
                         }
                         cwd={workCwd}
-                        agentName={agent?.name ?? memberTask?.memberName}
+                        agentName={agent?.name ?? savedMemberTask?.memberName}
                         agentMascot={
                           agent ??
-                          (memberTask?.memberMascot && memberTask.memberColor
+                          (savedMemberTask?.memberMascot && savedMemberTask.memberColor
                             ? {
-                                name: memberTask.memberName ?? "Member",
-                                mascot: memberTask.memberMascot,
-                                color: memberTask.memberColor,
+                                name: savedMemberTask.memberName ?? "Member",
+                                mascot: savedMemberTask.memberMascot,
+                                color: savedMemberTask.memberColor,
                                 projects: [],
                               }
                             : undefined)

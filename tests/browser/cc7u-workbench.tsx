@@ -29,18 +29,24 @@ import "../../src/styles/index.css";
 
 const params = new URLSearchParams(location.search);
 const scenario = params.get("scenario") ?? "failed";
-const workerSession = params.get("kind") === "session";
+const historicalSession = params.get("kind") === "historical-session";
+const workerSession = params.get("kind") === "session" || historicalSession;
 const waiting = scenario === "waiting";
 const working = scenario === "working";
 const approval = params.get("approval") === "yes";
 const child = params.get("child") === "yes";
+const queued = params.get("queue") === "yes";
 const approvalCommand =
   "printf '%s\\n' '<monocode_context>keep the exact command</monocode_context>'";
 const zero = scenario === "zero";
 const memberName = waiting || working ? "Native Core" : "Reviewer";
 const now = Date.now();
 const cwd = "C:/synthetic/BrowserLink";
-const sessionId = workerSession ? "review-worker" : "member-conversation";
+const sessionId = historicalSession
+  ? "old-review-worker"
+  : workerSession
+    ? "review-worker"
+    : "member-conversation";
 const events: { action: string; text?: string; options?: unknown }[] = [];
 const rejectLiveTurn = async () => {
   throw Error("Synthetic fixture never sends provider turns.");
@@ -178,6 +184,12 @@ if (waiting) {
 if (!waiting && !working)
   current.error =
     "Codex launch failed: conversation store could not be opened. SQLite error: database is locked (SQLITE_BUSY). Review attempt: not started.";
+if (historicalSession) {
+  current.sessionId = "new-review-worker";
+  current.status = "blocked";
+  current.error = "Latest worker failure must not rewrite the saved session";
+  current.workspace = workspace("new-attempt");
+}
 const tasks = zero
   ? []
   : [
@@ -245,6 +257,20 @@ const runs: OrchestrationRun[] = [
     })),
   },
 ];
+if (historicalSession)
+  runs[0].dispatches!.unshift({
+    id: "dispatch-current-old",
+    taskId: current.id,
+    sessionId,
+    workspace: workspace("old-attempt"),
+    state: "completed",
+    stage: "settled",
+    startedAt: now - 725_000,
+    turnStartedAt: now - 724_000,
+    finishedAt: now - 627_000,
+    durationMs: 97_000,
+    updatedAt: now - 627_000,
+  });
 orchestrator.snapshot = () => runs;
 orchestrator.subscribe = () => () => {};
 orchestrator.hydrate = async () => {};
@@ -385,21 +411,25 @@ const initialSession: Session = {
     : `${memberName} conversation`,
   cwd,
   branch: "cc7-native-review",
-  worktreeCwd: workspace("current").checkoutCwd,
+  worktreeCwd: workspace(historicalSession ? "old-attempt" : "current")
+    .checkoutCwd,
   blocks,
   context: { used: 178_000, window: 258_000 },
   busy: working,
-  ...(!zero && !waiting && !working
-    ? {
-        codexStorageError: current.error,
-        queueStatus: "paused" as const,
-        queuedMessages: [
+  queuedMessages:
+    queued || (!zero && !waiting && !working)
+      ? [
           {
             id: "queued-review",
             text: "Review the saved changes when storage is repaired.",
             attachments: [],
           },
-        ],
+        ]
+      : undefined,
+  ...(!historicalSession && !zero && !waiting && !working
+    ? {
+        codexStorageError: current.error,
+        queueStatus: "paused" as const,
       }
     : {}),
 };
@@ -424,20 +454,24 @@ if (!zero)
     text: "Review the saved change after storage recovery. Keep the current branch. No merge or live model turn is requested.",
     at: now - 60_000,
   });
-const liveState: AgentLiveState = approval
-  ? selectAgentLiveState(initialSession)
-  : zero
-    ? { status: "idle", detail: "Available · no assignment" }
-    : waiting
-      ? {
-          status: "waiting-on-member",
-          reason: "dependency",
-          waitingOn: "Reviewer",
-          detail: "Reviewer failed",
-        }
-      : working
-        ? { status: "running-tool", detail: "Checking saved window activation" }
-        : { status: "blocked", reason: "storage", detail: current.error };
+const liveState: AgentLiveState =
+  approval || historicalSession
+    ? selectAgentLiveState(initialSession)
+    : zero
+      ? { status: "idle", detail: "Available · no assignment" }
+      : waiting
+        ? {
+            status: "waiting-on-member",
+            reason: "dependency",
+            waitingOn: "Reviewer",
+            detail: "Reviewer failed",
+          }
+        : working
+          ? {
+              status: "running-tool",
+              detail: "Checking saved window activation",
+            }
+          : { status: "blocked", reason: "storage", detail: current.error };
 publishCardSessions(
   [
     {
@@ -578,22 +612,40 @@ function Fixture() {
     onStop: noop,
     onCompactContext: () => false,
     onPlaceSessionInFolder: noop,
-    onDeleteQueuedMessage: (_, id) =>
+    onDeleteQueuedMessage: (targetSessionId, id) => {
+      events.push({
+        action: "remove-queue",
+        text: id,
+        options: { sessionId: targetSessionId },
+      });
       setSession((value) => ({
         ...value,
         queuedMessages: value.queuedMessages?.filter(
           (message) => message.id !== id,
         ),
-      })),
-    onEditQueuedMessage: (_, id, text) =>
+      }));
+    },
+    onEditQueuedMessage: (targetSessionId, id, text) => {
+      events.push({
+        action: "edit-queue",
+        text: id,
+        options: { sessionId: targetSessionId, text },
+      });
       setSession((value) => ({
         ...value,
         queuedMessages: value.queuedMessages?.map((message) =>
           message.id === id ? { ...message, text } : message,
         ),
-      })),
+      }));
+    },
     onQueuedMessageEditingChange: noop,
-    onSteerQueuedMessage: noop,
+    onSteerQueuedMessage: (targetSessionId, id) => {
+      events.push({
+        action: "steer-queue",
+        text: id,
+        options: { sessionId: targetSessionId },
+      });
+    },
     onResumeQueue: noop,
     onUsageLimitResume: noop,
     onUsageLimitResumeAtReset: noop,

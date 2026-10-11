@@ -204,6 +204,16 @@ fn crash_child() {
     let entry = std::env::var("CC0G_CRASH_ENTRY").unwrap();
     let result = match std::env::var("CC0G_CRASH_OPERATION").unwrap().as_str() {
         "prepare" => prepare_files(&source, &home),
+        "isolate-skills" => prepare_files(&source, &home),
+        "skills-context" => (|| {
+            prepare_files(&source, &home)?;
+            let catalog = skills::catalog(&source, None, None)?;
+            let policy = skills::SkillsPolicy::default();
+            let id = skills::context_id(&source, &home, None, "worker", &policy, &catalog)?;
+            skills::with_context_home(&home, &id, |context| {
+                skills::prepare_context_files(&source, &home, context)
+            })
+        })(),
         "keep" => file_conflict(&source, &home, &entry).and_then(|conflict| {
             resolve_files(
                 &source,
@@ -265,6 +275,68 @@ fn killed_keep_restores_private_bytes_before_preparation() {
         assert!(!replaceable_link(&fixture.home().join("AGENTS.md")).unwrap());
         fixture.assert_clean();
         println!("keep {point}: {}", fixture.0.display());
+    }
+}
+
+#[test]
+fn killed_skill_junction_migration_preserves_source_and_restarts() {
+    for point in [
+        "after-journal",
+        "after-claim",
+        "before-publish",
+        "after-publish",
+    ] {
+        let fixture = Fixture::new(&format!("skills-{point}"));
+        let source = fixture.source().join("skills");
+        let target = fixture.home().join("skills");
+        std::fs::create_dir(&source).unwrap();
+        std::fs::write(source.join("original.txt"), ACCOUNT_BYTES).unwrap();
+        let identity = entry_identity(&source).unwrap();
+        #[cfg(windows)]
+        junction::create(&source, &target).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&source, &target).unwrap();
+        fixture.kill_at("isolate-skills", "skills", point);
+        fixture.run("isolate-skills", "skills", "restart").unwrap();
+        fixture.run("isolate-skills", "skills", "prepared").unwrap();
+        assert_eq!(entry_identity(&source).unwrap(), identity);
+        assert_eq!(
+            std::fs::read(source.join("original.txt")).unwrap(),
+            ACCOUNT_BYTES
+        );
+        assert!(target.is_dir());
+        assert!(!replaceable_link(&target).unwrap());
+        assert_eq!(std::fs::read_dir(&target).unwrap().count(), 0);
+        fixture.assert_clean();
+        println!("skill isolation {point}: {}", fixture.0.display());
+    }
+}
+
+#[test]
+fn killed_private_hook_context_copy_never_publishes_partial_hooks() {
+    for point in ["skills-hooks-before-publish", "skills-hooks-after-publish"] {
+        let fixture = Fixture::new(&format!("context-hooks-{point}"));
+        let hooks = fixture.home().join("hooks.json");
+        let chosen = br#"{"hooks":{"Stop":[{"command":"synthetic-private-context-hook"}]}}"#;
+        std::fs::write(&hooks, chosen).unwrap();
+        let identity = entry_identity(&hooks).unwrap();
+        fixture.kill_at("skills-context", "hooks.json", point);
+        fixture
+            .run("skills-context", "hooks.json", "restart")
+            .unwrap();
+        let contexts = std::fs::read_dir(fixture.home().join(".monocode-skill-contexts"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect::<Vec<_>>();
+        assert_eq!(contexts.len(), 1);
+        let published = contexts[0].join("hooks.json");
+        assert_eq!(std::fs::read(&published).unwrap(), chosen);
+        assert!(!replaceable_link(&published).unwrap());
+        assert!(!same_entry(&hooks, &published));
+        assert_eq!(entry_identity(&hooks).unwrap(), identity);
+        assert_eq!(std::fs::read(&hooks).unwrap(), chosen);
+        fixture.assert_clean();
+        println!("context private hooks {point}: {}", fixture.0.display());
     }
 }
 

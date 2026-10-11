@@ -901,6 +901,7 @@ pub fn harness_spawn(
     binary_provider: Option<String>,
     binary_path: Option<String>,
     codex_store: Option<String>,
+    codex_skills_context: Option<String>,
     devin_ask_edits: Option<bool>,
 ) -> Result<u32, String> {
     let workdir = expand_home(&cwd);
@@ -938,6 +939,9 @@ pub fn harness_spawn(
         .stderr(Stdio::piped());
     prepare_child(&mut cmd, &command);
     apply_provider_account(&app, &mut cmd, account.as_ref())?;
+    if codex_skills_context.is_some() && codex_store.as_deref() != Some("mono") {
+        return Err("A Mono skills context requires private Mono storage".into());
+    }
     let codex_store = match codex_store.as_deref() {
         None => None,
         Some("mono")
@@ -945,13 +949,17 @@ pub fn harness_spawn(
                 && account.as_ref().is_some_and(|a| a.provider == "codex")
                 && args.first().is_some_and(|a| a == "app-server") =>
         {
-            let store =
-                crate::codex_mono_store::prepare(&app, account.as_ref().map(|a| a.id.as_str()))?;
-            let private_path = serde_json::to_string(&store.home).map_err(|e| e.to_string())?;
+            let store = crate::codex_mono_store::prepare(
+                &app,
+                account.as_ref().map(|a| a.id.as_str()),
+                codex_skills_context.as_deref(),
+            )?;
+            let private_path =
+                serde_json::to_string(&store.sqlite_home).map_err(|e| e.to_string())?;
             // Explicit config takes precedence over CODEX_SQLITE_HOME. Override
             // both so a user's sqlite_home cannot index Monos in the Codex app.
             cmd.env("CODEX_HOME", &store.home)
-                .env("CODEX_SQLITE_HOME", &store.home)
+                .env("CODEX_SQLITE_HOME", &store.sqlite_home)
                 .args(["-c", &format!("sqlite_home={private_path}")]);
             Some(Arc::new(store))
         }

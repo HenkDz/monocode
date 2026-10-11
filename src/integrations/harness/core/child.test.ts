@@ -72,6 +72,16 @@ it("persists hooks sharing for the specified Codex account without preparing or 
   });
 });
 
+it("sends an isolated Codex skills context only on the selected Mono launch", async () => {
+  const child = await loadChild();
+  mocks.invoke.mockResolvedValue(41);
+  const context = "c".repeat(64);
+  await child.spawnChild("mono-child", "codex", ["app-server"], "/synthetic", { provider: "codex", id: "account" }, undefined, "mono", undefined, context);
+  expect(mocks.invoke).toHaveBeenLastCalledWith("harness_spawn", expect.objectContaining({ codexStore: "mono", codexSkillsContext: context }));
+  await child.spawnChild("ordinary-child", "codex", ["app-server"], "/synthetic");
+  expect(mocks.invoke.mock.calls.at(-1)?.[1]).not.toHaveProperty("codexSkillsContext");
+});
+
 describe("child bridge", () => {
   it("waits until every listener is installed", async () => {
     const pending = deferred<UnlistenFn>();

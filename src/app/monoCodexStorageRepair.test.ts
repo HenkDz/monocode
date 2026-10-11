@@ -88,6 +88,8 @@ it.each(["relink", "first replay"])("unblocks a late account member during %s be
   const context = {
     sessionsRef, codexStorageRecovery: { current: recovery }, codexStorageAccountId,
     isCodexStorageError, parseCodexStorageConflict,
+    monoSkillsForSession: () => ({ skillsRole: "manager", skillsPolicy: { mode: "role" } }),
+    sessionWorkCwd: (session: { cwd: string }) => session.cwd,
     remoteProjectFor: () => undefined, selectedProviderAccountId: () => "account",
     queuedHead: () => undefined, monoForSession: () => ({ id: "mono" }), listMonos: () => [],
     isProjectManager: () => false, editedResends: { isActive: () => false },

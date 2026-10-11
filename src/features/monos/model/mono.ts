@@ -19,6 +19,7 @@ import {
 import { removeMonoBackground } from "./monoBackground";
 import type { TeamChange, TeamLockedField } from "./monoTeam";
 import type { EffortSource } from "../../sessions/model/models";
+import { parseMonoSkillsPolicy, type MonoSkillsPolicy } from "./monoSkills";
 
 /** The project palette's colors, plus indigo for a Mono's ninth preset. */
 export const MONO_COLORS = [
@@ -46,6 +47,9 @@ export type Mono = {
   userLockedFields?: TeamLockedField[];
   effortSource?: EffortSource;
   teamSizeCap?: number;
+  /** Absent inherits the direct team's choice, then the curated role default. */
+  skillsPolicy?: MonoSkillsPolicy;
+  teamSkillsPolicy?: MonoSkillsPolicy;
   /** Durable receipts and reversible team history, owned by this Manager. */
   teamChanges?: TeamChange[];
   workerProfile?: {
@@ -221,6 +225,8 @@ function parseMono(value: unknown): Mono | undefined {
       : entry.role === "member" ? { origin: "starter" as const } : {}),
     ...(entry.reviewer === true ? { reviewer: true } : {}),
     ...(entry.effortSource === "role" || entry.effortSource === "user" ? { effortSource: entry.effortSource } : {}),
+    ...(parseMonoSkillsPolicy(entry.skillsPolicy) ? { skillsPolicy: parseMonoSkillsPolicy(entry.skillsPolicy) } : {}),
+    ...(parseMonoSkillsPolicy(entry.teamSkillsPolicy) ? { teamSkillsPolicy: parseMonoSkillsPolicy(entry.teamSkillsPolicy) } : {}),
     ...(Array.isArray(entry.userLockedFields) ? { userLockedFields: entry.userLockedFields.filter((field): field is TeamLockedField => ["name", "specialty", "soul", "harness", "model", "modelSettings"].includes(String(field))) } : {}),
     ...(Number.isInteger(entry.teamSizeCap) && Number(entry.teamSizeCap) >= 1 && Number(entry.teamSizeCap) <= 24 ? { teamSizeCap: Number(entry.teamSizeCap) } : {}),
     ...(Array.isArray(entry.teamChanges) ? { teamChanges: entry.teamChanges as TeamChange[] } : {}),

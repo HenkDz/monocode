@@ -179,6 +179,8 @@ export type HarnessSessionInput = {
   ephemeral?: boolean;
   /** Persist Codex context in MonoCode's private Mono store. */
   codexStore?: "mono";
+  skillsRole?: import("../../../features/monos/model/monoSkills").MonoSkillsRole;
+  skillsPolicy?: import("../../../features/monos/model/monoSkills").MonoSkillsPolicy;
   intent?: TurnIntent;
   /**
    * This session drives MonoCode's control CLI, which reaches the app over

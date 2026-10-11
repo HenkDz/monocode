@@ -495,6 +495,7 @@ pub fn run() {
             harness::harness_free_port,
             harness::harness_spawn,
             codex_mono_store::codex_mono_store_prepare,
+            codex_mono_store::codex_mono_skills_catalog,
             codex_mono_store::codex_mono_store_info,
             codex_mono_store::codex_mono_store_set_hooks_shared,
             codex_mono_store::codex_mono_store_resolve,

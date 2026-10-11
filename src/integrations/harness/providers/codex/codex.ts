@@ -94,6 +94,7 @@ type Live = {
   controlsAgents: boolean;
   ephemeral: boolean;
   codexStore?: "mono";
+  skillsSignature?: string;
   runtimeMode: RuntimeMode;
   planning: boolean;
   readOnly: boolean;
@@ -491,6 +492,8 @@ export async function migrateMonoCodexSession(input: {
   threadId: string;
   cwd: string;
   providerAccountId?: string;
+  skillsRole?: HarnessSessionInput["skillsRole"];
+  skillsPolicy?: HarnessSessionInput["skillsPolicy"];
 }): Promise<void> {
   const { path } = await resolveCodexBinaryImpl();
   await prepareCodexMonoContext({ ...input, path, migrationOnly: true });
@@ -522,6 +525,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     input.codexStore ??
     existing?.codexStore ??
     resumeByThread.get(input.sessionId)?.codexStore;
+  const skillsSignature = codexStore === "mono" ? JSON.stringify([input.skillsRole, input.skillsPolicy]) : undefined;
   if (
     existing &&
     existing.cwd === input.cwd &&
@@ -532,7 +536,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     existing.controlsAgents === controlsAgents &&
     existing.readOnly === readOnly &&
     existing.ephemeral === ephemeral &&
-    existing.codexStore === codexStore
+    existing.codexStore === codexStore && existing.skillsSignature === skillsSignature
   ) {
     existing.onEvent = input.onEvent;
     return existing;
@@ -575,6 +579,8 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
           path,
           cwd: input.cwd,
           providerAccountId: input.providerAccountId,
+          skillsRole: input.skillsRole,
+          skillsPolicy: input.skillsPolicy,
           threadId: canResume ? resume?.threadId : undefined,
         })
       : undefined;
@@ -665,7 +671,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
   await spawnChild(
     input.sessionId,
     path,
-    codexAppServerArgs(readOnly, IS_WIN),
+    [...codexAppServerArgs(readOnly, IS_WIN), ...(store?.skillArgs ?? [])],
     input.cwd,
     {
       provider: "codex",
@@ -673,6 +679,8 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     },
     "codex",
     codexStore,
+    undefined,
+    store?.skillsContextId,
   );
 
   try {
@@ -718,6 +726,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
           "thread/resume",
           {
             threadId: resume.threadId,
+            ...(store?.threadPath ? { path: store.threadPath } : {}),
             ...params,
             ...(storeConfig
               ? {
@@ -783,6 +792,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       controlsAgents,
       ephemeral,
       codexStore,
+      skillsSignature,
       runtimeMode: input.runtimeMode,
       planning: input.intent === "plan",
       readOnly,

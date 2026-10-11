@@ -412,12 +412,14 @@ describe("durable Manager wake waves", () => {
     current = { ...current, wakeState: addManagerWakeEvent(current.wakeState, event("held-info")) };
     await vi.advanceTimersByTimeAsync(MANAGER_WAKE_TIMEOUT);
     const prepared = { ...current, wakeState: prepareManagerWake(current, Date.now()) };
-    const stale = clone(prepared);
+    const stale = clone({ ...prepared, wakeState: { ...prepared.wakeState,
+      delivery: { attempts: 3, retryAt: Date.now() + 1_000, error: "Storage unavailable" } } });
     const receiptId = prepared.wakeState.receipt!.id;
     const acknowledged = { ...prepared, wakeState: acknowledgeManagerWake(prepared.wakeState, receiptId, Date.now()) };
     const restored = { ...stale, wakeState: reconcileManagerWake(stale, acknowledged, Date.now() + 1000) };
     expect(restored.wakeState?.receipt?.id).toBe(receiptId);
     expect(restored.wakeState?.receipt?.acknowledgedAt).toBe(Date.now());
+    expect(restored.wakeState?.delivery).toBeUndefined();
     expect(restored.wakeState?.events[0].acknowledgedAt).toBe(Date.now());
     expect(restored.wakeState?.waves[0].timedOutAt).toBe(Date.now());
     expect(managerWakePlan(restored, Date.now() + MANAGER_WAKE_TIMEOUT)).toEqual({ ready: false, at: undefined, completed: [], timeouts: [] });
@@ -434,6 +436,8 @@ describe("durable Manager wake waves", () => {
     latest = { ...latest, wakeState: addManagerWakeEvent(latest.wakeState, event("new-question", "question")) };
     await vi.advanceTimersByTimeAsync(MANAGER_QUESTION_DELAY);
     latest = { ...latest, wakeState: prepareManagerWake(latest, Date.now()) };
+    latest = { ...latest, wakeState: { ...latest.wakeState!,
+      delivery: { attempts: 3, retryAt: Date.now() + 1_000, error: "Storage unavailable" } } };
     const pending = latest.wakeState!.receipt!;
     expect(pending.id).not.toBe(stale.wakeState?.receipt?.id);
     const restored = reconcileManagerWake(stale, latest, Date.now())!;
@@ -442,6 +446,7 @@ describe("durable Manager wake waves", () => {
     expect(restored.events.slice(1).every(value => value.acknowledgedAt == null)).toBe(true);
     expect(restored.waves).toEqual(latest.wakeState?.waves);
     expect(restored.receipt).toEqual(pending);
+    expect(restored.delivery).toEqual(latest.wakeState?.delivery);
     expect(restored.receipt?.eventIds).toEqual(["new-question", "new-info"]);
   });
 

@@ -62,6 +62,10 @@ export function reconcileManagerWake(run: OrchestrationRun, previous: Orchestrat
   let state = run.wakeState ?? previous?.wakeState;
   if (state && previous?.wakeState && state !== previous.wakeState) {
     const latest = previous.wakeState;
+    const receipt = latest.receipt && (state.receipt?.id === latest.receipt.id && latest.receipt.acknowledgedAt != null && state.receipt.acknowledgedAt == null ||
+      latest.receipt.acknowledgedAt == null && state.receipt?.id !== latest.receipt.id) ? latest.receipt : state.receipt ?? latest.receipt;
+    const delivery = receipt?.acknowledgedAt != null ? undefined : receipt?.id !== state.receipt?.id ? latest.delivery :
+      receipt?.id === latest.receipt?.id && (latest.delivery?.retryAt ?? 0) > (state.delivery?.retryAt ?? 0) ? latest.delivery : state.delivery;
     // An async engine operation may hold a snapshot from before a team update arrived.
     state = { ...state, events: [...state.events.map(event => {
       const prior = latest.events.find(entry => entry.id === event.id);
@@ -75,11 +79,10 @@ export function reconcileManagerWake(run: OrchestrationRun, previous: Orchestrat
           sealedAt: wave.sealedAt ?? prior?.sealedAt, completedAt: wave.completedAt ?? prior?.completedAt,
           timedOutAt: wave.timedOutAt ?? prior?.timedOutAt, retiredAt: wave.retiredAt ?? prior?.retiredAt };
       }), ...latest.waves.filter(wave => !state!.waves.some(entry => entry.id === wave.id))],
-      delivery: state.receipt?.acknowledgedAt == null && latest.receipt?.acknowledgedAt == null &&
-        (latest.delivery?.retryAt ?? 0) > (state.delivery?.retryAt ?? 0) ? latest.delivery : state.delivery,
-      receipt: latest.receipt && (state.receipt?.id === latest.receipt.id && latest.receipt.acknowledgedAt != null && state.receipt.acknowledgedAt == null ||
-        latest.receipt.acknowledgedAt == null && state.receipt?.id !== latest.receipt.id) ? latest.receipt : state.receipt ?? latest.receipt };
+      delivery, receipt };
   }
+  if (state?.receipt?.acknowledgedAt != null && state.delivery)
+    state = { ...state, delivery: undefined };
   if (!run.projectManager) return state;
   for (const dispatch of run.dispatches ?? []) {
     if (!previous || previous.dispatches?.some(entry => entry.id === dispatch.id) ||

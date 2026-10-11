@@ -2,7 +2,7 @@
 
 Branch: `HenkDz/cc6-mono-skills`, based on `e950866bb164ded1eba3cbcd5632279a8fd313c8`. Integration and publication remain coordinator-owned.
 
-Monos receive a small skill set chosen for their role. Details and Team settings show **Skills: N enabled**, searchable individual selections, a team default, an explicit role reset, all-skills opt-in, and separate plugin opt-in. Choices persist with the Mono roster and take effect on its next preparation/turn; a changed policy restarts a warm Codex server while retaining its native thread. Ordinary conversations and ordinary orchestration workers keep their existing behavior.
+Monos receive a small skill set chosen for their role. Details and Team settings show **Skills · N enabled**, opening an accordion-free picker with searchable selections, enabled chips, Role default / Custom / All segments, team defaults and separate plugin opt-in. Choices persist with the Mono roster and take effect on its next preparation/turn; a changed policy restarts a warm Codex server while retaining its native thread. Ordinary conversations and ordinary orchestration workers keep their existing behavior.
 
 ## Installed Codex investigation
 
@@ -32,7 +32,7 @@ Available project-local skills are included in each role default. Bug bounty, re
 
 The former shared `skills` junction becomes a real private directory using a new `IsolateSkills` journal intent. Existing real directories and user files remain intact. Directory junctions are claimed, identity-checked, and replaced with a staged empty directory; only the original link is discarded. Interrupted work reconciles through the existing CC0G transaction machinery. Windows keeps the private directory handle locked while creating selected links. Skill aliases include canonical source identity, so changing account/source never redirects a link an older server may still use.
 
-A single shared discovery directory with per-server disabled-path snapshots was rejected after a reproduction: a second member added a new project skill, and the first member's next request included it. Codex defaults unknown paths to enabled. Each effective selection therefore has its own private **CODEX_HOME**, keyed by account/source, project, role, policy and inventory. Selected skill folders are linked from their originals; skill originals are neither copied nor modified. State directories inside these homes remain real directories. The existing account Mono **SQLite home** remains the common native thread index, and legacy rollout files remain in place. This preserves history while separating skill discovery. Private configuration/instruction choices and isolated hooks from storage repair are inherited; hook copies use staged publication.
+A single shared discovery directory with per-server disabled-path snapshots was rejected after a reproduction: a second member added a new project skill, and the first member's next request included it. Codex defaults unknown paths to enabled. Each effective selection therefore has its own private **CODEX_HOME**, keyed by account/source, project, role, policy and inventory. Selected skill folders are linked from their originals; skill originals are neither copied nor modified. The account Mono base owns the shared **SQLite home**, sessions, archived sessions and native memory. Instruction homes link these state roots while retaining private instruction choices. Existing context rollouts are retained through journaled migration, preserving their original bytes and updating only their matching index paths. Private configuration/instruction choices and isolated hooks from storage repair are inherited; hook copies use journaled staged publication.
 
 Existing SQLite-indexed threads resume by ID across instruction homes. A first copied legacy rollout has no row in the new index, so preparation and copying return its native validated path for `thread/resume`. Runtime probes cover both cases with unchanged files. A copied Paginated rollout without its SQLite history remains an existing storage-import limitation: the runtime rejects it even with an explicit path. Existing Paginated threads whose shared SQLite history is present resume successfully. CC6 does not import those missing databases or manufacture history.
 
@@ -72,6 +72,40 @@ Evidence root: `C:/Users/nooro/AppData/Local/Temp/monocode-cc/cc6/evidence/`.
 - `vitest-parallel-failed.log`: the retained concurrent run with six 5-second timeouts; no timeout or skip was added to obtain the final pass.
 - `../REPORT.md`: commit, exact final counts, files changed, risks and deliberately omitted work.
 
+## CC6F review corrections
+
+CC6F integrates the original CC6 branch into `HenkDz/cc6f-skills-fixes`, starting from `nour` at `4a86188dba99a580814fbd8fa6f1e97a44bebdee`. The requested merge was clean and local. All seven CC6R findings have regression coverage:
+
+- **F1, sandbox continuity:** Every selection links the base `.sandbox`, `.sandbox-bin`, `.sandbox-secrets` and `cap_sid` identity. Sandboxed preparation checks the existing elevated sandbox's version-5 marker/users and required artifacts before provider spawn, rejecting missing or malformed provisioning without launching setup. Full-access Chat does not require provisioning. Read-only and Plan turns do; switching access waits for the active Mono turn before rechecking. The guard follows installed Codex 0.162.1 and must be revisited when its schema changes. It does not test Windows account flags, DPAPI, ACLs or live sandbox execution.
+- **F2, archive ownership:** Base-owned `sessions` and `archived_sessions` are linked into every home. Legacy context files are copied with no-replace publication, fsync and identity/fingerprint checks; the exact matching SQLite paths are updated, and original directories are retained. Busy writers, unfamiliar entries and divergent collisions fail with bytes preserved. An archived saved thread is unarchived through a temporary selected-home Codex server before the normal adapter resumes it. No replacement thread or synthesized history is used.
+- **F3, application context:** The adapter remembers policy/home identity across idle parking and forgets both receipt families before `prepareText` after a switch. Unchanged-home parking keeps its receipts. Rejected sends retain no new receipt and retry with the full org, soul and memory context.
+- **F4, native memory:** Every selection shares base `memories`. Legacy context memory uses the same journaled retention: context-only and disjoint files migrate, identical duplicates reuse their bytes, and divergent files require explicit reconciliation with both versions intact.
+- **F5, private skills:** Real base-private skills appear as catalog source `mono`, including custom and all-skills mode. Canonical aliases avoid duplicate catalog entries. Curated role defaults remain selective.
+- **F6, controls:** A compact **Skills · N enabled** row opens the shared Modal, with search, removable enabled chips and Role default / Custom / All segments. Plugin opt-in and team defaults remain available. The real Modal and SwitchRow supply keyboard behavior; there are no disclosure or accordion elements.
+- **F7, staging recovery:** Hook clones are journaled before copying and fingerprinted before publication. Restart cleans only recorded matching stages and preserves unfamiliar replacements. Crash assertions inspect nested homes as well as the base. Rollout and memory copies use the same checked journal mechanics.
+
+Final integrated Windows validation, Node `v26.5.0`, with `NODE_OPTIONS=--no-experimental-webstorage`:
+
+| Check | Result |
+| --- | --- |
+| Full `npx vitest run --maxWorkers=4` | **7,096 passed, 13 skipped, 0 failed**; 593 passed files, 2 skipped |
+| `npx tsc --noEmit` | Exit 0, no diagnostics |
+| `npm run build` | Exit 0; existing CSS/import/chunk warnings retained |
+| Actual-crate `cargo test --manifest-path src-tauri/Cargo.toml codex_mono_store --lib --no-fail-fast -- --nocapture` | **114 passed, 0 failed, 3 ignored, 618 filtered** |
+| Touched Rust formatting / diff / LF checks | Eight CC6F Rust files pass `rustfmt --check` with child traversal disabled; diff check passes; no changed file has CRLF |
+| Skills browser fixture | **27 passed checks**, six dark/light desktop/narrow screenshots; no browser errors or external requests |
+| Installed Codex archive migration | **15 thread RPC operations**, four server lifetimes; same populated thread ID and two exact history turns; original hash retained; zero provider requests and model turns |
+
+The three ignored native entries are the two subprocess entrypoints and the synthetic installed-runtime preparation entrypoint, exercised by crash tests and the runtime probe. The 13 Vitest skips are existing real-provider/soak tests. No timeout or skip was increased. One pre-final native compile exposed an ambiguous error conversion in the full Tauri crate; an explicit closure result type fixed it, and the actual suite then passed. Earlier red context-receipt and queued-access regressions are retained as separate evidence.
+
+Evidence root: `C:/Users/nooro/AppData/Local/Temp/monocode-cc/cc6f/evidence/`.
+
+- `validation/`: full Vitest, TypeScript, build and actual native logs/exit receipts, focused before/after context tests, sandbox adapter checks and formatting receipt.
+- `native/`: state regression log, copied-harness provenance/hashes and native design/limits. Copied-harness tests supplement the passing actual-crate run.
+- `continuity/`: installed-runtime archive/migration probes and receipts, retained synthetic fixtures, and native migration transform manifest.
+- `ui/`: actual-component browser fixture, 27-check receipt, source hashes, screenshots and focused UI tests.
+- `../REPORT.md`: branch/commits, changed-file lists, exact validation numbers, decisions and remaining risks.
+
 ## Limits
 
-Windows is the verified platform. Native migration exercises process termination and restart, not operating-system power loss. Unix retains the documented external path-replacement/open-writer limitation. The settings control applies to local Codex Monos; remote/headless provider storage is unchanged. Global skill installation performed outside MonoCode while a server is running remains subject to Codex discovery; the inventory resolves again on preparation. Old instruction homes are retained because they can own rollout files; automatic pruning was not added. Copied Paginated account imports require a separate storage follow-up. No global configuration or real profile was repaired, no live model inference was run, and no merge, push or deployment was performed.
+Windows is the verified platform. Native migration exercises process termination and restart, not operating-system power loss. Unix retains the documented external path-replacement/open-writer limitation. The settings control applies to local Codex Monos; remote/headless provider storage is unchanged. Global skill installation performed outside MonoCode while a server is running remains subject to Codex discovery; the inventory resolves again on preparation. Old instruction homes and retained originals remain available; automatic pruning was not added. Copied Paginated account imports require a separate storage follow-up. No global configuration or real profile was repaired, no live model inference or elevated sandbox command was run, and no push, deployment or merge into `nour` was performed. The sandbox preflight cannot establish live machine provisioning health; conflicting legacy memory requires explicit reconciliation. Native WebView screenshot acceptance remains separate from the synthetic browser fixture.

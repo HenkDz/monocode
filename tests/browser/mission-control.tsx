@@ -5,6 +5,7 @@ import { MissionControlView } from "../../src/features/commandCenter/ui/MissionC
 import { MissionCommandBar } from "../../src/features/commandCenter/ui/MissionCommandBar";
 import { AttentionQueueView } from "../../src/features/commandCenter/ui/AttentionQueue";
 import { selectCockpit } from "../../src/features/commandCenter/model/cockpit";
+import { recordPullRequest } from "../../src/features/source-control/model/pullRequests";
 import { selectGoalViews, type GoalTarget } from "../../src/features/commandCenter/model/goalView";
 import { selectGoalTimeline } from "../../src/features/commandCenter/model/timeline";
 import type { MonoGoalSubmission } from "../../src/features/monos/model/monoGoalRouting";
@@ -78,6 +79,7 @@ orchestrator.subscribe = () => () => {};
 orchestrator.hydrate = async () => {};
 const pr: GitPr = { number: 1861, title: "Correct Arabic pricing labels", url: pricing.prUrl!, state: "merged", headOid: "synthetic", headRefName: "synthetic-pricing", baseRefName: "nour", additions: 3, deletions: 3, checksStatus: "success", reviewDecision: "APPROVED", mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", updatedAt: new Date(now - 720_000).toISOString(), closedAt: new Date(now - 720_000).toISOString() };
 const statuses = new Map([[prStatusKey(dzProject, pr.url), pr]]);
+if (params.get("pr") === "open") recordPullRequest(monoProject, { ...pr, number: 42, url: "https://github.com/synthetic/monocode/pull/42", state: "open", headRefName: "nour" });
 mockWindows("main");
 mockIPC((command, args) => {
   if (command === "git_worktrees") {

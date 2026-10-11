@@ -19,7 +19,9 @@ old failures, and opens a blocked engine's exact conversation. Archived members
 and terminal-goal failures cannot masquerade as current work. Windows project
 keys use the same `pathKey` normalization as the goal ledger.
 
-Unknown timing and counters say **—**. Active/idle counts come from canonical
+CC7Q labels unavailable organization counters **No samples** or **Not recorded**,
+omits absent agent clocks and panel ages, and names unknown ledger/phase timing
+**Unknown**. Active/idle counts come from canonical
 agent states. Average hand-off uses only recorded dispatch-to-turn-start samples;
 duplicate conflicting boundaries are excluded. Tokens today deduplicate loaded
 session/turn identities and use CC4's cache conventions, with observed coverage
@@ -34,7 +36,11 @@ turn begins. Captured wait and compaction intervals remain separate: overlapping
 spans are never added. The ledger pages four rows and exposes actor, attempt,
 review reference, exact boundaries, uncertainty and the saved conversation.
 
-Recent activity uses completed dispatches and verified merged PRs. A merged PR
+Recent activity uses completed dispatches and verified merged PRs. CC7Q groups
+saved PR identities and Manager-scoped task identities, including explicitly
+linked reviews. A verified merge takes precedence, with completion/review details
+retained on its single row. Separate tasks under the same goal stay separate.
+A merged PR
 must match the task's saved URL; a reused branch cannot prove a new task merged.
 Completion time comes from `finishedAt`, not a mutable update timestamp. Missing
 completion timestamps remain unknown, and a completed review does not imply an
@@ -78,6 +84,16 @@ stay pinned independently of paging. Arrow navigation and existing task/session
 detail and safety actions remain. Narrow rails hide only visual status text,
 preserving the full accessible description and token-colored dot.
 
+CC7Q separates worktree branch/badges from teammate chips. Rails narrower than
+180 px of container space put the existing actions on their own line, retaining
+the badge and the open-PR action without overlap. Right-click and keyboard menus
+still belong to the exact checkout; Escape dismisses the menu without closing
+Mission control. Project lead avatars use project/role initials (MM and DM),
+shared with the goal drawer. The home restores the mockup's 104 px command,
+144 px comfortable cards and 64 px organization lead, aligns vitals captions,
+and removes repeated timing captions. Storage recovery actions share a line
+while retaining their fieldset, callbacks and authority rules.
+
 ## Decisions and limits
 
 The CC7M mockup controls typography, spacing, surfaces, grids and right-drawer
@@ -108,7 +124,7 @@ the real Cockpit, command, Attention queue, Manager rows and worktree controls.
 final full checks to source hashes. The round's `REPORT.md` records the resulting
 commit and exact validation totals.
 
-## Validation
+## CC7N validation
 
 Windows / Node 26.5.0 checks use `NODE_OPTIONS=--no-experimental-webstorage`,
 four Vitest workers and synthetic homes with `CODEX_HOME` and `ORCA_*` removed.
@@ -151,3 +167,22 @@ runner setting leaves the video failure. Raw evidence is retained under
 `provisional-full-before-attention-polish/`; its source drift is explicitly
 recorded. The final run uses the original test directory, projects and viewport,
 with only launch-folder/port paths adjusted for isolation.
+
+## CC7Q polish validation
+
+CC7Q's final Cockpit/sidebar polish and decisions are documented in
+[`cc7q-cockpit-polish.md`](cc7q-cockpit-polish.md). Evidence root:
+`C:/Users/nooro/AppData/Local/Temp/monocode-cc/cc7q/evidence/`.
+
+| Check | CC7Q final result |
+| --- | --- |
+| Full Vitest | 601 files passed, 2 skipped, 0 failed; 7,209 tests passed, 13 skipped, 0 failed/todo (603 files / 7,222 tests total). |
+| TypeScript / production build | Both passed, exit 0; 18.968 / 33.841 s. |
+| Full browser suite | 121 passed, 1 unchanged known WebKit video failure, 0 skipped/flaky/todo; 122 tests total. All 32 Cockpit cases passed. |
+| Screenshots | 49 final PNGs and 19 mockup comparisons, including 1440/900/800 px light/dark and open-PR hover/focus states. |
+| Layout / interaction | 36 sidebar states / 144 rows: zero overlaps; 12 menu-dismissal checks passed; minimum sampled normal-text contrast 5.35965:1. |
+
+The full checks share one unchanged 1,617-file source digest; the capture's
+80 source hashes and image hashes are bound to the local commit in
+`final-commit-binding.json`. Native/live-provider acceptance remains unverified.
+All owned previews and synthetic homes are stopped/removed.

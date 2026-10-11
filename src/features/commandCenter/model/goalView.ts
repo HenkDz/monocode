@@ -9,6 +9,11 @@ import { selectAgentMetrics, selectDelegationEdges, selectGoalMetrics, selectTas
 import { currentTurnIndex } from "../../agents/model/turnMetrics";
 
 export type GoalTarget = { monoId?: string; sessionId?: string; requestSessionId?: string };
+export function agentInitials(name: string, role?: string, project = ""): string {
+  const words = name.trim().split(/\s+/);
+  return (role === "manager" && project ? `${project[0]}M`
+    : words.length > 1 ? words.slice(0, 2).map(word => word[0]).join("") : name.slice(0, 2)).toUpperCase();
+}
 export function openGoalTarget(target: GoalTarget, routes: {
   close: () => void;
   request: (id: string) => void;

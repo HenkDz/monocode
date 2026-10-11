@@ -34,7 +34,7 @@ it("keeps unknown legacy review timing unavailable", async () => {
   const value = selectGoalTimeline({ ...input, goalId: goals[0].id })!;
   expect(value.lanes.find(lane => lane.review)?.spans.some(span => span.id === "legacy")).toBe(true);
   await act(async () => render(value));
-  expect(phase("Review").querySelector("small")?.textContent).toBe("—");
+  expect(phase("Review").querySelector("small")?.textContent).toBe("Unknown");
   await act(async () => phase("Review").click());
   expect(host.querySelector(".mc-phase-detail")?.textContent).toContain("exact phase boundaries are unavailable");
   expect(host.textContent).not.toContain("Not started");
@@ -47,7 +47,7 @@ it("does not call Review unstarted when another review attempt has unknown or ob
       id: observed ? "turn:another" : "legacy", kind: "unknown", label: "Turn phases unknown", detail: "Unavailable phase coverage", ...(observed ? { start: now - 10_000 } : {}),
     }] });
     await act(async () => render(value));
-    expect(phase("Review").querySelector("small")?.textContent).toBe("—");
+    expect(phase("Review").querySelector("small")?.textContent).toBe("Unknown");
     expect(host.textContent).not.toContain("Not started");
   }
 });
@@ -55,7 +55,7 @@ it("does not call Review unstarted when another review attempt has unknown or ob
 it("preserves unknown planning and work phases and missing review evidence", async () => {
   await act(async () => render());
   for (const name of ["Planning", "Working", "Review"]) {
-    expect(phase(name).querySelector("small")?.textContent).toBe("—");
+    expect(phase(name).querySelector("small")?.textContent).toBe("Unknown");
     await act(async () => phase(name).click());
     expect(host.querySelector(".mc-phase-detail")?.textContent).toContain("exact phase boundaries are unavailable");
   }
@@ -83,5 +83,5 @@ it("shows only captured compaction durations and counts multiple spans without a
   expect(phase("Compaction").querySelector("small")?.textContent).toBe("2 spans");
   await act(async () => phase("Compaction").click());
   expect(host.querySelector(".mc-phase-detail")?.textContent).toContain("0m 2s");
-  expect(host.querySelector(".mc-phase-detail")?.textContent).toContain("—");
+  expect(host.querySelector(".mc-phase-detail")?.textContent).toContain("Unknown");
 });

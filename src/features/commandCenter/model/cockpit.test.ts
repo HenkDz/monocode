@@ -144,7 +144,51 @@ describe("CC7N Cockpit recorded organization projection", () => {
     expect(project(input, statuses).activity.some(item => item.kind === "merge")).toBe(false);
     const pr = statuses.values().next().value!;
     statuses.set(prStatusKey(task.workspace.checkoutCwd, task.prUrl), { ...pr, number: 1, url: task.prUrl });
-    expect(project(input, statuses).activity.find(item => item.kind === "merge")).toMatchObject({ detail: "Merged PR #1", at: now - 1_000 });
+    expect(project(input, statuses).activity.find(item => item.kind === "merge")).toMatchObject({ detail: "Merged PR #1 · Builder · Completed", at: now - 1_000 });
+  });
+
+  it("gives equally named Managers their project initials and the organization lead its word initials", () => {
+    const input = fixture();
+    input.roster = [input.roster[0], { ...input.roster[1], name: "Manager" },
+      { ...input.roster[1], id: "delta-manager", name: "Manager", managerProject: "C:/synthetic/Delta", projects: ["C:/synthetic/Delta"] }];
+    expect(project(input).agents.map(item => item.initials)).toEqual(["GO", "AM", "DM"]);
+  });
+
+  it("keeps a verified merge once with completion and linked review as secondary detail", () => {
+    const input = fixture(); const run = input.runs[0]; const task = run.tasks[0];
+    task.prUrl = "https://example.test/Atlas/pull/1";
+    task.workspace = run.workspace;
+    run.dispatches![1] = { ...run.dispatches![1], state: "completed", finishedAt: now - 500 };
+    const statuses = new Map<string, GitPr | null>([[prStatusKey(run.workspace!.checkoutCwd, task.prUrl), {
+      number: 1, url: task.prUrl, title: task.title, state: "merged", closedAt: new Date(now - 1_000).toISOString(),
+    }]]);
+    input.runs.push(structuredClone(run));
+    const recent = project(input, statuses).activity;
+    expect(recent).toHaveLength(1);
+    expect(recent[0]).toMatchObject({ kind: "merge", title: task.title, at: now - 1_000, target: { sessionId: task.sessionId } });
+    expect(recent[0].detail).toBe("Merged PR #1 · Reviewer · Review completed · Builder · Completed");
+  });
+
+  it("keeps unrelated tasks with matching titles and goals distinct, and scopes task ids to their Manager", () => {
+    const input = fixture(); const run = input.runs[0]; const task = run.tasks[0];
+    run.tasks.push({ ...task, id: "another-task" });
+    run.dispatches!.push({ ...run.dispatches![0], id: "another-dispatch", taskId: "another-task" });
+    input.runs.push({ ...structuredClone(run), leadId: "another-manager" });
+    const recent = project(input).activity;
+    expect(recent).toHaveLength(4);
+    expect(new Set(recent.map(item => item.id)).size).toBe(4);
+  });
+
+  it("coalesces repeated completions for a task or saved PR without inventing merge status", () => {
+    const input = fixture(); const run = input.runs[0]; const task = run.tasks[0];
+    run.dispatches!.push({ ...run.dispatches![0], id: "later-dispatch", sessionId: "later-chat", finishedAt: now - 500 });
+    expect(project(input).activity).toHaveLength(1);
+    expect(project(input).activity[0]).toMatchObject({ kind: "completion", at: now - 500, target: { sessionId: "later-chat" } });
+    task.prUrl = "https://example.test/Atlas/pull/1";
+    const other = structuredClone(run); other.leadId = "another-manager";
+    input.runs.push(other);
+    expect(project(input).activity).toHaveLength(1);
+    expect(project(input).activity[0].kind).toBe("completion");
   });
 
   it("leaves roster, saved turns, task receipts and goal history unchanged", () => {

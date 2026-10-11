@@ -12,7 +12,7 @@ export function GoalProgress({ timeline, onOpenTarget }: { timeline?: GoalTimeli
   const pages = Math.max(1, Math.ceil(rows.length / 4));
   const currentPage = Math.min(page, pages - 1);
   const duration = (span: TimelineSpan) => span.start != null && (span.end != null || span.ongoing)
-    ? goalElapsedLabel(Math.max(0, (span.end ?? timeline!.end) - span.start)) : "—";
+    ? goalElapsedLabel(Math.max(0, (span.end ?? timeline!.end) - span.start)) : "Unknown";
   const phaseSpans = (name: string) => rows.filter(({ span }) => name === "Waiting" ? ["waiting", "queued"].includes(span.kind) : name === "Compaction" && span.kind === "compaction");
   const phaseRows = phaseSpans(phase);
   const reviews = timeline?.lanes.filter(lane => lane.review) ?? [];
@@ -21,7 +21,7 @@ export function GoalProgress({ timeline, onOpenTarget }: { timeline?: GoalTimeli
   const phaseLabel = (name: string) => {
     if (name === "Review" && reviewNotStarted) return "Not started";
     const spans = phaseSpans(name);
-    return spans.length === 1 ? duration(spans[0].span) : spans.length > 1 ? `${spans.length} spans` : "—";
+    return spans.length === 1 ? duration(spans[0].span) : spans.length > 1 ? `${spans.length} spans` : "Unknown";
   };
   const details = rows.find(row => row.id === selected);
   return <section className="mc-progress" aria-label="Time & progress">
@@ -40,7 +40,7 @@ export function GoalProgress({ timeline, onOpenTarget }: { timeline?: GoalTimeli
         <button type="button" key={row.id} onClick={() => setSelected(row.id)}>{row.span.label}</button>)}</div>
     </> : <><div className="mc-ledger-scroll"><table className="mc-ledger"><caption>Recorded intervals · parallel lanes overlap</caption>
       <thead><tr><th scope="col">Time</th><th scope="col">Event / actor</th><th scope="col">Duration</th></tr></thead>
-      <tbody>{rows.slice(currentPage * 4, currentPage * 4 + 4).map(row => <tr key={row.id}><td>{row.span.start == null ? "—" : new Date(row.span.start).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</td>
+      <tbody>{rows.slice(currentPage * 4, currentPage * 4 + 4).map(row => <tr key={row.id}><td>{row.span.start == null ? "Unknown" : new Date(row.span.start).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</td>
         <th scope="row"><button type="button" aria-pressed={selected === row.id} onClick={() => setSelected(row.id)}>{row.span.label}<small>{row.lane.name}</small></button></th><td>{duration(row.span)}</td></tr>)}</tbody></table></div>
       {!rows.length && <p className="mc-phase-detail">No timeline evidence available.</p>}
       <div className="mc-paging"><button type="button" aria-label="Previous ledger page" disabled={!currentPage} onClick={() => { setPage(currentPage - 1); setSelected(undefined); }}>←</button>
@@ -48,7 +48,7 @@ export function GoalProgress({ timeline, onOpenTarget }: { timeline?: GoalTimeli
     </>}
     {details && <div className="mc-event-detail" role="status"><strong>{details.lane.name} · {details.span.label}</strong><p>{details.span.detail}</p>
       <p>{details.lane.attempt ? `Attempt ${details.lane.attempt} · ` : ""}{details.lane.review ? `Reviews ${details.lane.review.taskId} / ${details.lane.review.dispatchId} · ` : ""}
-        {details.span.start == null ? "Start —" : `Start ${new Date(details.span.start).toLocaleString()}`} · {details.span.end == null ? details.span.ongoing ? "Ongoing to snapshot" : "End —" : `End ${new Date(details.span.end).toLocaleString()}`}</p>
+        {details.span.start == null ? "Start not recorded" : `Start ${new Date(details.span.start).toLocaleString()}`} · {details.span.end == null ? details.span.ongoing ? "Ongoing to snapshot" : "End not recorded" : `End ${new Date(details.span.end).toLocaleString()}`}</p>
       {details.lane.target && <button type="button" className="mc-link" onClick={() => onOpenTarget(details.lane.target!)}>Open recorded conversation →</button>}</div>}
   </section>;
 }

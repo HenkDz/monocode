@@ -137,7 +137,7 @@ export function AttentionQueueView({ input, callbacks, readInput, open, onClose,
         {receipt && <p className="aq-receipt" role={receipt.status === "error" ? "alert" : "status"}>{receipt.message}</p>}
         {settled && <p className="aq-owner">{item.status === "resolved" ? "The original request is settled." : "Retained for inspection. Actions are disabled; inspect the current conversation."}</p>}
       </div>
-      <time className="aq-time" title={item.createdAt == null ? undefined : new Date(item.createdAt).toLocaleString()}>{item.createdAt == null ? presentation === "panel" ? "—" : "Age unavailable" : goalElapsedLabel(Math.max(0, now - item.createdAt))}</time>
+      {(item.createdAt != null || presentation === "page") && <time className="aq-time" title={item.createdAt == null ? undefined : new Date(item.createdAt).toLocaleString()}>{item.createdAt == null ? "Age unavailable" : goalElapsedLabel(Math.max(0, now - item.createdAt))}</time>}
     </article>;
   }
   return <section className="attention-queue" data-presentation={presentation} aria-labelledby={titleId} hidden={!open} inert={!open || undefined}>

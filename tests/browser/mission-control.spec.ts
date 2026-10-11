@@ -3,6 +3,86 @@ import { expect, test } from "@playwright/test";
 test.setTimeout(120_000);
 const route = "/tests/browser/mission-control.html";
 
+for (const width of [1440, 900, 800]) for (const theme of ["dark", "light"]) {
+  test(`CC7Q rows, identities and visual rhythm at ${width}px ${theme}`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 1000 });
+    await page.goto(`${route}?theme=${theme}&pr=open`);
+    const feed = page.getByRole("region", { name: "Recent activity" });
+    await expect(feed.locator(".mc-feed-item")).toHaveCount(1);
+    await expect(feed).toContainText("Merged PR #1861 · Pricing worker · Completed");
+    await expect(page.locator('[data-agent="mono-manager"] .mc-avatar')).toHaveText("MM");
+    await expect(page.locator('[data-agent="dz-manager"] .mc-avatar')).toHaveText("DM");
+    await expect(page.locator('[data-agent="grand"] .mc-avatar')).toHaveText("GO");
+    await expect(page.locator('[data-agent="designer"] .mc-elapsed')).toHaveCount(0);
+    await expect(page.getByText("Current turn / attempt time", { exact: true })).toHaveCount(0);
+    await expect(page.getByRole("region", { name: "Organization vitals" })).toContainText("Not recorded");
+
+    const checkRows = async () => {
+      const issues = await page.locator("[data-worktree]").evaluateAll(rows => rows.filter(row => row.getClientRects().length).flatMap(row => {
+        const branch = row.querySelector("[data-worktree-label]")!;
+        const badge = row.querySelector("[data-worktree-badge]")!;
+        const header = branch.closest("button")!.parentElement!;
+        const team = row.querySelector("[data-worktree-team]");
+        const bounds = row.getBoundingClientRect();
+        const labelBounds = branch.getBoundingClientRect();
+        const badgeBounds = badge.getBoundingClientRect();
+        const headerBounds = header.getBoundingClientRect();
+        const errors: string[] = [];
+        if (labelBounds.width < 1 || labelBounds.right > headerBounds.right + 1) errors.push("branch outside header");
+        if (badge.textContent?.trim() && (badgeBounds.width < 1 || labelBounds.right > badgeBounds.left + 1)) errors.push("branch/badge overlap");
+        if (badge.textContent?.trim() && badgeBounds.right > headerBounds.right + 1) errors.push("badge outside header");
+        const actions = [...row.querySelectorAll("[data-worktree-actions] button")].filter(button => Number(getComputedStyle(button).opacity) > .9);
+        for (const action of actions) {
+          const bounds = action.getBoundingClientRect();
+          if ([labelBounds, badgeBounds].some(copy => copy.width > 0 && copy.left < bounds.right - 1 && copy.right > bounds.left + 1 && copy.top < bounds.bottom - 1 && copy.bottom > bounds.top + 1)) errors.push("copy overlaps action");
+        }
+        if (team && team.getBoundingClientRect().top < headerBounds.bottom - 1) errors.push("team overlaps header");
+        if (team && [...team.querySelectorAll("button")].some(button => button.getBoundingClientRect().right > bounds.right + 1)) errors.push("chip outside row");
+        return errors.map(error => `${row.getAttribute("data-worktree")}: ${error}`);
+      }));
+      expect(issues).toEqual([]);
+    };
+    const primary = page.locator('[data-worktree="C:/synthetic/MonoCode"]');
+    await expect(primary.locator("[data-worktree-team]")).toBeVisible();
+    await checkRows();
+    await primary.locator('[aria-label="Open worktree nour"]').hover();
+    await expect.poll(() => primary.locator('[aria-label="Actions for nour"]').evaluate(element => Number(getComputedStyle(element).opacity))).toBe(1);
+    await expect(primary.locator('[aria-label="Open pull request for nour"]')).toBeVisible();
+    await checkRows();
+    await primary.locator('[aria-label="Actions for nour"]').focus();
+    await checkRows();
+    await primary.getByRole("button", { name: "Open Builder's session", exact: true }).click();
+    expect(await page.evaluate(() => window.missionFixture.events.at(-1))).toEqual({ action: "session", text: "builder-chat" });
+    const chip = primary.getByRole("button", { name: "Open Builder's session", exact: true });
+    await chip.click({ button: "right" });
+    await expect(page.getByRole("menu")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("menu")).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "Mission control", exact: true })).toBeVisible();
+    await chip.focus();
+    await page.keyboard.press("Shift+F10");
+    await expect(page.getByRole("menu")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("menu")).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "Mission control", exact: true })).toBeVisible();
+
+    const rhythm = await page.evaluate(() => ({
+      vitals: [...document.querySelectorAll(".mc-vitals > div > span")].map(element => element.getBoundingClientRect().top),
+      cards: [...document.querySelectorAll(".mc-agent-card")].map(element => element.getBoundingClientRect().height),
+      lead: document.querySelector(".mc-org-lead")!.getBoundingClientRect().height,
+      command: document.querySelector(".mc-command-bar")!.getBoundingClientRect().height,
+    }));
+    expect(Math.max(...rhythm.vitals) - Math.min(...rhythm.vitals)).toBeLessThanOrEqual(1);
+    expect(Math.min(...rhythm.cards)).toBeGreaterThanOrEqual(144);
+    expect(rhythm.lead).toBeGreaterThanOrEqual(64);
+    expect(rhythm.command).toBeGreaterThanOrEqual(104);
+    await page.locator('[data-goal="mc"]').click();
+    await expect(page.locator('.mc-chain [data-role="manager"] .mc-avatar')).toHaveText("MM");
+    await page.keyboard.press("Escape");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+  });
+}
+
 for (const [width, theme, zero] of [[1440, "dark", false], [1440, "light", false], [1100, "dark", false], [900, "dark", false], [800, "light", false], [1440, "dark", true]] as const) {
   test(`Cockpit remains useful at ${width}px ${theme}, ${zero ? "zero" : "live"} goals`, async ({ page }) => {
     await page.setViewportSize({ width, height: 1000 });
@@ -75,6 +155,11 @@ test("attention stays in Mission control and keeps the source queue intact", asy
   await all.click();
   const panel = page.getByRole("dialog", { name: "Needs attention", exact: true });
   await expect(panel.locator(".aq-item")).toHaveCount(2);
+  const storage = panel.locator('[data-attention-source="storage"]');
+  await expect(storage.locator(".aq-time")).toHaveCount(0);
+  const controls = await storage.getByRole("button").evaluateAll(buttons => buttons.map(button => ({ top: button.getBoundingClientRect().top, height: button.getBoundingClientRect().height })));
+  expect(Math.max(...controls.map(button => button.top)) - Math.min(...controls.map(button => button.top))).toBeLessThanOrEqual(1);
+  expect(Math.max(...controls.map(button => button.height)) - Math.min(...controls.map(button => button.height))).toBeLessThanOrEqual(1);
   const evidence = panel.locator('[data-attention-source="storage"]').getByRole("button", { name: "Evidence", exact: true });
   await evidence.click();
   await expect(page.getByRole("dialog", { name: "Storage evidence", exact: true })).toBeVisible();

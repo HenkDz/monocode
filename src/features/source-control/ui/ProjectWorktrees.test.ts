@@ -390,7 +390,7 @@ it.each([
     expect(row.querySelector('[data-worktree-metadata]')?.textContent).toBe("PR ready");
     expect((row.querySelector('[aria-label^="Open pull request"]') as HTMLButtonElement).title).toContain(pr.url);
     expect(button("Open worktree Validate the complete PR acceptance document").querySelector('[class*="line-clamp-2"]')).not.toBeNull();
-    expect(row.firstElementChild?.className).toContain("h-10");
+    expect(row.querySelector("[data-worktree-header]")?.className).toContain("h-10");
   } finally { snapshot.mockRestore(); }
 });
 
@@ -422,6 +422,15 @@ it.each([1, 2])("lists %i user sessions with a clickable teammate indicator and 
     expect(indicator).toBeDefined();
     await act(async () => indicator.click());
     expect(props.onSelectSession).toHaveBeenCalledExactlyOnceWith("native-worker", { project: "/repo", tree: expect.objectContaining({ path: "/trees/a" }) });
+    const context = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    await act(async () => indicator.dispatchEvent(context));
+    expect(context.defaultPrevented).toBe(true);
+    expect(document.querySelector('[role="menu"]')).not.toBeNull();
+    await act(async () => document.querySelector('[role="menu"]')!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    const keyboard = new KeyboardEvent("keydown", { key: "F10", shiftKey: true, bubbles: true, cancelable: true });
+    await act(async () => indicator.dispatchEvent(keyboard));
+    expect(keyboard.defaultPrevented).toBe(true);
+    expect(document.querySelector('[role="menu"]')).not.toBeNull();
   } finally { snapshot.mockRestore(); }
 });
 
@@ -892,7 +901,7 @@ it("overlays worktree actions and only reserves title space when they are reveal
   expect(spacer.className).toContain("[@media(hover:none)]:block");
   for (const label of ["New session in feature-a", "Actions for feature-a"]) {
     const action = button(label);
-    expect(action.parentElement).toBe(row);
+    expect(action.closest("[data-worktree-header]")).toBe(row);
     expect(action.className.split(" ")).toContain("absolute");
     expect(action.className).toContain(
       "group-focus-within/worktree:opacity-100",

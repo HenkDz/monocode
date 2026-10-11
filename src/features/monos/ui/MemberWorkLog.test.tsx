@@ -684,9 +684,9 @@ it("keeps current work, queued assignments and review on current pages, separate
     ).toBe("Waiting for an available worker");
     expect(
       host.querySelector(
-        '[data-member-task="blocked"] [data-transcript-error="transport"]',
+        '[data-member-task="blocked"] [data-task-reason]',
       )?.textContent,
-    ).toContain("provider connection interrupted");
+    ).toContain("Provider connection interrupted");
     expect(
       host.querySelector('[data-member-task="blocked"]')?.textContent,
     ).not.toContain("Worker lost its connection");
@@ -1053,6 +1053,14 @@ it("keeps a prepared failed launch distinct from a recorded conversation turn", 
       host.querySelector('[data-member-task="launch"] [data-task-metrics]')
         ?.textContent,
     ).toContain("Conversation not started");
+    expect(host.querySelector('[data-member-task="launch"] [data-transcript-error]')).toBeNull();
+    expect(host.querySelector('[data-member-task="launch"] [data-task-reason]')?.textContent).not.toContain("Storage not available");
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-member-task="launch"] button')!.click());
+    const reader = document.querySelector('[role="dialog"]')!;
+    expect(reader.querySelector('[data-transcript-error]')).not.toBeNull();
+    const diagnostics = [...reader.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Open details")!;
+    await act(async () => diagnostics.click());
+    expect(document.body.textContent).toContain("Storage not available");
   } finally {
     await act(async () => root.unmount());
   }

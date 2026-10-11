@@ -308,18 +308,10 @@ export function MemberWorkLog({
               }
             />
           )}
-          {task.error &&
-          ["failed", "blocked", "interrupted"].includes(task.status) ? (
-            <TranscriptError
-              error={task.error}
-              title={`Couldn't complete ${presentationText(task.title)}`}
-            />
-          ) : (
-            state.detail && (
-              <p data-task-reason className="mt-1 break-words text-content/75">
-                {presentationText(state.detail)}
-              </p>
-            )
+          {state.detail && (
+            <p data-task-reason className="mt-1 break-words text-content/75">
+              {presentationText(state.detail)}
+            </p>
           )}
           <OrgArtifactLinks monoId={member.id} links={links} />
           {task.status === "queued" && (

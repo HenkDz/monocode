@@ -37,6 +37,14 @@ const deferred = () => {
 };
 
 describe("Attention queue", () => {
+  it("omits unknown panel ages while keeping full-page coverage explicit and recorded ages visible", async () => {
+    const input = inputFor("storage", "manager");
+    await act(async () => root.render(<AttentionQueueView input={input} callbacks={callbacks()} open onClose={() => {}} presentation="panel" />));
+    expect(host.querySelector('[data-attention-source="storage"] .aq-time')).toBeNull();
+    expect(host.querySelector('[data-attention-source="approval"] .aq-time')?.textContent).toMatch(/\d+[hm] \d+[ms]/);
+    await act(async () => root.render(<AttentionQueueView input={input} callbacks={callbacks()} open onClose={() => {}} />));
+    expect(host.querySelector('[data-attention-source="storage"] .aq-time')?.textContent).toBe("Age unavailable");
+  });
   it("keeps worker approvals and questions with the lead while exposing a separate escalation", async () => {
     const input = inputFor("worker", "decision");
     input.sessions = input.sessions.map(session => session.id === "worker"

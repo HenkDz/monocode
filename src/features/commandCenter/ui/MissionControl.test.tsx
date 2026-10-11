@@ -26,6 +26,21 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); });
 
 describe("CC7N Cockpit", () => {
+  it("omits unavailable card timers and repeated timing captions while keeping honest organization coverage", async () => {
+    const input = fixture(); input.sessions = input.sessions.map(session => ({ ...session, blocks: [] }));
+    input.runs = input.runs.map(run => ({ ...run, dispatches: [] }));
+    await act(async () => render(input));
+    expect(host.querySelector('[data-agent="synthetic-builder"] .mc-elapsed')).toBeNull();
+    expect(host.textContent).not.toContain("Current turn / attempt time");
+    const vitals = host.querySelector('[aria-label="Organization vitals"]')!;
+    expect(vitals.textContent).toContain("No samples");
+    expect(vitals.textContent).toContain("Not recorded");
+    expect(vitals.textContent).not.toContain("—");
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-goal]")!.click());
+    const manager = document.querySelector('.mc-chain [data-role="manager"] .mc-avatar');
+    expect(manager?.textContent).toBe("AM");
+    expect(host.querySelector('[data-agent="synthetic-manager"] .mc-avatar')?.textContent).toBe("AM");
+  });
   it("keeps command, roster, vitals and recent work useful with zero goals", async () => {
     const input = fixture(); input.goals = [];
     await act(async () => render(input));
@@ -108,6 +123,20 @@ describe("CC7N Cockpit", () => {
     const event = await key("Escape"); expect(event.defaultPrevented).toBe(true); expect(close).toHaveBeenCalledOnce();
     await act(async () => render(fixture(), undefined, close, false));
     expect((await key("Escape")).defaultPrevented).toBe(false);
+  });
+  it("lets an open context menu own Escape and navigation without closing Mission control", async () => {
+    const close = vi.fn();
+    await act(async () => render(fixture(), undefined, close));
+    const menu = document.createElement("div"); menu.setAttribute("role", "menu");
+    const item = document.createElement("button"); menu.append(item); document.body.append(menu); item.focus();
+    try {
+      expect((await key("Escape")).defaultPrevented).toBe(false);
+      expect(close).not.toHaveBeenCalled();
+      expect((await key("j")).defaultPrevented).toBe(false);
+      expect(document.activeElement).toBe(item);
+    } finally { menu.remove(); }
+    await key("Escape");
+    expect(close).toHaveBeenCalledOnce();
   });
   it("text editing retains ordinary j/k keys and navigation errors stay visible in the drawer", async () => {
     await act(async () => render(fixture(), async () => { throw Error("Session removed"); }));

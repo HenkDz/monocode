@@ -333,7 +333,7 @@ export function ProjectWorktrees({
   const toggle = (path: string) => setSessionsExpanded(path, !sessionsExpanded(path));
   const smallButton =
     "grid size-6 shrink-0 place-items-center rounded-md text-content/60 hover:bg-content/8 hover:text-content disabled:opacity-40";
-  const worktreeAction = `${smallButton} absolute top-1/2 -translate-y-1/2 pointer-events-none opacity-0 transition-opacity duration-150 motion-reduce:transition-none group-hover/worktree:pointer-events-auto group-hover/worktree:opacity-100 group-focus-within/worktree:pointer-events-auto group-focus-within/worktree:opacity-100 group-data-[actions-open=true]/worktree:pointer-events-auto group-data-[actions-open=true]/worktree:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100`;
+  const worktreeAction = `${smallButton} absolute top-1/2 -translate-y-1/2 pointer-events-none opacity-0 transition-opacity duration-150 motion-reduce:transition-none group-hover/worktree:pointer-events-auto group-hover/worktree:opacity-100 group-focus-within/worktree:pointer-events-auto group-focus-within/worktree:opacity-100 group-data-[actions-open=true]/worktree:pointer-events-auto group-data-[actions-open=true]/worktree:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100 @max-[180px]/sidebar:static @max-[180px]/sidebar:translate-y-0 @max-[180px]/sidebar:pointer-events-auto @max-[180px]/sidebar:opacity-100`;
   return (
     <div
       className="ml-5 pb-1"
@@ -512,10 +512,6 @@ export function ProjectWorktrees({
                   className={`my-1 rounded-md border border-transparent hover:border-content/15 hover:bg-content/5 focus-within:border-content/15 focus-within:bg-content/5 ${folded && sessions[0].id === activeSessionId ? "bg-selection" : ""} ${menu?.tree.path === tree.path ? "border-content/15 bg-content/5" : ""}`}
                 >
                   <div
-                    className={`group/worktree relative flex ${taskTree ? "h-10" : "h-7"} items-center gap-1 rounded-md`}
-                    data-actions-open={
-                      menu?.tree.path === tree.path || undefined
-                    }
                     onContextMenu={(event) => {
                       event.preventDefault();
                       event.stopPropagation();
@@ -542,6 +538,11 @@ export function ProjectWorktrees({
                       const rect = trigger.getBoundingClientRect();
                       setMenu({ tree, x: rect.left, y: rect.bottom, trigger });
                     }}
+                  >
+                  <div
+                    data-worktree-header
+                    className={`group/worktree relative flex ${taskTree ? "h-10" : "h-7"} items-center gap-1 rounded-md @max-[180px]/sidebar:h-auto @max-[180px]/sidebar:flex-wrap`}
+                    data-actions-open={menu?.tree.path === tree.path || undefined}
                   >
                     {expandable ? (
                       <button
@@ -579,15 +580,16 @@ export function ProjectWorktrees({
                             ? onSelectSession(sessions[0].id, { project, tree })
                             : onSelectWorktree(project, tree)
                       }
-                      className={`flex h-full min-w-0 flex-1 items-center gap-2 text-left text-xs ${removing ? "disabled:opacity-70" : "disabled:opacity-40"} ${selected ? "text-content" : "text-content/70"}`}
+                      className={`flex h-full min-w-0 flex-1 items-center gap-2 text-left text-xs @max-[180px]/sidebar:min-h-7 @max-[180px]/sidebar:flex-[1_1_calc(100%_-_20px)] ${removing ? "disabled:opacity-70" : "disabled:opacity-40"} ${selected ? "text-content" : "text-content/70"}`}
                     >
                       <WorktreePrIcon tree={tree} enabled={enabled} taskPrUrl={taskTree ? managerTask?.prUrl ?? null : undefined} status={workerStatus || undefined} />
                       <span
-                        className={`min-w-0 flex-1 ${taskTree ? "line-clamp-2 py-1 leading-4" : "truncate"} ${selected ? "font-medium" : ""}`}
+                        data-worktree-label
+                        className={`min-w-4 flex-1 ${taskTree ? "line-clamp-2 py-1 leading-4" : "truncate"} ${selected ? "font-medium" : ""}`}
                       >
                         {label}
                       </span>
-                      <span className="shrink-0 text-[11px] text-content/70">
+                      <span data-worktree-badge className="min-w-0 truncate text-[11px] text-content/70">
                         {removing ? <span className="inline-flex items-center gap-1.5 rounded-full bg-content/10 px-2 py-0.5 text-[10px] font-medium text-content/80"><Loader className="size-3 animate-spin motion-reduce:animate-none" />Deleting…</span> : tree.isMain ? "primary" : !tree.branch ? tree.head.slice(0, 7) : ""}
                       </span>
                       {!expanded && sessions.length > 1 ? (
@@ -601,24 +603,7 @@ export function ProjectWorktrees({
                     </button>
                     </AgentDetailTooltip>
                     {checkoutNotice && <span role="status" tabIndex={0} title={checkoutNotice} aria-label={checkoutNotice} className="shrink-0 rounded text-content/45 hover:text-content focus-visible:outline-accent"><CircleAlert className="size-3" /></span>}
-                    {teammates.length > 0 && (
-                      <div data-worktree-team className="flex min-w-0 max-w-[50%] items-center gap-1 pr-1">
-                        {teammates.map(({ sessionId, task, look, name }) => (
-                            <button key={sessionId} type="button" disabled={tree.missing}
-                              aria-label={`Open ${name}'s session`} title={`${name} working here`}
-                              onClick={() => onSelectSession(sessionId, { project, tree })}
-                              className="shrink-0 rounded hover:bg-content/8 focus-visible:outline-accent disabled:opacity-40">
-                              <PixelMascot name={look?.mascot ?? task.memberMascot ?? "robot"} color={look?.color ?? task.memberColor ?? "#888"} still className="size-4" />
-                            </button>
-                        ))}
-                        <button type="button" disabled={tree.missing}
-                          onClick={() => onSelectSession(teammates[0].sessionId, { project, tree })}
-                          className="truncate rounded text-[11px] text-content/70 hover:text-content focus-visible:outline-accent disabled:opacity-40">
-                          {teammates.length === 1 ? `${teammates[0].name} working here` : `${teammates.length} teammates here`}
-                        </button>
-                      </div>
-                    )}
-                    <div data-worktree-metadata className="ml-auto flex max-w-[45%] shrink-0 items-center gap-1 overflow-hidden pr-1 text-[11px] text-content/70 group-hover/worktree:hidden group-focus-within/worktree:hidden group-data-[actions-open=true]/worktree:hidden [@media(hover:none)]:hidden">
+                    <div data-worktree-metadata className="ml-auto flex max-w-[45%] shrink-0 items-center gap-1 overflow-hidden pr-1 text-[11px] text-content/70 group-hover/worktree:hidden group-focus-within/worktree:hidden group-data-[actions-open=true]/worktree:hidden [@media(hover:none)]:hidden @max-[180px]/sidebar:hidden!">
                       {liveState ? <AgentStatusLabel state={liveState} className="truncate text-content/70" /> : done ? (
                         <>
                         <span title={outcome || undefined} className={`truncate ${outcome === "Merged" ? "text-emerald-700 dark:text-emerald-400" : ""}`}>{outcome === "Closed (not merged)" ? "Closed" : outcome}</span>
@@ -629,8 +614,9 @@ export function ProjectWorktrees({
                       ) : null}
                       {!done && <WorktreeDiffStat path={tree.path} enabled={enabled && !tree.missing} showLines={!workerStatus && !activeProgress} />}
                     </div>
-                    {/* Reserves room for the hover actions so in-flow items (notice, teammates) stay visible beside them. */}
-                    <span aria-hidden data-worktree-actions-spacer className={`hidden shrink-0 group-hover/worktree:block group-focus-within/worktree:block group-data-[actions-open=true]/worktree:block [@media(hover:none)]:block ${openPrUrl ? "w-[5rem]" : "w-13"}`} />
+                    <div data-worktree-actions className="contents @max-[180px]/sidebar:flex @max-[180px]/sidebar:basis-full @max-[180px]/sidebar:justify-end @max-[180px]/sidebar:gap-1 @max-[180px]/sidebar:pb-1">
+                    {/* Reserves room for the hover actions beside the branch and badges. */}
+                    <span aria-hidden data-worktree-actions-spacer className={`hidden shrink-0 group-hover/worktree:block group-focus-within/worktree:block group-data-[actions-open=true]/worktree:block [@media(hover:none)]:block @max-[180px]/sidebar:hidden! ${openPrUrl ? "w-[5rem]" : "w-13"}`} />
                     {openPrUrl && (
                       <button
                         type="button"
@@ -676,6 +662,26 @@ ${openPrUrl}`}
                     >
                       <MoreHorizontal className="size-3.5" />
                     </button>
+                    </div>
+                  </div>
+                  {teammates.length > 0 && (
+                    <div data-worktree-team className="ml-7 mr-1 flex min-w-0 flex-wrap items-center gap-1 pb-1">
+                      {teammates.map(({ sessionId, task, look, name }) => (
+                        <button key={sessionId} type="button" disabled={tree.missing}
+                          aria-label={`Open ${name}'s session`} title={`${name} working here`}
+                          onClick={() => onSelectSession(sessionId, { project, tree })}
+                          className="shrink-0 rounded hover:bg-content/8 focus-visible:outline-accent disabled:opacity-40">
+                          <PixelMascot name={look?.mascot ?? task.memberMascot ?? "robot"} color={look?.color ?? task.memberColor ?? "#888"} still className="size-4" />
+                        </button>
+                      ))}
+                      <button type="button" disabled={tree.missing}
+                        title={teammates.length === 1 ? `${teammates[0].name} working here` : `${teammates.length} teammates here`}
+                        onClick={() => onSelectSession(teammates[0].sessionId, { project, tree })}
+                        className="min-w-0 flex-1 truncate rounded text-left text-[11px] text-content/70 hover:text-content focus-visible:outline-accent disabled:opacity-40">
+                        {teammates.length === 1 ? `${teammates[0].name} working here` : `${teammates.length} teammates here`}
+                      </button>
+                    </div>
+                  )}
                   </div>
                   {expanded ? (
                     <div className="ml-7">
@@ -1256,6 +1262,6 @@ function WorktreePrIcon({
   const Icon = pr ? pr.isDraft ? GitPullRequestDraft : GitPullRequest : GitBranch;
   return <span className="flex shrink-0 items-center gap-1" role="img" aria-label={label} title={open.map(pr => `Open PR #${pr.number}: ${pr.title}`).join("\n") || label}>
     <Icon className={`size-3 ${pr ? "text-emerald-400/90" : "text-content/45"}`} />
-    {pr && label !== status && <span className="text-[10px] text-content/50">{label}</span>}
+    {pr && label !== status && <span className="text-[10px] text-content/50 @max-[240px]/sidebar:hidden">{label}</span>}
   </span>;
 }

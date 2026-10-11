@@ -2,6 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type
 import type { GitPr } from "../../../platform/tauri/fs";
 import { pathKey } from "../../../shared/lib/paths";
 import { Modal } from "../../../shared/ui/Modal";
+import { Check, GitMerge } from "../../../shared/ui/icons";
 import { AgentStatusLabel } from "../../agents/ui/AgentStatusLabel";
 import { listMonos, monosSnapshot, subscribeMonos } from "../../monos/model/mono";
 import { monoManagerGoals } from "../../monos/model/monoManagerGoals";
@@ -55,7 +56,7 @@ export function MissionControlView({ view, cockpit = emptyCockpit, attentionInpu
   useEffect(() => {
     if (!open) return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || event.isComposing || panel || document.querySelector('[role="dialog"][aria-modal="true"]')) return;
+      if (event.defaultPrevented || event.isComposing || panel || document.querySelector('[role="dialog"][aria-modal="true"], [role="menu"]')) return;
       if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); onClose(); return; }
       if (event.ctrlKey || event.metaKey || event.altKey || event.target instanceof Element && event.target.closest("input, textarea, select, [contenteditable=true]")) return;
       if (!["j", "k"].includes(event.key)) return;
@@ -82,9 +83,9 @@ export function MissionControlView({ view, cockpit = emptyCockpit, attentionInpu
   const patch = (change: Partial<Preferences>) => setPreferences(previous => ({ ...previous, ...change }));
   const card = (agent: CockpitAgent, lead = false) => <button type="button" key={agent.id} className={`${lead ? "mc-org-lead" : "mc-agent-card"} agent-state-surface`}
     data-mc-roving data-state={agent.state.status} data-agent={agent.id} onClick={() => openTarget(agent.target)} aria-label={`Open ${agent.name}`} aria-describedby={`${descriptionId}-${agent.id}-activity ${descriptionId}-${agent.id}-state`}>
-    <span className="mc-agent-top"><span className="mc-avatar" aria-hidden="true">{agent.name.slice(0, 2).toUpperCase()}</span><span><strong>{agent.name}</strong><small>{agent.role}</small></span></span>
+    <span className="mc-agent-top"><span className="mc-avatar" aria-hidden="true">{agent.initials}</span><span><strong>{agent.name}</strong><small>{agent.role}</small></span></span>
     <span id={`${descriptionId}-${agent.id}-activity`} className="mc-activity-text" title={agent.activity}>{agent.activity}</span>
-    <span id={`${descriptionId}-${agent.id}-state`} className="mc-agent-bottom"><AgentStatusLabel state={agent.state} /><span className="mc-elapsed" title="Current observed turn time">{agent.elapsedMs == null ? "—" : goalElapsedLabel(agent.elapsedMs)}</span></span>
+    <span id={`${descriptionId}-${agent.id}-state`} className="mc-agent-bottom"><AgentStatusLabel state={agent.state} />{agent.elapsedMs != null && <span className="mc-elapsed" title="Current observed turn time">{goalElapsedLabel(agent.elapsedMs)}</span>}</span>
   </button>;
   return <section ref={section} className="mission-control" data-density={density} aria-labelledby="mission-control-title" hidden={!open} inert={!open || undefined}>
     <div className="mc-topbar"><span>Workspace <span>/</span> <strong>Mission control</strong></span><span><i />Updated just now</span></div>
@@ -104,8 +105,8 @@ export function MissionControlView({ view, cockpit = emptyCockpit, attentionInpu
       <section className="mc-vitals" aria-label="Organization vitals">
         <div><strong>{cockpit.active}<small>/ {cockpit.agents.length} agents</small></strong><span>Active now</span></div>
         <div><strong>{cockpit.idle}</strong><span>Idle and available</span></div><div><strong>{view.live.length}</strong><span>Goals in flight</span></div>
-        <div title={`Dispatch to recorded turn start · ${cockpit.handoffSamples} samples`}><strong>{cockpit.handoffMs == null ? "—" : goalElapsedLabel(cockpit.handoffMs)}</strong><span>Average hand-off</span></div>
-        <div title="Unique loaded conversations and recorded turns today; input includes cache. Coverage can be incomplete."><strong>{cockpit.tokensToday == null ? "—" : `${cockpit.tokensPartial ? "≥ " : ""}${cockpit.tokensToday.toLocaleString()}`}</strong><span>Tokens today · recorded</span></div>
+        <div title={`Dispatch to recorded turn start · ${cockpit.handoffSamples} samples`}><strong data-unavailable={cockpit.handoffMs == null || undefined}>{cockpit.handoffMs == null ? "No samples" : goalElapsedLabel(cockpit.handoffMs)}</strong><span>Average hand-off</span></div>
+        <div title="Unique loaded conversations and recorded turns today; input includes cache. Coverage can be incomplete."><strong data-unavailable={cockpit.tokensToday == null || undefined}>{cockpit.tokensToday == null ? "Not recorded" : `${cockpit.tokensPartial ? "≥ " : ""}${cockpit.tokensToday.toLocaleString()}`}</strong><span>Tokens today</span></div>
       </section>
       <div className="mc-filters"><div className="mc-segmented" aria-label="Project filter"><button type="button" aria-pressed={!activeProject} onClick={() => patch({ project: "" })}>All projects</button>
         {projects.map(([id, name]) => <button type="button" key={id} title={id} aria-pressed={activeProject === id} onClick={() => patch({ project: id })}>{name}</button>)}</div>
@@ -114,14 +115,14 @@ export function MissionControlView({ view, cockpit = emptyCockpit, attentionInpu
       </div>
       {agents.filter(agent => !agent.projectId).map(agent => card(agent, true))}
       {projects.map(([id, name]) => { const group = agents.filter(agent => agent.projectId && pathKey(agent.projectId) === id); return group.length ? <section className="mc-agent-group" key={id} aria-label={`${name} agents`}>
-        <div className="mc-section-heading"><h2>{name}<small>{group.length} agents</small></h2><span>Current turn / attempt time</span></div><div className="mc-agent-grid">{group.map(agent => card(agent))}</div></section> : null; })}
+        <div className="mc-section-heading"><h2>{name}<small>{group.length} agents</small></h2></div><div className="mc-agent-grid">{group.map(agent => card(agent))}</div></section> : null; })}
       {!agents.length && <p className="mc-empty">{cockpit.agents.length ? "No agents match these filters." : "Your team will appear here when agents are added."}</p>}
       <section className="mc-flight-strip" aria-label="In flight"><span>In flight</span>{live.map(goal => <button type="button" key={goal.goal.id} data-mc-roving data-goal={goal.goal.id} onClick={event => { event.currentTarget.focus(); setPanel(goal.goal.id); }}>
-        <strong>{goal.goal.title}</strong><small>{goal.project} · {goal.goal.state.replace("-", " ")}</small><span className="mc-elapsed">{goal.wallElapsedMs == null ? "—" : goalElapsedLabel(goal.wallElapsedMs)}</span></button>)}
+        <strong>{goal.goal.title}</strong><small>{goal.project} · {goal.goal.state.replace("-", " ")}</small>{goal.wallElapsedMs != null && <span className="mc-elapsed" title="Goal wall elapsed">{goalElapsedLabel(goal.wallElapsedMs)}</span>}</button>)}
         {!live.length && <p>{view.live.length ? "No goals match these filters." : "No live goals. Ask a question or assign the next one above."}</p>}</section>
       <section className="mc-feed" aria-label="Recent activity"><div className="mc-section-heading"><h2>Recent activity</h2><span>Recorded outcomes</span></div>
-        {cockpit.activity.map(item => <button type="button" className="mc-feed-item" key={item.id} onClick={() => openTarget(item.target)}><span className="mc-feed-icon" aria-hidden="true">{item.kind === "merge" ? "⑂" : "✓"}</span>
-          <span><strong>{item.title}</strong><small>{item.detail}</small></span><time>{item.at == null ? "—" : goalElapsedLabel(Math.max(0, Date.now() - item.at)) + " ago"}</time></button>)}
+        {cockpit.activity.map(item => <button type="button" className="mc-feed-item" key={item.id} onClick={() => openTarget(item.target)}><span className="mc-feed-icon" aria-hidden="true">{item.kind === "merge" ? <GitMerge /> : <Check />}</span>
+          <span><strong>{item.title}</strong><small>{item.detail}</small></span>{item.at != null && <time>{goalElapsedLabel(Math.max(0, Date.now() - item.at)) + " ago"}</time>}</button>)}
         {!cockpit.activity.length && <p className="mc-empty">Completed work and reviews will appear here.</p>}</section>
       <footer className="mc-footer"><button type="button" className="mc-link" onClick={onClose}>Back to conversation</button><span><kbd>j</kbd> <kbd>k</kbd> navigate · <kbd>↵</kbd> open · <kbd>esc</kbd> close</span></footer>
     </div>
@@ -130,7 +131,7 @@ export function MissionControlView({ view, cockpit = emptyCockpit, attentionInpu
         {panel === "attention" ? renderAttention?.(closePanel) ?? attention.map(item => <button type="button" className="mc-goal-row" key={item.id} onClick={() => openTarget({ requestSessionId: item.route === "lead" && item.leadId ? item.leadId : item.sessionId })}><strong>{item.title}</strong><small>{item.owner} · {item.detail}</small></button>)
           : panel === "goals" ? <><p className="mc-eyebrow">In flight · {view.live.length}</p>{[...view.live, ...view.finished].map(entry => <button type="button" key={entry.goal.id} className="mc-goal-row" onClick={() => setPanel(entry.goal.id)}>
             <strong>{entry.goal.title}</strong><small>{entry.project} · {entry.goal.state.replace("-", " ")}</small></button>)}{!view.live.length && <p className="mc-empty">No goals in flight. The team is ready for your next assignment.</p>}</>
-          : goal ? <><p className="mc-eyebrow">{goal.project} / Goal</p><div className="mc-drawer-meta"><span>{goal.goal.state.replace("-", " ")}</span><span className="mc-elapsed">{goal.wallElapsedMs == null ? "—" : goalElapsedLabel(goal.wallElapsedMs)} wall elapsed</span></div>
+          : goal ? <><p className="mc-eyebrow">{goal.project} / Goal</p><div className="mc-drawer-meta"><span>{goal.goal.state.replace("-", " ")}</span><span className="mc-elapsed">{goal.wallElapsedMs == null ? "Wall time not recorded" : `${goalElapsedLabel(goal.wallElapsedMs)} wall elapsed`}</span></div>
             <p className="mc-activity-text">{goal.nodes.find(node => node.state?.detail)?.state?.detail ?? goal.nodes.find(node => node.activity)?.activity ?? "No current activity recorded."}</p>
             {goal.rosterIssue && <p className="mc-phase-detail">{goal.rosterIssue}</p>}
             <div className="mc-section-heading"><h3>Delegation chain</h3><span>Current assignments</span></div><GoalChain view={goal} onOpenTarget={openTarget} />

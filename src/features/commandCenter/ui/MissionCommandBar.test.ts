@@ -226,3 +226,39 @@ it("submits on Enter while preserving Shift-Enter and IME composition", async ()
   expect(key.defaultPrevented).toBe(true);
   expect(f.host.grand).toHaveBeenCalledOnce();
 });
+
+for (const explicit of [false, true]) {
+  it.each([
+    " \tFix Atlas and every registered project\r\n",
+    "Apply this fix to Atlas and all our registered projects",
+    "Fix Atlas and both remaining registered repositories",
+    "Each registered repository needs the Atlas fix",
+    "Registered projects: all need the Atlas fix",
+    "Fix Atlas and every **registered** project",
+    "Fix Atlas and all,\tremaining repositories",
+    "Fix Atlas and the remaining projects",
+  ])("retains Mission Grand scope and retry identity for %s (explicit " + explicit + ")", async text => {
+    const f = fixture();
+    f.host.grand.mockReturnValueOnce(false);
+    f.change({ ...context, projects: context.projects.map(project => ({ ...project, available: project.name === "Atlas" })) });
+    enter(text);
+    if (explicit) await override("Atlas Manager");
+    expect(chip()).toContain("Send to Grand Orch");
+    expect(chip()).toContain("Comparison or cross-project goal");
+    await act(async () => send());
+    expect(field().value).toBe(text);
+    await act(async () => send());
+    const first = f.onSubmit.mock.calls[0][1]!;
+    expect(f.onSubmit.mock.calls.map(call => call[0])).toEqual([text, text]);
+    expect(f.onSubmit.mock.calls[1][1]).toMatchObject({ requestId: first.requestId, userMessageId: first.userMessageId });
+    expect(first).toMatchObject({ ownerId: "grand", choice: { mode: "goal", override: explicit ? "manager" : "auto" } });
+    expect(first.projectId).toBeUndefined();
+    expect(first.managerMonoId).toBeUndefined();
+    expect(f.host.grand).toHaveBeenCalledTimes(2);
+    expect(f.host.resolve).not.toHaveBeenCalled();
+    expect(f.host.persistOrigin).not.toHaveBeenCalled();
+    expect(f.host.goals.deliver).not.toHaveBeenCalled();
+    expect(f.host.ledger.goals("grand")).toHaveLength(0);
+    expect(field().value).toBe("");
+  });
+}

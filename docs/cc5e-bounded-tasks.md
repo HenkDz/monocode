@@ -220,3 +220,15 @@ changed. Full validation details and the final documentation revision are
 recorded in `docs/cc5eg-rotation-recovery.md` and
 `C:/Users/nooro/AppData/Local/Temp/monocode-cc/cc5eg/REPORT.md`.
 Logs and machine-readable receipts are in that round's `validation/` directory.
+
+## CC5EH simplified recovery validation
+
+Implementation: `f426f92d304988ab9904149c90f062d0eaeb1d6e`.
+The full suite passes 606 files with 2 skipped: 7,266 tests passed, 13 skipped,
+zero failed. TypeScript and production build pass. The focused eight-file
+suite passes 242 tests; independent actual-adapter fixtures pass 20 tests and
+writer/App checks pass six checks. No native source changed.
+
+Design decisions, failed-attempt disclosure, exact timings and remaining
+storage/exactly-once limits are recorded in `docs/cc5eh-rotation-simplify.md`
+and `C:/Users/nooro/AppData/Local/Temp/monocode-cc/cc5eh/REPORT.md`.

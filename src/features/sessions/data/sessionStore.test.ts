@@ -606,6 +606,11 @@ describe("sanitizeSessionForPersist", () => {
           outputTokens: 20,
           cacheReadTokens: 80,
           cacheHitPercent: 40,
+          firstTokenAt: 1_100,
+          endedAt: 2_000,
+          modelCalls: 2,
+          modelCallIds: ["call-1", "call-2"],
+          compactions: [{ id: "compaction-1", startedAt: 1_200, endedAt: 1_500 }],
         },
       },
     ];
@@ -615,6 +620,11 @@ describe("sanitizeSessionForPersist", () => {
       outputTokens: 20,
       cacheReadTokens: 80,
       cacheHitPercent: 40,
+      firstTokenAt: 1_100,
+      endedAt: 2_000,
+      modelCalls: 2,
+      modelCallIds: ["call-1", "call-2"],
+      compactions: [{ id: "compaction-1", startedAt: 1_200, endedAt: 1_500 }],
     });
   });
 

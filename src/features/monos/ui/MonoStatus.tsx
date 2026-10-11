@@ -1,4 +1,5 @@
 import { monoStatusLabel, monoTeamWorkingLabel, type MonoState } from "../model/mono";
+import { AgentStatusLabel } from "../../agents/ui/AgentStatusLabel";
 
 type Props = {
   state: MonoState;
@@ -32,7 +33,9 @@ export function MonoStatus({ state, color, className = "" }: Props) {
         }`}
         style={dot ? { background: dot } : undefined}
       />
-      <span className="shrink-0">{monoStatusLabel(state)}</span>
+      {state.liveState && !state.attentionLocation && !["thinking", "running-tool", "needs-you"].includes(state.liveState.status)
+        ? <AgentStatusLabel state={state.liveState} className="shrink-0" />
+        : <span className="shrink-0">{monoStatusLabel(state)}</span>}
       {state.teamWorking ? <span className="shrink-0 text-content/45">· {monoTeamWorkingLabel(state)}</span> : null}
       {activity ? (
         <>

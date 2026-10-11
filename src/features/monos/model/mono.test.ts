@@ -11,14 +11,15 @@ import type { Block } from "../../sessions/model/session";
 it("is idle between turns", () => {
   expect(monoState({ blocks: [], busy: false })).toEqual({
     status: "idle",
+    liveState: { status: "idle" },
   });
 });
 
 it("needs the user when a provider usage limit stops the conversation", () => {
   expect(monoState({ blocks: [], busy: false, usageLimit: { resetsAt: 1000 } }))
-    .toEqual({ status: "needs-you", activity: "Usage limit reached" });
+    .toEqual({ status: "needs-you", activity: "Usage limit reached", liveState: { status: "blocked", reason: "usage-limit", detail: "Usage limit reached" } });
   expect(monoState({ blocks: [], busy: false, worktreeRemoved: true, usageLimit: {} }))
-    .toEqual({ status: "idle" });
+    .toEqual({ status: "needs-you", activity: "Select a working copy to continue", liveState: { status: "needs-you", reason: "decision", detail: "Select a working copy to continue" } });
 });
 
 it("names the step it is on while working", () => {
@@ -41,7 +42,7 @@ it("names the step it is on while working", () => {
         },
       ],
     }),
-  ).toEqual({ status: "working", activity: "Bash: gh pr checks" });
+  ).toEqual({ status: "working", activity: "Bash: gh pr checks", liveState: { status: "running-tool", detail: "Bash: gh pr checks" } });
 });
 
 it("is thinking before the current turn has a step", () => {
@@ -58,7 +59,7 @@ it("is thinking before the current turn has a step", () => {
         { id: "2", role: "user", text: "check CI" },
       ],
     }),
-  ).toEqual({ status: "working", activity: "Thinking" });
+  ).toEqual({ status: "working", activity: "Thinking", liveState: { status: "thinking", detail: "Thinking" } });
 });
 
 it("says what it needs from you", () => {
@@ -75,12 +76,13 @@ it("says what it needs from you", () => {
         },
       ],
     }),
-  ).toEqual({ status: "needs-you", activity: "Approve git push" });
+  ).toEqual({ status: "needs-you", activity: "Approve git push", liveState: { status: "needs-you", reason: "approval", detail: "Approve git push" } });
 });
 
 it("is idle when no turn is running", () => {
   expect(monoState({ blocks: [], busy: false })).toEqual({
     status: "idle",
+    liveState: { status: "idle" },
   });
 });
 
@@ -99,7 +101,7 @@ it("reports the current turn's step while working", () => {
         },
       ],
     }),
-  ).toEqual({ status: "working", activity: "gh pr checks 688" });
+  ).toEqual({ status: "working", activity: "gh pr checks 688", liveState: { status: "running-tool", detail: "gh pr checks 688" } });
   expect(
     monoState({
       busy: true,
@@ -108,7 +110,7 @@ it("reports the current turn's step while working", () => {
         { id: "1", role: "user", text: "hi" },
       ],
     }),
-  ).toEqual({ status: "working", activity: "Thinking" });
+  ).toEqual({ status: "working", activity: "Thinking", liveState: { status: "thinking", detail: "Thinking" } });
 });
 
 it("says what it needs from you", () => {
@@ -125,7 +127,7 @@ it("says what it needs from you", () => {
         },
       ],
     }),
-  ).toEqual({ status: "needs-you", activity: "Approve git push" });
+  ).toEqual({ status: "needs-you", activity: "Approve git push", liveState: { status: "needs-you", reason: "approval", detail: "Approve git push" } });
 });
 
 it("names an unnamed Mono after its mascot", () => {

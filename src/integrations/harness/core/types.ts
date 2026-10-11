@@ -17,6 +17,7 @@ export type HarnessEvent =
   | { type: "session.providerBound"; providerSessionId: string }
   | { type: "turn.started"; providerTurnId: string }
   | { type: "turn.ready" }
+  | { type: "turn.compaction"; phase: "started" | "completed"; id?: string; legacy?: boolean }
   | {
       type: "session.configChanged";
       model?: string;
@@ -156,7 +157,7 @@ export type HarnessEvent =
   /** Context-window level after the harness's latest request. */
   | { type: "context"; used?: number; window?: number }
   /** Provider token accounting for the active user turn. */
-  | ({ type: "turn.metrics" } & TurnMetrics);
+  | ({ type: "turn.metrics"; modelCallId?: string; providerTurnId?: string } & TurnMetrics);
 
 export type ApprovalDecision = "allow" | "deny";
 

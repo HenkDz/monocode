@@ -1044,7 +1044,7 @@ describe("sidebar orchestration card", () => {
       expect(card().textContent).toContain("3 agents");
       expect(card().textContent).toContain("1/3 done");
       expect(card().textContent).toContain("Build settings");
-      expect(card().textContent).toContain("Needs input");
+      expect(card().textContent).toContain("Needs you");
       expect(
         card().querySelector('[aria-label="Linked work item updated"]'),
       ).not.toBeNull();

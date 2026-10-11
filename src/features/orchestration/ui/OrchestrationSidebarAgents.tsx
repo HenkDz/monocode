@@ -13,6 +13,11 @@ import {
 } from "./OrchestrationActions";
 import { Check, ChevronDown, ChevronRight, CircleAlert } from "../../../shared/ui/icons";
 import { TerminalSpinner } from "../../sessions/ui/TerminalSpinner";
+import { AgentStatusLabel } from "../../agents/ui/AgentStatusLabel";
+import { TaskMetricsLine } from "../../agents/ui/TaskMetricsLine";
+import { agentLiveStateLabel, selectAgentLiveState, type AgentLiveState } from "../../agents/model/agentLiveState";
+import { selectTaskMetrics } from "../../agents/model/agentMetrics";
+import { cardSessionsSnapshot, subscribeCardSessions } from "../../monos/model/monoCards";
 
 export function OrchestrationSidebarAgents({
   leadId,
@@ -23,6 +28,7 @@ export function OrchestrationSidebarAgents({
 }) {
   const actions = useContext(OrchestrationActions);
   const workers = useContext(OrchestrationWorkers);
+  const sessions = useSyncExternalStore(subscribeCardSessions, cardSessionsSnapshot, cardSessionsSnapshot);
   const runs = useSyncExternalStore(
     orchestrator.subscribe,
     orchestrator.snapshot,
@@ -111,9 +117,17 @@ export function OrchestrationSidebarAgents({
           const live = run?.tasks.find(
             (entry) => entry.sessionId === task.sessionId,
           );
-          const label = orchestrationTaskLabel(task, summary);
+          const session = sessions.get(task.sessionId);
+          const state: AgentLiveState = session?.liveState ?? (task.needsInput
+            ? { status: "needs-you", reason: "approval", detail: "Waiting for user input" }
+            : live ? selectAgentLiveState(undefined, { task: live, tasks: run?.tasks, runStatus: run?.status, pauseReason: run?.lastPauseReason })
+            : { status: task.status === "completed" || task.status === "cancelled" ? "done" : task.status === "failed" ? "failed" : task.status === "blocked" || task.status === "interrupted" ? "blocked" : "queued", detail: orchestrationTaskLabel(task, summary) });
+          const label = agentLiveStateLabel(state);
+          const metrics = live ? session?.taskMetrics?.[live.id] ?? selectTaskMetrics(live, run?.dispatches ?? [], []) : undefined;
+          const dispatch = run?.dispatches?.find(entry => entry.id === (live?.activeDispatchId ?? live?.lastDispatchId));
           const working =
-            summary.live && task.status === "running" && !task.needsInput;
+            summary.live && ["thinking", "running-tool", "compacting"].includes(state.status);
+          const attention = ["blocked", "failed", "needs-you"].includes(state.status);
           // A saved provider model may not be in this window's catalog yet.
           // Keep its identity instead of substituting the harness default.
           const model = findModel(task.model)?.name ?? task.model;
@@ -158,10 +172,7 @@ export function OrchestrationSidebarAgents({
                 </span>
                 <span
                   className={`flex shrink-0 items-center gap-1 text-[11px] ${
-                    task.needsInput ||
-                    task.status === "failed" ||
-                    task.status === "blocked" ||
-                    task.status === "interrupted"
+                    attention
                       ? "text-amber-400"
                       : working
                         ? "text-accent"
@@ -170,19 +181,19 @@ export function OrchestrationSidebarAgents({
                           : "text-content/45"
                   }`}
                 >
-                  {task.needsInput ||
-                  task.status === "failed" ||
-                  task.status === "blocked" ||
-                  task.status === "interrupted" ? (
+                  {attention ? (
                     <CircleAlert className="size-3" strokeWidth={1.75} />
                   ) : working ? (
                     <TerminalSpinner className="inline-block w-3 select-none text-center text-[11px] leading-none text-accent" />
                   ) : task.status === "completed" ? (
                     <Check className="size-3" strokeWidth={2.25} />
                   ) : null}
-                  <span>{label}</span>
+                  <AgentStatusLabel state={state} />
                 </span>
               </button>
+              <div className="pb-1 pl-6.5 pr-2">
+                <TaskMetricsLine state={state} metrics={metrics} startedAt={dispatch?.turnStartedAt ?? dispatch?.startedAt} endedAt={dispatch?.finishedAt ?? (dispatch && ["completed", "failed", "blocked", "interrupted", "cancelled"].includes(dispatch.state) ? dispatch.updatedAt : undefined)} />
+              </div>
               {/* Indented to the title's column: the icon slot and its gap. */}
               {open && (
                 <div className="space-y-2 pb-3 pl-6.5 pr-2">

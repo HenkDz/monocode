@@ -2,7 +2,7 @@
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createMono, monoLook } from "../../features/monos/model/mono";
+import { createMono, monoLook, monoState } from "../../features/monos/model/mono";
 import { MonoRailSection } from "./MonoRailSection";
 
 let root: Root;
@@ -54,6 +54,19 @@ it("names a Mono by its availability without exposing command paths", () => {
   expect(row.getAttribute("aria-label")).toBe(`${monoLook(mono).name}, Working`);
   expect(row.getAttribute("aria-label")).not.toContain("monocode.exe");
   expect(row.getAttribute("aria-label")).not.toContain("Private");
+});
+
+it("keeps a storage-blocked queued message visible and names live work precisely", () => {
+  const mono = createMono();
+  const state = monoState({ blocks: [], busy: false, codexStorageError: "Repair AGENTS.md", queuedMessages: [{ id: "q", text: "review", attachments: [] }] });
+  render({ states: new Map([[mono.id, state]]) });
+  const row = container.querySelector('[data-mono-status="needs-you"] button')!;
+  expect(row.textContent).toContain("Blocked · storage");
+  expect(row.getAttribute("aria-label")).toBe(`${monoLook(mono).name}, Blocked · storage`);
+  expect(row.getAttribute("title")).toContain("Repair AGENTS.md");
+  expect(row.textContent).not.toContain("Idle");
+  render({ states: new Map([[mono.id, monoState({ blocks: [], busy: true })]]) });
+  expect(container.querySelector('[data-agent-state="thinking"]')?.textContent).toBe("Thinking");
 });
 
 it("offers a new mono in place of the list, and meets a new user beside it", () => {

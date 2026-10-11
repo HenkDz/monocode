@@ -34,7 +34,7 @@ import { ProjectLogoIcon } from "./ProjectLogoIcon";
 import { ProjectMascot } from "./ProjectMascot";
 import { PixelMascot } from "./PixelMascot";
 import { MonoRailMascot } from "../../monos/ui/MonoRailMascot";
-import { MONO_STATUS_LABEL, type MonoStatus } from "../../monos/model/mono";
+import { monoLiveStatusLabel, type MonoStatus, type MonoState } from "../../monos/model/mono";
 
 /** A Mono the picker offers beside the projects. */
 export type PickerMono = {
@@ -43,6 +43,7 @@ export type PickerMono = {
   mascot: string;
   color: string;
   status?: MonoStatus;
+  state?: MonoState;
 };
 
 /** Monos listed above the projects; picking one opens it. */
@@ -153,14 +154,14 @@ export function SearchableProjectPicker({
         type="button"
         title={
           activeMono
-            ? `${activeMono.name}\n${MONO_STATUS_LABEL[activeMono.status ?? "idle"]}`
+            ? `${activeMono.name}\n${monoLiveStatusLabel(activeMono.state ?? { status: activeMono.status ?? "idle" })}${activeMono.state?.liveState?.detail ? `\n${activeMono.state.liveState.detail}` : ""}`
             : inProject
               ? cwd
               : undefined
         }
         aria-label={
           activeMono
-            ? `${action}, current mono ${activeMono.name}, ${MONO_STATUS_LABEL[activeMono.status ?? "idle"]}`
+            ? `${action}, current mono ${activeMono.name}, ${monoLiveStatusLabel(activeMono.state ?? { status: activeMono.status ?? "idle" })}`
             : inProject
               ? `${action}, current project ${label}`
               : "Choose project for note"

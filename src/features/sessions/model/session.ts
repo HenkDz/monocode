@@ -304,7 +304,7 @@ export type TurnModel = {
   name: string;
 };
 
-/** Provider-reported token accounting for one user turn. */
+/** Turn timing and provider-reported token accounting for one user turn. */
 export type TurnMetrics = {
   inputTokens?: number;
   outputTokens?: number;
@@ -312,6 +312,14 @@ export type TurnMetrics = {
   cacheWriteTokens?: number;
   /** Provider-normalized share of input served from cache, as a percentage. */
   cacheHitPercent?: number;
+  /** Epoch ms of the first text/reasoning event received by the app. */
+  firstTokenAt?: number;
+  endedAt?: number;
+  /** Provider-observed requests; absent when the provider exposes no identity. */
+  modelCalls?: number;
+  /** Durable request receipts keep repeated usage snapshots from counting twice. */
+  modelCallIds?: string[];
+  compactions?: { id?: string; startedAt?: number; endedAt?: number }[];
 };
 
 export type Block = {
@@ -472,6 +480,8 @@ export type Session = {
   monoTranscript?: { before: number | null; firstBlockId: string | null };
   /** True while a harness turn is in flight. */
   busy?: boolean;
+  /** Provider compaction is running. In-memory only. */
+  compacting?: boolean;
   /** The provider has accepted this turn and can take live follow-ups. */
   turnReady?: boolean;
   /**

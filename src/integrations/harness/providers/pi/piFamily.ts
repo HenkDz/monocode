@@ -854,6 +854,9 @@ function handleFrame(
   }
   if (type === "compaction_start") live.compacting = true;
   if (type === "compaction_end") live.compacting = false;
+  if (type === "compaction_start" || type === "compaction_end") {
+    live.onEvent({ type: "turn.compaction", phase: type === "compaction_start" ? "started" : "completed" });
+  }
   if (type === "auto_retry_start") live.retrying = true;
   if (type === "auto_retry_end") live.retrying = false;
 
@@ -866,7 +869,14 @@ function handleFrame(
   const context = contextFromUsage(rec, live.contextWindow);
   if (context) live.onEvent({ type: "context", ...context });
   const metrics = turnMetricsFromUsage(rec);
-  if (metrics) live.onEvent({ type: "turn.metrics", ...metrics });
+  const message = asRecord(rec.message);
+  const messageId = stringField(message, "id") ??
+    (typeof message?.timestamp === "number" && Number.isFinite(message.timestamp)
+      ? `pi:${message.timestamp}` : undefined);
+  if (metrics && type !== "message_update") {
+    live.onEvent({ type: "turn.metrics", ...metrics,
+      ...(type === "message_end" && messageId && message?.role === "assistant" ? { modelCallId: messageId } : {}) });
+  }
 
   const delta = assistantDeltaFromEvent(rec);
   if (delta) {

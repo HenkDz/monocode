@@ -5,6 +5,8 @@ import { memberContinuity } from "./memberContinuity";
 import type { Artifact } from "../../artifacts/artifacts";
 import { usageLimitFromError } from "../../sessions/model/usageLimit";
 import { isCodexStorageError } from "../../monos/model/monoCodexStorage";
+import { dispatchTurnSnapshot } from "../../agents/model/agentMetrics";
+import { currentTurnIndex, isFirstTokenEvent } from "../../agents/model/turnMetrics";
 import {
   HARNESSES,
   type HarnessId,
@@ -370,6 +372,7 @@ export class Orchestrator {
   private waking = new Set<string>();
   private blocked = new Map<string, string>();
   private announced = new Map<string, Set<string>>();
+  private pendingReports = new Map<string, string[]>();
   /** Async write checks are isolated per dispatch, including retries. */
   private writeChecks = new Map<string, Set<Promise<void>>>();
   private inflight = new Map<
@@ -688,6 +691,10 @@ export class Orchestrator {
   }
   private async commit(run: OrchestrationRun) {
     run = normalizeOrchestrationRun(run);
+    run = { ...run, dispatches: run.dispatches?.map(dispatch =>
+      dispatch.dispatchedAt != null && dispatch.stage === "settled" && dispatch.finishedAt == null
+        ? { ...dispatch, ...dispatchTurnSnapshot(dispatch, this.host?.session(dispatch.sessionId)), finishedAt: Date.now() }
+        : dispatch) };
     this.runs = [
       ...this.runs.filter((entry) => entry.leadId !== run.leadId),
       run,
@@ -1833,6 +1840,7 @@ export class Orchestrator {
           throw new Error(
             "Assign the team's Reviewer an exact completed task to review",
           );
+        const managerSession = this.host?.session(run.leadId);
         const created: OrchestrationTask = {
           trivial: input.trivial === true,
           handoffNote: input.handoffNote == null ? undefined : text(input.handoffNote, "handoffNote", 2000),
@@ -1847,6 +1855,7 @@ export class Orchestrator {
             : undefined,
           id: crypto.randomUUID(),
           origin: input.origin === "user" ? "user" : "manager",
+          managerTurnBlockId: managerSession?.blocks[currentTurnIndex(managerSession)]?.id,
           ...(input.member == null
             ? {}
             : {
@@ -1864,7 +1873,7 @@ export class Orchestrator {
               }
             : {}),
           ...(input.monoGoalId == null
-            ? {}
+            ? (reviewTarget?.monoGoalId ? { monoGoalId: reviewTarget.monoGoalId } : {})
             : { monoGoalId: text(input.monoGoalId, "monoGoalId", 128) }),
           sessionId: crypto.randomUUID(),
           title,
@@ -2499,6 +2508,7 @@ export class Orchestrator {
             state: "starting",
             stage: "accepted",
             startedAt: now,
+            dispatchedAt: now,
             updatedAt: now,
           };
           // Persist authority before any external worker/resource operation.
@@ -2622,6 +2632,7 @@ export class Orchestrator {
               await this.patchDispatch(run.leadId, dispatchId, {
                 state: "running",
                 stage: "turn_submitted",
+                ...dispatchTurnSnapshot(dispatch, this.host.session(task.sessionId)),
               });
           } catch (error) {
             await this.settle(
@@ -3158,7 +3169,9 @@ export class Orchestrator {
             ]
               .filter(Boolean)
               .join("\n\n");
+            this.pendingReports.set(run.leadId, results.flatMap(task => task.lastDispatchId ? [task.lastDispatchId] : []));
             this.host!.submit(run.leadId, body, (outcome) => {
+              this.pendingReports.delete(run.leadId);
               if (outcome.status !== "completed") {
                 if (
                   current.projectManager &&
@@ -3194,6 +3207,7 @@ export class Orchestrator {
               } else this.sync();
             });
           } catch (error) {
+            this.pendingReports.delete(run.leadId);
             console.error("Orchestration continuation failed", error);
           } finally {
             this.waking.delete(run.leadId);
@@ -3203,6 +3217,28 @@ export class Orchestrator {
     }
   }
   observe(id: string, event: HarnessEvent) {
+    const firstToken = isFirstTokenEvent(event);
+    if (event.type === "turn.started" || firstToken) {
+      const now = Date.now();
+      for (const [leadId, dispatchIds] of this.pendingReports) {
+        if (this.ownerSession(leadId) !== id) continue;
+        this.pendingReports.delete(leadId);
+        const reporting = this.run(leadId);
+        const managerSession = this.host?.session(leadId);
+        if (reporting?.status === "active") void this.commit({ ...reporting, dispatches: reporting.dispatches?.map(dispatch =>
+          dispatchIds.includes(dispatch.id) ? { ...dispatch, reportedAt: dispatch.reportedAt ?? now,
+            reportedTurnBlockId: managerSession?.blocks[currentTurnIndex(managerSession)]?.id } : dispatch) }).catch(console.error);
+      }
+      const run = this.forSession(id);
+      const task = run?.tasks.find(task => task.sessionId === id && task.status === "running");
+      const dispatch = run?.dispatches?.find(dispatch => dispatch.id === task?.activeDispatchId);
+      if (run && dispatch && (dispatch.turnStartedAt == null || firstToken && dispatch.firstTokenAt == null)) {
+        const snapshot = dispatchTurnSnapshot(dispatch, this.host?.session(id));
+        void this.patchDispatch(run.leadId, dispatch.id, { ...snapshot,
+          turnStartedAt: dispatch.turnStartedAt ?? snapshot.turnStartedAt ?? now,
+          ...(firstToken ? { firstTokenAt: dispatch.firstTokenAt ?? now } : {}) }).catch(console.error);
+      }
+    }
     if (event.type !== "tool.started" && event.type !== "tool.updated") return;
     const run = this.forSession(id);
     const task = run?.tasks.find(

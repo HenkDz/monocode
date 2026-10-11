@@ -30,6 +30,9 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { OrgArtifactLinks } from "../../artifacts/ui/OrgArtifactLinks";
 import { Modal } from "../../../shared/ui/Modal";
 import { ChevronDown } from "../../../shared/ui/icons";
+import { selectAgentLiveState } from "../../agents/model/agentLiveState";
+import { TaskMetricsLine } from "../../agents/ui/TaskMetricsLine";
+import { selectTaskMetrics } from "../../agents/model/agentMetrics";
 
 const tones = {
   running:
@@ -208,6 +211,12 @@ export function MemberWorkLog({ member }: { member: Mono }) {
           </button>
         </div>
         <div className="px-3 pb-2">
+          <TaskMetricsLine
+            metrics={cardSession(task.sessionId)?.taskMetrics?.[task.id] ?? selectTaskMetrics(task, [...dispatches.values()], [])}
+            state={cardSession(task.sessionId)?.liveState ?? selectAgentLiveState(undefined, { task })}
+            startedAt={dispatch?.turnStartedAt ?? dispatch?.startedAt}
+            endedAt={dispatch?.finishedAt ?? (!["running", "queued", "cancelling"].includes(task.status) ? dispatch?.updatedAt : undefined)}
+          />
           <OrgArtifactLinks monoId={member.id} links={links} />
         </div>
       </article>

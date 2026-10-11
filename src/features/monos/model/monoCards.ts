@@ -1,5 +1,7 @@
 import { habitSchedule, type HabitSchedule } from "./monoHabits";
 import type { RuntimeMode } from "../../sessions/model/session";
+import type { AgentLiveState } from "../../agents/model/agentLiveState";
+import type { AgentMetrics } from "../../agents/model/agentMetrics";
 
 /**
  * Cards a Mono puts in its chat beside its words, with the app CLI's
@@ -148,6 +150,8 @@ export type CardSession = {
   harness: string;
   busy: boolean;
   needsInput: boolean;
+  liveState?: AgentLiveState;
+  taskMetrics?: Record<string, AgentMetrics>;
   runtimeMode?: RuntimeMode;
   /** The last thing its agent said, on one line. */
   lastLine?: string;

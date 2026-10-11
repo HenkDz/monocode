@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
 import { ProjectManagerRow } from "./ProjectManagerRow";
 import { orchestrator, type OrchestrationRun } from "../model/orchestration";
+import { newSession } from "../../sessions/model/session";
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
 it("selects members with native keyboard-focusable buttons and only one current row", async () => {
@@ -43,25 +44,28 @@ it("shows member availability and a task tooltip without repeating its title or 
   const snapshot = vi.spyOn(orchestrator, "snapshot").mockReturnValue(runs);
   const host = document.createElement("div");
   const root = createRoot(host);
-  const render = (attention = new Set<string>(), busy = new Set<string>()) => act(async () => root.render(
-    <ProjectManagerRow project="/repo" onOpen={vi.fn()} expanded onToggle={vi.fn()} approvalSessionIds={attention} busySessionIds={busy} />,
+  const render = (attention = new Set<string>(), busy = new Set<string>(), sessions?: Parameters<typeof ProjectManagerRow>[0]["sessions"]) => act(async () => root.render(
+    <ProjectManagerRow project="/repo" onOpen={vi.fn()} expanded onToggle={vi.fn()} approvalSessionIds={attention} busySessionIds={busy} sessions={sessions} />,
   ));
   const member = () => host.querySelector<HTMLButtonElement>('[aria-label="Open Backend"]')!;
   try {
     await render();
-    expect(member().textContent).toBe("BackendIdle");
+    expect(member().textContent).toBe("BackendWaiting review");
     expect(member().title).toBe(task.title);
     expect(host.textContent).not.toContain(task.title);
     expect(host.textContent).not.toContain("completed");
     expect(host.querySelector('[aria-label="Toggle Manager team"]')).not.toBeNull();
     task.status = "running";
     await render();
-    expect(member().textContent).toBe("BackendWorking");
+    expect(member().textContent).toBe("BackendThinking");
     await render(new Set(["worker"]));
     expect(member().textContent).toBe("BackendNeeds you");
     task.status = "completed";
     await render(new Set(), new Set(["member-chat"]));
-    expect(member().textContent).toBe("BackendWorking");
+    expect(member().textContent).toBe("BackendThinking");
+    await render(new Set(), new Set(), [{ ...newSession("codex", "/repo"), id: "worker", codexStorageError: "Repair AGENTS.md", queuedMessages: [{ id: "q", text: "review", attachments: [] }] }]);
+    expect(member().textContent).toBe("BackendBlocked · storage");
+    expect(member().querySelector('[data-agent-state="blocked"]')?.getAttribute("title")).toBe("Repair AGENTS.md");
   } finally {
     await act(async () => root.unmount());
     snapshot.mockRestore();

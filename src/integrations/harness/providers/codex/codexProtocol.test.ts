@@ -1027,6 +1027,8 @@ describe("mapCodexNotification thread/tokenUsage/updated", () => {
         cacheReadTokens: 30_000,
         outputTokens: 2_000,
         cacheHitPercent: 75,
+        modelCallId: "900000:880000:800000:20000",
+        providerTurnId: "turn1",
       },
     ]);
   });

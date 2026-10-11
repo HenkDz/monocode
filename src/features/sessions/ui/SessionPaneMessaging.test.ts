@@ -201,6 +201,24 @@ it("updates the member header from live session and roster state", () => {
   ).toContain("Idle");
 });
 
+it("keeps member tasks outside the transcript for empty and ongoing conversations", () => {
+  probes.member = true;
+  const pane = props();
+  setComposerDraft("chat", "Keep my draft");
+  render(pane);
+  const input = field();
+  const log = container.querySelector('[aria-label="Member work log"]')!;
+  expect(log).not.toBeNull();
+  expect(probes.transcript.mock.calls.at(-1)![0].latestTurnAccessory).toBeUndefined();
+  expect(log.contains(input)).toBe(false);
+  expect(log.parentElement).toBe(container.querySelector('[data-session-composer]')!.parentElement);
+  render({ ...pane, session: { ...pane.session, blocks: [] } });
+  expect(container.querySelectorAll('[aria-label="Member work log"]')).toHaveLength(1);
+  expect(container.querySelector('[aria-label="Member work log"]')).toBe(log);
+  expect(field()).toBe(input);
+  expect(field().value).toBe("Keep my draft");
+});
+
 it("keeps the same input, current draft and attachments when a question appears and closes", async () => {
   setComposerDraft("chat", "Initial draft");
   const pane = props();

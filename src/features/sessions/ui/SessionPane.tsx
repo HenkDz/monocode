@@ -1004,7 +1004,6 @@ const LocalSessionPane = memo(function LocalSessionPane({
                     state={monoState ?? sessionMonoState(session)}
                     greeting={mono?.role !== "member"}
                   />
-                  {mono?.role === "member" && <MemberWorkLog member={mono} />}
                 </div>
               ) : session.inboxAsk ? (
                 <div className="scrollbar-none h-full min-h-0 overflow-y-auto">
@@ -1203,9 +1202,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
                       )
                     }
                     latestTurnAccessory={
-                      mono?.role === "member" ? (
-                        <MemberWorkLog member={mono} />
-                      ) : ownedRuns.length ? (
+                      mono?.role === "member" ? undefined : ownedRuns.length ? (
                         <>
                           {ownedRuns.map((run) => (
                             <ProjectManagerReview
@@ -1278,6 +1275,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
               </>
             )}
           </div>
+          {mono?.role === "member" && <MemberWorkLog key={mono.id} member={mono} />}
           {onCodexStorageRepair && (
             <div className="mx-auto w-full max-w-4xl shrink-0">
               <MonoCodexStorageNotice key={session.id} detail={session.codexStorageError} onRepair={() => onCodexStorageRepair(session.id)} />

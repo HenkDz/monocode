@@ -69,6 +69,7 @@ afterEach(() => {
   localStorage.clear();
   vi.restoreAllMocks();
   vi.mocked(usePrStatusCache).mockReturnValue(new Map());
+  vi.mocked(cardSession).mockReset();
   vi.unstubAllGlobals();
 });
 
@@ -99,6 +100,14 @@ it("links task reports, reviews and PR summaries while keeping artifact reports 
   window.addEventListener("monocode:open-artifact", opened);
   try {
     await act(async () => root.render(<MemberWorkLog member={member} />));
+    expect(
+      container.querySelector('[data-member-task="artifact-task"]'),
+    ).toBeNull();
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>('button[aria-controls$="-history"]')!
+        .click(),
+    );
     expect(container.textContent).toContain("Completed (no changes)");
     expect(container.querySelectorAll("[data-org-artifact]")).toHaveLength(3);
     for (const id of ["report-1", "review-1", "summary-1"]) {
@@ -322,6 +331,28 @@ it("maps lifecycle and verified PR outcomes to light/dark status colors without 
     root = createRoot(container);
   try {
     await act(async () => root.render(<MemberWorkLog member={member} />));
+    for (const id of [
+      "ready",
+      "review",
+      "approved",
+      "stale",
+      "stale-verdict",
+      "changes",
+      "failed",
+      "blocked",
+    ]) {
+      expect(
+        container.querySelector(`[data-member-task="${id}"]`),
+      ).not.toBeNull();
+    }
+    for (const id of ["merged", "closed", "cancelled", "no-changes"]) {
+      expect(container.querySelector(`[data-member-task="${id}"]`)).toBeNull();
+    }
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>('button[aria-controls$="-history"]')!
+        .click(),
+    );
     for (const [id, label, border] of [
       ["running", "Running", "border-l-accent"],
       ["queued", "Queued", "border-l-content/20"],
@@ -352,6 +383,138 @@ it("maps lifecycle and verified PR outcomes to light/dark status colors without 
         "Open",
       );
     }
+  } finally {
+    await act(async () => root.unmount());
+  }
+});
+
+it("keeps large histories unmounted, prioritizes attention and lets every past task open", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const history = Array.from({ length: 200 }, (_, index) => ({
+    ...base,
+    id: `past-${index}`,
+    title: `Past assignment ${index}`,
+    accepted: true,
+    acceptedDispatchId: "dispatch",
+    completionOutcome: "no-changes" as const,
+  }));
+  const runs = [
+    {
+      tasks: [
+        { ...base, id: "blocked", status: "blocked" },
+        { ...base, id: "running", status: "running" },
+        ...history,
+        { ...base, id: "other", memberId: "other-member" },
+      ],
+      dispatches: [],
+    },
+  ] as unknown as OrchestrationRun[];
+  vi.spyOn(orchestrator, "snapshot").mockReturnValue(runs);
+  vi.spyOn(orchestrator, "subscribe").mockReturnValue(() => {});
+  const host = document.createElement("div"),
+    root = createRoot(host);
+  try {
+    await act(async () => root.render(<MemberWorkLog member={member} />));
+    const toggle = host.querySelector<HTMLButtonElement>(
+      'button[aria-controls]:not([aria-controls$="-history"])',
+    )!;
+    const historyToggle = host.querySelector<HTMLButtonElement>(
+      'button[aria-controls$="-history"]',
+    )!;
+    expect(toggle.textContent).toContain("Tasks (202)");
+    expect(historyToggle.textContent).toContain("History (200)");
+    expect(historyToggle.getAttribute("aria-expanded")).toBe("false");
+    expect(host.textContent).toContain("Needs attention (1)");
+    expect(
+      [...host.querySelectorAll("[data-member-task]")].map((el) =>
+        el.getAttribute("data-member-task"),
+      ),
+    ).toEqual(["blocked", "running"]);
+    expect(host.textContent).not.toContain("Past assignment");
+    await act(async () => historyToggle.click());
+    expect(historyToggle.getAttribute("aria-expanded")).toBe("true");
+    expect(host.querySelectorAll("[data-member-task]")).toHaveLength(202);
+    await act(async () =>
+      host
+        .querySelector<HTMLButtonElement>(
+          '[data-member-task="past-0"] button[aria-haspopup="dialog"]',
+        )!
+        .click(),
+    );
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain(
+      "Past assignment 0",
+    );
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(
+          '[role="dialog"] [aria-label="Close"]',
+        )!
+        .click(),
+    );
+    await act(async () => historyToggle.click());
+    expect(host.querySelectorAll("[data-member-task]")).toHaveLength(2);
+    await act(async () => toggle.click());
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(host.querySelectorAll("[data-member-task]")).toHaveLength(0);
+    await act(async () => historyToggle.click());
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(host.querySelectorAll("[data-member-task]")).toHaveLength(202);
+  } finally {
+    await act(async () => root.unmount());
+  }
+});
+
+it("keeps opened details readable when a current task moves into collapsed history", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const snapshot = vi
+    .spyOn(orchestrator, "snapshot")
+    .mockReturnValue([
+      { tasks: [base], dispatches: [] },
+    ] as unknown as OrchestrationRun[]);
+  vi.spyOn(orchestrator, "subscribe").mockReturnValue(() => {});
+  const host = document.createElement("div"),
+    root = createRoot(host);
+  try {
+    await act(async () => root.render(<MemberWorkLog member={member} />));
+    await act(async () =>
+      host
+        .querySelector<HTMLButtonElement>('[aria-haspopup="dialog"]')!
+        .click(),
+    );
+    snapshot.mockReturnValue([
+      {
+        tasks: [
+          {
+            ...base,
+            accepted: true,
+            acceptedDispatchId: "dispatch",
+            completionOutcome: "no-changes",
+          },
+        ],
+        dispatches: [],
+      },
+    ] as unknown as OrchestrationRun[]);
+    await act(async () => root.render(<MemberWorkLog member={member} />));
+    expect(host.querySelectorAll("[data-member-task]")).toHaveLength(0);
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain(
+      "Assignment instructions",
+    );
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(
+          '[role="dialog"] [aria-label="Close"]',
+        )!
+        .click(),
+    );
+    await act(async () =>
+      host
+        .querySelector<HTMLButtonElement>('button[aria-controls$="-history"]')!
+        .click(),
+    );
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(host.querySelector("[data-task-status]")?.textContent).toBe(
+      "Completed (no changes)",
+    );
   } finally {
     await act(async () => root.unmount());
   }

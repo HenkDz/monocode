@@ -48,6 +48,7 @@ it("uses the reviewed lifecycle on cards, Activity, recent tasks, org task rows,
     ] as const) {
       Object.assign(task, changes);
       await render();
+      if (label.startsWith("Completed")) await act(async () => host.querySelector<HTMLButtonElement>('button[aria-controls$="-history"]')!.click());
       expect(host.querySelector("[data-task-status]")?.textContent).toBe(label);
       expect(host.querySelector('[aria-label="Member tasks"]')?.textContent).toContain(label);
       expect(host.querySelector('[data-team-task="t"]')?.textContent).toContain(label);

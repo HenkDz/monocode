@@ -85,10 +85,18 @@ it("sends an isolated Codex skills context only on the selected Mono launch", as
 it("forwards effective sandbox requirements separately from skill selection", async () => {
   const child = await loadChild();
   mocks.invoke.mockResolvedValue({ hasThread: false });
-  await child.prepareMonoCodexStore("account", "thread", { skillsRole: "manager", projectPath: "/synthetic", sandboxRequired: true });
+  await child.prepareMonoCodexStore("account", "thread", { skillsRole: "manager", projectPath: "/synthetic", sandboxRequired: true, windowsSandbox: "unelevated", sandboxNetworkAccess: false });
   expect(mocks.invoke).toHaveBeenCalledExactlyOnceWith("codex_mono_store_prepare", {
-    providerAccountId: "account", threadId: "thread", skillsRole: "manager", projectPath: "/synthetic", sandboxRequired: true,
+    providerAccountId: "account", threadId: "thread", skillsRole: "manager", projectPath: "/synthetic", sandboxRequired: true, windowsSandbox: "unelevated", sandboxNetworkAccess: false,
   });
+});
+
+it("forwards the effective sandbox settings for a side-effect-free warm Mono check", async () => {
+  const child = await loadChild();
+  mocks.invoke.mockResolvedValue(undefined);
+  const input = { providerAccountId: "account", sandboxRequired: true, windowsSandbox: "unelevated" as const, sandboxNetworkAccess: false, skillsContextId: "a".repeat(64), sandboxConfig: { windows: { sandbox: "elevated" } } };
+  await child.checkMonoCodexSandbox(input);
+  expect(mocks.invoke).toHaveBeenCalledExactlyOnceWith("codex_mono_sandbox_check", input);
 });
 
 describe("child bridge", () => {

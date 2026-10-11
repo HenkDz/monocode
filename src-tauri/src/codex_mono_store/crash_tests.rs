@@ -332,6 +332,10 @@ fn killed_skill_junction_migration_preserves_source_and_restarts() {
 #[test]
 fn killed_private_hook_context_copy_never_publishes_partial_hooks() {
     for point in [
+        #[cfg(windows)]
+        "skills-hooks-after-stage-create",
+        #[cfg(windows)]
+        "skills-hooks-after-stage-journal",
         "skills-hooks-before-copy",
         "skills-hooks-before-publish",
         "skills-hooks-after-publish",
@@ -342,8 +346,33 @@ fn killed_private_hook_context_copy_never_publishes_partial_hooks() {
         std::fs::write(&hooks, chosen).unwrap();
         let identity = entry_identity(&hooks).unwrap();
         fixture.kill_at("skills-context", "hooks.json", point);
+        #[cfg(windows)]
+        if point.starts_with("skills-hooks-after-stage-") {
+            let contexts = std::fs::read_dir(fixture.home().join(".monocode-skill-contexts"))
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .collect::<Vec<_>>();
+            assert_eq!(contexts.len(), 1);
+            let entries = std::fs::read_dir(&contexts[0])
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                .collect::<Vec<_>>();
+            assert!(!entries
+                .iter()
+                .any(|name| name.starts_with(".monocode-link-")));
+            assert_eq!(
+                entries
+                    .iter()
+                    .filter(|name| name.starts_with(".monocode-txn-"))
+                    .count(),
+                usize::from(point == "skills-hooks-after-stage-journal")
+            );
+        }
         fixture
             .run("skills-context", "hooks.json", "restart")
+            .unwrap();
+        fixture
+            .run("skills-context", "hooks.json", "prepared")
             .unwrap();
         let contexts = std::fs::read_dir(fixture.home().join(".monocode-skill-contexts"))
             .unwrap()

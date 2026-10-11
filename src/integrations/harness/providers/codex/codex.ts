@@ -12,6 +12,7 @@ import {
   type UserQuestionReply,
 } from "../../../../features/sessions/model/userQuestion";
 import {
+  checkMonoCodexSandbox,
   killChild,
   resolveCodexBinary,
   restoreMonoCodexAgentState,
@@ -97,6 +98,8 @@ type Live = {
   ephemeral: boolean;
   codexStore?: "mono";
   skillsSignature?: string;
+  skillsContextId?: string;
+  storeConfig?: Record<string, unknown>;
   runtimeMode: RuntimeMode;
   planning: boolean;
   readOnly: boolean;
@@ -592,6 +595,8 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
           skillsRole: input.skillsRole,
           skillsPolicy: input.skillsPolicy,
           sandboxRequired,
+          windowsSandbox: IS_WIN && readOnly ? "unelevated" : undefined,
+          sandboxNetworkAccess: controlsAgents,
           threadId: canResume ? resume?.threadId : undefined,
         })
       : undefined;
@@ -809,6 +814,8 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       ephemeral,
       codexStore,
       skillsSignature,
+      skillsContextId: store?.skillsContextId,
+      storeConfig,
       sandboxRequired,
       runtimeMode: input.runtimeMode,
       planning: input.intent === "plan",
@@ -862,6 +869,16 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
 }
 
 async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
+  if (live.codexStore === "mono") {
+    await checkMonoCodexSandbox({
+      providerAccountId: live.providerAccountId,
+      sandboxRequired: live.sandboxRequired,
+      windowsSandbox: IS_WIN && live.readOnly ? "unelevated" : undefined,
+      sandboxNetworkAccess: live.controlsAgents,
+      skillsContextId: live.skillsContextId,
+      sandboxConfig: live.storeConfig,
+    });
+  }
   const text = input.prepareText ? await input.prepareText(live.threadId) : input.text;
   if (live.cancelled || live.muteUpdates) return;
   const model = nativeModelId(input.model);

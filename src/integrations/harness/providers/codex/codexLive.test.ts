@@ -4,6 +4,9 @@ import { planAgentContext, planOrgContext, recordAgentContext, recordOrgContext 
 import { registerHarness, resetHarnessIdlePark, sendHarnessTurn } from "../../core/registry";
 
 const sent: string[] = [];
+vi.mock("../../../../platform/tauri/platform", async importOriginal => ({
+  ...await importOriginal<typeof import("../../../../platform/tauri/platform")>(), IS_WIN: true,
+}));
 let onLine: ((line: string) => void) | undefined;
 const writeChild = vi.fn(async (_id: string, line: string) => {
   sent.push(line);
@@ -19,6 +22,7 @@ const deleteGeneratedImages = vi.hoisted(() => vi.fn(async () => undefined));
 const spawnChild = vi.hoisted(() =>
   vi.fn(async (..._args: unknown[]) => undefined),
 );
+const checkMonoCodexSandbox = vi.hoisted(() => vi.fn(async (_input: unknown) => undefined));
 const restoreMonoCodexAgentState = vi.hoisted(() =>
   vi.fn(async (..._args: unknown[]) => undefined),
 );
@@ -34,6 +38,7 @@ const prepareCodexMonoContext = vi.hoisted(() =>
 vi.mock("./codexStore", () => ({ prepareCodexMonoContext }));
 
 vi.mock("../../core/child", () => ({
+  checkMonoCodexSandbox,
   resolveCodexBinary: async () => ({ path: "/fake/codex" }),
   spawnChild,
   restoreMonoCodexAgentState,
@@ -301,6 +306,7 @@ describe("codex live turn sequence", () => {
     spawnChild.mockClear();
     restoreMonoCodexAgentState.mockClear();
     prepareCodexMonoContext.mockClear();
+    checkMonoCodexSandbox.mockReset();
   });
 
   afterEach(async () => {
@@ -539,6 +545,29 @@ describe("codex live turn sequence", () => {
     })).rejects.toThrow("not provisioned");
     expect(prepareCodexMonoContext).toHaveBeenLastCalledWith(expect.objectContaining({ sandboxRequired: true }));
     expect(spawnChild).not.toHaveBeenCalled();
+  });
+
+  it("launches a read-only Mono with the unelevated engine and the native guard's argument order", async () => {
+    const { turn } = await startTurn("codex-live", { codexStore: "mono", readOnly: true, runtimeMode: "full-access" });
+    expect(prepareCodexMonoContext).toHaveBeenLastCalledWith(expect.objectContaining({ sandboxRequired: true, windowsSandbox: "unelevated", sandboxNetworkAccess: false }));
+    expect(spawnChild.mock.calls.at(-1)?.[2]).toEqual(["app-server", "-c", 'windows.sandbox="unelevated"']);
+    expect(spawnChild.mock.calls.at(-1)?.[6]).toBe("mono");
+    expect(parse().find(message => message.method === "turn/start")?.params).toMatchObject({ sandboxPolicy: { type: "readOnly" }, approvalPolicy: "never" });
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+  });
+
+  it("blocks an unchanged warm Mono before prompt preparation when its identity becomes unready", async () => {
+    const first = await startTurn("codex-live", { codexStore: "mono" });
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await first.turn;
+    sent.length = 0;
+    const prepareText = vi.fn(async () => "Continue");
+    checkMonoCodexSandbox.mockRejectedValueOnce(new Error("Codex storage needs repair: sandbox account is disabled"));
+    await expect(sendCodexTurn({ sessionId: "codex-live", codexStore: "mono", cwd: "/repo", model: "codex:gpt-5.4", runtimeMode: "supervised", text: "Continue", prepareText, onEvent() {} })).rejects.toThrow("account is disabled");
+    expect(prepareText).not.toHaveBeenCalled();
+    expect(spawnChild).toHaveBeenCalledTimes(1);
+    expect(parse().some(message => message.method === "turn/start")).toBe(false);
   });
 
   it("lets an active Mono turn finish before checking a queued sandbox-mode change", async () => {

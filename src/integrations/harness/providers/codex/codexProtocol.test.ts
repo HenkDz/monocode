@@ -14,6 +14,7 @@ import {
   type CodexCodeModeState,
 } from "./codexProtocol";
 import { parseCodexModelList } from "./codexCatalog";
+import windowsReadOnlyMono from "./fixtures/windows-read-only-mono.json";
 
 it("maps explicit completed Codex compaction notifications without finishing the turn", () => {
   const scope = { threadId: "thread", turnId: "turn" };
@@ -31,7 +32,9 @@ it("maps explicit completed Codex compaction notifications without finishing the
 });
 
 it("uses the restricted-token fallback only for Windows read-only worker processes", () => {
-  expect(codexAppServerArgs(true, true)).toEqual(["-c", 'windows.sandbox="unelevated"', "app-server"]);
+  expect(codexAppServerArgs(true, true)).toEqual(["app-server", "-c", 'windows.sandbox="unelevated"']);
+  expect(codexAppServerArgs(true, true)).toEqual(windowsReadOnlyMono.args);
+  expect(buildThreadStartParams({ cwd: "/repo", readOnly: true, runtimeMode: "full-access" })).toMatchObject({ sandbox: windowsReadOnlyMono.sandbox, approvalPolicy: windowsReadOnlyMono.approvalPolicy });
   expect(buildThreadStartParams({ cwd: "/repo", readOnly: true, runtimeMode: "full-access" })).toMatchObject({ sandbox: "read-only", approvalPolicy: "never" });
   expect(codexAppServerArgs(false, true)).toEqual(["app-server"]);
   expect(codexAppServerArgs(true, false)).toEqual(["app-server"]);

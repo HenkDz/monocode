@@ -101,6 +101,37 @@ impl ClaimJournal {
         Self::clone_file(target, staged, ClaimIntent::CloneMemory)
     }
 
+    #[cfg(windows)]
+    pub(super) fn keep_clone_on_close(&self, file: &std::fs::File) -> Result<(), String> {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FileDispositionInfoEx, SetFileInformationByHandle, FILE_DISPOSITION_INFO_EX,
+        };
+        if file_identity(file)?
+            != self
+                .transaction
+                .staged
+                .as_ref()
+                .ok_or("Missing file clone")?
+                .identity
+        {
+            return Err("Private file clone identity changed; it was preserved".into());
+        }
+        let info = FILE_DISPOSITION_INFO_EX { Flags: 8 }; // ON_CLOSE clears deletion at close.
+        if unsafe {
+            SetFileInformationByHandle(
+                file.as_raw_handle() as _,
+                FileDispositionInfoEx,
+                (&info as *const FILE_DISPOSITION_INFO_EX).cast(),
+                std::mem::size_of_val(&info) as u32,
+            )
+        } == 0
+        {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        Ok(())
+    }
+
     fn clone_file(
         target: &Path,
         staged: &RecordedEntry,

@@ -104,11 +104,15 @@ export function decideMonoGoalRoute(input: {
   if (/\b(compare|compares|compared|comparing|comparisons?|versus|vs\.?|cross[- ]project)\b|\b(across|all|both|multiple|between)\s+(the\s+)?(projects|repositories|repos)\b/i.test(text))
     return grand("Comparison or cross-project goal");
   const matches = mentions(text, context.projects);
-  const ids = new Set(matches.map(match => match.id));
-  if (ids.size > 1) return grand("More than one project mentioned");
   const selected = choice.override === "manager" ? choice.projectId : matches[0]?.id;
   if (!selected) return grand("Choose a project or mention its exact name");
-  if (ids.size && !ids.has(selected)) return grand("Selected project differs from the text");
+  const normalize = (value: string) => value.toLowerCase().replace(/[\p{P}\s]/gu, "");
+  const normalizedText = normalize(text);
+  // Conflict checks deliberately over-block substrings, including unavailable project names.
+  const referenced = context.projects.filter(project => normalizedText.includes(normalize(project.name)));
+  if (referenced.some(project => project.id !== selected))
+    return grand(referenced.some(project => project.id === selected)
+      ? "More than one project mentioned" : "Selected project differs from the text");
   const project = context.projects.find(project => project.id === selected);
   if (!project?.available || !project.managerMonoId)
     return grand("Project has no available local Manager");
@@ -123,7 +127,7 @@ export type MonoGoalSubmitHost = {
   ledger: MonoManagerGoals;
   goals: ManagerGoalHost;
   persistOrigin(submission: MonoGoalSubmission, text: string): Promise<void>;
-  hasOrigin(submission: MonoGoalSubmission): boolean;
+  hasOrigin(submission: MonoGoalSubmission): boolean | Promise<boolean>;
   persistPending(submission: MonoGoalSubmission, error: unknown): Promise<void>;
   persistCard(submission: MonoGoalSubmission, goal: MonoManagerGoal): Promise<void>;
   grand(): boolean | Promise<boolean>;
@@ -194,9 +198,11 @@ export async function submitMonoGoal(input: {
       console.error("Mono goal accepted; route card retained for recovery", error));
     return true;
   };
-  const fallback = () => {
-    if (host.hasOrigin(submission)) return pending(Error("The original project route is unavailable"));
+  const fallback = async () => {
+    if (await host.hasOrigin(submission)) return pending(Error("The original project route is unavailable"));
     if (input.recovery) throw Error("Goal route unavailable; retained the original request");
+    // A stale Manager envelope must refresh its chip before a new Send can use Grand.
+    if (submission.projectId) return false;
     return host.grand();
   };
   await host.ledger.hydrate(ownerId);

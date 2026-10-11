@@ -2,13 +2,18 @@
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import ts from "typescript";
 import { FloatingMonoChat } from "./FloatingMonoChat";
 import { MonoComposer } from "./MonoComposer";
 import { clearComposerDraft } from "../../sessions/model/draftCache";
-import { newSession } from "../../sessions/model/session";
+import { newSession, type Block, type Session } from "../../sessions/model/session";
+import { upsertSession, writeSession } from "../../sessions/data/sessionStore";
+import { getMonoGoalRecoveryBlocks, mergeMonoGoalRecoverySession, monoGoalRecoveryLiveSession } from "../../sessions/data/monoGoalRecovery";
 import { deliverFloatingMonoRequest, type FloatingMonoAction, type FloatingMonoView } from "../model/floatingMono";
-import { appendMonoGoalOrigin, submitMonoGoal, type MonoGoalRoutingContext, type MonoGoalSubmission } from "../model/monoGoalRouting";
+import { appendMonoGoalCard, appendMonoGoalOrigin, appendMonoGoalPendingCard, submitMonoGoal, type MonoGoalRoutingContext, type MonoGoalSubmission } from "../model/monoGoalRouting";
 import { MonoManagerGoals, type ManagerGoalHost } from "../model/monoManagerGoals";
+import { pathKey } from "../../../shared/lib/paths";
 
 const native = vi.hoisted(() => ({ invoke: vi.fn(), listen: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: native.invoke }));
@@ -40,9 +45,28 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-async function fixture(surface: "embedded" | "floating", interrupt: boolean) {
+function appSubmit(dependencies: Record<string, unknown>) {
+  const app = readFileSync("src/app/App.tsx", "utf8");
+  const start = app.indexOf("  submitMonoGoalRef.current = async (");
+  const end = app.indexOf("\n  useEffect(() => {\n    const stopCards", start);
+  expect(start).toBeGreaterThan(0);
+  expect(end).toBeGreaterThan(start);
+  const code = ts.transpileModule(app.slice(start, end) + "\nreturn submitMonoGoalRef.current;", {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  return new Function(...Object.keys(dependencies), code)(...Object.values(dependencies)) as
+    (sessionId: string, text: string, attachments: unknown[], submission: MonoGoalSubmission) => Promise<boolean>;
+}
+
+async function fixture(surface: "embedded" | "floating", interrupt: boolean, fault?: "before-write" | "after-write") {
   let context = interrupt ? initial : { ...initial, projects: initial.projects.map(project => ({ ...project, available: false })) };
-  let source = { ...newSession("codex", "C:/code/Atlas"), id: "cc5cg-ack" };
+  let source: Session = { ...newSession("codex", "C:/code/Atlas"), id: "cc5cg-ack" };
+  if (fault) source = { ...source, id: `cc5ch-retry-${surface}-${crypto.randomUUID()}`,
+    blocks: [{ id: "prior-user", role: "user", text: "Previous chat" }],
+    monoTranscript: { before: null, firstBlockId: "prior-user" } };
+  const sessionsRef = { current: [source] };
+  let disk: Block[] = structuredClone(source.blocks);
+  let readsBlocked = false;
   const project = { id: "c:/code/atlas", name: "Atlas", folder: "C:/code/Atlas", managerId: "atlas-engine",
     managerMonoId: "atlas-manager", managerExists: true, running: 0, needsDecision: 0, ready: 0, blocked: [], goals: [] };
   const goals: ManagerGoalHost = { mayDelegate: () => true, projects: async () => [project],
@@ -56,9 +80,18 @@ async function fixture(surface: "embedded" | "floating", interrupt: boolean) {
     },
     hasOrigin: (submission: MonoGoalSubmission) => source.blocks.some(block => block.id === submission.userMessageId),
     persistPending: vi.fn(async () => {}), persistCard: vi.fn(async () => {}), grand: vi.fn(() => false) };
+  const adapter = fault ? appSubmit({
+    submitMonoGoalRef: { current: undefined }, sessionsRef, setSessions: () => { source = sessionsRef.current[0]; },
+    monoForSession: () => ({ id: "grand", role: "orchestrator" }),
+    goalRoutingForMono: () => context, monoManagerGoals: host.ledger, managerGoalHost: { current: goals },
+    invoke: native.invoke, pathKey, writeSession, getMonoGoalRecoveryBlocks,
+    mergeMonoGoalRecoverySession, monoGoalRecoveryLiveSession, submitMonoGoal,
+    appendMonoGoalOrigin, appendMonoGoalPendingCard, appendMonoGoalCard, submitSession: host.grand,
+  }) : undefined;
   const submissions: MonoGoalSubmission[] = [];
   const submit = (text: string, attachments: unknown[], submission: MonoGoalSubmission) => {
     submissions.push(submission);
+    if (adapter) return adapter(source.id, text, attachments, submission);
     return submitMonoGoal({ text, attachmentCount: attachments.length, origin: "user", submission }, host);
   };
   const view = (): FloatingMonoView => ({ monoId: "grand", error: null,
@@ -67,6 +100,32 @@ async function fixture(surface: "embedded" | "floating", interrupt: boolean) {
   let receive!: (event: { payload: FloatingMonoView }) => void;
   native.listen.mockImplementation(async (_name, callback) => { receive = callback; return () => {}; });
   native.invoke.mockImplementation(async (command: string, args?: { action: FloatingMonoAction }) => {
+    if (command === "project_root") return project.folder;
+    if (command === "mono_session_page") {
+      if (readsBlocked) throw Error("Database read unavailable");
+      return { blocks: structuredClone(disk), before: null, hasNewer: false };
+    }
+    if (command === "mono_session_upsert") {
+      if (fault === "before-write" && !interrupted) {
+        interrupted = true;
+        throw Error("Database temporarily unavailable before saving");
+      }
+      const payload = args as unknown as { session: Session; blocksChanged: boolean;
+        afterBlockId: string | null; fromBlockId: string | null; appendOnly: boolean };
+      if (payload.blocksChanged) {
+        const start = payload.afterBlockId ? disk.findIndex(block => block.id === payload.afterBlockId) + 1
+          : payload.fromBlockId ? disk.findIndex(block => block.id === payload.fromBlockId)
+          : payload.appendOnly ? disk.length : 0;
+        expect(start).toBeGreaterThanOrEqual(0);
+        disk = [...disk.slice(0, start), ...structuredClone(payload.session.blocks)];
+        expect(new Set(disk.map(block => block.id)).size).toBe(disk.length);
+      }
+      if (fault === "after-write" && !interrupted) {
+        interrupted = true;
+        throw Error("Origin write acknowledgement interrupted before App publication");
+      }
+      return { ...payload.session, createdAt: 1, updatedAt: 2 };
+    }
     if (command === "mono_chat_state") return view();
     if (command === "mono_chat_action") {
       try {
@@ -90,7 +149,12 @@ async function fixture(surface: "embedded" | "floating", interrupt: boolean) {
   const props = Object.entries(field).find(([key]) => key.startsWith("__reactProps"))![1];
   act(() => props.onChange({ target: { value: "Fix Atlas checkout" } }));
   act(() => [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "New goal")!.click());
-  return { host, goals, submissions, source: () => source, field,
+  return { host, goals, submissions, source: () => source, disk: () => disk, field,
+    blockReads: (blocked: boolean) => { readsBlocked = blocked; },
+    saveChat: async () => {
+      const next = { ...source, blocks: [...source.blocks, { id: "later-user", role: "user" as const, text: "Later chat" }] };
+      await upsertSession(next);
+    },
     change: async (next: MonoGoalRoutingContext) => {
       context = next;
       await act(async () => surface === "floating" ? receive({ payload: view() }) : render());
@@ -133,4 +197,63 @@ it.each(["embedded", "floating"] as const)("recalculates the %s route only after
   expect(f.submissions[1].userMessageId).not.toBe(f.submissions[0].userMessageId);
   expect(f.goals.deliver).toHaveBeenCalledOnce();
   expect(f.field.value).toBe("");
+});
+
+it.each(["embedded", "floating"] as const)("reconciles the %s durable origin after failure before App publication", async surface => {
+  const f = await fixture(surface, true, "after-write");
+  await send();
+  expect(f.disk().filter(block => block.monoGoalSubmission)).toHaveLength(1);
+  expect(f.source().blocks.some(block => block.monoGoalSubmission)).toBe(false);
+  expect(f.host.ledger.goals("grand")).toHaveLength(0);
+  await f.change({ ...initial, projects: initial.projects.map(project => ({ ...project, available: false })) });
+  expect(chip()).toContain("Send to Atlas Manager");
+  await send();
+  expect(f.host.grand).not.toHaveBeenCalled();
+  expect(f.submissions[1]).toBe(f.submissions[0]);
+  expect(f.disk().filter(block => block.monoGoalSubmission)).toHaveLength(1);
+  expect(f.source().blocks.filter(block => block.monoGoalSubmission)).toHaveLength(1);
+  expect(f.disk().find(block => block.id === `route-${f.submissions[0].userMessageId}`)?.text).toContain("Delivery blocked");
+  await f.saveChat();
+  expect(f.disk().filter(block => block.monoGoalSubmission)).toHaveLength(1);
+  expect(f.disk().at(-1)?.id).toBe("later-user");
+  expect(f.goals.deliver).not.toHaveBeenCalled();
+});
+
+it.each(["embedded", "floating"] as const)("refreshes the %s chip after proving a pre-save rejection before a fresh Send", async surface => {
+  const f = await fixture(surface, true, "before-write");
+  await send();
+  expect(f.disk().some(block => block.monoGoalSubmission)).toBe(false);
+  expect(f.source().blocks.some(block => block.monoGoalSubmission)).toBe(false);
+  expect(container.textContent).toContain("Database temporarily unavailable");
+  await f.change({ ...initial, projects: initial.projects.map(project => ({ ...project, available: false })) });
+  expect(chip()).toContain("Send to Atlas Manager");
+  await send();
+  expect(f.host.grand).not.toHaveBeenCalled();
+  expect(f.submissions[1]).toBe(f.submissions[0]);
+  expect(chip()).toContain("Send to Grand Orch");
+  expect(f.field.value).toBe("Fix Atlas checkout");
+  await send();
+  expect(f.host.grand).toHaveBeenCalledOnce();
+  expect(f.submissions[2].requestId).not.toBe(f.submissions[0].requestId);
+  expect(f.submissions[2].userMessageId).not.toBe(f.submissions[0].userMessageId);
+});
+
+it.each(["embedded", "floating"] as const)("blocks the %s original route while durable identity cannot be checked", async surface => {
+  const f = await fixture(surface, true, "after-write");
+  await send();
+  await f.change({ ...initial, projects: initial.projects.map(project => ({ ...project, available: false })) });
+  f.blockReads(true);
+  await send();
+  expect(chip()).toContain("Send to Atlas Manager");
+  expect(container.textContent).toContain("Checking previous send");
+  expect(container.textContent).toContain("Retry original");
+  expect(f.field.value).toBe("Fix Atlas checkout");
+  expect(f.host.grand).not.toHaveBeenCalled();
+  expect(f.submissions[1]).toBe(f.submissions[0]);
+  expect(f.disk().filter(block => block.monoGoalSubmission)).toHaveLength(1);
+  f.blockReads(false);
+  await send();
+  expect(f.host.grand).not.toHaveBeenCalled();
+  expect(f.submissions[2]).toBe(f.submissions[0]);
+  expect(f.disk().filter(block => block.monoGoalSubmission)).toHaveLength(1);
 });

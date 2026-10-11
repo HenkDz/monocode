@@ -193,3 +193,22 @@ it("merges saved and unsaved tails when an initially empty Mono still has a null
   const blank = { ...live, blocks: [{ id: "unsaved", role: "user" as const, text: "New chat" }] };
   expect(mergeMonoGoalRecoverySession(blank, []).blocks).toEqual(blank.blocks);
 });
+
+it("retains every unpublished durable goal in the writable tail while keeping older origins off the live page", () => {
+  const older: Block = { id: "older-origin", role: "user", text: "Older goal", monoGoalSubmission: {
+    ...submission, requestId: "older-request", userMessageId: "older-origin",
+  } };
+  const tail: Block = { id: "tail", role: "user", text: "Current chat" };
+  const unpublished: Block[] = ["unpublished-one", "unpublished-two"].map(id => ({
+    id, role: "user", text: "Unacknowledged goal", monoGoalSubmission: {
+      ...submission, requestId: id, userMessageId: id,
+    },
+  }));
+  const history = [older, tail, ...unpublished];
+  const live = { ...newSession("codex", "C:/synthetic/Atlas"), blocks: [tail],
+    monoTranscript: { before: 2, firstBlockId: tail.id } };
+  const full = mergeMonoGoalRecoverySession(live, history);
+  expect(full.blocks).toEqual(history);
+  expect(monoGoalRecoveryLiveSession(live, full, history).blocks).toEqual([tail, ...unpublished]);
+  expect(mergeMonoGoalRecoverySession({ ...live, blocks: [tail, unpublished[0]] }, history).blocks).toEqual(history);
+});

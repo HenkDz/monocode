@@ -33,7 +33,8 @@ describe("exact project routes", () => {
       { ...context().projects[0], name: "Atlas" },
       { ...context().projects[1], name: "Atlas API" },
     ] };
-    expect(decide("Fix Atlas API login", { context: ctx })).toMatchObject({ kind: "manager", project: { name: "Atlas API" } });
+    expect(decide("Fix Atlas API login", { context: ctx }))
+      .toMatchObject({ kind: "grand", reason: "More than one project mentioned" });
     expect(decide("Fix Atlases login")).toMatchObject({ kind: "grand" });
     expect(decide("Fix Atlas-old login")).toMatchObject({ kind: "grand" });
     ctx.projects[1].name = "Atlas";
@@ -41,6 +42,50 @@ describe("exact project routes", () => {
   });
   it.each(["Fix Atlas and Beacon", "Compare Atlas costs", "Atlas versus alternatives", "Update across projects", "Atlas compared to alternatives", "Update both repos"])("falls back for %s", text => {
     expect(decide(text)).toMatchObject({ kind: "grand" });
+  });
+  it.each(["Fix Atlas and Beacon.", "Fix Atlas. Update Beacon", "Fix Atlas... and Beacon"])("keeps sentence conflict %s at Grand", text => {
+    for (const override of ["auto", "manager"] as const)
+      for (const ctx of [context(), monoGoalRoutingContext(owner, roster, projects, ["C:/code/Beacon"]),
+        monoGoalRoutingContext(owner, roster.map(member => member.id === "beacon-manager" ? { ...member, archivedAt: 1 } : member), projects)])
+        expect(decide(text, { context: ctx, choice: { mode: "goal", override, projectId: "c:/code/atlas" } }))
+          .toMatchObject({ kind: "grand", reason: "More than one project mentioned" });
+  });
+  it.each([
+    { name: "Beacon API", text: "Fix Atlas and BEACON—\nAPI." },
+    { name: "Beacon-API", text: "Fix Atlas and Beacon API." },
+    { name: "API", text: "Fix Atlas capitalization" },
+    { name: "Go", text: "Fix Atlas goals" },
+  ])("conservatively blocks normalized substring $name", ({ name, text }) => {
+    const ctx = context();
+    ctx.projects[1].name = name;
+    for (const override of ["auto", "manager"] as const)
+      expect(decide(text, { context: ctx, choice: { mode: "goal", override, projectId: "c:/code/atlas" } }))
+        .toMatchObject({ kind: "grand", reason: "More than one project mentioned" });
+  });
+  it("keeps duplicate and empty normalized names conservative", () => {
+    const ctx = context();
+    ctx.projects[0].name = "Atlas API";
+    ctx.projects[1].name = "Atlas-API";
+    expect(decide("Fix Atlas API login", { context: ctx }))
+      .toMatchObject({ kind: "grand", reason: "More than one project mentioned" });
+    ctx.projects[1].name = "...";
+    expect(decide("Fix Atlas API login", { context: ctx }))
+      .toMatchObject({ kind: "grand", reason: "More than one project mentioned" });
+  });
+  it.each(["auto", "manager"] as const)("never selects one Manager for two names in punctuation contexts (%s)", override => {
+    const punctuation = ["", " ", ".", "...", "!", "?", ",", ";", ":", "-", "_", "/", "\\", "\n", "\t", '"', "`", "(", ")", "「", "」", "。", "—", "\u00a0"];
+    for (const [first, second] of [["Atlas", "Beacon"], ["مونو كود", "بوابة"], ["Atlas-API", "Beacon_UI"]]) {
+      const ctx = context();
+      ctx.projects[0].name = first;
+      ctx.projects[1].name = second;
+      for (const before of punctuation)
+        for (const after of punctuation) {
+          const text = `Fix ${before}${first}${after} and ${after}${second}${before}`;
+          const route = decide(text, { context: ctx, choice: { mode: "goal", override, projectId: ctx.projects[0].id } });
+          expect(route, JSON.stringify({ text, override })).toMatchObject({ kind: "grand" });
+          if (override === "manager") expect(route.reason).toBe("More than one project mentioned");
+        }
+    }
   });
   it.each([
     "C:/code/Atlas", "c:\\CODE\\ATLAS\\", "C:/code/Beacon/src/index.ts",
@@ -54,10 +99,14 @@ describe("exact project routes", () => {
   ])("requires explicit selection for path-like token %s", path => {
     for (const text of [`Update ${path}`, `Update Atlas and ${path}`])
       expect(decide(text)).toMatchObject({ kind: "grand", reason: "Contains file paths: choose a project or send to Grand Orchestrator" });
-    expect(decide(`Update ${path}`, {
+    const selected = decide(`Update ${path}`, {
       choice: { mode: "goal", override: "manager", projectId: "c:/code/atlas" },
-    })).toMatchObject({ kind: "manager", project: { name: "Atlas" },
-      reason: "Contains file paths: routed to Atlas because you selected it" });
+    });
+    expect(selected).toMatchObject(path.toLowerCase().includes("beacon")
+      ? { kind: "grand", reason: path.toLowerCase().includes("atlas")
+        ? "More than one project mentioned" : "Selected project differs from the text" }
+      : { kind: "manager", project: { name: "Atlas" },
+        reason: "Contains file paths: routed to Atlas because you selected it" });
   });
   it("keeps paths at Grand when their project is unavailable", () => {
     expect(decide("Update Atlas and C:/code/Beacon/src/index.ts", {
@@ -192,7 +241,7 @@ describe("shared user submission boundary", () => {
   });
   it("delivers a path-bearing goal only after explicit project selection and preserves its reason", async () => {
     const f = setup();
-    f.input.text = "Fix C:/code/Beacon/src/index.ts";
+    f.input.text = "Fix src/index.ts";
     f.input.submission.choice = { mode: "goal", override: "manager", projectId: f.project.id };
     f.input.submission.reason = "Contains file paths: routed to Atlas because you selected it";
     expect(await submitMonoGoal(f.input, f.host)).toBe(true);
@@ -296,8 +345,8 @@ describe("shared user submission boundary", () => {
     f.host.resolve.mockImplementationOnce(async () => {
       f.setContext({ ownerId: "grand", projects: [] }); return f.project;
     });
-    await submitMonoGoal(f.input, f.host);
-    expect(f.host.grand).toHaveBeenCalledOnce();
+    expect(await submitMonoGoal(f.input, f.host)).toBe(false);
+    expect(f.host.grand).not.toHaveBeenCalled();
     expect(f.saved.size).toBe(0);
     const next = setup();
     next.host.persistOrigin.mockImplementationOnce(async () => { next.setContext({ ownerId: "grand", projects: [] }); });

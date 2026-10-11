@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 
 for (const surface of ["embedded", "floating"]) {
   for (const theme of ["dark", "light"]) {
-    test(`${surface} goal route, override and submission in ${theme}`, async ({
+    test(`${surface} goal route, conflict, override and submission in ${theme}`, async ({
       page,
     }, testInfo) => {
       const errors: string[] = [];
@@ -33,7 +33,18 @@ for (const surface of ["embedded", "floating"]) {
       const composer = page.getByRole("textbox", {
         name: "Message Grand Orchestrator", exact: true,
       });
-      await composer.fill("Fix DZDistro and C:/fixtures/monocode/../other/src/index.ts");
+      const conflicts = [
+        "Fix DZDistro and MonoCode.",
+        "Fix DZDistro. Update MonoCode",
+        "Fix DZDistro... and MonoCode",
+      ];
+      for (const text of conflicts) {
+        await composer.fill(text);
+        await expect(page.getByRole("status")).toContainText("Send to Grand Orch");
+        await expect(page.getByRole("status")).toContainText("More than one project mentioned");
+      }
+      const pathGoal = "Fix DZDistro and C:/fixtures/work/../other/src/index.ts";
+      await composer.fill(pathGoal);
       await expect(page.getByRole("status")).toContainText("Send to Grand Orch");
       await expect(page.getByRole("status")).toContainText("Contains file paths");
       await page
@@ -51,6 +62,18 @@ for (const surface of ["embedded", "floating"]) {
       await page
         .getByRole("option", { name: "DZDistro Manager", exact: true })
         .click();
+      for (const text of conflicts) {
+        await composer.fill(text);
+        await expect(page.getByRole("status")).toContainText("Send to Grand Orch");
+        await expect(page.getByRole("status")).toContainText("More than one project mentioned");
+      }
+      await expect(
+        page.getByRole("button", { name: "Goal route: DZDistro Manager", exact: true }),
+      ).toBeVisible();
+      await page.screenshot({
+        path: testInfo.outputPath(`${surface}-${theme}-conflict.png`),
+      });
+      await composer.fill(pathGoal);
       await expect(page.getByRole("status")).toContainText(
         "Contains file paths: routed to DZDistro because you selected it",
       );

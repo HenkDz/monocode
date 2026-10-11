@@ -23,7 +23,7 @@ import { resolveModel } from "../../../features/sessions/model/models";
 import type { HarnessEvent } from "./types";
 import { usageLimitFromError } from "../../../features/sessions/model/usageLimit";
 import { parseTeamMessage } from "../../../features/sessions/model/teamMessage";
-import { captureTurnEvent } from "../../../features/agents/model/turnMetrics";
+import { captureTurnEvent, currentTurnIndex } from "../../../features/agents/model/turnMetrics";
 
 /** Apply one delivery batch without copying the transcript for every token. */
 export function applyHarnessEvents(
@@ -509,7 +509,7 @@ export function stopStreaming(session: Session, endedAt = Date.now()): Session {
     compacting: false,
     turnReady: false,
     pendingQuestion: undefined,
-    blocks: stampTurnDuration(settled.blocks.map(stopBlockProgress), endedAt),
+    blocks: stampTurnDuration(settled, endedAt).map(stopBlockProgress),
   };
 }
 
@@ -678,17 +678,9 @@ function stopBlockProgress(block: Block): Block {
   };
 }
 
-function stampTurnDuration(blocks: Block[], endedAt: number): Block[] {
-  let lastUser = -1;
-  for (let i = blocks.length - 1; i >= 0; i--) {
-    const block = blocks[i];
-    // A message sent mid-turn joined it; the turn is timed from its start.
-    if (block.role === "user" && block.sentAt != null) continue;
-    if (block.role === "user") {
-      lastUser = i;
-      break;
-    }
-  }
+function stampTurnDuration(session: Session, endedAt: number): Block[] {
+  const blocks = session.blocks;
+  const lastUser = currentTurnIndex(session);
   if (lastUser < 0) return blocks;
   const user = blocks[lastUser];
   if (user.durationMs != null || user.startedAt == null) return blocks;

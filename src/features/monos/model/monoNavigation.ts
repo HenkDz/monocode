@@ -32,8 +32,9 @@ export function memberMonoState(runs: readonly OrchestrationRun[], memberId: str
   const tasks = memberTasks(runs, memberId);
   const task = tasks.find(t => ["queued", "running", "cancelling"].includes(t.status)) ?? tasks[0];
   const session = sessions.find(s => s.id === memberSessionId);
-  const own = session && monoState(session);
-  const worker = monoState(sessions.find(s => s.id === task?.sessionId), { task, tasks });
+  const workerSession = sessions.find(s => s.id === task?.sessionId);
+  const own = session && monoState({ ...session, codexStorageError: session.codexStorageError ?? workerSession?.codexStorageError });
+  const worker = monoState(workerSession, { task, tasks });
   if (own?.status === "needs-you" || worker.status === "needs-you") return own?.status === "needs-you" ? own : worker;
   if (own && own.liveState?.status !== "idle") return own;
   return worker;
@@ -54,7 +55,7 @@ export function monoLiveState(roster: readonly Mono[], runs: readonly Orchestrat
       pauseReason: owned.find(run => run.status === "paused")?.lastPauseReason,
     });
     const decision = decisions.find(value => value.owner.id === entry.id);
-    return { mono: entry, state: decision ? { ...state, status: "needs-you" as const, liveState: { status: "needs-you" as const, reason: "decision" as const, detail: decision.resume?.reason ?? state.activity }, activity: decision.resume?.reason ?? state.activity } : state };
+    return { mono: entry, state: decision && state.status !== "needs-you" ? { ...state, status: "needs-you" as const, liveState: { status: "needs-you" as const, reason: "decision" as const, detail: decision.resume?.reason ?? state.activity }, activity: decision.resume?.reason ?? state.activity } : state };
   });
   const own = states.find(entry => entry.mono.id === monoId)!.state;
   const below = states.filter(entry => entry.mono.id !== monoId);

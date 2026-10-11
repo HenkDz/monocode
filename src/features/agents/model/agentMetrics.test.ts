@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { Block } from "../../sessions/model/session";
+import type { Block, HarnessId } from "../../sessions/model/session";
 import type { MonoManagerGoal } from "../../monos/model/monoManagerGoals";
 import { workspaceIdentity, type OrchestrationDispatch, type OrchestrationRun, type OrchestrationTask } from "../../orchestration/model/orchestrationState";
 import { dispatchTurnSnapshot, selectAgentMetrics, selectDelegationEdges, selectGoalMetrics, selectTaskMetrics } from "./agentMetrics";
 
 const turn = (id: string, startedAt: number, inputTokens = 10): Block => ({
   id, role: "user", text: "Task", startedAt, durationMs: 50,
+  turnModel: { harness: "codex", id: "test", name: "Test" },
   turnMetrics: { inputTokens, outputTokens: 5, cacheReadTokens: 8, modelCalls: 2,
     firstTokenAt: startedAt + 10, endedAt: startedAt + 50, compactions: [] },
 });
@@ -33,7 +34,7 @@ describe("agent metrics rollups", () => {
   it("does not invent ongoing work for an inactive historical turn missing its end", () => {
     expect(selectAgentMetrics({ id: "worker", blocks: [
       { id: "interrupted", role: "user", text: "Old work", startedAt: 100 },
-    ] }, 999_000)).toEqual({ turns: 1, startedAt: 100, elapsedMs: 0, partial: true });
+    ] }, 999_000)).toEqual({ turns: 1, startedAt: 100, elapsedMs: 0, inputTokenConvention: "total-including-cache", partial: true });
   });
   it("retains unknown counters and ignores drafts and non-turn messages", () => {
     const metrics = selectAgentMetrics({ id: "worker", busy: true, blocks: [
@@ -41,7 +42,7 @@ describe("agent metrics rollups", () => {
       { ...turn("draft", 1), draft: true },
       { id: "unknown", role: "user", text: "Task", startedAt: 100 },
     ] }, 175);
-    expect(metrics).toEqual({ turns: 1, startedAt: 100, elapsedMs: 75, partial: true });
+    expect(metrics).toEqual({ turns: 1, startedAt: 100, elapsedMs: 75, inputTokenConvention: "total-including-cache", partial: true });
     expect(metrics.inputTokens).toBeUndefined();
     expect(metrics.modelCalls).toBeUndefined();
     expect(metrics.compactions).toBeUndefined();
@@ -65,8 +66,8 @@ describe("agent metrics rollups", () => {
   it("counts repeated user-turn references once", () => {
     const block = turn("same", 100);
     expect(selectAgentMetrics({ id: "worker", blocks: [block, block] })).toMatchObject({ turns: 1, inputTokens: 10 });
-    const attempts = [dispatch("one", 100, { turnBlockId: "same", turnStartedAt: 100, turnMetrics: block.turnMetrics }),
-      dispatch("duplicate", 101, { turnBlockId: "same", turnStartedAt: 100, turnMetrics: block.turnMetrics })];
+    const attempts = [dispatch("one", 100, { turnBlockId: "same", turnStartedAt: 100, turnMetrics: block.turnMetrics, turnModel: block.turnModel }),
+      dispatch("duplicate", 101, { turnBlockId: "same", turnStartedAt: 100, turnMetrics: block.turnMetrics, turnModel: block.turnModel })];
     expect(selectTaskMetrics(task, attempts, [])).toMatchObject({ turns: 1, inputTokens: 10 });
   });
 
@@ -92,7 +93,7 @@ describe("agent metrics rollups", () => {
 
   it("uses persisted snapshots for unloaded chats and preserves zero counters", () => {
     const attempt = dispatch("one", 100, { turnStartedAt: 110, finishedAt: 160, firstTokenAt: 120,
-      durationMs: 50, turnMetrics: { inputTokens: 0, outputTokens: 0, modelCalls: 0, compactions: [] } });
+      durationMs: 50, inputTokenConvention: "includes-cache-read", turnMetrics: { inputTokens: 0, outputTokens: 0, modelCalls: 0, compactions: [] } });
     expect(selectTaskMetrics(task, [attempt], [])).toMatchObject({ turns: 1, elapsedMs: 50, inputTokens: 0, outputTokens: 0,
       modelCalls: 0, firstTokenAt: 120, endedAt: 160, compactions: 0, partial: false });
     expect(selectTaskMetrics(task, [dispatch("missing", 100)], [])).toMatchObject({ turns: 0, partial: true });
@@ -117,6 +118,78 @@ describe("agent metrics rollups", () => {
     expect(selectGoalMetrics(goal, [run([task], [dispatch("one", 200, { turnBlockId: "worker-turn" })])],
       [{ id: "worker", blocks: [turn("worker-turn", 200)] }])).toMatchObject({ turns: 1, inputTokens: 10, partial: true });
   });
+
+  it("normalizes mixed-provider agent, task and goal input using each saved turn's harness", () => {
+    const manager = turn("grand-turn", 100, 100);
+    manager.turnMetrics!.cacheReadTokens = 80;
+    const worker = turn("worker-turn", 200, 20);
+    worker.turnModel = { harness: "claude", id: "claude-test", name: "Claude test" };
+    worker.turnMetrics!.cacheReadTokens = 80;
+    const replacedSession = { id: "worker", harness: "codex" as const, blocks: [manager, worker] };
+    const expected = { inputTokens: 200, cacheReadTokens: 160, inputTokenConvention: "total-including-cache", partial: false };
+    expect(selectAgentMetrics(replacedSession)).toMatchObject(expected);
+    expect(selectTaskMetrics(task, [], [replacedSession])).toMatchObject(expected);
+    const linkedTask = { ...task, managerTurnBlockId: manager.id };
+    expect(selectGoalMetrics(goal, [run([linkedTask], [dispatch("one", 200, { turnBlockId: worker.id })])],
+      [{ id: "grand-session", blocks: [manager] }, { ...replacedSession, blocks: [worker] }])).toMatchObject(expected);
+    expect(manager.turnMetrics!.inputTokens).toBe(100);
+    expect(worker.turnMetrics!.inputTokens).toBe(20);
+  });
+
+  it.each<HarnessId>(["codex", "claude", "pi", "omp", "opencode", "fx", "grok", "cursor", "hermes", "antigravity", "devin"])(
+    "includes cache writes in normalized %s input without changing raw counters", harness => {
+      const block = turn("one", 100, 100);
+      block.turnModel!.harness = harness;
+      block.turnMetrics!.cacheReadTokens = 80;
+      block.turnMetrics!.cacheWriteTokens = 10;
+      expect(selectAgentMetrics({ id: "worker", blocks: [block] })).toMatchObject({
+        inputTokens: harness === "codex" ? 110 : 190, cacheReadTokens: 80, cacheWriteTokens: 10, partial: false,
+      });
+      expect(block.turnMetrics!.inputTokens).toBe(100);
+    },
+  );
+
+  it.each<HarnessId>(["codex", "claude"])("retains %s snapshot provenance after unloading and worker replacement", harness => {
+    const block = turn("worker-turn", 200, 100);
+    block.turnModel!.harness = harness;
+    block.turnMetrics!.cacheReadTokens = 80;
+    block.turnMetrics!.cacheWriteTokens = 10;
+    const attempt = dispatch("one", 200, { turnBlockId: block.id });
+    const session = { id: "worker", harness: "opencode" as const, blocks: [block] };
+    const loaded = selectTaskMetrics(task, [attempt], [session]);
+    const snapshot = dispatchTurnSnapshot(attempt, session);
+    expect(snapshot).toMatchObject({ turnModel: block.turnModel,
+      inputTokenConvention: harness === "codex" ? "includes-cache-read" : "excludes-cache",
+      turnMetrics: { inputTokens: 100, cacheReadTokens: 80, cacheWriteTokens: 10 } });
+    const persisted = JSON.parse(JSON.stringify({ ...attempt, ...snapshot })) as OrchestrationDispatch;
+    const replacement = { ...task, harness: "pi" as const, sessionId: "replacement", managerTurnBlockId: "grand-turn" };
+    const unloaded = selectTaskMetrics(replacement, [persisted], []);
+    expect(unloaded).toEqual(loaded);
+    expect(unloaded).toMatchObject({ inputTokens: harness === "codex" ? 110 : 190, partial: false });
+    const manager = turn("grand-turn", 100, 100);
+    expect(selectGoalMetrics(goal, [run([replacement], [persisted])], [{ id: "grand-session", blocks: [manager] }])).toMatchObject({
+      inputTokens: harness === "codex" ? 210 : 290, inputTokenConvention: "total-including-cache", partial: false,
+    });
+  });
+
+  it("includes cache-only input when observed uncached input is zero", () => {
+    const block = turn("cached", 100, 0);
+    block.turnModel!.harness = "claude";
+    block.turnMetrics!.cacheReadTokens = 80;
+    block.turnMetrics!.cacheWriteTokens = 10;
+    expect(selectAgentMetrics({ id: "worker", blocks: [block] })).toMatchObject({ inputTokens: 90, partial: false });
+    expect(block.turnMetrics!.inputTokens).toBe(0);
+  });
+
+  it("leaves legacy input unknown when neither the turn nor snapshot retained its convention", () => {
+    const block = { ...turn("legacy", 100, 20), turnModel: undefined };
+    const metrics = selectAgentMetrics({ id: "worker", blocks: [block] });
+    expect(metrics).toMatchObject({ turns: 1, outputTokens: 5, cacheReadTokens: 8, partial: true });
+    expect(metrics.inputTokens).toBeUndefined();
+    const attempt = dispatch("one", 100, { turnBlockId: block.id, turnStartedAt: 100,
+      durationMs: block.durationMs, turnMetrics: block.turnMetrics });
+    expect(selectTaskMetrics({ ...task, harness: "claude" }, [attempt], [])).toEqual(metrics);
+  });
 });
 
 it("exposes delegation lifecycle timestamps and leaves legacy turn boundaries unknown", () => {
@@ -132,5 +205,6 @@ it("exposes delegation lifecycle timestamps and leaves legacy turn boundaries un
 it("snapshots only the dispatch's exact turn", () => {
   const snapshot = dispatchTurnSnapshot(dispatch("one", 100, { turnBlockId: "first" }),
     { id: "worker", blocks: [turn("stale", 1, 1000), turn("first", 100), turn("later", 200, 2000)] });
-  expect(snapshot).toMatchObject({ turnBlockId: "first", turnStartedAt: 100, durationMs: 50, firstTokenAt: 110, turnMetrics: { inputTokens: 10 } });
+  expect(snapshot).toMatchObject({ turnBlockId: "first", turnStartedAt: 100, durationMs: 50, firstTokenAt: 110,
+    turnModel: { harness: "codex" }, inputTokenConvention: "includes-cache-read", turnMetrics: { inputTokens: 10 } });
 });

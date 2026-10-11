@@ -2701,7 +2701,8 @@ it("records delegation boundaries and observed Manager delivery on the exact wor
   expect(task).toMatchObject({ monoGoalId: "goal", managerTurnBlockId: "manager-turn" });
   f.lead.queuedMessages = undefined;
   expect(f.manager.run("lead")!.dispatches![0]).toMatchObject({ dispatchedAt: 100 });
-  worker.blocks.push({ id: "worker-turn", role: "user", text: "Task", startedAt: 110 });
+  worker.blocks.push({ id: "worker-turn", role: "user", text: "Task", startedAt: 110,
+    turnModel: { harness: "claude", id: "claude-test", name: "Claude test" } });
   now = 120;
   f.manager.observe(worker.id, { type: "turn.started", providerTurnId: "provider-turn" });
   now = 130;
@@ -2716,7 +2717,8 @@ it("records delegation boundaries and observed Manager delivery on the exact wor
   f.completions.get(worker.id)!({ status: "completed", text: "Done" });
   await vi.waitFor(() => expect(f.saved.get("lead")!.dispatches![0].finishedAt).toBe(150));
   expect(f.saved.get("lead")!.dispatches![0]).toMatchObject({ turnBlockId: "worker-turn", turnStartedAt: 110,
-    firstTokenAt: 130, durationMs: 40, turnMetrics: { inputTokens: 20, outputTokens: 5 } });
+    firstTokenAt: 130, durationMs: 40, turnModel: { harness: "claude", id: "claude-test", name: "Claude test" },
+    inputTokenConvention: "excludes-cache", turnMetrics: { inputTokens: 20, outputTokens: 5 } });
   expect(f.manager.run("lead")!.dispatches![0].reportedAt).toBeUndefined();
   f.lead.busy = false;
   f.manager.sync();
@@ -2738,9 +2740,11 @@ it("retains cancelled dispatch metrics without reporting an undelivered result",
   const dispatch = f.manager.run("lead")!.dispatches![0];
   const worker = f.sessions.find(session => session.id === task.sessionId)!;
   worker.blocks.push({ id: "worker-turn", role: "user", text: "Task", startedAt: dispatch.startedAt + 1,
+    turnModel: { harness: "codex", id: "codex-test", name: "Codex test" },
     durationMs: 30, turnMetrics: { inputTokens: 10, outputTokens: 5 } });
   await f.manager.cancelTask("lead", task.id);
   expect(f.saved.get("lead")!.dispatches![0]).toMatchObject({ state: "cancelled", turnBlockId: "worker-turn", durationMs: 30,
+    turnModel: { harness: "codex", id: "codex-test", name: "Codex test" }, inputTokenConvention: "includes-cache-read",
     turnMetrics: { inputTokens: 10, outputTokens: 5 } });
   expect(f.saved.get("lead")!.dispatches![0].finishedAt).toBeDefined();
   expect(f.saved.get("lead")!.dispatches![0].reportedAt).toBeUndefined();

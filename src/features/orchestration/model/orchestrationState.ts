@@ -1,6 +1,6 @@
 import { pathKey } from "../../../shared/lib/paths";
 import type { OrchestrationChoice } from "./orchestrationPlan";
-import type { HarnessId, TurnMetrics } from "../../sessions/model/session";
+import type { HarnessId, TurnMetrics, TurnModel } from "../../sessions/model/session";
 
 export type TaskStatus =
   | "queued"
@@ -65,6 +65,9 @@ export type OrchestrationDispatch = {
   reportedTurnBlockId?: string;
   /** Retain observed accounting when a worker conversation is not loaded. */
   turnMetrics?: TurnMetrics;
+  turnModel?: TurnModel;
+  /** Convention of the raw snapshot, independent of later task/provider changes. */
+  inputTokenConvention?: "includes-cache-read" | "excludes-cache";
   durationMs?: number;
   result?: string;
   error?: string;

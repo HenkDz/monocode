@@ -76,9 +76,12 @@ export function acknowledgeMonoMessage(
           : block,
       )
     : [...remaining.blocks, { ...accepted, id: message.id }];
-  return options.mode === "new-turn"
-    ? { ...appended, blocks }
-    : { ...remaining, blocks };
+  if (options.mode === "new-turn") {
+    const owner = blocks.find(block => block.id === (message.blockId ?? message.id));
+    // A queued bubble can precede the previous turn's final reply or failure.
+    return { ...appended, blocks: owner ? [...blocks.filter(block => block !== owner), owner] : blocks };
+  }
+  return { ...remaining, blocks };
 }
 
 export function monoMessageDeliveries(

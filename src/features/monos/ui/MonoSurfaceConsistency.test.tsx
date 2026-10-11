@@ -17,6 +17,12 @@ import { monoLook, MONO_STATUS_LABEL, type Mono } from "../model/mono";
 import { newSession, type Session } from "../../sessions/model/session";
 import type { OrchestrationRun, OrchestrationTask } from "../../orchestration/model/orchestrationState";
 import { publishCardSessions } from "../model/monoCards";
+import { MonoChatCard } from "./MonoChatCard";
+import { monoManagerGoals } from "../model/monoManagerGoals";
+import { OrchestrationSidebarAgents } from "../../orchestration/ui/OrchestrationSidebarAgents";
+import { summarizeOrchestration } from "../../orchestration/model/orchestrationSummary";
+import { SearchableProjectPicker } from "../../projects/ui/SearchableProjectPicker";
+import { selectAgentLiveState } from "../../agents/model/agentLiveState";
 
 vi.mock("../model/monoFiles", async original => ({ ...(await original<object>()), loadMonoFiles: vi.fn(async () => ({ soul: "", memory: "", topics: [] })) }));
 vi.mock("../../source-control/hooks/useProjectWorktrees", () => ({ useProjectWorktrees: () => ({ data: { worktrees: [{}] } }) }));
@@ -26,6 +32,59 @@ const roster: Mono[] = [
   { id: "m", role: "manager", name: "App Manager", sessionId: "manager-chat", reportsTo: "o", managerProject: "/app", projects: ["/app"], mascot: "cat", color: "#abc" },
   { id: "b", role: "member", name: "Backend", reportsTo: "m", projects: ["/app"], specialty: "Backend", mascot: "cat", color: "#abc" },
 ];
+
+it("keeps a queued Reviewer's storage blocker canonical on sidebar, project row, card, member header and compact picker", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const reviewer = { ...roster[2], name: "Reviewer", sessionId: "reviewer-chat" };
+  const members = [...roster.slice(0, 2), reviewer];
+  localStorage.setItem("monocode:mono-roster", JSON.stringify(members));
+  const session = { ...newSession("codex", "/app"), id: reviewer.sessionId, codexStorageError: "Repair AGENTS.md before the queued review", queuedMessages: [{ id: "q", text: "Review the changes", attachments: [] }] };
+  const task = { id: "review", title: "Reviewer", memberId: reviewer.id, memberName: "Reviewer", sessionId: session.id, harness: "codex", model: "codex:gpt-5.4", status: "queued" } as OrchestrationTask;
+  const run = { leadId: "engine", ownerMonoId: "m", cwd: "/app", projectManager: true, status: "paused", tasks: [task], dispatches: [] } as unknown as OrchestrationRun;
+  const runs = [run], sessions = [session];
+  const snapshot = vi.spyOn(orchestrator, "snapshot").mockReturnValue(runs);
+  const hydrate = vi.spyOn(monoManagerGoals, "hydrate").mockResolvedValue({ version: 1, goals: [], receipts: {} });
+  const metrics = { turns: 1, elapsedMs: 1000, inputTokens: 100, cacheReadTokens: 80, outputTokens: 10, modelCalls: 2, compactions: 1, partial: true };
+  publishCardSessions([{ id: session.id, title: "Reviewer", harness: "codex", busy: false, needsInput: false, liveState: selectAgentLiveState(session), taskMetrics: { review: metrics } }], noop);
+  const state = monoLiveState(members, runs, sessions, reviewer.id);
+  const look = monoLook(reviewer);
+  const host = document.createElement("div"), root = createRoot(host);
+  document.body.append(host);
+  try {
+    await act(async () => root.render(<>
+      <section data-surface="sidebar"><OrchestrationSidebarAgents leadId={run.leadId} summary={summarizeOrchestration(run, sessions)} /></section>
+      <section data-surface="project"><ProjectManagerRow project="/app" sessions={sessions} onOpen={async () => {}} /></section>
+      <section data-surface="card"><MonoChatCard monoId={reviewer.id} blockId="session-card" card={{ type: "session", sessionId: session.id }} /></section>
+      <section data-surface="header"><MonoHeader agent={look} state={state} /></section>
+      <section data-surface="picker"><SearchableProjectPicker cwd="/app" recents={[]} compact onSelectProject={noop} monos={{ activeId: reviewer.id, items: [{ id: reviewer.id, name: look.name, mascot: look.mascot, color: look.color, status: state.status, state }], onOpen: noop }} /></section>
+    </>));
+    const rows = [
+      host.querySelector('[data-surface="sidebar"] [aria-label="Agent details: Reviewer"]')!,
+      host.querySelector('[data-surface="project"] [aria-label="Open Reviewer"]')!,
+      host.querySelector('[data-surface="card"] button')!,
+      host.querySelector('[data-surface="header"] [data-mono-status]')!,
+      host.querySelector('[data-surface="picker"] button')!,
+    ];
+    for (const row of rows) {
+      const label = `${row.textContent ?? ""} ${row.getAttribute("aria-label") ?? ""}`;
+      expect(label).toContain("Blocked · storage");
+      expect(label).not.toContain("Idle");
+    }
+    for (const row of rows.filter((element): element is HTMLButtonElement => element instanceof HTMLButtonElement)) {
+      const id = row.getAttribute("aria-describedby")!;
+      expect(document.getElementById(id)?.textContent).toContain("Blocked · storage");
+      expect(document.getElementById(id)?.textContent).toContain(session.codexStorageError);
+      await act(async () => row.focus());
+      expect(document.getElementById(id)?.getAttribute("role")).toBe("tooltip");
+      expect(row.querySelector("button, [tabindex]")).toBeNull();
+    }
+    expect(rows[0].getAttribute("aria-describedby")).not.toBeNull();
+    await act(async () => (rows[0] as HTMLButtonElement).focus());
+    expect(document.getElementById(rows[0].getAttribute("aria-describedby")!)?.textContent).toContain("Model calls 2 · Compactions 1");
+  } finally {
+    await act(async () => root.unmount()); host.remove(); publishCardSessions([], noop); snapshot.mockRestore(); hydrate.mockRestore(); localStorage.clear(); vi.unstubAllGlobals();
+  }
+});
 
 it("uses the reviewed lifecycle on cards, Activity, recent tasks, org task rows, worktrees and crew feed", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);

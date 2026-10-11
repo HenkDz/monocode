@@ -11,6 +11,8 @@ import { Shimmer } from "../../shared/ui/Shimmer";
 import { useAnimatedReorder } from "../../shared/hooks/useAnimatedReorder";
 import { MonoRailMascot } from "../../features/monos/ui/MonoRailMascot";
 import { AgentStatusLabel } from "../../features/agents/ui/AgentStatusLabel";
+import { AgentDetailTooltip } from "../../features/agents/ui/AgentDetailTooltip";
+import { agentLiveStateTooltip } from "../../features/agents/model/agentLiveState";
 import { MonoIntroPopover } from "../../features/monos/ui/MonoIntro";
 import { ProjectBackgroundDialog } from "../../features/projects/ui/ProjectBackgroundDialog";
 import { monoBackgroundKey } from "../../features/monos/model/monoBackground";
@@ -183,6 +185,7 @@ export function MonoRailSection({
                 });
               }}
             >
+              <AgentDetailTooltip detail={state.liveState && agentLiveStateTooltip(state.liveState)}>
               <button
                 type="button"
                 title={[look.name, projects, monoLiveStatusLabel(state), state.liveState?.detail ?? status, monoTeamWorkingLabel(state), unseen ? unreadLabel(unseen) : undefined].filter(Boolean).join("\n")}
@@ -231,6 +234,7 @@ export function MonoRailSection({
                   </span>
                 ) : null}
               </button>
+              </AgentDetailTooltip>
               <button
                 type="button"
                 data-no-drag

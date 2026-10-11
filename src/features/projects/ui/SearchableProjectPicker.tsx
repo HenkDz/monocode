@@ -35,6 +35,8 @@ import { ProjectMascot } from "./ProjectMascot";
 import { PixelMascot } from "./PixelMascot";
 import { MonoRailMascot } from "../../monos/ui/MonoRailMascot";
 import { monoLiveStatusLabel, type MonoStatus, type MonoState } from "../../monos/model/mono";
+import { AgentDetailTooltip } from "../../agents/ui/AgentDetailTooltip";
+import { agentLiveStateTooltip } from "../../agents/model/agentLiveState";
 
 /** A Mono the picker offers beside the projects. */
 export type PickerMono = {
@@ -150,6 +152,7 @@ export function SearchableProjectPicker({
         className ? ` ${className}` : ""
       }`}
     >
+      <AgentDetailTooltip detail={activeMono?.state?.liveState && agentLiveStateTooltip(activeMono.state.liveState)}>
       <button
         type="button"
         title={
@@ -222,6 +225,7 @@ export function SearchableProjectPicker({
           </>
         )}
       </button>
+      </AgentDetailTooltip>
       {open ? (
         <ProjectPickerPopover
           anchor={pickerRef}

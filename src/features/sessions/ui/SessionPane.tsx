@@ -23,6 +23,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { Composer } from "./Composer";
+import { selectAgentLiveState } from "../../agents/model/agentLiveState";
 import type { Worktree } from "../../source-control/model/worktrees";
 import {
   orchestrator,
@@ -839,7 +840,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
       onPlaceInFolder={(target) => onPlaceSessionInFolder(session.id, target)}
       queuedMessages={session.queuedMessages}
       queueStatus={session.queueStatus}
-      storageBlocked={!!session.codexStorageError}
+      liveState={selectAgentLiveState(session)}
       onDeleteQueuedMessage={(messageId) =>
         onDeleteQueuedMessage(session.id, messageId)
       }

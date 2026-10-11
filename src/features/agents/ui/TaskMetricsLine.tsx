@@ -7,6 +7,18 @@ import {
   type AgentLiveState,
 } from "../model/agentLiveState";
 
+export function taskMetricsDetail(metrics: AgentMetrics | undefined, state: AgentLiveState): string {
+  return [
+    metrics?.inputTokens !== undefined && `${metrics.inputTokenConvention ? "Total input (including cache)" : "Input"} ${metrics.inputTokens.toLocaleString()}`,
+    metrics?.cacheReadTokens !== undefined && `Cached ${metrics.cacheReadTokens.toLocaleString()}`,
+    metrics?.outputTokens !== undefined && `Output ${metrics.outputTokens.toLocaleString()}`,
+    metrics?.modelCalls !== undefined && `Model calls ${metrics.modelCalls}`,
+    metrics?.compactions !== undefined && `Compactions ${metrics.compactions}`,
+    metrics?.partial && "Recorded metrics only; some counters are unavailable",
+    agentLiveStateTooltip(state),
+  ].filter(Boolean).join(" · ");
+}
+
 export function TaskMetricsLine({
   metrics,
   state,
@@ -34,20 +46,10 @@ export function TaskMetricsLine({
     output !== undefined && `${output.toLocaleString()} out`,
   ].filter(Boolean);
   const tokens = counts.length ? `${counts.join(" / ")} tokens` : "Tokens unavailable";
-  const detail = [
-    input !== undefined && `Input ${input.toLocaleString()}`,
-    metrics?.cacheReadTokens !== undefined &&
-      `Cached ${metrics.cacheReadTokens.toLocaleString()}`,
-    output !== undefined && `Output ${output.toLocaleString()}`,
-    metrics?.modelCalls !== undefined && `Model calls ${metrics.modelCalls}`,
-    metrics?.compactions !== undefined && `Compactions ${metrics.compactions}`,
-    metrics?.partial && "Recorded metrics only; some counters are unavailable",
-    agentLiveStateTooltip(state),
-  ].filter(Boolean).join(" · ");
   return (
     <p
       data-task-metrics
-      title={detail}
+      title={taskMetricsDetail(metrics, state)}
       className="min-w-0 truncate text-[11px] tabular-nums text-content/50"
     >
       {startedAt === undefined || (!ticking && endedAt === undefined && !metrics?.elapsedMs)

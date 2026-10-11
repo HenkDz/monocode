@@ -115,6 +115,23 @@ describe("turn metrics capture", () => {
     ).toBeUndefined();
   });
 
+  it.each([0, undefined])("weights fully cached requests with uncached input %s", inputTokens => {
+    let session = appendUser(newSession("pi", "/fixture"), "Run the fixture");
+    session = applyHarnessEvent(session, {
+      type: "turn.metrics", modelCallId: "first", inputTokens,
+      cacheReadTokens: 100, cacheWriteTokens: 0, cacheHitPercent: 100,
+    });
+    session = applyHarnessEvent(session, {
+      type: "turn.metrics", modelCallId: "second", inputTokens,
+      cacheReadTokens: 50, cacheWriteTokens: 50, cacheHitPercent: 50,
+    });
+    expect(session.blocks[0].turnMetrics).toMatchObject({
+      cacheReadTokens: 150, cacheWriteTokens: 50,
+      cacheHitPercent: 75, modelCalls: 2,
+    });
+    expect(session.blocks[0].turnMetrics?.inputTokens).toBe(inputTokens);
+  });
+
   it("records compaction lifecycle fixtures once and clears live activity when stopped", () => {
     let session = turn();
     const started = mapCodexNotification("item/started", {

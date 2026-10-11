@@ -118,6 +118,7 @@ import { HandoffMiniCard } from "./HandoffMiniCard";
 import { ModelControlPills, ModelPicker } from "./ModelPicker";
 import { QuestionForm } from "./QuestionForm";
 import { MessageQueue } from "./MessageQueue";
+import type { AgentLiveState } from "../../agents/model/agentLiveState";
 import { SkillPicker } from "../../skills/ui/SkillPicker";
 import { pathKey, projectKey } from "../../../shared/lib/paths";
 import { consumeQuoteRequest, type QuoteRequest } from "../model/quoteDraft";
@@ -241,7 +242,7 @@ type Props = {
   lastTurnRecall?: LastTurnRecall | null;
   queuedMessages?: QueuedMessage[];
   queueStatus?: MessageQueueStatus;
-  storageBlocked?: boolean;
+  liveState?: AgentLiveState;
   usageLimit?: UsageLimit;
   hotkeys?: boolean;
   onFocus: () => void;
@@ -366,7 +367,7 @@ export function Composer({
   lastTurnRecall = null,
   queuedMessages = [],
   queueStatus,
-  storageBlocked,
+  liveState,
   usageLimit,
   onFocus,
   onCwdChange,
@@ -1739,7 +1740,7 @@ export function Composer({
       <MessageQueue
         messages={queuedMessages}
         status={queueStatus}
-        storageBlocked={storageBlocked}
+        liveState={liveState}
         onDelete={onDeleteQueuedMessage}
         onEdit={onEditQueuedMessage}
         onEditingChange={onQueuedMessageEditingChange}

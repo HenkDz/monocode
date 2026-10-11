@@ -14,7 +14,8 @@ import {
 import { Check, ChevronDown, ChevronRight, CircleAlert } from "../../../shared/ui/icons";
 import { TerminalSpinner } from "../../sessions/ui/TerminalSpinner";
 import { AgentStatusLabel } from "../../agents/ui/AgentStatusLabel";
-import { TaskMetricsLine } from "../../agents/ui/TaskMetricsLine";
+import { TaskMetricsLine, taskMetricsDetail } from "../../agents/ui/TaskMetricsLine";
+import { AgentDetailTooltip } from "../../agents/ui/AgentDetailTooltip";
 import { agentLiveStateLabel, selectAgentLiveState, type AgentLiveState } from "../../agents/model/agentLiveState";
 import { selectTaskMetrics } from "../../agents/model/agentMetrics";
 import { cardSessionsSnapshot, subscribeCardSessions } from "../../monos/model/monoCards";
@@ -138,6 +139,7 @@ export function OrchestrationSidebarAgents({
               // Expanding lights the whole row, header and detail together.
               className={`rounded-md ${open ? "bg-selection" : ""}`}
             >
+              <AgentDetailTooltip detail={taskMetricsDetail(metrics, state)}>
               <button
                 type="button"
                 title={`${task.title} · ${HARNESS_TITLE[task.harness]} · ${model} · ${label}`}
@@ -191,6 +193,7 @@ export function OrchestrationSidebarAgents({
                   <AgentStatusLabel state={state} />
                 </span>
               </button>
+              </AgentDetailTooltip>
               <div className="pb-1 pl-6.5 pr-2">
                 <TaskMetricsLine state={state} metrics={metrics} startedAt={dispatch?.turnStartedAt ?? dispatch?.startedAt} endedAt={dispatch?.finishedAt ?? (dispatch && ["completed", "failed", "blocked", "interrupted", "cancelled"].includes(dispatch.state) ? dispatch.updatedAt : undefined)} />
               </div>

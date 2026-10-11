@@ -88,11 +88,21 @@ it("preserves storage blocking from the member chat or current worker above runn
   const chat = { ...newSession("codex", "/app"), id: "member-chat", codexStorageError: "hooks.json conflict" };
   const worker = { ...newSession("codex", "/app"), id: "worker-chat", busy: true };
   const working = [{ ...runs[0], tasks: [{ ...runs[0].tasks[1], status: "running", title: "Routing", prompt: "Routing" }] }] as OrchestrationRun[];
-  expect(memberMonoState(working, "backend", [worker, chat], chat.id)).toEqual({ status: "needs-you", storageBlocked: true });
-  expect(memberMonoState(working, "backend", [{ ...worker, codexStorageError: "hooks.json conflict" }, { ...chat, codexStorageError: undefined }], chat.id)).toEqual({ status: "needs-you", storageBlocked: true });
-  expect(memberMonoState(working, "backend", [worker, { ...chat, codexStorageError: undefined }], chat.id)).toEqual({ status: "working", activity: "Waiting for the next step" });
+  const blocked = { status: "needs-you", activity: "hooks.json conflict", liveState: { status: "blocked", reason: "storage", detail: "hooks.json conflict" } };
+  expect(memberMonoState(working, "backend", [worker, chat], chat.id)).toEqual(blocked);
+  expect(memberMonoState(working, "backend", [{ ...worker, codexStorageError: "hooks.json conflict" }, { ...chat, codexStorageError: undefined }], chat.id)).toEqual(blocked);
+  expect(memberMonoState(working, "backend", [{ ...worker, codexStorageError: "hooks.json conflict" }, { ...chat, codexStorageError: undefined, pendingQuestion: { requestId: 1, title: "Choose", questions: [] } }], chat.id)).toEqual(blocked);
+  expect(memberMonoState(working, "backend", [worker, { ...chat, codexStorageError: undefined }], chat.id)).toEqual({ status: "working", activity: "Thinking", liveState: { status: "thinking", detail: "Thinking" } });
   const roster = [{ id: "backend", role: "member", sessionId: chat.id, projects: [] }] as unknown as Mono[];
   expect(monoStatusLabel(monoLiveState(roster, working, [worker, chat], "backend"))).toBe("Blocked · storage");
+});
+
+it("keeps canonical blockers above rolled-up decisions in the same agent", () => {
+  const roster = [{ id: "reviewer", role: "member", sessionId: "reviewer-chat", projects: ["/app"] }] as Mono[];
+  const reviewer = { ...newSession("codex", "/app"), id: "reviewer-chat", codexStorageError: "Repair hooks.json", pendingQuestion: { requestId: 1, title: "Choose", questions: [] } };
+  const state = monoLiveState(roster, [], [reviewer], "reviewer");
+  expect(state.liveState).toEqual({ status: "blocked", reason: "storage", detail: "Repair hooks.json" });
+  expect(monoStatusLabel(state)).toBe("Blocked · storage");
 });
 
 it("shows current member availability without historical task outcomes dominating", () => {

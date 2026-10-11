@@ -25,11 +25,11 @@ it("shows storage repair before idle, work, or provider attention and clears aft
       pendingQuestion: { requestId: 1, title: "Choose", questions: [] },
     };
     const state = monoState(session);
-    expect(state).toEqual({ status: "needs-you", storageBlocked: true });
+    expect(state).toEqual({ status: "needs-you", activity: session.codexStorageError, liveState: { status: "blocked", reason: "storage", detail: session.codexStorageError } });
     expect(monoStatusLabel(state)).toBe("Blocked · storage");
-    expect(monoState({ ...session, codexStorageError: undefined }).storageBlocked).toBeUndefined();
+    expect(monoState({ ...session, codexStorageError: undefined }).liveState?.reason).toBe("decision");
   }
-  expect(monoState({ blocks: [], busy: false, worktreeRemoved: true, codexStorageError: "old conflict" })).toEqual({ status: "idle" });
+  expect(monoState({ blocks: [], busy: false, worktreeRemoved: true, codexStorageError: "old conflict" }).liveState).toEqual({ status: "blocked", reason: "storage", detail: "old conflict" });
 });
 
 it("needs the user when a provider usage limit stops the conversation", () => {
@@ -50,7 +50,7 @@ it("names the step it is on while working", () => {
           text: "",
           tool: { title: "Read old.ts" },
         },
-        { id: "2", role: "user", text: "check CI" },
+        { id: "2", role: "user", text: "check CI", startedAt: 1000 },
         {
           id: "3",
           role: "assistant",
@@ -73,7 +73,7 @@ it("is thinking before the current turn has a step", () => {
           text: "",
           tool: { title: "Read old.ts" },
         },
-        { id: "2", role: "user", text: "check CI" },
+        { id: "2", role: "user", text: "check CI", startedAt: 1000 },
       ],
     }),
   ).toEqual({ status: "working", activity: "Thinking", liveState: { status: "thinking", detail: "Thinking" } });
@@ -109,7 +109,7 @@ it("reports the current turn's step while working", () => {
       busy: true,
       blocks: [
         { id: "0", role: "assistant", text: "", tool: { title: "Old step" } },
-        { id: "1", role: "user", text: "check CI" },
+        { id: "1", role: "user", text: "check CI", startedAt: 1000 },
         {
           id: "2",
           role: "assistant",
@@ -124,7 +124,7 @@ it("reports the current turn's step while working", () => {
       busy: true,
       blocks: [
         { id: "0", role: "assistant", text: "", tool: { title: "Old step" } },
-        { id: "1", role: "user", text: "hi" },
+        { id: "1", role: "user", text: "hi", startedAt: 1000 },
       ],
     }),
   ).toEqual({ status: "working", activity: "Thinking", liveState: { status: "thinking", detail: "Thinking" } });

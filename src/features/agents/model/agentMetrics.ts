@@ -1,10 +1,13 @@
-import type { Block, Session } from "../../sessions/model/session";
+import type { Block, HarnessId, Session } from "../../sessions/model/session";
 import type { MonoManagerGoal } from "../../monos/model/monoManagerGoals";
 import type { OrchestrationDispatch, OrchestrationRun, OrchestrationTask } from "../../orchestration/model/orchestrationState";
 
 type MetricsSession = Pick<Session, "id" | "blocks" | "busy">;
-type MetricTurn = Pick<Block, "id" | "startedAt" | "durationMs" | "turnMetrics"> & { active?: boolean };
-const counters = ["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "modelCalls"] as const;
+type MetricTurn = Pick<Block, "id" | "startedAt" | "durationMs" | "turnMetrics" | "turnModel"> & {
+  active?: boolean;
+  inputTokenConvention?: OrchestrationDispatch["inputTokenConvention"];
+};
+const counters = ["outputTokens", "cacheReadTokens", "cacheWriteTokens", "modelCalls"] as const;
 
 export type AgentMetrics = {
   turns: number;
@@ -12,6 +15,8 @@ export type AgentMetrics = {
   startedAt?: number;
   firstTokenAt?: number;
   endedAt?: number;
+  /** Aggregate input includes cache reads and writes; per-turn counters stay raw. */
+  inputTokenConvention?: "total-including-cache";
   inputTokens?: number;
   outputTokens?: number;
   cacheReadTokens?: number;
@@ -22,8 +27,12 @@ export type AgentMetrics = {
   partial: boolean;
 };
 
+function inputTokenConvention(harness?: HarnessId): OrchestrationDispatch["inputTokenConvention"] {
+  return harness == null ? undefined : harness === "codex" ? "includes-cache-read" : "excludes-cache";
+}
+
 function rollup(turns: readonly MetricTurn[], now: number, missing = false): AgentMetrics {
-  const summary: AgentMetrics = { turns: turns.length, elapsedMs: 0, partial: missing };
+  const summary: AgentMetrics = { turns: turns.length, elapsedMs: 0, inputTokenConvention: "total-including-cache", partial: missing };
   let unfinished = false;
   for (const turn of turns) {
     const metrics = turn.turnMetrics;
@@ -38,6 +47,12 @@ function rollup(turns: readonly MetricTurn[], now: number, missing = false): Age
     if (metrics?.firstTokenAt != null)
       summary.firstTokenAt = Math.min(summary.firstTokenAt ?? metrics.firstTokenAt, metrics.firstTokenAt);
     if (endedAt != null) summary.endedAt = Math.max(summary.endedAt ?? endedAt, endedAt);
+    if (metrics?.inputTokens != null) {
+      const convention = turn.inputTokenConvention ?? inputTokenConvention(turn.turnModel?.harness);
+      if (convention) summary.inputTokens = (summary.inputTokens ?? 0) + metrics.inputTokens +
+        (convention === "excludes-cache" ? metrics.cacheReadTokens ?? 0 : 0) + (metrics.cacheWriteTokens ?? 0);
+      else summary.partial = true;
+    }
     for (const counter of counters) {
       const value = metrics?.[counter];
       if (value != null) summary[counter] = (summary[counter] ?? 0) + value;
@@ -74,6 +89,7 @@ function taskTurns(task: OrchestrationTask, dispatches: readonly OrchestrationDi
       for (const block of blocks) turns.set(`${session!.id}:${block.id}`, block);
     } else if (dispatch.turnMetrics || dispatch.turnStartedAt != null) {
       turns.set(`${dispatch.sessionId}:${dispatch.turnBlockId ?? dispatch.id}`, { id: dispatch.turnBlockId ?? dispatch.id, startedAt: dispatch.turnStartedAt, durationMs: dispatch.durationMs,
+        turnModel: dispatch.turnModel, inputTokenConvention: dispatch.inputTokenConvention,
         active: ["running", "starting", "cancelling"].includes(dispatch.state),
         turnMetrics: { ...dispatch.turnMetrics, firstTokenAt: dispatch.firstTokenAt ?? dispatch.turnMetrics?.firstTokenAt,
           endedAt: dispatch.finishedAt ?? dispatch.turnMetrics?.endedAt } });
@@ -165,5 +181,7 @@ export function dispatchTurnSnapshot(dispatch: OrchestrationDispatch, session?: 
     : block.startedAt != null && block.startedAt >= (dispatch.dispatchedAt ?? dispatch.startedAt));
   return turn ? { turnBlockId: turn.id, turnStartedAt: turn.startedAt,
     firstTokenAt: turn.turnMetrics?.firstTokenAt ?? dispatch.firstTokenAt,
+    turnModel: turn.turnModel ?? dispatch.turnModel,
+    inputTokenConvention: inputTokenConvention(turn.turnModel?.harness) ?? dispatch.inputTokenConvention,
     turnMetrics: turn.turnMetrics, durationMs: turn.durationMs } : {};
 }

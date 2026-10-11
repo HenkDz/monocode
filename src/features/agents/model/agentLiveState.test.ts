@@ -1,7 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { newSession, type Session } from "../../sessions/model/session";
 import type { OrchestrationTask } from "../../orchestration/model/orchestrationState";
 import { agentLiveStateLabel, agentLiveStateTooltip, selectAgentLiveState, type AgentLiveStatus } from "./agentLiveState";
+import { appendUser, applyHarnessEvent, stopStreaming } from "../../../integrations/harness/core/apply";
+import { acknowledgeMonoMessage, enqueueMonoMessage } from "../../monos/model/monoMessaging";
 
 const session = (patch: Partial<Session> = {}) => ({ ...newSession("codex", "/app"), ...patch });
 const queued = { id: "q", text: "next", attachments: [] };
@@ -59,15 +61,63 @@ describe("selectAgentLiveState", () => {
   it("ignores stale steps, settled tool calls, decided approvals and earlier turn failures", () => {
     expect(selectAgentLiveState(session({ busy: true, blocks: [
       { id: "old", role: "tool", text: "", tool: { title: "old tool", status: "running" } },
-      { id: "u", role: "user", text: "new task" },
+      { id: "u", role: "user", text: "new task", startedAt: 1000 },
       { id: "new", role: "tool", text: "", tool: { title: "new tool", status: "done" }, approval: { requestId: 1, decided: "allow" } },
     ] })).status).toBe("thinking");
     expect(selectAgentLiveState(session({ blocks: [
       { id: "e", role: "system", text: "old failure", notice: "error" },
-      { id: "u", role: "user", text: "retry" },
+      { id: "u", role: "user", text: "retry", startedAt: 1000 },
       { id: "a", role: "assistant", text: "Finished" },
     ] })).status).toBe("idle");
     expect(selectAgentLiveState(session({ compacting: true })).status).toBe("idle");
+  });
+
+  it("keeps the submitted turn's running tool visible behind queued and steering bubbles", () => {
+    const active = session({ busy: true, blocks: [
+      { id: "old", role: "tool", text: "", tool: { title: "old tool", status: "running" } },
+      { id: "owner", role: "user", text: "build", startedAt: 1000 },
+      { id: "tool", role: "tool", text: "", tool: { title: "npm test", status: "in_progress" } },
+      { id: "steer", role: "user", text: "check tests too", sentAt: 1500 },
+    ] });
+    const pending = enqueueMonoMessage(active, queued);
+    expect(selectAgentLiveState(pending)).toEqual({ status: "running-tool", detail: "npm test" });
+    const settled = { ...pending, blocks: pending.blocks.map(block => block.id === "tool" ? { ...block, tool: { ...block.tool!, status: "done" } } : block) };
+    expect(selectAgentLiveState(settled).status).toBe("thinking");
+  });
+
+  it("retains the current provider failure ahead of a paused outbox", () => {
+    const active = enqueueMonoMessage(session({ busy: true, blocks: [
+      { id: "old-error", role: "system", text: "Old failure", notice: "error" },
+      { id: "owner", role: "user", text: "build", startedAt: 1000 },
+    ] }), queued);
+    const failed = applyHarnessEvent(active, { type: "session.error", message: "Connection lost; reconnect to retry" });
+    expect(failed.queueStatus).toBe("paused");
+    expect(failed.queuedMessages?.[0].error).toBeUndefined();
+    expect(selectAgentLiveState(failed)).toEqual({ status: "failed", reason: "error", detail: "Connection lost; reconnect to retry" });
+    const retry = { ...failed, blocks: [...failed.blocks, { id: "retry", role: "user" as const, text: "retry", startedAt: 3000 }] };
+    expect(selectAgentLiveState(retry)).toEqual({ status: "queued", reason: "paused", detail: "Queue paused" });
+  });
+
+  it("drops the earlier failure after a queued bubble becomes a recovered new turn", () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1000);
+    try {
+      let pending = enqueueMonoMessage(appendUser(session(), "First"), queued);
+      pending = applyHarnessEvent(pending, { type: "session.error", message: "Old connection lost" });
+      clock.mockReturnValue(3000);
+      const retry = acknowledgeMonoMessage(pending, pending.queuedMessages![0], { mode: "new-turn" });
+      const replied = applyHarnessEvent(retry, { type: "message.delta", text: "Recovered" });
+      expect(selectAgentLiveState(stopStreaming(replied, 4000))).toEqual({ status: "idle" });
+      expect(retry.blocks.at(-1)?.id).toBe(queued.id);
+      expect(retry.blocks.some(block => block.text === "Old connection lost" && block.notice === "error")).toBe(true);
+    } finally { clock.mockRestore(); }
+  });
+
+  it("uses the last untimed historical turn when restored timestamps are missing", () => {
+    expect(selectAgentLiveState(session({ blocks: [
+      { id: "old", role: "system", text: "Old failure", notice: "error" },
+      { id: "untimed", role: "user", text: "Later successful turn" },
+      { id: "done", role: "assistant", text: "Finished" },
+    ] }))).toEqual({ status: "idle" });
   });
 
   it.each([

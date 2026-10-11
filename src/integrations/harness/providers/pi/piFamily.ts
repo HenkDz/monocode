@@ -873,9 +873,8 @@ function handleFrame(
   const messageId = stringField(message, "id") ??
     (typeof message?.timestamp === "number" && Number.isFinite(message.timestamp)
       ? `pi:${message.timestamp}` : undefined);
-  if (metrics && type !== "message_update") {
-    live.onEvent({ type: "turn.metrics", ...metrics,
-      ...(type === "message_end" && messageId && message?.role === "assistant" ? { modelCallId: messageId } : {}) });
+  if (metrics && type === "message_end" && messageId && message?.role === "assistant") {
+    live.onEvent({ type: "turn.metrics", ...metrics, modelCallId: messageId });
   }
 
   const delta = assistantDeltaFromEvent(rec);

@@ -1,5 +1,6 @@
 import type { Session } from "../../sessions/model/session";
 import type { OrchestrationRun, OrchestrationTask } from "../../orchestration/model/orchestrationState";
+import { currentTurnIndex } from "./turnMetrics";
 
 export type AgentLiveStatus =
   | "thinking" | "running-tool" | "compacting"
@@ -40,6 +41,14 @@ function plainLine(text: string): string {
 /** Current blockers and work outrank queued work and historical task outcomes. */
 export function selectAgentLiveState(session?: AgentLiveSession, context: AgentLiveContext = {}): AgentLiveState {
   const blocks = session?.blocks ?? [];
+  let turnIndex = currentTurnIndex({ blocks, queuedMessages: session?.queuedMessages });
+  if (turnIndex < 0) {
+    for (let i = blocks.length - 1; i >= 0; i--) {
+      const block = blocks[i];
+      if (block.role === "user" && !block.draft && block.sentAt == null
+        && !session?.queuedMessages?.some(message => message.blockId === block.id)) { turnIndex = i; break; }
+    }
+  }
   const queued = session?.queuedMessages?.[0] ?? session?.pendingMonoEvents?.[0];
   if (session?.codexStorageError)
     return { status: "blocked", reason: "storage", detail: session.codexStorageError };
@@ -62,13 +71,15 @@ export function selectAgentLiveState(session?: AgentLiveSession, context: AgentL
     const last = blocks[blocks.length - 1];
     if (last?.role === "assistant" && !last.tool && last.streaming)
       return { status: "thinking", detail: "Writing a reply" };
-    for (let i = blocks.length - 1; i >= 0; i--) {
+    for (let i = blocks.length - 1; i > turnIndex; i--) {
       const block = blocks[i];
-      if (block.role === "user") break;
       if (block.tool?.title && (!block.tool.status || ["running", "pending", "in_progress"].includes(block.tool.status)))
         return { status: "running-tool", detail: plainLine(block.tool.title) };
     }
     return { status: "thinking", detail: "Thinking" };
+  }
+  for (let i = blocks.length - 1; i > turnIndex; i--) {
+    if (blocks[i].notice === "error") return { status: "failed", reason: "error", detail: blocks[i].text };
   }
   if (queued?.error) return { status: "blocked", reason: "error", detail: queued.error };
   if (queued) {
@@ -108,10 +119,6 @@ export function selectAgentLiveState(session?: AgentLiveSession, context: AgentL
   if (context.tasks?.some(candidate => candidate.status === "completed" && !candidate.accepted))
     return { status: "waiting-review", detail: "Waiting for task review" };
   if (context.runStatus === "finished") return { status: "done" };
-  for (let i = blocks.length - 1; i >= 0; i--) {
-    if (blocks[i].role === "user") break;
-    if (blocks[i].notice === "error") return { status: "failed", reason: "error", detail: blocks[i].text };
-  }
   return { status: "idle" };
 }
 
@@ -131,4 +138,7 @@ export function agentLiveStateLabel(state: AgentLiveState): string {
   }
 }
 
-export const agentLiveStateTooltip = (state: AgentLiveState) => state.detail || agentLiveStateLabel(state);
+export const agentLiveStateTooltip = (state: AgentLiveState) => {
+  const label = agentLiveStateLabel(state);
+  return state.detail && state.detail !== label ? `${label} · ${state.detail}` : label;
+};

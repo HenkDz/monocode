@@ -320,7 +320,7 @@ it("shows hierarchy, live worker steps and a chronological feed from stored disp
         '[data-org-member="backend"]',
       ),
     ).toBeTruthy();
-    expect(container.textContent).toContain("Working");
+    expect(container.textContent).toContain("Running tool");
     expect(container.textContent).not.toContain("Now doing: Reading routes");
     expect(container.textContent).toContain("Backend picked up Fix routing");
     expect(container.querySelector("details")).toBeNull();

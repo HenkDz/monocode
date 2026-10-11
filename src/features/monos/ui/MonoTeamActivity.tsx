@@ -7,7 +7,8 @@ import {
 } from "react";
 import { selectAgentLiveState } from "../../agents/model/agentLiveState";
 import { selectTaskMetrics } from "../../agents/model/agentMetrics";
-import { TaskMetricsLine } from "../../agents/ui/TaskMetricsLine";
+import { TaskMetricsLine, taskMetricsDetail } from "../../agents/ui/TaskMetricsLine";
+import { AgentDetailTooltip } from "../../agents/ui/AgentDetailTooltip";
 import { listMonos, monoLook, monoState } from "../model/mono";
 import { ArtifactText } from "../../artifacts/ui/ArtifactReference";
 import {
@@ -196,6 +197,8 @@ export function MonoTeamActivity({
             task.id,
           )
         : openCardSession(task.sessionId);
+    const metrics = selectTaskMetrics(task, run.dispatches ?? [], sessions, now);
+    const state = selectAgentLiveState(session, { task, tasks: run.tasks, runStatus: run.status });
     return (
       <article
         key={task.id}
@@ -222,6 +225,7 @@ export function MonoTeamActivity({
           >
             {title}
           </span>
+          <AgentDetailTooltip detail={taskMetricsDetail(metrics, state)}>
           <button
             type="button"
             onClick={open}
@@ -230,6 +234,7 @@ export function MonoTeamActivity({
           >
             Open
           </button>
+          </AgentDetailTooltip>
         </div>
         <div className="mt-1 flex min-w-0 items-center gap-2 text-content/60">
           <span title={look.name} className="max-w-24 truncate">
@@ -252,8 +257,8 @@ export function MonoTeamActivity({
           </p>
         </div>
         <TaskMetricsLine
-          metrics={selectTaskMetrics(task, run.dispatches ?? [], sessions, now)}
-          state={selectAgentLiveState(session, { task, tasks: run.tasks, runStatus: run.status })}
+          metrics={metrics}
+          state={state}
           startedAt={dispatch?.turnStartedAt ?? dispatch?.startedAt}
           endedAt={dispatch?.finishedAt ?? (!["running", "queued", "cancelling"].includes(task.status) ? dispatch?.updatedAt : undefined)}
         />

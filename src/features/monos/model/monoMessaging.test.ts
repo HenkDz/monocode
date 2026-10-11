@@ -218,6 +218,17 @@ describe("optimistic Mono messages", () => {
     expect(accepted.queuedMessages).toBeUndefined();
   });
 
+  it("promotes a queued new turn after the preceding reply without changing its identity or other queued messages", () => {
+    const pending = enqueueMonoMessage(enqueueMonoMessage(appendUser(newSession("codex", "/tmp"), "First"), message("second")), message("third"));
+    const finished = stopStreaming(applyHarnessEvent(pending, { type: "message.delta", text: "First turn finished" }));
+    const accepted = acknowledgeMonoMessage(finished, finished.queuedMessages![0], { mode: "new-turn" });
+    expect(accepted.blocks.at(-1)).toMatchObject({ id: "second", role: "user", text: "second", sentAt: pending.blocks[1].sentAt });
+    expect(accepted.blocks.findIndex(block => block.text === "First turn finished")).toBeLessThan(accepted.blocks.length - 1);
+    expect(accepted.blocks.filter(block => block.id === "second")).toHaveLength(1);
+    expect(accepted.queuedMessages).toEqual([finished.queuedMessages![1]]);
+    expect(accepted.blocks.find(block => block.id === "third")).toBe(finished.blocks.find(block => block.id === "third"));
+  });
+
   it("never resurrects a finished turn when a follow-up acknowledgement arrives late", () => {
     const session = enqueueMonoMessage(
       appendUser(newSession("codex", "/tmp"), "First"),

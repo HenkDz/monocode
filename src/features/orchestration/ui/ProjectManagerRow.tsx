@@ -11,6 +11,8 @@ import {
 } from "../../monos/model/mono";
 import { memberTasks, monoLiveState } from "../../monos/model/monoNavigation";
 import { AgentStatusLabel } from "../../agents/ui/AgentStatusLabel";
+import { AgentDetailTooltip } from "../../agents/ui/AgentDetailTooltip";
+import { agentLiveStateTooltip } from "../../agents/model/agentLiveState";
 import type { Session } from "../../sessions/model/session";
 import { PixelMascot } from "../../projects/ui/PixelMascot";
 import { ChevronDown, ChevronRight } from "../../../shared/ui/icons";
@@ -112,6 +114,7 @@ export function ProjectManagerRow({
           )}
         </button>
       )}
+      <AgentDetailTooltip detail={live?.liveState && agentLiveStateTooltip(live.liveState)}>
       <button
         type="button"
         disabled={opening}
@@ -180,6 +183,7 @@ export function ProjectManagerRow({
           </span>
         )}
       </button>
+      </AgentDetailTooltip>
       {expanded !== false &&
         members.map((member) => {
           const look = monoLook(member);
@@ -193,6 +197,7 @@ export function ProjectManagerRow({
           const availability = state.status;
           const memberSelected = member.id === selectedMemberId;
           return (
+            <AgentDetailTooltip key={member.id} detail={state.liveState && agentLiveStateTooltip(state.liveState)}>
             <button
               type="button"
               key={member.id}
@@ -218,6 +223,7 @@ export function ProjectManagerRow({
                 {state.liveState ? <AgentStatusLabel state={state.liveState} /> : monoLiveStatusLabel(state)}
               </span>
             </button>
+            </AgentDetailTooltip>
           );
         })}
       {error && (

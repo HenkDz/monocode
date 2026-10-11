@@ -1,5 +1,4 @@
 import { sessionConversationPage } from "../features/agent-app/model/sessionConversation";
-import { selectAgentLiveState } from "../features/agents/model/agentLiveState";
 import { selectTaskMetrics } from "../features/agents/model/agentMetrics";
 import { captureTurnEvent, isFirstTokenEvent } from "../features/agents/model/turnMetrics";
 import {
@@ -13268,17 +13267,22 @@ function Workspace({
     publishCardSessions(
       sessions.map((session) => {
         const run = orchestrator.forSession(session.id);
+        const mono = monoForSession(session.id);
+        const state = mono && mono.archivedAt == null
+          ? monoLiveState(listMonos(), orchestrationRuns, sessions, mono.id)
+          : monoState(session, {
+            task: run?.tasks.find((task) => task.sessionId === session.id),
+            tasks: run?.tasks,
+            runStatus: run?.status,
+            pauseReason: run?.lastPauseReason,
+          });
         return {
           id: session.id,
           title: session.title,
           harness: session.harness,
           busy: !!session.busy,
-          needsInput: monoState(session).status === "needs-you",
-          liveState: selectAgentLiveState(session, {
-            task: run?.tasks.find((task) => task.sessionId === session.id),
-            tasks: run?.tasks,
-            runStatus: run?.status,
-          }),
+          needsInput: state.status === "needs-you",
+          liveState: state.liveState,
           taskMetrics: taskMetrics.get(session.id),
           runtimeMode: session.runtimeMode,
         };

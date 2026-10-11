@@ -13,12 +13,12 @@ it("renders the derived storage blocker and becomes queued after repair starts",
   try {
     await act(async () => root.render(<AgentStatusLabel state={selectAgentLiveState(session)} />));
     expect(host.textContent).toBe("Blocked · storage");
-    expect(host.querySelector('[data-agent-state="blocked"]')?.getAttribute("title")).toBe("Storage repair needed: AGENTS.md");
+    expect(host.querySelector('[data-agent-state="blocked"]')?.getAttribute("title")).toBe("Blocked · storage · Storage repair needed: AGENTS.md");
     expect(host.textContent).not.toContain("Idle");
     await act(async () => root.render(<AgentStatusLabel state={selectAgentLiveState({ ...session, codexStorageError: undefined, codexStoragePreparing: true })} />));
     expect(host.textContent).toBe("Queued · waiting for storage");
     await act(async () => root.render(<AgentStatusLabel state={{ status: "waiting-review", waitingOn: "Reviewer", detail: "Reviewing task t" }} />));
     expect(host.textContent).toBe("Waiting on Reviewer");
-    expect(host.querySelector("span")?.title).toBe("Reviewing task t");
+    expect(host.querySelector("span")?.title).toBe("Waiting on Reviewer · Reviewing task t");
   } finally { await act(async () => root.unmount()); vi.unstubAllGlobals(); }
 });

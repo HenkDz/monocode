@@ -98,11 +98,12 @@ export function captureTurnEvent(
         event.modelCallId,
       ];
       metrics.modelCalls = metrics.modelCallIds.length;
-      if (metrics.inputTokens && metrics.cacheReadTokens != null) {
-        const input =
-          metrics.inputTokens +
-          (session.harness === "codex" ? 0 : metrics.cacheReadTokens) +
-          (metrics.cacheWriteTokens ?? 0);
+      const input =
+        (metrics.inputTokens ?? 0) +
+        ((block.turnModel?.harness ?? session.harness) === "codex"
+          ? 0 : (metrics.cacheReadTokens ?? 0)) +
+        (metrics.cacheWriteTokens ?? 0);
+      if (input > 0 && metrics.cacheReadTokens != null) {
         metrics.cacheHitPercent = (metrics.cacheReadTokens / input) * 100;
       }
     }

@@ -722,10 +722,9 @@ export const MONO_STATUS_LABEL: Record<MonoStatus, string> = {
 };
 
 export const monoStatusLabel = (state: MonoState) =>
-  `${state.liveState && !["thinking", "running-tool", "needs-you"].includes(state.liveState.status) ? agentLiveStateLabel(state.liveState) : MONO_STATUS_LABEL[state.status]}${state.status === "needs-you" && state.attentionLocation ? ` · in ${state.attentionLocation}` : ""}`;
+  `${state.liveState ? agentLiveStateLabel(state.liveState) : MONO_STATUS_LABEL[state.status]}${state.status === "needs-you" && state.attentionLocation ? ` · in ${state.attentionLocation}` : ""}`;
 
-export const monoLiveStatusLabel = (state: MonoState) => state.attentionLocation
-  ? monoStatusLabel(state) : state.liveState ? agentLiveStateLabel(state.liveState) : monoStatusLabel(state);
+export const monoLiveStatusLabel = monoStatusLabel;
 
 export const monoTeamWorkingLabel = (state: MonoState) =>
   state.teamWorking ? `${state.teamWorking} working below` : undefined;

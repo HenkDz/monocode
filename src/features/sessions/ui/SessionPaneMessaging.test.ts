@@ -184,7 +184,7 @@ it("updates the member header from live session and roster state", () => {
   render(pane);
   expect(
     container.querySelector('header [data-mono-status="working"]')?.textContent,
-  ).toContain("Working");
+  ).toBe("Thinking");
 
   render({
     ...pane,

@@ -145,7 +145,7 @@ import { isOpus55Model } from "../model/opusWelcome";
 import { AstraWelcome } from "./AstraWelcome";
 import { OpusWelcome } from "./OpusWelcome";
 import { projectKey } from "../../../shared/lib/paths";
-import { canEditLastTurn, lastTurnRecall } from "../model/editLastTurn";
+import { canEditLastTurn, lastTurnRecall, truncateBeforeLastEditableTurn } from "../model/editLastTurn";
 import {
   loadProjectChatBackgroundSettings,
   projectChatBackgroundImageRevision,
@@ -850,9 +850,10 @@ const LocalSessionPane = memo(function LocalSessionPane({
   const rotationStatus =
     !remote && (mono || memberTask)
       ? sessionRotationStatus(
-          session,
+          editingLastTurn ? { ...session, blocks: truncateBeforeLastEditableTurn(session) } : session,
           composerDraft,
           memberTask && taskRun ? retainedTaskContext(taskRun, memberTask) : "",
+          editingLastTurn ? session.blocks.slice(truncateBeforeLastEditableTurn(session).length) : [],
         )
       : {};
   const composer = (

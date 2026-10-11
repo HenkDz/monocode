@@ -769,10 +769,10 @@ it("replaces a Mono refresh promise with the actual draft's size deferral and re
   )![1];
   act(() => inputProps.onChange({ target: { value: "x".repeat(14_000) } }));
   expect(container.querySelector('[role="status"]')?.textContent).toContain(
-    "Context refresh deferred: brief and next input too large",
+    "Context refresh deferred: constraints, scope or references too large",
   );
   expect(container.textContent).toContain(
-    "Compact manually or trim constraints",
+    "Compact manually or trim the next input",
   );
   expect(
     container
@@ -830,6 +830,49 @@ it("shows the pending carry's deferral after a detached failed startup without u
       .querySelector('[title="Context usage"]')
       ?.getAttribute("aria-label"),
   ).toContain("Context usage unknown");
+});
+
+it("clears an initial oversized draft deferral after real meter compaction and draft trimming", async () => {
+  const pane = props();
+  pane.session.providerSessionId = "thread";
+  pane.session.context = { used: 700_000, window: 1_000_000 };
+  setComposerDraft("chat", "x".repeat(8001));
+  pane.onCompactContext = vi.fn(() => {
+    pane.session = { ...pane.session, context: { used: 0, window: 1_000_000 } };
+    render(pane);
+    return true;
+  });
+  render(pane);
+  expect(container.textContent).toContain("Compact manually or trim the next input");
+  await act(async () => container.querySelector<HTMLButtonElement>('[title="Context usage"]')!.click());
+  await act(async () => [...document.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Compact now")!.click());
+  expect(pane.onCompactContext).toHaveBeenCalledExactlyOnceWith("chat");
+  expect(container.textContent).not.toContain("Context refresh deferred");
+  expect(field().value).toHaveLength(8001);
+  render({ ...pane, session: { ...pane.session, context: { used: 700_000, window: 1_000_000 } } });
+  const inputProps = Object.entries(field()).find(([key]) => key.startsWith("__reactProps"))![1];
+  act(() => inputProps.onChange({ target: { value: "Continue" } }));
+  expect(container.querySelector('[title="Context usage"]')?.getAttribute("aria-label")).toContain("Will refresh context before next turn");
+  expect(container.textContent).not.toContain("Context refresh deferred");
+});
+
+it("plans a retained task edit with its replacement input and retained assignment", () => {
+  probes.mono = false;
+  probes.runs = [{ leadId: "lead", tasks: [{ id: "task", title: "Patch", sessionId: "chat", memberId: "worker", status: "queued", prompt: "Verify the parser only." }], dispatches: [] }];
+  const pane = props();
+  pane.session.harness = "opencode";
+  pane.session.blocks = [{ id: "scope", role: "user", text: "Do not publish." }, { id: "failed", role: "user", text: "x".repeat(8001) }];
+  saveMonoRotation("chat", { at: 1, reason: "context", afterBlockId: "scope", earlier: [],
+    pendingBrief: "Do not publish.\nOriginal assignment: Verify the parser only.", pendingInput: "x".repeat(8001) });
+  render(pane);
+  expect(probes.transcript.mock.calls.at(-1)![0].onEditLastTurn).toBeTypeOf("function");
+  expect(probes.composer.mock.calls.at(-1)![0].rotationScheduled).toBe(false);
+  act(() => {
+    probes.composer.mock.calls.at(-1)![0].onEditingLastTurnChange(true);
+    probes.composer.mock.calls.at(-1)![0].onDraftChange("Verify tests only.");
+  });
+  expect(probes.composer.mock.calls.at(-1)![0].rotationScheduled).toBe(true);
+  expect(probes.composer.mock.calls.at(-1)![0].rotationDeferredReason).toBeUndefined();
 });
 
 it.each([
@@ -899,7 +942,7 @@ it("plans generic retained tasks with their current draft and full assignment sc
   expect(probes.composer.mock.calls.at(-1)![0].rotationScheduled).toBe(false);
   expect(
     probes.composer.mock.calls.at(-1)![0].rotationDeferredReason,
-  ).toContain("brief and next input too large");
+  ).toContain("constraints, scope or references too large");
   act(() => probes.composer.mock.calls.at(-1)![0].onDraftChange("Continue"));
   probes.runs[0].tasks[0].prompt = "x".repeat(8_001);
   render({ ...pane, session: { ...pane.session } });

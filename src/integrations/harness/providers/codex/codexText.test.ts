@@ -16,7 +16,7 @@ const spawnChild = vi.hoisted(() =>
   vi.fn(async (..._args: unknown[]) => undefined),
 );
 const prepareCodexMonoContext = vi.hoisted(() =>
-  vi.fn(async (_input: unknown) => ({
+  vi.fn(async (_input: unknown): Promise<{ config: Record<string, unknown>; hasThread: boolean; skillsContextId?: string; threadPath?: string }> => ({
     config: { sqlite_home: "/private/mono" },
     hasThread: true,
   })),
@@ -287,6 +287,23 @@ it("isolates Mono side questions from regular Codex threads and resumes them aft
     config: { sqlite_home: "/private/mono" },
   });
   expect(threadStarts()).toHaveLength(2);
+});
+
+it("launches a Mono side question in its isolated skills context and keeps ordinary helpers unchanged", async () => {
+  const skillsContextId = "d".repeat(64);
+  prepareCodexMonoContext.mockResolvedValueOnce({ config: { sqlite_home: "/private/mono" }, hasThread: true, skillsContextId });
+  await runCodexTextPrompt({ cwd: "/repo", ephemeral: false, codexStore: "mono", prompt: "Mono question" });
+  expect(prepareCodexMonoContext).toHaveBeenLastCalledWith(expect.objectContaining({ sandboxRequired: true }));
+  expect(spawnChild.mock.calls.at(-1)?.[8]).toBe(skillsContextId);
+  await runCodexTextPrompt({ cwd: "/repo", prompt: "Ordinary helper" });
+  expect(spawnChild.mock.calls.at(-1)?.[8]).toBeUndefined();
+});
+
+it.each(["base", "prior-context"])("resumes a saved %s Mono side question with the native rollout path", async location => {
+  const threadPath = `/private/mono/${location}/sessions/rollout-saved.jsonl`;
+  prepareCodexMonoContext.mockResolvedValueOnce({ config: { sqlite_home: "/private/mono" }, hasThread: true, threadPath });
+  await runCodexTextPrompt({ cwd: "/repo", ephemeral: false, codexStore: "mono", threadId: "saved", prompt: "Continue saved question" });
+  expect(sent.find(message => message.method === "thread/resume")?.params).toMatchObject({ threadId: "saved", path: threadPath, config: { sqlite_home: "/private/mono" } });
 });
 
 it("reports private side-question resume failures without replacing saved context", async () => {

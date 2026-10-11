@@ -43,6 +43,7 @@ import {
 import { MonoActivityContent } from "./MonoActivityPanel";
 import { PanelStack, type StackPage } from "./PanelStack";
 import { MonoCodexStorageSource } from "./MonoCodexStorageSource";
+import { MonoSkillsSettings } from "./MonoSkillsSettings";
 import { MonoSidebar, MonoSidebarHeader } from "./MonoSidebar";
 import { ArchivedManagerConversation, ArchivedManagerConversations } from "./ArchivedManagerConversations";
 import { PullRequestsList } from "../../pullRequests/ui/PullRequestsList";
@@ -382,6 +383,7 @@ export function MonoDetails({
                   )}
                 </Property>
               </dl>
+              <MonoSkillsSettings monoId={monoId} harness={harness} providerAccountId={providerAccountId} cwd={cwd} />
               {findMono(monoId)?.role === "manager" && <ArchivedManagerConversations project={agent.projects[0]?.path ?? cwd} onOpen={id => push({ kind: "archive", id })} />}
             </MonoSettingsPage>
           )}

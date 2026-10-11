@@ -8,14 +8,15 @@ const mock = vi.hoisted(() => ({
   unloadedThread: undefined as string | undefined,
   loaded: false,
   failure: undefined as { method: string; message: string } | undefined,
+  restoredPath: "/mono/default/sessions/rollout-root.jsonl",
   release: vi.fn(),
   spawn: vi.fn(async (..._args: unknown[]) => undefined),
   kill: vi.fn(async (_id: string) => undefined),
-  prepare: vi.fn(async (..._args: unknown[]) => ({
+  prepare: vi.fn(async (..._args: unknown[]): Promise<{ home: string; hasThread: boolean; skillsContextId?: string; threadPath?: string }> => ({
     home: "/mono/default",
     hasThread: false,
   })),
-  copy: vi.fn(async (..._args: unknown[]) => undefined),
+  copy: vi.fn(async (..._args: unknown[]): Promise<string | undefined> => undefined),
 }));
 
 vi.mock("../../core/child", () => ({
@@ -84,6 +85,7 @@ vi.mock("../../core/child", () => ({
       mock.archived = true;
     } else if (request.method === "thread/unarchive") {
       mock.archived = false;
+      result = { thread: { id: request.params.threadId, path: mock.restoredPath } };
     }
     mock.handlers.get(childId)?.(JSON.stringify({ id: request.id, result }));
   },
@@ -105,6 +107,7 @@ beforeEach(() => {
   mock.unloadedThread = undefined;
   mock.loaded = false;
   mock.failure = undefined;
+  mock.restoredPath = "/mono/default/sessions/rollout-root.jsonl";
   vi.clearAllMocks();
   mock.prepare.mockResolvedValue({ home: "/mono/default", hasThread: false });
   mock.copy.mockResolvedValue(undefined);
@@ -162,6 +165,88 @@ it("uses the account's resolved settings with an isolated SQLite home", async ()
   expect(mock.release).toHaveBeenCalledOnce();
   expect(mock.kill).toHaveBeenCalledOnce();
   expect(mock.handlers.size).toBe(0);
+});
+
+it("passes the runtime discovery context separately while SQLite remains in the base Mono home", async () => {
+  const skillsContextId = "b".repeat(64);
+  mock.prepare.mockResolvedValueOnce({ home: "/mono/default", hasThread: false, skillsContextId });
+  expect(await prepareCodexMonoContext(input)).toMatchObject({ config: { sqlite_home: "/mono/default" }, skillsContextId });
+  expect(mock.spawn.mock.calls[0]).toHaveLength(6);
+});
+
+it.each(["base", "prior-context"])("retains the native validated %s rollout path independently from SQLite", async location => {
+  const threadPath = `/mono/${location}/sessions/rollout-root.jsonl`;
+  mock.prepare.mockResolvedValueOnce({ home: "/mono/default", hasThread: true, threadPath });
+  expect(await prepareCodexMonoContext({ ...input, threadId: "root" })).toMatchObject({ config: { sqlite_home: "/mono/default" }, hasThread: true, threadPath });
+});
+
+it("retains the rooted copied rollout path after the initial account migration", async () => {
+  const threadPath = "/mono/default/archived_sessions/rollout-root.jsonl";
+  mock.copy.mockResolvedValueOnce(threadPath);
+  expect(await prepareCodexMonoContext({ ...input, threadId: "root" })).toMatchObject({ hasThread: true, threadPath });
+});
+
+it("restores an archived saved thread through the selected Mono home before resume", async () => {
+  const skillsContextId = "b".repeat(64);
+  mock.archived = true;
+  mock.prepare.mockResolvedValueOnce({ home: "/mono/default", hasThread: true, skillsContextId,
+    threadPath: "/mono/default/archived_sessions/rollout-root.jsonl" });
+  const prepared = await prepareCodexMonoContext({ ...input, threadId: "root" });
+  expect(prepared).toMatchObject({ hasThread: true, skillsContextId, threadPath: mock.restoredPath });
+  expect(mock.spawn.mock.calls[0]).toEqual([expect.any(String), "/codex", ["app-server"], "/project",
+    { provider: "codex", id: "account" }, "codex", "mono", undefined, skillsContextId]);
+  expect(mock.sent.map(r => r.method)).toEqual(["initialize", "initialized", "thread/unarchive", "initialize", "initialized", "config/read"]);
+  expect(mock.sent.some(r => ["thread/start", "thread/resume", "turn/start"].includes(r.method))).toBe(false);
+  expect(mock.kill).toHaveBeenCalledTimes(2);
+  expect(mock.release).toHaveBeenCalledTimes(2);
+});
+
+it.each(["/mono/default/archived_sessions/rollout-root.jsonl", ""])("fails closed if native restore returns an unusable path %s", async restoredPath => {
+  mock.restoredPath = restoredPath;
+  mock.prepare.mockResolvedValueOnce({ home: "/mono/default", hasThread: true,
+    threadPath: "/mono/default/archived_sessions/rollout-root.jsonl" });
+  await expect(prepareCodexMonoContext({ ...input, threadId: "root" })).rejects.toThrow("did not restore the saved Mono context");
+  expect(mock.sent.some(r => ["thread/start", "thread/resume", "turn/start"].includes(r.method))).toBe(false);
+  expect(mock.handlers.size).toBe(0);
+  expect(mock.kill).toHaveBeenCalledOnce();
+});
+
+it("keeps the saved context intact when native unarchive fails", async () => {
+  mock.prepare.mockResolvedValueOnce({ home: "/mono/default", hasThread: true,
+    threadPath: "/mono/default/archived_sessions/rollout-root.jsonl" });
+  mock.failure = { method: "thread/unarchive", message: "archive unavailable" };
+  await expect(prepareCodexMonoContext({ ...input, threadId: "root" })).rejects.toThrow("Codex storage restore: archive unavailable");
+  expect(mock.copy).not.toHaveBeenCalled();
+  expect(mock.sent.some(r => ["thread/start", "thread/resume", "turn/start"].includes(r.method))).toBe(false);
+  expect(mock.handlers.size).toBe(0);
+});
+
+it("forwards sandbox continuity requirements without coalescing full-access preparation", async () => {
+  let accept: (() => void) | undefined;
+  mock.prepare.mockImplementationOnce(async () => {
+    await new Promise<void>(resolve => { accept = resolve; });
+    return { home: "/mono/default", hasThread: false };
+  });
+  const fullAccess = prepareCodexMonoContext({ ...input, sandboxRequired: false });
+  const sandboxed = prepareCodexMonoContext({ ...input, sandboxRequired: true });
+  expect(mock.prepare).toHaveBeenCalledTimes(1);
+  accept?.();
+  await Promise.all([fullAccess, sandboxed]);
+  expect(mock.prepare).toHaveBeenCalledTimes(2);
+  expect(mock.prepare.mock.calls.map(call => call[2])).toEqual([
+    expect.objectContaining({ sandboxRequired: false }), expect.objectContaining({ sandboxRequired: true }),
+  ]);
+});
+
+it("replaces inherited skill and plugin enablement while preserving account paths and other settings", () => {
+  expect(codexConfigOverrides({
+    model: "account-model", skills: { config: [{ path: "/account/global", enabled: true }], extra: "retained" },
+    plugins: { "ponytail@test": { enabled: true, cache_path: "/account/plugins/ponytail" }, "other@test": { enabled: false } },
+  }, "/mono", { skills: { config: [{ path: "/account/global", enabled: false }], bundled: { enabled: false } }, plugins: { "ponytail@test": { enabled: false } } })).toEqual({
+    model: "account-model", sqlite_home: "/mono",
+    skills: { config: [{ path: "/account/global", enabled: false }], extra: "retained", bundled: { enabled: false } },
+    plugins: { "ponytail@test": { enabled: false, cache_path: "/account/plugins/ponytail" }, "other@test": { enabled: false } },
+  });
 });
 
 it("archives the old root and retains all native descendants before resuming privately", async () => {

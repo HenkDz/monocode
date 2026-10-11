@@ -19,6 +19,7 @@ import type { HarnessEvent } from "../../core/types";
 import { JsonRpcClient, type JsonRpcId } from "../../core/jsonRpc";
 import { prepareCodexMonoContext } from "./codexStore";
 import type { TextPromptInput } from "../../core/registry";
+import type { MonoSkillsContext } from "../../../../features/monos/model/monoSkills";
 
 import { mergeStream, streamTextDelta } from "../../core/streamText";
 
@@ -36,6 +37,8 @@ type LiveText = {
   threadId: string;
   ephemeral: boolean;
   codexStore?: "mono";
+  skillsContext?: MonoSkillsContext;
+  skillsSignature?: string;
   storeConfig?: Record<string, unknown>;
   model: string;
   effort: string;
@@ -193,7 +196,7 @@ async function promptOnLive(input: TextPromptInput): Promise<string> {
     await dropLive();
   }
 }
-async function ensureLive(input: {
+async function ensureLive(input: MonoSkillsContext & {
   cwd: string;
   providerAccountId?: string;
   model?: string;
@@ -212,6 +215,7 @@ async function ensureLive(input: {
   const requestedThreadId = ephemeral
     ? undefined
     : input.threadId?.trim() || undefined;
+  const skillsSignature = input.codexStore === "mono" ? JSON.stringify([input.skillsRole, input.skillsPolicy]) : undefined;
   if (live && !live.closed) {
     if (
       live.cwd === input.cwd &&
@@ -221,6 +225,7 @@ async function ensureLive(input: {
       live.providerAccountId === input.providerAccountId &&
       live.ephemeral === ephemeral &&
       live.codexStore === input.codexStore &&
+      live.skillsSignature === skillsSignature &&
       (!requestedThreadId || live.threadId === requestedThreadId)
     ) {
       input.onThreadId?.(live.threadId);
@@ -228,7 +233,7 @@ async function ensureLive(input: {
     }
     if (
       live.providerAccountId !== input.providerAccountId ||
-      live.codexStore !== input.codexStore
+      live.codexStore !== input.codexStore || live.skillsSignature !== skillsSignature
     ) {
       await dropLive();
       const started = await startLive(
@@ -240,6 +245,7 @@ async function ensureLive(input: {
         requestedThreadId,
         ephemeral,
         input.codexStore,
+        input,
       );
       input.onThreadId?.(started.threadId);
       return started;
@@ -265,6 +271,7 @@ async function ensureLive(input: {
     requestedThreadId,
     ephemeral,
     input.codexStore,
+    input,
   );
   input.onThreadId?.(started.threadId);
   return started;
@@ -279,6 +286,7 @@ async function startLive(
   requestedThreadId?: string,
   ephemeral = true,
   codexStore?: "mono",
+  skillsContext: MonoSkillsContext = {},
 ): Promise<LiveText> {
   await dropLive();
   const { path } = await resolveCodexBinary();
@@ -289,6 +297,9 @@ async function startLive(
           path,
           cwd,
           providerAccountId,
+          skillsRole: skillsContext.skillsRole,
+          skillsPolicy: skillsContext.skillsPolicy,
+          sandboxRequired: true,
           threadId: requestedThreadId,
         })
       : undefined;
@@ -313,6 +324,8 @@ async function startLive(
     threadId: "",
     ephemeral,
     codexStore,
+    skillsContext,
+    skillsSignature: codexStore === "mono" ? JSON.stringify([skillsContext.skillsRole, skillsContext.skillsPolicy]) : undefined,
     model,
     effort,
     serviceTier,
@@ -342,7 +355,7 @@ async function startLive(
     await spawnChild(
       TEXT_CHILD_ID,
       path,
-      ["app-server"],
+      ["app-server", ...(store?.skillArgs ?? [])],
       cwd,
       {
         provider: "codex",
@@ -350,6 +363,8 @@ async function startLive(
       },
       "codex",
       codexStore,
+      undefined,
+      store?.skillsContextId,
     );
     await rpc.request(
       "initialize",
@@ -385,6 +400,7 @@ async function openThread(
 ): Promise<void> {
   let opened: { thread?: { id?: string } } | undefined;
   let hasSavedContext = false;
+  let threadPath: string | undefined;
   if (session.codexStore === "mono") {
     const { path } = await resolveCodexBinary();
     const store =
@@ -394,10 +410,14 @@ async function openThread(
         path,
         cwd,
         providerAccountId: session.providerAccountId,
+        skillsRole: session.skillsContext?.skillsRole,
+        skillsPolicy: session.skillsContext?.skillsPolicy,
+        sandboxRequired: true,
         threadId: requestedThreadId,
       }));
     session.storeConfig = store.config;
     hasSavedContext = store.hasThread;
+    threadPath = store.threadPath;
     if (requestedThreadId && hasSavedContext)
       await restoreMonoCodexAgentState(
         session.providerAccountId,
@@ -421,6 +441,7 @@ async function openThread(
         "thread/resume",
         {
           threadId: requestedThreadId,
+          ...(threadPath ? { path: threadPath } : {}),
           ...params,
         },
         INIT_TIMEOUT_MS,

@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { webcrypto } from "node:crypto";
+import { planAgentContext, planOrgContext, recordAgentContext, recordOrgContext } from "../../../../features/monos/model/monoFiles";
 import { registerHarness, resetHarnessIdlePark, sendHarnessTurn } from "../../core/registry";
 
 const sent: string[] = [];
@@ -21,7 +23,7 @@ const restoreMonoCodexAgentState = vi.hoisted(() =>
   vi.fn(async (..._args: unknown[]) => undefined),
 );
 const prepareCodexMonoContext = vi.hoisted(() =>
-  vi.fn(async (_input: unknown) => ({
+  vi.fn(async (_input: unknown): Promise<{ config: Record<string, unknown>; hasThread: boolean; skillArgs?: string[]; skillsContextId?: string; threadPath?: string }> => ({
     config: {
       sqlite_home: "/private/mono",
       instructions: "Account instructions",
@@ -124,6 +126,9 @@ async function startTurn(
     readOnly?: boolean;
     ephemeral?: boolean;
     codexStore?: "mono";
+    skillsRole?: import("../../../../features/monos/model/monoSkills").MonoSkillsRole;
+    skillsPolicy?: import("../../../../features/monos/model/monoSkills").MonoSkillsPolicy;
+    prepareText?: Parameters<typeof sendCodexTurn>[0]["prepareText"];
   } = {},
 ) {
   const events: HarnessEvent[] = [];
@@ -146,9 +151,12 @@ async function startTurn(
     controlsAgents: options.controlsAgents,
     ephemeral: options.ephemeral,
     codexStore: options.codexStore,
+    skillsRole: options.skillsRole,
+    skillsPolicy: options.skillsPolicy,
     intent: options.intent,
     readOnly: options.readOnly,
     text: "summarize the changelog",
+    prepareText: options.prepareText,
     attachments: [],
     onAccepted: options.onAccepted,
     onEvent: (event) => events.push(event),
@@ -408,6 +416,176 @@ describe("codex live turn sequence", () => {
     expect(restoreMonoCodexAgentState).toHaveBeenCalledWith(undefined, "thr_1");
     notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
     await next.turn;
+  });
+
+  it("restarts a warm Mono server on the next turn after its skills or plugin policy changes", async () => {
+    const skillArgs = ["-c", 'plugins={"ponytail@test"={enabled=false}}'];
+    const skillsContextId = "a".repeat(64);
+    prepareCodexMonoContext.mockResolvedValueOnce({ config: { sqlite_home: "/private/mono", plugins: { "ponytail@test": { enabled: false } } }, hasThread: true, skillArgs, skillsContextId });
+    const first = await startTurn("codex-live", { codexStore: "mono", skillsRole: "manager", skillsPolicy: { mode: "role" } });
+    expect(spawnChild.mock.calls.at(-1)?.[2]).toEqual(expect.arrayContaining(skillArgs));
+    expect(spawnChild.mock.calls.at(-1)?.[8]).toBe(skillsContextId);
+    expect(parse().find(message => message.method === "thread/start")?.params).toMatchObject({ config: { plugins: { "ponytail@test": { enabled: false } } } });
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await first.turn;
+    sent.length = 0;
+    const second = await startTurn("codex-live", { codexStore: "mono", skillsRole: "manager", skillsPolicy: { mode: "all", plugins: ["ponytail@test"] }, expectResume: true });
+    expect(spawnChild).toHaveBeenCalledTimes(2);
+    expect(prepareCodexMonoContext).toHaveBeenLastCalledWith(expect.objectContaining({ skillsRole: "manager", skillsPolicy: { mode: "all", plugins: ["ponytail@test"] }, threadId: "thr_1" }));
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await second.turn;
+  });
+
+  it.each(["supervised", "auto", "auto-accept-edits", "plan"] as const)("checks provisioning before a full-access Mono switches to %s", async mode => {
+    const first = await startTurn("codex-live", { codexStore: "mono", runtimeMode: "full-access" });
+    expect(prepareCodexMonoContext).toHaveBeenLastCalledWith(expect.objectContaining({ sandboxRequired: false }));
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await first.turn;
+    sent.length = 0;
+    prepareCodexMonoContext.mockRejectedValueOnce(new Error("Mono Windows sandbox is not provisioned"));
+    await expect(sendCodexTurn({
+      sessionId: "codex-live", codexStore: "mono", cwd: "/repo", model: "codex:gpt-5.4", runtimeMode: mode === "plan" ? "full-access" : mode,
+      ...(mode === "plan" ? { intent: "plan" as const } : {}),
+      text: "Continue", onEvent() {},
+    })).rejects.toThrow("not provisioned");
+    expect(prepareCodexMonoContext).toHaveBeenLastCalledWith(expect.objectContaining({ sandboxRequired: true, threadId: "thr_1" }));
+    expect(spawnChild).toHaveBeenCalledTimes(1);
+    expect(parse().some(message => message.method === "thread/start" || message.method === "turn/start")).toBe(false);
+  });
+
+  it("checks sandbox provisioning before the first full-access Plan turn", async () => {
+    prepareCodexMonoContext.mockRejectedValueOnce(new Error("Mono Windows sandbox is not provisioned"));
+    await expect(sendCodexTurn({
+      sessionId: "codex-live", codexStore: "mono", cwd: "/repo", model: "codex:gpt-5.4", runtimeMode: "full-access", intent: "plan",
+      text: "Plan", onEvent() {},
+    })).rejects.toThrow("not provisioned");
+    expect(prepareCodexMonoContext).toHaveBeenLastCalledWith(expect.objectContaining({ sandboxRequired: true }));
+    expect(spawnChild).not.toHaveBeenCalled();
+  });
+
+  it("lets an active Mono turn finish before checking a queued sandbox-mode change", async () => {
+    const first = await startTurn("codex-live", { codexStore: "mono", runtimeMode: "full-access" });
+    prepareCodexMonoContext.mockRejectedValueOnce(new Error("Mono Windows sandbox is not provisioned"));
+    const queued = sendCodexTurn({
+      sessionId: "codex-live", codexStore: "mono", cwd: "/repo", model: "codex:gpt-5.4", runtimeMode: "supervised",
+      text: "Continue", onEvent() {},
+    });
+    const rejected = expect(queued).rejects.toThrow("not provisioned");
+    await new Promise(resolve => setTimeout(resolve, 10));
+    expect(prepareCodexMonoContext).toHaveBeenCalledTimes(1);
+    expect(hasLiveCodexSession("codex-live")).toBe(true);
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await first.turn;
+    await rejected;
+    expect(prepareCodexMonoContext).toHaveBeenCalledTimes(2);
+    expect(spawnChild).toHaveBeenCalledTimes(1);
+  });
+
+  describe("instruction-home context receipts", () => {
+    const files = { soulHash: "same-soul", memoryHash: "same-memory" };
+    const chart = "standing org context";
+    const initial = { codexStore: "mono" as const, skillsRole: "manager" as const, skillsPolicy: { mode: "role" as const } };
+
+    beforeEach(() => {
+      const stored = new Map<string, string>();
+      vi.stubGlobal("localStorage", { getItem: (key: string) => stored.get(key) ?? null, setItem: (key: string, value: string) => stored.set(key, value) });
+      vi.stubGlobal("crypto", webcrypto);
+    });
+    afterEach(() => vi.unstubAllGlobals());
+
+    async function delivered() {
+      prepareCodexMonoContext.mockResolvedValueOnce({ config: {}, hasThread: true, skillsContextId: "a".repeat(64) });
+      const first = await startTurn("codex-live", initial);
+      notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+      await first.turn;
+      recordAgentContext("codex-live", "thr_1", files);
+      recordOrgContext("codex-live", "thr_1", await planOrgContext("codex-live", "thr_1", "codex:gpt-5.4", chart));
+      expect(planAgentContext("codex-live", "thr_1", files)).toEqual({ soul: false, memory: false });
+      expect((await planOrgContext("codex-live", "thr_1", "codex:gpt-5.4", chart)).text).toBeUndefined();
+      sent.length = 0;
+    }
+
+    const prepareText = async (provider?: string) => {
+      expect(parse().some(message => message.method === "turn/start")).toBe(false);
+      expect(planAgentContext("codex-live", provider, files)).toEqual({ soul: true, memory: true });
+      expect((await planOrgContext("codex-live", provider, "codex:gpt-5.4", chart)).text).toBe(chart);
+      return "Full org, soul and memory\nContinue";
+    };
+
+    it.each(["policy", "plugins", "role", "parked-home"])("resends before preparing the prompt after a %s switch", async change => {
+      await delivered();
+      if (change === "parked-home") await stopCodexSession("codex-live");
+      prepareCodexMonoContext.mockResolvedValueOnce({ config: {}, hasThread: true, skillsContextId: "b".repeat(64) });
+      const second = await startTurn("codex-live", {
+        ...initial,
+        ...(change === "policy" ? { skillsPolicy: { mode: "all" as const } } : {}),
+        ...(change === "plugins" ? { skillsPolicy: { mode: "role" as const, plugins: ["ponytail@test"] } } : {}),
+        ...(change === "role" ? { skillsRole: "reviewer" as const } : {}),
+        expectResume: true,
+        prepareText,
+        onAccepted: () => recordAgentContext("codex-live", "thr_1", files),
+      });
+      expect(parse().find(message => message.method === "turn/start")?.params).toMatchObject({
+        threadId: "thr_1", input: [{ type: "text", text: "Full org, soul and memory\nContinue" }],
+      });
+      expect(spawnChild).toHaveBeenCalledTimes(2);
+      expect(parse().some(message => message.method === "thread/start")).toBe(false);
+      notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+      await second.turn;
+    });
+
+    it("keeps receipts when parking resumes the same instruction home", async () => {
+      await delivered();
+      await stopCodexSession("codex-live");
+      prepareCodexMonoContext.mockResolvedValueOnce({ config: {}, hasThread: true, skillsContextId: "a".repeat(64) });
+      const second = await startTurn("codex-live", { ...initial, expectResume: true, prepareText: async provider => {
+        expect(planAgentContext("codex-live", provider, files)).toEqual({ soul: false, memory: false });
+        expect((await planOrgContext("codex-live", provider, "codex:gpt-5.4", chart)).text).toBeUndefined();
+        return "Continue";
+      } });
+      notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+      await second.turn;
+    });
+
+    it("keeps a failed switched prompt unreceipted so a retry resends it", async () => {
+      await delivered();
+      const changed = { ...initial, skillsPolicy: { mode: "all" as const } };
+      prepareCodexMonoContext.mockResolvedValueOnce({ config: {}, hasThread: true, skillsContextId: "b".repeat(64) });
+      const onAccepted = vi.fn();
+      const failed = sendCodexTurn({
+        ...changed, sessionId: "codex-live", cwd: "/repo", model: "codex:gpt-5.4", runtimeMode: "supervised",
+        text: "Continue", prepareText, onAccepted, onEvent() {},
+      });
+      const rejected = expect(failed).rejects.toThrow("Rejected");
+      await waitFor(() => parse().some(message => message.method === "initialize"), "initialize");
+      reply(parse().find(message => message.method === "initialize")!.id as number, {});
+      await waitFor(() => parse().some(message => message.method === "thread/resume"), "resume");
+      reply(parse().find(message => message.method === "thread/resume")!.id as number, { thread: { id: "thr_1" } });
+      await waitFor(() => parse().some(message => message.method === "turn/start"), "turn/start");
+      onLine!(JSON.stringify({ id: parse().find(message => message.method === "turn/start")!.id, error: { message: "Rejected" } }));
+      await rejected;
+      expect(onAccepted).not.toHaveBeenCalled();
+      sent.length = 0;
+      const retry = sendCodexTurn({
+        ...changed, sessionId: "codex-live", cwd: "/repo", model: "codex:gpt-5.4", runtimeMode: "supervised",
+        text: "Continue", prepareText, onAccepted, onEvent() {},
+      });
+      await waitFor(() => parse().some(message => message.method === "turn/start"), "retry");
+      reply(parse().find(message => message.method === "turn/start")!.id as number, { turn: { id: "turn_1", status: "inProgress" } });
+      notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+      await retry;
+      expect(onAccepted).toHaveBeenCalledTimes(1);
+      expect(spawnChild).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it.each(["base", "prior-context"])("resumes a saved %s Mono by its native rollout path", async location => {
+    const threadPath = `/private/mono/${location}/sessions/rollout-thr_1.jsonl`;
+    prepareCodexMonoContext.mockResolvedValueOnce({ config: { sqlite_home: "/private/mono" }, hasThread: true, threadPath });
+    const { turn } = await startTurn("codex-live", { codexStore: "mono", resume: true });
+    expect(parse().find(message => message.method === "thread/resume")?.params).toMatchObject({ threadId: "thr_1", path: threadPath, config: { sqlite_home: "/private/mono" } });
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
   });
 
   it("resumes a saved Mono after restart without rebuilding its context", async () => {

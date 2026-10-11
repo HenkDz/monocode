@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager};
 
+mod archive;
+mod skills;
 mod transactions;
 use transactions::{ClaimIntent, ClaimJournal};
 #[cfg(test)]
@@ -51,6 +53,7 @@ const STATE_NAMES: &[&str] = &[
 
 pub(crate) struct MonoCodexStore {
     pub home: PathBuf,
+    pub sqlite_home: PathBuf,
     auth: Mutex<Vec<KeyringMirror>>,
 }
 
@@ -98,6 +101,12 @@ pub struct PreparedStore {
     source_home: String,
     source_kind: &'static str,
     share_hooks: bool,
+    skills_config: serde_json::Value,
+    skill_args: Vec<String>,
+    skills_context_id: String,
+    skill_home: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thread_path: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -271,25 +280,68 @@ pub fn codex_mono_store_prepare(
     app: AppHandle,
     provider_account_id: Option<String>,
     thread_id: Option<String>,
+    skills_role: Option<String>,
+    skills_policy: Option<skills::SkillsPolicy>,
+    project_path: Option<String>,
+    sandbox_required: Option<bool>,
 ) -> Result<PreparedStore, String> {
     let (source, home, source_kind) =
         locations(&app, provider_account_id.as_deref()).map_err(storage_error)?;
     prepare_files(&source, &home).map_err(storage_error)?;
-    let has_thread = match thread_id {
+    {
+        let _lock = STORAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        archive::prepare_base_state(&home).map_err(storage_error)?;
+    }
+    if sandbox_required.unwrap_or(false) {
+        skills::validate_sandbox(&home).map_err(storage_error)?;
+    }
+    let (skills_context_id, skill_home, skills_config, skill_args) = skills::prepare(
+        &source,
+        &home,
+        project_path.as_deref().map(Path::new),
+        skills_role.as_deref().unwrap_or("worker"),
+        &skills_policy.unwrap_or_default(),
+    )
+    .map_err(storage_error)?;
+    let thread_path = match thread_id {
         Some(id) => {
             validate_thread_id(&id)?;
-            !home.join(".monocode-migrations").join(&id).exists()
-                && contains_thread(&home.join("sessions"), &id)?
+            if home.join(".monocode-migrations").join(&id).exists() {
+                None
+            } else {
+                skills::find_mono_thread(&home, &id)?
+            }
         }
-        None => false,
+        None => None,
     };
     Ok(PreparedStore {
         home: crate::fs::path_to_js(&home),
-        has_thread,
+        has_thread: thread_path.is_some(),
         source_home: crate::fs::path_to_js(&source),
         source_kind,
         share_hooks: hooks_shared(&home)?,
+        skills_config,
+        skill_args,
+        skills_context_id,
+        skill_home: crate::fs::path_to_js(&skill_home),
+        thread_path: thread_path.as_deref().map(crate::fs::path_to_js),
     })
+}
+
+#[tauri::command(async)]
+pub fn codex_mono_skills_catalog(
+    app: AppHandle,
+    provider_account_id: Option<String>,
+    project_path: Option<String>,
+) -> Result<skills::Catalog, String> {
+    let (source, home, _) = locations(&app, provider_account_id.as_deref())?;
+    let user_home = crate::dirs_home().map(PathBuf::from);
+    skills::catalog(
+        &source,
+        &home,
+        user_home.as_deref(),
+        project_path.as_deref().map(Path::new),
+    )
 }
 
 #[tauri::command(async)]
@@ -299,7 +351,7 @@ pub fn codex_mono_store_copy(
     thread_id: String,
     paths: Vec<String>,
     sqlite_home: Option<String>,
-) -> Result<(), String> {
+) -> Result<String, String> {
     let (source, home, _) = locations(&app, provider_account_id.as_deref())?;
     let sqlite_home = sqlite_home
         .map(PathBuf::from)
@@ -316,7 +368,11 @@ pub fn codex_mono_store_copy(
         &thread_id,
         &paths.into_iter().map(PathBuf::from).collect::<Vec<_>>(),
         &edges,
-    )
+    )?;
+    skills::find_mono_thread(&home, &thread_id)?
+        .as_deref()
+        .map(crate::fs::path_to_js)
+        .ok_or_else(|| "Copied Mono thread could not be located".into())
 }
 
 #[tauri::command(async)]
@@ -330,12 +386,27 @@ pub fn codex_mono_store_restore_agent_state(
     restore_agent_edges(&home, &thread_id)
 }
 
-pub(crate) fn prepare(app: &AppHandle, account_id: Option<&str>) -> Result<MonoCodexStore, String> {
-    let (source, home, _) = locations(app, account_id).map_err(storage_error)?;
-    prepare_files(&source, &home).map_err(storage_error)?;
+pub(crate) fn prepare(
+    app: &AppHandle,
+    account_id: Option<&str>,
+    skills_context: Option<&str>,
+) -> Result<MonoCodexStore, String> {
+    let (source, sqlite_home, _) = locations(app, account_id).map_err(storage_error)?;
+    let _lock = STORAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    prepare_files_locked(&source, &sqlite_home).map_err(storage_error)?;
+    archive::prepare_base_state(&sqlite_home).map_err(storage_error)?;
+    let home = match skills_context {
+        Some(id) => skills::with_context_home(&sqlite_home, id, |home| {
+            skills::prepare_context_files(&source, &sqlite_home, home)?;
+            Ok(home.to_path_buf())
+        })
+        .map_err(storage_error)?,
+        None => sqlite_home.clone(),
+    };
     let auth = prepare_keyring(&source, &home).map_err(storage_error)?;
     Ok(MonoCodexStore {
         home,
+        sqlite_home,
         auth: Mutex::new(auth),
     })
 }
@@ -1210,21 +1281,46 @@ fn compare_files(source: &Path, home: &Path, name: &str) -> Result<StorageCompar
 
 fn prepare_files(source: &Path, home: &Path) -> Result<(), String> {
     let _lock = STORAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    prepare_files_locked(source, home)
+}
+
+fn prepare_files_locked(source: &Path, home: &Path) -> Result<(), String> {
+    prepare_files_with_state_locked(source, home, None)
+}
+
+fn prepare_files_with_state_locked(
+    source: &Path,
+    home: &Path,
+    state_home: Option<&Path>,
+) -> Result<(), String> {
     let (source, home) = storage_roots(source, home)?;
     transactions::reconcile(&home)?;
+    if let Some(base) = state_home {
+        archive::prepare_context_state(base, &home)?;
+    }
     let share_hooks = hooks_shared(&home)?;
+    skills::private_skills(&home)?;
     if !share_hooks {
         prepare_isolated_hooks(&home)?;
     }
     for name in STATE_NAMES {
-        if std::fs::symlink_metadata(home.join(name)).is_ok_and(|m| m.file_type().is_symlink()) {
+        if std::fs::symlink_metadata(home.join(name)).is_ok_and(|m| m.file_type().is_symlink())
+            && !state_home.is_some_and(|base| {
+                matches!(*name, "sessions" | "archived_sessions" | "memories")
+                    && std::fs::symlink_metadata(base.join(name))
+                        .is_ok_and(|m| m.is_dir() && !m.file_type().is_symlink())
+                    && same_entry(&base.join(name), &home.join(name))
+            })
+        {
             return Err("Mono Codex state must remain in its private storage directory".into());
         }
     }
     for entry in std::fs::read_dir(&home).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
         let name = entry.file_name();
-        if !share_hooks && name.to_string_lossy().eq_ignore_ascii_case("hooks.json") {
+        if name.to_string_lossy().eq_ignore_ascii_case("skills")
+            || (!share_hooks && name.to_string_lossy().eq_ignore_ascii_case("hooks.json"))
+        {
             continue;
         }
         if private_entry(&name.to_string_lossy()) {
@@ -1261,7 +1357,9 @@ fn prepare_files(source: &Path, home: &Path) -> Result<(), String> {
     for entry in std::fs::read_dir(&source).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
         let name = entry.file_name();
-        if !share_hooks && name.to_string_lossy().eq_ignore_ascii_case("hooks.json") {
+        if name.to_string_lossy().eq_ignore_ascii_case("skills")
+            || (!share_hooks && name.to_string_lossy().eq_ignore_ascii_case("hooks.json"))
+        {
             continue;
         }
         if private_entry(&name.to_string_lossy()) {
@@ -3645,7 +3743,8 @@ mod tests {
             "old skill"
         );
         assert!(!fixture.home().join("auth.json").exists());
-        assert!(!fixture.home().join("skills").exists());
+        assert!(fixture.home().join("skills").is_dir());
+        assert!(!replaceable_link(&fixture.home().join("skills")).unwrap());
     }
 
     #[test]

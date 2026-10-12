@@ -13,6 +13,7 @@ import { chromium } from "@playwright/test";
 const run = promisify(execFile);
 const root = resolve(fileURLToPath(new URL("../../", import.meta.url)));
 const source = resolve(root, "docs/cc7u");
+const savedWorkerOnly = process.argv.includes("--saved-worker");
 const evidence =
   process.env.CC7U_BROWSER_EVIDENCE ||
   "C:/Users/nooro/AppData/Local/Temp/monocode-cc/cc7u/evidence/browser";
@@ -191,7 +192,7 @@ try {
   const origin = `http://127.0.0.1:${server.address().port}`;
   browser = await chromium.launch({ env });
   const context = await browser.newContext({ reducedMotion: "reduce" });
-  for (const width of [1440, 1100])
+  for (const width of savedWorkerOnly ? [] : [1440, 1100])
     for (const theme of ["dark", "light"])
       for (const scenario of [
         "failed",
@@ -306,12 +307,45 @@ try {
         await page.close();
       }
   const session = await context.newPage();
-  await session.addInitScript(() => localStorage.clear());
+  await session.addInitScript(() => {
+    localStorage.clear();
+    window.cc7uCaptureCheckpointCalls = [];
+    const internals = (window.__TAURI_INTERNALS__ ??= {});
+    let invoke;
+    // Capture bridge: the synthetic IPC fallback omits this supported result.
+    Object.defineProperty(internals, "invoke", {
+      configurable: true,
+      get: () => invoke,
+      set(handler) {
+        invoke = (command, args, options) => {
+          if (command === "session_checkpoint_status") {
+            window.cc7uCaptureCheckpointCalls.push(args);
+            return Promise.resolve({ files: [] });
+          }
+          return handler(command, args, options);
+        };
+      },
+    });
+  });
   await session.setViewportSize({ width: 1440, height: 1000 });
   await session.goto(
     `${origin}/tests/browser/cc7u-workbench.html?kind=session&scenario=failed`,
   );
   await session.locator("[data-workbench-header]").waitFor({ timeout: 90_000 });
+  await session.waitForFunction(() => window.cc7uCaptureCheckpointCalls.length > 0);
+  await session.waitForTimeout(350);
+  receipt.savedWorkerCheckpointCalls = await session.evaluate(() => window.cc7uCaptureCheckpointCalls);
+  check("saved worker: checkpoint read retains exact session and checkout", receipt.savedWorkerCheckpointCalls.every((args) =>
+    args.sessionId === "review-worker" && args.cwd === "C:/synthetic/BrowserLink/current"));
+  check("saved worker: supported empty checkpoint has no incidental review error", (await session.locator("[data-session-review-shell]").count()) === 0);
+  check("saved worker: genuine storage recovery remains visible", await session.getByRole("status", { name: "Conversation couldn’t start", exact: true }).isVisible());
+  check("saved worker: queue remains single", (await session.locator("[data-message-queue]").count()) === 1 && (await session.locator("[data-message-queue-card]").count()) === 1);
+  check("saved worker: queue Edit remains visible", await session.getByRole("button", { name: "Edit queued message", exact: true }).isVisible());
+  check("saved worker: queue Edit is in viewport and unobscured", await session.getByRole("button", { name: "Edit queued message", exact: true }).evaluate((button) => {
+    const box = button.getBoundingClientRect();
+    return box.top >= 0 && box.bottom <= innerHeight && button.contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2));
+  }));
+  check("saved worker: draft retained", (await session.locator("[data-session-composer]").getByRole("textbox").inputValue()) === "Keep my draft");
   await screenshot(session, "workbench-1440-dark-member-session");
   await session.close();
   for (const [name, digest] of Object.entries(receipt.sourceHashes))
@@ -358,7 +392,7 @@ try {
     ),
     JSON.stringify(receipt, null, 2) + "\n",
   );
-  await writeFile(
+  if (!savedWorkerOnly) await writeFile(
     resolve(source, "screenshots/index.md"),
     "# CC7U Workbench screenshots\n\nActual components with synthetic sessions, alongside the selected CC7S mockup. Chromium, 1440/1100 by 1000, dark/light. Working compares with the closest Native waiting reference because CC7S has no working specimen. These use the merged CC7T transcript and activity renderers.\n\n| Screenshot | Size | SHA-256 |\n| --- | --- | --- |\n" +
       receipt.screenshots

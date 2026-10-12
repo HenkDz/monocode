@@ -38,6 +38,27 @@ it("keeps an explicitly selected completed retry separate from aggregate elapsed
   expect(html).not.toContain("15s");
 });
 
+it("starts ticking only when the canonical turn is observed, including a zero start", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.useFakeTimers();
+  vi.setSystemTime(0);
+  const host = document.createElement("div"), root = createRoot(host);
+  const metrics = { turns: 1, elapsedMs: 0, partial: true };
+  try {
+    await act(async () => root.render(<TaskMetricsLine metrics={metrics} startedAt={0} state={{ status: "thinking" }} />));
+    expect(host.textContent).toContain("Elapsed unavailable");
+    expect(vi.getTimerCount()).toBe(0);
+    await act(async () => root.render(<TaskMetricsLine metrics={{ ...metrics, startedAt: 0 }} startedAt={0} state={{ status: "thinking" }} />));
+    expect(vi.getTimerCount()).toBe(1);
+    await act(async () => vi.advanceTimersByTime(2000));
+    expect(host.textContent).toContain("2s · Tokens unavailable · Thinking");
+  } finally {
+    await act(async () => root.unmount());
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  }
+});
+
 it("describes the existing row button and shows the full metrics and blocker on keyboard focus", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const host = document.createElement("div"), root = createRoot(host);

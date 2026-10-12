@@ -35,11 +35,11 @@ export function TaskMetricsLine({
   const [now, setNow] = useState(Date.now);
   const ticking = ["thinking", "running-tool", "compacting"].includes(state.status);
   useEffect(() => {
-    if (!ticking || startedAt === undefined || endedAt !== undefined) return;
+    if (!ticking || metrics?.startedAt === undefined || startedAt === undefined || endedAt !== undefined) return;
     setNow(Date.now());
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
-  }, [ticking, startedAt, endedAt]);
+  }, [ticking, metrics?.startedAt, startedAt, endedAt]);
   const input = metrics?.inputTokens;
   const output = metrics?.outputTokens;
   const counts = [

@@ -15,7 +15,7 @@ export type CodexStorageConflict = {
 };
 
 export type CodexStorageResolution = "use_account_version" | "keep_mono_version" |
-  "use_unelevated_sandbox" | "use_mono_full_access";
+  "use_unelevated_sandbox" | "use_mono_full_access" | "preserve_recovery_metadata";
 
 export type CodexSandboxBlocker = {
   sandbox: true;
@@ -27,6 +27,7 @@ export type CodexStorageRecoveryConflict = {
   recovery: true;
   reason: string;
   paths: string[];
+  metadata?: { path: string; identity: string; fingerprint: string };
 };
 
 export type CodexStorageComparison = {
@@ -86,6 +87,8 @@ export function parseCodexStorageRecoveryConflict(error: unknown): CodexStorageR
     if (!value || value.recovery !== true || typeof value.reason !== "string" || !value.reason.length ||
       !Array.isArray(value.paths) || !value.paths.length ||
       !value.paths.every((path: unknown) => typeof path === "string" && path.length > 0)) return undefined;
+    if (value.metadata !== undefined && (!value.metadata ||
+      !["path", "identity", "fingerprint"].every(key => typeof value.metadata[key] === "string" && value.metadata[key].length > 0))) return undefined;
     return value as CodexStorageRecoveryConflict;
   } catch {
     return undefined;

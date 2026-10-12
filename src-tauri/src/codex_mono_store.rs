@@ -271,6 +271,21 @@ pub fn codex_mono_store_compare(
 }
 
 #[tauri::command(async)]
+pub fn codex_mono_store_preserve_recovery(
+    app: AppHandle,
+    provider_account_id: Option<String>,
+    metadata: transactions::RecoveryMetadata,
+) -> Result<String, String> {
+    let (source, home, _) =
+        locations(&app, provider_account_id.as_deref()).map_err(storage_error)?;
+    let _lock = STORAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (_, home) = canonical_roots(&source, &home).map_err(storage_error)?;
+    transactions::preserve_metadata(&home, &metadata)
+        .map(|path| crate::fs::path_to_js(&path))
+        .map_err(storage_error)
+}
+
+#[tauri::command(async)]
 pub async fn codex_mono_store_reveal(
     app: AppHandle,
     provider_account_id: Option<String>,
@@ -582,6 +597,10 @@ fn storage_roots(source: &Path, home: &Path) -> Result<(PathBuf, PathBuf), Strin
         std::fs::set_permissions(home, std::fs::Permissions::from_mode(0o700))
             .map_err(|e| e.to_string())?;
     }
+    canonical_roots(source, home)
+}
+
+fn canonical_roots(source: &Path, home: &Path) -> Result<(PathBuf, PathBuf), String> {
     let source = source.canonicalize().map_err(|e| e.to_string())?;
     let canonical_home = home.canonicalize().map_err(|e| e.to_string())?;
     if canonical_home.starts_with(&source) || source.starts_with(&canonical_home) {
@@ -936,6 +955,8 @@ impl ClaimedEntry {
         #[cfg(unix)]
         std::fs::remove_file(&self.path).map_err(|e| e.to_string())?;
         self.active = false;
+        #[cfg(test)]
+        crash_tests::checkpoint("after-discard");
         Ok(())
     }
 

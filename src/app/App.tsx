@@ -10242,6 +10242,12 @@ function Workspace({
           flushSync(() => setSessions(previous => previous.map(entry => entry.id === sessionId ? { ...entry, runtimeMode: "full-access", runtimeModeSource: "user" } : entry)));
           const updated = sessionsRef.current.find(entry => entry.id === sessionId)!;
           await upsertSession(updated);
+        } else if (resolution === "preserve_recovery_metadata") {
+          const metadata = parseCodexStorageRecoveryConflict(session.codexStorageError)?.metadata;
+          if (!metadata) throw new Error("Refresh the recovery issue before preserving metadata.");
+          const preservedPath = await invoke<string>("codex_mono_store_preserve_recovery", { providerAccountId: accountId, metadata });
+          flushSync(() => setSessions(previous => previous.map(entry => entry.id === sessionId ? { ...entry, blocks: [...entry.blocks,
+            { id: crypto.randomUUID(), role: "system", text: `Incomplete transaction metadata was preserved at ${preservedPath}. Storage recovery will continue from the remaining files.` }] } : entry)));
         } else if (resolution) {
           const conflict = parseCodexStorageConflict(session.codexStorageError);
           if (!conflict) throw new Error("Refresh the storage issue before choosing a version.");

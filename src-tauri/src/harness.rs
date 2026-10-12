@@ -963,7 +963,7 @@ pub fn harness_spawn(
             cmd.env("CODEX_HOME", &store.home)
                 .env("CODEX_SQLITE_HOME", &store.sqlite_home)
                 .args(["-c", &format!("sqlite_home={private_path}")]);
-            Some(Arc::new(store))
+            Some(store)
         }
         Some(_) => {
             return Err("Private Mono storage is only supported for Codex app-server".into())
@@ -1003,6 +1003,9 @@ pub fn harness_spawn(
         terminate(rejected.pid);
         thread::spawn(move || {
             let _ = child.wait();
+            if let Some(store) = codex_store {
+                store.sync_auth();
+            }
         });
         return Err(SPAWN_CANCELLED.to_string());
     }

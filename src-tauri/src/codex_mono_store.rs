@@ -1,18 +1,21 @@
 //! Mono threads retain native Codex rollouts, but outside the Codex app's home.
 //! Configuration and credentials remain shared with the selected provider account.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex, Weak};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager};
 
 mod archive;
+mod credential_lifetime;
+mod credential_namespace;
 mod sandbox;
 mod sandbox_config;
+mod source_binding;
 #[tauri::command(async)]
 pub fn codex_mono_use_unelevated_sandbox(
     app: AppHandle,
@@ -24,18 +27,23 @@ mod skills;
 mod transactions;
 use transactions::{ClaimIntent, ClaimJournal};
 #[cfg(test)]
+mod consistency_tests;
+#[cfg(test)]
 mod crash_tests;
 #[cfg(test)]
 mod transactions_tests;
 
 // Preparation and Repair share one lock, including harness startup.
 static STORAGE_LOCK: Mutex<()> = Mutex::new(());
+static LIVE_STORES: LazyLock<Mutex<HashMap<PathBuf, Weak<MonoCodexStore>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 static STORAGE_ISSUES: LazyLock<Mutex<HashSet<String>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
 
 #[cfg(test)]
 thread_local! {
     static BEFORE_CLAIM: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
+    static BEFORE_ROLLOUT_PUBLISH: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
 }
 
 #[cfg(test)]
@@ -64,6 +72,8 @@ pub(crate) struct MonoCodexStore {
     pub home: PathBuf,
     pub sqlite_home: PathBuf,
     auth: Mutex<Vec<KeyringMirror>>,
+    lease: Option<credential_lifetime::ContextLease>,
+    credentials: Arc<dyn credential_lifetime::CredentialBackend>,
 }
 
 struct KeyringMirror {
@@ -72,29 +82,63 @@ struct KeyringMirror {
     private_key: String,
     // Never serialize or log credential contents.
     source_value: Option<String>,
+    private_created: bool,
+}
+
+impl Drop for MonoCodexStore {
+    fn drop(&mut self) {
+        if self.lease.is_some() {
+            self.sync_auth();
+            // Windows keyring cannot prove exclusion of non-cooperating credential writers.
+            // Keep copies when conditional retirement is unavailable, rather than read-then-delete.
+            self.lease.as_mut().unwrap().retire(
+                &self.auth.lock().unwrap_or_else(|e| e.into_inner()),
+                |service, key| self.credentials.read(service, key),
+                |service, key, value| self.credentials.retire_owned(service, key, value),
+            );
+        }
+    }
 }
 
 impl MonoCodexStore {
     /// Refreshes written by the private server must also reach the ordinary CLI.
     /// Do not overwrite a login changed independently while this server ran.
     pub(crate) fn sync_auth(&self) {
+        let _lock = STORAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        self.sync_auth_with(
+            |service, key| self.credentials.read(service, key),
+            |service, key, value| self.credentials.write(service, key, value),
+        );
+    }
+
+    fn sync_auth_with(
+        &self,
+        read: impl Fn(&str, &str) -> Result<Option<String>, String>,
+        write: impl Fn(&str, &str, &str) -> Result<(), String>,
+    ) {
         let mut mirrors = self.auth.lock().unwrap_or_else(|e| e.into_inner());
         for mirror in mirrors.iter_mut() {
-            let Ok(source) = read_keyring(mirror.service, &mirror.source_key) else {
+            // Opaque secrets have no account identity and must never write back.
+            if mirror.service != "Codex Auth" {
+                continue;
+            }
+            let Ok(private) = read(mirror.service, &mirror.private_key) else {
                 continue;
             };
-            let Ok(private) = read_keyring(mirror.service, &mirror.private_key) else {
+            let Ok(source) = read(mirror.service, &mirror.source_key) else {
                 continue;
             };
             if private == source {
                 mirror.source_value = source;
                 continue;
             }
-            if source != mirror.source_value && !newer_same_account(&private, &source) {
+            if !same_account(&private, &source)
+                || (source != mirror.source_value && !newer_same_account(&private, &source))
+            {
                 continue;
             }
             if let Some(value) = private {
-                if write_keyring(mirror.service, &mirror.source_key, &value).is_ok() {
+                if write(mirror.service, &mirror.source_key, &value).is_ok() {
                     mirror.source_value = Some(value);
                 }
             }
@@ -127,6 +171,7 @@ pub struct StorageInfo {
     source_home: String,
     source_kind: &'static str,
     share_hooks: bool,
+    credential_namespaces: Vec<credential_namespace::CredentialNamespace>,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
@@ -180,6 +225,35 @@ fn locations(
     app: &AppHandle,
     account_id: Option<&str>,
 ) -> Result<(PathBuf, PathBuf, &'static str), String> {
+    let (source, home, kind) = resolved_locations(app, account_id)?;
+    let _lock = STORAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    source_binding::ensure(&source, &home, false).map_err(storage_error)?;
+    let (source, home) = canonical_roots(&source, &home).map_err(storage_error)?;
+    Ok((source, home, kind))
+}
+
+#[tauri::command(async)]
+pub fn codex_mono_store_bind_source(
+    app: AppHandle,
+    provider_account_id: Option<String>,
+    source_home: String,
+) -> Result<(), String> {
+    let (source, home, _) = resolved_locations(&app, provider_account_id.as_deref())?;
+    let _lock = STORAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let resolved = source.canonicalize().map_err(|e| e.to_string())?;
+    if crate::fs::path_to_js(&resolved) != source_home {
+        return Err(
+            "The selected Codex source changed. Refresh the source choice before confirming it."
+                .into(),
+        );
+    }
+    source_binding::ensure(&source, &home, true).map_err(storage_error)
+}
+
+fn resolved_locations(
+    app: &AppHandle,
+    account_id: Option<&str>,
+) -> Result<(PathBuf, PathBuf, &'static str), String> {
     let account_id = account_id.unwrap_or("default");
     // Validate the default id as well: it is used as a private directory name.
     if account_id.is_empty()
@@ -225,7 +299,29 @@ pub fn codex_mono_store_info(
         source_home: crate::fs::path_to_js(&source),
         source_kind,
         share_hooks: hooks_shared(&home)?,
+        credential_namespaces: credential_namespace::list(
+            &source,
+            &home,
+            &credential_lifetime::SystemCredentials,
+        )?,
     })
+}
+
+#[tauri::command(async)]
+pub fn codex_mono_store_retire_credentials(
+    app: AppHandle,
+    provider_account_id: Option<String>,
+    receipt: credential_namespace::RetirementReceipt,
+) -> Result<(), String> {
+    let (source, home, _) = locations(&app, provider_account_id.as_deref())?;
+    let _lock = STORAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    credential_namespace::retire(
+        &source,
+        &home,
+        &receipt,
+        &credential_lifetime::SystemCredentials,
+    )
+    .map_err(storage_error)
 }
 
 #[tauri::command(async)]
@@ -291,7 +387,7 @@ pub async fn codex_mono_store_reveal(
     provider_account_id: Option<String>,
     entry: String,
 ) -> Result<(), String> {
-    let (_, home, _) = locations(&app, provider_account_id.as_deref())?;
+    let (_, home, _) = resolved_locations(&app, provider_account_id.as_deref())?;
     // Resolve the account directory here; never accept a client supplied path.
     let path = if entry == ".monocode-recovery" {
         home
@@ -453,7 +549,8 @@ pub fn codex_mono_store_copy(
         &thread_id,
         &paths.into_iter().map(PathBuf::from).collect::<Vec<_>>(),
         &edges,
-    )?;
+    )
+    .map_err(storage_error)?;
     skills::find_mono_thread(&home, &thread_id)?
         .as_deref()
         .map(crate::fs::path_to_js)
@@ -468,6 +565,8 @@ pub fn codex_mono_store_restore_agent_state(
 ) -> Result<(), String> {
     validate_thread_id(&thread_id)?;
     let (_, home, _) = locations(&app, provider_account_id.as_deref())?;
+    let _lock = STORAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    transactions::reconcile(&home).map_err(storage_error)?;
     restore_agent_edges(&home, &thread_id)
 }
 
@@ -475,7 +574,7 @@ pub(crate) fn prepare(
     app: &AppHandle,
     account_id: Option<&str>,
     skills_context: Option<&str>,
-) -> Result<MonoCodexStore, String> {
+) -> Result<Arc<MonoCodexStore>, String> {
     let (source, sqlite_home, _) = locations(app, account_id).map_err(storage_error)?;
     let _lock = STORAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     prepare_files_locked(&source, &sqlite_home).map_err(storage_error)?;
@@ -488,15 +587,44 @@ pub(crate) fn prepare(
         .map_err(storage_error)?,
         None => sqlite_home.clone(),
     };
-    let auth = prepare_keyring(&source, &home).map_err(storage_error)?;
-    Ok(MonoCodexStore {
-        home,
-        sqlite_home,
-        auth: Mutex::new(auth),
+    shared_store(&home, || {
+        let lease = credential_lifetime::ContextLease::acquire(&home)?;
+        let auth = prepare_keyring(&source, &home).map_err(storage_error)?;
+        Ok(MonoCodexStore {
+            home: home.clone(),
+            sqlite_home,
+            auth: Mutex::new(auth),
+            lease: Some(lease),
+            credentials: Arc::new(credential_lifetime::SystemCredentials),
+        })
     })
 }
 
+fn shared_store(
+    home: &Path,
+    create: impl FnOnce() -> Result<MonoCodexStore, String>,
+) -> Result<Arc<MonoCodexStore>, String> {
+    let mut stores = LIVE_STORES.lock().unwrap_or_else(|e| e.into_inner());
+    stores.retain(|_, store| store.strong_count() > 0);
+    if let Some(store) = stores.get(home).and_then(Weak::upgrade) {
+        if store
+            .lease
+            .as_ref()
+            .is_some_and(|lease| !lease.still_owns(home))
+        {
+            return Err("A managed private context was replaced. Its credential copies and live store were preserved; reopen the original context before continuing.".into());
+        }
+        return Ok(store);
+    }
+    let store = Arc::new(create()?);
+    stores.insert(home.to_path_buf(), Arc::downgrade(&store));
+    Ok(store)
+}
+
 fn storage_error(error: String) -> String {
+    if error.starts_with("Codex storage needs repair:") {
+        return error;
+    }
     log_storage_issue(format!("Mono Codex storage: {error}"));
     format!("Codex storage needs repair: {error}")
 }
@@ -1390,6 +1518,49 @@ fn prepare_files_locked(source: &Path, home: &Path) -> Result<(), String> {
     prepare_files_with_state_locked(source, home, None)
 }
 
+fn context_private_entry(base: &Path, name: &str) -> Result<Option<PathBuf>, String> {
+    let path = base.join(name);
+    if private_entry(name)
+        || login_entry(name)
+        || name.eq_ignore_ascii_case("hooks.json")
+        || !path.is_file()
+        || replaceable_link(&path)?
+    {
+        return Ok(None);
+    }
+    if name.eq_ignore_ascii_case("config.toml")
+        || read_snapshot(base, name)?.is_some_and(|s| s.private_override && !s.invalid)
+    {
+        Ok(Some(path))
+    } else {
+        Ok(None)
+    }
+}
+
+fn link_context_private(source: &Path, target: &Path) -> Result<(), String> {
+    if std::fs::symlink_metadata(target).is_ok_and(|m| m.is_file() && !m.file_type().is_symlink())
+        && !replaceable_link(target)?
+        && target
+            .parent()
+            .zip(target.file_name().and_then(|name| name.to_str()))
+            .is_some_and(|(home, name)| {
+                read_snapshot(home, name)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|s| s.private_override && !s.invalid)
+            })
+    {
+        return Ok(());
+    }
+    if !same_entry(source, target) && std::fs::symlink_metadata(target).is_ok() {
+        return Err(transactions::recovery(
+            "Existing private context configuration was preserved. Restart with a newly prepared context before changing its configuration.",
+            &[target.to_path_buf(), source.to_path_buf()],
+        ));
+    }
+    link_entry(source, target)
+}
+
 fn prepare_files_with_state_locked(
     source: &Path,
     home: &Path,
@@ -1427,6 +1598,11 @@ fn prepare_files_with_state_locked(
         }
         if private_entry(&name.to_string_lossy()) {
             continue;
+        }
+        if let Some(base) = state_home {
+            if context_private_entry(base, &name.to_string_lossy())?.is_some() {
+                continue;
+            }
         }
         let result = match std::fs::symlink_metadata(source.join(&name)) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => (|| {
@@ -1472,8 +1648,15 @@ fn prepare_files_with_state_locked(
             let name = name
                 .to_str()
                 .ok_or("Invalid Codex configuration filename")?;
+            let selected = match state_home {
+                Some(base) => context_private_entry(base, name)?.unwrap_or_else(|| entry.path()),
+                None => entry.path(),
+            };
+            let source = selected
+                .parent()
+                .ok_or("Missing Codex configuration directory")?;
             let normalized_name = name.to_ascii_lowercase();
-            let snapshot = if entry.path().is_file() {
+            let snapshot = if selected.is_file() {
                 read_snapshot(&home, name)?
             } else {
                 None
@@ -1499,16 +1682,19 @@ fn prepare_files_with_state_locked(
                     }
                 }
             }
-            if entry.path().is_file()
+            if state_home.is_some_and(|base| source == base) {
+                return link_context_private(&selected, &target);
+            }
+            if selected.is_file()
                 && std::fs::symlink_metadata(&target)
                     .is_ok_and(|m| m.is_file() && !m.file_type().is_symlink())
                 && !replaceable_link(&target)?
-                && !same_entry(&entry.path(), &target)
+                && !same_entry(&selected, &target)
             {
-                let conflict = file_conflict(&source, &home, name)?;
+                let conflict = file_conflict(source, &home, name)?;
                 if autoheal_allowed(&conflict, &target, snapshot.as_ref()) {
                     backup_and_relink(
-                        &source,
+                        source,
                         &home,
                         name,
                         None,
@@ -1527,13 +1713,13 @@ fn prepare_files_with_state_locked(
             {
                 log_storage_issue(format!(
                     "Mono Codex storage preserves private configuration overriding {}: {}",
-                    entry.path().display(),
+                    selected.display(),
                     target.display()
                 ));
                 return Ok(());
             }
-            link_entry(&entry.path(), &target)?;
-            if entry.path().is_file() {
+            link_entry(&selected, &target)?;
+            if selected.is_file() {
                 write_snapshot(
                     &home,
                     name,
@@ -1880,9 +2066,18 @@ fn write_keyring(service: &str, key: &str, value: &str) -> Result<(), String> {
 }
 
 fn prepare_keyring(source: &Path, home: &Path) -> Result<Vec<KeyringMirror>, String> {
+    prepare_keyring_with(source, home, read_keyring, write_keyring)
+}
+
+fn prepare_keyring_with(
+    source: &Path,
+    home: &Path,
+    read: impl Fn(&str, &str) -> Result<Option<String>, String>,
+    write: impl Fn(&str, &str, &str) -> Result<(), String>,
+) -> Result<Vec<KeyringMirror>, String> {
     let explicit_keyring = std::fs::read_to_string(home.join("config.toml"))
         .ok()
-        .and_then(|s| s.parse::<toml::Value>().ok())
+        .and_then(|s| toml::from_str::<toml::Value>(&s).ok())
         .and_then(|v| {
             v.get("cli_auth_credentials_store")
                 .and_then(toml::Value::as_str)
@@ -1904,18 +2099,30 @@ fn prepare_keyring(source: &Path, home: &Path) -> Result<Vec<KeyringMirror>, Str
         ("codex", "secrets", ""),
         ("codex", "secrets", "|gateway-oauth"),
     ] {
+        if (service == "Codex Auth" && !explicit_keyring) || (service == "codex" && !encrypted) {
+            continue;
+        }
         let source_key = format!("{prefix}|{source_hash}{suffix}");
         let private_key = format!("{prefix}|{private_hash}{suffix}");
-        let value = match read_keyring(service, &source_key) {
+        let private_before = read(service, &private_key)?;
+        let value = match read(service, &source_key) {
             Ok(value) => value,
             Err(error) if explicit_keyring || encrypted => return Err(error),
             Err(_) => continue,
         };
+        if private_before != value && private_before.is_some() {
+            if service != "Codex Auth" || !same_account(&private_before, &value) {
+                return Err("The existing private credential differs from this source account; both were preserved. Reconnect the original account before preparing this context.".into());
+            }
+        }
         let value = if service == "Codex Auth" {
-            let private = read_keyring(service, &private_key)?;
+            let private = private_before.clone();
+            if read(service, &source_key)? != value {
+                return Err("The source credential changed during context preparation; the private login was preserved. Retry after the source account finishes changing.".into());
+            }
             if newer_same_account(&private, &value) {
                 let recovered = private.as_ref().unwrap();
-                write_keyring(service, &source_key, recovered)?;
+                write(service, &source_key, recovered)?;
                 private
             } else {
                 value
@@ -1924,11 +2131,14 @@ fn prepare_keyring(source: &Path, home: &Path) -> Result<Vec<KeyringMirror>, Str
             value
         };
         if let Some(value) = &value {
-            write_keyring(service, &private_key, value)?;
-        } else if let Ok(entry) = keyring::Entry::new(service, &private_key) {
-            match entry.delete_credential() {
-                Ok(()) | Err(keyring::Error::NoEntry) => {}
-                Err(_) => return Err("Could not clear the previous Mono Codex login".into()),
+            if private_before.is_none() {
+                credential_namespace::own_new_copy(source, home, service, &private_key)?;
+            }
+            write(service, &private_key, value)?;
+        } else {
+            // A missing source never grants ownership of an existing private credential.
+            if private_before.is_some() {
+                return Err("The source credential is missing; the existing private credential was preserved. Reconnect the original account before preparing this context.".into());
             }
         }
         mirrors.push(KeyringMirror {
@@ -1936,12 +2146,32 @@ fn prepare_keyring(source: &Path, home: &Path) -> Result<Vec<KeyringMirror>, Str
             source_key,
             private_key,
             source_value: value,
+            private_created: private_before.is_none(),
         });
     }
     Ok(mirrors)
 }
 
+fn auth_account(value: &Option<String>) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(value.as_ref()?).ok()?;
+    value
+        .get("tokens")?
+        .get("account_id")?
+        .as_str()
+        .filter(|id| !id.trim().is_empty())
+        .map(str::to_owned)
+}
+
+fn same_account(private: &Option<String>, source: &Option<String>) -> bool {
+    auth_account(private)
+        .zip(auth_account(source))
+        .is_some_and(|(private, source)| private == source)
+}
+
 fn newer_same_account(private: &Option<String>, source: &Option<String>) -> bool {
+    if !same_account(private, source) {
+        return false;
+    }
     let Some((private, source)) = private.as_ref().zip(source.as_ref()) else {
         return false;
     };
@@ -1951,18 +2181,6 @@ fn newer_same_account(private: &Option<String>, source: &Option<String>) -> bool
     let Ok(source) = serde_json::from_str::<serde_json::Value>(source) else {
         return false;
     };
-    let account = |v: &serde_json::Value| {
-        v.get("tokens")
-            .and_then(|v| v.get("account_id"))
-            .and_then(|v| v.as_str())
-            .map(str::to_owned)
-    };
-    let Some(private_account) = account(&private) else {
-        return false;
-    };
-    if Some(private_account) != account(&source) {
-        return false;
-    }
     private
         .get("last_refresh")
         .and_then(|v| v.as_str())
@@ -2003,11 +2221,14 @@ fn copy_rollouts_with_edges(
     paths: &[PathBuf],
     edges: &[AgentEdge],
 ) -> Result<(), String> {
+    let _lock = STORAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     validate_thread_id(thread_id)?;
     if paths.is_empty() {
         return Err("Codex did not return a saved Mono thread".into());
     }
     let source = source.canonicalize().map_err(|e| e.to_string())?;
+    let (_, home) = storage_roots(&source, home)?;
+    transactions::reconcile(&home)?;
     let allowed_roots = [source.join("sessions"), source.join("archived_sessions")]
         .into_iter()
         .filter_map(|p| p.canonicalize().ok())
@@ -2097,10 +2318,7 @@ fn copy_rollouts_with_edges(
             .join(&date[..4])
             .join(&date[5..7])
             .join(&date[8..10]);
-        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         let dest = dir.join(path.file_name().unwrap());
-        // Retrying a partial migration can replace already copied descendants.
-        // The provider checks for the root before invoking this operation.
         staged.push((path, dest));
     }
     let root_name = staged[0].0.file_name().unwrap().to_string_lossy();
@@ -2116,18 +2334,15 @@ fn copy_rollouts_with_edges(
     // Copy descendants first and the root last, so a partial migration is not
     // mistaken for a successfully migrated root on the next connection.
     for (path, dest) in staged.iter().rev() {
-        let temp = dest.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
-        std::fs::copy(path, &temp)
-            .map_err(|e| format!("Could not retain the full Codex thread: {e}"))?;
-        // Windows requires write access when flushing a file to disk.
-        std::fs::File::options()
-            .write(true)
-            .open(&temp)
-            .and_then(|f| f.sync_all())
-            .map_err(|e| e.to_string())?;
-        std::fs::rename(&temp, dest).map_err(|e| e.to_string())?;
+        let sessions = private_directory(&home, "sessions")?;
+        archive::retain_file(
+            path,
+            &sessions,
+            dest.strip_prefix(&sessions).map_err(|e| e.to_string())?,
+            false,
+        )?;
     }
-    let edge_snapshot = edge_snapshot_path(home, thread_id);
+    let edge_snapshot = edge_snapshot_path(&home, thread_id);
     if !edges.is_empty() {
         let path = edge_snapshot;
         std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;

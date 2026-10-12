@@ -3,6 +3,7 @@ import { agentLiveStateLabel } from "../../agents/model/agentLiveState";
 import { listMonos, monosSnapshot, subscribeMonos } from "../../monos/model/mono";
 import { monoManagerGoals } from "../../monos/model/monoManagerGoals";
 import { MonoCodexStorageNotice } from "../../monos/ui/MonoCodexStorageNotice";
+import { codexFullAccessRepairAllowed } from "../../monos/model/monoCodexStorage";
 import { QuestionForm } from "../../sessions/ui/QuestionForm";
 import { UsageLimitNotice } from "../../sessions/ui/UsageLimitNotice";
 import { useAttentionSources } from "../model/useAttentionSources";
@@ -110,6 +111,7 @@ export function AttentionQueueView({ input, callbacks, readInput, open, onClose,
           {(item.source !== "storage" || settled || item.repairable === false) && <AttentionDetails title={`${item.title} evidence`}>{evidence}</AttentionDetails>}</>}
         {!settled && <>
           {item.source === "storage" && item.repairable !== false ? <fieldset className="aq-question" disabled={locked}><legend className="sr-only">Storage recovery</legend><MonoCodexStorageNotice key={item.revision} detail={item.detail} blockedContext={item.state.detail}
+            allowFullAccess={!!session && codexFullAccessRepairAllowed(session)} explicitElevated={session?.windowsSandbox === "elevated"}
             renderDetails={content => open && <AttentionDetails title="Storage evidence">{presentation === "panel" && evidence}{content}</AttentionDetails>}
             onRepair={async () => { await run(item, "repair"); }} onResolve={async resolution => { await run(item, "repair", { resolution }); }}
             onCompare={callbacks.compare ? async () => (await run(item, "compare"))! : undefined}

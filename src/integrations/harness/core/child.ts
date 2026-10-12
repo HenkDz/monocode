@@ -35,11 +35,26 @@ export function readHarnessTextFile(path: string): Promise<string> {
   });
 }
 
+export type CodexCredentialNamespaceReceipt = {
+  contextId: string;
+  contextIdentity: string;
+  owners: { entry: string; identity: string; fingerprint: string }[];
+};
+
+export type CodexCredentialNamespace = {
+  contextId: string;
+  home: string;
+  copies: number;
+  active: boolean;
+  receipt: CodexCredentialNamespaceReceipt;
+};
+
 export type MonoCodexStorageInfo = {
   home: string;
   sourceHome: string;
   sourceKind: "account" | "CODEX_HOME" | "default";
   shareHooks: boolean;
+  credentialNamespaces?: CodexCredentialNamespace[];
 };
 
 export function monoCodexStorageInfo(providerAccountId?: string): Promise<MonoCodexStorageInfo> {
@@ -48,6 +63,11 @@ export function monoCodexStorageInfo(providerAccountId?: string): Promise<MonoCo
 
 export function setMonoCodexHooksShared(providerAccountId: string, shared: boolean): Promise<void> {
   return invoke("codex_mono_store_set_hooks_shared", { providerAccountId, shared });
+}
+
+export function retireMonoCodexCredentials(providerAccountId: string, receipt: CodexCredentialNamespaceReceipt): Promise<void> {
+  if (hasHeadlessChildBackend()) return Promise.reject(new Error("Clear this private credential namespace on its owning desktop host."));
+  return invoke("codex_mono_store_retire_credentials", { providerAccountId, receipt });
 }
 
 export function monoCodexSkillsCatalog(providerAccountId?: string, projectPath?: string): Promise<MonoSkillsCatalog> {

@@ -495,6 +495,8 @@ pub fn run() {
             harness::harness_free_port,
             harness::harness_spawn,
             codex_mono_store::codex_mono_store_prepare,
+            codex_mono_store::codex_mono_store_bind_source,
+            codex_mono_store::codex_mono_store_retire_credentials,
             codex_mono_store::codex_mono_sandbox_check,
             codex_mono_store::codex_mono_skills_catalog,
             codex_mono_store::codex_mono_store_info,

@@ -13,6 +13,14 @@ pub(super) fn checkpoint(point: &str) {
     if std::env::var("CC0G_CRASH_POINT").ok().as_deref() != Some(point) {
         return;
     }
+    static HITS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let skip = std::env::var("CC0G_CRASH_SKIP")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(0);
+    if HITS.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < skip {
+        return;
+    }
     let fixture = PathBuf::from(std::env::var_os("CC0G_CRASH_FIXTURE").unwrap());
     let ready = PathBuf::from(std::env::var_os("CC0G_CRASH_READY").unwrap());
     assert_eq!(ready.parent(), Some(fixture.as_path()));
@@ -28,10 +36,10 @@ pub(super) fn checkpoint(point: &str) {
     }
 }
 
-struct Fixture(PathBuf);
+pub(super) struct Fixture(pub(super) PathBuf);
 
 impl Fixture {
-    fn new(case: &str) -> Self {
+    pub(super) fn new(case: &str) -> Self {
         let root = std::env::temp_dir().join(format!(
             "monocode-cc0g-crash-{case}-{}",
             uuid::Uuid::new_v4()
@@ -47,11 +55,11 @@ impl Fixture {
         Self(root.canonicalize().unwrap())
     }
 
-    fn source(&self) -> PathBuf {
+    pub(super) fn source(&self) -> PathBuf {
         self.0.join("account")
     }
 
-    fn home(&self) -> PathBuf {
+    pub(super) fn home(&self) -> PathBuf {
         self.0.join("mono")
     }
 
@@ -70,6 +78,7 @@ impl Fixture {
             .env_remove("CODEX_HOME")
             .env_remove("CC0G_CRASH_POINT")
             .env_remove("CC0G_CRASH_READY")
+            .env_remove("CC0G_CRASH_SKIP")
             .stdout(Stdio::from(
                 std::fs::File::create(self.0.join(format!("{label}.stdout.log"))).unwrap(),
             ))
@@ -85,10 +94,15 @@ impl Fixture {
     }
 
     fn kill_at(&self, operation: &str, entry: &str, point: &str) {
+        self.kill_at_skip(operation, entry, point, 0)
+    }
+
+    pub(super) fn kill_at_skip(&self, operation: &str, entry: &str, point: &str, skip: usize) {
         let ready = self.0.join("checkpoint");
         let mut command = self.command(operation, entry, "killed");
         command
             .env("CC0G_CRASH_POINT", point)
+            .env("CC0G_CRASH_SKIP", skip.to_string())
             .env("CC0G_CRASH_READY", &ready);
         let mut child = TestChild(command.spawn().unwrap());
         let started = Instant::now();
@@ -228,6 +242,14 @@ fn crash_child() {
             Ok(())
         })(),
         "prepare" => prepare_files(&source, &home),
+        "legacy-retention" => archive::prepare_base_state(&home),
+        "preserve-provided-metadata" => (|| {
+            let metadata: transactions::RecoveryMetadata = serde_json::from_str(
+                &std::env::var("CC0I_RECOVERY_METADATA").map_err(|e| e.to_string())?,
+            )
+            .map_err(|e| e.to_string())?;
+            transactions::preserve_metadata(&home, &metadata).map(|_| ())
+        })(),
         "isolate-skills" => prepare_files(&source, &home),
         "skills-context" | "memory-context" => (|| {
             prepare_files(&source, &home)?;

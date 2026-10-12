@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { codexStorageIssueTitle, isCodexStorageError, MonoCodexStorageRecovery, parseCodexStorageConflict, parseCodexStorageRecoveryConflict, parseCodexSandboxBlocker, codexSandboxRepairSettings } from "./monoCodexStorage";
+import { codexStorageIssueTitle, isCodexStorageError, MonoCodexStorageRecovery, parseCodexStorageConflict, parseCodexStorageRecoveryConflict, parseCodexSandboxBlocker, codexSandboxRepairSettings, codexFullAccessRepairAllowed } from "./monoCodexStorage";
 import type { Session } from "../../sessions/model/session";
 
 it("parses actionable sandbox blockers without treating them as file conflicts", () => {
@@ -32,6 +32,28 @@ it("keeps read-only and Plan repair restricted while allowing explicit full-acce
     expect(codexSandboxRepairSettings(worker, false, false).windowsSandbox).toBeUndefined();
   }
   expect(codexSandboxRepairSettings({ ...session, readOnly: true, windowsSandbox: "elevated" }, true, false)).toMatchObject({ sandboxRequired: true, windowsSandbox: "elevated" });
+});
+
+it("offers full-access repair only when it can lift the held message's restrictions", () => {
+  const session = { runtimeMode: "supervised", blocks: [] } as unknown as Session;
+  expect(codexFullAccessRepairAllowed(session)).toBe(true);
+  expect(codexFullAccessRepairAllowed({ ...session, blocks: [{ id: "old", role: "user", text: "Old plan", intent: "plan" }], queuedMessages: [{ id: "chat", text: "Current chat", attachments: [] }] })).toBe(true);
+  expect(codexFullAccessRepairAllowed({ ...session, readOnly: true })).toBe(false);
+  for (const intent of ["plan", "orchestrate"] as const) {
+    expect(codexFullAccessRepairAllowed({ ...session, blocks: [{ id: "held", role: "user", text: "Held", intent }] })).toBe(false);
+    expect(codexFullAccessRepairAllowed({ ...session, queuedMessages: [{ id: "held", text: "Held", attachments: [], intent }] })).toBe(false);
+  }
+});
+
+it("parses source choices only from the whole structured recovery envelope", () => {
+  const value = { recovery: true, reason: "Choose original source", paths: ["C:/synthetic/private"],
+    sourceBinding: { resolvedSourceHome: "C:/synthetic/source", boundSourceHome: null, canBind: true } };
+  const error = `Codex storage needs repair: ${JSON.stringify(value)}`;
+  expect(parseCodexStorageRecoveryConflict(error)).toEqual(value);
+  expect(parseCodexStorageRecoveryConflict(`Codex storage needs repair: Could not retain: ${JSON.stringify(value)}`)).toBeUndefined();
+  for (const sourceBinding of [{ ...value.sourceBinding, canBind: "true" }, { ...value.sourceBinding, resolvedSourceHome: "" },
+    { ...value.sourceBinding, boundSourceHome: 12 }])
+    expect(parseCodexStorageRecoveryConflict(`Codex storage needs repair: ${JSON.stringify({ ...value, sourceBinding })}`)).toBeUndefined();
 });
 
 const conflict = {

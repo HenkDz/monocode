@@ -95,50 +95,71 @@ and transport mocked. Physical source/private/context config files are synthetic
 It covers inherited and explicit engines, unchanged account/project settings,
 source bytes, account-scoped held replay, exact prompts, and restricted outgoing
 supervised and Plan policies. A native regression also checks the actual private
-override reader after repair and actual context preparation; native execution
-awaits the assigned heavy-check slot.
+override reader after repair and actual context preparation, including a private
+context hardlink. It passes in the actual native storage suite.
 
 The unchanged six correct-behavior assertions fail against the pinned original
 adapter: 3 passed, 3 failed, 0 skipped. Only the old adapter's four import paths
 are retargeted to current modules in the external baseline fixture. The current
 adapter passes all 6, and the connected adapter group passes 36. The earlier
-full-suite results below predate this integration change and do not validate it.
+7,888-test full run predates this integration change and is retained as historical
+evidence. Fresh merged-source validation below covers the integrated correction.
 
 ## Validation and evidence
 
 Windows/NTFS, Node 26.5.0; web checks use
 `NODE_OPTIONS=--no-experimental-webstorage`. Assertions, timeouts and existing
-skips remain unchanged. Heavy checks are temporarily serialized by the
-coordinator's `VALIDATION-QUEUE.md`.
+skips remain unchanged. The coordinator explicitly authorized merging validated
+`nour` commit `735455a38d2ee279c5297743ab73ad2267056aef` into this branch and
+assigned the sole heavy slot. All current gates ran sequentially at merged head
+`623c9dde91ae4d3d91ac8de31308ffd295766286`, with one Vitest worker, one native
+build job and one native test thread. All 1,923 tracked source hashes stayed
+unchanged during execution. Final documentation changes preserve every tested
+implementation, test, dependency and build-input byte.
 
 | Check | Result |
 | --- | --- |
 | Baseline unchanged CC6IR read-only assertion in full native crate | 0 passed, 1 failed, 0 ignored, 780 filtered; exit 101; 204.468 s |
-| Corrected unchanged CC6IR module in full native crate | 4 passed, 1 failed, 1 ignored, 782 filtered; exit 101; 107.406 s |
-| Required unchanged read-only assertion in that corrected module | Passed; all reconcile/preparation/retry errors null; no stranded claims/journals; source attributes 33 |
-| Full Vitest before inherited-engine integration | 7,888 passed, 13 skipped, 0 failed; 623 files passed, 2 skipped; runner 250.25 s; superseded as final-source proof |
-| Original reset/App/request matrix | 25 passed, 0 failed/skipped; 2 files; 40.500 s |
-| Focused production permission/provider/repair/UI | 536 passed, 0 failed/skipped; 15 files; 39.391 s |
-| Focused notice tests | 26 passed, 0 failed/skipped, including 2 new cases; 12.698 s |
-| Production Chromium controls | 59 named checks passed, 0 failed; 10 screenshots; 1440px/390px pointer and keyboard; 36.780 s |
-| Unchanged Attention browser cases | 4 passed, 0 failed/skipped/flaky; 6 screenshots; runner 13.688 s |
-| Exact-source readiness reproductions | 8 passed; five JS/native argument controls passed |
+| Current full Vitest | 8,117 passed, 13 skipped, 0 failed; 624 files passed, 2 skipped; 330.532 s wrapper, 328.33 s runner |
+| Current TypeScript | Exit 0, no diagnostics; 18.125 s |
+| Current production build | Exit 0; 31.843 s wrapper, Vite 17.65 s |
+| Actual checkout native storage | 152 passed, 0 failed, 4 ignored, 628 filtered; 70.203 s including compile, tests 11.13 s |
+| Actual checkout native harness | 26 passed, 0 failed/ignored, 758 filtered; 1.047 s |
+| Current unchanged full-native CC6IR read-only assertion | 1 passed, 0 failed/ignored, 796 filtered; 54.234 s including export compile |
+| Current unchanged full-native CC6IR module | 4 passed, 1 raw path-prefix failure, 1 ignored, 791 filtered; exit 101; 0.797 s |
+| Separately disclosed canonical-path matrix in full native crate | 5 passed, 0 failed, 1 ignored, 791 filtered; 0.922 s |
+| Actual old baseline stranded transaction recovery | 1 passed, 0 failed/ignored, 796 filtered; 0.766 s |
+| Current original reset/App/request matrix | 25 passed, 0 failed/skipped; 2 files; 4.594 s |
+| Current real-module private-engine/replay + connected group | 46 passed, 0 failed/skipped; 3 files; 3.625 s |
+| Source-bound production Chromium controls, earlier execution | 59 named checks passed, 0 failed; 10 screenshots; 1440px/390px pointer and keyboard; 36.780 s; all control inputs remain byte-identical |
+| Source-bound unchanged Attention browser cases, earlier execution | 4 passed, 0 failed/skipped/flaky; 6 screenshots; runner 13.688 s; input hashes unchanged |
+| Current exact-source readiness reproductions | 8 passed; wrapper 15.579 s; lookup/DPAPI/setup boundaries stubbed |
+| Current JS/native argument controls | Five controls passed; 0.890 s; no provider launch |
+| Touched Rust formatting / Git whitespace | Exit 0; four Rust files, recursive children disabled |
 | Correct-behavior private-engine witness against original adapter | 3 passed, 3 failed, 0 skipped; exit 1; 2.578 s |
-| Corrected real-module private-engine/held-replay witness | 6 passed, 0 failed/skipped; 3.532 s |
-| Connected current adapter group | 36 passed, 0 failed/skipped; 2 files; 2.859 s |
-| Final native storage/harness and committed regressions | Awaiting explicit heavy-check slot |
-| Final full Vitest / TypeScript / production build | Awaiting explicit heavy-check slot; one worker for full Vitest |
 
 The corrected original module's retained failure is a fixture path-prefix
 comparison between its JS backup path and canonical Windows home. The literal
 fixture is preserved unchanged. The required read-only behavior passes in the
 actual full native crate with real path/filesystem/transaction implementations;
 no copied or stubbed native harness is used as completion proof.
+The original fixture SHA-256 is
+`11e7ef3847fac566abcfc163509135c569963f0530be27f1e793a6a8a10527a8`.
+Only the supplemental matrix canonicalizes the JS backup path before its exact
+private-home assertion. Native source, path serialization and all other matrix
+assertions remain unchanged. The actual stranded baseline is recovered in place
+after preserving its original claim/journal evidence: two reconciliations, two
+preparations and retry succeed, with zero owned recovery entries and zero source
+backups. Source attributes remain **33**, and the exact source hash is
+`ad0abd0590bac7c4c6c5228f2c89a24d990debd1d95a5ce789cabb2bf912c018`.
 
 Evidence root: `C:/Users/nooro/AppData/Local/Temp/monocode-cc/cc6j/evidence/`.
 `native/baseline/` holds the failing source-bound export, log, receipt and source
-preservation observation. `native/final/` holds the corrected full export and
-unchanged original module receipts. `permissions/`, `validation/` and `ui/`
+preservation observation. `native/integrated-623c9dd/` holds the current full
+native export, literal/canonical module receipts and actual baseline recovery.
+`integrated/` holds the merged source freeze, full/tsc/build/native logs,
+permission/private-engine reruns, UI source binding and cleanup receipts.
+`permissions/`, `validation/` and `ui/`
 contain source hashes, raw logs, counts, browser fixtures and cleanup receipts.
 `private-engine/` holds the CC0GR3 witness origin, correct-behavior baseline,
 current real-module results and exact source manifests. The old full/native
@@ -152,8 +173,10 @@ Initial UI dependency-startup failures and the literal fixture failure are
 retained as failures. All 16 browser screenshots were inspected. Owned previews
 were stopped, their fixture process count is zero, and ports 17971/1478 are closed.
 
+The only merge was the explicitly authorized exact `nour` commit into the
+builder's branch. No new agents or previews were launched during the slot.
 No real profile/account/ACL/service setup, live model turn, native App/WebView
-acceptance, OS filesystem/network-denial parity, merge, push or deployment is
-claimed. Unelevated network isolation is not established as equivalent to
+acceptance, OS filesystem/network-denial parity, push or deployment is claimed.
+Unelevated network isolation is not established as equivalent to
 elevated execution. Elevated restricted Mono execution remains blocked. Unix
 writer exclusion and operating-system power-loss behavior remain unverified.

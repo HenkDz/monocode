@@ -8,6 +8,8 @@ use tauri::AppHandle;
 #[cfg(test)]
 thread_local! {
     static FAIL_NEXT_BACKUP_WRITE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static FAIL_NEXT_CLAIM_DISCARD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static FAIL_NEXT_SNAPSHOT_WRITE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 #[derive(Serialize)]
@@ -108,6 +110,37 @@ fn unelevated_config(text: &str) -> Result<String, String> {
     Ok(updated)
 }
 
+pub(super) fn private_overrides(
+    source: &Path,
+    home: &Path,
+) -> Result<Option<serde_json::Value>, String> {
+    if !cfg!(windows) {
+        return Ok(None);
+    }
+    let path = home.join("config.toml");
+    if !path.is_file()
+        || std::fs::symlink_metadata(&path)
+            .map_err(|error| error.to_string())?
+            .file_type()
+            .is_symlink()
+        || super::same_entry(&source.join("config.toml"), &path)
+    {
+        return Ok(None);
+    }
+    let config = super::skills::read_config(home)?;
+    let Some(engine) = config
+        .get("windows")
+        .and_then(|windows| windows.get("sandbox"))
+    else {
+        return Ok(None);
+    };
+    let engine = engine
+        .as_str()
+        .ok_or("Private Mono Windows sandbox engine must be a string")?;
+    // Keep config/read's resolved account paths and all unrelated project settings.
+    Ok(Some(serde_json::json!({"windows": {"sandbox": engine}})))
+}
+
 fn change_configs(source: &Path, home: &Path) -> Result<SandboxConfigChange, String> {
     super::transactions::reconcile(home)?;
     let config_path = home.join("config.toml");
@@ -185,9 +218,9 @@ fn change_configs(source: &Path, home: &Path) -> Result<SandboxConfigChange, Str
         file.write_all(updated.as_bytes())
             .map_err(|error| error.to_string())?;
         file.sync_all().map_err(|error| error.to_string())?;
-        std::fs::set_permissions(&temp, metadata.permissions())
+        #[cfg(not(windows))]
+        file.set_permissions(metadata.permissions())
             .map_err(|error| error.to_string())?;
-        drop(file);
         staged = Some(super::transactions::RecordedEntry::new(&temp)?);
         let stage = staged.as_ref().unwrap();
         #[cfg(test)]
@@ -195,7 +228,7 @@ fn change_configs(source: &Path, home: &Path) -> Result<SandboxConfigChange, Str
         let mut claimed = if existing {
             Some(super::ClaimedEntry::new(
                 &config_path,
-                super::ClaimIntent::UseAccount,
+                super::ClaimIntent::PrivateConfig,
                 Some(stage),
             )?)
         } else {
@@ -224,8 +257,30 @@ fn change_configs(source: &Path, home: &Path) -> Result<SandboxConfigChange, Str
                 .map_err(|error| error.to_string())?;
             if let Some(claimed) = &mut claimed {
                 claimed.journal.verify(Some(&backup))?;
+                #[cfg(test)]
+                super::crash_tests::checkpoint("sandbox-before-discard");
+                #[cfg(test)]
+                if FAIL_NEXT_CLAIM_DISCARD.with(|flag| flag.replace(false)) {
+                    return Err(
+                        "Synthetic unsupported claim cleanup; original config is unchanged".into(),
+                    );
+                }
+                // Refuse unsupported cleanup while the original path can still be restored.
+                claimed.discard()?;
+                #[cfg(test)]
+                super::crash_tests::checkpoint("sandbox-after-discard");
             }
+            #[cfg(windows)]
+            file.set_permissions(metadata.permissions())
+                .map_err(|error| error.to_string())?;
+            drop(file);
             stage.publish(&temp, &config_path)?;
+            #[cfg(test)]
+            super::crash_tests::checkpoint("sandbox-after-publish");
+            #[cfg(test)]
+            if FAIL_NEXT_SNAPSHOT_WRITE.with(|flag| flag.replace(false)) {
+                return Err("Synthetic private snapshot write failure".into());
+            }
             super::write_snapshot(
                 home,
                 "config.toml",
@@ -235,9 +290,8 @@ fn change_configs(source: &Path, home: &Path) -> Result<SandboxConfigChange, Str
                     invalid: false,
                 },
             )?;
-            if let Some(claimed) = &mut claimed {
-                claimed.discard()?;
-            }
+            #[cfg(test)]
+            super::crash_tests::checkpoint("sandbox-after-snapshot");
             Ok(())
         })();
         match claimed {
@@ -279,6 +333,10 @@ pub fn codex_mono_use_unelevated_sandbox(
     let (source, home) = super::storage_roots(&source, &home)?;
     change_configs(&source, &home)
 }
+
+#[cfg(test)]
+#[path = "sandbox_config_tests.rs"]
+mod repair_tests;
 
 #[cfg(test)]
 mod tests {

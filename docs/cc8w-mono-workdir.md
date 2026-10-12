@@ -57,6 +57,18 @@ turn without restoring its old native binding onto the new choice. Pi/OMP
 refuse a relocation whose fork does not expose a native ID. Both queued-event
 and pending-save restart windows have committed regression tests.
 
+CC8Y also covers a choice made before the queued binding flushes. The existing
+turn tagger snapshots the binding's originating harness/account, using the
+account passed to send or compact. The shared reducer refuses an old-owner
+binding after a newer choice. Same-owner model, effort and permission changes
+retain native continuity. The awaited checkpoint and migration receipt rules
+remain intact; details and current validation are in
+[`cc8y-binding-provenance.md`](cc8y-binding-provenance.md).
+
+Grok, FX, Devin and Antigravity still omit the existing `onAccepted` callback.
+Their inherited pending migration/context/rotation receipts remain a P3 backlog
+item; this round does not change adapter acceptance semantics.
+
 CC1 standing and organization receipts are invalidated after a successful
 save and are recorded again only on acceptance. Codex's instruction-home
 signature also includes cwd. CC5-E rotation retains the new cwd and existing

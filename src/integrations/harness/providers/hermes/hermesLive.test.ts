@@ -4,6 +4,7 @@ const sent: string[] = [];
 let onLine: ((line: string) => void) | undefined;
 let onStderr: ((line: string) => void) | undefined;
 const textFiles = new Map<string, string>();
+let beforeRead: ((path: string) => Promise<void>) | undefined;
 
 vi.mock("../../core/child", () => ({
   resolveHermesBinary: async () => ({ path: "/fake/hermes" }),
@@ -23,6 +24,7 @@ vi.mock("../../core/child", () => ({
     sent.push(line);
   },
   readHarnessTextFile: async (path: string) => {
+    await beforeRead?.(path);
     const content = textFiles.get(path);
     if (content == null) throw new Error(`missing ${path}`);
     return content;
@@ -36,6 +38,7 @@ const {
   stopHermesSession,
 } = await import("./hermes");
 import type { HarnessEvent } from "../../core/types";
+import { assertMonoRotationCurrent, saveMonoRotation } from "../../../../features/monos/model/monoRotation";
 
 const parse = () => sent.map((line) => JSON.parse(line));
 
@@ -80,6 +83,7 @@ describe("Hermes live ACP sequence", () => {
     onLine = undefined;
     onStderr = undefined;
     textFiles.clear();
+    beforeRead = undefined;
   });
 
   it("starts Hermes ACP, selects model and mode, and sends attachments", async () => {
@@ -266,6 +270,52 @@ describe("Hermes live ACP sequence", () => {
 
     await turn;
     await stopHermesSession("hermes-live-permission");
+  });
+
+  it.each(["newer", "stop"])("refuses %s after awaited background handoff without issuing a second prompt", async change => {
+    const id = `hermes-authority-${change}`;
+    const bytes = new Map<string, string>();
+    vi.stubGlobal("localStorage", { getItem: (key: string) => bytes.get(key) ?? null, setItem: (key: string, value: string) => bytes.set(key, value) });
+    const receipt = { at: 1, reason: "context" as const, earlier: [], userRequests: [{ id: "scope", text: "Parser only." }] };
+    expect(saveMonoRotation(id, receipt)).toBe(true);
+    const newer = { ...receipt, userRequests: [...receipt.userRequests, { id: "restriction", text: "Never publish." }] };
+    const transcript = "/tmp/deleg_authority/task-0.log";
+    textFiles.set("/tmp/deleg_authority/manifest.json", JSON.stringify({ completed: true, tasks: [{ status: "completed" }] }));
+    textFiles.set(transcript, "Synthetic report.");
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let reading = false;
+    beforeRead = async path => { if (path === transcript) { reading = true; await gate; } };
+    const onAccepted = vi.fn();
+    const validateDispatch = vi.fn(() => assertMonoRotationCurrent(id, receipt));
+    const events: HarnessEvent[] = [];
+    const turn = sendHermesTurn({ sessionId: id, cwd: "/repo", model: "hermes:nous:hermes-4", runtimeMode: "supervised", text: "Parser only.",
+      onAccepted, validateDispatch, onEvent: event => events.push(event) });
+    const observed = turn.then(() => undefined, error => error);
+    try {
+      await initialize(); await newSession();
+      await waitFor(() => parse().some(message => message.method === "session/set_mode"), "session/set_mode");
+      reply(parse().find(message => message.method === "session/set_mode").id, {});
+      await waitFor(() => parse().some(message => message.method === "session/prompt"), "first prompt");
+      const first = parse().find(message => message.method === "session/prompt");
+      onLine!(JSON.stringify({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "hermes-session-1", update: {
+        sessionUpdate: "tool_call_update", toolCallId: "authority-call", kind: "agent", status: "completed",
+        content: [{ type: "text", text: JSON.stringify({ status: "dispatched", mode: "background", delegation_id: "deleg_authority", live_transcripts: [transcript] }) }],
+      } } }));
+      reply(first.id, { stopReason: "end_turn" });
+      await waitFor(() => reading, "awaited handoff transcript");
+      if (change === "newer") expect(saveMonoRotation(id, newer)).toBe(true);
+      else await stopHermesSession(id);
+      const saved = bytes.get("monocode:mono-rotations");
+      release();
+      const result = await observed;
+      if (change === "newer") expect(result?.message).toBe("The saved context carry changed. Retry to include its latest constraints.");
+      else expect(result).toBeUndefined();
+      expect(parse().filter(message => message.method === "session/prompt")).toHaveLength(1);
+      expect(onAccepted).toHaveBeenCalledOnce();
+      expect(validateDispatch).toHaveBeenCalledTimes(change === "newer" ? 2 : 1);
+      expect(bytes.get("monocode:mono-rotations")).toBe(saved);
+    } finally { release(); beforeRead = undefined; await stopHermesSession(id); await observed; vi.unstubAllGlobals(); }
   });
 
   it("stays busy and resumes after Hermes background subagents finish", async () => {

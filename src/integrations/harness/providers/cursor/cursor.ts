@@ -160,9 +160,11 @@ export async function steerCursorTurn(input: SteerTurnInput): Promise<void> {
     sessionId: live.acpSessionId,
     prompt: blocks,
   };
+  input.validateDispatch?.();
   try {
     await live.acp.notify("session/steer", params);
   } catch {
+    input.validateDispatch?.();
     await live.acp.notify("_session/steer", params);
   }
 }
@@ -466,6 +468,7 @@ async function prompt(live: Live, input: SendTurnInput): Promise<void> {
     live.backgroundAgentTools.clear();
     live.taskListTools.clear();
     live.promptActive = true;
+    input.validateDispatch?.();
     const pending = live.acp.request("session/prompt", {
       sessionId: live.acpSessionId,
       prompt: blocks,

@@ -488,6 +488,7 @@ it("actual direct busy-steer callback refuses an outage during preparation witho
   });
   const steerHarnessTurn = vi.fn(async () => undefined);
   const scope = {
+    turnGen: { current: new Map([[id, 1]]) }, gen: 1,
     prepareAttachments: vi.fn(async () => []), attachments: [], preparePrompt, harnessText: replacement,
     current: active, sessionId: id, initialWorkCwd: active.cwd, loadMonoRotation, MONO_ROTATION_READ_ERROR,
     assertMonoRotationCurrent, savedRotation: loadMonoRotation(id),
@@ -498,7 +499,7 @@ it("actual direct busy-steer callback refuses an outage during preparation witho
   await send();
   expect(preparePrompt).toHaveBeenCalledOnce();
   expect(steerHarnessTurn).not.toHaveBeenCalled();
-  expect(events).toEqual([{ type: "session.error", message: MONO_ROTATION_READ_ERROR }]);
+  expect(events).toEqual([{ type: "session.error", message: MONO_ROTATION_READ_ERROR, followUp: true }]);
   const retained = applyHarnessEvents(active, events);
   expectActiveTurn(retained, active);
   expect(retained.queuedMessages).toBe(active.queuedMessages);

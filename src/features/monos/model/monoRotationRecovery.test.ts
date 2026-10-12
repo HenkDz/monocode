@@ -65,6 +65,8 @@ it.each([
   { pendingBrief: undefined }, { pendingBrief: "" }, { pendingBrief: " \n " },
   { pendingBrief: null }, { pendingInput: false }, { pendingInputs: [null] },
   { futureAuthority: "Do not discard unknown restrictions." },
+  { userRequests: [{ id: "scope", text: "Keep the scope.", futureAuthority: "Never publish." }] },
+  { userRequests: [{ id: "scope", text: "Keep the scope.", futureAuthority: { restrictions: ["Never publish."] } }] },
 ])("rejects malformed entries without replacing their protected bytes: %j", change => {
   const id = "invalid-entry";
   const original = pending(id);

@@ -246,9 +246,11 @@ export class OpenCodeClient {
     variant?: string;
     parts: OpenCodePromptPart[];
     delivery?: "queue" | "steer";
+    validateDispatch?: () => void;
   }): Promise<string | undefined> {
     if (this.generation === "v2") {
       await this.configureTurn(input);
+      input.validateDispatch?.();
       const admitted = await this.request<unknown>(
         "POST",
         this.path(`/session/${enc(input.sessionID)}/prompt`),
@@ -256,6 +258,7 @@ export class OpenCodeClient {
       );
       return stringField(asRecord(admitted), "id");
     }
+    input.validateDispatch?.();
     await this.request<unknown>(
       "POST",
       `/session/${enc(input.sessionID)}/prompt_async`,

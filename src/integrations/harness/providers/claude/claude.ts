@@ -296,6 +296,7 @@ export async function steerClaudeTurn(input: SteerTurnInput): Promise<void> {
   const content = (message.message as { content: unknown[] }).content;
   if (content.length === 0) return;
 
+  input.validateDispatch?.();
   await writeJson(input.sessionId, message);
 }
 
@@ -622,6 +623,7 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
   settlePendingTurn(live);
 
   try {
+    input.validateDispatch?.();
     await writeJson(input.sessionId, message);
     input.onAccepted?.();
     settlePendingTurn(live);

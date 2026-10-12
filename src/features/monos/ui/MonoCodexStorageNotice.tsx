@@ -81,7 +81,7 @@ export function MonoCodexStorageNotice({
 
   if (!details && !busy && !success) return null;
   const detailContent = <>
-    <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-all">{details}</pre>
+    <pre tabIndex={0} className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-all">{details}</pre>
     <div className="mt-2">
       <SecondaryButton onClick={() => {
         void copyText(details ?? "").then(
@@ -139,6 +139,11 @@ export function MonoCodexStorageNotice({
             </div>
           )}
           <div className="mt-2 flex flex-wrap items-center gap-2">
+            {recovery?.metadata && onResolve && (
+              <SecondaryButton disabled={!!busy} onClick={() => void run("repair", () => onResolve("preserve_recovery_metadata"))}>
+                Archive incomplete metadata
+              </SecondaryButton>
+            )}
             {sandbox ? <>
               {!setupUnavailable && <SecondaryButton disabled={!!busy} onClick={() => void run("repair", onRepair)}>{busy === "repair" ? "Checking…" : "Check setup again"}</SecondaryButton>}
               {onResolve && <>
@@ -203,10 +208,9 @@ export function MonoCodexStorageNotice({
           )}
           {error && <p role="alert" className="mt-2 break-all text-xs text-content/70">{parseCodexStorageRecoveryConflict(error)?.reason ?? (parseCodexStorageConflict(error) ? "The file changed again. Review the latest versions before choosing." : error)}</p>}
           {details && !sandbox && (renderDetails ? renderDetails(detailContent) : (
-            <details className="mt-2 text-xs text-content/70">
-              <summary className="cursor-pointer select-none rounded focus-visible:outline-accent">Details</summary>
+            <div className="mt-2 text-xs text-content/70" aria-label="Storage diagnostic details">
               {detailContent}
-            </details>
+            </div>
           ))}
         </>
       )}

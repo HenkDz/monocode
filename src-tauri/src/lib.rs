@@ -501,6 +501,7 @@ pub fn run() {
             codex_mono_store::codex_mono_use_unelevated_sandbox,
             codex_mono_store::codex_mono_store_set_hooks_shared,
             codex_mono_store::codex_mono_store_resolve,
+            codex_mono_store::codex_mono_store_preserve_recovery,
             codex_mono_store::codex_mono_store_compare,
             codex_mono_store::codex_mono_store_reveal,
             codex_mono_store::codex_mono_store_copy,

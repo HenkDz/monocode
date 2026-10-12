@@ -166,7 +166,7 @@ it("switches between ordinary and recovery conflicts when refresh reports preser
   expect(buttonNamed("Keep MonoCode version")).toBeDefined();
 });
 
-it("offers explicit account and Mono choices with a plain title, held message context, and collapsed diagnostics", async () => {
+it("offers explicit account and Mono choices with a plain title, held message context, and flat diagnostics", async () => {
   const resolve = vi.fn(async () => {});
   const reveal = vi.fn(async () => {});
   const detail = conflictDetail();
@@ -177,7 +177,8 @@ it("offers explicit account and Mono choices with a plain title, held message co
   expect(container.querySelectorAll('[role="status"]')).toHaveLength(1);
   expect(container.textContent).toContain("Codex hooks file got out of sync");
   expect(container.textContent).toContain("1 queued message on Reviewer is waiting");
-  expect(container.querySelector("details")?.open).toBe(false);
+  expect(container.querySelector("details")).toBeNull();
+  expect(container.querySelector('[aria-label="Storage diagnostic details"] pre')?.textContent).toBe(detail);
   expect(container.textContent).toContain("Recommended");
   await act(async () => buttonNamed("Show in folder").click());
   expect(reveal).toHaveBeenCalledOnce();
@@ -186,6 +187,25 @@ it("offers explicit account and Mono choices with a plain title, held message co
   await act(async () => buttonNamed("Keep MonoCode version").click());
   expect(resolve).toHaveBeenCalledExactlyOnceWith("keep_mono_version");
   expect(container.textContent).toContain("Codex storage repaired");
+});
+
+it("offers metadata archival only for incomplete recovery and keeps flat diagnostics available", async () => {
+  const metadata = { path: "C:/synthetic/mono/.monocode-txn-id.json.pending", identity: "1:2", fingerprint: "receipt-hash" };
+  const detail = `Codex storage needs repair: ${JSON.stringify({ recovery: true, reason: "Incomplete transaction metadata was preserved.", paths: [metadata.path], metadata })}`;
+  const resolve = vi.fn(async () => { throw new Error(detail); });
+  await act(async () => root.render(<MonoCodexStorageNotice detail={detail} onRepair={vi.fn()} onResolve={resolve} onReveal={vi.fn()} />));
+  expect(container.querySelector("details")).toBeNull();
+  expect(container.querySelector('[aria-label="Storage diagnostic details"] pre')?.textContent).toBe(detail);
+  expect(buttonNamed("Keep MonoCode version")).toBeUndefined();
+  expect(buttonNamed("Use account version")).toBeUndefined();
+  expect(buttonNamed("Compare")).toBeUndefined();
+  await act(async () => buttonNamed("Copy details").click());
+  expect(native.copy).toHaveBeenCalledWith(detail);
+  await act(async () => buttonNamed("Archive incomplete metadata").click());
+  expect(resolve).toHaveBeenCalledExactlyOnceWith("preserve_recovery_metadata");
+  expect(container.textContent).not.toContain("Codex storage repaired");
+  await act(async () => root.render(<MonoCodexStorageNotice detail={conflictDetail()} onRepair={vi.fn()} onResolve={resolve} />));
+  expect(buttonNamed("Archive incomplete metadata")).toBeUndefined();
 });
 
 it("uses the recommended account version and prevents other actions until resolution finishes", async () => {
@@ -442,7 +462,7 @@ it("shows clipboard failures while retaining the exact repair details", async ()
       .find((button) => button.textContent === "Copy details")!
       .click(),
   );
-  expect(container.querySelector("details pre")?.textContent).toBe(detail);
+  expect(container.querySelector('[aria-label="Storage diagnostic details"] pre')?.textContent).toBe(detail);
   expect(container.textContent).toContain(
     "Could not copy details: Clipboard unavailable",
   );

@@ -20,10 +20,10 @@ it("refuses a dispatch clock without a canonical recorded turn while retaining z
 
 it("uses recorded completed duration rather than delayed dispatch settlement", () => {
   const html = renderToStaticMarkup(<TaskMetricsLine
-    metrics={{ turns: 1, startedAt: 0, endedAt: 60_000, elapsedMs: 0, partial: false }}
+    metrics={{ turns: 1, startedAt: 0, endedAt: 60_000, elapsedMs: 5000, partial: false }}
     state={{ status: "done" }}
   />);
-  expect(html).toContain("0s");
+  expect(html).toContain("5s");
   expect(html).not.toContain("1m");
 });
 

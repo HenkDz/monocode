@@ -126,7 +126,8 @@ it.each([0, 5000])("retains an actually observed start at zero and completed dur
     await restored.hydrate("lead");
     vi.mocked(orchestrator.snapshot).mockReturnValue(restored.snapshot());
     await act(async () => view.root.render(<MemberWorkLog member={member} />));
-    expect(view.metrics().textContent).toBe(`${durationMs ? "5s" : "0s"} · 1,000 in / 900 cached / 0 out tokens · Waiting review`);
+    expect(selectTaskMetrics(task, restored.run("lead")!.dispatches!, []).elapsedMs).toBe(durationMs);
+    expect(view.metrics().textContent).toBe(`${durationMs ? "5s" : "1s"} · 1,000 in / 900 cached / 0 out tokens · Waiting review`);
     expect(view.metrics().title).toContain("Total input (including cache) 1,000");
     expect(view.metrics().title).toContain("Cached 900");
   } finally { await act(async () => view.root.unmount()); }

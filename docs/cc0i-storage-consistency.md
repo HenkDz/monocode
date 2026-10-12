@@ -1,6 +1,6 @@
 # CC0I storage consistency and recovery
 
-Baseline: `ec1250de4f0abc0af781485ed581aa0cc81bff7d`, tree `660a3ffdea50073682a0edcfb8adb5b9321a54ac`. Implementation validation is complete enough to freeze source; final exact-pin native/web/process/browser gates are still pending. This document is not a SHIP verdict.
+Baseline: `ec1250de4f0abc0af781485ed581aa0cc81bff7d`, tree `660a3ffdea50073682a0edcfb8adb5b9321a54ac`. Final application source: `b88ff5c80a3a720b868333a5c9c0c243d0280e2c`, tree `ad7a57c1ef55850a9fff1ac692fa318dfd52da15`. Native executions retain their original `3fb6a4857e83c518acc8b3d0b3007a44319745a2` pin; all 113 native inputs match the final source. This documentation update changes no application or test input. Coordinator integration, current native families and independent Claude re-review remain separate gates; this is not a SHIP verdict.
 
 ## Migration and recovery
 
@@ -28,22 +28,36 @@ Context preparation chooses private config, instructions and overrides before an
 
 Explicit Elevated selections receive accurate guidance to change Sandbox engine in Permissions; ineffective private repair is withheld and no success receipt is posted before readiness. Held Plan/orchestrate/read-only messages do not offer Full access. Ordinary Full access checks native readiness before saving the Mono/session permission change, then resumes the held prompt once. Failed readiness leaves persisted modes unchanged and accepts no turn. Remote-host notices expose host guidance instead of local mutations; sandbox failures show their human reason.
 
-## Implementation checks and evidence
+The completed sandbox category stays visible while its success receipt is shown, even when App clears the blocker first. Browser attempt02 exposed this actual notice defect; its unchanged five-second assertion is retained and passes after the source correction and regression test.
+
+## Validation and evidence
 
 Evidence root: `C:/Users/nooro/AppData/Local/Temp/monocode-cc/cc0i/evidence/`.
 
-| Check | Current implementation result |
+| Check | Executed result and pin |
 | --- | --- |
 | Initial source/small callback/model probe | 12 passed / 0 failed; synthetic native/persistence adapters |
 | Locked install | 428 packages; exit0; no source/lock drift |
-| Focused App/model/notice/store/provider/Attention | 111 passed / 0 failed |
-| Actual current full crate storage group | 189 passed / 0 failed / 5 child entrypoint ignores / 628 filtered |
-| Owned lifecycle/namespace subset | 11 passed / 0 failed / 1 child ignore; synthetic credential backend, real file leases |
-| Implementation TypeScript | Exit0 before the last local corrections; final rerun pending |
+| Focused App/model/notice/store/provider/Attention | 111/0 before notice correction; focused notice34/0 afterward |
+| Actual full crate storage group,3fb6a48 | 189 passed / 0 failed / 5 child entrypoint ignores / 628 filtered |
+| Native harness / Mono / control,3fb6a48 | Broad harness26/0; narrower namespace21/0; Mono14/0; control11/0 |
+| Owned lifecycle/namespace subset | 11/0/1 child ignore; synthetic credential backend, real Windows file leases |
+| Original A probe,3fb6a48 native export | 11/0/1 entrypoint ignore;61 rows include original49 kill cases; all safe assertions pass |
+| Original H11,3fb6a48 native export | 11/0:9 terminated cases plus2 resumed replacement controls |
+| H39,3fb6a48 | Actual native suite/child checkpoints retained; separate0.594s aggregator validates39 fixtures plus2 publication and1 allocation control |
+| Original literal / separate canonical / original legacy journal | Literal4 pass/1 known raw-prefix failure/1 child ignore; canonical5/0/1; legacy1/0 |
+| Actual old ec1250d copy safety assertion | 0 pass/1 expected failure; newer private dependency turns were lost |
+| Full one-worker Vitest,b88ff5c | 8302 passed / 0 failed /13 existing skips,627 test files |
+| TypeScript / production build,b88ff5c | Both exit0;1936 inputs unchanged through each gate |
+| Chromium/WebKit,b88ff5c UI | 68/0;56 wide/narrow dark/light PNGs inspected; native helper from3fb6a48 with unchanged native hashes |
 
 Every failed implementation attempt is retained: native4/4 and172/10 and187/1; focused102/1 and109/2. Correcting invalid rollout fixtures did not change safe expectations. The old held Plan test now asserts refusal before preparation and no persistence, preserving its restriction/retained-prompt intent. The original external literal READONLY assertion is unchanged; canonical normalization stays a separate control. No deadlines, retries or skips were relaxed. Native credential tests perform no real Credential Manager operations.
 
-Final frozen-source validation, original A49/H11/39/legacy/literal/canonical controls, complete one-worker Vitest, tsc/build, Chromium/WebKit proof and current PNG inspection are required before reporting DONE. REPORT and VALIDATION-READY outside the checkout record the exact source/doc pins and final counts when available.
+Historical full frontend results8301/0/13 and tsc/build0 at3fb6a48 remain historical. Browser01 failed before UI on a canonical receipt-path fixture mismatch; browser02 failed an actual UI success-category assertion; browser03 failed an actual UI success assertion because its synthetic legacy fixture also contained an unowned config. Browser04 initializes that fixture through native prepare before injecting the original kill point. Assertions and deadlines are unchanged; every failed receipt/log and the02/03 PNG/driver inventories remain. A console-encoding exception after build01 is retained separately from its successful direct build receipt.
+
+Browser04 runs the actual production components, storage model and App callback with isolated IPC/persistence adapters and full-crate native primitives. It exercises all three original legacy kill points in both engines, then the UI Archive action and prepare, checking original bytes, Windows attributes and retained file identity. It also exercises source confirmation/mismatch, explicit namespace confirmation/cancel/keyboard, and actual other-process lease refusal. Credentials are synthetic only. No browser console error or external request occurred. All owned servers/browsers/children were stopped.
+
+External REPORT and VALIDATION-READY record final source/doc pins, commands and the closure ledger. `evidence/final-source-manifest.json` lists all23 changed paths, including both notice-correction paths. `native-applicability-and-browser-inputs.json` verifies historical native inputs, unchanged exported helpers/test modules and separate browser-driver changes. `final-web-summary.json` preserves the unchanged13 skip inventory. `browser/results.json` and `browser/inspection/` bind and inspect all56 PNGs. Native evidence is not relabeled as execution at the final UI head.
 
 ## Remaining limits
 

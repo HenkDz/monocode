@@ -64,6 +64,49 @@ it("checks the harness and every settings key while allowing reordered settings"
     .toEqual({ used: 10 });
 });
 
+it.each(["harness", "account"] as const)("ignores a binding published by the old %s", choice => {
+  const previous = { ...newSession("codex", "/tmp"), providerAccountId: "work" };
+  const event = bindTurnContextProfile(previous)({ type: "session.providerBound", providerSessionId: "old-native" });
+  const current: Session = { ...previous, providerSessionId: "new-native",
+    ...(choice === "harness" ? { harness: "claude" } : { providerAccountId: "personal" }) };
+  expect(applyHarnessEvent(current, event)).toBe(current);
+});
+
+it.each([
+  { origin: undefined, current: "default" }, { origin: "default", current: undefined },
+  { origin: "work", current: "work" },
+])("keeps a valid binding from account $origin to $current across next-turn controls", ({ origin, current }) => {
+  const previous = { ...newSession("codex", "/tmp"), providerAccountId: origin };
+  const event = bindTurnContextProfile(previous)({ type: "session.providerBound", providerSessionId: "native" });
+  const changed: Session = { ...previous, providerAccountId: current, model: "next-model", modelSettings: { effort: "high" },
+    readOnly: true, runtimeMode: "supervised", windowsSandbox: "unelevated" };
+  expect(applyHarnessEvent(changed, event)).toEqual({ ...changed, providerSessionId: "native" });
+});
+
+it("snapshots binding ownership independently of provider configuration and later session mutation", () => {
+  const previous = { ...newSession("codex", "/tmp"), providerAccountId: "work" };
+  const bind = bindTurnContextProfile(previous);
+  const configured = applyHarnessEvent(previous, bind({ type: "session.configChanged", model: "provider-model" }));
+  previous.harness = "claude";
+  previous.providerAccountId = "personal";
+  expect(applyHarnessEvent(configured, bind({ type: "context", used: 10, window: 100 })).context)
+    .toEqual({ used: 10, window: 100 });
+  const event = bind({ type: "session.providerBound", providerSessionId: "native" });
+  expect(applyHarnessEvent(configured, event).providerSessionId).toBe("native");
+  expect(applyHarnessEvent(previous, event)).toBe(previous);
+});
+
+it("retains context/configuration profile guards while accepting the same-owner binding", () => {
+  const previous = { ...newSession("codex", "/tmp"), providerAccountId: "work" };
+  const bind = bindTurnContextProfile(previous);
+  const changed = { ...previous, model: "next-model", modelSettings: { effort: "high" }, context: { used: 10, window: 100 } };
+  expect(applyHarnessEvent(changed, bind({ type: "session.configChanged", model: "old-model" }))).toBe(changed);
+  expect(applyHarnessEvent(changed, bind({ type: "context", used: 20, window: 1000 })).context)
+    .toEqual({ used: 20, window: 100 });
+  expect(applyHarnessEvent(changed, bind({ type: "session.providerBound", providerSessionId: "native" })))
+    .toEqual({ ...changed, providerSessionId: "native" });
+});
+
 beforeEach(() => {
   now = 0;
   vi.spyOn(Date, "now").mockImplementation(() => now);

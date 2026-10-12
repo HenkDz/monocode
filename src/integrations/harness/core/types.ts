@@ -9,13 +9,13 @@ import type {
   TurnMetrics,
 } from "../../../features/sessions/model/session";
 import type { UserQuestion } from "../../../features/sessions/model/userQuestion";
-import type { ContextProfile } from "./contextProfile";
+import type { ContextProfile, ProviderBindingProfile } from "./contextProfile";
 
 export type HarnessEvent =
   | { type: "session.started" }
   | { type: "session.ended"; code?: number | null }
   | { type: "session.error"; message: string }
-  | { type: "session.providerBound"; providerSessionId: string }
+  | { type: "session.providerBound"; providerSessionId: string; bindingProfile?: ProviderBindingProfile }
   | { type: "turn.started"; providerTurnId: string }
   | { type: "turn.ready" }
   | { type: "turn.compaction"; phase: "started" | "completed"; id?: string; legacy?: boolean }

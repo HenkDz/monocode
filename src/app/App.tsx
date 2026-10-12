@@ -8596,6 +8596,10 @@ function Workspace({
                 modelSettings: pendingSwitch.fromSettings,
                 providerAccountId: pendingSwitch.fromProviderAccountId,
                 userRequest: text,
+                validateDispatch: () => {
+                  if (turnGen.current.get(sessionId) !== gen) throw new TurnNotReadyError("The turn was stopped before its prompt could be sent.");
+                  assertMonoRotationCurrent(sessionId, rotationReceipt);
+                },
               });
             } catch {
               agentText = "";
@@ -11914,6 +11918,9 @@ function Workspace({
           throw new Error(
             `${session.harness} cannot take guidance mid-turn. Wait for the turn to finish, then use message.`,
           );
+        const savedRotation = loadMonoRotation(id);
+        assertMonoRotationCurrent(id, savedRotation);
+        const gen = turnGen.current.get(id);
         // Record it on the worker before dispatch, so its own transcript shows
         // why it changed course even if the harness call then fails.
         const next = sessionsRef.current.map((entry) =>
@@ -11921,14 +11928,36 @@ function Workspace({
         );
         sessionsRef.current = next;
         setSessions(next);
-        await steerHarnessTurn({
-          harness: session.harness,
-          sessionId: id,
-          cwd: sessionWorkCwd(session),
-          model: session.model,
-          modelSettings: session.modelSettings,
-          text,
-        });
+        const guidanceId = next.find((entry) => entry.id === id)!.blocks.at(-1)!.id;
+        let refused = false;
+        try {
+          await steerHarnessTurn({
+            harness: session.harness,
+            sessionId: id,
+            cwd: sessionWorkCwd(session),
+            model: session.model,
+            modelSettings: session.modelSettings,
+            text,
+            validateDispatch: () => {
+              try {
+                if (turnGen.current.get(id) !== gen) throw new TurnNotReadyError("The active turn changed before the follow-up could be sent.");
+                assertMonoRotationCurrent(id, savedRotation);
+              } catch (error) {
+                refused = true;
+                throw error;
+              }
+            },
+          });
+        } catch (error) {
+          if (refused || error instanceof TurnNotReadyError) {
+            // Unsent guidance must not become authority for a later rotation.
+            sessionsRef.current = sessionsRef.current.map((entry) => entry.id === id
+              ? { ...entry, blocks: entry.blocks.map((block) => block.id === guidanceId ? { ...block, draft: true } : block) }
+              : entry);
+            setSessions(sessionsRef.current);
+          }
+          throw error;
+        }
       },
       respondApproval: (id, requestId, decision) => {
         const session = sessionsRef.current.find((entry) => entry.id === id);

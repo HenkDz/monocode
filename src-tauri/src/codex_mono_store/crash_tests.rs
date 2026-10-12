@@ -214,6 +214,19 @@ fn crash_child() {
     let (source, home) = storage_roots(&root.join("account"), &root.join("mono")).unwrap();
     let entry = std::env::var("CC0G_CRASH_ENTRY").unwrap();
     let result = match std::env::var("CC0G_CRASH_OPERATION").unwrap().as_str() {
+        "preserve-metadata" => (|| {
+            let error = transactions::reconcile(&home)
+                .err()
+                .ok_or("Missing incomplete metadata")?;
+            let recovery: serde_json::Value =
+                serde_json::from_str(&error).map_err(|e| e.to_string())?;
+            let metadata = serde_json::from_value::<transactions::RecoveryMetadata>(
+                recovery["metadata"].clone(),
+            )
+            .map_err(|e| e.to_string())?;
+            transactions::preserve_metadata(&home, &metadata)?;
+            Ok(())
+        })(),
         "prepare" => prepare_files(&source, &home),
         "isolate-skills" => prepare_files(&source, &home),
         "skills-context" | "memory-context" => (|| {
@@ -465,6 +478,108 @@ fn killed_account_choice_preserves_original_bytes_and_reconciles_claims() {
         fixture.assert_clean();
         println!("use-account {point}: {}", fixture.0.display());
     }
+}
+
+#[test]
+fn killed_journal_publication_and_retirement_preserve_bytes_and_recover() {
+    for point in [
+        "journal-after-create",
+        "journal-after-write",
+        "verify-before-rename",
+        "verify-after-rename",
+        "after-discard",
+        "before-journal-remove",
+        "after-journal-remove",
+        "journal-before-publish",
+        "journal-after-publish",
+    ] {
+        let fixture = Fixture::new(&format!("journal-{point}"));
+        let source = fixture.source().join("AGENTS.md");
+        let original = fixture.home().join("AGENTS.md");
+        std::fs::write(&source, ACCOUNT_BYTES).unwrap();
+        std::fs::write(&original, MONO_BYTES).unwrap();
+        let identity = entry_identity(&source).unwrap();
+        let modified = std::fs::metadata(&source).unwrap().modified().unwrap();
+        let private_identity = entry_identity(&original).unwrap();
+        fixture.kill_at("use-account", "AGENTS.md", point);
+        let restart = fixture.run("prepare", "AGENTS.md", "restart");
+        if let Err(error) = &restart {
+            let value: serde_json::Value = serde_json::from_str(error).unwrap();
+            if value["recovery"] == true {
+                assert!(value["metadata"].is_object(), "{error}");
+                assert_eq!(
+                    fixture.run("prepare", "AGENTS.md", "repeat").unwrap_err(),
+                    *error
+                );
+                let path = PathBuf::from(value["metadata"]["path"].as_str().unwrap());
+                let pending_identity = entry_identity(&path).unwrap();
+                let pending_bytes = std::fs::read(&path).unwrap();
+                fixture
+                    .run("preserve-metadata", "AGENTS.md", "preserved")
+                    .unwrap();
+                assert!(!path.exists());
+                let archived = std::fs::read_dir(
+                    path.parent()
+                        .unwrap()
+                        .join(".monocode-preserved-transactions"),
+                )
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap()
+                .path();
+                assert_eq!(entry_identity(&archived).unwrap(), pending_identity);
+                assert_eq!(std::fs::read(&archived).unwrap(), pending_bytes);
+            }
+        }
+        if let Err(error) = fixture.run("prepare", "AGENTS.md", "reconciled") {
+            let conflict: StorageConflict = serde_json::from_str(&error).unwrap();
+            assert_eq!(conflict.entry, "AGENTS.md");
+            assert_eq!(entry_identity(&original).unwrap(), private_identity);
+            assert_eq!(std::fs::read(&original).unwrap(), MONO_BYTES);
+            fixture.run("use-account", "AGENTS.md", "resolved").unwrap();
+        }
+        fixture.run("prepare", "AGENTS.md", "prepared").unwrap();
+        fixture
+            .run("prepare", "AGENTS.md", "prepared-again")
+            .unwrap();
+        assert_eq!(std::fs::read(&source).unwrap(), ACCOUNT_BYTES);
+        assert_eq!(entry_identity(&source).unwrap(), identity);
+        assert_eq!(
+            std::fs::metadata(&source).unwrap().modified().unwrap(),
+            modified
+        );
+        assert!(same_entry(&source, &original));
+        fixture.assert_archived("AGENTS.md", MONO_BYTES);
+        fixture.assert_clean();
+        println!("CC0H journal {point}: {}", fixture.0.display());
+    }
+}
+
+#[test]
+fn killed_initial_journal_allocation_never_exposes_partial_authority() {
+    let fixture = Fixture::new("atomic-journal-allocation");
+    let source = fixture.source().join("AGENTS.md");
+    let original = fixture.home().join("AGENTS.md");
+    std::fs::write(&source, ACCOUNT_BYTES).unwrap();
+    std::fs::write(&original, MONO_BYTES).unwrap();
+    let identity = entry_identity(&original).unwrap();
+    fixture.kill_at("use-account", "AGENTS.md", "journal-after-create");
+    let entries = std::fs::read_dir(fixture.home())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect::<Vec<_>>();
+    assert!(
+        !entries.iter().any(|path| {
+            let name = path.file_name().unwrap().to_string_lossy();
+            name.starts_with(".monocode-txn-") && name.ends_with(".json")
+        }),
+        "Only complete, synced journals may become authoritative"
+    );
+    assert_eq!(entry_identity(&original).unwrap(), identity);
+    assert_eq!(std::fs::read(&original).unwrap(), MONO_BYTES);
+    assert_eq!(std::fs::read(&source).unwrap(), ACCOUNT_BYTES);
+    println!("CC0H initial allocation: {}", fixture.0.display());
 }
 
 fn killed_hooks_isolation(link: fn(&Path, &Path), kind: &str) {

@@ -210,11 +210,14 @@ fn change_configs(source: &Path, home: &Path) -> Result<SandboxConfigChange, Str
     let mut staged = None;
     let mut backups = Vec::new();
     let result = (|| {
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temp)
-            .map_err(|error| error.to_string())?;
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            options.share_mode(windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ);
+        }
+        let mut file = options.open(&temp).map_err(|error| error.to_string())?;
         file.write_all(updated.as_bytes())
             .map_err(|error| error.to_string())?;
         file.sync_all().map_err(|error| error.to_string())?;
@@ -222,6 +225,7 @@ fn change_configs(source: &Path, home: &Path) -> Result<SandboxConfigChange, Str
         file.set_permissions(metadata.permissions())
             .map_err(|error| error.to_string())?;
         staged = Some(super::transactions::RecordedEntry::new(&temp)?);
+        drop(file);
         let stage = staged.as_ref().unwrap();
         #[cfg(test)]
         super::before_claim();
@@ -234,6 +238,8 @@ fn change_configs(source: &Path, home: &Path) -> Result<SandboxConfigChange, Str
         } else {
             None
         };
+        #[cfg(windows)]
+        let file = stage.pin_attributes(&temp)?;
         let result = (|| {
             if let Some(claimed) = &claimed {
                 let current =
@@ -273,6 +279,7 @@ fn change_configs(source: &Path, home: &Path) -> Result<SandboxConfigChange, Str
             #[cfg(windows)]
             file.set_permissions(metadata.permissions())
                 .map_err(|error| error.to_string())?;
+            #[cfg(windows)]
             drop(file);
             stage.publish(&temp, &config_path)?;
             #[cfg(test)]

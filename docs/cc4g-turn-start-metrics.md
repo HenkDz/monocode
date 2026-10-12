@@ -1,6 +1,75 @@
 # CC4G: assignment elapsed requires a recorded conversation turn
 
-## Current CC7UR corrections: source ready, FULL pending
+## Completed FULL A validation
+
+All assigned builder gates ran on exact frozen
+8e8f8b74fbda0924c2439d3970492d962ca058cb, tree
+3cc0f3a5b073af572608e504dee232b1abb68674, with 1,730 unchanged source hashes.
+No production/test source changed during FULL; the final delta is documentation.
+One heavy job and one worker ran at a time under the explicit slot A grant;
+slot B remained I. The passed full gates were not unnecessarily repeated after
+the provider-capacity interruption.
+
+| Gate | Result |
+| --- | --- |
+| Locked local install | Exit 0; 26.03s; unchanged source |
+| Full Vitest | 8,370 passed / 0 failed / 13 existing skips; 8,383 total; files 630 passed / 2 skipped / 632 total; suite 460.18s, wrapper 462.14s; exit 0 |
+| TypeScript / production build | Both exit 0; 17.34s / 35.05s; production Vite phase completed |
+| Complete Chromium + WebKit | 255 passed / 1 known MP4 failure / 0 skips / 0 flaky; 256 total; suite 372.65s, wrapper 374.02s; exit 1 |
+| New correction browser cases | All 20 pass within the complete run |
+| Exact ec6005 browser baseline | 5 passed / 1 known MP4 failure / 0 skips / 0 flaky; 6 total; wrapper 50.92s; exit 1 |
+| Tab-revisit, unchanged current and baseline | Each 4 / 0 across both engines; original assertions/deadlines/retries/skips retained |
+| Supplemental controls | 62 passed / 2 wrong-target failures, retained; original 60 controls all pass |
+| Cold drawers, exact copy, glyph and corrected unknown-clock controls | 10 / 0 across both engines; exit 0 |
+| Fresh comparison matrix | 1,707 checks / 0 failed; 20 layouts; 61 PNGs; 54.81s; exit 0 |
+| Fresh original source / unknown-clock probes with local dependencies | 18 / 0 and 2 / 0; unchanged assertions; exit 0 |
+
+The baseline is actual Git-object source from exact
+ec6005fdfa33f51ca001dd4a89c877afade138d3, not source equality substituted for a
+browser replay. Its first two attempts stopped before product checks: missing
+package resolution, then the exact imported CHANGELOG.md. Both failures/configs
+are preserved. A temporary dependency junction reused this branch's locked local
+packages, and the missing changelog came from the same baseline Git object.
+Baseline source stayed unchanged; the spec adapter changes only the package
+import. No animation defect reproduced in current or baseline; no animation
+source correction was made. The previous CC7UR extra-fade failure stays retained
+and does not become a passing historical result.
+
+Current and baseline WebKit both fail Blob-MP4 metadata loading with error 4 and
+metadataReady=false, under the original 15s assertion. This browser gate remains
+visibly failed, not skipped or described as green. Final independent/integrated
+acceptance and the separate storage/authority/routing decisions remain required.
+
+All original 60 supplementary pointer/keyboard/nested Escape/disconnected-opener,
+queue Edit-Cancel/history/search and narrow controls pass. The original padding
+selection coordinate is adapted to the actual rendered glyph, preserving its
+selection assertion; the old padding failure is retained. Two new settled-clock
+controls initially selected the known Current blocked-preparation row. Their
+62/2 run remains failed. The corrected follow-up selects History and verifies
+Done, then retains the same Elapsed unavailable/no did-not-start assertions.
+Running-tool and Done controls pass in both engines without a production change.
+
+Real drawer wrappers now measure x970/y0/w470/h1000 at 1440px, translate=none,
+with visible hit-tested copy/fact targets. Glyph controls select `files` and copy
+the exact full output through an intercepted clipboard. Body selection remains
+suppressed. Retired/reused task readers close and focus Current without opening
+another Manager's prompt; originals remain protected by run identity.
+
+Inspected all 20 current dark/light 1440/1100 comparison PNGs, the saved-worker
+frame, all 16 narrow state PNGs, and representative drawer/glyph/focus/unknown-
+clock frames: 45 inspected images with hashes in png-inspection.json. No new
+layout defect was found. The capture-only supported empty checkpoint bridge is
+unchanged; live database/provider, OS clipboard, native foreground and screen-
+reader acceptance are not claimed.
+
+Evidence: cc4g/evidence/full-a-initial/, including frozen-source-manifest.json,
+all *-receipt.json/log/results, baseline source/import/dependency artifacts,
+supplement/ and followups/, visual/screenshots/index.md, png-inspection.json,
+validation-summary.json and final cleanup/gate manifests. Source-stage failures,
+all old evidence and every FULL attempt remain retained. No new incoming merge,
+native job, app preview, real profile/model turn, fan-out or push occurred.
+
+## Retained source checkpoint before FULL
 
 The resumed branch merged exact validated nour
 ec1250de4f0abc0af781485ed581aa0cc81bff7d, conflict-free, as

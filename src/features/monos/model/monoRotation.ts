@@ -527,6 +527,7 @@ function isMonoRotation(value: unknown): value is MonoRotation {
       rotation[key] === undefined || strings(rotation[key])) &&
     (rotation.userRequests === undefined || (Array.isArray(rotation.userRequests) &&
       rotation.userRequests.every(request => request && typeof request === "object" &&
+        !Array.isArray(request) && Object.keys(request).every(key => key === "id" || key === "text") &&
         typeof request.id === "string" && typeof request.text === "string"))) &&
     (rotation.pendingBrief === undefined || !!(rotation.pendingBrief as string).trim()) &&
     ((rotation.pendingInput === undefined && rotation.pendingInputs === undefined) ||

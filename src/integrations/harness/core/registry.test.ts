@@ -26,6 +26,7 @@ import {
   registerHarness,
   resetHarnessIdlePark,
   sendHarnessTurn,
+  steerHarnessTurn,
   updateHarnessRuntimeMode,
   TurnAuthorizationError,
   type HarnessAdapter,
@@ -59,14 +60,24 @@ describe("harness registry", () => {
       executable: "C:/preview/current.exe", tempDir: "C:/Temp", actions: ["projects.list"],
     } : undefined);
     let submitted = "";
-    registerHarness(stub("codex", { async sendTurn(input) { submitted = await input.prepareText!("fresh"); } }));
     const prepareText = vi.fn(async () => "Full replacement context");
-    await sendHarnessTurn({ harness: "codex", sessionId: "prepared-cli", cwd: "/tmp", model: "test", runtimeMode: "supervised", orgMono: true, text: "Full fallback", prepareText, onEvent() {} });
+    const validateDispatch = vi.fn();
+    registerHarness(stub("codex", { async sendTurn(input) {
+      submitted = await input.prepareText!("fresh");
+      expect(input.validateDispatch).toBe(validateDispatch);
+      input.validateDispatch!();
+    }, async steerTurn(input) {
+      expect(input.validateDispatch).toBe(validateDispatch);
+      input.validateDispatch!();
+    } }));
+    await sendHarnessTurn({ harness: "codex", sessionId: "prepared-cli", cwd: "/tmp", model: "test", runtimeMode: "supervised", orgMono: true, text: "Full fallback", prepareText, validateDispatch, onEvent() {} });
     expect(prepareText).toHaveBeenCalledExactlyOnceWith("fresh");
     expect(submitted).toContain("Full replacement context");
     expect(submitted).toContain("current running MonoCode executable is C:/preview/current.exe");
     expect(submitted.match(/<monocode_cli_input>/g)).toHaveLength(1);
     expect(submitted).not.toContain("Full fallback");
+    await steerHarnessTurn({ harness: "codex", sessionId: "prepared-cli", cwd: "/tmp", model: "test", text: "Follow up", validateDispatch });
+    expect(validateDispatch).toHaveBeenCalledTimes(2);
   });
 
   it.each([

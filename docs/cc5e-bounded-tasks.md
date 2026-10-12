@@ -293,3 +293,29 @@ remain unproven. No native source changed, and no preview or model turn ran.
 Design, fixture adaptations, failed setup attempts, exact checks and evidence:
 `docs/cc5ej-rotation-continuity.md` and
 `C:/Users/nooro/AppData/Local/Temp/monocode-cc/cc5ej/REPORT.md`.
+
+## CC5EK dispatch authority repair
+
+The final authority check now runs synchronously at each connected provider's
+prompt/steer transport boundary, including OpenCode v2's awaited configuration,
+Cursor's awaited steer fallback and Hermes background continuation. App's turn
+generation and complete receipt remain authoritative there. Newer receipts after
+an issued request survive acceptance; unknown nested user request fields refuse
+dispatch with saved bytes unchanged. Rejected direct follow-ups preserve the
+original active turn, tool and canonical live state.
+
+Connected source suites pass 693 tests across 19 files. CC5EJ-R's five red safety
+cases become 37/37 lifecycle passes; original nine and combined binding nine pass.
+Historical 129 external / 639 source tests and every assertion runner pass; all
+prior 627 source cases remain, with 12 incoming provenance cases added.
+These overlapping counts are source evidence, not live provider acceptance.
+After authorized integration of exact nour c23762b, final input ba792d5 passes
+complete one-worker Vitest: 8,221 passed / 13 skipped / zero failed, with 625
+passed / 2 skipped files. TypeScript and production build pass. The raw merged
+8,220/1/13 and binding-only 25/1 failures remain; the coordinator-approved fixture
+adds generation bindings and the exact followUp marker without weakening safety.
+All 1,712 non-documentation hashes remain identical through validation and the
+final docs update. Builder completion does not grant SHIP or replace final review.
+Dispatch semantics, caller inventory, fixture adaptations and remaining renderer
+transaction/durability limits: `docs/cc5ek-dispatch-authority.md` and
+`C:/Users/nooro/AppData/Local/Temp/monocode-cc/cc5ek/REPORT.md`.

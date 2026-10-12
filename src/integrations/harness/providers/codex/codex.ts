@@ -313,6 +313,7 @@ export async function steerCodexTurn(input: SteerTurnInput): Promise<void> {
   }
 
   try {
+    input.validateDispatch?.();
     await live.rpc.request("turn/steer", params);
   } catch (error) {
     if (live.activeTurnId !== turnId)
@@ -923,6 +924,7 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
 
   try {
     let response: { turn?: { id?: string } };
+    input.validateDispatch?.();
     try {
       response = await live.rpc.request("turn/start", params);
     } catch (error) {

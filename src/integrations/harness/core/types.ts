@@ -14,7 +14,7 @@ import type { ContextProfile, ProviderBindingProfile } from "./contextProfile";
 export type HarnessEvent =
   | { type: "session.started" }
   | { type: "session.ended"; code?: number | null }
-  | { type: "session.error"; message: string }
+  | { type: "session.error"; message: string; followUp?: boolean }
   | { type: "session.providerBound"; providerSessionId: string; bindingProfile?: ProviderBindingProfile }
   | { type: "turn.started"; providerTurnId: string }
   | { type: "turn.ready" }
@@ -208,6 +208,8 @@ export type SendTurnInput = HarnessSessionInput & {
   attachments?: Attachment[];
   /** Rebuild context after the provider confirms its conversation, before submission. */
   prepareText?: (providerSessionId?: string) => Promise<string>;
+  /** Synchronously refuse stale authority immediately before issuing each prompt. */
+  validateDispatch?: () => void;
   /** Called once the provider has accepted the user turn. */
   onAccepted?: () => void;
 };
@@ -221,6 +223,8 @@ export type SteerTurnInput = {
   modelSettings?: Record<string, string>;
   text: string;
   attachments?: Attachment[];
+  /** Runs at the transport boundary, after any queued or provider preparation. */
+  validateDispatch?: () => void;
 };
 
 export type RewindLastTurnInput = CompactContextInput & {

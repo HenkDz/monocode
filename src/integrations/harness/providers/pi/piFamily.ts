@@ -339,6 +339,7 @@ export async function steerTurn(
     attachments: input.attachments,
   });
   if (!command.message && !Array.isArray(command.images)) return;
+  input.validateDispatch?.();
   await live.rpc.request(command);
 }
 
@@ -632,6 +633,7 @@ async function runTurn(
   settlePendingTurn(live);
 
   try {
+    input.validateDispatch?.();
     const response = await Promise.race([
       live.rpc.request(
         {

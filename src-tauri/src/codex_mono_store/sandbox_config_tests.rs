@@ -276,17 +276,70 @@ fn failed_private_snapshot_keeps_journal_for_reconciliation() {
     let fixture = Fixture::new();
     FAIL_NEXT_SNAPSHOT_WRITE.with(|flag| flag.set(true));
     assert!(change_configs(&fixture.source, &fixture.home).is_err());
-    assert_eq!(
-        std::fs::read_dir(&fixture.home)
-            .unwrap()
-            .filter(|entry| entry
-                .as_ref()
+    let journals = std::fs::read_dir(&fixture.home)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.file_name()
                 .unwrap()
-                .file_name()
                 .to_string_lossy()
-                .starts_with(".monocode-txn-"))
-            .count(),
-        1
+                .starts_with(".monocode-txn-")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(journals.len(), 2);
+    let initial = journals
+        .iter()
+        .find(|path| {
+            !path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .ends_with(".verified.json")
+        })
+        .unwrap();
+    let verified = journals
+        .iter()
+        .find(|path| {
+            path.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .ends_with(".verified.json")
+        })
+        .unwrap();
+    let initial_name = initial.file_name().unwrap().to_str().unwrap();
+    let id = initial_name
+        .strip_prefix(".monocode-txn-")
+        .unwrap()
+        .strip_suffix(".json")
+        .unwrap();
+    uuid::Uuid::parse_str(id).unwrap();
+    assert_eq!(
+        verified.file_name().unwrap().to_str().unwrap(),
+        format!(".monocode-txn-{id}.verified.json")
+    );
+    let initial_value: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(initial).unwrap()).unwrap();
+    let verified_value: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(verified).unwrap()).unwrap();
+    assert_eq!(initial_value["entry"], "config.toml");
+    assert_eq!(initial_value["intent"], "private_config");
+    assert_eq!(initial_value["verified"], false);
+    assert_eq!(verified_value["verified"], true);
+    assert_eq!(
+        initial_value["claim"]["name"],
+        format!(".monocode-claim-{id}")
+    );
+    for field in ["entry", "intent", "claim", "staged"] {
+        assert_eq!(verified_value[field], initial_value[field]);
+    }
+    assert_eq!(verified_value["authority"]["name"], initial_name);
+    assert_eq!(
+        verified_value["authority"]["identity"],
+        serde_json::json!(super::super::entry_identity(initial).unwrap())
+    );
+    assert_eq!(
+        verified_value["authority"]["fingerprint"],
+        super::super::fingerprint(initial).unwrap()
     );
     fixture.source_proof();
     fixture.original_backup();

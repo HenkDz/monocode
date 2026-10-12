@@ -847,6 +847,11 @@ pub(super) fn preserve_metadata(
     home: &Path,
     expected: &RecoveryMetadata,
 ) -> Result<PathBuf, String> {
+    #[cfg(windows)]
+    let native_path = PathBuf::from(expected.path.to_string_lossy().replace('/', "\\"));
+    #[cfg(windows)]
+    let path = &native_path;
+    #[cfg(not(windows))]
     let path = &expected.path;
     let relative = path
         .strip_prefix(home)

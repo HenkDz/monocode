@@ -6,8 +6,8 @@ displayed dispatch's clock. Task counters retain their existing retry aggregatio
 input convention, cache subtotal and unavailable-counter behavior. A previous
 attempt's start cannot become the clock for a newly accepted dispatch.
 
-TaskMetricsLine requires a canonical recorded start before showing elapsed, even
-when a caller supplies timestamps. With no observed turns it shows Conversation
+TaskMetricsLine requires a canonical recorded start before showing or ticking elapsed,
+even when a caller supplies timestamps. With no observed turns it shows Conversation
 not started; a recorded turn without its start stays Elapsed unavailable. An
 observed running turn continues ticking, including a start at zero. A completed
 turn uses its recorded elapsed duration, including zero, rather than extending
@@ -47,12 +47,12 @@ completed duration despite late settlement, persisted legacy unknown starts and
 changed current goal/session identity. Shared line tests preserve zero counters and
 reject unsupported caller clocks. Existing metric/state/header regressions remain.
 
-Corrected source is frozen at 0b3f61b7412147ea095c41e0adb6273cdff4859a.
+Corrected source is frozen at cf9d2a509ced8c9a1523f414bf693f5b7c614ea5.
 The corrected original probe passes 18 / 0 failed / 0 skipped with its original
 expected-safe assertions and baseline witnesses unchanged. Its baseline WorkLog
 uses the corrected shared TaskMetricsLine; exact original base and candidate red
-runs remain separate. Five focused Vitest files pass 69 / 0 failed / 0 skipped,
-including ten new regressions. Both current runs preserve all 1,726 tracked
+runs remain separate. Five focused Vitest files pass 70 / 0 failed / 0 skipped,
+including eleven new regressions. Both current runs preserve all 1,726 tracked
 non-documentation input hashes before/after. The Workbench browser spec is unchanged.
 
 Full Vitest, TypeScript and production build await an explicit sole validation
@@ -76,12 +76,14 @@ fixtures then exposed unsupported memberId (61 / 7), missing required member nam
 (61 / 7), and an incomplete PR-cache mock (62 / 6). Each failed run is retained.
 The complete supported delegation envelope and partial house-cache mock now run
 the real production boundaries. The intermediate corrected run passes 68 / 0;
-the final run adds the completed-retry override regression and passes 69 / 0.
+the next run adds the completed-retry override regression and passes 69 / 0.
+The final clock-gate run also verifies no timer before recorded start and an
+actually ticking zero start, and passes 70 / 0.
 Original tests, safe assertions, deadlines, retries and skips were not relaxed.
 
 Evidence root: C:/Users/nooro/AppData/Local/Temp/monocode-cc/cc4g/evidence/.
 Original red runs: original-ec6005/, original-735455a-corrected-import/,
-integrated-before/. Corrected gates: corrected-final/ and focused-final/, with raw
+integrated-before/. Current gates: corrected-clock-gate/ and focused-clock-gate/, with raw
 logs, JSON and source manifests. source-audit.json records incoming guard/native/
 scope preservation; integrated-app-seam.diff records the authorized App merge seam.
 Initial wrapper syntax, baseline import and audit-adapter failures are retained

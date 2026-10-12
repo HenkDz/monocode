@@ -47,11 +47,34 @@ for (const surface of ["embedded", "floating"]) {
         "Fix DZDistro login\ufeff",
       ];
       const specialReason = "Contains non-English or special characters, so Grand Orch will route it.";
+      const projectSets = [
+        "Fix DZDistro and every registered project",
+        "Apply this fix to DZDistro and all our registered projects",
+        "Fix DZDistro and both remaining registered repositories",
+        "Each registered repository needs the DZDistro fix",
+        "Registered projects: all need the DZDistro fix",
+        "Fix DZDistro and every **registered** project",
+        "Fix DZDistro and all,\tremaining repositories",
+        "Fix DZDistro and the remaining projects",
+      ];
       for (const text of conflicts) {
         await composer.fill(text);
         await expect(page.getByRole("status")).toContainText("Send to Grand Orch");
         await expect(page.getByRole("status")).toContainText("More than one project mentioned");
       }
+      for (const text of projectSets) {
+        await composer.fill(text);
+        await expect(page.getByRole("status")).toContainText("Send to Grand Orch");
+        await expect(page.getByRole("status")).toContainText("Comparison or cross-project goal");
+      }
+      await expect(page.getByRole("status")).toBeInViewport();
+      await page.screenshot({ path: testInfo.outputPath(`${surface}-${theme}-project-set-auto.png`) });
+      await page.getByRole("button", { name: "Send", exact: true }).click();
+      const autoSetSubmission = JSON.parse(await page.locator("[data-submission]").innerText());
+      expect(autoSetSubmission).toMatchObject({ choice: { mode: "goal", override: "auto" }, reason: "Comparison or cross-project goal" });
+      expect(autoSetSubmission.projectId).toBeUndefined();
+      expect(autoSetSubmission.managerMonoId).toBeUndefined();
+      await page.getByRole("button", { name: "New goal", exact: true }).click();
       for (const text of specialGoals) {
         await composer.fill(text);
         await expect(page.getByRole("status")).toContainText("Send to Grand Orch");
@@ -99,6 +122,22 @@ for (const surface of ["embedded", "floating"]) {
       expect(grandSubmission.reason).toBe(specialReason);
       expect(grandSubmission.projectId).toBeUndefined();
       expect(grandSubmission.managerMonoId).toBeUndefined();
+      await page.getByRole("button", { name: "New goal", exact: true }).click();
+      await page.getByRole("button", { name: "Goal route: Auto route", exact: true }).click();
+      await page.getByRole("option", { name: "DZDistro Manager", exact: true }).click();
+      for (const text of projectSets) {
+        await composer.fill(text);
+        await expect(page.getByRole("status")).toContainText("Send to Grand Orch");
+        await expect(page.getByRole("status")).toContainText("Comparison or cross-project goal");
+      }
+      await expect(page.getByRole("button", { name: "Goal route: DZDistro Manager", exact: true })).toBeVisible();
+      await expect(page.getByRole("status")).toBeInViewport();
+      await page.screenshot({ path: testInfo.outputPath(`${surface}-${theme}-project-set-explicit.png`) });
+      await page.getByRole("button", { name: "Send", exact: true }).click();
+      const explicitSetSubmission = JSON.parse(await page.locator("[data-submission]").innerText());
+      expect(explicitSetSubmission).toMatchObject({ choice: { mode: "goal", override: "manager", projectId: "dzdistro" }, reason: "Comparison or cross-project goal" });
+      expect(explicitSetSubmission.projectId).toBeUndefined();
+      expect(explicitSetSubmission.managerMonoId).toBeUndefined();
       await page.getByRole("button", { name: "New goal", exact: true }).click();
       await page.getByRole("button", { name: "Goal route: Auto route", exact: true }).click();
       await page.getByRole("option", { name: "DZDistro Manager", exact: true }).click();

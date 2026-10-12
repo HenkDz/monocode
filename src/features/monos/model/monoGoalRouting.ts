@@ -106,11 +106,16 @@ export function decideMonoGoalRoute(input: {
     return grand("Contains non-English or special characters, so Grand Orch will route it.");
   const text = rawText.trim();
   if (!text || text.length > 8000) return grand("Goals must contain 1–8,000 characters");
-  const hasPaths = (text.match(/[^\s"'`()\[\]{}<>]+/g) ?? []).some(token =>
-    /[/\\]|^[a-z]:|^\.{1,2}$|^\.[\p{L}\p{N}_-]|[\p{L}\p{N}_-]\.[\p{L}\p{N}_-]/iu.test(token));
+  const tokens = text.match(/[^\s"'`()\[\]{}<>]+/g) ?? [];
+  const plainTokens = tokens.filter(token =>
+    !/[/\\]|^[a-z]:|^\.{1,2}$|^\.[\p{L}\p{N}_-]|[\p{L}\p{N}_-]\.[\p{L}\p{N}_-]/iu.test(token));
+  const hasPaths = plainTokens.length !== tokens.length;
   if (hasPaths && choice.override !== "manager")
     return grand("Contains file paths: choose a project or send to Grand Orchestrator");
-  if (/\b(compare|compares|compared|comparing|comparisons?|versus|vs\.?|cross[- ]project)\b|\b(across|all|both|multiple|between)\s+(the\s+)?(projects|repositories|repos)\b/i.test(text))
+  // Scope wording requires Grand even for benign singular phrases.
+  const scopeText = plainTokens.join(" ").replace(/[^a-z]/gi, " ");
+  if (/\b(compare|compares|compared|comparing|comparisons?|versus|vs\.?|cross[- ]project)\b/i.test(text) ||
+      /\b(project|repo|work\s*space|code\s*base)/i.test(scopeText))
     return grand("Comparison or cross-project goal");
   const foldedText = foldProjectText(text);
   if (/[<>]|&(?:#(?:x[0-9a-f]+|\d+)|[a-z][a-z0-9]*);|\]\s*\(/i.test(foldedText))

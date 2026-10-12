@@ -69,10 +69,10 @@ function fixture() {
   })));
   return { host, onSubmit, render, change: (next: MonoGoalRoutingContext) => { ctx = next; render(); } };
 }
-function enterGoal() {
+function enterGoal(text = "Fix Atlas checkout") {
   const field = container.querySelector<HTMLTextAreaElement>('[aria-label="Message Grand"]')!;
   const props = Object.entries(field).find(([key]) => key.startsWith("__reactProps"))![1];
-  act(() => props.onChange({ target: { value: "Fix Atlas checkout" } }));
+  act(() => props.onChange({ target: { value: text } }));
   act(() => [...container.querySelectorAll<HTMLButtonElement>("button")]
     .find(button => button.textContent === "New goal")!.click());
 }
@@ -164,3 +164,59 @@ it("gives a raw whitespace edit new IDs after an uncertain goal send", async () 
   expect(f.host.goals.deliver).not.toHaveBeenCalled();
   expect(f.host.grand).toHaveBeenCalledOnce();
 });
+
+for (const explicit of [false, true]) {
+  it.each([
+    " \tFix Atlas and every registered project\r\n",
+    "Apply this fix to Atlas and all our registered projects",
+    "Fix Atlas and both remaining registered repositories",
+    "Each registered repository needs the Atlas fix",
+    "Registered projects: all need the Atlas fix",
+    "Fix Atlas and every **registered** project",
+    "Fix Atlas and all,\tremaining repositories",
+    "Fix Atlas and the remaining projects",
+    "Fix Atlas and other registered projects",
+    "Apply Atlas changes to other repositories too",
+    "Fix Atlas and any other registered repo",
+    "Fix Atlas and another project",
+    "Fix Atlas and the rest of our repositories",
+    "Additional registered projects need the Atlas fix",
+    "Fix Atlas workspace startup",
+    "Fix Atlas codebase startup",
+    "Fix Atlas and 42 repositories",
+    "Fix Atlas and every other code base",
+    "Fix Atlas and every other code-base",
+    "Fix Atlas and every other work space",
+    "Fix Atlas and every other work-space",
+  ])("retains embedded Grand scope and retry identity for %s (explicit " + explicit + ")", async text => {
+    const f = fixture();
+    f.change({ ...context, projects: [...context.projects, {
+      id: "c:/code/beacon", name: "Beacon", path: "C:/code/Beacon",
+      managerMonoId: "beacon-manager", available: false,
+    }] });
+    enterGoal(text);
+    if (explicit) {
+      await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Goal route: Auto route"]')!.click());
+      await act(async () => [...document.querySelectorAll<HTMLButtonElement>('[role="option"]')]
+        .find(button => button.textContent?.trim() === "Atlas Manager")!.click());
+    }
+    expect(chip()).toContain("Send to Grand Orch");
+    expect(chip()).toContain("Comparison or cross-project goal");
+    await act(async () => send());
+    expect(container.querySelector<HTMLTextAreaElement>('[aria-label="Message Grand"]')!.value).toBe(text);
+    f.host.grand.mockReturnValue(true);
+    await act(async () => send());
+    const first = f.onSubmit.mock.calls[0][2]!;
+    expect(f.onSubmit.mock.calls.map(call => call[0])).toEqual([text, text]);
+    expect(f.onSubmit.mock.calls[1][2]).toMatchObject({ requestId: first.requestId, userMessageId: first.userMessageId });
+    expect(first).toMatchObject({ ownerId: "grand", choice: { mode: "goal", override: explicit ? "manager" : "auto" } });
+    expect(first.projectId).toBeUndefined();
+    expect(first.managerMonoId).toBeUndefined();
+    expect(f.host.grand).toHaveBeenCalledTimes(2);
+    expect(f.host.resolve).not.toHaveBeenCalled();
+    expect(f.host.persistOrigin).not.toHaveBeenCalled();
+    expect(f.host.goals.deliver).not.toHaveBeenCalled();
+    expect(f.host.ledger.goals("grand")).toHaveLength(0);
+    expect(container.querySelector<HTMLTextAreaElement>('[aria-label="Message Grand"]')!.value).toBe("");
+  });
+}

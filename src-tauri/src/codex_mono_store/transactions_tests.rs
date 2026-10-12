@@ -754,3 +754,23 @@ fn metadata_archival_preserves_readonly_source_private_and_metadata_attributes()
         transactions::reconcile(&fixture.home).unwrap();
     }
 }
+
+#[test]
+fn recovery_root_validation_never_creates_account_or_private_directories() {
+    let fixture = TransactionFixture::new(ClaimIntent::Keep);
+    let missing_source = fixture.root.join("missing-account");
+    let missing_home = fixture.root.join("missing-private");
+    assert!(canonical_roots(&missing_source, &fixture.home).is_err());
+    assert!(canonical_roots(&fixture.source, &missing_home).is_err());
+    assert!(!missing_source.exists());
+    assert!(!missing_home.exists());
+    assert!(canonical_roots(&fixture.source, &fixture.source).is_err());
+    let (source, home) = canonical_roots(&fixture.source, &fixture.home).unwrap();
+    assert_eq!(source, fixture.source);
+    assert_eq!(home, fixture.home);
+    assert_eq!(std::fs::read(&fixture.original).unwrap(), PRIVATE);
+    assert_eq!(
+        std::fs::read(fixture.source.join("AGENTS.md")).unwrap(),
+        ACCOUNT
+    );
+}

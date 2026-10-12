@@ -20,7 +20,7 @@ All authority reads are bounded to **65,536 bytes**, with an extra-byte check an
 
 ## Explicit incomplete-metadata recovery
 
-Unpublished metadata and legacy empty initial journals remain blocked across repeated preparations. Their notice offers **Archive incomplete metadata** using a native receipt with a string-encoded identity and SHA-256 fingerprint. The native command derives the held account's private home, rejects escapes and linked parent directories, pins the exact single-link file, and refuses a stale receipt or a nonempty authoritative journal.
+Unpublished metadata and legacy empty initial journals remain blocked across repeated preparations. Their notice offers **Archive incomplete metadata** using a native receipt with a string-encoded identity and SHA-256 fingerprint. The native command requires existing canonical account/private roots without creating or provisioning them, rejects escapes and linked parent directories, pins the exact single-link file, and refuses a stale receipt or a nonempty authoritative journal.
 
 The selected file is renamed without replacement into a real `.monocode-preserved-transactions` directory beside it. Its bytes, identity, timestamps and attributes are retained. A conversation receipt records the archive path. Preparation then reconciles the remaining authority and claims; it can still require an ordinary version choice or inspection of an unlabelled legacy claim. Archival does not reset user data, grant a private override, or erase an unfamiliar data stage.
 
@@ -34,7 +34,7 @@ The old positive expectation that default Details was closed was intentionally r
 
 ## Prepared regressions and evidence
 
-- Ten new native tests cover identity/content replacement, a replacement claim retaining its label, parser boundaries, unknown bytes/fields, reparses, stale/outside/linked recovery receipts, exact archival, read-only attributes, verification replacement and real process termination.
+- Eleven new native tests cover identity/content replacement, a replacement claim retaining its label, parser boundaries, unknown bytes/fields, reparses, stale/outside/linked recovery receipts, exact archival, read-only attributes, non-creating root validation, verification replacement and real process termination.
 - The production test executable remains the child harness. Its existing 32 matrix cases plus seven former journal/verification/retirement boundaries map to all original **39** cases. Two publication boundaries and a separate initial-allocation control add three cases. Existing CC0/CC0F/CC0G and CC6 interruption families remain required.
 - Four new frontend tests cover metadata parsing, flat recovery/action presentation, held-account archival/replay, and failure retaining pending submissions.
 - Four counterexample tests are prepared for the old `40a4b82` full native crate. The initial-allocation counterexample needs one pause-only hook in old source. They have not been compiled or executed; no baseline-failure or corrected-pass claim is made.

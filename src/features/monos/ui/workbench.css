@@ -335,6 +335,7 @@ div:has(> .cc7u-drawer) {
   inset: 0 0 0 auto;
   width: min(470px, 100vw);
   transform: none;
+  translate: none;
 }
 .cc7u-drawer {
   height: 100dvh;

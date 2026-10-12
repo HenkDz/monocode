@@ -54,6 +54,8 @@ async function fixture() {
     }),
     stop: vi.fn(async () => {}),
     steer: vi.fn(async () => {}),
+    integrateWorker: vi.fn(async () => ({ files: [], alreadyApplied: 0 })),
+    cleanupWorker: vi.fn(async () => false),
     respondApproval: vi.fn(),
     answerQuestion: vi.fn(),
   };
@@ -100,7 +102,7 @@ it("keeps actual accepted preparation and settled preparation failure without a 
     expect(settled.dispatches![0].turnStartedAt).toBeUndefined();
     vi.mocked(orchestrator.snapshot).mockReturnValue([settled]);
     await act(async () => view.root.render(<MemberWorkLog member={member} />));
-    expect(view.metrics().textContent).toBe("Conversation not started · Tokens unavailable · Failed");
+    expect(view.metrics().textContent).toBe("Elapsed unavailable · Tokens unavailable · Failed");
     expect(f.host.submit).not.toHaveBeenCalled();
   } finally { await act(async () => view.root.unmount()); }
 });

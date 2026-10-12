@@ -55,7 +55,7 @@ export function TaskMetricsLine({
       className="min-w-0 truncate text-[11px] tabular-nums text-content/75"
     >
       {metrics?.startedAt === undefined || startedAt === undefined || (!ticking && endedAt === undefined && !metrics?.elapsedMs)
-        ? metrics?.turns === 0 ? "Conversation not started" : "Elapsed unavailable"
+        ? metrics?.turns === 0 && !metrics.partial ? "Conversation not started" : "Elapsed unavailable"
         : endedAt === undefined
           ? ticking ? formatLiveElapsed(startedAt, now) : formatLiveElapsed(0, metrics!.elapsedMs)
           : startedAt === metrics!.startedAt && endedAt === metrics!.endedAt

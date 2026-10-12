@@ -924,6 +924,38 @@ it("restores focus to the Current segment when an open assignment moves into His
   }
 });
 
+it.each([false, true])("restores the active filter when the reader's task retires (another Manager reuses its ID: %s)", async reused => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const original = { leadId: "original-manager", tasks: [base], dispatches: [] } as unknown as OrchestrationRun;
+  let runs = [original];
+  let notify = () => {};
+  vi.spyOn(orchestrator, "snapshot").mockImplementation(() => runs);
+  vi.spyOn(orchestrator, "subscribe").mockImplementation(listener => {
+    notify = listener;
+    return () => {};
+  });
+  const host = document.createElement("div"), root = createRoot(host);
+  document.body.append(host);
+  try {
+    await act(async () => root.render(<MemberWorkLog member={member} />));
+    const open = host.querySelector<HTMLButtonElement>('[aria-haspopup="dialog"]')!;
+    await act(async () => { open.focus(); open.click(); });
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    runs = reused ? [{ ...original, leadId: "other-manager", tasks: [{ ...base, prompt: "Other Manager's assignment" }] }] : [];
+    await act(async () => notify());
+    expect(open.isConnected).toBe(false);
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.body.textContent).not.toContain("Other Manager's assignment");
+    expect(document.activeElement).toBe(host.querySelector('[role="tab"][id$="-current"]'));
+    runs = [original];
+    await act(async () => notify());
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+  }
+});
+
 it("dismisses hovered task hints while a reader is open so Escape closes it and restores the same trigger", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.spyOn(orchestrator, "snapshot").mockReturnValue([

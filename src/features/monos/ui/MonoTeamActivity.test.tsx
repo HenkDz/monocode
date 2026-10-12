@@ -142,7 +142,7 @@ it("shows flat summary rows and counted keyboard tabs, and opens the ready card"
           status: "cancelled",
         },
       ],
-      dispatches: [{ id: "dispatch", startedAt: 1000, updatedAt: 11000 }],
+      dispatches: [{ id: "dispatch", taskId: base.id, sessionId: base.sessionId, state: "completed", stage: "settled", startedAt: 1000, turnStartedAt: 1000, durationMs: 10000, finishedAt: 11000, updatedAt: 11000 }],
     },
     {
       leadId: "another-run",

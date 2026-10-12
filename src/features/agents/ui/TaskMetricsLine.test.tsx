@@ -5,6 +5,20 @@ import { expect, it, vi } from "vitest";
 import { TaskMetricsLine, taskMetricsDetail } from "./TaskMetricsLine";
 import { AgentDetailTooltip } from "./AgentDetailTooltip";
 import { renderToStaticMarkup } from "react-dom/server";
+import { selectTaskMetrics } from "../model/agentMetrics";
+import type { OrchestrationDispatch, OrchestrationTask } from "../../orchestration/model/orchestrationState";
+
+it.each(["running", "completed"] as const)("leaves an unretained %s turn clock unavailable rather than claiming no conversation", status => {
+  const task = { id: "task", sessionId: "worker", status } as OrchestrationTask;
+  const dispatch = { id: "dispatch", taskId: task.id, sessionId: task.sessionId, state: status,
+    stage: status === "completed" ? "settled" : "turn_submitted", startedAt: 1000, updatedAt: 11000,
+    ...(status === "completed" ? { finishedAt: 10000, durationMs: 9000, result: "Retained report" } : {}) } as OrchestrationDispatch;
+  const metrics = selectTaskMetrics(task, [dispatch], [], 12000);
+  expect(metrics).toMatchObject({ turns: 0, partial: true });
+  const html = renderToStaticMarkup(<TaskMetricsLine metrics={metrics} state={{ status: status === "completed" ? "done" : "running-tool" }} />);
+  expect(html).toContain("Elapsed unavailable");
+  expect(html).not.toContain("Conversation not started");
+});
 
 it("refuses a dispatch clock without a canonical recorded turn while retaining zero counters", () => {
   const html = renderToStaticMarkup(<TaskMetricsLine

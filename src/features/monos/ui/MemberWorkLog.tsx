@@ -351,6 +351,12 @@ export function MemberWorkLog({
     ({ task, run }) =>
       task.id === openedTask?.id && run?.leadId === openedTask?.leadId,
   );
+  useEffect(() => {
+    if (openedTask && !selected) {
+      setOpenedTask(undefined);
+      taskToggleRef.current?.focus();
+    }
+  }, [openedTask, selected]);
   const renderDetails = ({ task, links }: (typeof tasks)[number]) => {
     const cwd = task.workspace?.checkoutCwd;
     return (

@@ -55,11 +55,19 @@ const history = Array.from({ length: 120 }, (_, i) => ({
   acceptedDispatchId: `Completed assignment ${i}`,
   completionOutcome: "no-changes" as const,
 }));
-const runs = [
-  { tasks: [...current, ...history], dispatches: [] },
+let runs = [
+  { leadId: "original-manager", tasks: [...current, ...history], dispatches: [] },
 ] as unknown as OrchestrationRun[];
+const listeners = new Set<() => void>();
 orchestrator.snapshot = () => runs;
-orchestrator.subscribe = () => () => {};
+orchestrator.subscribe = listener => { listeners.add(listener); return () => { listeners.delete(listener); }; };
+Object.assign(window, { retireFixtureTask: (id: string, reuse: boolean) => {
+  const owner = runs.find(run => run.tasks.some(task => task.id === id))!;
+  const selected = owner.tasks.find(task => task.id === id)!;
+  runs = runs.map(run => ({ ...run, tasks: run.tasks.filter(task => task !== selected) }));
+  if (reuse) runs.push({ ...owner, leadId: "other-manager", tasks: [{ ...selected, prompt: "Other Manager's assignment", sessionId: "other-worker" }] });
+  for (const listener of listeners) listener();
+} });
 publishCardSessions(
   [
     {

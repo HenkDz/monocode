@@ -31,7 +31,7 @@ import {
   type QuoteRequest,
 } from "../../sessions/model/quoteDraft";
 import {
-  decideMonoGoalRoute,
+  decideNewMonoGoalRoute,
   type MonoGoalRouteChoice,
   type MonoGoalRouteDecision,
   type MonoGoalRoutingContext,
@@ -341,7 +341,7 @@ export function MonoComposer({
         goalRequest.current?.signature !== signature ||
         goalRequest.current.rejected
       ) {
-        const route = decideMonoGoalRoute({
+        const route = decideNewMonoGoalRoute({
           text: draft,
           attachmentCount: files.length,
           choice: goalChoice,

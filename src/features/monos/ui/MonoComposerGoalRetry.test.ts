@@ -25,6 +25,7 @@ const context: MonoGoalRoutingContext = {
 let container: HTMLDivElement;
 let root: Root;
 beforeEach(() => {
+  vi.stubEnv("VITE_MONO_DIRECT_PROJECT_ROUTING", "true");
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
   clearComposerDraft("cc5cf-retry");
@@ -33,6 +34,7 @@ beforeEach(() => {
   root = createRoot(container);
 });
 afterEach(() => {
+  vi.unstubAllEnvs();
   act(() => root.unmount());
   container.remove();
   clearComposerDraft("cc5cf-retry");

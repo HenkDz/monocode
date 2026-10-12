@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { isImeComposition } from "../../../shared/lib/keyboard";
 import { ChevronRight, Terminal } from "../../../shared/ui/icons";
 import {
-  decideMonoGoalRoute,
+  decideNewMonoGoalRoute,
+  directProjectRoutingEnabled,
   type MonoGoalRouteChoice,
   type MonoGoalRouteDecision,
   type MonoGoalRoutingContext,
@@ -51,7 +52,7 @@ export function MissionCommandBar({ goalRouting, onSubmit, open = true }: {
       let submission: MonoGoalSubmission | undefined;
       if (choice.mode === "goal") {
         if (request.current?.signature !== signature || request.current.rejected) {
-          const route = decideMonoGoalRoute({ text, attachmentCount: 0, choice, context: goalRouting });
+          const route = decideNewMonoGoalRoute({ text, attachmentCount: 0, choice, context: goalRouting });
           const previous = request.current?.signature === signature ? request.current.submission : undefined;
           const project = route.kind === "manager" ? route.project : undefined;
           const sameRoute = previous?.reason === route.reason && previous.projectId === project?.id &&
@@ -106,7 +107,7 @@ export function MissionCommandBar({ goalRouting, onSubmit, open = true }: {
         {goalRouting && <MonoGoalRoute context={goalRouting} text={text} attachmentCount={0} choice={choice}
           route={retained?.signature === signature ? retained.route : undefined}
           onChange={setChoice} disabled={submitting} />}
-        {choice.mode === "chat" && <span className="mc-command-chat-route">Send to Grand Orch</span>}
+        {directProjectRoutingEnabled() && choice.mode === "chat" && <span className="mc-command-chat-route">Send to Grand Orch</span>}
       </div>
       <button type="submit" className="mc-command-send" disabled={!goalRouting || submitting || !text.trim()}>
         {submitting ? "Sending…" : "Send"} <ChevronRight aria-hidden="true" />

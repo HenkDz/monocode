@@ -1,6 +1,7 @@
 import { SearchableSelect } from "../../../shared/ui/SearchableSelect";
 import {
-  decideMonoGoalRoute,
+  decideNewMonoGoalRoute,
+  directProjectRoutingEnabled,
   type MonoGoalRouteChoice,
   type MonoGoalRouteDecision,
   type MonoGoalRoutingContext,
@@ -25,7 +26,7 @@ export function MonoGoalRoute({
 }) {
   const route =
     retainedRoute ??
-    decideMonoGoalRoute({
+    decideNewMonoGoalRoute({
       text,
       attachmentCount,
       choice,
@@ -48,7 +49,7 @@ export function MonoGoalRoute({
             </button>
           ))}
         </div>
-        {choice.mode === "goal" ? (
+        {directProjectRoutingEnabled() && choice.mode === "goal" ? (
           <SearchableSelect
             label="Goal route"
             variant="pill"
@@ -81,7 +82,7 @@ export function MonoGoalRoute({
           />
         ) : null}
       </div>
-      {choice.mode === "goal" ? (
+      {directProjectRoutingEnabled() && choice.mode === "goal" ? (
         <p role="status" className="mt-1 text-[12px] text-content/70">
           <span className="font-medium text-content">
             {route.kind === "manager"

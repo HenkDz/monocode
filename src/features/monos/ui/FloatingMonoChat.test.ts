@@ -4,6 +4,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { newSession } from "../../sessions/model/session";
 import { clearComposerDraft } from "../../sessions/model/draftCache";
+import { MonoManagerGoals, type ManagerGoalHost } from "../model/monoManagerGoals";
+import { submitMonoGoal, type MonoGoalSubmission } from "../model/monoGoalRouting";
 import type { FloatingMonoView } from "../model/floatingMono";
 import { FloatingMonoChat } from "./FloatingMonoChat";
 
@@ -87,6 +89,7 @@ let container: HTMLDivElement;
 let root: Root;
 let receive: (event: { payload: FloatingMonoView }) => void;
 beforeEach(() => {
+  vi.stubEnv("VITE_MONO_DIRECT_PROJECT_ROUTING", "true");
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal(
     "ResizeObserver",
@@ -112,6 +115,7 @@ beforeEach(() => {
   root = createRoot(container);
 });
 afterEach(() => {
+  vi.unstubAllEnvs();
   act(() => root.unmount());
   container.remove();
   vi.unstubAllGlobals();
@@ -158,6 +162,67 @@ it("passes the floating new-goal route and stable source IDs to its owner", asyn
   });
   expect(input.value).toBe("");
   expect(container.querySelector('[data-mono-goal-route] [aria-pressed="true"]')?.textContent).toBe("Chat");
+});
+
+it("sends a default-off floating goal without a Manager selection or route prediction", async () => {
+  vi.stubEnv("VITE_MONO_DIRECT_PROJECT_ROUTING", "false");
+  const view = snapshot(0);
+  view.session!.monoGoalRouting = {
+    ownerId: "first",
+    projects: [{ id: "dzdistro", name: "DZDistro", path: "C:/projects/dzdistro", managerMonoId: "manager", available: true }],
+  };
+  native.invoke.mockImplementation(async command => command === "mono_chat_state" ? view : undefined);
+  await render();
+  const input = container.querySelector<HTMLTextAreaElement>('[aria-label="Message Captain"]')!;
+  const inputProps = Object.entries(input).find(([key]) => key.startsWith("__reactProps"))![1];
+  act(() => inputProps.onChange({ target: { value: "Fix DZDistro and every registered project" } }));
+  act(() => [...container.querySelectorAll<HTMLButtonElement>("button")]
+    .find(button => button.textContent === "New goal")!.click());
+  expect(container.querySelector('[data-mono-goal-route] [role="status"]')).toBeNull();
+  expect(container.querySelector('[aria-label="Goal route: Auto route"]')).toBeNull();
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Send"]')!.click());
+  expect(native.invoke).toHaveBeenCalledWith("mono_chat_action", expect.objectContaining({
+    monoId: "first", action: expect.objectContaining({ monoGoal: expect.not.objectContaining({ projectId: expect.anything() }) }),
+  }));
+});
+
+it("routes a stale explicit floating selection through Grand without Manager writes", async () => {
+  const view = snapshot(0);
+  view.session!.monoGoalRouting = {
+    ownerId: "first",
+    projects: [{ id: "dzdistro", name: "DZDistro", path: "C:/projects/dzdistro", managerMonoId: "manager", available: true }],
+  };
+  const project = { id: "dzdistro", name: "DZDistro", folder: "C:/projects/dzdistro", managerId: "engine",
+    managerMonoId: "manager", managerExists: true, running: 0, needsDecision: 0, ready: 0, blocked: [], goals: [] };
+  const ledger = new MonoManagerGoals({ load: async () => null, save: async () => {} });
+  const goals: ManagerGoalHost = { mayDelegate: () => true, projects: async () => [project], deliver: vi.fn(async () => {}),
+    status: async () => ({}), ready: async () => [] };
+  const grand = vi.fn(() => true);
+  native.invoke.mockImplementation(async (command, options) => {
+    if (command === "mono_chat_state") return view;
+    const action = (options as { action?: { text: string; attachments: unknown[]; monoGoal?: MonoGoalSubmission } } | undefined)?.action;
+    if (command !== "mono_chat_action" || !action?.monoGoal) return undefined;
+    return submitMonoGoal({ text: action.text, attachmentCount: action.attachments.length, origin: "user", submission: action.monoGoal }, {
+      context: () => ({ ...view.session!.monoGoalRouting!, ownerId: "first" }), resolve: async () => project, ledger, goals,
+      persistOrigin: async () => {}, hasOrigin: () => false, persistPending: async () => {}, persistCard: async () => {}, grand,
+    });
+  });
+  await render();
+  const input = container.querySelector<HTMLTextAreaElement>('[aria-label="Message Captain"]')!;
+  const inputProps = Object.entries(input).find(([key]) => key.startsWith("__reactProps"))![1];
+  act(() => inputProps.onChange({ target: { value: "Fix the checkout" } }));
+  act(() => [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "New goal")!.click());
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Goal route: Auto route"]')!.click());
+  await act(async () => [...document.querySelectorAll<HTMLButtonElement>('[role="option"]')]
+    .find(button => button.textContent?.trim() === "DZDistro Manager")!.click());
+  vi.stubEnv("VITE_MONO_DIRECT_PROJECT_ROUTING", "false");
+  await render();
+  act(() => inputProps.onChange({ target: { value: "Fix DZDistro and all C:/projects/repos" } }));
+  expect(container.querySelector('[role="status"]')).toBeNull();
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Send"]')!.click());
+  expect(grand).toHaveBeenCalledOnce();
+  expect(goals.deliver).not.toHaveBeenCalled();
+  expect(ledger.goals("first")).toHaveLength(0);
 });
 
 it("shows this window's Mono with its status beneath the name", async () => {

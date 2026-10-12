@@ -12,6 +12,9 @@ import {
   type MonoGoalRoutingContext, type MonoGoalRouteChoice, type MonoGoalSubmission,
 } from "./monoGoalRouting";
 
+beforeEach(() => vi.stubEnv("VITE_MONO_DIRECT_PROJECT_ROUTING", "true"));
+afterEach(() => vi.unstubAllEnvs());
+
 vi.mock("../../sessions/hooks/useFileDrop", () => ({ useFileDrop: () => false }));
 const context: MonoGoalRoutingContext = { ownerId: "grand", projects: [
   { id: "atlas", name: "Atlas", path: "C:/synthetic/Atlas", managerMonoId: "atlas-manager", available: true },

@@ -4,6 +4,28 @@ import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
 import { TaskMetricsLine, taskMetricsDetail } from "./TaskMetricsLine";
 import { AgentDetailTooltip } from "./AgentDetailTooltip";
+import { renderToStaticMarkup } from "react-dom/server";
+
+it("refuses a dispatch clock without a canonical recorded turn while retaining zero counters", () => {
+  const html = renderToStaticMarkup(<TaskMetricsLine
+    metrics={{ turns: 1, elapsedMs: 0, inputTokens: 0, cacheReadTokens: 0, outputTokens: 0, partial: true }}
+    startedAt={0}
+    endedAt={3000}
+    state={{ status: "failed" }}
+  />);
+  expect(html).toContain("Elapsed unavailable");
+  expect(html).toContain("Recorded 0 in / 0 cached / 0 out tokens");
+  expect(html).not.toContain("3s");
+});
+
+it("uses recorded completed duration rather than delayed dispatch settlement", () => {
+  const html = renderToStaticMarkup(<TaskMetricsLine
+    metrics={{ turns: 1, startedAt: 0, endedAt: 60_000, elapsedMs: 0, partial: false }}
+    state={{ status: "done" }}
+  />);
+  expect(html).toContain("0s");
+  expect(html).not.toContain("1m");
+});
 
 it("describes the existing row button and shows the full metrics and blocker on keyboard focus", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);

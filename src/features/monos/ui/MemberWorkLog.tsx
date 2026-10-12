@@ -195,6 +195,7 @@ export function MemberWorkLog({
     const metrics =
       session?.taskMetrics?.[task.id] ??
       selectTaskMetrics(task, run?.dispatches ?? [], []);
+    const clock = dispatch ? selectTaskMetrics(task, [dispatch], []) : metrics;
     const prNumber = task.prUrl?.match(/\/pull\/(\d+)/)?.[1];
     const verdict =
       task.status === "completed" &&
@@ -288,27 +289,16 @@ export function MemberWorkLog({
           </AgentDetailTooltip>
         </div>
         <div className="px-3 pb-2">
-          {dispatch &&
-          ["queued", "workspace_prepared", "session_prepared"].includes(
-            dispatch.stage,
-          ) &&
-          dispatch.turnStartedAt === undefined ? (
-            <p data-task-metrics className="text-[10px] text-content/65">
-              Conversation not started · Tokens unavailable
-            </p>
-          ) : (
-            <TaskMetricsLine
-              metrics={metrics}
-              state={state}
-              startedAt={dispatch?.turnStartedAt ?? dispatch?.startedAt}
-              endedAt={
-                dispatch?.finishedAt ??
-                (!["running", "queued", "cancelling"].includes(task.status)
-                  ? dispatch?.updatedAt
-                  : undefined)
-              }
-            />
-          )}
+          <TaskMetricsLine
+            metrics={{
+              ...metrics,
+              startedAt: clock.startedAt,
+              endedAt: clock.endedAt,
+              elapsedMs: clock.elapsedMs,
+              partial: metrics.partial || clock.partial,
+            }}
+            state={state}
+          />
           {state.detail && (
             <p data-task-reason className="mt-1 break-words text-content/75">
               {presentationText(state.detail)}

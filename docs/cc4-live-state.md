@@ -130,7 +130,13 @@ selectDelegationEdges(goals, runs, sessions): DelegationEdge[];
 active turn; inactive history with a missing end contributes no invented
 duration and is marked partial. Aggregate `endedAt` is absent when a selected
 turn has no known end. The task card's
-elapsed label describes its displayed dispatch. Missing counters remain absent;
+elapsed label describes its displayed dispatch, using the existing selector's
+recorded turn start and duration. Dispatch acceptance, preparation, settlement
+and goal timestamps are not conversation clocks. Accepted or failed preparation
+without a recorded turn shows Conversation not started; historical missing clocks
+stay unavailable. Recorded starts and durations at zero remain valid. Task
+counters can include retries while the displayed clock belongs only to the selected
+dispatch; a previous goal or attempt cannot supply its start. Missing counters remain absent;
 partial totals are marked as recorded metrics. Selectors deduplicate user-turn
 identities, include retry dispatches and keep unrelated session turns out of
 tasks with an exact turn reference.

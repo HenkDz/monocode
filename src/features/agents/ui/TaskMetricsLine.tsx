@@ -54,11 +54,11 @@ export function TaskMetricsLine({
       title={taskMetricsDetail(metrics, state)}
       className="min-w-0 truncate text-[11px] tabular-nums text-content/75"
     >
-      {startedAt === undefined || (!ticking && endedAt === undefined && !metrics?.elapsedMs)
-        ? "Elapsed unavailable"
-        : endedAt === undefined && !ticking
-          ? formatLiveElapsed(0, metrics!.elapsedMs)
-          : formatLiveElapsed(startedAt, endedAt ?? now)}
+      {metrics?.startedAt === undefined || startedAt === undefined || (!ticking && endedAt === undefined && !metrics?.elapsedMs)
+        ? metrics?.turns === 0 ? "Conversation not started" : "Elapsed unavailable"
+        : endedAt === undefined && ticking
+          ? formatLiveElapsed(startedAt, now)
+          : formatLiveElapsed(0, metrics!.elapsedMs)}
       {" · "}
       {metrics?.partial && counts.length ? "Recorded " : ""}
       {tokens}

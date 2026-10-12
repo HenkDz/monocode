@@ -27,6 +27,17 @@ it("uses recorded completed duration rather than delayed dispatch settlement", (
   expect(html).not.toContain("1m");
 });
 
+it("keeps an explicitly selected completed retry separate from aggregate elapsed", () => {
+  const html = renderToStaticMarkup(<TaskMetricsLine
+    metrics={{ turns: 2, startedAt: 1000, endedAt: 30_000, elapsedMs: 15_000, partial: false }}
+    startedAt={20_000}
+    endedAt={30_000}
+    state={{ status: "done" }}
+  />);
+  expect(html).toContain("10s");
+  expect(html).not.toContain("15s");
+});
+
 it("describes the existing row button and shows the full metrics and blocker on keyboard focus", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const host = document.createElement("div"), root = createRoot(host);

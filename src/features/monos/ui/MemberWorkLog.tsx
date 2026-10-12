@@ -2,7 +2,6 @@ import {
   useContext,
   useEffect,
   useId,
-  useLayoutEffect,
   useRef,
   useState,
   useSyncExternalStore,
@@ -30,7 +29,6 @@ import {
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { OrgArtifactLinks } from "../../artifacts/ui/OrgArtifactLinks";
 import { Modal } from "../../../shared/ui/Modal";
-import { ChevronDown } from "../../../shared/ui/icons";
 import { selectAgentLiveState } from "../../agents/model/agentLiveState";
 import {
   TaskMetricsLine,
@@ -74,25 +72,24 @@ export function MemberWorkLog({
     memberId: string;
     message: string;
   }>();
-  const [expanded, setExpanded] = useState(true);
-  const [showHistory, setShowHistory] = useState(false);
+  const [filter, setFilter] = useState<"current" | "history" | "all">(
+    "current",
+  );
+  const [page, setPage] = useState(0);
   const [activityLimit, setActivityLimit] = useState(80);
   useEffect(() => setActivityLimit(80), [member.id, activity?.filter]);
   const panelId = useId();
   const taskToggleRef = useRef<HTMLButtonElement>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
-  const historyRef = useRef<HTMLDivElement>(null);
-  useLayoutEffect(() => {
-    const scroller = scrollerRef.current;
-    const history = historyRef.current;
-    if (!scroller || !expanded) return;
-    scroller.scrollTop =
-      showHistory && history
-        ? history.getBoundingClientRect().top -
-          scroller.getBoundingClientRect().top +
-          scroller.scrollTop
-        : 0;
-  }, [expanded, showHistory]);
+  useEffect(() => {
+    setFilter("current");
+    setPage(0);
+    setOpenedTask(undefined);
+    setActionError(undefined);
+  }, [member.id]);
+  useEffect(() => {
+    if (scrollerRef.current) scrollerRef.current.scrollTop = 0;
+  }, [filter, page]);
   const [, refresh] = useState(0);
   useEffect(
     () => subscribeCardSessions(() => refresh((value) => value + 1)),
@@ -168,15 +165,13 @@ export function MemberWorkLog({
       };
     })
     .sort((a, b) => a.rank - b.rank);
-  const current = tasks.filter(
-    ({ task, rank }) =>
-      rank !== 3 && !["queued", "completed"].includes(task.status),
-  );
-  const queue = tasks.filter(({ task }) => task.status === "queued");
-  const workLog = tasks.filter(
-    ({ task, rank }) => task.status === "completed" && rank !== 3,
-  );
+  const current = tasks.filter(({ rank }) => rank !== 3);
   const history = tasks.filter(({ rank }) => rank === 3);
+  const filtered =
+    filter === "current" ? current : filter === "history" ? history : tasks;
+  const pageCount = Math.max(1, Math.ceil(filtered.length / 5));
+  const visiblePage = Math.min(page, pageCount - 1);
+  const visibleTasks = filtered.slice(visiblePage * 5, visiblePage * 5 + 5);
   const attention = tasks.filter(({ rank }) => rank === 0).length;
   const manager = findMono(member.reportsTo ?? ""),
     look = manager && monoLook(manager);
@@ -283,38 +278,41 @@ export function MemberWorkLog({
               type="button"
               aria-haspopup="dialog"
               className={`${button} shrink-0 bg-content/8 font-medium`}
-              onClick={() =>
-                setOpenedTask({ id: task.id, leadId: run?.leadId })
-              }
+              onClick={(event) => {
+                event.currentTarget.focus();
+                setOpenedTask({ id: task.id, leadId: run?.leadId });
+              }}
             >
               Open
             </button>
           </AgentDetailTooltip>
         </div>
         <div className="px-3 pb-2">
-          <TaskMetricsLine
-            metrics={metrics}
-            state={state}
-            startedAt={dispatch?.turnStartedAt ?? dispatch?.startedAt}
-            endedAt={
-              dispatch?.finishedAt ??
-              (!["running", "queued", "cancelling"].includes(task.status)
-                ? dispatch?.updatedAt
-                : undefined)
-            }
-          />
-          {task.error &&
-          ["failed", "blocked", "interrupted"].includes(task.status) ? (
-            <TranscriptError
-              error={task.error}
-              title={`Couldn't complete ${presentationText(task.title)}`}
-            />
+          {dispatch &&
+          ["queued", "workspace_prepared", "session_prepared"].includes(
+            dispatch.stage,
+          ) &&
+          dispatch.turnStartedAt === undefined ? (
+            <p data-task-metrics className="text-[10px] text-content/65">
+              Conversation not started · Tokens unavailable
+            </p>
           ) : (
-            state.detail && (
-              <p data-task-reason className="mt-1 break-words text-content/75">
-                {presentationText(state.detail)}
-              </p>
-            )
+            <TaskMetricsLine
+              metrics={metrics}
+              state={state}
+              startedAt={dispatch?.turnStartedAt ?? dispatch?.startedAt}
+              endedAt={
+                dispatch?.finishedAt ??
+                (!["running", "queued", "cancelling"].includes(task.status)
+                  ? dispatch?.updatedAt
+                  : undefined)
+              }
+            />
+          )}
+          {state.detail && (
+            <p data-task-reason className="mt-1 break-words text-content/75">
+              {presentationText(state.detail)}
+            </p>
           )}
           <OrgArtifactLinks monoId={member.id} links={links} />
           {task.status === "queued" && (
@@ -363,7 +361,7 @@ export function MemberWorkLog({
     ({ task, run }) =>
       task.id === openedTask?.id && run?.leadId === openedTask?.leadId,
   );
-  const renderDetails = ({ task, links, rank }: (typeof tasks)[number]) => {
+  const renderDetails = ({ task, links }: (typeof tasks)[number]) => {
     const cwd = task.workspace?.checkoutCwd;
     return (
       <Modal
@@ -371,7 +369,7 @@ export function MemberWorkLog({
         fitViewport
         onClose={() => {
           setOpenedTask(undefined);
-          if (!expanded || (rank === 3 && !showHistory))
+          if (!visibleTasks.some((item) => item.task === task))
             taskToggleRef.current?.focus();
         }}
       >
@@ -508,25 +506,28 @@ export function MemberWorkLog({
                       type="button"
                       aria-haspopup="dialog"
                       className="min-w-0 truncate text-left text-xs font-medium hover:text-accent focus-visible:outline-accent"
-                      onClick={() =>
+                      onClick={(click) => {
+                        click.currentTarget.focus();
                         setOpenedTask({
                           id: event.task.id,
                           leadId: taskRuns.get(event.task)?.leadId,
-                        })
-                      }
+                        });
+                      }}
                     >
                       {event.label}
                     </button>
-                    <span className="shrink-0 text-[11px] text-content/70">
-                      {event.at === undefined ? (
-                        "Time not recorded"
-                      ) : (
-                        <time dateTime={new Date(event.at).toISOString()}>
-                          {formatRelativeTime(new Date(event.at).toISOString())}
-                        </time>
-                      )}
-                    </span>
+                    {event.at !== undefined && (
+                      <time
+                        className="shrink-0 text-[11px] text-content/70"
+                        dateTime={new Date(event.at).toISOString()}
+                      >
+                        {formatRelativeTime(new Date(event.at).toISOString())}
+                      </time>
+                    )}
                   </div>
+                  <p className="mt-1 text-xs text-content/70">
+                    {presentationText(event.task.title)}
+                  </p>
                   {event.error ? (
                     <div className="mt-2">
                       <TranscriptError
@@ -561,54 +562,68 @@ export function MemberWorkLog({
     );
   }
   return (
-    <section
-      aria-label="Member work log"
-      className="mx-auto w-full max-w-4xl shrink-0 px-4 py-2"
-    >
+    <section aria-label="Member work log" className="cc7u-assignments min-w-0">
       <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-        <button
-          ref={taskToggleRef}
-          type="button"
-          aria-expanded={expanded}
-          aria-controls={panelId}
-          disabled={!tasks.length}
-          className={`${button} flex items-center gap-1.5 font-medium`}
-          onClick={() => setExpanded((value) => !value)}
-        >
-          <ChevronDown className={`size-3.5 ${expanded ? "" : "-rotate-90"}`} />
-          Tasks ({tasks.length})
-        </button>
-        {current.length > 0 && (
-          <span className="text-content/60">{current.length} current</span>
-        )}
+        <h2 className="text-[13px] font-medium">Assignments</h2>
+        <span className="ml-auto text-content/60">
+          {current.length} current · {history.length} past
+        </span>
         {attention > 0 && (
           <span className="text-amber-700 dark:text-amber-400">
             Needs attention ({attention})
           </span>
         )}
-        {history.length > 0 && (
-          <button
-            type="button"
-            aria-expanded={expanded && showHistory}
-            aria-controls={`${panelId}-history`}
-            className={`${button} ml-auto flex items-center gap-1.5 text-content/60`}
-            onClick={() => {
-              setShowHistory(!expanded || !showHistory);
-              setExpanded(true);
-            }}
-          >
-            <ChevronDown
-              className={`size-3.5 ${expanded && showHistory ? "" : "-rotate-90"}`}
-            />
-            History ({history.length})
-          </button>
+      </div>
+      <div
+        role="tablist"
+        aria-label="Assignment filter"
+        className="cc7u-segments"
+      >
+        {(["current", "history", "all"] as const).map(
+          (value, index, values) => (
+            <button
+              key={value}
+              ref={filter === value ? taskToggleRef : undefined}
+              type="button"
+              id={`${panelId}-${value}`}
+              role="tab"
+              aria-selected={filter === value}
+              aria-controls={`${panelId}-tasks`}
+              tabIndex={filter === value ? 0 : -1}
+              onClick={() => {
+                setFilter(value);
+                setPage(0);
+              }}
+              onKeyDown={(event) => {
+                if (
+                  !["ArrowLeft", "ArrowRight", "Home", "End"].includes(
+                    event.key,
+                  )
+                )
+                  return;
+                event.preventDefault();
+                const next =
+                  event.key === "Home"
+                    ? "current"
+                    : event.key === "End"
+                      ? "all"
+                      : values[
+                          (index + (event.key === "ArrowRight" ? 1 : 2)) % 3
+                        ];
+                setFilter(next);
+                setPage(0);
+                document.getElementById(`${panelId}-${next}`)?.focus();
+              }}
+            >
+              {value === "current"
+                ? "Current"
+                : value === "history"
+                  ? "History"
+                  : "All"}
+            </button>
+          ),
         )}
       </div>
-      {!tasks.length && (
-        <p className="px-2.5 py-1 text-xs text-content/70">
-          No assignments yet. {look?.name ?? "Your Manager"} assigns work here.
-        </p>
-      )}
       {actionError?.memberId === member.id && (
         <p
           role="alert"
@@ -617,60 +632,61 @@ export function MemberWorkLog({
           {presentationText(actionError.message)}
         </p>
       )}
-      <div id={panelId} hidden={!expanded}>
+      <div
+        id={`${panelId}-tasks`}
+        role="tabpanel"
+        aria-labelledby={`${panelId}-${filter}`}
+      >
         <div
           ref={scrollerRef}
           role="region"
           aria-label="Assignments and work history"
           tabIndex={0}
-          className="max-h-[min(30dvh,16rem)] space-y-2 overflow-y-auto overscroll-contain rounded-md border-b border-stroke pb-2 [scrollbar-gutter:stable] [scrollbar-width:thin] focus-visible:outline-accent"
+          className="cc7u-task-list space-y-2 rounded-md focus-visible:outline-accent"
         >
-          {expanded &&
-            (current.length > 0 || queue.length > 0 || workLog.length > 0) && (
-              <div className="space-y-2" data-member-section="current">
-                <h3 className="px-2.5 text-xs font-medium text-content/60">
-                  Current assignment
-                </h3>
-                {current.length ? (
-                  current.map(renderTask)
-                ) : (
-                  <p className="px-2.5 text-xs text-content/70">
-                    No current assignment.
-                  </p>
-                )}
-              </div>
-            )}
-          {expanded && queue.length > 0 && (
-            <div className="space-y-2" data-member-section="queue">
-              <h3 className="px-2.5 text-xs font-medium text-content/60">
-                Queue ({queue.length})
+          {visibleTasks.map(renderTask)}
+          {!filtered.length && (
+            <div className="cc7u-empty-work">
+              <h3>
+                {!tasks.length
+                  ? "No assignments yet"
+                  : filter === "history"
+                    ? "No past assignments"
+                    : "No current assignment"}
               </h3>
-              {queue.map(renderTask)}
+              <p>
+                {!tasks.length
+                  ? `${look?.name ?? "Your Manager"} assigns work here.`
+                  : filter === "current"
+                    ? "Past work is available in History."
+                    : "Finished work will appear here."}
+              </p>
             </div>
           )}
-          {expanded && workLog.length > 0 && (
-            <div className="space-y-2" data-member-section="log">
-              <h3 className="px-2.5 text-xs font-medium text-content/60">
-                Work log ({workLog.length})
-              </h3>
-              {workLog.map(renderTask)}
-            </div>
-          )}
-          <div
-            ref={historyRef}
-            id={`${panelId}-history`}
-            hidden={!expanded || !showHistory}
-          >
-            {expanded && showHistory && (
-              <div className="space-y-2 pt-2">
-                <h3 className="px-2.5 text-xs font-medium text-content/50">
-                  Completed and cancelled
-                </h3>
-                {history.map(renderTask)}
-              </div>
-            )}
-          </div>
         </div>
+        {pageCount > 1 && (
+          <nav aria-label="Assignment pages" className="cc7u-paging">
+            <button
+              type="button"
+              disabled={visiblePage === 0}
+              onClick={() => setPage(visiblePage - 1)}
+              aria-label="Previous assignments"
+            >
+              Previous
+            </button>
+            <span aria-live="polite">
+              {visiblePage + 1} / {pageCount}
+            </span>
+            <button
+              type="button"
+              disabled={visiblePage === pageCount - 1}
+              onClick={() => setPage(visiblePage + 1)}
+              aria-label="Next assignments"
+            >
+              Next
+            </button>
+          </nav>
+        )}
       </div>
       {selected && renderDetails(selected)}
     </section>

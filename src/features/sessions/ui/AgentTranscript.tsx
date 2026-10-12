@@ -61,6 +61,7 @@ import { artifactCards } from "../../artifacts/artifacts";
 
 import { TerminalSpinner } from "./TerminalSpinner";
 import { Popover } from "../../../shared/ui/Popover";
+import { Modal } from "../../../shared/ui/Modal";
 import { ProjectMascot } from "../../projects/ui/ProjectMascot";
 import { PixelMascot } from "../../projects/ui/PixelMascot";
 import { listMonos, monoLook, type MonoLook } from "../../monos/model/mono";
@@ -217,6 +218,8 @@ type Props = {
   bottomAligned?: boolean;
   /** Keeps process in the activity trail, with live progress in the header. */
   inlineWork?: boolean;
+  /** Show saved work with CC7T cards in a Workbench conversation. */
+  flatWork?: boolean;
   messageDeliveries?: ReadonlyMap<string, MessageDelivery>;
   onRetryMessage?: (blockId: string) => void;
   /** Inspect a Mono turn in the activity sidebar. */
@@ -297,6 +300,7 @@ function AgentTranscriptComponent({
   agentMascot,
   bottomAligned = false,
   inlineWork = false,
+  flatWork = false,
   messageDeliveries,
   onRetryMessage,
   onShowWork,
@@ -1125,7 +1129,7 @@ function AgentTranscriptComponent({
           // of the live work and append them after all of the lead's output.
           const items = turnCache.turnItems(turn, settled, {
             managed,
-            inlineWork,
+            inlineWork: inlineWork && !flatWork,
             undeliveredMessageIds,
           });
           // Earlier activity groups have already been followed by prose or
@@ -1195,7 +1199,7 @@ function AgentTranscriptComponent({
               ))}
             </div>
           );
-          const fold = inlineWork ? undefined : foldableWork(items);
+          const fold = inlineWork || flatWork ? undefined : foldableWork(items);
           const folded = fold ? foldedBlocks(items, fold) : [];
           const summarizedWork = inlineWork
             ? items.flatMap((item) =>
@@ -1301,7 +1305,7 @@ function AgentTranscriptComponent({
             );
           };
           const renderItem = (item: TurnItem, itemIndex: number) =>
-            item.type === "subagents" && !inlineWork ? (
+            item.type === "subagents" && !inlineWork && !flatWork ? (
               <SubagentStack
                 key={item.blocks[0].id}
                 blocks={item.blocks}
@@ -1311,7 +1315,19 @@ function AgentTranscriptComponent({
                 onOpenDiff={onOpenDiff}
               />
             ) : item.type !== "block" ? (
-              inlineWork ? (
+              flatWork ? (
+                <MonoActivityTrail
+                  key={item.blocks[0].id}
+                  blocks={item.blocks}
+                  live={live}
+                  cwd={cwd}
+                  onApproval={onApproval}
+                  onOpenFile={onOpenFile}
+                  onOpenDiff={onOpenDiff}
+                  readOutput
+                  flatWork
+                />
+              ) : inlineWork ? (
                 <MonoWorkApprovals
                   key={item.blocks[0].id}
                   blocks={item.blocks}
@@ -1481,6 +1497,7 @@ function AgentTranscriptComponent({
                   // in the chat. The full turn remains in the activity sidebar.
                   if (
                     inlineWork &&
+                    !flatWork &&
                     item.type !== "block" &&
                     !item.blocks.some(needsApproval)
                   )
@@ -3471,7 +3488,8 @@ export function MonoActivityTrail({
   onOpenFile,
   onOpenDiff,
   readOutput = false,
-}: Omit<ActivityPhasesProps, "done" | "padded"> & { live?: boolean; readOutput?: boolean }) {
+  flatWork = false,
+}: Omit<ActivityPhasesProps, "done" | "padded"> & { live?: boolean; readOutput?: boolean; flatWork?: boolean }) {
   const steps = blocks.filter(
     (block) =>
       !block.internal &&
@@ -3558,6 +3576,7 @@ export function MonoActivityTrail({
                     onApproval={onApproval}
                     onOpenFile={onOpenFile}
                     onOpenDiff={onOpenDiff}
+                    flatWork={flatWork}
                   />
                 )}
               </div>
@@ -3879,15 +3898,53 @@ function SubagentRow({
   live = false,
   onOpenFile,
   onOpenDiff,
+  flatWork = false,
 }: {
   block: Block;
   cwd?: string;
   live?: boolean;
   onOpenFile?: (path: string) => void;
   onOpenDiff?: (path: string) => void;
+  flatWork?: boolean;
 }) {
   const [override, setOverride] = useState<boolean | null>(null);
   const open = override ?? toolCallState(block) === "rejected";
+  if (flatWork) {
+    const steps = block.agentRun?.steps ?? [];
+    const report = subagentReport(block);
+    return (
+      <div className="min-w-0" data-flat-subagent>
+        <div className="flex items-center gap-2 py-1 text-xs">
+          <span className="min-w-0 flex-1 truncate" title={presentationText(subagentBrief(block))}>
+            {presentationText(subagentName(block))}
+          </span>
+          <ToolCallStatusIcon state={toolCallState(block)} />
+          <span className="text-content/65">{subagentStatusLine(block, steps)}</span>
+        </div>
+        <button type="button" aria-haspopup="dialog"
+          className="rounded text-xs text-content/75 hover:text-content focus-visible:outline-accent"
+          onClick={(event) => {
+            event.currentTarget.focus();
+            setOverride(true);
+          }}>
+          View full output
+        </button>
+        {override === true && (
+          <Modal title={presentationText(subagentName(block))} fitViewport onClose={() => setOverride(false)}>
+            <div className="space-y-3 p-4">
+              <MonoActivityTrail
+                blocks={steps.map(agentStepBlock)} live={live} cwd={cwd}
+                onOpenFile={onOpenFile} onOpenDiff={onOpenDiff} readOutput flatWork
+              />
+              {report && <AgentMarkdown text={presentationText(report)} cwd={cwd}
+                onOpenFile={onOpenFile} className="mono-run-report" />}
+              {!steps.length && !report && <p className="text-xs text-content/65">No saved output yet.</p>}
+            </div>
+          </Modal>
+        )}
+      </div>
+    );
+  }
   return (
     <SubagentPanel
       block={block}
@@ -4170,6 +4227,7 @@ function ActivityRow({
   onApproval,
   onOpenFile,
   onOpenDiff,
+  flatWork = false,
 }: {
   block: Block;
   cwd?: string;
@@ -4177,6 +4235,7 @@ function ActivityRow({
   onApproval?: (requestId: number, decision: ApprovalDecision) => void;
   onOpenFile?: (path: string) => void;
   onOpenDiff?: (path: string) => void;
+  flatWork?: boolean;
 }) {
   if (isThinkingBlock(block)) {
     return (
@@ -4217,6 +4276,7 @@ function ActivityRow({
         live={live}
         onOpenFile={onOpenFile}
         onOpenDiff={onOpenDiff}
+        flatWork={flatWork}
       />
     );
   }
@@ -4229,6 +4289,7 @@ function ActivityRow({
       onApproval={onApproval}
       onOpenFile={onOpenFile}
       onOpenDiff={onOpenDiff}
+      flatWork={flatWork}
     />
   );
 }
@@ -4480,6 +4541,7 @@ function ActivityToolRow({
   onApproval,
   onOpenFile,
   onOpenDiff,
+  flatWork = false,
 }: {
   block: Block;
   cwd?: string;
@@ -4488,6 +4550,7 @@ function ActivityToolRow({
   onApproval?: (requestId: number, decision: ApprovalDecision) => void;
   onOpenFile?: (path: string) => void;
   onOpenDiff?: (path: string) => void;
+  flatWork?: boolean;
 }) {
   const appCall = monoCodeToolCall(block);
   if (appCall) {
@@ -4514,7 +4577,7 @@ function ActivityToolRow({
   );
 
   return (
-    <div className="flex min-w-0 flex-col">
+    <div data-flat-work-call={(flatWork && !pending && !errorDetail) || undefined} className="flex min-w-0 flex-col">
       <div
         aria-label={`${errorDetail ? "Failed tool call" : "Tool call"}: ${label}`}
         className="flex min-w-0 items-center gap-1.5 py-1"
@@ -4529,7 +4592,7 @@ function ActivityToolRow({
           <ApprovalControls block={block} onApproval={onApproval} />
         </>
       ) : null}
-      {errorDetail ? <TranscriptError error={errorDetail} /> : output && !pending ? <CompactToolOutput output={output} title={label} /> : null}
+      {errorDetail ? <TranscriptError error={errorDetail} /> : output && !pending ? <CompactToolOutput output={output} title={label} preview={!flatWork} /> : null}
     </div>
   );
 }

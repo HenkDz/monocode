@@ -18,6 +18,7 @@ export function MonoCodexStorageNotice({
   onCompare,
   onReveal,
   renderDetails,
+  workbench = false,
 }: {
   onRepair: () => Promise<void>;
   detail?: string;
@@ -26,6 +27,7 @@ export function MonoCodexStorageNotice({
   onCompare?: () => Promise<CodexStorageComparison>;
   onReveal?: () => Promise<void>;
   renderDetails?: (content: ReactNode) => ReactNode;
+  workbench?: boolean;
 }) {
   const [busy, setBusy] = useState<"repair" | "compare" | "reveal">();
   const [error, setError] = useState<string>();
@@ -49,7 +51,7 @@ export function MonoCodexStorageNotice({
   }, [detail]);
 
   const details = error ?? detail;
-  const title = success ? sandbox ? "Codex sandbox choice applied" : "Codex storage repaired" : sandbox ? setupUnavailable ? "Codex elevated sandbox unavailable" : "Codex sandbox needs setup" : recovery ? "Codex recovery files preserved" : conflict ? codexStorageIssueTitle(conflict) : "Codex storage needs repair";
+  const title = success ? sandbox ? "Codex sandbox choice applied" : "Codex storage repaired" : sandbox ? setupUnavailable ? "Codex elevated sandbox unavailable" : "Codex sandbox needs setup" : recovery ? "Codex recovery files preserved" : conflict ? codexStorageIssueTitle(conflict) : workbench ? "Conversation couldn’t start" : "Codex storage needs repair";
   async function run(action: "repair" | "compare" | "reveal", operation: () => Promise<unknown>) {
     if (busy) return;
     setBusy(action);
@@ -108,6 +110,7 @@ export function MonoCodexStorageNotice({
         </div>
       ) : (
         <>
+          {workbench && !sandbox && !conflict && !recovery && <p className="mt-2 text-xs leading-relaxed text-content/70">Codex couldn’t open its conversation store. Work is waiting; your messages are still here.</p>}
           {blockedContext && <p className="mt-1 text-xs text-content/70">{blockedContext}</p>}
           {sandbox && <div className="mt-2 text-xs text-content/70">
             <p>{sandbox.reason}</p>
@@ -160,7 +163,7 @@ export function MonoCodexStorageNotice({
               </>
             ) : (
               <SecondaryButton disabled={!!busy} onClick={() => void run("repair", onRepair)}>
-                {busy === "repair" ? "Repairing…" : recovery ? "Refresh issue" : "Repair"}
+                {busy === "repair" ? "Repairing…" : recovery ? "Refresh issue" : workbench ? "Resolve storage" : "Repair"}
               </SecondaryButton>
             )}
             {conflict && onCompare && (

@@ -26,10 +26,6 @@ import {
 import { Composer } from "./Composer";
 import { ContextMeter } from "./ContextMeter";
 import { selectAgentLiveState } from "../../agents/model/agentLiveState";
-import { currentTurnIndex } from "../../agents/model/turnMetrics";
-import { selectAgentMetrics } from "../../agents/model/agentMetrics";
-import { TaskMetricsLine } from "../../agents/ui/TaskMetricsLine";
-import { AgentStatusLabel } from "../../agents/ui/AgentStatusLabel";
 import {
   loadMonoRotation,
   MONO_ROTATION_READ_ERROR,
@@ -56,6 +52,7 @@ import { sessionEditPaths } from "../model/checkpointEdits";
 import { PromptOutline } from "./PromptOutline";
 import {
   canCompactHarnessContext,
+  canSteerHarness,
   type ApprovalDecision,
   type UserQuestionReply,
 } from "../../../integrations/harness";
@@ -105,8 +102,11 @@ import {
   subscribeMonos,
 } from "../../monos/model/mono";
 import { MonoHeader } from "../../monos/ui/MonoHeader";
-import { MonoStatus } from "../../monos/ui/MonoStatus";
-import { PixelMascot } from "../../projects/ui/PixelMascot";
+import { WorkbenchHeader } from "../../monos/ui/WorkbenchHeader";
+import { WorkbenchDrawer } from "../../monos/ui/WorkbenchDrawer";
+import { ManagerWorkbenchNote } from "../../monos/ui/ManagerWorkbenchNote";
+import { WorkbenchSessionDetails } from "../../monos/ui/WorkbenchSessionDetails";
+import "../../monos/ui/workbench.css";
 import { MonoActivityContent } from "../../monos/ui/MonoActivityPanel";
 import { MessageQueue } from "./MessageQueue";
 import { parseTeamMessage } from "../model/teamMessage";
@@ -126,7 +126,7 @@ import type {
 } from "../../monos/model/monoCodexStorage";
 import { QuestionForm } from "./QuestionForm";
 import { MemberWorkLog } from "../../monos/ui/MemberWorkLog";
-import { memberTasks } from "../../monos/model/monoNavigation";
+import { memberTasks, workbenchSessionTask } from "../../monos/model/monoNavigation";
 import {
   monoMessageDeliveries,
   monoPendingTranscriptBlocks,
@@ -154,7 +154,11 @@ import { isOpus55Model } from "../model/opusWelcome";
 import { AstraWelcome } from "./AstraWelcome";
 import { OpusWelcome } from "./OpusWelcome";
 import { projectKey } from "../../../shared/lib/paths";
-import { canEditLastTurn, lastTurnRecall, truncateBeforeLastEditableTurn } from "../model/editLastTurn";
+import {
+  canEditLastTurn,
+  lastTurnRecall,
+  truncateBeforeLastEditableTurn,
+} from "../model/editLastTurn";
 import {
   loadProjectChatBackgroundSettings,
   projectChatBackgroundImageRevision,
@@ -226,8 +230,10 @@ export type SessionPaneProps = {
     sessionId: string,
     settings: Record<string, string>,
     settingId?: string,
+    effortSource?: Session["effortSource"],
   ) => void;
-  onRuntimeModeChange: (sessionId: string, mode: RuntimeMode) => void;
+  onRuntimeModeChange: (sessionId: string, mode: RuntimeMode, source?: Session["runtimeModeSource"]) => void;
+  onWindowsSandboxChange?: (sessionId: string, engine: Session["windowsSandbox"]) => void | Promise<void>;
   onSubmit: (
     sessionId: string,
     text: string,
@@ -397,6 +403,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
   onModelChange,
   onModelSettingsChange,
   onRuntimeModeChange,
+  onWindowsSandboxChange,
   onSaveDraft,
   onRemoveDraft,
   onSubmit,
@@ -491,7 +498,8 @@ const LocalSessionPane = memo(function LocalSessionPane({
     : savedRotation?.pendingBrief
       ? "Retry the original first. Editing is available after it's accepted."
       : undefined;
-  const editLastTurnEnabled = editLastTurnSupported && !editLastTurnDisabledReason;
+  const editLastTurnEnabled =
+    editLastTurnSupported && !editLastTurnDisabledReason;
   const turnRecall = editLastTurnEnabled ? lastTurnRecall(session) : null;
   const draftBlock = sessionDraftBlock(session);
   useSyncExternalStore(
@@ -553,6 +561,51 @@ const LocalSessionPane = memo(function LocalSessionPane({
   const memberTask = orchestrationRuns
     .flatMap((run) => run.tasks)
     .find((task) => task.sessionId === session.id && task.memberId);
+  const savedMemberTask = memberTask ?? workbenchSessionTask(orchestrationRuns, session.id);
+  const workbenchMember = isMember
+    ? mono
+    : savedMemberTask
+      ? findMono(savedMemberTask.memberId ?? "")
+      : undefined;
+  const workbench = isMember || (!mono && !!savedMemberTask);
+  const workbenchLook = workbenchMember ? monoLook(workbenchMember) : undefined;
+  const workbenchTask = isMember ? assignedTask : savedMemberTask;
+  const workbenchState =
+    isMember && memberState.liveState
+      ? memberState.liveState
+      : selectAgentLiveState(session, { task: workbenchTask });
+  const [workOpen, setWorkOpen] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [errorDetailsOpen, setErrorDetailsOpen] = useState(false);
+  const [steerMode, setSteerMode] = useState(false);
+  const canSteer =
+    !!session.busy &&
+    canSteerHarness(session.harness) &&
+    ["thinking", "running-tool", "compacting"].includes(
+      conversationLiveState.status,
+    ) &&
+    !session.worktreePreparing &&
+    !session.codexStoragePreparing;
+  const steering = steerMode && canSteer;
+  const workbenchOrigin = useRef<HTMLDivElement>(null);
+  const focusWorkbenchComposer = (steer = false) => {
+    setMemberTab("conversation");
+    setSteerMode(steer);
+    setWorkOpen(false);
+    requestAnimationFrame(() =>
+      workbenchOrigin.current
+        ?.querySelector<HTMLElement>(
+          "[data-session-composer] textarea, [data-session-composer] [contenteditable=true]",
+        )
+        ?.focus(),
+    );
+  };
+  useEffect(() => {
+    setSteerMode(false);
+    setWorkOpen(false);
+    setDetailsOpen(false);
+    setErrorDetailsOpen(false);
+  }, [session.id]);
   // A Mono shows only its own background, never the project's or the app's.
   const projectBackground = mono
     ? monoChatBackground(mono.id)
@@ -864,7 +917,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
       draftRef.current ??
       (agent || session.inboxCard || session.noteCard || session.handoffCard
         ? ""
-        : session.composerSeed ?? ""),
+        : (session.composerSeed ?? "")),
   );
   const draftChanged = useCallback(
     (text: string) => {
@@ -882,10 +935,16 @@ const LocalSessionPane = memo(function LocalSessionPane({
   const rotationStatus =
     !remote && (mono || memberTask)
       ? sessionRotationStatus(
-          editingLastTurn ? { ...session, blocks: truncateBeforeLastEditableTurn(session) } : session,
+          editingLastTurn
+            ? { ...session, blocks: truncateBeforeLastEditableTurn(session) }
+            : session,
           composerDraft,
           memberTask && taskRun ? retainedTaskContext(taskRun, memberTask) : "",
-          editingLastTurn ? session.blocks.slice(truncateBeforeLastEditableTurn(session).length) : [],
+          editingLastTurn
+            ? session.blocks.slice(
+                truncateBeforeLastEditableTurn(session).length,
+              )
+            : [],
         )
       : {};
   const rotationRecovery = (
@@ -895,14 +954,17 @@ const LocalSessionPane = memo(function LocalSessionPane({
           {session.rotationWarning}
         </p>
       )}
-      {!remote && onDiscardRotationPendingInput &&
-      rotationStatus.deferredReason?.includes("too large") && (
-        <RotationPendingInput
-          key={session.id}
-          preview={previewMonoRotationDiscard(session)}
-          onDiscard={(preview) => onDiscardRotationPendingInput(session.id, preview)}
-        />
-      )}
+      {!remote &&
+        onDiscardRotationPendingInput &&
+        rotationStatus.deferredReason?.includes("too large") && (
+          <RotationPendingInput
+            key={session.id}
+            preview={previewMonoRotationDiscard(session)}
+            onDiscard={(preview) =>
+              onDiscardRotationPendingInput(session.id, preview)
+            }
+          />
+        )}
     </>
   );
   const composer = (
@@ -1018,7 +1080,12 @@ const LocalSessionPane = memo(function LocalSessionPane({
         }
         onSubmit={(text, attachments, options) => {
           if (!dockComposer) composerDockMotion.captureLaunch();
-          return onSubmit(session.id, text, attachments, options);
+          return onSubmit(
+            session.id,
+            text,
+            attachments,
+            steering ? { ...options, followUpBehavior: "steer" } : options,
+          );
         }}
         onBtwCommand={btw.openWith}
         onStop={() => onStop(session.id)}
@@ -1063,6 +1130,33 @@ const LocalSessionPane = memo(function LocalSessionPane({
       <MonoCodexStorageNotice
         key={storageSessionId}
         detail={storageDetail}
+        workbench={workbench}
+        renderDetails={
+          workbench
+            ? (content) => (
+                <>
+                  <button
+                    type="button"
+                    className="cc7u-error-details"
+                    onClick={(event) => {
+                      event.currentTarget.focus();
+                      setErrorDetailsOpen(true);
+                    }}
+                  >
+                    Error details
+                  </button>
+                  {errorDetailsOpen && (
+                    <WorkbenchDrawer
+                      title="Storage error details"
+                      onClose={() => setErrorDetailsOpen(false)}
+                    >
+                      {content}
+                    </WorkbenchDrawer>
+                  )}
+                </>
+              )
+            : undefined
+        }
         blockedContext={
           storageTask
             ? `Assigned worker: ${storageTask.title}`
@@ -1122,28 +1216,32 @@ const LocalSessionPane = memo(function LocalSessionPane({
       )}
     </>
   );
-  const currentTurn = currentTurnIndex(session);
-  const fillMemberWork = isMember && isEmpty && memberTab === "conversation";
-  const memberDelivery = session.codexStorageError
-    ? "Message will queue until storage is repaired."
-    : session.codexStoragePreparing
-      ? "Message will queue until storage preparation finishes."
-      : session.usageLimit
-        ? "Message will queue until the usage limit is resolved."
-        : session.queueStatus === "paused"
-          ? "Message will queue until you resume delivery."
-          : session.busy
-            ? "Message will queue for the next turn."
-            : conversationLiveState.status === "needs-you"
-              ? "Message will queue until the pending request is resolved."
-              : ["queued", "blocked", "failed"].includes(
-                    conversationLiveState.status,
-                  )
-                ? `Message will queue: ${conversationLiveState.detail ?? "waiting to continue"}.`
-                : "Message will start the next turn.";
+  const memberDelivery = steering
+    ? "Message will steer the current turn."
+    : session.codexStorageError
+      ? "Message will queue until storage is repaired."
+      : session.codexStoragePreparing
+        ? "Message will queue until storage preparation finishes."
+        : session.usageLimit
+          ? "Message will queue until the usage limit is resolved."
+          : session.queueStatus === "paused"
+            ? "Message will queue until you resume delivery."
+            : session.busy
+              ? isMember && canSteer
+                ? "Message will join the current turn."
+                : "Message will follow the current turn."
+              : conversationLiveState.status === "needs-you"
+                ? "Message will queue until the pending request is resolved."
+                : ["queued", "blocked", "failed"].includes(
+                      conversationLiveState.status,
+                    )
+                  ? `Message will queue: ${conversationLiveState.detail ?? "waiting to continue"}.`
+                  : "Message will start the next turn.";
 
   return (
     <div
+      ref={workbenchOrigin}
+      data-member-workbench={workbench || undefined}
       data-session-drop={session.id}
       data-session-empty={isEmpty}
       data-project-chat-background={!!projectBackground}
@@ -1218,64 +1316,177 @@ const LocalSessionPane = memo(function LocalSessionPane({
       ) : null}
       <div className="flex min-h-0 min-w-0 flex-1">
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-          {isMember && agent && (
-            <>
-              <header className="flex shrink-0 items-start gap-3 border-b border-stroke px-4 py-3 font-sans">
-                <PixelMascot
-                  name={agent.mascot}
-                  color={agent.color}
-                  still
-                  className="size-7 shrink-0"
-                />
-                <div className="min-w-0 flex-1">
-                  <h2 className="text-sm font-semibold">{agent.name}</h2>
-                  {memberState.liveState && !memberState.attentionLocation ? (
-                    <AgentStatusLabel state={memberState.liveState} className="mt-1 text-xs" />
-                  ) : (
-                    <MonoStatus
-                      state={memberState}
-                      color={agent.color}
-                      className="mt-1 text-xs text-content/70"
-                    />
-                  )}
-                  {!session.busy ? (
-                    <p className="mt-1 text-[11px] text-content/75">
-                      No conversation turn running
-                    </p>
-                  ) : (
-                    <div className="mt-1">
-                      <span className="text-[11px] text-content/75">
-                        Current conversation turn
-                      </span>
-                      <TaskMetricsLine
-                        showState={false}
-                        state={conversationLiveState}
-                        metrics={selectAgentMetrics({
-                          ...session,
-                          blocks:
-                            currentTurn < 0
-                              ? []
-                              : session.blocks.slice(currentTurn),
-                        })}
-                      />
-                    </div>
-                  )}
-                </div>
-              </header>
-              <div
-                className={`flex min-h-0 flex-col ${fillMemberWork ? "flex-1" : "max-h-[50dvh] shrink-0"}`}
+          {workbench && (
+            <WorkbenchHeader
+              session={session}
+              name={isMember ? (workbenchLook?.name ?? "Member") : title}
+              role={
+                isMember
+                  ? (workbenchMember?.specialty ?? "Team member")
+                  : `Saved session · ${workbenchLook?.name ?? workbenchTask?.memberName ?? "Member"}`
+              }
+              mascot={workbenchLook?.mascot ?? workbenchTask?.memberMascot}
+              color={workbenchLook?.color ?? workbenchTask?.memberColor}
+              state={workbenchState}
+              onMessage={() => focusWorkbenchComposer()}
+              onSteer={() => focusWorkbenchComposer(true)}
+              canSteer={canSteer}
+              onOpenWorktree={
+                workbenchTask?.workspace?.checkoutCwd &&
+                (!workbenchTask.readOnly || workbenchTask.readOnlyFallback) &&
+                !session.worktreeRemoved &&
+                reviewActions?.openWorker
+                  ? () => reviewActions.openWorker?.(workbenchTask.sessionId)
+                  : undefined
+              }
+              onDetails={() => setDetailsOpen(true)}
+            />
+          )}
+          <div className={workbench ? "cc7u-body" : "contents"}>
+            {workbench && (
+              <section
+                className="cc7u-work"
                 data-member-work
+                data-open={workOpen}
+                aria-label="Work"
+                tabIndex={0}
               >
-                <div className="max-h-[35dvh] shrink-0 overflow-y-auto overscroll-contain">
-                  {storageNotice}
-                  {monoNotices}
+                <div className="cc7u-work-caption">
+                  <span>Work</span>
+                  <button type="button" onClick={() => setWorkOpen(false)}>
+                    Close work
+                  </button>
                 </div>
-                <div className="min-h-0 overflow-y-auto overscroll-contain">
-                  <MemberWorkLog key={mono.id} member={mono} />
-                  {!!memberMessages.length && (
+                {storageNotice}
+                {monoNotices}
+                {!storageDetail &&
+                  [
+                    "waiting-on-member",
+                    "waiting-review",
+                    "failed",
+                    "blocked",
+                  ].includes(workbenchState.status) && (
+                    <section
+                      className="cc7u-priority"
+                      aria-label="Assignment status"
+                      data-state={workbenchState.status}
+                    >
+                      <h3>
+                        {workbenchState.status === "waiting-review"
+                          ? "Ready for review"
+                          : workbenchState.status === "waiting-on-member"
+                            ? "Waiting on a teammate"
+                            : "Work needs attention"}
+                      </h3>
+                      <p>
+                        {workbenchState.detail ??
+                          "Open the assignment to review the next step."}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.currentTarget.focus();
+                          setDetailsOpen(true);
+                        }}
+                      >
+                        View hand-off
+                      </button>
+                    </section>
+                  )}
+                {workbenchMember ? (
+                  <MemberWorkLog
+                    key={workbenchMember.id}
+                    member={workbenchMember}
+                  />
+                ) : (
+                  <section className="cc7u-empty-work">
+                    <h2>Assignment</h2>
+                    <p>
+                      {workbenchTask?.title ?? "Assignment details unavailable"}
+                    </p>
+                  </section>
+                )}
+                {workbenchMember && (
+                  <ManagerWorkbenchNote
+                    key={`note-${workbenchMember.id}`}
+                    member={workbenchMember}
+                  />
+                )}
+              </section>
+            )}
+            <div
+              className={workbench ? "cc7u-conversation" : "contents"}
+              data-workbench-conversation={workbench || undefined}
+            >
+              {workbench && (
+                <>
+                  <button
+                    type="button"
+                    className="cc7u-work-toggle"
+                    aria-expanded={workOpen}
+                    onClick={() => setWorkOpen(!workOpen)}
+                  >
+                    Work{storageDetail ? " · Needs attention" : ""}
+                  </button>
+                  <div
+                    role="tablist"
+                    aria-label="Member view"
+                    className="cc7u-conversation-head flex shrink-0 gap-5 border-b border-stroke px-5 text-xs"
+                  >
+                    {(["conversation", "activity"] as const).map((tab) => (
+                      <button
+                        key={tab}
+                        type="button"
+                        role="tab"
+                        id={`${memberPanelId}-${tab}-tab`}
+                        aria-controls={`${memberPanelId}-${tab}`}
+                        aria-selected={memberTab === tab}
+                        tabIndex={memberTab === tab ? 0 : -1}
+                        className={`border-b-2 px-1 py-2 focus-visible:outline-accent ${memberTab === tab ? "border-accent text-content" : "border-transparent text-content/60"}`}
+                        onClick={() => setMemberTab(tab)}
+                        onKeyDown={(event) => {
+                          if (
+                            ![
+                              "ArrowLeft",
+                              "ArrowRight",
+                              "Home",
+                              "End",
+                            ].includes(event.key)
+                          )
+                            return;
+                          event.preventDefault();
+                          const next =
+                            event.key === "Home"
+                              ? "conversation"
+                              : event.key === "End"
+                                ? "activity"
+                                : tab === "conversation"
+                                  ? "activity"
+                                  : "conversation";
+                          setMemberTab(next);
+                          document
+                            .getElementById(`${memberPanelId}-${next}-tab`)
+                            ?.focus();
+                        }}
+                      >
+                        {tab === "conversation" ? "Conversation" : "Activity"}
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      className="ml-auto text-[10px] text-content/65"
+                      onClick={(event) => {
+                        event.currentTarget.focus();
+                        setDetailsOpen(true);
+                      }}
+                    >
+                      Session details
+                    </button>
+                  </div>
+                {isMember && !!memberMessages.length && (
                     <section
                       aria-label="Message queue"
-                      className="mx-auto max-h-[20dvh] w-full max-w-4xl shrink-0 overflow-y-auto overscroll-contain px-4 pb-2"
+                      className="cc7u-message-queue"
                     >
                       <h3 className="mb-1 text-xs font-medium">Messages</h3>
                       <MessageQueue
@@ -1294,569 +1505,597 @@ const LocalSessionPane = memo(function LocalSessionPane({
                       />
                     </section>
                   )}
-                </div>
-              </div>
-              <div
-                role="tablist"
-                aria-label="Member view"
-                className="flex shrink-0 gap-3 border-b border-stroke px-4 text-xs"
-              >
-                {(["conversation", "activity"] as const).map((tab) => (
-                  <button
-                    key={tab}
-                    type="button"
-                    role="tab"
-                    id={`${memberPanelId}-${tab}-tab`}
-                    aria-controls={`${memberPanelId}-${tab}`}
-                    aria-selected={memberTab === tab}
-                    tabIndex={memberTab === tab ? 0 : -1}
-                    className={`border-b-2 px-1 py-2 focus-visible:outline-accent ${memberTab === tab ? "border-accent text-content" : "border-transparent text-content/60"}`}
-                    onClick={() => setMemberTab(tab)}
-                    onKeyDown={(event) => {
-                      if (
-                        !["ArrowLeft", "ArrowRight", "Home", "End"].includes(
-                          event.key,
-                        )
-                      )
-                        return;
-                      event.preventDefault();
-                      const next =
-                        event.key === "Home"
-                          ? "conversation"
-                          : event.key === "End"
-                            ? "activity"
-                            : tab === "conversation"
-                              ? "activity"
-                              : "conversation";
-                      setMemberTab(next);
-                      document
-                        .getElementById(`${memberPanelId}-${next}-tab`)
-                        ?.focus();
-                    }}
-                  >
-                    {tab === "conversation" ? "Conversation" : "Activity"}
-                  </button>
-                ))}
-              </div>
-            </>
-          )}
-          {!agent && !session.inboxAsk && (
-            <button
-              ref={sessionPanelTrigger}
-              type="button"
-              aria-label="Show session PRs"
-              aria-expanded={sessionPanelOpen}
-              onClick={() => {
-                setSessionPanelChoice(sessionPanelOpen ? "closed" : "open");
-                if (sessionPanelOpen) setSessionPanelPinned(false);
-              }}
-              className="absolute right-3 top-2 z-10 rounded px-2 py-1 text-xs text-content/50 hover:bg-content/8 hover:text-content focus-visible:outline-accent"
-            >
-              PRs
-            </button>
-          )}
-          {ownedRuns.map((run) => (
-            <ProjectManagerStatus
-              key={run.leadId}
-              run={run}
-              needsUser={!!session.pendingQuestion}
-              onDecision={() => {
-                const question =
-                  transcriptScope.current?.parentElement?.querySelector<HTMLElement>(
-                    "[data-question-form]",
-                  );
-                question?.scrollIntoView({ block: "center" });
-                question
-                  ?.querySelector<HTMLElement>("button, input, textarea")
-                  ?.focus();
-              }}
-            />
-          ))}
-          <div
-            ref={transcriptScope}
-            id={isMember ? `${memberPanelId}-conversation` : undefined}
-            role={isMember ? "tabpanel" : undefined}
-            aria-labelledby={
-              isMember ? `${memberPanelId}-conversation-tab` : undefined
-            }
-            hidden={isMember && memberTab !== "conversation"}
-            inert={isMember && memberTab !== "conversation"}
-            className={`@container relative min-h-0 ${fillMemberWork ? "shrink-0" : "flex-1"}${
-              dockComposer && !agent ? " transcript-composer-fade" : ""
-            }`}
-          >
-            {visible && focused && !session.inboxAsk ? (
-              <LinkedWorkItemUpdateNotice
-                sessionId={session.id}
-                card={session.linkedWorkItemUpdateCard}
-                onAcknowledge={() => {
-                  const updatedAt = session.linkedWorkItemUpdateCard?.updatedAt;
-                  if (updatedAt != null) {
-                    markLinkedSessionUpdateSeen(session.id, updatedAt);
-                  }
-                }}
-                onDismiss={() =>
-                  onLinkedWorkItemUpdateCardDismiss?.(session.id)
-                }
-                onOpenDiscussion={() => {
-                  if (session.linkedWorkItem) {
-                    onOpenLinkedWorkItem?.(session.linkedWorkItem, session.id);
-                  }
-                }}
-                onAddToChat={(text) => addSelectionToChat(text, "plain")}
-                onArchiveSession={
-                  onArchiveSession
-                    ? () => onArchiveSession(session.id, true)
-                    : undefined
-                }
-                onDeleteSession={
-                  onDeleteSession
-                    ? () => onDeleteSession(session.id)
-                    : undefined
-                }
-              />
-            ) : null}
-            <NestedWorktreeWarning
-              cwd={workCwd}
-              enabled={visible && !remoteSessionLoading}
-            />
-            {remoteSessionLoading ? null : isEmpty ? (
-              isMember ? (
-                <p className="px-4 py-5 text-xs text-content/55">
-                  No conversation yet. Assignments and queued messages appear
-                  above.
-                </p>
-              ) : agent ? (
-                <div className="scrollbar-none h-full min-h-0 overflow-y-auto">
-                  <MonoHeader
-                    agent={agent}
-                    state={monoState ?? sessionMonoState(session)}
-                    greeting={mono?.role !== "member"}
-                  />
-                </div>
-              ) : session.inboxAsk ? (
-                <div className="scrollbar-none h-full min-h-0 overflow-y-auto">
-                  <DiscussionEmpty message="Explore this item with your agent." />
-                </div>
-              ) : (
-                <EmptySession
-                  cwd={session.cwd}
-                  hasChatBackground={Boolean(
-                    projectBackground || globalBackgroundPath,
-                  )}
-                  composer={
-                    dockComposer ? undefined : (
-                      <div
-                        ref={composerDockMotion.centeredRef}
-                        data-session-composer
-                      >
-                        {composer}
-                      </div>
-                    )
-                  }
-                />
-              )
-            ) : (
-              <>
-                <PooledTranscript
-                  pool={transcriptPool}
-                  sessionId={session.id}
-                  onMouseDown={focusPane}
+                </>
+              )}
+              {!workbench && !agent && !session.inboxAsk && (
+                <button
+                  ref={sessionPanelTrigger}
+                  type="button"
+                  aria-label="Show session PRs"
+                  aria-expanded={sessionPanelOpen}
+                  onClick={() => {
+                    setSessionPanelChoice(sessionPanelOpen ? "closed" : "open");
+                    if (sessionPanelOpen) setSessionPanelPinned(false);
+                  }}
+                  className="absolute right-3 top-2 z-10 rounded px-2 py-1 text-xs text-content/50 hover:bg-content/8 hover:text-content focus-visible:outline-accent"
                 >
-                  <AgentTranscript
-                    managerProject={
-                      !agent && isProjectManager(session.id)
-                        ? session.cwd
+                  PRs
+                </button>
+              )}
+              {ownedRuns.map((run) => (
+                <ProjectManagerStatus
+                  key={run.leadId}
+                  run={run}
+                  needsUser={!!session.pendingQuestion}
+                  onDecision={() => {
+                    const question =
+                      transcriptScope.current?.parentElement?.querySelector<HTMLElement>(
+                        "[data-question-form]",
+                      );
+                    question?.scrollIntoView({ block: "center" });
+                    question
+                      ?.querySelector<HTMLElement>("button, input, textarea")
+                      ?.focus();
+                  }}
+                />
+              ))}
+              <div
+                ref={transcriptScope}
+                id={workbench ? `${memberPanelId}-conversation` : undefined}
+                role={workbench ? "tabpanel" : undefined}
+                aria-labelledby={
+                  workbench ? `${memberPanelId}-conversation-tab` : undefined
+                }
+                hidden={workbench && memberTab !== "conversation"}
+                inert={workbench && memberTab !== "conversation"}
+                className={`@container relative min-h-0 flex-1${
+                  dockComposer && !agent ? " transcript-composer-fade" : ""
+                }`}
+              >
+                {visible && focused && !session.inboxAsk ? (
+                  <LinkedWorkItemUpdateNotice
+                    sessionId={session.id}
+                    card={session.linkedWorkItemUpdateCard}
+                    onAcknowledge={() => {
+                      const updatedAt =
+                        session.linkedWorkItemUpdateCard?.updatedAt;
+                      if (updatedAt != null) {
+                        markLinkedSessionUpdateSeen(session.id, updatedAt);
+                      }
+                    }}
+                    onDismiss={() =>
+                      onLinkedWorkItemUpdateCardDismiss?.(session.id)
+                    }
+                    onOpenDiscussion={() => {
+                      if (session.linkedWorkItem) {
+                        onOpenLinkedWorkItem?.(
+                          session.linkedWorkItem,
+                          session.id,
+                        );
+                      }
+                    }}
+                    onAddToChat={(text) => addSelectionToChat(text, "plain")}
+                    onArchiveSession={
+                      onArchiveSession
+                        ? () => onArchiveSession(session.id, true)
                         : undefined
                     }
-                    blocks={
-                      isMember && !monoTranscript.viewingOlderPage
-                        ? monoTranscript.blocks.filter(
-                            (block) => !queuedBlockIds.has(block.id),
-                          )
-                        : agent && !monoTranscript.viewingOlderPage
-                          ? monoPendingTranscriptBlocks(
-                              session,
-                              monoTranscript.blocks,
-                            )
-                          : monoTranscript.blocks
-                    }
-                    historicalBlockIds={monoTranscript.historicalBlockIds}
-                    initialTurns={agent ? MONO_PAGE_TURNS : undefined}
-                    pageSize={agent ? MONO_PAGE_TURNS : undefined}
-                    hasEarlier={monoTranscript.hasEarlier}
-                    loadEarlierOnScroll={!!agent}
-                    onLoadEarlier={
-                      agent ? monoTranscript.loadEarlier : undefined
-                    }
-                    onReturnToLatest={
-                      monoTranscript.viewingOlderPage
-                        ? monoTranscript.latest
+                    onDeleteSession={
+                      onDeleteSession
+                        ? () => onDeleteSession(session.id)
                         : undefined
-                    }
-                    busy={!!session.busy && !monoTranscript.viewingOlderPage}
-                    visible={
-                      visible && (!isMember || memberTab === "conversation")
-                    }
-                    cwd={workCwd}
-                    agentName={agent?.name ?? memberTask?.memberName}
-                    agentMascot={
-                      agent ??
-                      (memberTask?.memberMascot && memberTask.memberColor
-                        ? {
-                            name: memberTask.memberName ?? "Member",
-                            mascot: memberTask.memberMascot,
-                            color: memberTask.memberColor,
-                            projects: [],
-                          }
-                        : undefined)
-                    }
-                    onOpenArtifact={
-                      onOpenArtifact
-                        ? (id) => onOpenArtifact(session.id, id)
-                        : undefined
-                    }
-                    bottomAligned={!!agent}
-                    inlineWork={!!agent}
-                    messageDeliveries={messageDeliveries}
-                    onRetryMessage={() => onResumeQueue(session.id)}
-                    onShowWork={
-                      agent && onShowMonoActivity
-                        ? (turnId, blocks) =>
-                            onShowMonoActivity(session.id, turnId, blocks)
-                        : undefined
-                    }
-                    activeWorkTurnId={monoActivityTurnId}
-                    onOpenSession={
-                      agent && onOpenMonoSession
-                        ? (turnId, blocks, launchedId) =>
-                            onOpenMonoSession(
-                              session.id,
-                              turnId,
-                              blocks,
-                              launchedId,
-                            )
-                        : undefined
-                    }
-                    launchedSessions={monoLaunchedSessions}
-                    openSessionId={openMonoSessionId}
-                    // A Mono's turn keeps copy, save as note and the time.
-                    daySeparators={!!agent}
-                    hideTurnMetrics={!!agent}
-                    harness={session.harness}
-                    model={session.model}
-                    modelSettings={session.modelSettings}
-                    pendingQuestion={!!session.pendingQuestion}
-                    backgroundTasks={session.backgroundTasks}
-                    onApproval={session.worktreeRemoved ? undefined : approve}
-                    onAddToChat={addSelectionToChat}
-                    onSaveNote={notesEnabled ? saveNote : undefined}
-                    onSendDraft={
-                      draftBlock
-                        ? (block) =>
-                            onSubmit(
-                              session.id,
-                              block.text,
-                              block.attachments ?? [],
-                              {
-                                draftBlockId: block.id,
-                                ...(block.appRequestId
-                                  ? { appRequestId: block.appRequestId }
-                                  : {}),
-                              },
-                            )
-                        : undefined
-                    }
-                    onRemoveDraft={
-                      draftBlock
-                        ? (block) => onRemoveDraft(session.id, block.id)
-                        : undefined
-                    }
-                    onSaveSelectionNote={
-                      notesEnabled ? saveSelectionNote : undefined
-                    }
-                    onOpenFile={onOpenFile}
-                    onOpenDiff={onOpenDiff}
-                    onOpenPlan={openPlan}
-                    onBuildPlan={
-                      session.worktreeRemoved ? undefined : buildPlan
-                    }
-                    planBuildTargets={!remote}
-                    onSecondOpinion={
-                      !agent &&
-                      !session.inboxAsk &&
-                      !session.worktreeRemoved &&
-                      onSecondOpinion
-                        ? (target, turn) =>
-                            onSecondOpinion(session.id, target, turn)
-                        : undefined
-                    }
-                    onHandoff={
-                      !agent &&
-                      !session.inboxAsk &&
-                      !session.worktreeRemoved &&
-                      onHandoff
-                        ? (target, turn) => onHandoff(session.id, target, turn)
-                        : undefined
-                    }
-                    onJumpToBottomChange={jumpVisibility.setVisible}
-                    onJumpToBottomReady={onJumpToBottomReady}
-                    onRevealReady={onRevealReady}
-                    onNavigateReady={onNavigateReady}
-                    turnAccessories={
-                      new Map(
-                        [
-                          ...new Set([...reviewTimeline.keys(), ...prTurnIds]),
-                        ].map((turnId) => [
-                          turnId,
-                          <>
-                            {(reviewTimeline.get(turnId) ?? []).map((run) => (
-                              <ProjectManagerReview
-                                key={run.leadId}
-                                run={run}
-                                historical
-                              />
-                            ))}
-                            {prTurns.has(turnId) && (
-                              <div className="px-4 py-1">
-                                <SessionPrSummary turn={prTurns.get(turnId)!} />
-                              </div>
-                            )}
-                          </>,
-                        ]),
-                      )
-                    }
-                    onScrollerChange={setTranscriptScroller}
-                    editingLastTurn={editingLastTurn}
-                    editLastTurnDisabledReason={editLastTurnDisabledReason}
-                    onEditLastTurn={
-                      editLastTurnSupported && !monoTranscript.viewingOlderPage
-                        ? () => {
-                            const rotation = loadMonoRotation(session.id);
-                            if (rotation === null || rotation?.pendingBrief) return;
-                            onFocus(session.id);
-                            recallLastTurnRef.current?.();
-                          }
-                        : undefined
-                    }
-                    editTurnAction={
-                      reviewHidden || !agent ? undefined : (
-                        <SessionChangesButton
-                          sessionId={session.id}
-                          editedPaths={editedPaths}
-                          cwd={workCwd}
-                          enabled={visible}
-                          busy={!!session.busy}
-                          onOpenDiff={onOpenDiff}
-                        />
-                      )
-                    }
-                    latestTurnAccessory={
-                      mono?.role === "member" ? undefined : ownedRuns.length ? (
-                        <>
-                          {ownedRuns.map((run) => (
-                            <ProjectManagerReview
-                              key={run.leadId}
-                              run={run}
-                              noticesOnly
-                            />
-                          ))}
-                        </>
-                      ) : reviewHidden || agent ? undefined : (
-                        <SessionReview
-                          sessionId={session.id}
-                          editedPaths={editedPaths}
-                          cwd={workCwd}
-                          enabled={visible}
-                          busy={!!session.busy}
-                          undoLocked={
-                            reviewUndoLocked ||
-                            orchestrationRuns.some(
-                              (run) =>
-                                (run.status === "active" ||
-                                  run.status === "paused") &&
-                                (run.leadId === session.id ||
-                                  run.tasks.some(
-                                    (task) => task.sessionId === session.id,
-                                  )),
-                            )
-                          }
-                          onOpenDiff={onOpenDiff}
-                          onCommit={onCommitChanges}
-                        />
-                      )
-                    }
-                  />
-                </PooledTranscript>
-                {!session.inboxAsk ? (
-                  <TranscriptFind
-                    blocks={session.blocks}
-                    visible={
-                      visible && (!isMember || memberTab === "conversation")
-                    }
-                    focused={focused}
-                    onNavigate={navigateBlock}
-                    onSearch={monoTranscript.search}
-                    side={
-                      session.linkedWorkItemUpdateCard &&
-                      session.linkedWorkItemUpdateCard.status !== "loading"
-                        ? "left"
-                        : "right"
                     }
                   />
                 ) : null}
-                {/* One mark per message would crowd a Mono's endless chat. */}
-                {agent ? null : (
-                  <PromptOutline
-                    blocks={session.blocks}
-                    scope={transcriptScope}
-                    scroller={transcriptScroller}
-                    visible={visible}
-                    revealBlock={revealBlock}
-                  />
-                )}
-                <TranscriptJumpToBottom
-                  visibility={jumpVisibility}
-                  onJump={() => {
-                    if (monoTranscript.viewingOlderPage) {
-                      monoTranscript.latest();
-                      requestAnimationFrame(() => jumpToBottomRef.current?.());
-                    } else jumpToBottomRef.current?.();
-                  }}
+                <NestedWorktreeWarning
+                  cwd={workCwd}
+                  enabled={visible && !remoteSessionLoading}
                 />
-              </>
-            )}
-          </div>
-          {isMember && memberTab === "activity" && (
-            <div
-              id={`${memberPanelId}-activity`}
-              role="tabpanel"
-              aria-labelledby={`${memberPanelId}-activity-tab`}
-              className="flex min-h-0 flex-1 flex-col"
-            >
-              <MonoActivityContent
-                member={mono}
-                blocks={session.blocks.filter(
-                  (block) => !queuedBlockIds.has(block.id),
-                )}
-                live={!!session.busy}
-                cwd={workCwd}
-                onOpenFile={onOpenFile}
-                onOpenDiff={onOpenDiff}
-                onApproval={session.worktreeRemoved ? undefined : approve}
-                readOutput
-              />
-            </div>
-          )}
-          {!isMember && storageNotice}
-          {dockComposer ? (
-            <div
-              ref={composerDockMotion.dockedRef}
-              data-session-composer
-              inert={btw.open}
-              className="mx-auto w-full max-w-4xl shrink-0"
-            >
-              {agent ? (
-                <>
-                  {rotationRecovery}
-                  {!isMember && monoNotices}
-                  {isMember && (
-                    <p
-                      role="status"
-                      className="px-3 py-1 text-xs text-content/75"
+                {remoteSessionLoading ? null : isEmpty ? (
+                  workbench ? (
+                    <p className="px-4 py-5 text-xs text-content/55">
+                      No conversation yet. Send a message to get started.
+                    </p>
+                  ) : agent ? (
+                    <div className="scrollbar-none h-full min-h-0 overflow-y-auto">
+                      <MonoHeader
+                        agent={agent}
+                        state={monoState ?? sessionMonoState(session)}
+                        greeting={mono?.role !== "member"}
+                      />
+                    </div>
+                  ) : session.inboxAsk ? (
+                    <div className="scrollbar-none h-full min-h-0 overflow-y-auto">
+                      <DiscussionEmpty message="Explore this item with your agent." />
+                    </div>
+                  ) : (
+                    <EmptySession
+                      cwd={session.cwd}
+                      hasChatBackground={Boolean(
+                        projectBackground || globalBackgroundPath,
+                      )}
+                      composer={
+                        dockComposer ? undefined : (
+                          <div
+                            ref={composerDockMotion.centeredRef}
+                            data-session-composer
+                          >
+                            {composer}
+                          </div>
+                        )
+                      }
+                    />
+                  )
+                ) : (
+                  <>
+                    <PooledTranscript
+                      pool={transcriptPool}
+                      sessionId={session.id}
+                      onMouseDown={focusPane}
                     >
+                      <AgentTranscript
+                        managerProject={
+                          !agent && isProjectManager(session.id)
+                            ? session.cwd
+                            : undefined
+                        }
+                        blocks={
+                          isMember && !monoTranscript.viewingOlderPage
+                            ? monoTranscript.blocks.filter(
+                                (block) => !queuedBlockIds.has(block.id),
+                              )
+                            : agent && !monoTranscript.viewingOlderPage
+                              ? monoPendingTranscriptBlocks(
+                                  session,
+                                  monoTranscript.blocks,
+                                )
+                              : monoTranscript.blocks
+                        }
+                        historicalBlockIds={monoTranscript.historicalBlockIds}
+                        initialTurns={agent ? MONO_PAGE_TURNS : undefined}
+                        pageSize={agent ? MONO_PAGE_TURNS : undefined}
+                        hasEarlier={monoTranscript.hasEarlier}
+                        loadEarlierOnScroll={!!agent}
+                        onLoadEarlier={
+                          agent ? monoTranscript.loadEarlier : undefined
+                        }
+                        onReturnToLatest={
+                          monoTranscript.viewingOlderPage
+                            ? monoTranscript.latest
+                            : undefined
+                        }
+                        busy={
+                          !!session.busy && !monoTranscript.viewingOlderPage
+                        }
+                        visible={
+                          visible &&
+                          (!workbench || memberTab === "conversation")
+                        }
+                        cwd={workCwd}
+                        agentName={agent?.name ?? savedMemberTask?.memberName}
+                        agentMascot={
+                          agent ??
+                          (savedMemberTask?.memberMascot && savedMemberTask.memberColor
+                            ? {
+                                name: savedMemberTask.memberName ?? "Member",
+                                mascot: savedMemberTask.memberMascot,
+                                color: savedMemberTask.memberColor,
+                                projects: [],
+                              }
+                            : undefined)
+                        }
+                        onOpenArtifact={
+                          onOpenArtifact
+                            ? (id) => onOpenArtifact(session.id, id)
+                            : undefined
+                        }
+                        bottomAligned={!!agent}
+                        inlineWork={!!agent}
+                        flatWork={workbench}
+                        messageDeliveries={messageDeliveries}
+                        onRetryMessage={() => onResumeQueue(session.id)}
+                        onShowWork={
+                          agent && onShowMonoActivity
+                            ? (turnId, blocks) =>
+                                onShowMonoActivity(session.id, turnId, blocks)
+                            : undefined
+                        }
+                        activeWorkTurnId={monoActivityTurnId}
+                        onOpenSession={
+                          agent && onOpenMonoSession
+                            ? (turnId, blocks, launchedId) =>
+                                onOpenMonoSession(
+                                  session.id,
+                                  turnId,
+                                  blocks,
+                                  launchedId,
+                                )
+                            : undefined
+                        }
+                        launchedSessions={monoLaunchedSessions}
+                        openSessionId={openMonoSessionId}
+                        // A Mono's turn keeps copy, save as note and the time.
+                        daySeparators={!!agent}
+                        hideTurnMetrics={!!agent}
+                        harness={session.harness}
+                        model={session.model}
+                        modelSettings={session.modelSettings}
+                        pendingQuestion={!!session.pendingQuestion}
+                        backgroundTasks={session.backgroundTasks}
+                        onApproval={
+                          session.worktreeRemoved ? undefined : approve
+                        }
+                        onAddToChat={addSelectionToChat}
+                        onSaveNote={notesEnabled ? saveNote : undefined}
+                        onSendDraft={
+                          draftBlock
+                            ? (block) =>
+                                onSubmit(
+                                  session.id,
+                                  block.text,
+                                  block.attachments ?? [],
+                                  {
+                                    draftBlockId: block.id,
+                                    ...(block.appRequestId
+                                      ? { appRequestId: block.appRequestId }
+                                      : {}),
+                                  },
+                                )
+                            : undefined
+                        }
+                        onRemoveDraft={
+                          draftBlock
+                            ? (block) => onRemoveDraft(session.id, block.id)
+                            : undefined
+                        }
+                        onSaveSelectionNote={
+                          notesEnabled ? saveSelectionNote : undefined
+                        }
+                        onOpenFile={onOpenFile}
+                        onOpenDiff={onOpenDiff}
+                        onOpenPlan={openPlan}
+                        onBuildPlan={
+                          session.worktreeRemoved ? undefined : buildPlan
+                        }
+                        planBuildTargets={!remote}
+                        onSecondOpinion={
+                          !agent &&
+                          !session.inboxAsk &&
+                          !session.worktreeRemoved &&
+                          onSecondOpinion
+                            ? (target, turn) =>
+                                onSecondOpinion(session.id, target, turn)
+                            : undefined
+                        }
+                        onHandoff={
+                          !agent &&
+                          !session.inboxAsk &&
+                          !session.worktreeRemoved &&
+                          onHandoff
+                            ? (target, turn) =>
+                                onHandoff(session.id, target, turn)
+                            : undefined
+                        }
+                        onJumpToBottomChange={jumpVisibility.setVisible}
+                        onJumpToBottomReady={onJumpToBottomReady}
+                        onRevealReady={onRevealReady}
+                        onNavigateReady={onNavigateReady}
+                        turnAccessories={
+                          new Map(
+                            [
+                              ...new Set([
+                                ...reviewTimeline.keys(),
+                                ...prTurnIds,
+                              ]),
+                            ].map((turnId) => [
+                              turnId,
+                              <>
+                                {(reviewTimeline.get(turnId) ?? []).map(
+                                  (run) => (
+                                    <ProjectManagerReview
+                                      key={run.leadId}
+                                      run={run}
+                                      historical
+                                    />
+                                  ),
+                                )}
+                                {prTurns.has(turnId) && (
+                                  <div className="px-4 py-1">
+                                    <SessionPrSummary
+                                      turn={prTurns.get(turnId)!}
+                                    />
+                                  </div>
+                                )}
+                              </>,
+                            ]),
+                          )
+                        }
+                        onScrollerChange={setTranscriptScroller}
+                        editingLastTurn={editingLastTurn}
+                        editLastTurnDisabledReason={editLastTurnDisabledReason}
+                        onEditLastTurn={
+                          editLastTurnSupported &&
+                          !monoTranscript.viewingOlderPage
+                            ? () => {
+                            const rotation = loadMonoRotation(session.id);
+                            if (rotation === null || rotation?.pendingBrief)
+                                  return;
+                                onFocus(session.id);
+                                recallLastTurnRef.current?.();
+                              }
+                            : undefined
+                        }
+                        editTurnAction={
+                          reviewHidden || !agent ? undefined : (
+                            <SessionChangesButton
+                              sessionId={session.id}
+                              editedPaths={editedPaths}
+                              cwd={workCwd}
+                              enabled={visible}
+                              busy={!!session.busy}
+                              onOpenDiff={onOpenDiff}
+                            />
+                          )
+                        }
+                        latestTurnAccessory={
+                          mono?.role ===
+                          "member" ? undefined : ownedRuns.length ? (
+                            <>
+                              {ownedRuns.map((run) => (
+                                <ProjectManagerReview
+                                  key={run.leadId}
+                                  run={run}
+                                  noticesOnly
+                                />
+                              ))}
+                            </>
+                          ) : reviewHidden || agent ? undefined : (
+                            <SessionReview
+                              sessionId={session.id}
+                              editedPaths={editedPaths}
+                              cwd={workCwd}
+                              enabled={visible}
+                              busy={!!session.busy}
+                              undoLocked={
+                                reviewUndoLocked ||
+                                orchestrationRuns.some(
+                                  (run) =>
+                                    (run.status === "active" ||
+                                      run.status === "paused") &&
+                                    (run.leadId === session.id ||
+                                      run.tasks.some(
+                                        (task) => task.sessionId === session.id,
+                                      )),
+                                )
+                              }
+                              onOpenDiff={onOpenDiff}
+                              onCommit={onCommitChanges}
+                            />
+                          )
+                        }
+                      />
+                    </PooledTranscript>
+                    {!session.inboxAsk ? (
+                      <TranscriptFind
+                        blocks={session.blocks}
+                        visible={
+                          visible &&
+                          (!workbench || memberTab === "conversation")
+                        }
+                        focused={focused}
+                        onNavigate={navigateBlock}
+                        onSearch={monoTranscript.search}
+                        side={
+                          session.linkedWorkItemUpdateCard &&
+                          session.linkedWorkItemUpdateCard.status !== "loading"
+                            ? "left"
+                            : "right"
+                        }
+                      />
+                    ) : null}
+                    {/* One mark per message would crowd a Mono's endless chat. */}
+                    {agent ? null : (
+                      <PromptOutline
+                        blocks={session.blocks}
+                        scope={transcriptScope}
+                        scroller={transcriptScroller}
+                        visible={visible}
+                        revealBlock={revealBlock}
+                      />
+                    )}
+                    <TranscriptJumpToBottom
+                      visibility={jumpVisibility}
+                      onJump={() => {
+                        if (monoTranscript.viewingOlderPage) {
+                          monoTranscript.latest();
+                          requestAnimationFrame(() =>
+                            jumpToBottomRef.current?.(),
+                          );
+                        } else jumpToBottomRef.current?.();
+                      }}
+                    />
+                  </>
+                )}
+              </div>
+              {workbench && memberTab === "activity" && (
+                <div
+                  id={`${memberPanelId}-activity`}
+                  role="tabpanel"
+                  aria-labelledby={`${memberPanelId}-activity-tab`}
+                  className="flex min-h-0 flex-1 flex-col"
+                >
+                  <MonoActivityContent
+                    member={workbenchMember}
+                    flatWork={workbench}
+                    blocks={session.blocks.filter(
+                      (block) => !queuedBlockIds.has(block.id),
+                    )}
+                    live={!!session.busy}
+                    cwd={workCwd}
+                    onOpenFile={onOpenFile}
+                    onOpenDiff={onOpenDiff}
+                    onApproval={session.worktreeRemoved ? undefined : approve}
+                    readOutput
+                  />
+                </div>
+              )}
+              {!workbench && storageNotice}
+              {dockComposer ? (
+                <div
+                  ref={composerDockMotion.dockedRef}
+                  data-session-composer
+                  inert={btw.open}
+                  className={
+                    workbench
+                      ? "cc7u-composer shrink-0"
+                      : "mx-auto w-full max-w-4xl shrink-0"
+                  }
+                >
+                  {agent ? (
+                    <>
+                      {rotationRecovery}
+                      {!isMember && monoNotices}
+                      <MonoComposer
+                        key={session.id}
+                        sessionId={session.id}
+                        goalRouting={monoGoalRouting}
+                        runtimeMode={monoRuntimeMode(
+                          mono,
+                          session.runtimeMode,
+                          session.readOnly
+                            ? undefined
+                            : session.runtimeModeSource,
+                        )}
+                        onRuntimeModeChange={(mode) =>
+                          onRuntimeModeChange(session.id, mode)
+                        }
+                        name={agent.name}
+                        enabled={visible}
+                        quoteRequest={quoteRequest}
+                        onQuoteRequestConsumed={acknowledgeQuote}
+                        onDraftChange={draftChanged}
+                        focusToken={
+                          focused && composerFocused
+                            ? composerFocusToken
+                            : undefined
+                        }
+                        onFocus={() => onFocus(session.id)}
+                        onSubmit={(text, attachments, monoGoal) =>
+                          monoGoal
+                            ? (onSubmitGoal?.(
+                                session.id,
+                                text,
+                                attachments,
+                                monoGoal,
+                              ) ?? false)
+                            : steering
+                              ? onSubmit(session.id, text, attachments, {
+                                  followUpBehavior: "steer",
+                                })
+                              : onSubmit(session.id, text, attachments)
+                        }
+                        controls={
+                          <>
+                            <ModelPicker
+                              harness={session.harness}
+                              model={session.model}
+                              values={session.modelSettings}
+                              allowedHarnesses={allowedModelHarnesses}
+                              project={workCwd}
+                              hideSettings
+                              hotkeys={focused && !btw.open}
+                              variant="text"
+                              onChange={(harness, model) =>
+                                onModelChange(session.id, harness, model)
+                              }
+                              onSettingsChange={(settings, settingId) =>
+                                onModelSettingsChange(
+                                  session.id,
+                                  settings,
+                                  settingId,
+                                )
+                              }
+                            />
+                            <ModelControlPills
+                              harness={session.harness}
+                              model={session.model}
+                              values={session.modelSettings}
+                              variant="text"
+                              onSettingsChange={(settings, settingId) =>
+                                onModelSettingsChange(
+                                  session.id,
+                                  settings,
+                                  settingId,
+                                )
+                              }
+                            />
+                            <div className="min-w-0 rounded-md px-1.5 py-1 transition-colors hover:bg-content/8">
+                              <ContextMeter
+                                usage={session.context}
+                                rotationScheduled={!!rotationStatus.plan}
+                                rotationDeferredReason={
+                                  rotationStatus.deferredReason
+                                }
+                                onCompact={
+                                  canCompactHarnessContext(session.harness) &&
+                                  !session.worktreeRemoved
+                                    ? () => onCompactContext(session.id)
+                                    : undefined
+                                }
+                                compactDisabled={!canRotateContext(session)}
+                              />
+                            </div>
+                          </>
+                        }
+                      />
+                    </>
+                  ) : (
+                    composer
+                  )}
+                  {workbench && (
+                    <p role="status" className="cc7u-delivery">
                       {memberDelivery}
                     </p>
                   )}
-                  <MonoComposer
-                    key={session.id}
-                    sessionId={session.id}
-                    goalRouting={monoGoalRouting}
-                    runtimeMode={monoRuntimeMode(mono, session.runtimeMode, session.readOnly ? undefined : session.runtimeModeSource)}
-                    onRuntimeModeChange={(mode) =>
-                      onRuntimeModeChange(session.id, mode)
-                    }
-                    name={agent.name}
-                    enabled={visible}
-                    quoteRequest={quoteRequest}
-                    onQuoteRequestConsumed={acknowledgeQuote}
-                    onDraftChange={draftChanged}
-                    focusToken={
-                      focused && composerFocused
-                        ? composerFocusToken
-                        : undefined
-                    }
-                    onFocus={() => onFocus(session.id)}
-                    onSubmit={(text, attachments, monoGoal) =>
-                      monoGoal
-                        ? onSubmitGoal?.(session.id, text, attachments, monoGoal) ?? false
-                        : onSubmit(session.id, text, attachments)
-                    }
-                    controls={
-                      <>
-                        <ModelPicker
-                          harness={session.harness}
-                          model={session.model}
-                          values={session.modelSettings}
-                          allowedHarnesses={allowedModelHarnesses}
-                          project={workCwd}
-                          hideSettings
-                          hotkeys={focused && !btw.open}
-                          variant="text"
-                          onChange={(harness, model) =>
-                            onModelChange(session.id, harness, model)
-                          }
-                          onSettingsChange={(settings, settingId) =>
-                            onModelSettingsChange(session.id, settings, settingId)
-                          }
-                        />
-                        <ModelControlPills
-                          harness={session.harness}
-                          model={session.model}
-                          values={session.modelSettings}
-                          variant="text"
-                          onSettingsChange={(settings, settingId) =>
-                            onModelSettingsChange(session.id, settings, settingId)
-                          }
-                        />
-                        <div className="min-w-0 rounded-md px-1.5 py-1 transition-colors hover:bg-content/8">
-                          <ContextMeter
-                            usage={session.context}
-                            rotationScheduled={!!rotationStatus.plan}
-                            rotationDeferredReason={rotationStatus.deferredReason}
-                            onCompact={
-                              canCompactHarnessContext(session.harness) &&
-                              !session.worktreeRemoved
-                                ? () => onCompactContext(session.id)
-                                : undefined
-                            }
-                            compactDisabled={!canRotateContext(session)}
-                          />
-                        </div>
-                      </>
-                    }
-                  />
-                </>
-              ) : (
-                composer
-              )}
+                </div>
+              ) : null}
+              <BtwSheet
+                btw={btw}
+                cwd={workCwd}
+                visible={visible}
+                origin={() =>
+                  composerDockMotion.dockedRef.current?.querySelector<HTMLElement>(
+                    "[data-composer-box]",
+                  ) ?? null
+                }
+                onSaveNote={notesEnabled ? saveNote : undefined}
+                onOpenFile={onOpenFile}
+                onOpenDiff={onOpenDiff}
+              />
             </div>
-          ) : null}
-          <BtwSheet
-            btw={btw}
-            cwd={workCwd}
-            visible={visible}
-            origin={() =>
-              composerDockMotion.dockedRef.current?.querySelector<HTMLElement>(
-                "[data-composer-box]",
-              ) ?? null
-            }
-            onSaveNote={notesEnabled ? saveNote : undefined}
-            onOpenFile={onOpenFile}
-            onOpenDiff={onOpenDiff}
-          />
+          </div>
+          {workbench && detailsOpen && (
+            <WorkbenchDrawer
+              title="Session details"
+              onClose={() => setDetailsOpen(false)}
+            >
+              <WorkbenchSessionDetails
+                session={session}
+                member={isMember ? workbenchMember : undefined}
+                onClose={() => setDetailsOpen(false)}
+                onModelChange={(harness, model) =>
+                  onModelChange(session.id, harness, model)
+                }
+                onSettingsChange={(settings, source) =>
+                  onModelSettingsChange(session.id, settings, undefined, source)
+                }
+                onAccessChange={(mode, source) => onRuntimeModeChange(session.id, mode, source)}
+                onSandboxChange={onWindowsSandboxChange ? (engine) => onWindowsSandboxChange(session.id, engine) : undefined}
+              />
+            </WorkbenchDrawer>
+          )}
         </div>
-        {!agent && !session.inboxAsk && sessionPanelOpen && (
+        {!workbench && !agent && !session.inboxAsk && sessionPanelOpen && (
           <SessionRightPanel
             key={session.id}
             session={session}

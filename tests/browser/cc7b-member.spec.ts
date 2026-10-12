@@ -26,11 +26,15 @@ for (const theme of ["dark", "light"]) {
       const log = page.getByRole("region", { name: "Member work log" });
       await expect(log).toBeVisible();
       await expect(
-        log.getByRole("heading", { name: "Current assignment", exact: true }),
+        log.getByRole("heading", { name: "Assignments", exact: true }),
       ).toBeVisible();
       await expect(
-        log.getByRole("heading", { name: "Queue (1)", exact: true }),
-      ).toBeVisible();
+        log.getByRole("tab", { name: "Current", exact: true }),
+      ).toHaveAttribute("aria-selected", "true");
+      await expect(log.locator("[data-member-task]")).toHaveCount(2);
+      await expect(log.locator('[data-member-task="queued"]')).toContainText(
+        "Queued",
+      );
       const composer = page.getByRole("textbox", {
         name: "Message Reviewer",
         exact: true,
@@ -39,12 +43,22 @@ for (const theme of ["dark", "light"]) {
       await expect(composer).toBeInViewport();
       if (scenario === "blocked") {
         const notice = page.getByRole("status", {
-          name: "Codex storage needs repair",
+          name: "Conversation couldn’t start",
         });
         await expect(notice).toBeInViewport();
-        await expect(page.getByText("Message will queue until storage is repaired.", { exact: true })).toHaveCount(1);
-        await expect(page.getByText("Message will queue until storage is repaired.", { exact: true })).toBeInViewport();
-        await expect(page.locator('header [data-agent-state="blocked"] .agent-state-cue')).toHaveCount(1);
+        await expect(
+          page.getByText("Message will queue until storage is repaired.", {
+            exact: true,
+          }),
+        ).toHaveCount(1);
+        await expect(
+          page.getByText("Message will queue until storage is repaired.", {
+            exact: true,
+          }),
+        ).toBeInViewport();
+        await expect(
+          page.locator('header [data-agent-state="blocked"] .agent-state-cue'),
+        ).toHaveCount(1);
         await expect(
           page
             .getByRole("region", { name: "Message queue" })
@@ -57,23 +71,24 @@ for (const theme of ["dark", "light"]) {
             .first(),
         ).toBeInViewport();
         await expect(
-          page.getByText("No conversation turn running", { exact: true }),
+          page.getByText("No conversation turn recorded", { exact: true }),
         ).toBeVisible();
         expect((await notice.boundingBox())!.y).toBeLessThan(
           (await log.boundingBox())!.y,
         );
       }
       if (scenario === "long-log") {
-        await log
-          .getByRole("button", { name: "History (28)", exact: true })
-          .click();
-        await expect(log.locator("[data-member-task]")).toHaveCount(30);
-        const scroller = log.locator(".overflow-y-auto");
+        await log.getByRole("tab", { name: "History", exact: true }).click();
+        await expect(log.locator("[data-member-task]")).toHaveCount(5);
+        await expect(
+          log.getByRole("navigation", { name: "Assignment pages" }),
+        ).toContainText("1 / 6");
+        const scroller = page.locator("[data-member-work]");
         expect(
           await scroller.evaluate(
             (element) => element.scrollHeight - element.clientHeight,
           ),
-        ).toBeGreaterThan(400);
+        ).toBeGreaterThan(100);
         const box = (await scroller.boundingBox())!;
         await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
         const before = await scroller.evaluate((element) => element.scrollTop);
@@ -108,7 +123,7 @@ for (const theme of ["dark", "light"]) {
           queue.getByRole("button", { name: "Edit queued message" }).first(),
         ).toBeInViewport();
         await expect(
-          page.getByRole("status", { name: "Codex storage needs repair" }),
+          page.getByRole("status", { name: "Conversation couldn’t start" }),
         ).toBeInViewport();
       }
       await page.screenshot({
@@ -133,10 +148,17 @@ for (const scenario of ["blocked", "long-log"]) {
     await expect(
       page.getByRole("textbox", { name: "Message Reviewer", exact: true }),
     ).toBeInViewport();
-    if (scenario === "blocked")
+    if (scenario === "blocked") {
+      await page
+        .getByRole("button", { name: /^Work · Needs attention$/ })
+        .click();
       await expect(
-        page.getByRole("status", { name: "Codex storage needs repair" }),
+        page.getByRole("status", { name: "Conversation couldn’t start" }),
       ).toBeInViewport();
+      await page
+        .getByRole("button", { name: "Close work", exact: true })
+        .click();
+    }
     if (scenario === "blocked") {
       const queue = page.getByRole("region", { name: "Message queue" });
       await queue
@@ -147,7 +169,7 @@ for (const scenario of ["blocked", "long-log"]) {
         queue.getByRole("button", { name: "Edit queued message" }).first(),
       ).toBeInViewport();
       await expect(
-        page.getByRole("status", { name: "Codex storage needs repair" }),
+        page.getByRole("button", { name: /^Work · Needs attention$/ }),
       ).toBeInViewport();
     }
     expect(
@@ -235,7 +257,7 @@ test("blocked queued messages can be edited and removed while the composer draft
     page.getByRole("textbox", { name: "Message Reviewer", exact: true }),
   ).toHaveValue("Keep my draft");
   await expect(
-    page.getByRole("status", { name: "Codex storage needs repair" }),
+    page.getByRole("status", { name: "Conversation couldn’t start" }),
   ).toBeInViewport();
 });
 

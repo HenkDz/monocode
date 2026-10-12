@@ -105,7 +105,7 @@ it("links task reports, reviews and PR summaries while keeping artifact reports 
     ).toBeNull();
     await act(async () =>
       container
-        .querySelector<HTMLButtonElement>('button[aria-controls$="-history"]')!
+        .querySelector<HTMLButtonElement>('[role="tab"][id$="-history"]')!
         .click(),
     );
     expect(container.textContent).toContain("Completed (no changes)");
@@ -331,62 +331,75 @@ it("keeps lifecycle and verified PR outcomes separate from canonical availabilit
     root = createRoot(container);
   try {
     await act(async () => root.render(<MemberWorkLog member={member} />));
-    for (const id of [
-      "ready",
-      "review",
-      "approved",
-      "stale",
-      "stale-verdict",
-      "changes",
-      "failed",
-      "blocked",
-    ]) {
-      expect(
-        container.querySelector(`[data-member-task="${id}"]`),
-      ).not.toBeNull();
-    }
+    expect(container.querySelectorAll("[data-member-task]")).toHaveLength(5);
+    expect(
+      container.querySelector('[data-member-task="blocked"]'),
+    ).not.toBeNull();
+    expect(
+      container.querySelector('[data-member-task="failed"]'),
+    ).not.toBeNull();
     for (const id of ["merged", "closed", "cancelled", "no-changes"]) {
       expect(container.querySelector(`[data-member-task="${id}"]`)).toBeNull();
     }
     await act(async () =>
       container
-        .querySelector<HTMLButtonElement>('button[aria-controls$="-history"]')!
+        .querySelector<HTMLButtonElement>('[role="tab"][id$="-all"]')!
         .click(),
     );
-    for (const [id, label, status] of [
-      ["running", "Running", "thinking"],
-      ["queued", "Queued", "queued"],
-      ["cancelling", "Cancelling", "thinking"],
-      ["review", "In review", "waiting-review"],
-      ["changes", "Changes requested", "waiting-review"],
-      ["approved", "Approved", "waiting-review"],
-      ["ready", "PR ready", "done"],
-      ["stale", "In review", "waiting-review"],
-      ["stale-verdict", "In review", "waiting-review"],
-      ["merged", "Merged", "done"],
-      ["closed", "Closed (not merged)", "done"],
-      ["cancelled", "Cancelled", "done"],
-      ["failed", "Failed", "failed"],
-      ["blocked", "Blocked", "blocked"],
-      ["no-changes", "Completed (no changes)", "done"],
-    ]) {
-      const card = container.querySelector(`[data-member-task="${id}"]`)!;
-      expect(card.querySelector("[data-task-status]")?.textContent).toBe(label);
-      expect(card.getAttribute("data-state")).toBe(status);
-      expect(card.querySelector(".agent-state")?.getAttribute("data-agent-state")).toBe(status);
-      expect(card.querySelectorAll(".agent-state-cue")).toHaveLength(1);
-      if (["running", "queued", "cancelling", "stale-verdict"].includes(id))
-        expect(card.querySelector('[title="Review notes"]')).toBeNull();
-      expect(card.querySelector('[aria-haspopup="dialog"]')?.textContent).toBe(
-        "Open",
-      );
+    const expected = new Map(
+      [
+        ["running", "Running", "thinking"],
+        ["queued", "Queued", "queued"],
+        ["cancelling", "Cancelling", "thinking"],
+        ["review", "In review", "waiting-review"],
+        ["changes", "Changes requested", "waiting-review"],
+        ["approved", "Approved", "waiting-review"],
+        ["ready", "PR ready", "done"],
+        ["stale", "In review", "waiting-review"],
+        ["stale-verdict", "In review", "waiting-review"],
+        ["merged", "Merged", "done"],
+        ["closed", "Closed (not merged)", "done"],
+        ["cancelled", "Cancelled", "done"],
+        ["failed", "Failed", "failed"],
+        ["blocked", "Blocked", "blocked"],
+        ["no-changes", "Completed (no changes)", "done"],
+      ].map(([id, label, status]) => [id, [label, status]]),
+    );
+    const seen: string[] = [];
+    for (;;) {
+      const cards = [...container.querySelectorAll("[data-member-task]")];
+      expect(cards.length).toBeLessThanOrEqual(5);
+      for (const card of cards) {
+        const id = card.getAttribute("data-member-task")!;
+        const [label, status] = expected.get(id)!;
+        seen.push(id);
+        expect(card.querySelector("[data-task-status]")?.textContent).toBe(
+          label,
+        );
+        expect(card.getAttribute("data-state")).toBe(status);
+        expect(
+          card.querySelector(".agent-state")?.getAttribute("data-agent-state"),
+        ).toBe(status);
+        expect(card.querySelectorAll(".agent-state-cue")).toHaveLength(1);
+        if (["running", "queued", "cancelling", "stale-verdict"].includes(id))
+          expect(card.querySelector('[title="Review notes"]')).toBeNull();
+        expect(
+          card.querySelector('[aria-haspopup="dialog"]')?.textContent,
+        ).toBe("Open");
+      }
+      const next = container.querySelector<HTMLButtonElement>(
+        '[aria-label="Next assignments"]',
+      )!;
+      if (next.disabled) break;
+      await act(async () => next.click());
     }
+    expect(seen.sort()).toEqual([...expected.keys()].sort());
   } finally {
     await act(async () => root.unmount());
   }
 });
 
-it("keeps large histories unmounted, prioritizes attention and lets every past task open", async () => {
+it("pages large histories five at a time, prioritizes attention and reaches every past task", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const history = Array.from({ length: 200 }, (_, index) => ({
     ...base,
@@ -411,17 +424,18 @@ it("keeps large histories unmounted, prioritizes attention and lets every past t
   vi.spyOn(orchestrator, "subscribe").mockReturnValue(() => {});
   const host = document.createElement("div"),
     root = createRoot(host);
+  document.body.append(host);
   try {
     await act(async () => root.render(<MemberWorkLog member={member} />));
     const toggle = host.querySelector<HTMLButtonElement>(
-      'button[aria-controls]:not([aria-controls$="-history"])',
+      '[role="tab"][id$="-current"]',
     )!;
     const historyToggle = host.querySelector<HTMLButtonElement>(
-      'button[aria-controls$="-history"]',
+      '[role="tab"][id$="-history"]',
     )!;
-    expect(toggle.textContent).toContain("Tasks (202)");
-    expect(historyToggle.textContent).toContain("History (200)");
-    expect(historyToggle.getAttribute("aria-expanded")).toBe("false");
+    expect(host.textContent).toContain("2 current · 200 past");
+    expect(toggle.getAttribute("aria-selected")).toBe("true");
+    expect(historyToggle.getAttribute("aria-selected")).toBe("false");
     expect(host.textContent).toContain("Needs attention (1)");
     expect(
       [...host.querySelectorAll("[data-member-task]")].map((el) =>
@@ -430,17 +444,37 @@ it("keeps large histories unmounted, prioritizes attention and lets every past t
     ).toEqual(["blocked", "running"]);
     expect(host.textContent).not.toContain("Past assignment");
     await act(async () => historyToggle.click());
-    expect(historyToggle.getAttribute("aria-expanded")).toBe("true");
-    expect(host.querySelectorAll("[data-member-task]")).toHaveLength(202);
-    await act(async () =>
+    expect(historyToggle.getAttribute("aria-selected")).toBe("true");
+    expect(
       host
-        .querySelector<HTMLButtonElement>(
-          '[data-member-task="past-0"] button[aria-haspopup="dialog"]',
-        )!
+        .querySelector('[aria-label="Previous assignments"]')
+        ?.hasAttribute("disabled"),
+    ).toBe(true);
+    const seen: string[] = [];
+    for (let page = 0; page < 40; page++) {
+      const cards = [...host.querySelectorAll("[data-member-task]")];
+      expect(cards).toHaveLength(5);
+      seen.push(...cards.map((card) => card.getAttribute("data-member-task")!));
+      expect(
+        host.querySelector('[aria-label="Assignment pages"] span')?.textContent,
+      ).toBe(`${page + 1} / 40`);
+      const next = host.querySelector<HTMLButtonElement>(
+        '[aria-label="Next assignments"]',
+      )!;
+      expect(next.disabled).toBe(page === 39);
+      if (!next.disabled) await act(async () => next.click());
+    }
+    expect(new Set(seen).size).toBe(200);
+    expect(seen.sort()).toEqual(history.map((task) => task.id).sort());
+    const last = host.querySelector("[data-member-task]")!;
+    const lastTitle = last.querySelector("strong")!.textContent!;
+    await act(async () =>
+      last
+        .querySelector<HTMLButtonElement>('button[aria-haspopup="dialog"]')!
         .click(),
     );
     expect(document.querySelector('[role="dialog"]')?.textContent).toContain(
-      "Past assignment 0",
+      lastTitle,
     );
     await act(async () =>
       document
@@ -449,20 +483,45 @@ it("keeps large histories unmounted, prioritizes attention and lets every past t
         )!
         .click(),
     );
-    await act(async () => historyToggle.click());
+    await act(async () =>
+      historyToggle.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Home", bubbles: true }),
+      ),
+    );
+    expect(toggle.getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(toggle);
     expect(host.querySelectorAll("[data-member-task]")).toHaveLength(2);
-    await act(async () => toggle.click());
-    expect(toggle.getAttribute("aria-expanded")).toBe("false");
-    expect(host.querySelectorAll("[data-member-task]")).toHaveLength(0);
-    await act(async () => historyToggle.click());
-    expect(toggle.getAttribute("aria-expanded")).toBe("true");
-    expect(host.querySelectorAll("[data-member-task]")).toHaveLength(202);
+    await act(async () =>
+      toggle.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }),
+      ),
+    );
+    expect(historyToggle.getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(historyToggle);
+    expect(
+      host.querySelector('[aria-label="Assignment pages"] span')?.textContent,
+    ).toBe("1 / 40");
+    await act(async () =>
+      historyToggle.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "End", bubbles: true }),
+      ),
+    );
+    expect(
+      host
+        .querySelector('[role="tab"][id$="-all"]')
+        ?.getAttribute("aria-selected"),
+    ).toBe("true");
+    expect(host.querySelectorAll("[data-member-task]")).toHaveLength(5);
+    expect(
+      host.querySelector('[aria-label="Assignment pages"] span')?.textContent,
+    ).toBe("1 / 41");
   } finally {
     await act(async () => root.unmount());
+    host.remove();
   }
 });
 
-it("keeps opened details readable when a current task moves into collapsed history", async () => {
+it("keeps opened details readable when a current task moves into History", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const snapshot = vi
     .spyOn(orchestrator, "snapshot")
@@ -506,7 +565,7 @@ it("keeps opened details readable when a current task moves into collapsed histo
     );
     await act(async () =>
       host
-        .querySelector<HTMLButtonElement>('button[aria-controls$="-history"]')!
+        .querySelector<HTMLButtonElement>('[role="tab"][id$="-history"]')!
         .click(),
     );
     expect(document.querySelector('[role="dialog"]')).toBeNull();
@@ -552,7 +611,7 @@ it("highlights a task awaiting the user without automatically opening its body",
   }
 });
 
-it("separates current work, queued assignments and review from collapsed completed history", async () => {
+it("keeps current work, queued assignments and review on current pages, separate from History", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const tasks = [
     { ...base, id: "running", status: "running" },
@@ -601,20 +660,20 @@ it("separates current work, queued assignments and review from collapsed complet
   vi.spyOn(orchestrator, "subscribe").mockReturnValue(() => {});
   const host = document.createElement("div"),
     root = createRoot(host);
-  const ids = (section: string) =>
-    [
-      ...host.querySelectorAll(
-        `[data-member-section="${section}"] [data-member-task]`,
-      ),
-    ].map((card) => card.getAttribute("data-member-task"));
+  const ids = () =>
+    [...host.querySelectorAll("[data-member-task]")].map((card) =>
+      card.getAttribute("data-member-task"),
+    );
   try {
     await act(async () => root.render(<MemberWorkLog member={member} />));
-    expect(ids("current")).toEqual(["blocked", "running"]);
-    expect(ids("queue")).toEqual(["available", "queued", "paused"]);
-    expect(ids("log")).toEqual(["ready", "review"]);
-    expect(host.textContent).toContain("Current assignment");
-    expect(host.textContent).toContain("Queue (3)");
-    expect(host.textContent).toContain("Work log (2)");
+    expect(ids()).toEqual([
+      "blocked",
+      "ready",
+      "review",
+      "available",
+      "queued",
+    ]);
+    expect(host.textContent).toContain("7 current · 2 past");
     expect(
       host.querySelector('[data-member-task="queued"] [data-task-reason]')
         ?.textContent,
@@ -624,14 +683,13 @@ it("separates current work, queued assignments and review from collapsed complet
         ?.textContent,
     ).toBe("Waiting for an available worker");
     expect(
-      host.querySelector('[data-member-task="paused"] [data-task-reason]')
-        ?.textContent,
-    ).toBe("Review checkout permissions");
+      host.querySelector(
+        '[data-member-task="blocked"] [data-task-reason]',
+      )?.textContent,
+    ).toContain("Provider connection interrupted");
     expect(
-      host.querySelector('[data-member-task="blocked"] [data-transcript-error="transport"]')
-        ?.textContent,
-    ).toContain("provider connection interrupted");
-    expect(host.querySelector('[data-member-task="blocked"]')?.textContent).not.toContain("Worker lost its connection");
+      host.querySelector('[data-member-task="blocked"]')?.textContent,
+    ).not.toContain("Worker lost its connection");
     expect(
       host.querySelector('[data-member-task="review"] [data-task-metrics]')
         ?.textContent,
@@ -639,6 +697,22 @@ it("separates current work, queued assignments and review from collapsed complet
     expect(host.querySelector('[data-member-task="past"]')).toBeNull();
     expect(host.querySelector('[data-member-task="cancelled"]')).toBeNull();
     expect(host.textContent).not.toContain("Assignment instructions");
+    await act(async () =>
+      host
+        .querySelector<HTMLButtonElement>('[aria-label="Next assignments"]')!
+        .click(),
+    );
+    expect(ids()).toEqual(["running", "paused"]);
+    expect(
+      host.querySelector('[data-member-task="paused"] [data-task-reason]')
+        ?.textContent,
+    ).toBe("Review checkout permissions");
+    await act(async () =>
+      host
+        .querySelector<HTMLButtonElement>('[role="tab"][id$="-history"]')!
+        .click(),
+    );
+    expect(ids()).toEqual(["cancelled", "past"]);
   } finally {
     await act(async () => root.unmount());
   }
@@ -703,8 +777,10 @@ it("shows a blocked queue reason while keeping historical state and task metrics
         ?.textContent,
     ).toContain("Blocked");
     expect(
-      host.querySelector('[data-member-section="current"]')?.textContent,
-    ).toContain("No current assignment");
+      host
+        .querySelector('[role="tab"][id$="-current"]')
+        ?.getAttribute("aria-selected"),
+    ).toBe("true");
     const review = host.querySelector('[data-member-task="review"]')!;
     expect(review.querySelector("[data-task-status]")?.textContent).toBe(
       "In review",
@@ -722,7 +798,7 @@ it("shows a blocked queue reason while keeping historical state and task metrics
     ).toContain("Waiting review");
     await act(async () =>
       host
-        .querySelector<HTMLButtonElement>('button[aria-controls$="-history"]')!
+        .querySelector<HTMLButtonElement>('[role="tab"][id$="-history"]')!
         .click(),
     );
     const past = host.querySelector('[data-member-task="past"]')!;
@@ -794,13 +870,13 @@ it("opens queued workers and cancels the exact task with pending and retryable e
     expect(cancel).toHaveBeenCalledTimes(2);
     expect(host.querySelector('[role="alert"]')).toBeNull();
     expect(host.querySelector('[data-member-task="queued"]')).toBeNull();
-    expect(host.textContent).toContain("History (1)");
+    expect(host.textContent).toContain("0 current · 1 past");
   } finally {
     await act(async () => root.unmount());
   }
 });
 
-it("restores focus to the task toggle when an open assignment moves into collapsed history", async () => {
+it("restores focus to the Current segment when an open assignment moves into History", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const snapshot = vi
     .spyOn(orchestrator, "snapshot")
@@ -840,9 +916,7 @@ it("restores focus to the task toggle when an open assignment moves into collaps
         .click(),
     );
     expect(document.activeElement).toBe(
-      host.querySelector(
-        'button[aria-controls]:not([aria-controls$="-history"])',
-      ),
+      host.querySelector('[role="tab"][id$="-current"]'),
     );
   } finally {
     await act(async () => root.unmount());
@@ -888,5 +962,106 @@ it("dismisses hovered task hints while a reader is open so Escape closes it and 
   } finally {
     await act(async () => root.unmount());
     host.remove();
+  }
+});
+
+it("keeps zero assignments usable across all segments without adding disclosures or paging", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  localStorage.setItem(
+    "monocode:mono-roster",
+    JSON.stringify([manager, member]),
+  );
+  vi.spyOn(orchestrator, "snapshot").mockReturnValue([]);
+  vi.spyOn(orchestrator, "subscribe").mockReturnValue(() => {});
+  const host = document.createElement("div"),
+    root = createRoot(host);
+  document.body.append(host);
+  try {
+    await act(async () => root.render(<MemberWorkLog member={member} />));
+    expect(host.textContent).toContain("No assignments yet");
+    expect(host.textContent).toContain("Project Manager assigns work here.");
+    expect(
+      host.querySelector(
+        'details, [aria-expanded], [aria-label="Assignment pages"]',
+      ),
+    ).toBeNull();
+    const tabs = [...host.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
+    expect(tabs.map((tab) => tab.textContent)).toEqual([
+      "Current",
+      "History",
+      "All",
+    ]);
+    for (const tab of tabs) {
+      await act(async () => tab.click());
+      expect(tab.getAttribute("aria-selected")).toBe("true");
+      expect(tab.tabIndex).toBe(0);
+      expect(host.textContent).toContain("No assignments yet");
+      expect(host.querySelectorAll("[data-member-task]")).toHaveLength(0);
+    }
+    await act(async () =>
+      tabs[2].dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }),
+      ),
+    );
+    expect(document.activeElement).toBe(tabs[0]);
+    await act(async () =>
+      tabs[0].dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }),
+      ),
+    );
+    expect(document.activeElement).toBe(tabs[2]);
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+  }
+});
+
+it("keeps a prepared failed launch distinct from a recorded conversation turn", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.spyOn(orchestrator, "snapshot").mockReturnValue([
+    {
+      tasks: [
+        {
+          ...base,
+          id: "launch",
+          status: "failed",
+          error: "Storage not available",
+        },
+      ],
+      dispatches: [
+        {
+          id: "dispatch",
+          taskId: "launch",
+          stage: "session_prepared",
+          state: "failed",
+          startedAt: 100,
+          finishedAt: 500,
+        },
+      ],
+    },
+  ] as unknown as OrchestrationRun[]);
+  vi.spyOn(orchestrator, "subscribe").mockReturnValue(() => {});
+  const host = document.createElement("div"),
+    root = createRoot(host);
+  try {
+    await act(async () => root.render(<MemberWorkLog member={member} />));
+    expect(
+      host.querySelector('[data-member-task="launch"] [data-task-status]')
+        ?.textContent,
+    ).toBe("Failed");
+    expect(
+      host.querySelector('[data-member-task="launch"] [data-task-metrics]')
+        ?.textContent,
+    ).toContain("Conversation not started");
+    expect(host.querySelector('[data-member-task="launch"] [data-transcript-error]')).toBeNull();
+    expect(host.querySelector('[data-member-task="launch"] [data-task-reason]')?.textContent).not.toContain("Storage not available");
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-member-task="launch"] button')!.click());
+    const reader = document.querySelector('[role="dialog"]')!;
+    expect(reader.querySelector('[data-transcript-error]')).not.toBeNull();
+    const diagnostics = [...reader.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Open details")!;
+    await act(async () => diagnostics.click());
+    expect(document.body.textContent).toContain("Storage not available");
+  } finally {
+    await act(async () => root.unmount());
   }
 });

@@ -33,6 +33,7 @@ const member = {
 const task: OrchestrationTask = {
   id: "review",
   memberId: member.id,
+  memberName: "Reviewer",
   title: "Review V5 process reconciliation",
   status: "failed",
   sessionId: "worker",
@@ -141,6 +142,16 @@ it("filters one flat member timeline and keeps injected protocol and diagnostics
         ),
       ].find((button) => button.textContent === value)!;
     expect(host.querySelectorAll("[data-member-activity]")).toHaveLength(5);
+    expect(
+      host.querySelector('[data-member-activity="assignments"] button')
+        ?.textContent,
+    ).toBe("Assigned to Reviewer");
+    expect(
+      host.querySelector('[data-member-activity="assignments"] p')?.textContent,
+    ).toBe(task.title);
+    expect(
+      host.querySelector('[data-member-activity="errors"] button')?.textContent,
+    ).toBe("Stopped");
     expect(host.textContent).not.toContain("Finished");
     expect(host.querySelector("[aria-expanded]")).toBeNull();
     expect(host.textContent).toContain("Native Core");
@@ -213,6 +224,35 @@ it("filters one flat member timeline and keeps injected protocol and diagnostics
   }
 });
 
+it("omits unknown timestamps and keeps the task title on its own secondary line", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.spyOn(orchestrator, "snapshot").mockReturnValue([run]);
+  vi.spyOn(orchestrator, "subscribe").mockReturnValue(() => {});
+  const host = document.createElement("div"),
+    root = createRoot(host);
+  try {
+    await act(async () =>
+      root.render(
+        <MonoActivityContent member={member} blocks={[]} readOutput />,
+      ),
+    );
+    const rows = [...host.querySelectorAll("[data-member-activity]")];
+    expect(rows).toHaveLength(2);
+    expect(rows.map((row) => row.querySelector("button")?.textContent)).toEqual(
+      ["Assigned to Reviewer", "Stopped"],
+    );
+    expect(rows.map((row) => row.querySelector("p")?.textContent)).toEqual([
+      task.title,
+      task.title,
+    ]);
+    expect(host.querySelector("time")).toBeNull();
+    expect(host.textContent).not.toContain("Time not recorded");
+    expect(host.textContent).not.toContain("Unknown");
+  } finally {
+    await act(async () => root.unmount());
+  }
+});
+
 it("keeps default failed task cards and their readers free of raw storage errors", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.spyOn(orchestrator, "snapshot").mockReturnValue([run]);
@@ -224,8 +264,8 @@ it("keeps default failed task cards and their readers free of raw storage errors
     await act(async () => root.render(<MemberWorkLog member={member} />));
     expect(host.textContent).not.toContain(task.error);
     expect(
-      host.querySelector('[data-transcript-error="storage"]'),
-    ).not.toBeNull();
+      host.querySelector('[data-task-reason]')?.textContent,
+    ).toBe("Storage launch mismatch");
     await act(async () =>
       [...host.querySelectorAll<HTMLButtonElement>("button")]
         .find((button) => button.textContent === "Open")!

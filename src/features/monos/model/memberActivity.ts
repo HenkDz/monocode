@@ -90,7 +90,7 @@ export function memberActivityEvents(
         id: `task:${run.leadId}:${task.id}:assignment`,
         kind: "assignments",
         task,
-        label: `Assigned ${presentationText(task.title)}`,
+        label: `Assigned to ${presentationText(task.memberName || "member")}`,
         at: first,
         orderAt: first,
       });
@@ -110,11 +110,23 @@ export function memberActivityEvents(
           error || ["failed", "blocked", "interrupted"].includes(dispatch.state)
             ? "errors"
             : "results";
+        const notStarted =
+          dispatch.turnStartedAt === undefined &&
+          ["queued", "workspace_prepared", "session_prepared"].includes(
+            dispatch.stage,
+          );
         events.push({
           id: `dispatch:${run.leadId}:${dispatch.id}:outcome`,
           kind,
           task,
-          label: `${dispatch.state === "cancelled" ? "Cancelled" : kind === "errors" ? "Stopped" : "Finished"} ${presentationText(task.title)}`,
+          label:
+            dispatch.state === "cancelled"
+              ? "Cancelled"
+              : kind === "errors"
+                ? notStarted
+                  ? "Stopped before starting"
+                  : "Stopped"
+                : "Finished",
           error:
             error ||
             (kind === "errors"
@@ -148,7 +160,12 @@ export function memberActivityEvents(
           id: `task:${run.leadId}:${task.id}:outcome`,
           kind,
           task,
-          label: `${task.status === "cancelled" ? "Cancelled" : kind === "errors" ? "Stopped" : "Finished"} ${presentationText(task.title)}`,
+          label:
+            task.status === "cancelled"
+              ? "Cancelled"
+              : kind === "errors"
+                ? "Stopped"
+                : "Finished",
           error:
             task.error ||
             (kind === "errors"

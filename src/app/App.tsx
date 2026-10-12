@@ -11934,7 +11934,7 @@ function Workspace({
         );
         sessionsRef.current = next;
         setSessions(next);
-        const guidanceId = next.find((entry) => entry.id === id)!.blocks.at(-1)!.id;
+        const guidanceId = next.find((entry) => entry.id === id)!.blocks.slice(-1)[0]!.id;
         let refused = false;
         try {
           await steerHarnessTurn({

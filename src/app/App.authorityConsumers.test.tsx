@@ -183,7 +183,7 @@ it.each(changes)("host steer refuses late %s before actual registry/HTTP issuanc
   expect(issued).toEqual([]);
   expect(localStorage.getItem(key)).toBe(bytes);
   expectOriginal(original);
-  expect(sessionsRef.current[0].blocks.at(-1)).toMatchObject({ role: "user", text: guidance, draft: true });
+  expect(sessionsRef.current[0].blocks.slice(-1)[0]).toMatchObject({ role: "user", text: guidance, draft: true });
 });
 it.each(["unknown", "unreadable"] as const)("host steer refuses initially %s authority before recording guidance", async change => {
   await startOriginal();
@@ -204,8 +204,8 @@ it.each([false, true])("host steer records real guidance and preserves the origi
   else await pending;
   expect(issued).toEqual([guidance]);
   expectOriginal(original);
-  expect(sessionsRef.current[0].blocks.at(-1)).toMatchObject({ role: "user", text: guidance });
-  expect(sessionsRef.current[0].blocks.at(-1)?.draft).toBeUndefined();
+  expect(sessionsRef.current[0].blocks.slice(-1)[0]).toMatchObject({ role: "user", text: guidance });
+  expect(sessionsRef.current[0].blocks.slice(-1)[0]?.draft).toBeUndefined();
   expect(loadMonoRotation(id)).toEqual(receipt);
 });
 it.each(changes)("outgoing recap refuses late %s before actual registry/HTTP issuance and cannot own the next dispatch", async change => {
@@ -252,7 +252,7 @@ it.each(changes.flatMap(change => (["steer", "handoff"] as const).map(consumer =
   expect(issued).toEqual([]);
   expect(localStorage.getItem(key)).toBe(bytes);
   expectOriginal(original);
-  if (consumer === "steer") expect(sessionsRef.current[0].blocks.at(-1)).toMatchObject({ text: guidance, draft: true });
+  if (consumer === "steer") expect(sessionsRef.current[0].blocks.slice(-1)[0]).toMatchObject({ text: guidance, draft: true });
   else expect(sessionsRef.current[0]).toBe(original);
 });
 

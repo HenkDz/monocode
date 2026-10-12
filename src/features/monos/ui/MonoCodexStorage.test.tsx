@@ -74,6 +74,32 @@ it("shows the sandbox reason and exact manual command inline without auto-changi
   expect(container.textContent).toContain("Codex sandbox choice applied");
 });
 
+it.each(["initial", "recheck"])("offers working remedies for the elevated provisioning guard after %s detection", async detection => {
+  const reason = "Codex 0.162.1 can automatically repair sandbox credentials and enter elevated setup. Read-only checks cannot exclude that path without authentication side effects. Manual setup alone cannot unlock elevated Mono turns; use unelevated sandbox or full access until Codex can forbid automatic provisioning.";
+  const setupCommand = "codex sandbox -P :workspace -- echo ready";
+  const blocker = `Codex storage needs repair: ${JSON.stringify({ sandbox: true, reason, setupCommand })}`;
+  const repair = vi.fn(async () => { throw new Error(blocker); });
+  const resolve = vi.fn(async () => { throw new Error("The account is busy; config was not changed"); });
+  await act(async () => root.render(<MonoCodexStorageNotice
+    detail={detection === "initial" ? blocker : `Codex storage needs repair: ${JSON.stringify({ sandbox: true, reason: "Sandbox account is missing", setupCommand })}`}
+    onRepair={repair} onResolve={resolve} />));
+  if (detection === "recheck") await act(async () => buttonNamed("Check setup again").click());
+  expect(container.querySelector('[role="status"]')?.getAttribute("aria-label")).toBe("Codex elevated sandbox unavailable");
+  expect(container.textContent).toContain(reason);
+  expect(container.textContent).not.toContain("Run setup yourself");
+  expect(container.querySelector('[aria-label="Sandbox setup command"]')).toBeNull();
+  expect(buttonNamed("Copy setup command")).toBeUndefined();
+  expect(buttonNamed("Check setup again")).toBeUndefined();
+  expect(container.textContent).toContain("Your own Codex config stays unchanged");
+  expect(container.textContent).toContain("Full access applies to this Mono; Plan stays restricted");
+  expect(resolve).not.toHaveBeenCalled();
+  await act(async () => buttonNamed("Use unelevated sandbox for Monos").click());
+  expect(resolve).toHaveBeenCalledExactlyOnceWith("use_unelevated_sandbox");
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain("config was not changed");
+  expect(container.querySelector('[role="status"]')?.getAttribute("aria-label")).toBe("Codex elevated sandbox unavailable");
+  expect(buttonNamed("Use full access for this Mono").disabled).toBe(false);
+});
+
 it("requests full access only on explicit click and disables sandbox choices while pending", async () => {
   const detail = `Codex storage needs repair: ${JSON.stringify({ sandbox: true, reason: "Sandbox password expired", setupCommand: "codex sandbox -P :workspace -- echo ready" })}`;
   let finish!: () => void;

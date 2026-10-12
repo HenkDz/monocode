@@ -1,53 +1,67 @@
 # CC0H journal finalization
 
-Base: `2bd9b5231b1891fa894dfc3cfc21e36cc097d94b` (integrated CC6J). This is a **source-only correction pending required validation**. The coordinator explicitly kept CC0H source-only; no compilation, full suite, build, browser, screenshot or preview has been run. The exact committed source and hashes are recorded in the external CC0H report and VALIDATIONREADY.
+Tested implementation: `0c37b44a65cead9e66610a6dfc80c90910178e75`, including exact incoming `ecf907a28335c1defd8386f22e85e6600acc913b` merged into this branch. Builder validation is complete; root integration, a fresh joint storage/permission review and release gates remain required. No SHIP claim is made.
 
-## Problem and ownership
+## Authority and interruption order
 
-CC0GR3's frozen `40a4b82` observations showed pathname-only journal deletion, acceptance of an oversized valid JSON prefix, and an empty authoritative journal after process termination during allocation. Its verification write also left an unlabelled stage. The raw 11 journal witnesses and 39 interruption cases remain rejection evidence; their observation assertions are not correct-behavior passes.
+CC0GR3's `40a4b82` observations showed pathname-only journal deletion, acceptance of an oversized JSON prefix, and an empty authoritative journal after process termination during allocation. An interrupted verification also left an unlabelled stage. The original raw 11/39 observation fixtures remain rejection evidence.
 
-CC0H changes transactions and their native/UI recovery boundary. CC6J's held-handle read-only unlink, verified backup attributes, private override composition, snapshot repair and legacy stranded repair remain. Rotation, provider configuration, working-folder binding, Workbench and Attention's existing evidence presentation are outside this change.
+1. Serialize the complete transaction before allocating metadata. Hold the exact recorded Windows data stage with a delete-pending guard until complete authority owns it. Refuse an altered or shared stage without adopting or changing it.
+2. Exclusively allocate `.monocode-txn-<UUID>.json.pending`, write and sync the complete record, then publish through its own held handle without replacing a target. Only the complete initial `.json` authorizes moving the original into its claim.
+3. Keep initial authority immutable. Publish `.monocode-txn-<UUID>.verified.json` through another exclusive pending stage. Its authority records the initial journal name, file identity and exact fingerprint. Both files describe one logical transaction.
+4. Reconciliation validates surviving linked authority before using it. A complete verification can finish after interruption between initial and verified retirement. Unpublished metadata stays explicitly blocked.
+5. Before stage cleanup, pin the original and verified metadata as real single-link files and check held identity/content. Retire only the exact owned files through their Windows handles. Replacements, changed contents, missing required verification and unfamiliar files remain preserved. An in-memory completion flag prevents a second Drop cleanup from reinterpreting completed ownership.
 
-## Publication and interruption order
+Reads accept at most **65,536 bytes**, detect an extra byte, and parse the entire accepted buffer. Exact-limit valid JSON plus whitespace passes. Oversized whitespace, invalid tails, truncated input, unknown fields/intents, hardlinks and reparses are refused.
 
-1. Serialize the entire initial transaction before allocating metadata. Hold any recorded Windows replacement stage with deletion at handle close until the published journal owns it. A changed stage is recorded as blocked recovery rather than adopted or deleted.
-2. Allocate `.monocode-txn-<id>.json.pending` exclusively, write all bytes, sync the file, and publish through its own held handle with no replacement. Only the complete `.json` file authorizes moving an original to its claim.
-3. Keep that initial journal immutable. Verification publishes `.monocode-txn-<id>.verified.json` through its own exclusive `.pending` stage. It records the initial journal's file identity and exact content fingerprint. An interrupted write therefore leaves either the original authority or a complete verification; an unpublished stage remains explicitly recoverable.
-4. Reconciliation accepts existing legacy journals and complete verification records. It checks surviving initial authority against verification before using it. A complete verification can finish recovery after a stop between initial-journal retirement and verification retirement.
-5. Before cleaning a recorded data stage, retirement pins and checks the journal identities, single-link real-file status and exact fingerprints. It retires the initial journal and then verification through their own Windows handles. A replacement, changed content, missing required verification or unfamiliar pending file stays blocked and preserved. An in-memory completion flag makes the existing second Drop cleanup harmless.
+## Windows stage and attribute boundaries
 
-All authority reads are bounded to **65,536 bytes**, with an extra-byte check and parsing of the entire buffer. Exactly 65,536 bytes of complete JSON plus allowed whitespace remains valid. Over-limit whitespace, invalid trailing bytes, truncated input, unknown fields/intents, hardlinks and reparses are refused. Unknown authority is never automatically deleted.
+The first full run exposed error 50 when arming an ordinary file with clone-oriented DELETE_ON_CLOSE disposition. An actual Rust handle witness showed ordinary no-replacement renames succeed; occupied targets reject with error 183 while retaining exact target bytes/identity. The defect was disposition arming.
+
+Ordinary stages use DELETE flags **1**, or DELETE plus IGNORE_READONLY **17**, and clear with **0** before publication. The original clone handle, created DELETE_ON_CLOSE, retains its separate clear-ON_CLOSE **8** operation. These operations are not interchangeable: clearing an ordinary pending deletion with 8 still deletes at close. Rust probes cover writable/READONLY stages, occupied targets and three real child kills while preserving source attributes and bytes.
+
+The protected `sandbox_config.rs` integration now denies foreign writes/deletes while creating the private stage, closes that writer before the claim lease, and uses `RecordedEntry::pin_attributes` for subsequent attribute restoration. That held handle rejects non-files, multiple links and reparse attributes, then checks held identity and exact contents before any attribute write. The actual same-inode alias-before-claim control retains alias identity/bytes/attributes **32**, source bytes/READONLY attributes **33**, and the original private config. All J runtime families, including six kill boundaries and legacy recovery, were rerun.
 
 ## Explicit incomplete-metadata recovery
 
-Unpublished metadata and legacy empty initial journals remain blocked across repeated preparations. Their notice offers **Archive incomplete metadata** using a native receipt with a string-encoded identity and SHA-256 fingerprint. The native command requires existing canonical account/private roots without creating or provisioning them, rejects escapes and linked parent directories, pins the exact single-link file, and refuses a stale receipt or a nonempty authoritative journal.
+Unpublished metadata and legacy empty initial journals expose **Archive incomplete metadata** with a string identity and SHA-256 receipt. The native command validates existing canonical account/private roots without provisioning them, strict parent/reparse rules, the exact single-link leaf and held identity/content. It refuses stale receipts and nonempty authoritative initial journals.
 
-The selected file is renamed without replacement into a real `.monocode-preserved-transactions` directory beside it. Its bytes, identity, timestamps and attributes are retained. A conversation receipt records the archive path. Preparation then reconciles the remaining authority and claims; it can still require an ordinary version choice or inspection of an unlabelled legacy claim. Archival does not reset user data, grant a private override, or erase an unfamiliar data stage.
+The producer's Windows `path_to_js` slash representation is converted to native separators for lexical comparison against trusted home; the leaf is never canonicalized to conceal a reparse. The exact file is renamed without replacement into a real `.monocode-preserved-transactions` directory, retaining bytes, identity, timestamps and attributes. Preparation can then reconcile remaining authority; unfamiliar stages or unlabelled legacy claims may still require inspection. Archival does not reset data or grant permissions.
 
-Windows initial stage lifetime handling reuses the existing clone-disposition mechanism. Unix has no comparable writer/path exclusion here; concurrent Unix retirement and pre-journal stage cleanup remain unproven.
+## Presentation and disclosed fixture adaptations
 
-## Conversation presentation and policy adaptation
+Default storage diagnostics are flat, visible and focusable, with the existing Copy button. The old closed-Details positive expectation was replaced by the binding no-accordion expectation and exact diagnostic text; existing recovery/byte/safety/command assertions remain. Attention retains its custom Evidence renderer, and sandbox commands remain verbatim.
 
-The default storage notice now presents diagnostics directly, with a keyboard-focusable scrolling text region and the existing Copy details button. Ordinary conflict choices, comparisons, busy guards, preserved paths, folder reveal and refresh remain. Attention's supplied Evidence presentation and the sandbox's exact manual command remain.
+The protected `sandbox_config_tests.rs` snapshot-failure fixture was explicitly authorized to change from one raw journal to **exactly two linked authority records for one transaction**. It asserts a valid UUID, matching initial/verified filenames, the same claim UUID, entry/intent/claim/stage equality, initial false/verified true status, and the verified record's exact initial name/identity/fingerprint. Every original source/backup/attribute/reconciliation/final-clean assertion remains. The original **159 passed / 4 failed** run remains preserved. The module also adds the same-inode alias control; this replaces no different-inode assertion.
 
-The old positive expectation that default Details was closed was intentionally replaced by absence of an accordion and exact visible diagnostic text. The clipboard-failure selector was updated to the same flat region. All existing byte, recovery, safety, command and interaction assertions remain; no deadline or skip changed. This is the binding no-accordion requirement from the brief, not a new product decision.
+Six other protected modules remain unchanged: archive, skills, Codex store composition/private-config tests, AttentionQueue and AttentionDetails. All 38 incoming non-App files remain exact; App contains incoming source plus the six H archival lines. Integrity checks retain 24 original transaction/crash helpers and eight J helpers unchanged.
 
-## Prepared regressions and evidence
+## Actual validation
 
-- Eleven new native tests cover identity/content replacement, a replacement claim retaining its label, parser boundaries, unknown bytes/fields, reparses, stale/outside/linked recovery receipts, exact archival, read-only attributes, non-creating root validation, verification replacement and real process termination.
-- The production test executable remains the child harness. Its existing 32 matrix cases plus seven former journal/verification/retirement boundaries map to all original **39** cases. Two publication boundaries and a separate initial-allocation control add three cases. Existing CC0/CC0F/CC0G and CC6 interruption families remain required.
-- Four new frontend tests cover metadata parsing, flat recovery/action presentation, held-account archival/replay, and failure retaining pending submissions.
-- Four counterexample tests are prepared for the old `40a4b82` full native crate. The initial-allocation counterexample needs one pause-only hook in old source. They have not been compiled or executed; no baseline-failure or corrected-pass claim is made.
-- A production-component browser fixture is prepared for 1440/390 layouts, pointer/keyboard Copy, metadata action, Attention Evidence and verbatim sandbox command. It has passed JavaScript syntax checking only. No screenshots exist yet.
+All required builder gates used isolated synthetic homes, one Cargo job/native thread and one Vitest worker. Node retained `NODE_OPTIONS=--no-experimental-webstorage`. All **1,692** implementation/test/config inputs remained unchanged.
 
-Evidence root: `C:/Users/nooro/AppData/Local/Temp/monocode-cc/cc0h/evidence/`. `baseline/` preserves seven raw CC0GR3 files; `baseline-inventory.json` records their hashes. `witness-manifest.json` maps the original 11/39 cases to actual tests with source hashes. `run.py` retains every validation attempt under a unique label and binds pre/post source hashes. The first witness-preparation attempt failed on an incorrect historical helper name; its failure is retained, and corrected preparation passes without changing any product assertion.
+| Gate | Result |
+| --- | --- |
+| Locked local dependencies | 428 packages installed from lock, no lock changes |
+| Actual full crate storage group | **164 passed / 0 failed / 4 original ignores / 628 filtered** |
+| Actual harness / Mono groups | **26/0/0** and **14/0/0** |
+| Original Windows journal controls | **11 passed**: two live replacements, nine kill/parser controls |
+| Process matrix | **39 original + 3 new cases passed**; actual children stopped/restarted, final successful recovery has no owned orphans |
+| Actual old `40a4b82` crate | Four journal correct-behavior controls fail as expected; fresh original read-only failure also retained |
+| Corrected fresh old read-only fixture | **1 passed**, exact source bytes/attributes preserved |
+| Original literal external J control | **4 passed / 1 raw-prefix assertion failed / 1 ignored** |
+| Separate canonical external J control | **5 passed / 0 failed / 1 ignored** |
+| Focused frontend | **262/0**, 14 files |
+| Full one-worker Vitest | **8,283 passed / 0 failed / 13 original skips**, 625 passed / 2 skipped files |
+| TypeScript / production build | Both pass; build retains large-chunk advisory |
+| Chromium production recovery/Attention | **162 checks / 44 inspected PNGs**, dark/light at 1440/390; **18 additional scroll checks / 4 inspected PNGs** |
 
-A later formatting check also failed after the archive-directory guard was added. The touched file was formatted and the five-file check then passed. Both receipts remain; no product test run is hidden by these preparation corrections.
+Evidence: `C:/Users/nooro/AppData/Local/Temp/monocode-cc/cc0h/evidence/`. `final-integrity-current.json` binds source; `native-controls/source-manifest.json` describes complete actual old/current crates with test-only modules and pause-only instrumentation, no stubs. Original literal tests and the single canonical assertion adaptation remain separate. `journal-windows-results.json` and `process-matrix-39-current.json` bind real processes and receipts. Browser folders retain actual PNGs, driver snapshots, isolated fixture source, source hashes and cleanup receipts.
 
-## Validation and follow-ups
+Every failed attempt remains recorded. Native progression was **88/75/4**, **159/4/4**, **163/0/4**, then **164/0/4** after the alias guard. Source corrections were refrozen and affected gates rerun. The first supplementary browser scroll attempt lacked the app's bounded parent container; correcting only the fixture allowed the unchanged scroll assertions and repeated full browser matrix to pass. All browsers/servers and native child jobs are finished.
 
-Completed small checks: touched-file Rust formatting/syntax on five files, browser-fixture JavaScript syntax, baseline inventory, 11/39 witness mapping and Git whitespace/source integrity. These are preparation checks; **zero product tests and zero screenshot inspections have run on CC0H**. Exact receipts and timings are in REPORT.
+## Limits and release boundary
 
-Pending: locked dependencies; correct-behavior and old-pin native counterexamples; actual full native crate storage/mono/harness groups and Windows filesystem families; full one-worker Vitest with `NODE_OPTIONS=--no-experimental-webstorage`; TypeScript; production build; real wide/narrow screenshot inspection. The native child ignores and existing frontend skips remain unchanged. A fresh independent corrected-head storage review still owns release acceptance.
+Source `secrets` first-creation and conditional raw Windows long-path behavior remain separate observed follow-ups. Parser preservation fixtures preseed secrets; their success does not erase missing-directory behavior. The literal raw-prefix failure remains a failure and is never relabelled as a canonical pass.
 
-Separate follow-ups retained from CC0GR3: first preparation creates a missing source `secrets` directory; raw Windows paths can fail beyond MAX_PATH while extended-prefix fixtures succeed. CC6J also retained an external fixture's raw-path-prefix assertion failure separately from its canonical control. None is silently treated as fixed by this journal change. Real profiles/models, automatic account/ACL setup, OS power-loss durability, Unix runtime acceptance, arbitrary external parent-directory replacement and shipping are unproven or outside scope. No merge, push or deployment was performed.
+Process termination is proven; OS power-loss durability is not. Unix runtime/writer exclusion, arbitrary parent-directory replacement, native WebView/desktop lifecycle and real OS clipboard acceptance remain unproven. Browser clipboard writes were instrumented; product components and pointer/keyboard actions were real. No real profiles, model turns, account/ACL setup, unrelated preview, fan-out, push or deployment occurred. Root integration and a fresh corrected-head joint storage/permission review still own release acceptance.

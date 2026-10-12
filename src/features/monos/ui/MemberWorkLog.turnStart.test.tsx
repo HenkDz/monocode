@@ -58,7 +58,8 @@ async function fixture() {
   await manager.start(lead.id, ["codex"], 1);
   lead.busy = true;
   const delegate = () => manager.handle(lead.id, "request", "delegate", {
-    title: "Task", prompt: "Implement", harness: "codex", model: "test", files: ["src"], member: member.id, monoGoalId: "original-goal",
+    title: "Task", prompt: "Implement", harness: "codex", model: "test", files: ["src"], member: member.id,
+    memberName: "Builder", memberMascot: "cat", memberColor: "#abc", monoGoalId: "original-goal",
   });
   return { manager, host, sessions, store, delegate, saved: () => saved!, complete: (outcome: ControlOutcome) => complete(outcome) };
 }

@@ -62,18 +62,27 @@ impl RecordedEntry {
         use windows_sys::Win32::{
             Foundation::GENERIC_READ,
             Storage::FileSystem::{
-                DELETE, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_WRITE_ATTRIBUTES,
+                DELETE, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT,
+                FILE_SHARE_READ, FILE_WRITE_ATTRIBUTES,
             },
         };
-        let file = std::fs::OpenOptions::new()
+        let mut file = std::fs::OpenOptions::new()
             .access_mode(GENERIC_READ | DELETE | FILE_WRITE_ATTRIBUTES)
             .share_mode(FILE_SHARE_READ)
             .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
             .open(path)
             .map_err(|e| e.to_string())?;
-        if !matches_record(path, self)? {
+        let info = handle_file_info(&file)?;
+        if !file.metadata().map_err(|e| e.to_string())?.is_file()
+            || info.nNumberOfLinks != 1
+            || info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
+            || file_identity(&file)? != self.identity
+            || self.fingerprint.as_ref().is_none_or(|expected| {
+                !fingerprint_file(&mut file).is_ok_and(|actual| actual == *expected)
+            })
+        {
             return Err(recovery(
-                "A staged recovery entry changed; it was preserved.",
+                "A staged config is shared, linked or changed; its bytes and attributes were preserved.",
                 &[path.into()],
             ));
         }

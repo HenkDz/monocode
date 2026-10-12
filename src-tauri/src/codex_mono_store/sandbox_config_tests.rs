@@ -55,6 +55,55 @@ struct Fixture {
     attributes: u32,
 }
 
+#[test]
+fn same_inode_stage_alias_before_claim_refuses_attribute_changes() {
+    let fixture = Fixture::new();
+    let alias = fixture.root.join("unfamiliar-stage-alias.toml");
+    let observed = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let captured = observed.clone();
+    let home = fixture.home.clone();
+    let target = alias.clone();
+    super::super::BEFORE_CLAIM.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(move || {
+            let stage = std::fs::read_dir(&home)
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .find(|path| {
+                    path.file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .starts_with(".monocode-link-")
+                })
+                .unwrap();
+            std::fs::hard_link(&stage, &target).unwrap();
+            assert!(super::super::same_entry(&stage, &target));
+            *captured.lock().unwrap() = Some((
+                super::super::entry_identity(&stage).unwrap(),
+                std::fs::metadata(&stage).unwrap().file_attributes(),
+                std::fs::read(&stage).unwrap(),
+            ));
+        }));
+    });
+    let error = change_configs(&fixture.source, &fixture.home)
+        .err()
+        .unwrap();
+    assert!(error.contains("shared"), "{error}");
+    let (identity, attributes, bytes) = observed.lock().unwrap().take().unwrap();
+    assert_eq!(attributes, 32);
+    assert_eq!(super::super::entry_identity(&alias).unwrap(), identity);
+    assert_eq!(
+        std::fs::metadata(&alias).unwrap().file_attributes(),
+        attributes
+    );
+    assert_eq!(std::fs::read(&alias).unwrap(), bytes);
+    assert_eq!(
+        std::fs::read(fixture.home.join("config.toml")).unwrap(),
+        ORIGINAL
+    );
+    fixture.source_proof();
+    fixture.clean();
+}
+
 impl Fixture {
     fn new() -> Self {
         let root =

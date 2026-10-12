@@ -264,8 +264,13 @@ impl ClaimJournal {
             fingerprint(path)
                 .map_err(|error| format!("Could not verify clone contents: {error}"))?,
         );
-        self.verify(None)
-            .map_err(|error| format!("Could not journal completed clone: {error}"))
+        self.verify(None).map_err(|error| {
+            if error.starts_with('{') {
+                error
+            } else {
+                format!("Could not journal completed clone: {error}")
+            }
+        })
     }
 
     pub(super) fn publish_clone(&self, path: &Path, target: &Path) -> Result<(), String> {
@@ -547,7 +552,7 @@ fn remove_staged(path: &Path, expected: &RecordedEntry) -> Result<(), String> {
     }
 }
 
-fn recovery(reason: &str, paths: &[PathBuf]) -> String {
+pub(super) fn recovery(reason: &str, paths: &[PathBuf]) -> String {
     serde_json::json!({
         "recovery": true,
         "reason": reason,

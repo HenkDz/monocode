@@ -12,12 +12,14 @@ const native = vi.hoisted(() => ({
   copy: vi.fn(),
   headless: false,
   selectedAccountId: "default",
+  retireCredentials: vi.fn(),
 }));
 vi.mock("../../../platform/tauri/clipboard", () => ({ copyText: native.copy }));
 vi.mock("../../../integrations/harness/core/child", () => ({
   hasHeadlessChildBackend: () => native.headless,
   monoCodexStorageInfo: native.info,
   setMonoCodexHooksShared: native.shareHooks,
+  retireMonoCodexCredentials: native.retireCredentials,
 }));
 vi.mock("../../providers/model/providerAccounts", () => ({ selectedProviderAccountId: () => native.selectedAccountId }));
 vi.mock("../../settings/model/sounds", () => ({ playCue: vi.fn() }));
@@ -39,6 +41,7 @@ afterEach(async () => {
   native.info.mockReset();
   native.shareHooks.mockReset();
   native.copy.mockReset();
+  native.retireCredentials.mockReset();
   native.headless = false;
   native.selectedAccountId = "default";
   vi.restoreAllMocks();
@@ -53,6 +56,74 @@ const hooksConflict = {
 const conflictDetail = (value = hooksConflict) => `Codex storage needs repair: ${JSON.stringify(value)}`;
 const buttonNamed = (name: string) => Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
   .find(button => button.textContent?.startsWith(name))!;
+
+it("requires an explicit scoped confirmation before clearing an inactive owned credential namespace", async () => {
+  const receipt = { contextId: "a".repeat(64), contextIdentity: "1:2", owners: [{ entry: ".monocode-credential-owner-cli.json", identity: "1:3", fingerprint: "hash" }] };
+  const namespace = { contextId: receipt.contextId, home: "C:/synthetic/private/context", copies: 1, active: false, receipt };
+  const info = { home: "C:/synthetic/private", sourceHome: "C:/synthetic/source", sourceKind: "account", shareHooks: false, credentialNamespaces: [namespace] };
+  native.info.mockResolvedValue(info); native.retireCredentials.mockResolvedValue(undefined);
+  await act(async () => root.render(<MonoCodexStorageSource harness="codex" providerAccountId="account" cwd="/synthetic/repo" />));
+  expect(native.retireCredentials).not.toHaveBeenCalled();
+  await act(async () => buttonNamed("Clear inactive private credentials").click());
+  expect(native.retireCredentials).not.toHaveBeenCalled();
+  expect(container.textContent).toContain("including any changed login");
+  expect(container.textContent).toContain("Source credentials, legacy entries, sessions and config are kept");
+  native.info.mockResolvedValue({ ...info, credentialNamespaces: [] });
+  await act(async () => buttonNamed("Confirm clear private credentials").click());
+  expect(native.retireCredentials).toHaveBeenCalledExactlyOnceWith("account", receipt);
+  expect(buttonNamed("Clear inactive private credentials")).toBeUndefined();
+});
+
+it("withholds credential retirement for active contexts and preserves a failed inactive confirmation", async () => {
+  const namespace = { contextId: "base", home: "C:/synthetic/private", copies: 1, active: true, receipt: { contextId: "base", contextIdentity: "1:2", owners: [] } };
+  native.info.mockResolvedValue({ home: namespace.home, sourceHome: "C:/synthetic/source", sourceKind: "account", shareHooks: false, credentialNamespaces: [namespace] });
+  await act(async () => root.render(<MonoCodexStorageSource harness="codex" providerAccountId="account" cwd="/synthetic/repo" />));
+  expect(buttonNamed("Clear inactive private credentials")).toBeUndefined();
+  expect(container.textContent).toContain("Close every server");
+  await act(async () => root.render(null));
+  native.info.mockResolvedValue({ home: namespace.home, sourceHome: "C:/synthetic/source", sourceKind: "account", shareHooks: false, credentialNamespaces: [{ ...namespace, active: false }] });
+  native.retireCredentials.mockRejectedValue(new Error("This context became active; credentials preserved"));
+  await act(async () => root.render(<MonoCodexStorageSource harness="codex" providerAccountId="account" cwd="/synthetic/repo" />));
+  await act(async () => buttonNamed("Clear inactive private credentials").click());
+  await act(async () => buttonNamed("Confirm clear private credentials").click());
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain("credentials preserved");
+  expect(buttonNamed("Confirm clear private credentials")).toBeDefined();
+});
+
+it("gives explicit Elevated guidance and withholds ineffective Full access for restricted messages", async () => {
+  const detail = `Codex storage needs repair: ${JSON.stringify({ sandbox: true, reason: "Manual setup alone cannot unlock elevated Mono turns", setupCommand: "synthetic setup" })}`;
+  await act(async () => root.render(<MonoCodexStorageNotice detail={detail} onRepair={vi.fn()} onResolve={vi.fn()} explicitElevated allowFullAccess={false} />));
+  expect(container.textContent).toContain("In Permissions, change Sandbox engine");
+  expect(buttonNamed("Use unelevated sandbox for Monos")).toBeUndefined();
+  expect(buttonNamed("Use full access for this Mono")).toBeUndefined();
+  expect(container.textContent).toContain("Full access cannot repair Plan");
+});
+
+it("offers remote-host guidance without local mutation actions", async () => {
+  await act(async () => root.render(<MonoCodexStorageNotice detail="Codex storage needs repair: remote storage" onRepair={vi.fn()} onResolve={vi.fn()} remote />));
+  expect(container.textContent).toContain("on the remote host");
+  expect(buttonNamed("Repair")).toBeUndefined();
+  expect(buttonNamed("Use full access for this Mono")).toBeUndefined();
+});
+
+it("shows the original-source confirmation only for unbound homes", async () => {
+  for (const canBind of [true, false]) {
+    const sourceBinding = { resolvedSourceHome: "C:/synthetic/selected", boundSourceHome: "C:/synthetic/original", canBind };
+    const detail = `Codex storage needs repair: ${JSON.stringify({ recovery: true, reason: "Choose source", paths: ["C:/synthetic/private"], sourceBinding })}`;
+    await act(async () => root.render(<MonoCodexStorageNotice detail={detail} onRepair={vi.fn()} onResolve={vi.fn()} />));
+    expect(container.textContent).toContain("Selected source: C:/synthetic/selected");
+    expect(container.textContent).toContain("Original source: C:/synthetic/original");
+    expect(!!buttonNamed("Confirm selected source")).toBe(canBind);
+  }
+});
+
+it("humanizes failed sandbox readiness without printing the blocker JSON", async () => {
+  const reason = "Manual setup alone cannot unlock elevated Mono turns";
+  const detail = `Codex storage needs repair: ${JSON.stringify({ sandbox: true, reason, setupCommand: "synthetic setup" })}`;
+  await act(async () => root.render(<MonoCodexStorageNotice detail={detail} onRepair={vi.fn()} onResolve={async () => { throw new Error(detail); }} />));
+  await act(async () => buttonNamed("Use unelevated sandbox for Monos").click());
+  expect(container.querySelector('[role="alert"]')?.textContent).toBe(reason);
+});
 
 it("shows the sandbox reason and exact manual command inline without auto-changing settings", async () => {
   const sandbox = { sandbox: true, reason: "The recorded sandbox account is disabled", setupCommand: "$env:CODEX_HOME = 'C:/synthetic/account'; codex sandbox -P :workspace -- powershell.exe -Command 'echo ready'" };
@@ -111,6 +182,18 @@ it("requests full access only on explicit click and disables sandbox choices whi
   expect(buttonNamed("Use unelevated sandbox for Monos").disabled).toBe(true);
   expect(buttonNamed("Checking").disabled).toBe(true);
   await act(async () => finish());
+});
+
+it("retains the sandbox success category after the actual repair callback clears its blocker", async () => {
+  const blocker = `Codex storage needs repair: ${JSON.stringify({ sandbox:true, reason:"Manual setup alone cannot unlock elevated Mono turns", setupCommand:"synthetic setup" })}`;
+  let detail: string | undefined = blocker;
+  function render() { root.render(<MonoCodexStorageNotice detail={detail} onRepair={async()=>{}} onResolve={async()=>{ detail=undefined; render(); }} />); }
+  await act(async()=>render());
+  await act(async()=>buttonNamed("Use full access for this Mono").click());
+  expect(container.querySelector('[role="status"]')?.getAttribute("aria-label")).toBe("Codex sandbox choice applied");
+  expect(container.textContent).toContain("Waiting messages can continue");
+  await act(async()=>buttonNamed("Dismiss").click());
+  expect(container.textContent).toBe("");
 });
 
 it("retains inline sandbox choices after a failed explicit config change", async () => {

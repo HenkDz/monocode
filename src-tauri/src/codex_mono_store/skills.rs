@@ -561,6 +561,7 @@ pub(super) fn with_context_home<T>(
 }
 
 pub(super) fn prepare_context_files(source: &Path, base: &Path, home: &Path) -> Result<(), String> {
+    source_binding::ensure_context(source, base, home)?;
     transactions::reconcile(home)?;
     let share_hooks = hooks_shared(base)?;
     if !share_hooks {
@@ -642,19 +643,8 @@ pub(super) fn prepare_context_files(source: &Path, base: &Path, home: &Path) -> 
         let entry = entry.map_err(|e| e.to_string())?;
         let name = entry.file_name();
         let name = name.to_str().ok_or("Invalid Mono configuration filename")?;
-        if private_entry(name)
-            || login_entry(name)
-            || name.eq_ignore_ascii_case("hooks.json")
-            || !entry.path().is_file()
-            || replaceable_link(&entry.path())?
-        {
-            continue;
-        }
-        if name.eq_ignore_ascii_case("config.toml")
-            || read_snapshot(base, name)?
-                .is_some_and(|snapshot| snapshot.private_override && !snapshot.invalid)
-        {
-            link_entry(&entry.path(), &home.join(name))?;
+        if let Some(private) = context_private_entry(base, name)? {
+            link_context_private(&private, &home.join(name))?;
         }
     }
     archive::prepare_memory_state(base, home)?;

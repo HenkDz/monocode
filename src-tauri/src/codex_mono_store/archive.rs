@@ -3,6 +3,7 @@ use super::*;
 const ROOTS: [&str; 2] = ["sessions", "archived_sessions"];
 
 pub(super) fn prepare_base_state(base: &Path) -> Result<(), String> {
+    source_binding::guard_bound_contexts(base)?;
     for name in ROOTS {
         private_directory(base, name)?;
     }
@@ -132,7 +133,7 @@ fn retain_and_share(
                         .map_err(|e| e.to_string())?,
                     name == "memories",
                 )
-                .map_err(|e| format!("Could not retain {}: {e}", file.display()))?;
+                .map_err(|e| retain_error(e, &format!("Could not retain {}", file.display())))?;
             }
             if name != "memories" {
                 update_index(base, target, shared, &files, &claimed.path)
@@ -218,7 +219,20 @@ fn rollout_file(path: &Path) -> bool {
         })
 }
 
-fn retain_file(source: &Path, shared: &Path, relative: &Path, memory: bool) -> Result<(), String> {
+fn retain_error(error: String, context: &str) -> String {
+    if error.starts_with('{') {
+        error
+    } else {
+        format!("{context}: {error}")
+    }
+}
+
+pub(super) fn retain_file(
+    source: &Path,
+    shared: &Path,
+    relative: &Path,
+    memory: bool,
+) -> Result<(), String> {
     let mut parent = shared.to_path_buf();
     #[cfg(windows)]
     let mut guards = vec![lock_directory(shared)?];
@@ -236,7 +250,19 @@ fn retain_file(source: &Path, shared: &Path, relative: &Path, memory: bool) -> R
     }
     let destination = parent.join(relative.file_name().ok_or("Missing rollout filename")?);
     transactions::reconcile(&parent)?;
-    let expected = fingerprint(source).map_err(|e| format!("reading original: {e}"))?;
+    #[cfg(windows)]
+    let mut original = {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_DELETE, FILE_SHARE_READ};
+        std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_DELETE)
+            .open(source)
+            .map_err(|e| e.to_string())?
+    };
+    #[cfg(unix)]
+    let mut original = std::fs::File::open(source).map_err(|e| e.to_string())?;
+    let expected = fingerprint_file(&mut original).map_err(|e| format!("reading original: {e}"))?;
     match std::fs::symlink_metadata(&destination) {
         Ok(meta)
             if meta.is_file()
@@ -246,10 +272,20 @@ fn retain_file(source: &Path, shared: &Path, relative: &Path, memory: bool) -> R
             return Ok(())
         }
         Ok(_) => {
-            return Err(format!(
-                "Conflicting native state copies were preserved: {}",
-                destination.display()
-            ))
+            let name = destination
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or("Invalid native state filename")?;
+            let preserved = archive_file(
+                shared.parent().ok_or("Missing private state owner")?,
+                name,
+                &mut original,
+                &expected,
+            )?;
+            return Err(transactions::recovery(
+                "Conflicting native state copies were preserved. Keep the private thread and review the source copy before retrying migration.",
+                &[destination, preserved, source.to_path_buf()],
+            ));
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(e.to_string()),
@@ -273,9 +309,9 @@ fn retain_file(source: &Path, shared: &Path, relative: &Path, memory: bool) -> R
     } else {
         ClaimJournal::clone_rollout(&destination, &staged)
     }
-    .map_err(|e| format!("journaling copy: {e}"))?;
+    .map_err(|e| retain_error(e, "journaling copy"))?;
     let result = (|| {
-        let mut original = std::fs::File::open(source).map_err(|e| e.to_string())?;
+        original.rewind().map_err(|e| e.to_string())?;
         std::io::copy(&mut original, &mut copy).map_err(|e| e.to_string())?;
         copy.sync_all().map_err(|e| e.to_string())?;
         if fingerprint_file(&mut original)? != expected || fingerprint(&temp)? != expected {
@@ -283,22 +319,32 @@ fn retain_file(source: &Path, shared: &Path, relative: &Path, memory: bool) -> R
         }
         journal
             .verify_clone(&temp)
-            .map_err(|e| format!("verifying copy: {e}"))?;
+            .map_err(|e| retain_error(e, "verifying copy"))?;
         drop(copy);
         #[cfg(test)]
         crash_tests::checkpoint("rollouts-copy-before-publish");
+        #[cfg(test)]
+        BEFORE_ROLLOUT_PUBLISH.with(|hook| {
+            if let Some(writer) = hook.borrow_mut().take() {
+                writer();
+            }
+        });
         journal
             .publish_clone(&temp, &destination)
-            .map_err(|e| format!("publishing copy: {e}"))
+            .map_err(|e| {
+                if !e.starts_with('{') && std::fs::symlink_metadata(&destination).is_ok() {
+                    transactions::recovery("A private thread appeared during migration. Both versions were preserved; review them before retrying.", &[destination.clone(), source.to_path_buf()])
+                } else { retain_error(e, "publishing copy") }
+            })
     })();
     journal
         .finish()
-        .map_err(|e| format!("finishing copy: {e}"))?;
+        .map_err(|e| retain_error(e, "finishing copy"))?;
     result
 }
 
 #[cfg(windows)]
-fn lock_directory(path: &Path) -> Result<std::fs::File, String> {
+pub(super) fn lock_directory(path: &Path) -> Result<std::fs::File, String> {
     use std::os::windows::fs::OpenOptionsExt;
     use windows_sys::Win32::Storage::FileSystem::{
         FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE,

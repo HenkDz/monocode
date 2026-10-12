@@ -187,9 +187,9 @@ import { WindowControls } from "./shell/WindowControls";
 import { MonoDetails } from "../features/monos/ui/MonoDetails";
 import { changeMonoWorkingDirectory, isMonoHomeDirectory, migrateMonoWorkingDirectory } from "../features/monos/model/monoWorkingDirectory";
 import { acceptMonoWorkingDirectoryMigration, monoWorkingDirectoryMigrationPending } from "../features/monos/model/monoWorkingDirectoryMigration";
-import { MonoCodexStorageRecovery, isCodexStorageError, parseCodexStorageConflict, parseCodexStorageRecoveryConflict, parseCodexSandboxBlocker, codexSandboxRepairSettings, type CodexStorageResolution, type CodexStorageComparison } from "../features/monos/model/monoCodexStorage";
+import { MonoCodexStorageRecovery, isCodexStorageError, parseCodexStorageConflict, parseCodexStorageRecoveryConflict, parseCodexSandboxBlocker, codexSandboxRepairSettings, codexFullAccessRepairAllowed, type CodexStorageResolution, type CodexStorageComparison } from "../features/monos/model/monoCodexStorage";
 import { codexStorageAccountId, monoCodexStorageIssues } from "../features/monos/model/monoCodexStorageIssues";
-import { prepareMonoCodexStore, resolveCodexBinary } from "../integrations/harness/core/child";
+import { prepareMonoCodexStore, resolveCodexBinary, checkMonoCodexSandbox } from "../integrations/harness/core/child";
 import { monoSkillsForSession } from "./model/monoSkillsForSession";
 import { handleMonoTeam, isTeamReviewer, lockMonoField } from "../features/monos/model/monoTeam";
 import { monoTeamHost, registerTeamCards } from "../features/monos/model/monoTeamRuntime";
@@ -10235,27 +10235,31 @@ function Workspace({
     if (sandboxChoice && codexStorageRecovery.current.isRepairingAccount(accountId)) throw new Error("This account already has a recovery action pending. Wait for it to finish.");
     if (sandboxChoice && !parseCodexSandboxBlocker(session.codexStorageError)) throw new Error("Refresh the sandbox issue before choosing an engine or access mode.");
     if (resolution === "use_mono_full_access" && session.readOnly) throw new Error("Read-only investigations must retain their filesystem restrictions.");
+    if (resolution === "use_mono_full_access" && !codexFullAccessRepairAllowed(session)) throw new Error("Plan and orchestrate messages must retain their sandbox restrictions. Use the unelevated sandbox instead.");
+    if (resolution === "use_unelevated_sandbox" && session.windowsSandbox === "elevated") throw new Error("This Mono is set to Elevated. In Permissions, change Sandbox engine to Default or Unelevated, then retry its held message.");
     const affectedIds = resolution === "use_mono_full_access" ? [sessionId] : sessionsRef.current.filter(entry => entry.harness === "codex" && (entry.codexStorageError || entry.codexStoragePreparing) &&
       !remoteProjectFor(entry.cwd) && codexStorageAccountId(entry, selectedProviderAccountId("codex", entry.cwd)) === accountId).map(entry => entry.id);
     if (!affectedIds.includes(sessionId)) affectedIds.push(sessionId);
     try {
       const relink = async () => {
         await codexStorageRecovery.current.waitForPreparations(affectedIds);
+        let changed: { configPath: string; backupPaths: string[] } | undefined;
         if (resolution === "use_unelevated_sandbox") {
           const accountSessions = sessionsRef.current.filter(entry => entry.harness === "codex" && !remoteProjectFor(entry.cwd) &&
             codexStorageAccountId(entry, selectedProviderAccountId("codex", entry.cwd)) === accountId);
           if (accountSessions.some(entry => entry.busy || entry.codexStoragePreparing)) throw new Error("Wait for this account's current turns and storage preparations to finish before changing its Mono sandbox.");
           for (const entry of accountSessions) await stopHarnessSession("codex", entry.id);
-          const changed = await invoke<{ configPath: string; backupPaths: string[] }>("codex_mono_use_unelevated_sandbox", { providerAccountId: accountId });
-          flushSync(() => setSessions(previous => previous.map(entry => entry.id === sessionId ? { ...entry, blocks: [...entry.blocks,
-            { id: crypto.randomUUID(), role: "system", text: `Monos on this account now use the unelevated Codex sandbox. Your own Codex config is unchanged. Private config: ${changed.configPath}\nBackups: ${changed.backupPaths.join("\n")}\nRestore the private backup over its config to undo this choice, then restart the account's idle Mono conversations.` }] } : entry)));
+          changed = await invoke<{ configPath: string; backupPaths: string[] }>("codex_mono_use_unelevated_sandbox", { providerAccountId: accountId });
         } else if (resolution === "use_mono_full_access") {
           await stopHarnessSession("codex", sessionId);
-          const mono = monoForSession(sessionId);
-          if (mono) saveMonoRuntimeMode(mono.id, "full-access");
-          flushSync(() => setSessions(previous => previous.map(entry => entry.id === sessionId ? { ...entry, runtimeMode: "full-access", runtimeModeSource: "user" } : entry)));
-          const updated = sessionsRef.current.find(entry => entry.id === sessionId)!;
-          await upsertSession(updated);
+        } else if (resolution === "bind_selected_source") {
+          const binding = parseCodexStorageRecoveryConflict(session.codexStorageError)?.sourceBinding;
+          if (!binding?.canBind) throw new Error("Refresh the source-account issue before confirming its original source.");
+          const accountSessions = sessionsRef.current.filter(entry => entry.harness === "codex" && !remoteProjectFor(entry.cwd) &&
+            codexStorageAccountId(entry, selectedProviderAccountId("codex", entry.cwd)) === accountId);
+          if (accountSessions.some(entry => entry.busy || entry.codexStoragePreparing)) throw new Error("Wait for this account's current turns and preparations to finish before confirming its original source.");
+          for (const entry of accountSessions) await stopHarnessSession("codex", entry.id);
+          await invoke("codex_mono_store_bind_source", { providerAccountId: accountId, sourceHome: binding.resolvedSourceHome });
         } else if (resolution === "preserve_recovery_metadata") {
           const metadata = parseCodexStorageRecoveryConflict(session.codexStorageError)?.metadata;
           if (!metadata) throw new Error("Refresh the recovery issue before preserving metadata.");
@@ -10268,12 +10272,34 @@ function Workspace({
           await invoke("codex_mono_store_resolve", { providerAccountId: accountId, conflict, resolution });
         }
         const latest = sessionsRef.current.find(entry => entry.id === sessionId)!;
+        const checked = resolution === "use_mono_full_access" ? { ...latest, runtimeMode: "full-access" as const, runtimeModeSource: "user" as const } : latest;
         if (parseCodexSandboxBlocker(session.codexStorageError)) {
-          await prepareCodexMonoContext({ sessionId, path: (await resolveCodexBinary()).path, cwd: sessionWorkCwd(session),
+          const settings = codexSandboxRepairSettings(checked, IS_WIN, orchestrator.forSession(sessionId)?.status === "active");
+          const prepared = await prepareCodexMonoContext({ sessionId, path: (await resolveCodexBinary()).path, cwd: sessionWorkCwd(session),
             providerAccountId: accountId, threadId: session.providerSessionId, ...monoSkillsForSession(sessionId),
-            ...codexSandboxRepairSettings(latest, IS_WIN, orchestrator.forSession(sessionId)?.status === "active") });
+            ...settings });
+          if (resolution === "use_mono_full_access") await checkMonoCodexSandbox({ providerAccountId: accountId, ...settings,
+            skillsContextId: prepared?.skillsContextId, sandboxConfig: prepared?.config });
         } else {
           await prepareMonoCodexStore(accountId, session.providerSessionId, { ...monoSkillsForSession(sessionId), projectPath: sessionWorkCwd(session) });
+        }
+        if (resolution === "use_mono_full_access") {
+          const current = sessionsRef.current.find(entry => entry.id === sessionId);
+          if (!current || current.busy || !codexFullAccessRepairAllowed(current) ||
+            current.runtimeMode !== latest.runtimeMode || current.windowsSandbox !== latest.windowsSandbox ||
+            current.queuedMessages?.[0]?.id !== latest.queuedMessages?.[0]?.id ||
+            codexStorageAccountId(current, selectedProviderAccountId("codex", current.cwd)) !== accountId) {
+            throw new Error("The conversation changed during its readiness check. Review its current message and permissions before trying again.");
+          }
+          await upsertSession(checked);
+          const mono = monoForSession(sessionId);
+          if (mono) saveMonoRuntimeMode(mono.id, "full-access");
+          flushSync(() => setSessions(previous => previous.map(entry => entry.id === sessionId ? { ...entry, runtimeMode: "full-access", runtimeModeSource: "user" } : entry)));
+        }
+        if (changed) {
+          const receipt = changed;
+          flushSync(() => setSessions(previous => previous.map(entry => entry.id === sessionId ? { ...entry, blocks: [...entry.blocks,
+            { id: crypto.randomUUID(), role: "system", text: `This Mono's unelevated sandbox passed its readiness check. Your own Codex config is unchanged. Private config: ${receipt.configPath}\nBackups: ${receipt.backupPaths.join("\n")}\nRestore the private backup over its config to undo this choice, then restart the account's idle Mono conversations.` }] } : entry)));
         }
       };
       const beforeResume = (resumingId: string) => {

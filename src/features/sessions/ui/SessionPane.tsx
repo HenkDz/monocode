@@ -119,6 +119,8 @@ import type { LaunchedSessionView } from "../../monos/model/monoSpawnedSessions"
 import { ModelControlPills, ModelPicker } from "./ModelPicker";
 import { MonoUsageLimitNotice } from "../../monos/ui/MonoUsageLimitNotice";
 import { MonoCodexStorageNotice } from "../../monos/ui/MonoCodexStorageNotice";
+import { codexFullAccessRepairAllowed } from "../../monos/model/monoCodexStorage";
+import { remoteProjectFor } from "../../connections/model/remoteProjects";
 import { codexStorageBlockedContext } from "../../monos/model/monoCodexStorageIssues";
 import type {
   CodexStorageResolution,
@@ -1157,6 +1159,9 @@ const LocalSessionPane = memo(function LocalSessionPane({
               )
             : undefined
         }
+        allowFullAccess={!storageTask && codexFullAccessRepairAllowed(session)}
+        explicitElevated={!storageTask && session.windowsSandbox === "elevated"}
+        remote={!!remoteProjectFor(session.cwd)}
         blockedContext={
           storageTask
             ? `Assigned worker: ${storageTask.title}`

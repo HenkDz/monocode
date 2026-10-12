@@ -19,6 +19,9 @@ export function MonoCodexStorageNotice({
   onReveal,
   renderDetails,
   workbench = false,
+  allowFullAccess = true,
+  explicitElevated = false,
+  remote = false,
 }: {
   onRepair: () => Promise<void>;
   detail?: string;
@@ -28,6 +31,9 @@ export function MonoCodexStorageNotice({
   onReveal?: () => Promise<void>;
   renderDetails?: (content: ReactNode) => ReactNode;
   workbench?: boolean;
+  allowFullAccess?: boolean;
+  explicitElevated?: boolean;
+  remote?: boolean;
 }) {
   const [busy, setBusy] = useState<"repair" | "compare" | "reveal">();
   const [error, setError] = useState<string>();
@@ -41,7 +47,7 @@ export function MonoCodexStorageNotice({
   useEffect(() => {
     setConflict(parseCodexStorageConflict(detail));
     setRecovery(parseCodexStorageRecoveryConflict(detail));
-    setSandbox(parseCodexSandboxBlocker(detail));
+    if (detail || (!busy && !success)) setSandbox(parseCodexSandboxBlocker(detail));
     if (detail) {
       setSuccess(false);
       setError(undefined);
@@ -112,8 +118,10 @@ export function MonoCodexStorageNotice({
         <>
           {workbench && !sandbox && !conflict && !recovery && <p className="mt-2 text-xs leading-relaxed text-content/70">Codex couldn’t open its conversation store. Work is waiting; your messages are still here.</p>}
           {blockedContext && <p className="mt-1 text-xs text-content/70">{blockedContext}</p>}
+          {remote && <p className="mt-2 text-xs text-content/70">Inspect and repair Codex storage on the remote host.</p>}
           {sandbox && <div className="mt-2 text-xs text-content/70">
             <p>{sandbox.reason}</p>
+            {explicitElevated && <p className="mt-2">This Mono is set to Elevated. In Permissions, change Sandbox engine to Default or Unelevated, then retry its held message.</p>}
             {!setupUnavailable && <>
             <p className="mt-2">Run setup yourself in PowerShell, then check again:</p>
             <pre className="mt-1 overflow-auto whitespace-pre-wrap break-all" aria-label="Sandbox setup command">{sandbox.setupCommand}</pre>
@@ -123,6 +131,7 @@ export function MonoCodexStorageNotice({
             </>}
             {copyStatus && <p className="mt-1">{copyStatus}</p>}
             <p className="mt-2">Unelevated applies to this account's Monos and saves a backup of their private config. Your own Codex config stays unchanged. Restore the private backup to undo the change. Full access applies to this Mono; Plan stays restricted.</p>
+            {!allowFullAccess && <p className="mt-1">Full access cannot repair Plan, orchestrate or read-only messages.</p>}
           </div>}
           {conflict && (
             <p className="mt-1 text-xs text-content/70">
@@ -132,13 +141,18 @@ export function MonoCodexStorageNotice({
           {recovery && (
             <div className="mt-1 text-xs text-content/70">
               <p>{recovery.reason}</p>
-              <p className="mt-1">Review the preserved files in their folder, then refresh this issue.</p>
+              {recovery.sourceBinding ? <>
+                <p className="mt-1 break-all">Selected source: {recovery.sourceBinding.resolvedSourceHome}</p>
+                {recovery.sourceBinding.boundSourceHome && <p className="mt-1 break-all">Original source: {recovery.sourceBinding.boundSourceHome}</p>}
+                {recovery.sourceBinding.canBind && <p className="mt-1">Confirm only after selecting the account that originally owned these private sessions. Legacy context links alone do not establish that ownership.</p>}
+              </> : <p className="mt-1">Review the preserved files in their folder, then refresh this issue.</p>}
               <ul aria-label="Preserved recovery paths" className="mt-1 space-y-1 break-all">
                 {recovery.paths.map(path => <li key={path}>{path}</li>)}
               </ul>
             </div>
           )}
-          <div className="mt-2 flex flex-wrap items-center gap-2">
+          {!remote && <div className="mt-2 flex flex-wrap items-center gap-2">
+            {recovery?.sourceBinding?.canBind && onResolve && <SecondaryButton disabled={!!busy} onClick={() => void run("repair", () => onResolve("bind_selected_source"))}>Confirm selected source as original account</SecondaryButton>}
             {recovery?.metadata && onResolve && (
               <SecondaryButton disabled={!!busy} onClick={() => void run("repair", () => onResolve("preserve_recovery_metadata"))}>
                 Archive incomplete metadata
@@ -147,8 +161,8 @@ export function MonoCodexStorageNotice({
             {sandbox ? <>
               {!setupUnavailable && <SecondaryButton disabled={!!busy} onClick={() => void run("repair", onRepair)}>{busy === "repair" ? "Checking…" : "Check setup again"}</SecondaryButton>}
               {onResolve && <>
-                <SecondaryButton disabled={!!busy} onClick={() => void run("repair", () => onResolve("use_unelevated_sandbox"))}>Use unelevated sandbox for Monos</SecondaryButton>
-                <SecondaryButton disabled={!!busy} onClick={() => void run("repair", () => onResolve("use_mono_full_access"))}>Use full access for this Mono</SecondaryButton>
+                {!explicitElevated && <SecondaryButton disabled={!!busy} onClick={() => void run("repair", () => onResolve("use_unelevated_sandbox"))}>Use unelevated sandbox for Monos</SecondaryButton>}
+                {allowFullAccess && <SecondaryButton disabled={!!busy} onClick={() => void run("repair", () => onResolve("use_mono_full_access"))}>Use full access for this Mono</SecondaryButton>}
               </>}
             </> : conflict && onResolve ? (
               <>
@@ -182,7 +196,7 @@ export function MonoCodexStorageNotice({
             {error && conflict && (
               <SecondaryButton disabled={!!busy} onClick={() => void run("repair", onRepair)}>Refresh issue</SecondaryButton>
             )}
-          </div>
+          </div>}
           {comparison && conflict && (
             <div className="mt-3 rounded-md border border-content/10 p-2 text-xs">
               {comparison.unavailable ? <p>{comparison.unavailable}</p> : (
@@ -206,7 +220,7 @@ export function MonoCodexStorageNotice({
               <div className="mt-2"><SecondaryButton onClick={() => setComparison(undefined)}>Close comparison</SecondaryButton></div>
             </div>
           )}
-          {error && <p role="alert" className="mt-2 break-all text-xs text-content/70">{parseCodexStorageRecoveryConflict(error)?.reason ?? (parseCodexStorageConflict(error) ? "The file changed again. Review the latest versions before choosing." : error)}</p>}
+          {error && <p role="alert" className="mt-2 break-all text-xs text-content/70">{parseCodexSandboxBlocker(error)?.reason ?? parseCodexStorageRecoveryConflict(error)?.reason ?? (parseCodexStorageConflict(error) ? "The file changed again. Review the latest versions before choosing." : error)}</p>}
           {details && !sandbox && (renderDetails ? renderDetails(detailContent) : (
             <div className="mt-2 text-xs text-content/70" aria-label="Storage diagnostic details">
               {detailContent}

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { runInNewContext } from "node:vm";
 import ts from "typescript";
 import type { Session } from "../../../../features/sessions/model/session";
-import { codexSandboxRepairSettings, isCodexStorageError, MonoCodexStorageRecovery, parseCodexSandboxBlocker, parseCodexStorageConflict } from "../../../../features/monos/model/monoCodexStorage";
+import { codexSandboxRepairSettings, codexFullAccessRepairAllowed, isCodexStorageError, MonoCodexStorageRecovery, parseCodexSandboxBlocker, parseCodexStorageConflict, parseCodexStorageRecoveryConflict } from "../../../../features/monos/model/monoCodexStorage";
 import { codexStorageAccountId } from "../../../../features/monos/model/monoCodexStorageIssues";
 
 const mock = vi.hoisted(() => ({
@@ -198,4 +198,66 @@ it.each(["supervised", "plan"] as const)("private repair replays the inherited %
   expect(readFileSync(join(base, "config.backup"), "utf8")).toBe(SOURCE);
   expect(readFileSync(join(base, "config.toml"), "utf8")).toBe(PRIVATE);
   expect(readFileSync(join(contextHome, "config.toml"), "utf8")).toBe(PRIVATE);
+});
+
+function connectedRepair(extra: Partial<Session> = {}) {
+  const clicked: Session = { id: "clicked", harness: "codex", cwd: input.cwd, model: "codex:gpt-5.4", modelSettings: {}, title: "clicked", blocks: [],
+    runtimeMode: "supervised", providerAccountId: "account", providerSessionId: "synthetic-thread", codexStorageError: BLOCKER, ...extra };
+  const sessionsRef = { current: [clicked] };
+  const persisted = new Map([["clicked", structuredClone(clicked)]]);
+  const modes = new Map([["mono-clicked", "supervised"]]);
+  const recovery = new MonoCodexStorageRecovery();
+  const accepted = vi.fn();
+  recovery.hold("clicked", async () => {
+    const session = sessionsRef.current[0];
+    await sendCodexTurn({ sessionId: session.id, cwd: session.cwd, model: session.model, runtimeMode: session.runtimeMode, codexStore: "mono", providerAccountId: "account",
+      text: "Exact held prompt", intent: session.queuedMessages?.[0]?.intent, attachments: [], onAccepted: accepted, onEvent() {} });
+    return true;
+  });
+  const saveMode = vi.fn((id: string, mode: string) => modes.set(id, mode));
+  const persist = vi.fn(async (session: Session) => { persisted.set(session.id, structuredClone(session)); });
+  const invoke = vi.fn(async () => ({ configPath: join(base,"config.toml"), backupPaths: [join(base,"config.backup")] }));
+  const repair = repairCallback({ sessionsRef, codexStorageRecovery: { current: recovery }, codexStorageAccountId, isCodexStorageError,
+    parseCodexStorageConflict, parseCodexStorageRecoveryConflict, parseCodexSandboxBlocker, codexSandboxRepairSettings, codexFullAccessRepairAllowed, IS_WIN: true,
+    selectedProviderAccountId: () => "account", remoteProjectFor: () => undefined, queuedHead: () => undefined,
+    monoSkillsForSession: () => ({ skillsRole: "manager", skillsPolicy: { mode: "role" } }), sessionWorkCwd: (session: Session) => session.cwd,
+    orchestrator: { forSession: () => undefined }, monoForSession: () => ({ id:"mono-clicked" }), saveMonoRuntimeMode: saveMode, upsertSession: persist,
+    stopHarnessSession: async (_harness:string,id:string) => stopCodexSession(id), prepareCodexMonoContext, prepareMonoCodexStore:mock.prepare,
+    resolveCodexBinary: async () => ({path: input.path}), checkMonoCodexSandbox: mock.check, invoke, crypto: { randomUUID: () => "synthetic-receipt" }, flushSync: (action: () => void) => action(),
+    setSessions: (update: (sessions:Session[]) => Session[]) => { sessionsRef.current = update(sessionsRef.current); }, setQueueDispatchVersion: vi.fn(), setCodexStorageRepaired: vi.fn() });
+  return { repair, sessionsRef, persisted, modes, recovery, accepted, saveMode, persist, invoke };
+}
+
+it.each(["plan","orchestrate","readonly"] as const)("actual App/store/provider refuses ineffective %s Full access without a persistent change or accepted turn", async mode => {
+  const fixture = connectedRepair(mode === "readonly" ? { readOnly:true } : { queuedMessages:[{id:"held",text:"Exact held prompt",attachments:[],intent:mode}] });
+  await expect(fixture.repair("clicked","use_mono_full_access")).rejects.toThrow("restrictions");
+  expect(fixture.persist).not.toHaveBeenCalled(); expect(fixture.saveMode).not.toHaveBeenCalled(); expect(fixture.accepted).not.toHaveBeenCalled();
+  expect(fixture.persisted.get("clicked")?.runtimeMode).toBe("supervised"); expect(fixture.modes.get("mono-clicked")).toBe("supervised");
+  expect(fixture.recovery.hasPending("clicked")).toBe(true);
+  expect(mock.sent.some(request => ["thread/start","thread/resume","turn/start"].includes(request.method))).toBe(false);
+});
+
+it("actual failed store readiness leaves persisted Full access unchanged and accepts no provider turn", async () => {
+  const fixture = connectedRepair(); mock.check.mockRejectedValueOnce(new Error(BLOCKER));
+  await expect(fixture.repair("clicked","use_mono_full_access")).rejects.toThrow("cannot unlock");
+  expect(fixture.persist).not.toHaveBeenCalled(); expect(fixture.saveMode).not.toHaveBeenCalled(); expect(fixture.accepted).not.toHaveBeenCalled();
+  expect(fixture.persisted.get("clicked")?.runtimeMode).toBe("supervised"); expect(fixture.modes.get("mono-clicked")).toBe("supervised");
+  expect(mock.sent.some(request => ["thread/start","thread/resume","turn/start"].includes(request.method))).toBe(false);
+  expect(readFileSync(join(source,"config.toml"),"utf8")).toBe(SOURCE);
+});
+
+it("actual explicit Elevated repair gives Permissions guidance without native repair or accepted turns", async () => {
+  const fixture = connectedRepair({ windowsSandbox:"elevated" });
+  await expect(fixture.repair("clicked","use_unelevated_sandbox")).rejects.toThrow("In Permissions");
+  expect(fixture.invoke).not.toHaveBeenCalled(); expect(fixture.accepted).not.toHaveBeenCalled(); expect(fixture.persist).not.toHaveBeenCalled();
+  expect(fixture.sessionsRef.current[0].blocks).toEqual([]); expect(mock.sent).toEqual([]);
+});
+
+it("actual successful Full access persists only after readiness and resumes the provider exactly once", async () => {
+  const fixture = connectedRepair(); await fixture.repair("clicked","use_mono_full_access");
+  expect(fixture.persist).toHaveBeenCalledOnce(); expect(fixture.saveMode).toHaveBeenCalledExactlyOnceWith("mono-clicked","full-access");
+  expect(fixture.persisted.get("clicked")?.runtimeMode).toBe("full-access"); expect(fixture.modes.get("mono-clicked")).toBe("full-access");
+  expect(mock.check.mock.invocationCallOrder[0]).toBeLessThan(fixture.persist.mock.invocationCallOrder[0]);
+  expect(fixture.accepted).toHaveBeenCalledOnce(); expect(mock.sent.filter(request => request.method === "turn/start")).toHaveLength(1);
+  expect(fixture.recovery.hasPending("clicked")).toBe(false);
 });

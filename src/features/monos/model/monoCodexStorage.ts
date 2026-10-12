@@ -15,7 +15,7 @@ export type CodexStorageConflict = {
 };
 
 export type CodexStorageResolution = "use_account_version" | "keep_mono_version" |
-  "use_unelevated_sandbox" | "use_mono_full_access" | "preserve_recovery_metadata";
+  "use_unelevated_sandbox" | "use_mono_full_access" | "preserve_recovery_metadata" | "bind_selected_source";
 
 export type CodexSandboxBlocker = {
   sandbox: true;
@@ -28,6 +28,7 @@ export type CodexStorageRecoveryConflict = {
   reason: string;
   paths: string[];
   metadata?: { path: string; identity: string; fingerprint: string };
+  sourceBinding?: { resolvedSourceHome: string; boundSourceHome: string | null; canBind: boolean };
 };
 
 export type CodexStorageComparison = {
@@ -53,12 +54,17 @@ export function parseCodexSandboxBlocker(error: unknown): CodexSandboxBlocker | 
   }
 }
 export function codexSandboxRepairSettings(session: Session, isWindows: boolean, networkAccess: boolean) {
-  const intent = session.queuedMessages?.[0]?.intent ?? [...session.blocks].reverse().find(block => block.role === "user")?.intent;
+  const head = session.queuedMessages?.[0];
+  const intent = head ? head.intent : [...session.blocks].reverse().find(block => block.role === "user")?.intent;
   return {
     sandboxRequired: session.readOnly === true || intent === "plan" || intent === "orchestrate" || session.runtimeMode !== "full-access",
     windowsSandbox: isWindows ? session.windowsSandbox ?? (session.readOnly || session.runtimeMode === "auto" || session.runtimeMode === "auto-accept-edits" ? "unelevated" as const : undefined) : undefined,
     sandboxNetworkAccess: networkAccess,
   };
+}
+
+export function codexFullAccessRepairAllowed(session: Session): boolean {
+  return !codexSandboxRepairSettings({ ...session, runtimeMode: "full-access" }, false, false).sandboxRequired;
 }
 
 export function parseCodexStorageConflict(error: unknown): CodexStorageConflict | undefined {
@@ -89,6 +95,10 @@ export function parseCodexStorageRecoveryConflict(error: unknown): CodexStorageR
       !value.paths.every((path: unknown) => typeof path === "string" && path.length > 0)) return undefined;
     if (value.metadata !== undefined && (!value.metadata ||
       !["path", "identity", "fingerprint"].every(key => typeof value.metadata[key] === "string" && value.metadata[key].length > 0))) return undefined;
+    if (value.sourceBinding !== undefined && (!value.sourceBinding ||
+      typeof value.sourceBinding.resolvedSourceHome !== "string" || !value.sourceBinding.resolvedSourceHome ||
+      (value.sourceBinding.boundSourceHome !== null && (typeof value.sourceBinding.boundSourceHome !== "string" || !value.sourceBinding.boundSourceHome)) ||
+      typeof value.sourceBinding.canBind !== "boolean")) return undefined;
     return value as CodexStorageRecoveryConflict;
   } catch {
     return undefined;

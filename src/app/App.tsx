@@ -72,6 +72,7 @@ import {
   rejectMessageSend,
 } from "../features/monos/model/monoMessaging";
 import { TurnAuthorizationError } from "../integrations/harness/core/registry";
+import { TurnNotReadyError } from "../integrations/harness/core/types";
 import {
   dismissQueuedMonoSessionCompletion,
   enqueueMonoSessionCompletion,
@@ -7931,6 +7932,10 @@ function Workspace({
                 prepared.text,
               ),
               attachments: prepared.attachments,
+              validateDispatch: () => {
+                if (turnGen.current.get(sessionId) !== gen) throw new TurnNotReadyError("The active turn changed before the follow-up could be sent.");
+                assertMonoRotationCurrent(sessionId, savedRotation);
+              },
             });
           },
           delivered: () => {
@@ -8047,6 +8052,7 @@ function Workspace({
         });
         sessionsRef.current = nextSessions;
         setSessions(nextSessions);
+        const gen = turnGen.current.get(sessionId);
         void (async () => {
           try {
             const prepared = await prepareAttachments(attachments);
@@ -8067,8 +8073,13 @@ function Workspace({
                 prompt,
               ),
               attachments: prepared,
+              validateDispatch: () => {
+                if (turnGen.current.get(sessionId) !== gen) throw new TurnNotReadyError("The active turn changed before the follow-up could be sent.");
+                assertMonoRotationCurrent(sessionId, savedRotation);
+              },
             });
           } catch (error: unknown) {
+            if (turnGen.current.get(sessionId) !== gen) return;
             const message =
               error instanceof Error
                 ? error.message
@@ -8076,6 +8087,7 @@ function Workspace({
             enqueueHarnessEvent(sessionId, {
               type: "session.error",
               message,
+              followUp: true,
             });
             flushHarnessEvents();
           }
@@ -8640,7 +8652,7 @@ function Workspace({
         };
 
         const pendingEditedEvents: HarnessEvent[] = [];
-        const bindContextProfile = bindTurnContextProfile(current);
+        const bindContextProfile = bindTurnContextProfile({ ...current, providerAccountId });
         const applyTurnEvent = (event: HarnessEvent) => {
           orchestrator.observe(sessionId, event);
           if (options?.onSettled && event.type === "message.delta")
@@ -8844,6 +8856,10 @@ function Workspace({
                   ?.memberId,
               text: fallbackText,
               attachments: turnAttachments,
+              validateDispatch: () => {
+                if (turnGen.current.get(sessionId) !== gen) throw new TurnNotReadyError("The turn was stopped before its prompt could be sent.");
+                assertMonoRotationCurrent(sessionId, rotationReceipt);
+              },
               prepareText: async provider => {
                 contextProvider = provider;
                 if (provider && monoWorkingDirectoryMigrationPending(sessionId)) {
@@ -11161,7 +11177,10 @@ function Workspace({
       const gen = (turnGen.current.get(sessionId) ?? 0) + 1;
       turnGen.current.set(sessionId, gen);
       const workCwd = sessionWorkCwd(current);
-      const bindContextProfile = bindTurnContextProfile(current);
+      const providerAccountId = supportsProviderAccounts(current.harness)
+        ? (current.providerAccountId ?? selectedProviderAccountId(current.harness, current.cwd))
+        : undefined;
+      const bindContextProfile = bindTurnContextProfile({ ...current, providerAccountId });
       const started = sessionsRef.current.map((session) =>
         session.id === sessionId
           ? applyHarnessEvent(
@@ -11182,10 +11201,7 @@ function Workspace({
             cwd: workCwd,
             model: current.model,
             modelSettings: current.modelSettings,
-            providerAccountId: supportsProviderAccounts(current.harness)
-              ? (current.providerAccountId ??
-                selectedProviderAccountId(current.harness, current.cwd))
-              : undefined,
+            providerAccountId,
             runtimeMode: current.runtimeMode,
             readOnly: current.readOnly === true,
             ephemeral: current.ephemeral === true,

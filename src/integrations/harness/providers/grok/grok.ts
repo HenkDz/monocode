@@ -465,6 +465,7 @@ async function prompt(live: Live, input: SendTurnInput): Promise<void> {
     if (live.cancelled || liveByThread.get(input.sessionId) !== live) return;
     const blocks = grokPromptBlocks(text, input.attachments);
     if (blocks.length === 0) return;
+    input.validateDispatch?.();
     await live.acp.request(
       "session/prompt",
       {

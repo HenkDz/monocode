@@ -119,6 +119,7 @@ export async function steerHermesTurn(input: SteerTurnInput): Promise<void> {
   if (!live) throw new TurnNotReadyError("No active Hermes Agent session");
   const blocks = hermesPromptBlocks(input.text, input.attachments);
   if (blocks.length === 0) return;
+  input.validateDispatch?.();
   await live.acp.request(
     "session/prompt",
     { sessionId: live.acpSessionId, prompt: blocks },
@@ -384,6 +385,8 @@ async function prompt(live: Live, input: SendTurnInput): Promise<void> {
     if (blocks.length === 0) return;
     let accepted = false;
     for (;;) {
+      if (live.cancelled || liveByThread.get(input.sessionId) !== live) return;
+      input.validateDispatch?.();
       const pending = live.acp.request(
         "session/prompt",
         { sessionId: live.acpSessionId, prompt: blocks },

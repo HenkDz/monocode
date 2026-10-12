@@ -25,6 +25,7 @@ import { usageLimitFromError } from "../../../features/sessions/model/usageLimit
 import { parseTeamMessage } from "../../../features/sessions/model/teamMessage";
 import { captureTurnEvent, currentTurnIndex } from "../../../features/agents/model/turnMetrics";
 import { sameContextProfile } from "./contextProfile";
+import { sameProviderAccountId } from "../../../features/providers/model/providerAccounts";
 
 /** Apply one delivery batch without copying the transcript for every token. */
 export function applyHarnessEvents(
@@ -167,7 +168,7 @@ export function applyHarnessEvent(
       return upsertPlan(session, event);
     case "session.error":
       return appendBlock(
-        event.message === MONO_ROTATION_READ_ERROR && session.busy ? session : failStreaming({
+        (event.followUp || event.message === MONO_ROTATION_READ_ERROR) && session.busy ? session : failStreaming({
           ...session,
           usageLimit: session.usageLimit ?? usageLimitFromError(event.message),
           // Do not drain remaining messages into the same failed connection.
@@ -183,6 +184,8 @@ export function applyHarnessEvent(
         },
       );
     case "session.providerBound":
+      if (event.bindingProfile && (session.harness !== event.bindingProfile.harness ||
+        !sameProviderAccountId(session.providerAccountId, event.bindingProfile.providerAccountId))) return session;
       return { ...session, providerSessionId: event.providerSessionId };
     case "turn.started": {
       const index = lastMatchingBlock(

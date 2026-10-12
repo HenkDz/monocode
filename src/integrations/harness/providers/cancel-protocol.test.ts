@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { SendTurnInput } from "../core/types";
+import { assertMonoRotationCurrent, saveMonoRotation, type MonoRotation } from "../../../features/monos/model/monoRotation";
 
 // CC1FR's protocol reproduction, asserting Stop prevents the prepared prompt.
 const mock = vi.hoisted(() => ({
@@ -66,11 +67,11 @@ import * as omp from "./omp/omp";
 import * as opencode from "./opencode/opencode";
 
 const providers = [
-  { id: "codex", send: codex.sendCodexTurn, cancel: codex.cancelCodexTurn, stop: codex.stopCodexSession },
-  { id: "claude", send: claude.sendClaudeTurn, cancel: claude.cancelClaudeTurn, stop: claude.stopClaudeSession },
-  { id: "pi", send: pi.sendPiTurn, cancel: pi.cancelPiTurn, stop: pi.stopPiSession },
-  { id: "omp", send: omp.sendOmpTurn, cancel: omp.cancelOmpTurn, stop: omp.stopOmpSession },
-  { id: "opencode", send: opencode.sendOpenCodeTurn, cancel: opencode.cancelOpenCodeTurn, stop: opencode.stopOpenCodeSession },
+  { id: "codex", send: codex.sendCodexTurn, steer: codex.steerCodexTurn, cancel: codex.cancelCodexTurn, stop: codex.stopCodexSession },
+  { id: "claude", send: claude.sendClaudeTurn, steer: claude.steerClaudeTurn, cancel: claude.cancelClaudeTurn, stop: claude.stopClaudeSession },
+  { id: "pi", send: pi.sendPiTurn, steer: pi.steerPiTurn, cancel: pi.cancelPiTurn, stop: pi.stopPiSession },
+  { id: "omp", send: omp.sendOmpTurn, steer: omp.steerOmpTurn, cancel: omp.cancelOmpTurn, stop: omp.stopOmpSession },
+  { id: "opencode", send: opencode.sendOpenCodeTurn, steer: opencode.steerOpenCodeTurn, cancel: opencode.cancelOpenCodeTurn, stop: opencode.stopOpenCodeSession },
 ];
 const prompts = () => mock.writes.filter(message => message.method === "turn/start" || message.type === "user" || message.type === "prompt" || message.http?.endsWith("/prompt_async"));
 let sequence = 0;
@@ -100,6 +101,65 @@ describe.each(providers)("$id actual protocol preparation cancellation", provide
       await turn;
     } finally { await provider.stop(id); await turn; }
   }
+
+  it.each(["newer", "deleted", "unreadable", "stopped"])("refuses %s authority after the final preparation microtask, before transport", async change => {
+    mock.writes.length = 0;
+    const id = `authority-${provider.id}-${++sequence}`;
+    const bytes = new Map<string, string>();
+    vi.stubGlobal("localStorage", { getItem: (key: string) => bytes.get(key) ?? null, setItem: (key: string, value: string) => bytes.set(key, value) });
+    const receipt: MonoRotation = { at: 1, reason: "context", earlier: [], userRequests: [{ id: "scope", text: "Parser only." }] };
+    expect(saveMonoRotation(id, receipt)).toBe(true);
+    let generation = 1;
+    let changedBytes: string | undefined;
+    const prepareText = async () => {
+      queueMicrotask(() => queueMicrotask(() => {
+        if (change === "newer") expect(saveMonoRotation(id, { ...receipt, userRequests: [...receipt.userRequests!, { id: "new", text: "Never publish." }] })).toBe(true);
+        else if (change === "deleted") bytes.clear();
+        else if (change === "unreadable") bytes.set("monocode:mono-rotations", "{unknown");
+        else generation++;
+        changedBytes = bytes.get("monocode:mono-rotations");
+      }));
+      await Promise.resolve();
+      assertMonoRotationCurrent(id, receipt);
+      return "Parser only.";
+    };
+    const validateDispatch = vi.fn(() => {
+      if (generation !== 1) throw new Error("stopped generation");
+      assertMonoRotationCurrent(id, receipt);
+    });
+    const onAccepted = vi.fn();
+    try {
+      await expect(provider.send({ ...inputFor(id), prepareText, validateDispatch, onAccepted })).rejects.toThrow();
+      expect(validateDispatch).toHaveBeenCalledOnce();
+      expect(prompts()).toHaveLength(0);
+      expect(onAccepted).not.toHaveBeenCalled();
+      expect(bytes.get("monocode:mono-rotations")).toBe(changedBytes);
+    } finally { await provider.stop(id); vi.unstubAllGlobals(); }
+  });
+
+  it("validates each steer without settling or replacing the original turn", async () => {
+    mock.writes.length = 0;
+    const id = `steer-authority-${provider.id}-${++sequence}`;
+    const onAccepted = vi.fn();
+    const events: unknown[] = [];
+    const base = { ...inputFor(id), onAccepted, onEvent: (event: unknown) => events.push(event) };
+    const turn = provider.send(base);
+    try {
+      await vi.waitFor(() => expect(onAccepted).toHaveBeenCalledOnce());
+      const count = mock.writes.length;
+      const validateDispatch = vi.fn(() => { throw new Error("newer protected receipt"); });
+      await expect(provider.steer({ ...base, text: "Follow up", validateDispatch })).rejects.toThrow("newer protected receipt");
+      expect(validateDispatch).toHaveBeenCalledOnce();
+      expect(mock.writes).toHaveLength(count);
+      expect(events).not.toContainEqual(expect.objectContaining({ type: "session.error" }));
+      const valid = vi.fn();
+      await provider.steer({ ...base, text: "Follow up", validateDispatch: valid });
+      expect(valid).toHaveBeenCalledOnce();
+      expect(mock.writes).toHaveLength(count + 1);
+      if (provider.id === "codex") expect(mock.writes.at(-1)?.params).toMatchObject({ threadId: "fresh", expectedTurnId: "turn-1" });
+      expect(onAccepted).toHaveBeenCalledOnce();
+    } finally { await provider.stop(id); await turn; }
+  });
 
   it.each(["cancel", "stop"] as const)("does not submit or accept preparation after direct %s, then accepts a next turn", async action => {
     mock.writes.length = 0;

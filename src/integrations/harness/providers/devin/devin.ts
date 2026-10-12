@@ -127,7 +127,7 @@ export async function sendDevinTurn(input: SendTurnInput): Promise<void> {
     if (live.cancelled) return;
     const text = input.prepareText ? await input.prepareText(live.acpSessionId) : input.text;
     if (live.cancelled || liveByThread.get(input.sessionId) !== live) return;
-    await prompt(live, devinPromptBlocks(text, input.attachments));
+    await prompt(live, devinPromptBlocks(text, input.attachments), input.validateDispatch);
   });
 }
 
@@ -607,10 +607,12 @@ async function applyRuntimeMode(
 async function prompt(
   live: Live,
   blocks: ReturnType<typeof devinPromptBlocks>,
+  validateDispatch?: SendTurnInput["validateDispatch"],
 ): Promise<void> {
   if (blocks.length === 0) return;
   live.promptInFlight = true;
   try {
+    validateDispatch?.();
     const result = await live.rpc.request(
       "session/prompt",
       { sessionId: live.acpSessionId, prompt: blocks },

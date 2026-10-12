@@ -106,16 +106,27 @@ export function decideMonoGoalRoute(input: {
     return grand("Contains non-English or special characters, so Grand Orch will route it.");
   const text = rawText.trim();
   if (!text || text.length > 8000) return grand("Goals must contain 1–8,000 characters");
-  const tokens = text.match(/[^\s"'`()\[\]{}<>]+/g) ?? [];
+  const tokenPattern = /[^\s"'`()\[\]{}<>]+/g;
+  const tokens = text.match(tokenPattern) ?? [];
+  const pathMetadata = /^[a-z]:|^\.{1,2}$|^\.[\p{L}\p{N}_-]|[\p{L}\p{N}_-]\.[\p{L}\p{N}_-]/iu;
   const plainTokens = tokens.filter(token =>
-    !/[/\\]|^[a-z]:|^\.{1,2}$|^\.[\p{L}\p{N}_-]|[\p{L}\p{N}_-]\.[\p{L}\p{N}_-]/iu.test(token));
+    !/[/\\]/.test(token) && !pathMetadata.test(token));
   const hasPaths = plainTokens.length !== tokens.length;
   if (hasPaths && choice.override !== "manager")
     return grand("Contains file paths: choose a project or send to Grand Orchestrator");
   // Scope wording requires Grand even for benign singular phrases.
-  const scopeText = plainTokens.join(" ").replace(/[^a-z]/gi, " ");
+  const scopeNouns = /\b(project|repo|work\s*space|code\s*base)[a-z]*/gi;
+  // Bare scope alternatives must not disappear as selected-project paths.
+  const scopeTokens = text.replace(/\b(code)\s+(?=[/\\]base)|\b(work)\s+(?=[/\\]space)/gi, "$1$2")
+    .match(tokenPattern) ?? [];
+  const scopeText = scopeTokens.filter(token => !pathMetadata.test(token) &&
+    (!/[/\\]/.test(token) || !/^[/\\]|(?:^|[/\\])[.~]/.test(token) &&
+      (token.split(/[/\\]/).every(part => part.replace(/[^a-z]/gi, " ").match(scopeNouns)) ||
+        !token.replace(/[^a-z]/gi, " ").replace(scopeNouns, "")
+          .replace(/\b(work|space|code|base)\b/gi, "").trim())))
+    .join(" ").replace(/[^a-z]/gi, " ");
   if (/\b(compare|compares|compared|comparing|comparisons?|versus|vs\.?|cross[- ]project)\b/i.test(text) ||
-      /\b(project|repo|work\s*space|code\s*base)/i.test(scopeText))
+      scopeText.match(scopeNouns))
     return grand("Comparison or cross-project goal");
   const foldedText = foldProjectText(text);
   if (/[<>]|&(?:#(?:x[0-9a-f]+|\d+)|[a-z][a-z0-9]*);|\]\s*\(/i.test(foldedText))

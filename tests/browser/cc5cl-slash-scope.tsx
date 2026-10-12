@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { MonoComposer } from "../../src/features/monos/ui/MonoComposer";
 import { FloatingMonoChat } from "../../src/features/monos/ui/FloatingMonoChat";
-import { newSession } from "../../src/features/sessions/model/session";
+import { newSession, type Session } from "../../src/features/sessions/model/session";
 import { MonoManagerGoals, type ManagerGoalHost } from "../../src/features/monos/model/monoManagerGoals";
 import { appendMonoGoalOrigin, submitMonoGoal, type MonoGoalSubmission } from "../../src/features/monos/model/monoGoalRouting";
 import { deliverFloatingMonoRequest, type FloatingMonoAction } from "../../src/features/monos/model/floatingMono";
@@ -17,7 +17,7 @@ const context = { ownerId: "grand", projects: [
   { id: "atlas", name: "Atlas", path: "C:/synthetic/Atlas", managerMonoId: "atlas-manager", available: true },
   { id: "beacon", name: "Beacon", path: "C:/synthetic/Beacon", managerMonoId: "beacon-manager", available: true },
 ] };
-let session = { ...newSession("codex", "C:/synthetic/Atlas"), id: "cc5cl-browser-session",
+let session: Session & { monoGoalRouting: typeof context } = { ...newSession("codex", "C:/synthetic/Atlas"), id: "cc5cl-browser-session",
   monoTranscript: { before: null, firstBlockId: null }, monoGoalRouting: context };
 const counts = { grand: 0, resolve: 0, origin: 0, ledger: 0, deliver: 0 };
 let publish = (_receipt: unknown) => {};

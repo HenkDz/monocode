@@ -23,6 +23,31 @@ const context = () => monoGoalRoutingContext(owner, roster, projects);
 const choice = { mode: "goal" as const, override: "auto" as const };
 const decide = (text: string, other: Partial<Parameters<typeof decideMonoGoalRoute>[0]> = {}) =>
   decideMonoGoalRoute({ text, choice, context: context(), attachmentCount: 0, ...other });
+const projectSetGoals = [
+  "Fix Atlas and every registered project",
+  "Apply this fix to Atlas and all registered projects",
+  "Fix Atlas and both registered repositories",
+  "Fix Atlas and each project",
+  "Fix Atlas across every project",
+  "Fix Atlas in all of the projects",
+  "Fix Atlas and the remaining projects",
+  "Fix Atlas and all our repositories",
+  "Fix Atlas and every project",
+  "Fix Atlas and every registered repository",
+  "Fix Atlas and other registered projects",
+  "Apply Atlas changes to other repositories too",
+  "Fix Atlas and any other registered repo",
+  "Fix Atlas and another project",
+  "Fix Atlas and any registered project",
+  "Fix Atlas and the rest of our repositories",
+  "Additional registered projects need the Atlas fix",
+  "Fix Atlas and other workspaces",
+  "Fix Atlas and another codebase",
+  "Fix Atlas and every other code base",
+  "Fix Atlas and every other code-base",
+  "Fix Atlas and every other work space",
+  "Fix Atlas and every other work-space",
+];
 
 describe("exact project routes", () => {
   it.each(["Fix Atlas login", "Fix ATLAS login", "Fix (Atlas) login", "Fix `Atlas` login"])("matches %s", text => {
@@ -42,6 +67,68 @@ describe("exact project routes", () => {
   });
   it.each(["Fix Atlas and Beacon", "Compare Atlas costs", "Atlas versus alternatives", "Update across projects", "Atlas compared to alternatives", "Update both repos"])("falls back for %s", text => {
     expect(decide(text)).toMatchObject({ kind: "grand" });
+  });
+  it.each(projectSetGoals)("keeps quantified scope at Grand: %s", text => {
+    for (const override of ["auto", "manager"] as const)
+      expect(decide(text, { choice: { mode: "goal", override, projectId: "c:/code/atlas" } }))
+        .toEqual({ kind: "grand", reason: "Comparison or cross-project goal" });
+  });
+  it.each(["across", "all", "both", "multiple", "between", "every", "each", "remaining",
+    "other", "another", "any", "rest", "additional", "42", ""])(
+    "keeps %s project sets at Grand regardless of order, qualifiers or formatting", quantifier => {
+      for (const ctx of [context(), monoGoalRoutingContext(owner, roster, projects, ["C:/code/Beacon"]),
+        monoGoalRoutingContext(owner, roster.filter(member => member.id !== "beacon-manager"), projects)])
+        for (const override of ["auto", "manager"] as const)
+          for (const noun of ["project", "projects", "repository", "repositories", "repo", "repos", "workspace", "workspaces", "codebase", "codebases",
+            "work space", "work spaces", "work-space", "work-spaces", "code base", "code bases", "code-base", "code-bases"])
+            for (const qualifier of ["", "registered", "one of our widely separated", "**our**\tregistered\r\n"])
+              for (const text of [`Fix Atlas: _${quantifier}_ ${qualifier} ${noun}`,
+                `Fix Atlas and ${noun}; ${qualifier} **${quantifier.toUpperCase()}**`])
+                expect(decide(text, { context: ctx, choice: { mode: "goal", override, projectId: "c:/code/atlas" } }), text)
+                  .toEqual({ kind: "grand", reason: "Comparison or cross-project goal" });
+    });
+  it.each(["Fix Atlas all login checks", "Fix Atlas allocations", "Fix Atlas restoring minimized windows"])(
+    "keeps healthy single-project ASCII control %s", text => {
+      for (const override of ["auto", "manager"] as const)
+        expect(decide(text, { choice: { mode: "goal", override, projectId: "c:/code/atlas" } }))
+          .toMatchObject({ kind: "manager", project: { managerMonoId: "atlas-manager" } });
+    });
+  it.each(["Fix Atlas project sidebar", "Fix Atlas repository allocations", "Fix Atlas workspace color",
+    "Fix Atlas codebase startup", "Fix Atlas reports"])("deliberately over-blocks singular/prefix scope %s", text => {
+    for (const override of ["auto", "manager"] as const)
+      expect(decide(text, { choice: { mode: "goal", override, projectId: "c:/code/atlas" } }))
+        .toEqual({ kind: "grand", reason: "Comparison or cross-project goal" });
+  });
+  it("keeps registered compound names and split unavailable literal conflicts safe", () => {
+    for (const name of ["Atlas Project", "Atlas Workspace", "Atlas-Codebase", "Atlas Repo"])
+      for (const override of ["auto", "manager"] as const) {
+        const ctx = context();
+        ctx.projects[0].name = name;
+        ctx.projects[1] = { ...ctx.projects[1], name: "BeaconAPI", available: false };
+        expect(decide(`Fix ${name} login`, { context: ctx, choice: { mode: "goal", override, projectId: ctx.projects[0].id } }))
+          .toMatchObject({ kind: "grand" });
+        ctx.projects[0].name = "Atlas";
+        expect(decide("Fix Atlas and Beacon**API** login", { context: ctx,
+          choice: { mode: "goal", override, projectId: ctx.projects[0].id } }))
+          .toEqual({ kind: "grand", reason: "More than one project mentioned" });
+      }
+  });
+  it.each(["C:/outside/repo/index.ts", "C:\\outside\\repo\\index.ts", "/outside/repo/index.ts", "\\\\server\\repo\\file.ts",
+    "src/project.ts", "workspace/settings", "codebase/atlas", "project/index.ts", "code-base/index.ts", "work-space/settings",
+    "C:/work-space/code-base/index.ts", "code/base.ts"])(
+    "preserves scope-noun path segments only with explicit selection: %s", path => {
+      const selected = { mode: "goal" as const, override: "manager" as const, projectId: "c:/code/atlas" };
+      expect(decide(`Fix Atlas ${path}`)).toMatchObject({ kind: "grand" });
+      expect(decide(`Fix Atlas ${path}`, { choice: selected })).toMatchObject({ kind: "manager",
+        project: { managerMonoId: "atlas-manager" }, reason: "Contains file paths: routed to Atlas because you selected it" });
+      expect(decide(`Fix Atlas ${path} and other projects`, { choice: selected }))
+        .toEqual({ kind: "grand", reason: "Comparison or cross-project goal" });
+    });
+  it("keeps ASCII formatting inside ordinary scope aliases at Grand", () => {
+    for (const alias of ["code\tbase", "code\r\nbase", "code**base**", "work\tspace", "work**space**", "WORK _ SPACE"])
+      for (const override of ["auto", "manager"] as const)
+        expect(decide(`Fix Atlas and another ${alias}`, { choice: { mode: "goal", override, projectId: "c:/code/atlas" } }))
+          .toEqual({ kind: "grand", reason: "Comparison or cross-project goal" });
   });
   it.each(["Fix Atlas and Beacon.", "Fix Atlas. Update Beacon", "Fix Atlas... and Beacon"])("keeps sentence conflict %s at Grand", text => {
     for (const override of ["auto", "manager"] as const)
@@ -200,6 +287,43 @@ function setup() {
 }
 
 describe("shared user submission boundary", () => {
+  it.each(["auto", "manager"] as const)("retains an older accepted project-set receipt on unchanged %s retry", async override => {
+    const f = setup();
+    f.input.text = projectSetGoals[0];
+    f.input.submission.choice = { mode: "goal", override, projectId: override === "manager" ? f.project.id : undefined };
+    f.input.submission.reason = override === "manager" ? "Project selected" : "Exact project name";
+    await f.host.persistOrigin(f.input.submission, f.input.text);
+    f.deliver.mockRejectedValueOnce(Error("offline"));
+    await expect(f.host.ledger.handle("grand", { kind: "user", messageId: "user-1" }, "request-1", "goals.assign",
+      { projectId: f.project.id, goal: f.input.text }, f.host.goals, {
+        sourceUserMessageId: "user-1", projectId: f.project.id, managerId: f.project.managerId,
+        managerMonoId: f.project.managerMonoId, override, reason: f.input.submission.reason,
+      })).rejects.toThrow("offline");
+    const original = structuredClone(f.saved.get("grand")!);
+    f.host.ledger = new MonoManagerGoals(f.storage);
+    f.setContext({ ownerId: "grand", projects: [] });
+    expect(await submitMonoGoal({ ...f.input, recovery: true }, f.host)).toBe(true);
+    expect(f.host.grand).not.toHaveBeenCalled();
+    expect(f.host.resolve).not.toHaveBeenCalled();
+    expect(f.host.ledger.goals("grand")).toHaveLength(1);
+    expect(f.host.ledger.goals("grand")[0]).toMatchObject({ id: original.goals[0].id,
+      requestId: "request-1", userMessageId: "user-1", projectId: f.project.id, route: original.goals[0].route });
+    expect(Object.keys(f.saved.get("grand")!.receipts)).toEqual(Object.keys(original.receipts));
+    expect(f.deliver.mock.calls[1][2]).toBe(f.deliver.mock.calls[0][2]);
+    expect(f.source().blocks[0].monoGoalSubmission).toEqual(f.input.submission);
+  });
+  it("retains an older project-set origin without creating a new assignment or Grand turn", async () => {
+    const f = setup();
+    f.input.text = projectSetGoals[0];
+    await f.host.persistOrigin(f.input.submission, f.input.text);
+    expect(await submitMonoGoal({ ...f.input, recovery: true }, f.host)).toBe(true);
+    expect(f.host.grand).not.toHaveBeenCalled();
+    expect(f.host.resolve).not.toHaveBeenCalled();
+    expect(f.deliver).not.toHaveBeenCalled();
+    expect(f.host.ledger.goals("grand")).toHaveLength(0);
+    expect(f.source().blocks[0].monoGoalSubmission).toEqual(f.input.submission);
+    expect(f.source().blocks[1].text).toContain("original request will retry");
+  });
   it("places a missing route card after its visible origin and preserves later messages", async () => {
     const f = setup();
     await submitMonoGoal(f.input, f.host);

@@ -20,6 +20,7 @@ export function codexConfigOverrides(
   config: Record<string, unknown>,
   home: string,
   skillsConfig?: Record<string, unknown>,
+  privateConfig?: Record<string, unknown>,
 ): Record<string, unknown> {
   const withoutUnset = (value: unknown): unknown => {
     if (Array.isArray(value))
@@ -36,9 +37,11 @@ export function codexConfigOverrides(
   const table = (value: unknown): Record<string, unknown> => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
   const resolved = withoutUnset(config) as Record<string, unknown>;
   const curated = table(withoutUnset(skillsConfig));
+  const privateWindows = table(withoutUnset(privateConfig?.windows));
   return {
     ...resolved,
     ...curated,
+    ...(Object.keys(privateWindows).length ? { windows: { ...table(resolved.windows), ...privateWindows } } : {}),
     ...(curated.skills ? { skills: { ...table(resolved.skills), ...table(curated.skills) } } : {}),
     ...(curated.plugins ? { plugins: { ...table(resolved.plugins), ...Object.fromEntries(Object.entries(table(curated.plugins)).map(([id, flags]) => [id, { ...table(table(resolved.plugins)[id]), ...table(flags) }])) } } : {}),
     sqlite_home: home,
@@ -151,7 +154,7 @@ async function prepare(
       "config/read",
       { cwd: input.cwd },
     );
-    const config = codexConfigOverrides(settings.config, store.home, store.skillsConfig);
+    const config = codexConfigOverrides(settings.config, store.home, store.skillsConfig, store.privateConfig);
     if (input.windowsSandbox) {
       config.windows = { ...asRecord(config.windows), sandbox: input.windowsSandbox };
     }

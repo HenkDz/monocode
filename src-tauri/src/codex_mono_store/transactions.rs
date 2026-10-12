@@ -5,6 +5,7 @@ use super::*;
 pub(super) enum ClaimIntent {
     Keep,
     UseAccount,
+    PrivateConfig,
     IsolateHooks,
     IsolateSkills,
     CloneHooks,
@@ -229,6 +230,25 @@ impl ClaimJournal {
 
     pub(super) fn finish(&self) -> Result<(), String> {
         let parent = self.path.parent().ok_or("Missing journal parent")?;
+        if matches!(self.transaction.intent, ClaimIntent::PrivateConfig) {
+            let original = parent.join(&self.transaction.entry);
+            if self.transaction.staged.as_ref().is_some_and(|stage| {
+                exists(&original).unwrap_or(false)
+                    && matches_record(&original, stage).unwrap_or(false)
+            }) {
+                let snapshot = read_snapshot(parent, &self.transaction.entry)?;
+                if !snapshot.is_some_and(|snapshot| {
+                    snapshot.private_override
+                        && !snapshot.invalid
+                        && fingerprint(&original).is_ok_and(|actual| actual == snapshot.fingerprint)
+                }) {
+                    return Err(recovery(
+                        "Published private config is awaiting its recovery snapshot.",
+                        &[original, self.path.clone()],
+                    ));
+                }
+            }
+        }
         if let Some(stage) = &self.transaction.staged {
             let path = parent.join(&stage.name);
             if exists(&path)? {
@@ -364,6 +384,11 @@ fn read_journal(path: &Path) -> Result<ClaimJournal, String> {
     if transaction.claim.name != format!(".monocode-claim-{id}") {
         return Err("Transaction claim name does not match its journal".into());
     }
+    if matches!(transaction.intent, ClaimIntent::PrivateConfig)
+        && (transaction.entry != "config.toml" || transaction.staged.is_none())
+    {
+        return Err("Private config repair cannot target another entry".into());
+    }
     if let Some(stage) = &transaction.staged {
         let id = stage
             .name
@@ -471,7 +496,7 @@ fn archive_valid(home: &Path, transaction: &Transaction) -> Result<bool, String>
 fn invalid_snapshot(home: &Path, transaction: &Transaction) -> Result<(), String> {
     if matches!(
         transaction.intent,
-        ClaimIntent::Keep | ClaimIntent::UseAccount
+        ClaimIntent::Keep | ClaimIntent::UseAccount | ClaimIntent::PrivateConfig
     ) {
         write_snapshot(
             home,
@@ -520,6 +545,86 @@ fn reconcile_journal(home: &Path, journal: ClaimJournal) -> Result<(), String> {
             "An interrupted claim changed; all recovery entries were preserved.",
             &paths,
         ));
+    }
+    if !occupied
+        && !claimed
+        && matches!(journal.transaction.intent, ClaimIntent::PrivateConfig)
+        && journal.transaction.verified
+        && archive_valid(home, &journal.transaction)?
+    {
+        let staged = journal
+            .transaction
+            .staged
+            .as_ref()
+            .ok_or("Missing private config")?;
+        let path = parent.join(&staged.name);
+        if !exists(&path)? || replaceable_link(&path)? || !path.is_file() {
+            return Err(recovery(
+                "An interrupted private config repair changed; recovery entries were preserved.",
+                &paths,
+            ));
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            use windows_sys::Win32::{
+                Foundation::GENERIC_READ,
+                Storage::FileSystem::{
+                    DELETE, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT,
+                    FILE_SHARE_READ, FILE_WRITE_ATTRIBUTES,
+                },
+            };
+            let mut archive = open_entry(
+                journal
+                    .transaction
+                    .archive
+                    .as_ref()
+                    .ok_or("Missing private config archive")?,
+                true,
+            )?;
+            let archive_info = handle_file_info(&archive)?;
+            if !archive
+                .metadata()
+                .map_err(|error| error.to_string())?
+                .is_file()
+                || archive_info.nNumberOfLinks != 1
+                || archive_info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
+                || journal.transaction.claim.fingerprint.as_ref()
+                    != Some(&fingerprint_file(&mut archive)?)
+            {
+                return Err(recovery(
+                    "A private config recovery archive changed; it was preserved.",
+                    &paths,
+                ));
+            }
+            let file = std::fs::OpenOptions::new()
+                .access_mode(GENERIC_READ | DELETE | FILE_WRITE_ATTRIBUTES)
+                .share_mode(FILE_SHARE_READ)
+                .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+                .open(&path)
+                .map_err(|error| error.to_string())?;
+            let info = handle_file_info(&file)?;
+            if file_identity(&file)? != staged.identity
+                || info.nNumberOfLinks != 1
+                || info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
+                || !matches_record(&path, staged)?
+            {
+                return Err(recovery(
+                    "An interrupted private config stage changed; it was preserved.",
+                    &paths,
+                ));
+            }
+            // A kill immediately after disposal can precede the stage's READONLY copy.
+            file.set_permissions(
+                archive
+                    .metadata()
+                    .map_err(|error| error.to_string())?
+                    .permissions(),
+            )
+            .map_err(|error| error.to_string())?;
+        }
+        staged.publish(&path, &original)?;
+        return reconcile_journal(home, journal);
     }
     if !occupied && claimed {
         // Restored bytes must require a fresh choice even when an old snapshot could authorize healing.
@@ -616,6 +721,25 @@ fn reconcile_journal(home: &Path, journal: ClaimJournal) -> Result<(), String> {
             ClaimIntent::Relink | ClaimIntent::IsolateSkills
         ) || archive_valid(home, &journal.transaction)?
         {
+            // Older private repairs used UseAccount; their real staged config also needs its override restored.
+            if journal.transaction.entry == "config.toml"
+                && matches!(
+                    journal.transaction.intent,
+                    ClaimIntent::PrivateConfig | ClaimIntent::UseAccount
+                )
+                && original.is_file()
+                && !replaceable_link(&original)?
+            {
+                write_snapshot(
+                    home,
+                    "config.toml",
+                    &LinkSnapshot {
+                        fingerprint: fingerprint(&original)?,
+                        private_override: true,
+                        invalid: false,
+                    },
+                )?;
+            }
             if claimed {
                 let mut entry = ClaimedEntry {
                     original: original.clone(),

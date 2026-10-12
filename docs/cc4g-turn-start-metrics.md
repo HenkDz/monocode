@@ -11,7 +11,10 @@ when a caller supplies timestamps. With no observed turns it shows Conversation
 not started; a recorded turn without its start stays Elapsed unavailable. An
 observed running turn continues ticking, including a start at zero. A completed
 turn uses its recorded elapsed duration, including zero, rather than extending
-to delayed dispatch settlement. Canonical state, reasons and counters are retained.
+to delayed dispatch settlement. The existing formatter still rounds subsecond
+durations to a visible 1s; the underlying zero start/duration/end remain zero.
+Explicitly selected retry clocks retain their existing override behavior.
+Canonical state, reasons and counters are retained.
 
 No dispatch timestamp is invented or changed. There is no new store, clock,
 scheduler, preparation-stage exception list, dependency or layout. The necessary
@@ -44,13 +47,43 @@ completed duration despite late settlement, persisted legacy unknown starts and
 changed current goal/session identity. Shared line tests preserve zero counters and
 reject unsupported caller clocks. Existing metric/state/header regressions remain.
 
-Corrected focused validation is pending at this source freeze. Full Vitest,
-TypeScript and production build await an explicit sole validation slot under
-VALIDATION-QUEUE.md; CC5C-L currently owns FULL. Browser/current dark/light/narrow
-proof may run only if separately assigned. No native delta requires Cargo.
-Source/server-render checks do not establish pointer, browser or native behavior.
+Corrected source is frozen at 0b3f61b7412147ea095c41e0adb6273cdff4859a.
+The corrected original probe passes 18 / 0 failed / 0 skipped with its original
+expected-safe assertions and baseline witnesses unchanged. Its baseline WorkLog
+uses the corrected shared TaskMetricsLine; exact original base and candidate red
+runs remain separate. Five focused Vitest files pass 69 / 0 failed / 0 skipped,
+including ten new regressions. Both current runs preserve all 1,726 tracked
+non-documentation input hashes before/after. The Workbench browser spec is unchanged.
+
+Full Vitest, TypeScript and production build await an explicit sole validation
+slot under VALIDATION-QUEUE.md; CC5C-L currently owns FULL. Focused tests use
+read-only installed Workbench dependencies through an external resolver adapter;
+no dependency install, symlink or other-tree write occurred. One worker,
+NODE_OPTIONS=--no-experimental-webstorage and synthetic homes were used. Browser/
+current dark/light/narrow proof may run only if separately assigned. There is no
+native delta; no Cargo run is claimed. Source/server-render/happy-dom checks do
+not establish actual pointer, browser or native behavior. Final independent UI
+review and every required full gate remain open; this is VALIDATION-READY only.
+
+## Retained attempts
+
+The first focused attempt completed 31 tests / 0 failed but four files failed
+to load because of an external icon-export resolver error (overall exit 1).
+The next completed 47 passed / 1 failed, with two additional mermaid import/load
+errors. The new zero-display expectation was corrected to the existing formatter
+contract, retaining an exact selector assertion for duration zero. New integration
+fixtures then exposed unsupported memberId (61 / 7), missing required member name
+(61 / 7), and an incomplete PR-cache mock (62 / 6). Each failed run is retained.
+The complete supported delegation envelope and partial house-cache mock now run
+the real production boundaries. The intermediate corrected run passes 68 / 0;
+the final run adds the completed-retry override regression and passes 69 / 0.
+Original tests, safe assertions, deadlines, retries and skips were not relaxed.
 
 Evidence root: C:/Users/nooro/AppData/Local/Temp/monocode-cc/cc4g/evidence/.
 Original red runs: original-ec6005/, original-735455a-corrected-import/,
-integrated-before/. Initial wrapper syntax failure and the baseline import failure
-are retained separately; they produced no completed product test totals.
+integrated-before/. Corrected gates: corrected-final/ and focused-final/, with raw
+logs, JSON and source manifests. source-audit.json records incoming guard/native/
+scope preservation; integrated-app-seam.diff records the authorized App merge seam.
+Initial wrapper syntax, baseline import and audit-adapter failures are retained
+separately; they produced no completed product/audit totals. REPORT.md and
+VALIDATION-READY.md in the round folder record the pending slot and final binding.

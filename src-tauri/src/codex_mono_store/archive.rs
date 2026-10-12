@@ -132,6 +132,7 @@ fn retain_and_share(
                     file.strip_prefix(&claimed.path)
                         .map_err(|e| e.to_string())?,
                     name == "memories",
+                    false,
                 )
                 .map_err(|e| retain_error(e, &format!("Could not retain {}", file.display())))?;
             }
@@ -232,6 +233,7 @@ pub(super) fn retain_file(
     shared: &Path,
     relative: &Path,
     memory: bool,
+    migration: bool,
 ) -> Result<(), String> {
     let mut parent = shared.to_path_buf();
     #[cfg(windows)]
@@ -282,6 +284,14 @@ pub(super) fn retain_file(
                 &mut original,
                 &expected,
             )?;
+            if migration {
+                return migration_recovery::retain_private(
+                    shared.parent().ok_or("Missing private state owner")?,
+                    source,
+                    &destination,
+                    &preserved,
+                );
+            }
             return Err(transactions::recovery(
                 "Conflicting native state copies were preserved. Keep the private thread and review the source copy before retrying migration.",
                 &[destination, preserved, source.to_path_buf()],

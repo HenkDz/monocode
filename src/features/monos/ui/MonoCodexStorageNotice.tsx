@@ -57,7 +57,7 @@ export function MonoCodexStorageNotice({
   }, [detail]);
 
   const details = error ?? detail;
-  const title = success ? sandbox ? "Codex sandbox choice applied" : "Codex storage repaired" : sandbox ? setupUnavailable ? "Codex elevated sandbox unavailable" : "Codex sandbox needs setup" : recovery ? "Codex recovery files preserved" : conflict ? codexStorageIssueTitle(conflict) : workbench ? "Conversation couldn’t start" : "Codex storage needs repair";
+  const title = success ? sandbox ? "Codex sandbox choice applied" : "Codex storage repaired" : sandbox ? setupUnavailable ? "Codex elevated sandbox unavailable" : "Codex sandbox needs setup" : recovery?.sourceBinding ? "Choose this Mono's Codex source" : recovery ? "Codex recovery files preserved" : conflict ? codexStorageIssueTitle(conflict) : workbench ? "Conversation couldn’t start" : "Codex storage needs repair";
   async function run(action: "repair" | "compare" | "reveal", operation: () => Promise<unknown>) {
     if (busy) return;
     setBusy(action);
@@ -144,6 +144,7 @@ export function MonoCodexStorageNotice({
               {recovery.sourceBinding ? <>
                 <p className="mt-1 break-all">Selected source: {recovery.sourceBinding.resolvedSourceHome}</p>
                 {recovery.sourceBinding.boundSourceHome && <p className="mt-1 break-all">Original source: {recovery.sourceBinding.boundSourceHome}</p>}
+                {recovery.sourceBinding.canSeparate && <p className="mt-1">This starts a new provider conversation in a separate private home. The held prompt and queue stay here; original homes, history and credentials stay in place.</p>}
                 {recovery.sourceBinding.canBind && <p className="mt-1">Confirm only after selecting the account that originally owned these private sessions. Legacy context links alone do not establish that ownership.</p>}
               </> : <p className="mt-1">Review the preserved files in their folder, then refresh this issue.</p>}
               <ul aria-label="Preserved recovery paths" className="mt-1 space-y-1 break-all">
@@ -153,6 +154,8 @@ export function MonoCodexStorageNotice({
           )}
           {!remote && <div className="mt-2 flex flex-wrap items-center gap-2">
             {recovery?.sourceBinding?.canBind && onResolve && <SecondaryButton disabled={!!busy} onClick={() => void run("repair", () => onResolve("bind_selected_source"))}>Confirm selected source as original account</SecondaryButton>}
+            {recovery?.sourceBinding?.canSeparate && onResolve && <SecondaryButton disabled={!!busy} onClick={() => void run("repair", () => onResolve("separate_selected_source"))}>Use a separate Mono home for this source</SecondaryButton>}
+            {recovery?.migration && onResolve && <SecondaryButton disabled={!!busy} onClick={() => void run("repair", () => onResolve("keep_private_history"))}>Keep private history and retry migration</SecondaryButton>}
             {recovery?.metadata && onResolve && (
               <SecondaryButton disabled={!!busy} onClick={() => void run("repair", () => onResolve("preserve_recovery_metadata"))}>
                 Archive incomplete metadata

@@ -117,6 +117,17 @@ it("shows the original-source confirmation only for unbound homes", async () => 
   }
 });
 
+it("offers the separate-source choice with an accurate title and forwards only the selected action", async () => {
+  const sourceBinding = { resolvedSourceHome: "C:/synthetic/selected", boundSourceHome: "C:/synthetic/original", canBind: false, canSeparate: true, sourceIdentity: "1:2" };
+  const detail = `Codex storage needs repair: ${JSON.stringify({ recovery: true, reason: "Choose source", paths: ["C:/synthetic/private"], sourceBinding })}`;
+  const resolve = vi.fn(async () => {});
+  await act(async () => root.render(<MonoCodexStorageNotice detail={detail} onRepair={vi.fn()} onResolve={resolve} />));
+  expect(container.textContent).toContain("Choose this Mono's Codex source");
+  expect(container.textContent).toContain("held prompt and queue stay here");
+  await act(async () => buttonNamed("Use a separate Mono home").click());
+  expect(resolve).toHaveBeenCalledExactlyOnceWith("separate_selected_source");
+});
+
 it("humanizes failed sandbox readiness without printing the blocker JSON", async () => {
   const reason = "Manual setup alone cannot unlock elevated Mono turns";
   const detail = `Codex storage needs repair: ${JSON.stringify({ sandbox: true, reason, setupCommand: "synthetic setup" })}`;

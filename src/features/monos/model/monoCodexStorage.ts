@@ -1,4 +1,4 @@
-import type { Session } from "../../sessions/model/session";
+import type { Session, TurnIntent } from "../../sessions/model/session";
 
 export type CodexStorageConflict = {
   entry: string;
@@ -15,7 +15,7 @@ export type CodexStorageConflict = {
 };
 
 export type CodexStorageResolution = "use_account_version" | "keep_mono_version" |
-  "use_unelevated_sandbox" | "use_mono_full_access" | "preserve_recovery_metadata" | "bind_selected_source";
+  "use_unelevated_sandbox" | "use_mono_full_access" | "preserve_recovery_metadata" | "bind_selected_source" | "separate_selected_source" | "keep_private_history";
 
 export type CodexSandboxBlocker = {
   sandbox: true;
@@ -28,7 +28,8 @@ export type CodexStorageRecoveryConflict = {
   reason: string;
   paths: string[];
   metadata?: { path: string; identity: string; fingerprint: string };
-  sourceBinding?: { resolvedSourceHome: string; boundSourceHome: string | null; canBind: boolean };
+  sourceBinding?: { resolvedSourceHome: string; boundSourceHome: string | null; canBind: boolean; canSeparate?: boolean; sourceIdentity?: string };
+  migration?: { sourcePath: string; monoPath: string; sourceFingerprint: string; monoFingerprint: string; sourceIdentity: string; monoIdentity: string };
 };
 
 export type CodexStorageComparison = {
@@ -55,7 +56,7 @@ export function parseCodexSandboxBlocker(error: unknown): CodexSandboxBlocker | 
 }
 export function codexSandboxRepairSettings(session: Session, isWindows: boolean, networkAccess: boolean) {
   const head = session.queuedMessages?.[0];
-  const intent = head ? head.intent : [...session.blocks].reverse().find(block => block.role === "user")?.intent;
+  const intent = session.codexStorageHeld ? session.codexStorageHeld.intent : head ? head.intent : [...session.blocks].reverse().find(block => block.role === "user")?.intent;
   return {
     sandboxRequired: session.readOnly === true || intent === "plan" || intent === "orchestrate" || session.runtimeMode !== "full-access",
     windowsSandbox: isWindows ? session.windowsSandbox ?? (session.readOnly || session.runtimeMode === "auto" || session.runtimeMode === "auto-accept-edits" ? "unelevated" as const : undefined) : undefined,
@@ -99,6 +100,10 @@ export function parseCodexStorageRecoveryConflict(error: unknown): CodexStorageR
       typeof value.sourceBinding.resolvedSourceHome !== "string" || !value.sourceBinding.resolvedSourceHome ||
       (value.sourceBinding.boundSourceHome !== null && (typeof value.sourceBinding.boundSourceHome !== "string" || !value.sourceBinding.boundSourceHome)) ||
       typeof value.sourceBinding.canBind !== "boolean")) return undefined;
+    if (value.sourceBinding?.canSeparate !== undefined && (typeof value.sourceBinding.canSeparate !== "boolean" ||
+      (value.sourceBinding.canSeparate && typeof value.sourceBinding.sourceIdentity !== "string"))) return undefined;
+    if (value.migration !== undefined && (!value.migration ||
+      !["sourcePath", "monoPath", "sourceFingerprint", "monoFingerprint", "sourceIdentity", "monoIdentity"].every(key => typeof value.migration[key] === "string" && value.migration[key].length > 0))) return undefined;
     return value as CodexStorageRecoveryConflict;
   } catch {
     return undefined;
@@ -120,7 +125,7 @@ export function isCodexStorageError(error: unknown): boolean {
 
 /** Hold the exact submission until repair succeeds, before a Manager turn exists. */
 export class MonoCodexStorageRecovery {
-  private pending = new Map<string, () => unknown>();
+  private pending = new Map<string, { retry: () => unknown; intent?: TurnIntent }>();
   private preparing = new Map<string, Promise<void>>();
   private repairing = new Set<string>();
   private accountRepairs = new Map<string, { promise: Promise<void>; sessionIds: Set<string> }>();
@@ -141,6 +146,11 @@ export class MonoCodexStorageRecovery {
     return this.pending.has(sessionId);
   }
 
+  held(sessionId: string): Session["codexStorageHeld"] {
+    const held = this.pending.get(sessionId);
+    return held ? { intent: held.intent } : undefined;
+  }
+
   async prepare(sessionId: string, preparation: () => Promise<unknown>, submit: () => boolean | Promise<boolean>, failed: (error: unknown) => void): Promise<boolean> {
     if (this.preparing.has(sessionId)) return false;
     let finish!: () => void;
@@ -157,8 +167,8 @@ export class MonoCodexStorageRecovery {
     }
   }
 
-  hold(sessionId: string, retry: () => unknown): void {
-    if (!this.pending.has(sessionId)) this.pending.set(sessionId, retry);
+  hold(sessionId: string, retry: () => unknown, intent?: TurnIntent): void {
+    if (!this.pending.has(sessionId)) this.pending.set(sessionId, { retry, intent });
   }
 
   repairAccount(accountId: string, sessionIds: string[], relink: () => Promise<unknown>, beforeResume?: (sessionId: string) => void): Promise<void> {
@@ -186,13 +196,14 @@ export class MonoCodexStorageRecovery {
     this.repairing.add(sessionId);
     try {
       await relink();
-      const retry = this.pending.get(sessionId);
+      const held = this.pending.get(sessionId);
+      const retry = held?.retry;
       this.pending.delete(sessionId);
       try {
         if (await retry?.() === false)
           throw new Error("The turn could not restart. Its prompt was retained; try Repair again when the conversation is available.");
       } catch (error) {
-        if (retry) this.hold(sessionId, retry);
+        if (held) this.pending.set(sessionId, held);
         throw error;
       }
     } finally {

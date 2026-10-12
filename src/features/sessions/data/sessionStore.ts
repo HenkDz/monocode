@@ -60,6 +60,7 @@ const READ_ONLY_SETTING = "__monocodeReadOnly";
 const EFFORT_SOURCE_SETTING = "__monocodeEffortSource";
 const RUNTIME_MODE_SOURCE_SETTING = "__monocodeRuntimeModeSource";
 const WINDOWS_SANDBOX_SETTING = "__monocodeWindowsSandbox";
+const CODEX_STORAGE_HOME_SETTING = "__monocodeCodexStorageHome";
 const APP_REQUEST_ID = /^[A-Za-z0-9_-]{1,512}$/;
 const LEGACY_MANAGER_DIGEST_ID = /^manager-digest:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -176,6 +177,7 @@ function persistableMeta(
       ...(session.effortSource ? { [EFFORT_SOURCE_SETTING]: session.effortSource } : {}),
       ...(session.runtimeModeSource ? { [RUNTIME_MODE_SOURCE_SETTING]: session.runtimeModeSource } : {}),
       ...(session.windowsSandbox ? { [WINDOWS_SANDBOX_SETTING]: session.windowsSandbox } : {}),
+      ...(session.codexStorageHome ? { [CODEX_STORAGE_HOME_SETTING]: session.codexStorageHome } : {}),
     },
     runtimeMode: session.runtimeMode,
     title: session.title,
@@ -1576,7 +1578,7 @@ function normalizeSummary(summary: SessionSummary): SessionSummary {
 
 function recordToSession(record: SessionRecord): Session {
   const { [READ_ONLY_SETTING]: readOnly, [EFFORT_SOURCE_SETTING]: effortSource,
-    [RUNTIME_MODE_SOURCE_SETTING]: runtimeModeSource, [WINDOWS_SANDBOX_SETTING]: windowsSandbox, ...modelSettings } =
+    [RUNTIME_MODE_SOURCE_SETTING]: runtimeModeSource, [WINDOWS_SANDBOX_SETTING]: windowsSandbox, [CODEX_STORAGE_HOME_SETTING]: codexStorageHome, ...modelSettings } =
     record.modelSettings && typeof record.modelSettings === "object" ? record.modelSettings : {};
   const blocks = Array.isArray(record.blocks)
     ? record.blocks
@@ -1600,6 +1602,7 @@ function recordToSession(record: SessionRecord): Session {
     ...(runtimeModeSource === "role" || runtimeModeSource === "user" ? { runtimeModeSource } : {}),
     ...(windowsSandbox === "elevated" || windowsSandbox === "unelevated" ? { windowsSandbox } : {}),
     ...(readOnly === "true" ? { readOnly: true } : {}),
+    ...(typeof codexStorageHome === "string" && codexStorageHome.length > 0 && codexStorageHome.length <= 4096 ? { codexStorageHome } : {}),
     runtimeMode: asRuntimeMode(record.runtimeMode),
     title: record.title,
     blocks,

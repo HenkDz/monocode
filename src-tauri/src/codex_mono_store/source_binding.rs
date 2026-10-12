@@ -3,6 +3,96 @@ use super::*;
 const BINDING: &str = ".monocode-source.json";
 const LIMIT: u64 = 8192;
 
+pub(super) fn confirm_home(
+    source: &Path,
+    home: &Path,
+    expected_source: &str,
+    expected_identity: &str,
+) -> Result<PathBuf, String> {
+    let source = source.canonicalize().map_err(|e| e.to_string())?;
+    let id = entry_identity(&source)?;
+    if crate::fs::path_to_js(&source) != expected_source
+        || format!("{}:{}", id.0, id.1) != expected_identity
+    {
+        return Err("The selected source changed. Refresh before choosing a separate home.".into());
+    }
+    selected_home(&source, home, true)
+}
+
+pub(super) fn selected_home(source: &Path, home: &Path, confirm: bool) -> Result<PathBuf, String> {
+    if !source.exists() && !confirm {
+        return Ok(home.to_path_buf());
+    }
+    let source = source.canonicalize().map_err(|e| e.to_string())?;
+    let key = serde_json::to_vec(&(source.clone(), entry_identity(&source)?))
+        .map_err(|e| e.to_string())?;
+    let name = format!(
+        "{}-source-{:x}",
+        home.file_name()
+            .and_then(|name| name.to_str())
+            .ok_or("Missing Mono account home")?,
+        Sha256::digest(key)
+    );
+    let selected = home
+        .parent()
+        .ok_or("Missing Mono homes directory")?
+        .join(name);
+    if !confirm {
+        if !selected.join(BINDING).exists() {
+            return Ok(home.to_path_buf());
+        }
+        ensure(&source, &selected, false)?;
+        return Ok(selected);
+    }
+    let mut leases = Vec::new();
+    for base in [home, selected.as_path()] {
+        if !base.exists() {
+            continue;
+        }
+        if replaceable_link(base)? {
+            return Err("Private homes must remain real directories.".into());
+        }
+        let mut contexts = vec![base.to_path_buf()];
+        let root = base.join(".monocode-skill-contexts");
+        if root.exists() {
+            if replaceable_link(&root)? {
+                return Err("Private contexts must remain real directories.".into());
+            }
+            for entry in std::fs::read_dir(&root).map_err(|e| e.to_string())? {
+                let path = entry.map_err(|e| e.to_string())?.path();
+                if path.is_dir() {
+                    if replaceable_link(&path)? {
+                        return Err("Private contexts must remain real directories.".into());
+                    }
+                    contexts.push(path);
+                }
+            }
+        }
+        for context in contexts {
+            if context.join(".monocode-credential-lease.json").exists() {
+                leases.push(credential_lifetime::ContextLease::exclusive(&context)?);
+            }
+        }
+    }
+    ensure(&source, &selected, false)?;
+    Ok(selected)
+}
+
+pub(super) fn check_session_home(
+    source: &Path,
+    home: &Path,
+    expected: Option<&str>,
+) -> Result<(), String> {
+    if expected.is_none_or(|expected| expected == crate::fs::path_to_js(home)) {
+        return Ok(());
+    }
+    let id = entry_identity(source)?;
+    Err(serde_json::json!({"recovery":true,
+        "reason":"This conversation's provider thread belongs to a different private home. Choose this source's separate home to retry as a new provider conversation; the transcript and queue are retained.",
+        "paths":[crate::fs::path_to_js(home), expected],
+        "sourceBinding":{"resolvedSourceHome":crate::fs::path_to_js(source),"boundSourceHome":null,"canBind":false,"canSeparate":true,"sourceIdentity":format!("{}:{}",id.0,id.1)}}).to_string())
+}
+
 pub(super) fn ensure_context(source: &Path, base: &Path, home: &Path) -> Result<(), String> {
     if base.join(BINDING).exists() {
         ensure(source, base, false)?;
@@ -67,7 +157,8 @@ fn issue(home: &Path, source: &Path, bound: Option<&Path>, can_bind: bool, reaso
         "recovery": true, "reason": reason,
         "paths": [crate::fs::path_to_js(home), crate::fs::path_to_js(source)],
         "sourceBinding": {"resolvedSourceHome": crate::fs::path_to_js(source),
-            "boundSourceHome": bound.map(crate::fs::path_to_js), "canBind": can_bind}
+            "boundSourceHome": bound.map(crate::fs::path_to_js), "canBind": can_bind,
+            "canSeparate": bound.is_some(), "sourceIdentity": entry_identity(source).ok().map(|id| format!("{}:{}",id.0,id.1))}
     })
     .to_string()
 }
@@ -110,7 +201,7 @@ pub(super) fn ensure(source: &Path, home: &Path, confirm_legacy: bool) -> Result
             }
             if binding.source_identity != identity || binding.source_home != source {
                 return Err(issue(&home, &source, Some(&binding.source_home), false,
-                    "This private Mono home belongs to another source account. Select its original provider account, or launch with CODEX_HOME pointing to the bound source shown here, then refresh. The private sessions and credentials were left in place."));
+                    "This private Mono home belongs to a different source or an earlier source directory. Choose a separate Mono home for the selected source, or reopen with the original source. Existing private sessions and credentials stay in their original home."));
             }
             return Ok(());
         }

@@ -517,6 +517,10 @@ export type Session = {
   /** Account that failed preparation, even if the project selection changes. */
   codexStorageAccountId?: string;
   codexStoragePreparing?: boolean;
+  /** Authority of the exact in-memory retry, including an ordinary held prompt. */
+  codexStorageHeld?: { intent?: TurnIntent };
+  /** Persisted private home that owns this conversation's provider thread. */
+  codexStorageHome?: string;
   /** Provider accepted the carry; its durable clearing is being retried. In-memory only. */
   rotationWarning?: string;
   /**

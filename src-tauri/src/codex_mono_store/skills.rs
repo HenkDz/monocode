@@ -644,7 +644,7 @@ pub(super) fn prepare_context_files(source: &Path, base: &Path, home: &Path) -> 
         let name = entry.file_name();
         let name = name.to_str().ok_or("Invalid Mono configuration filename")?;
         if let Some(private) = context_private_entry(base, name)? {
-            link_context_private(&private, &home.join(name))?;
+            link_context_private(&private, &home.join(name), &source.join(name))?;
         }
     }
     archive::prepare_memory_state(base, home)?;

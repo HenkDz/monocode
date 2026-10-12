@@ -13,6 +13,7 @@ use tauri::{AppHandle, Manager};
 mod archive;
 mod credential_lifetime;
 mod credential_namespace;
+mod migration_recovery;
 mod sandbox;
 mod sandbox_config;
 mod source_binding;
@@ -30,6 +31,8 @@ use transactions::{ClaimIntent, ClaimJournal};
 mod consistency_tests;
 #[cfg(test)]
 mod crash_tests;
+#[cfg(test)]
+mod recovery_tests;
 #[cfg(test)]
 mod transactions_tests;
 
@@ -254,6 +257,40 @@ fn resolved_locations(
     app: &AppHandle,
     account_id: Option<&str>,
 ) -> Result<(PathBuf, PathBuf, &'static str), String> {
+    let (source, home, kind) = unselected_locations(app, account_id)?;
+    let home = source_binding::selected_home(&source, &home, false)?;
+    Ok((source, home, kind))
+}
+
+#[tauri::command(async)]
+pub fn codex_mono_store_separate_source(
+    app: AppHandle,
+    provider_account_id: Option<String>,
+    source_home: String,
+    source_identity: String,
+) -> Result<String, String> {
+    let (source, home, _) = unselected_locations(&app, provider_account_id.as_deref())?;
+    let _lock = STORAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    source_binding::confirm_home(&source, &home, &source_home, &source_identity)
+        .map(|home| crate::fs::path_to_js(&home))
+        .map_err(storage_error)
+}
+
+#[tauri::command(async)]
+pub fn codex_mono_store_keep_private_history(
+    app: AppHandle,
+    provider_account_id: Option<String>,
+    migration: migration_recovery::MigrationChoice,
+) -> Result<(), String> {
+    let (source, home, _) = locations(&app, provider_account_id.as_deref())?;
+    let _lock = STORAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    migration_recovery::keep(&source, &home, &migration).map_err(storage_error)
+}
+
+fn unselected_locations(
+    app: &AppHandle,
+    account_id: Option<&str>,
+) -> Result<(PathBuf, PathBuf, &'static str), String> {
     let account_id = account_id.unwrap_or("default");
     // Validate the default id as well: it is used as a private directory name.
     if account_id.is_empty()
@@ -408,9 +445,12 @@ pub fn codex_mono_store_prepare(
     sandbox_required: Option<bool>,
     windows_sandbox: Option<String>,
     sandbox_network_access: Option<bool>,
+    expected_mono_home: Option<String>,
 ) -> Result<PreparedStore, String> {
     let (source, home, source_kind) =
         locations(&app, provider_account_id.as_deref()).map_err(storage_error)?;
+    source_binding::check_session_home(&source, &home, expected_mono_home.as_deref())
+        .map_err(storage_error)?;
     prepare_files(&source, &home).map_err(storage_error)?;
     {
         let _lock = STORAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -1336,9 +1376,25 @@ fn archive_file(
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|e| e.to_string())?
         .as_millis();
-    let backup = root.join(format!("{timestamp}-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir(&backup).map_err(|e| e.to_string())?;
+    let backup = if name.starts_with("rollout-")
+        && (name.ends_with(".jsonl") || name.ends_with(".jsonl.zst"))
+    {
+        private_directory(&root, &format!("rollout-{expected}"))?
+    } else {
+        let backup = root.join(format!("{timestamp}-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&backup).map_err(|e| e.to_string())?;
+        backup
+    };
     let saved = backup.join(name);
+    if std::fs::symlink_metadata(&saved).is_ok() {
+        if !replaceable_link(&saved)?
+            && fingerprint(&saved)? == expected
+            && fingerprint_file(original)? == expected
+        {
+            return Ok(saved);
+        }
+        return Err("The retained rollout archive changed; it was preserved. Review recovery files before retrying.".into());
+    }
     // Archives have their own inode even when the original was a shared hardlink or symlink.
     let mut preserved = std::fs::OpenOptions::new()
         .write(true)
@@ -1537,7 +1593,7 @@ fn context_private_entry(base: &Path, name: &str) -> Result<Option<PathBuf>, Str
     }
 }
 
-fn link_context_private(source: &Path, target: &Path) -> Result<(), String> {
+fn link_context_private(source: &Path, target: &Path, account: &Path) -> Result<(), String> {
     if std::fs::symlink_metadata(target).is_ok_and(|m| m.is_file() && !m.file_type().is_symlink())
         && !replaceable_link(target)?
         && target
@@ -1553,6 +1609,9 @@ fn link_context_private(source: &Path, target: &Path) -> Result<(), String> {
         return Ok(());
     }
     if !same_entry(source, target) && std::fs::symlink_metadata(target).is_ok() {
+        if replaceable_link(target)? && same_entry(account, target) {
+            return link_entry_with_account(source, target, Some(account));
+        }
         return Err(transactions::recovery(
             "Existing private context configuration was preserved. Restart with a newly prepared context before changing its configuration.",
             &[target.to_path_buf(), source.to_path_buf()],
@@ -1683,7 +1742,7 @@ fn prepare_files_with_state_locked(
                 }
             }
             if state_home.is_some_and(|base| source == base) {
-                return link_context_private(&selected, &target);
+                return link_context_private(&selected, &target, &entry.path());
             }
             if selected.is_file()
                 && std::fs::symlink_metadata(&target)
@@ -1770,6 +1829,14 @@ fn prepare_files_with_state_locked(
 }
 
 fn link_entry(source: &Path, target: &Path) -> Result<(), String> {
+    link_entry_with_account(source, target, None)
+}
+
+fn link_entry_with_account(
+    source: &Path,
+    target: &Path,
+    account: Option<&Path>,
+) -> Result<(), String> {
     if same_entry(source, target) {
         return Ok(());
     }
@@ -1794,7 +1861,9 @@ fn link_entry(source: &Path, target: &Path) -> Result<(), String> {
             before_claim();
             let mut claimed = ClaimedEntry::new(target, ClaimIntent::Relink, Some(&staged))?;
             let result = (|| {
-                if entry_identity(&claimed.path)? != inspected || !replaceable_link(&claimed.path)?
+                if entry_identity(&claimed.path)? != inspected
+                    || !replaceable_link(&claimed.path)?
+                    || account.is_some_and(|account| !same_entry(account, &claimed.path))
                 {
                     return Err(format!(
                         "Codex storage entry changed; concurrent entry preserved: {}",
@@ -2110,8 +2179,8 @@ fn prepare_keyring_with(
             Err(error) if explicit_keyring || encrypted => return Err(error),
             Err(_) => continue,
         };
-        if private_before != value && private_before.is_some() {
-            if service != "Codex Auth" || !same_account(&private_before, &value) {
+        if service == "Codex Auth" && private_before != value && private_before.is_some() {
+            if !same_account(&private_before, &value) {
                 return Err("The existing private credential differs from this source account; both were preserved. Reconnect the original account before preparing this context.".into());
             }
         }
@@ -2340,6 +2409,7 @@ fn copy_rollouts_with_edges(
             &sessions,
             dest.strip_prefix(&sessions).map_err(|e| e.to_string())?,
             false,
+            true,
         )?;
     }
     let edge_snapshot = edge_snapshot_path(&home, thread_id);

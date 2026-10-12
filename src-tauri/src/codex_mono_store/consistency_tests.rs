@@ -209,7 +209,7 @@ fn repeated_migration_preserves_private_dependency_turns_and_source_identity() {
         .write_all(b"private turn\n")
         .unwrap();
     let continued = std::fs::read(&private).unwrap();
-    let error = copy_rollouts(&source, &home, "c", &[c]).unwrap_err();
+    let error = copy_rollouts(&source, &home, "c", &[c.clone()]).unwrap_err();
     let value: serde_json::Value = serde_json::from_str(&error).unwrap();
     assert_eq!(value["recovery"], true);
     assert_eq!(std::fs::read(&private).unwrap(), continued);
@@ -219,6 +219,36 @@ fn repeated_migration_preserves_private_dependency_turns_and_source_identity() {
         proof
     );
     assert!(home.join(".monocode-migrations/c").exists());
+    let archives = std::fs::read_dir(home.join(".monocode-conflicts"))
+        .unwrap()
+        .count();
+    for _ in 0..2 {
+        assert!(copy_rollouts(&source, &home, "c", &[c.clone()]).is_err());
+    }
+    assert_eq!(
+        std::fs::read_dir(home.join(".monocode-conflicts"))
+            .unwrap()
+            .count(),
+        archives,
+        "Retries must not duplicate the same incoming fork base archive"
+    );
+    let migration = serde_json::from_value(value["migration"].clone()).unwrap();
+    migration_recovery::keep(&source, &home, &migration).unwrap();
+    copy_rollouts(&source, &home, "c", &[c.clone()]).unwrap();
+    copy_rollouts(&source, &home, "c", &[c]).unwrap();
+    assert!(!home.join(".monocode-migrations/c").exists());
+    assert_eq!(std::fs::read(&private).unwrap(), continued);
+    assert_eq!(entry_identity(&private).unwrap(), identity);
+    assert_eq!(
+        (std::fs::read(&b).unwrap(), entry_identity(&b).unwrap()),
+        proof
+    );
+    assert_eq!(
+        std::fs::read_dir(home.join(".monocode-conflicts"))
+            .unwrap()
+            .count(),
+        archives
+    );
     std::fs::remove_dir_all(root).unwrap();
 }
 

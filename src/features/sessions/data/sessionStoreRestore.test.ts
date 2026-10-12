@@ -38,6 +38,20 @@ function codexRecord(): SessionRecord {
 describe("restoring a session whose repair cannot be persisted", () => {
   beforeEach(() => invoke.mockReset());
 
+  it("restores the private source home without forwarding its marker to the provider or changing the queue", async () => {
+    const queuedMessages = [{ id: "q", text: "Exact queued Plan", attachments: [], intent: "plan" }];
+    invoke.mockImplementation(async (command: string) => command === "session_get" ? {
+      ...codexRecord(), blocks: [], providerSessionId: null, queuedMessages,
+      modelSettings: { reasoningEffort: "high", __monocodeCodexStorageHome: "C:/synthetic/separate-mono" },
+    } : null);
+    const session = await getSession("s1");
+    expect(session?.codexStorageHome).toBe("C:/synthetic/separate-mono");
+    expect(session?.providerSessionId).toBeUndefined();
+    expect(session?.queuedMessages).toEqual(queuedMessages);
+    expect(session?.modelSettings).toEqual({ reasoningEffort: "high" });
+    expect(sanitizeSessionForPersist(session!).modelSettings.__monocodeCodexStorageHome).toBe("C:/synthetic/separate-mono");
+  });
+
   it.each(["role", "user"] as const)("restores %s permission ownership and an explicit engine without leaking markers", async runtimeModeSource => {
     invoke.mockImplementation(async (command: string) => command === "session_get" ? {
       ...codexRecord(), blocks: [], runtimeMode: "auto", modelSettings: { reasoningEffort: "high", __monocodeRuntimeModeSource: runtimeModeSource, __monocodeWindowsSandbox: "elevated" },

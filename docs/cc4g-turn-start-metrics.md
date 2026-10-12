@@ -21,6 +21,7 @@ the provider-capacity interruption.
 | Tab-revisit, unchanged current and baseline | Each 4 / 0 across both engines; original assertions/deadlines/retries/skips retained |
 | Supplemental controls | 62 passed / 2 wrong-target failures, retained; original 60 controls all pass |
 | Cold drawers, exact copy, glyph and corrected unknown-clock controls | 10 / 0 across both engines; exit 0 |
+| Precise current-report supplemental replay | 64 / 0 across both engines; 80.94s; exit 0; source identical to the full-tested pin |
 | Fresh comparison matrix | 1,707 checks / 0 failed; 20 layouts; 61 PNGs; 54.81s; exit 0 |
 | Fresh original source / unknown-clock probes with local dependencies | 18 / 0 and 2 / 0; unchanged assertions; exit 0 |
 
@@ -47,7 +48,19 @@ selection assertion; the old padding failure is retained. Two new settled-clock
 controls initially selected the known Current blocked-preparation row. Their
 62/2 run remains failed. The corrected follow-up selects History and verifies
 Done, then retains the same Elapsed unavailable/no did-not-start assertions.
-Running-tool and Done controls pass in both engines without a production change.
+That History replay establishes missing historical timing, not the precise
+current-report case. Root required a separate current-report witness. A disclosed
+external data/import adapter now gives task `current` exactly one selected
+`dispatch-current`: completed/settled, retained current report, no error, no
+retained turn start/metrics/duration, matching worker and accepted dispatch IDs.
+The actual selector reports turns=0, elapsedMs=0, partial=true. The replay verifies
+these facts, opens that exact report, and retains Elapsed unavailable/no did-not-
+start assertions with Done. It also verifies the actual current Running tool row.
+All original 60 controls plus these four exact current controls pass (64/0).
+Repository fixture, product source, safe assertions and timing limits are unchanged.
+The external adapter diff, provenance, facts, current PNGs and receipts are in
+cc4g/evidence/full-a-current-report, frozen at documentation pin9b1c380 with all
+1,730 application inputs identical to the full-tested8e8f8b7 source.
 
 Real drawer wrappers now measure x970/y0/w470/h1000 at 1440px, translate=none,
 with visible hit-tested copy/fact targets. Glyph controls select `files` and copy
@@ -57,7 +70,8 @@ another Manager's prompt; originals remain protected by run identity.
 
 Inspected all 20 current dark/light 1440/1100 comparison PNGs, the saved-worker
 frame, all 16 narrow state PNGs, and representative drawer/glyph/focus/unknown-
-clock frames: 45 inspected images with hashes in png-inspection.json. No new
+clock frames: 45 inspected images with hashes in png-inspection.json, plus both
+precise current-report PNGs (47 total). No new
 layout defect was found. The capture-only supported empty checkpoint bridge is
 unchanged; live database/provider, OS clipboard, native foreground and screen-
 reader acceptance are not claimed.
@@ -65,7 +79,10 @@ reader acceptance are not claimed.
 Evidence: cc4g/evidence/full-a-initial/, including frozen-source-manifest.json,
 all *-receipt.json/log/results, baseline source/import/dependency artifacts,
 supplement/ and followups/, visual/screenshots/index.md, png-inspection.json,
-validation-summary.json and final cleanup/gate manifests. Source-stage failures,
+validation-summary.json and final cleanup/gate manifests. The precise64/0 replay
+and its two new inspected current-report frames are in full-a-current-report/.
+Root explicitly released slot A to RO afterward; no further gates were run.
+Source-stage failures,
 all old evidence and every FULL attempt remain retained. No new incoming merge,
 native job, app preview, real profile/model turn, fan-out or push occurred.
 

@@ -9,7 +9,10 @@ import { cardSession } from "../model/monoCards";
 import type { Mono } from "../model/mono";
 import { MemberWorkLog } from "./MemberWorkLog";
 
-vi.mock("../../source-control/hooks/usePrStatus", () => ({ usePrStatusCache: () => new Map() }));
+vi.mock("../../source-control/hooks/usePrStatus", async original => ({
+  ...await original<typeof import("../../source-control/hooks/usePrStatus")>(),
+  usePrStatusCache: () => new Map(),
+}));
 vi.mock("../model/monoCards", () => ({ cardSession: vi.fn(), openCardSession: vi.fn(), subscribeCardSessions: () => () => {} }));
 
 const member = { id: "member", role: "member", projects: ["/repo"] } as Mono;

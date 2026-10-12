@@ -55,6 +55,30 @@ impl RecordedEntry {
         #[cfg(unix)]
         rename_no_replace(path, target)
     }
+
+    #[cfg(windows)]
+    pub(super) fn pin_attributes(&self, path: &Path) -> Result<std::fs::File, String> {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::{
+            Foundation::GENERIC_READ,
+            Storage::FileSystem::{
+                DELETE, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_WRITE_ATTRIBUTES,
+            },
+        };
+        let file = std::fs::OpenOptions::new()
+            .access_mode(GENERIC_READ | DELETE | FILE_WRITE_ATTRIBUTES)
+            .share_mode(FILE_SHARE_READ)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(path)
+            .map_err(|e| e.to_string())?;
+        if !matches_record(path, self)? {
+            return Err(recovery(
+                "A staged recovery entry changed; it was preserved.",
+                &[path.into()],
+            ));
+        }
+        Ok(file)
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -284,7 +308,7 @@ impl ClaimJournal {
                     &[stage_path],
                 ));
             }
-            stage_on_close(&file, true)?;
+            stage_delete_pending(&file, true)?;
             Some(file)
         } else {
             None
@@ -292,7 +316,7 @@ impl ClaimJournal {
         let record = publish_journal(&path, &transaction)?;
         #[cfg(windows)]
         if let Some(file) = stage_file {
-            stage_on_close(&file, false)?;
+            stage_delete_pending(&file, false)?;
         }
         let journal = Self {
             path,
@@ -432,6 +456,40 @@ fn stage_on_close(file: &std::fs::File, delete: bool) -> Result<(), String> {
             } else {
                 0
             },
+    };
+    if unsafe {
+        SetFileInformationByHandle(
+            file.as_raw_handle() as _,
+            FileDispositionInfoEx,
+            (&info as *const FILE_DISPOSITION_INFO_EX).cast(),
+            std::mem::size_of_val(&info) as u32,
+        )
+    } == 0
+    {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn stage_delete_pending(file: &std::fs::File, delete: bool) -> Result<(), String> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FileDispositionInfoEx, SetFileInformationByHandle, FILE_ATTRIBUTE_READONLY,
+        FILE_DISPOSITION_FLAG_DELETE, FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE,
+        FILE_DISPOSITION_INFO_EX,
+    };
+    let info = FILE_DISPOSITION_INFO_EX {
+        Flags: if delete {
+            FILE_DISPOSITION_FLAG_DELETE
+                | if handle_file_info(file)?.dwFileAttributes & FILE_ATTRIBUTE_READONLY != 0 {
+                    FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE
+                } else {
+                    0
+                }
+        } else {
+            0
+        },
     };
     if unsafe {
         SetFileInformationByHandle(

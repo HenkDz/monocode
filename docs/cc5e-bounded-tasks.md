@@ -304,11 +304,18 @@ an issued request survive acceptance; unknown nested user request fields refuse
 dispatch with saved bytes unchanged. Rejected direct follow-ups preserve the
 original active turn, tool and canonical live state.
 
-Connected source suites pass 686 tests across 19 files. CC5EJ-R's five red safety
+Connected source suites pass 693 tests across 19 files. CC5EJ-R's five red safety
 cases become 37/37 lifecycle passes; original nine and combined binding nine pass.
-Historical 129 external / 627 source tests and every assertion runner pass.
+Historical 129 external / 639 source tests and every assertion runner pass; all
+prior 627 source cases remain, with 12 incoming provenance cases added.
 These overlapping counts are source evidence, not live provider acceptance.
-Full web gates await the coordinator's heavy slot; no source-stage SHIP is claimed.
+After authorized integration of exact nour c23762b, final input ba792d5 passes
+complete one-worker Vitest: 8,221 passed / 13 skipped / zero failed, with 625
+passed / 2 skipped files. TypeScript and production build pass. The raw merged
+8,220/1/13 and binding-only 25/1 failures remain; the coordinator-approved fixture
+adds generation bindings and the exact followUp marker without weakening safety.
+All 1,712 non-documentation hashes remain identical through validation and the
+final docs update. Builder completion does not grant SHIP or replace final review.
 Dispatch semantics, caller inventory, fixture adaptations and remaining renderer
 transaction/durability limits: `docs/cc5ek-dispatch-authority.md` and
 `C:/Users/nooro/AppData/Local/Temp/monocode-cc/cc5ek/REPORT.md`.

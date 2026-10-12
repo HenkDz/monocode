@@ -8,7 +8,7 @@ Only `src/features/monos/model/monoGoalRouting.ts` changes application behavior.
 
 The deliberate conservative change is that a relative path consisting only of scope labels, such as `projects/repos`, requires Grand. An explicitly qualified `./projects/repos` remains a path. No quantifier list, model/classifier, filesystem lookup, dependency, schema or App/writer/ledger change is added. Registered-name conflicts still inspect the entire original text. Raw ASCII, markup, roster availability, user authority, receipts and retry identities use their existing rules. Accepted older slash-scope work stays with its original Manager; origin-only work is retained without reassignment.
 
-The tracked regression additions cover 23 joined/slash/backslash/spacing/compound forms, 16 genuine path controls and three additional accepted-receipt/origin recovery cases. The original twelve committed paths, eight independent paths and twelve connected selected-route controls are separate inventories. The last inventory contains nine path cases and three healthy ASCII requests.
+The tracked regression additions cover 35 joined/slash/backslash/spacing/compound forms, 20 genuine path controls and three additional accepted-receipt/origin recovery cases. Compound spacing such as `code /base` is joined only for scope analysis; the original Auto path tokens are unchanged. Rooted/dotted paths containing the same whitespace retain their path metadata. The original twelve committed paths, eight independent paths and twelve connected selected-route controls are separate inventories. The last inventory contains nine path cases and three healthy ASCII requests.
 
 Rejected alternatives: banning selected paths, matching a quantifier whitelist or the four reported phrases, filesystem containment, another parser/service, changing historical safe assertions, reassigning accepted requests and expanding into inherited receipt fairness/history performance work.
 
@@ -24,6 +24,8 @@ Evidence root: `C:/Users/nooro/AppData/Local/Temp/monocode-cc/cc5cl/evidence/`. 
 | Initial extended resolver check | 282 / 1 / 0; split compound exposed | `runs/corrected-routing-unit.*` |
 | Corrected resolver check | 283 / 0 / 0 | `runs/corrected-routing-unit-v2.*` |
 | Expanded exact App/writer/queue boundary | 150 / 0 / 0 | `runs/corrected-slash-expanded.*` |
+| Additional compound-spacing probe before correction | 292 / 7 / 0 | `runs/compound-spacing-before-fix.*` |
+| Corrected compound-spacing resolver | 299 / 0 / 0 | `runs/compound-spacing-corrected.*` |
 
 Current source is being frozen for historical routing replay and the serialized validation queue. Exact final-source results and commit hashes are appended after those checks. Full Vitest, TypeScript/build and required focused browser cases remain pending an explicit sole-slot grant; native source is unchanged. Source completion is not SHIP; corrected-head independent review remains required.
 

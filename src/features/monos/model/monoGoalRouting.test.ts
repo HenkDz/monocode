@@ -98,7 +98,9 @@ describe("exact project routes", () => {
     "code/base", "work/space", "code/base/work/space", "PROJECTS/REPOS,", "projects//repos",
     "projects / repos", "projects/ repos", "projects /repos", "code base/work space",
     "code**base**/work**space**", "projects\\repos", "code-base\\work-space", "code\\base",
-    "projects \\ repos", "projects\\ repos", "projects \\repos"])(
+    "projects \\ repos", "projects\\ repos", "projects \\repos", "code /base", "work /space",
+    "code / base", "code/ base", "work / space", "work/ space", "code\\ base", "code \\base",
+    "work \\space", "code \t/base", "work\r\n/space", "code /base/work /space"])(
     "keeps slash/backslash scope alternatives at Grand: %s", scope => {
       for (const ctx of [context(), monoGoalRoutingContext(owner, roster, projects, ["C:/code/Beacon"])])
         for (const override of ["auto", "manager"] as const)
@@ -108,7 +110,8 @@ describe("exact project routes", () => {
   it.each(["C:/projects/repos", "C:\\workspaces\\codebases", "/projects/repos", "\\\\projects\\repos",
     "./projects/repos", "../workspaces/codebases", ".\\codebase\\workspace", "~/projects/repos",
     "projects/repo.ts", "projects/repo.config", "projects/.repos", "projects/../repos",
-    "workspace/settings", "codebase/atlas", "project/index.ts", "code/base.ts"])(
+    "workspace/settings", "codebase/atlas", "project/index.ts", "code/base.ts",
+    "C:/code /base", "/code /base", "./code /base", "src/code /base.ts"])(
     "preserves genuine selected path metadata: %s", path => {
       expect(decide(`Fix Atlas ${path}`)).toMatchObject({ kind: "grand" });
       expect(decide(`Fix Atlas ${path}`, { choice: { mode: "goal", override: "manager", projectId: "c:/code/atlas" } }))

@@ -106,7 +106,8 @@ export function decideMonoGoalRoute(input: {
     return grand("Contains non-English or special characters, so Grand Orch will route it.");
   const text = rawText.trim();
   if (!text || text.length > 8000) return grand("Goals must contain 1–8,000 characters");
-  const tokens = text.match(/[^\s"'`()\[\]{}<>]+/g) ?? [];
+  const tokenPattern = /[^\s"'`()\[\]{}<>]+/g;
+  const tokens = text.match(tokenPattern) ?? [];
   const pathMetadata = /^[a-z]:|^\.{1,2}$|^\.[\p{L}\p{N}_-]|[\p{L}\p{N}_-]\.[\p{L}\p{N}_-]/iu;
   const plainTokens = tokens.filter(token =>
     !/[/\\]/.test(token) && !pathMetadata.test(token));
@@ -116,7 +117,9 @@ export function decideMonoGoalRoute(input: {
   // Scope wording requires Grand even for benign singular phrases.
   const scopeNouns = /\b(project|repo|work\s*space|code\s*base)[a-z]*/gi;
   // Bare scope alternatives must not disappear as selected-project paths.
-  const scopeText = tokens.filter(token => !pathMetadata.test(token) &&
+  const scopeTokens = text.replace(/\b(code)\s+(?=[/\\]base)|\b(work)\s+(?=[/\\]space)/gi, "$1$2")
+    .match(tokenPattern) ?? [];
+  const scopeText = scopeTokens.filter(token => !pathMetadata.test(token) &&
     (!/[/\\]/.test(token) || !/^[/\\]|(?:^|[/\\])[.~]/.test(token) &&
       (token.split(/[/\\]/).every(part => part.replace(/[^a-z]/gi, " ").match(scopeNouns)) ||
         !token.replace(/[^a-z]/gi, " ").replace(scopeNouns, "")

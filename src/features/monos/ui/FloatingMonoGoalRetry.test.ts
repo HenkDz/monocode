@@ -29,6 +29,7 @@ const initial: MonoGoalRoutingContext = { ownerId: "grand", projects: [{
 let container: HTMLDivElement;
 let root: Root;
 beforeEach(() => {
+  vi.stubEnv("VITE_MONO_DIRECT_PROJECT_ROUTING", "true");
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
   clearComposerDraft("floating:cc5cg-ack");
@@ -38,6 +39,7 @@ beforeEach(() => {
   root = createRoot(container);
 });
 afterEach(() => {
+  vi.unstubAllEnvs();
   act(() => root.unmount());
   container.remove();
   clearComposerDraft("floating:cc5cg-ack");

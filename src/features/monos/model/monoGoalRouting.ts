@@ -37,6 +37,15 @@ export type MonoGoalRouteDecision =
   | { kind: "grand"; reason: string }
   | { kind: "manager"; project: MonoGoalProject; reason: string };
 
+export function directProjectRoutingEnabled(): boolean {
+  return import.meta.env.VITE_MONO_DIRECT_PROJECT_ROUTING === "true";
+}
+
+export function decideNewMonoGoalRoute(input: Parameters<typeof decideMonoGoalRoute>[0]): MonoGoalRouteDecision {
+  return directProjectRoutingEnabled() ? decideMonoGoalRoute(input)
+    : { kind: "grand", reason: "Grand Orchestrator routes new goals" };
+}
+
 /** Include unavailable identities so a second project mention cannot disappear. */
 export function monoGoalRoutingContext(
   owner: Mono,
@@ -253,6 +262,14 @@ export async function submitMonoGoal(input: {
       if (!host.ledger.deliveryPending(ownerId, submission.requestId)) throw error;
     }
     return accepted(previous);
+  }
+  // New goals always use Grand while direct routing is disabled. Existing
+  // Manager ledger receipts are handled above and keep their original owner.
+  // Only explicit recovery needs to look for an uncertain pre-ledger origin.
+  if (!directProjectRoutingEnabled()) {
+    if (!input.recovery) return host.grand();
+    if (!await host.hasOrigin(submission))
+      throw Error("Goal route unavailable; retained the original request");
   }
   const decide = () => decideMonoGoalRoute({ text, attachmentCount: input.attachmentCount,
     choice: submission.choice, context: host.context() });

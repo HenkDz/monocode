@@ -17,6 +17,7 @@ const context: MonoGoalRoutingContext = {
 let container: HTMLDivElement;
 let root: Root;
 beforeEach(() => {
+  vi.stubEnv("VITE_MONO_DIRECT_PROJECT_ROUTING", "true");
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
   container = document.createElement("div");
@@ -24,6 +25,7 @@ beforeEach(() => {
   root = createRoot(container);
 });
 afterEach(() => {
+  vi.unstubAllEnvs();
   act(() => root.unmount());
   container.remove();
   vi.unstubAllGlobals();
@@ -84,6 +86,21 @@ it("defaults to Chat, uses the Grand callback and resets accepted goals to Chat"
   expect(field().value).toBe("");
   enter(); await act(async () => send());
   expect(button("Chat").getAttribute("aria-pressed")).toBe("true");
+});
+
+it("sends a stale explicit Manager selection to Grand with no routing UI or Manager writes when disabled", async () => {
+  const f = fixture(); f.render(); enter("Fix the checkout");
+  await override("Atlas Manager");
+  enter("Fix Atlas and every registered project", false);
+  vi.stubEnv("VITE_MONO_DIRECT_PROJECT_ROUTING", "false");
+  f.render();
+  expect(container.querySelector('[data-mono-goal-route] [role="status"]')).toBeNull();
+  expect(container.querySelector('[aria-label="Goal route: Auto route"]')).toBeNull();
+  await act(async () => send());
+  expect(f.host.grand).toHaveBeenCalledOnce();
+  expect(f.host.goals.deliver).not.toHaveBeenCalled();
+  expect(f.host.ledger.goals("grand")).toHaveLength(0);
+  expect(f.onSubmit.mock.calls[0][1]).not.toHaveProperty("projectId");
 });
 
 it("routes an explicit exact project goal once through CC5-C with zero Grand submissions", async () => {

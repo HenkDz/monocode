@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
@@ -12,6 +12,9 @@ import {
   appendMonoGoalCard, appendMonoGoalOrigin, appendMonoGoalPendingCard, decideMonoGoalRoute, monoGoalRoutingContext,
   submitMonoGoal, type MonoGoalProject, type MonoGoalRoutingContext, type MonoGoalSubmission,
 } from "./monoGoalRouting";
+
+beforeEach(() => vi.stubEnv("VITE_MONO_DIRECT_PROJECT_ROUTING", "true"));
+afterEach(() => vi.unstubAllEnvs());
 
 const owner = { id: "grand", role: "orchestrator", projects: ["C:/code/Atlas", "C:/code/Beacon"] } as Mono;
 const roster = [owner,
@@ -311,6 +314,42 @@ function setup() {
 }
 
 describe("shared user submission boundary", () => {
+  it("sends a fresh default-off Grand goal without reading retained origins", async () => {
+    const f = setup();
+    vi.stubEnv("VITE_MONO_DIRECT_PROJECT_ROUTING", "false");
+    f.input.text = "Fix Atlas and every registered project at C:/outside/repo/index.ts";
+    f.host.hasOrigin = vi.fn(() => { throw Error("history read should not happen"); });
+    expect(await submitMonoGoal(f.input, f.host)).toBe(true);
+    expect(f.host.grand).toHaveBeenCalledOnce();
+    expect(f.host.hasOrigin).not.toHaveBeenCalled();
+    expect(f.host.resolve).not.toHaveBeenCalled();
+    expect(f.deliver).not.toHaveBeenCalled();
+    expect(f.host.ledger.goals("grand")).toHaveLength(0);
+  });
+  it("keeps an accepted Manager receipt on its original owner when routing is disabled", async () => {
+    const f = setup();
+    await submitMonoGoal(f.input, f.host);
+    vi.stubEnv("VITE_MONO_DIRECT_PROJECT_ROUTING", "false");
+    f.host.hasOrigin = vi.fn(() => { throw Error("accepted receipt must not need an origin lookup"); });
+    expect(await submitMonoGoal(f.input, f.host)).toBe(true);
+    expect(f.host.grand).not.toHaveBeenCalled();
+    expect(f.host.hasOrigin).not.toHaveBeenCalled();
+    expect(f.deliver).toHaveBeenCalledOnce();
+    expect(f.host.ledger.goals("grand")).toMatchObject([{ projectId: f.project.id, route: { managerMonoId: "atlas-manager" } }]);
+  });
+  it("checks the retained origin only for explicit recovery with routing disabled", async () => {
+    const f = setup();
+    await f.host.persistOrigin(f.input.submission, f.input.text);
+    f.host.ledger = new MonoManagerGoals(f.storage);
+    vi.stubEnv("VITE_MONO_DIRECT_PROJECT_ROUTING", "false");
+    const hasOrigin = vi.fn(f.host.hasOrigin);
+    f.host.hasOrigin = hasOrigin;
+    await expect(submitMonoGoal({ ...f.input, recovery: true }, f.host)).resolves.toBe(true);
+    expect(hasOrigin).toHaveBeenCalledOnce();
+    expect(f.host.grand).not.toHaveBeenCalled();
+    expect(f.deliver).toHaveBeenCalledOnce();
+    expect(f.host.ledger.goals("grand")).toMatchObject([{ projectId: f.project.id, route: { managerMonoId: "atlas-manager" } }]);
+  });
   it.each((["auto", "manager"] as const).flatMap(override =>
     [projectSetGoals[0], "Fix Atlas and all projects/repos"].map(text => ({ override, text }))))(
     "retains an older accepted project-set receipt on unchanged $override retry: $text", async ({ override, text }) => {

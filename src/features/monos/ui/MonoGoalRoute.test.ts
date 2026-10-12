@@ -19,6 +19,7 @@ const context = {
 let container: HTMLDivElement;
 let root: Root;
 beforeEach(() => {
+  vi.stubEnv("VITE_MONO_DIRECT_PROJECT_ROUTING", "true");
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal(
     "ResizeObserver",
@@ -32,6 +33,7 @@ beforeEach(() => {
   root = createRoot(container);
 });
 afterEach(() => {
+  vi.unstubAllEnvs();
   act(() => root.unmount());
   container.remove();
   vi.unstubAllGlobals();
@@ -70,6 +72,14 @@ it("keeps chat explicit and shows the selected Manager and exact-match reason in
   expect(container.querySelector('[role="status"]')?.textContent).toContain(
     "Exact project name",
   );
+});
+
+it("hides project selection and prediction when direct routing is not opted in", () => {
+  vi.stubEnv("VITE_MONO_DIRECT_PROJECT_ROUTING", "false");
+  render({ choice: { mode: "goal", override: "manager", projectId: "dzdistro" } });
+  expect(container.querySelector('[aria-label="Goal route: Auto route"]')).toBeNull();
+  expect(container.querySelector('[role="status"]')).toBeNull();
+  expect(container.textContent).not.toContain("DZDistro Manager");
 });
 
 it("previews the same trimmed goal text that Send submits", () => {

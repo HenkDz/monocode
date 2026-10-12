@@ -6,7 +6,8 @@ import { MonoComposer } from "./MonoComposer";
 import { ContextMeter } from "../../sessions/ui/ContextMeter";
 import { clearComposerDraft } from "../../sessions/model/draftCache";
 import { saveComposerAutocorrect } from "../../settings/model/displayPrefs";
-import type { MonoGoalRoutingContext, MonoGoalSubmission } from "../model/monoGoalRouting";
+import { MonoManagerGoals, type ManagerGoalHost } from "../model/monoManagerGoals";
+import { submitMonoGoal, type MonoGoalRoutingContext, type MonoGoalSubmission } from "../model/monoGoalRouting";
 
 const { pick } = vi.hoisted(() => ({ pick: vi.fn() }));
 vi.mock("../../sessions/model/attachments", async (original) => ({
@@ -40,6 +41,7 @@ const file = {
   path: "/tmp/note.txt",
 };
 beforeEach(() => {
+  vi.stubEnv("VITE_MONO_DIRECT_PROJECT_ROUTING", "true");
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal(
     "ResizeObserver",
@@ -55,6 +57,7 @@ beforeEach(() => {
   root = createRoot(container);
 });
 afterEach(() => {
+  vi.unstubAllEnvs();
   act(() => root.unmount());
   container.remove();
   clearComposerDraft("chat");
@@ -107,6 +110,45 @@ it("keeps ordinary chat on the two-argument submit path even when goal routing i
   type("What is DZDistro doing?");
   act(submit);
   expect(onSubmit).toHaveBeenCalledExactlyOnceWith("What is DZDistro doing?", []);
+});
+
+it("submits a default-off new goal to the Grand callback without route predictions", () => {
+  vi.stubEnv("VITE_MONO_DIRECT_PROJECT_ROUTING", "false");
+  const onSubmit = vi.fn(() => true);
+  render({ goalRouting, onSubmit });
+  type("Fix DZDistro and every registered project");
+  newGoal();
+  expect(container.querySelector('[data-mono-goal-route] [role="status"]')).toBeNull();
+  expect(container.querySelector('[aria-label="Goal route: Auto route"]')).toBeNull();
+  act(submit);
+  expect(onSubmit.mock.calls[0][2]).not.toHaveProperty("projectId");
+});
+
+it("routes a stale explicit embedded selection through Grand without Manager writes", async () => {
+  const ledger = new MonoManagerGoals({ load: async () => null, save: async () => {} });
+  const project = { id: "dzdistro", name: "DZDistro", folder: "C:/projects/dzdistro", managerId: "engine",
+    managerMonoId: "manager", managerExists: true, running: 0, needsDecision: 0, ready: 0, blocked: [], goals: [] };
+  const goals: ManagerGoalHost = { mayDelegate: () => true, projects: async () => [project], deliver: vi.fn(async () => {}),
+    status: async () => ({}), ready: async () => [] };
+  const grand = vi.fn(() => true);
+  const onSubmit = vi.fn((text: string, files: unknown[], submission?: MonoGoalSubmission) => submitMonoGoal({
+    text, attachmentCount: files.length, origin: "user", submission: submission!,
+  }, { context: () => ({ ...goalRouting, ownerId: "grand" }), resolve: async () => project, ledger, goals,
+    persistOrigin: async () => {}, hasOrigin: () => false, persistPending: async () => {}, persistCard: async () => {}, grand }));
+  render({ goalRouting, onSubmit });
+  type("Fix the checkout"); newGoal();
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Goal route: Auto route"]')!.click());
+  await act(async () => [...document.querySelectorAll<HTMLButtonElement>('[role="option"]')]
+    .find(button => button.textContent?.trim() === "DZDistro Manager")!.click());
+  type("Fix DZDistro C:/outside/repo/index.ts");
+  vi.stubEnv("VITE_MONO_DIRECT_PROJECT_ROUTING", "false");
+  render({ goalRouting, onSubmit });
+  expect(container.querySelector('[role="status"]')).toBeNull();
+  act(submit);
+  await act(async () => {});
+  expect(grand).toHaveBeenCalledOnce();
+  expect(goals.deliver).not.toHaveBeenCalled();
+  expect(ledger.goals("grand")).toHaveLength(0);
 });
 
 it("captures the displayed route with stable IDs on retry and fresh IDs after acceptance", () => {

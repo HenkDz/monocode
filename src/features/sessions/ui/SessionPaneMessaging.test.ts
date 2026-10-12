@@ -149,6 +149,7 @@ beforeEach(() => {
   root = createRoot(container);
 });
 afterEach(() => {
+  vi.unstubAllEnvs();
   act(() => root.unmount());
   container.remove();
   clearComposerDraft("chat");
@@ -215,6 +216,7 @@ function field() {
 }
 
 it("passes a new-goal route from the embedded composer to the shared submit boundary", async () => {
+  vi.stubEnv("VITE_MONO_DIRECT_PROJECT_ROUTING", "true");
   const pane = props();
   const onSubmitGoal = vi.fn(async () => true);
   pane.onSubmitGoal = onSubmitGoal;

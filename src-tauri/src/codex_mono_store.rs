@@ -111,6 +111,8 @@ pub struct PreparedStore {
     source_kind: &'static str,
     share_hooks: bool,
     skills_config: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    private_config: Option<serde_json::Value>,
     skill_args: Vec<String>,
     skills_context_id: String,
     skill_home: String,
@@ -347,6 +349,7 @@ pub fn codex_mono_store_prepare(
         source_kind,
         share_hooks: hooks_shared(&home)?,
         skills_config,
+        private_config: sandbox_config::private_overrides(&source, &home).map_err(storage_error)?,
         skill_args,
         skills_context_id,
         skill_home: crate::fs::path_to_js(&skill_home),
@@ -956,9 +959,20 @@ impl ClaimedEntry {
 fn discard_handle(file: &std::fs::File) -> Result<(), String> {
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Storage::FileSystem::{
-        FileDispositionInfoEx, SetFileInformationByHandle, FILE_DISPOSITION_INFO_EX,
+        FileDispositionInfoEx, SetFileInformationByHandle, FILE_ATTRIBUTE_READONLY,
+        FILE_DISPOSITION_FLAG_DELETE, FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE,
+        FILE_DISPOSITION_FLAG_POSIX_SEMANTICS, FILE_DISPOSITION_INFO_EX,
     };
-    let info = FILE_DISPOSITION_INFO_EX { Flags: 3 }; // DELETE | POSIX_SEMANTICS
+    // Unlink the held entry without changing attributes on a shared source inode.
+    let info = FILE_DISPOSITION_INFO_EX {
+        Flags: FILE_DISPOSITION_FLAG_DELETE
+            | FILE_DISPOSITION_FLAG_POSIX_SEMANTICS
+            | if handle_file_info(file)?.dwFileAttributes & FILE_ATTRIBUTE_READONLY != 0 {
+                FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE
+            } else {
+                0
+            },
+    };
     if unsafe {
         SetFileInformationByHandle(
             file.as_raw_handle() as _,

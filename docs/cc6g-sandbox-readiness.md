@@ -27,11 +27,15 @@ existing filesystem permission policies.
   explicitly switch the account to unelevated with preserved configuration
   backups, or choose full access for the affected Mono. Read-only workers
   retain their restrictions, and Plan still requires sandbox readiness.
-- The explicit account switch pins both real configuration files against
-  Windows writes, renames and deletion, saves exact backups before updating
-  either file, and writes through the held handles. Comments and other settings
-  remain intact. A partial write or crash can require restoring the preserved
-  backup; failed actions resume no held turns.
+- Historical CC6G behavior: the explicit account switch pinned and updated
+  both source and private configuration files through held Windows handles.
+  CC6I superseded that writer. Current repair changes only the account's private
+  Mono config and saves an independent, exact private backup. The source Codex
+  config bytes and attributes remain unchanged, including when the private
+  config is a read-only source hardlink. CC6J completes owned-claim cleanup and
+  journal recovery without clearing shared attributes. Comments and other
+  settings remain intact; failed actions resume no held turns. See
+  [CC6I](cc6i-permission-fixes.md) and [CC6J](cc6j-readonly-repair.md).
 - On Windows, the OS deletes hook staging allocations if the process dies
   before the journal owns recovery. Kills before and after journal creation
   are followed by two successful restarts and nested cleanup checks.
@@ -107,6 +111,9 @@ The retained source references are
 `elevated_impl.rs:218-245`. The independent original observations are under
 `../cc6fr/evidence/sandbox/`; DX1's diagnosis is in `../dx1/REPORT.md`.
 
+These validation numbers and evidence describe the historical CC6G writer;
+they do not validate the current Mono-private-only repair. Current repair never
+updates the source/base account config or creates a source-directory backup.
 No merge, push, deployment, automatic setup, account reset or automatic
 access broadening was performed. Unix pre-journal SIGKILL cleanup and
 operating-system power loss are unverified.

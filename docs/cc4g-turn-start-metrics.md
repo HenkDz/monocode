@@ -1,5 +1,70 @@
 # CC4G: assignment elapsed requires a recorded conversation turn
 
+## Current CC7UR corrections: source ready, FULL pending
+
+The resumed branch merged exact validated nour
+ec1250de4f0abc0af781485ed581aa0cc81bff7d, conflict-free, as
+0410b4bf7fd86e623b1ffc33893a7cf447186f5a. Before corrections its application/source/test inputs matched the
+independently rejected prospective G+H8fcdc178. No authored App/notice resolution
+was necessary; incoming H diagnostics/sandbox, authority, binding, rotation,
+routing and private-config guards remain. Latest source is
+b4b28013627873c83bb69ed16df6c6b0f3111ced, after corrections733600b and the
+observed-clock fixture correctionb4b2801.
+
+- F1: the Workbench drawer wrapper resets the individual CSS translate in
+  addition to transform. Modal still owns trapping, Escape and return focus.
+- F2: zero observed turns only implies Conversation not started when the
+  selector reports complete metrics. Partial running/settled history keeps
+  Elapsed unavailable. Recorded starts, zero values and counters are unchanged.
+- F3: the synthetic host implements required integrateWorker/cleanupWorker with
+  their supported returns. MonoTeamActivity's existing user turn now records a
+  genuine synthetic10s clock; original10s and feed-count assertions stay intact.
+- F4: the shared full-output pre opts into text selection with the existing
+  select-text utility; body selection suppression remains.
+- F5: a retired reader task clears its selection and focuses the existing active
+  assignment filter. Another Manager reusing the ID cannot reopen that reader.
+
+Seven focused files pass84 /0 failed /0 skipped; the unchanged original18
+source/server probes pass18 /0 /0; both CC7UR unknown-clock controls pass2 /0.
+All1730 tracked non-documentation hashes match before/after each current gate.
+The first corrected focused attempt remains83 /1: a newly linked fixture
+dispatch added two feed events. Recording the synthetic clock on the existing
+user turn corrected the fixture while retaining every old assertion. No old
+timeout, retry, skip or safe expectation was weakened. Only this round's new
+failed-settlement test changes its label expectation to unavailable, consistent
+with that settled selector's partial history and the original18 safe contract.
+
+Ten additional browser cases are prepared for both engines: six dark/light
+wide/narrow cold drawer cases with pointer copy actions and screenshots, two
+saved-output glyph-selection cases, and two retired/reused-identity focus cases.
+The original Workbench spec is byte-identical to the review; its719-line prefix
+is unchanged. These new browser cases have not run. Actual screenshots and
+pointer/browser acceptance remain pending, as do full unit/type/build gates.
+
+The tab-revisit test/fixture, wordFade, AgentMarkdown, AgentTranscript and global
+CSS are byte-identical to exactec6005. The known WebKit extra fade remains an
+unresolved browser failure: this equality is preparation for an unchanged
+baseline replay, not a waiver. FULL must run both exact baseline and current
+tab-revisit controls with original assertions/deadlines/retries/skips. Keep the
+known BlobMP4 failure visible and baseline-bound. No animation correction has
+been guessed from source inspection.
+
+User's latest scheduling is FULL A=EL/B=I; this branch has SOURCE/SMALL authority
+until explicit reassignment. No installs, full suite, tsc, production build,
+browser/server/preview, Cargo/native or fan-out was started during the resume.
+Focused checks reuse installed dependencies read-only through the retained
+external resolver with one worker, isolated homes and the required Node flag.
+Storage/remedies belong I, steer/handoff EL, routing-default disablement CC5RO.
+No push or integration into nour occurred. Independent final acceptance remains.
+
+Current evidence is under cc4g/evidence: corrections-focused-01/ (failed),
+corrections-focused-02/ (84/0), corrections-original18/ (18/0),
+corrections-unknown-clock/ (2/0), corrections-source-audit.json and the adapted
+small-run wrappers. REPORT/VALIDATION-READY bind the current clean candidate.
+All earlier failures/results below remain historical and are preserved.
+
+## Retained original source checkpoint
+
 MemberWorkLog no longer uses dispatch acceptance or settlement timestamps as
 conversation elapsed. The existing selectTaskMetrics selector supplies the
 displayed dispatch's clock. Task counters retain their existing retry aggregation,
@@ -7,8 +72,9 @@ input convention, cache subtotal and unavailable-counter behavior. A previous
 attempt's start cannot become the clock for a newly accepted dispatch.
 
 TaskMetricsLine requires a canonical recorded start before showing or ticking elapsed,
-even when a caller supplies timestamps. With no observed turns it shows Conversation
-not started; a recorded turn without its start stays Elapsed unavailable. An
+even when a caller supplies timestamps. With no observed turns and complete metrics
+it shows Conversation not started; partial history or a recorded turn without
+its start stays Elapsed unavailable. An
 observed running turn continues ticking, including a start at zero. A completed
 turn uses its recorded elapsed duration, including zero, rather than extending
 to delayed dispatch settlement. The existing formatter still rounds subsecond

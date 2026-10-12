@@ -132,9 +132,10 @@ duration and is marked partial. Aggregate `endedAt` is absent when a selected
 turn has no known end. The task card's
 elapsed label describes its displayed dispatch, using the existing selector's
 recorded turn start and duration. Dispatch acceptance, preparation, settlement
-and goal timestamps are not conversation clocks. Accepted or failed preparation
-without a recorded turn shows Conversation not started; historical missing clocks
-stay unavailable. Recorded starts and durations at zero remain valid. Task
+and goal timestamps are not conversation clocks. No observed turns with complete
+metrics shows Conversation not started; partial running, settled or historical
+metrics without a retained clock stay Elapsed unavailable. Recorded starts and
+durations at zero remain valid. Task
 counters can include retries while the displayed clock belongs only to the selected
 dispatch; a previous goal or attempt cannot supply its start. Missing counters remain absent;
 partial totals are marked as recorded metrics. Selectors deduplicate user-turn

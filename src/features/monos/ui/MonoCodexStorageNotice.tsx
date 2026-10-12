@@ -45,7 +45,7 @@ export function MonoCodexStorageNotice({
   useEffect(() => {
     setConflict(parseCodexStorageConflict(detail));
     setRecovery(parseCodexStorageRecoveryConflict(detail));
-    setSandbox(parseCodexSandboxBlocker(detail));
+    if (detail || (!busy && !success)) setSandbox(parseCodexSandboxBlocker(detail));
     if (detail) {
       setSuccess(false);
       setError(undefined);

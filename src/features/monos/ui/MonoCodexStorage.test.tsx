@@ -184,6 +184,18 @@ it("requests full access only on explicit click and disables sandbox choices whi
   await act(async () => finish());
 });
 
+it("retains the sandbox success category after the actual repair callback clears its blocker", async () => {
+  const blocker = `Codex storage needs repair: ${JSON.stringify({ sandbox:true, reason:"Manual setup alone cannot unlock elevated Mono turns", setupCommand:"synthetic setup" })}`;
+  let detail: string | undefined = blocker;
+  function render() { root.render(<MonoCodexStorageNotice detail={detail} onRepair={async()=>{}} onResolve={async()=>{ detail=undefined; render(); }} />); }
+  await act(async()=>render());
+  await act(async()=>buttonNamed("Use full access for this Mono").click());
+  expect(container.querySelector('[role="status"]')?.getAttribute("aria-label")).toBe("Codex sandbox choice applied");
+  expect(container.textContent).toContain("Waiting messages can continue");
+  await act(async()=>buttonNamed("Dismiss").click());
+  expect(container.textContent).toBe("");
+});
+
 it("retains inline sandbox choices after a failed explicit config change", async () => {
   const detail = `Codex storage needs repair: ${JSON.stringify({ sandbox: true, reason: "Sandbox account is missing", setupCommand: "codex sandbox -P :workspace -- echo ready" })}`;
   const resolve = vi.fn(async () => { throw new Error("The account is busy; config was not changed"); });

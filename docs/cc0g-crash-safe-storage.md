@@ -34,3 +34,9 @@ Evidence root: `C:/Users/nooro/AppData/Local/Temp/monocode-cc/cc0g/evidence/`.
 ## Limits
 
 Process termination is tested; operating-system power loss is not. The storage mutex remains process-local. Linux/macOS and live desktop/profile/provider acceptance were not run. Unix already-open writers and concurrent path replacement cannot be excluded as on Windows; source comments retain that limit. Ambiguous legacy claims and concurrently recreated originals require inspection through the preserved-files notice. No automatic pruning, extra recovery-choice UI, merge, push or deployment was added.
+
+## CC0H correction awaiting validation
+
+The validation counts above describe CC0G's historical source. CC0GR3 later observed pathname-only journal cleanup, oversized-prefix parsing and an empty-journal allocation window, plus an unlabelled verification stage. CC0H's source correction binds retirement to identity and exact contents, publishes complete initial and verified authority through named pending stages, and adds explicit archival recovery for unpublished/legacy empty metadata. Default conversation diagnostics also follow the binding no-accordion requirement.
+
+See [CC0H journal finalization](cc0h-journal-finalization.md) for ordering, legacy compatibility, the preserved original 11/39 observations and every pending gate. CC0H is explicitly source-only: no corrected-head native/web/browser acceptance or SHIP result is established. Source `secrets` first-creation and raw Windows long-path concerns remain separate follow-ups.

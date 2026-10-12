@@ -152,10 +152,10 @@ function sandboxRepairFixture(extra: Partial<Session> = {}) {
   const retry = vi.fn<() => boolean | Promise<boolean>>(() => true), peerRetry = vi.fn(() => true), otherRetry = vi.fn(() => true);
   recovery.hold("clicked", retry); recovery.hold("peer", peerRetry); recovery.hold("other", otherRetry);
   const stop = vi.fn(async (_harness: string, _sessionId: string) => {}), prepare = vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}), persist = vi.fn(async () => {}), saveMode = vi.fn();
-  const invoke = vi.fn(async () => ({ configPath: "/synthetic/private/config.toml", backupPaths: ["/synthetic/private/config.backup"] }));
+  const invoke = vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => ({ configPath: "/synthetic/private/config.toml", backupPaths: ["/synthetic/private/config.backup"] }));
   const context = {
     sessionsRef, codexStorageRecovery: { current: recovery }, codexStorageAccountId, isCodexStorageError,
-    parseCodexStorageConflict, parseCodexSandboxBlocker, codexSandboxRepairSettings, IS_WIN: true,
+    parseCodexStorageConflict, parseCodexStorageRecoveryConflict, parseCodexSandboxBlocker, codexSandboxRepairSettings, IS_WIN: true,
     monoSkillsForSession: () => ({ skillsRole: "manager", skillsPolicy: { mode: "role" } }),
     sessionWorkCwd: (current: Session) => current.cwd, orchestrator: { forSession: () => undefined },
     remoteProjectFor: (cwd: string) => cwd.startsWith("remote:") ? {} : undefined,
@@ -170,6 +170,37 @@ function sandboxRepairFixture(extra: Partial<Session> = {}) {
   const repair = evaluate(appCallback("onCodexStorageRepair").getText(app), context);
   return { ...context, repair, recovery, retry, peerRetry, otherRetry, stop, prepare, persist, saveMode };
 }
+
+it("archives incomplete metadata for the held account before retrying its preserved submissions", async () => {
+  const metadata = { path: "/synthetic/private/.monocode-txn-id.json.pending", identity: "1:2", fingerprint: "hash" };
+  const codexStorageError = `Codex storage needs repair: ${JSON.stringify({ recovery: true, reason: "Incomplete metadata", paths: [metadata.path], metadata })}`;
+  const fixture = sandboxRepairFixture({ codexStorageError });
+  fixture.invoke.mockResolvedValueOnce("/synthetic/private/.monocode-preserved-transactions/metadata");
+  await fixture.repair("clicked", "preserve_recovery_metadata");
+  expect(fixture.invoke).toHaveBeenCalledExactlyOnceWith("codex_mono_store_preserve_recovery", { providerAccountId: "account", metadata });
+  expect(fixture.invoke.mock.invocationCallOrder[0]).toBeLessThan(fixture.prepare.mock.invocationCallOrder[0]);
+  expect(fixture.retry).toHaveBeenCalledOnce();
+  expect(fixture.peerRetry).toHaveBeenCalledOnce();
+  expect(fixture.otherRetry).not.toHaveBeenCalled();
+  expect(fixture.stop).not.toHaveBeenCalled();
+  expect(fixture.saveMode).not.toHaveBeenCalled();
+  expect(fixture.sessionsRef.current.find(session => session.id === "clicked")?.blocks[0].text).toContain("/synthetic/private/.monocode-preserved-transactions/metadata");
+});
+
+it("holds recovery submissions when metadata is stale or archival fails", async () => {
+  for (const hasMetadata of [false, true]) {
+    const codexStorageError = `Codex storage needs repair: ${JSON.stringify({ recovery: true, reason: "Incomplete metadata", paths: ["/synthetic/private/metadata"],
+      ...(hasMetadata ? { metadata: { path: "/synthetic/private/metadata", identity: "1:2", fingerprint: "hash" } } : {}) })}`;
+    const fixture = sandboxRepairFixture({ codexStorageError });
+    fixture.invoke.mockRejectedValueOnce(new Error(codexStorageError));
+    await expect(fixture.repair("clicked", "preserve_recovery_metadata")).rejects.toThrow();
+    expect(fixture.prepare).not.toHaveBeenCalled();
+    expect(fixture.retry).not.toHaveBeenCalled();
+    expect(fixture.peerRetry).not.toHaveBeenCalled();
+    expect(fixture.recovery.hasPending("clicked")).toBe(true);
+    expect(fixture.invoke).toHaveBeenCalledTimes(Number(hasMetadata));
+  }
+});
 
 it("switches the account's private Mono sandbox only on explicit choice, stops idle servers and exposes its backup", async () => {
   const fixture = sandboxRepairFixture();

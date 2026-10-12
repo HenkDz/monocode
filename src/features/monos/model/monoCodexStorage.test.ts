@@ -78,6 +78,14 @@ it("recognizes preparation and spawn storage errors without treating provider fa
   expect(isCodexStorageError("Provider crashed")).toBe(false);
 });
 
+it("retains native metadata receipts and refuses malformed recovery choices", () => {
+  const metadata = { path: "C:/mono/.monocode-txn-id.json.pending", identity: "1:18446744073709551615", fingerprint: "sha256" };
+  const recovery = { recovery: true, reason: "Incomplete metadata", paths: [metadata.path], metadata };
+  expect(parseCodexStorageRecoveryConflict(`Codex storage needs repair: ${JSON.stringify(recovery)}`)).toEqual(recovery);
+  for (const invalid of [null, {}, { ...metadata, identity: 1 }, { ...metadata, fingerprint: "" }, { ...metadata, path: null }])
+    expect(parseCodexStorageRecoveryConflict(`Codex storage needs repair: ${JSON.stringify({ ...recovery, metadata: invalid })}`)).toBeUndefined();
+});
+
 it("holds one exact turn with attachments until relink succeeds, then retries only once", async () => {
   const recovery = new MonoCodexStorageRecovery();
   const attachments = [{ name: "brief.txt", path: "/tmp/brief.txt" }];

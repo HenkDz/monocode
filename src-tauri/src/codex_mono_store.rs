@@ -271,6 +271,20 @@ pub fn codex_mono_store_compare(
 }
 
 #[tauri::command(async)]
+pub fn codex_mono_store_preserve_recovery(
+    app: AppHandle,
+    provider_account_id: Option<String>,
+    metadata: transactions::RecoveryMetadata,
+) -> Result<String, String> {
+    let (source, home, _) = locations(&app, provider_account_id.as_deref())?;
+    let _lock = STORAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (_, home) = storage_roots(&source, &home)?;
+    transactions::preserve_metadata(&home, &metadata)
+        .map(|path| crate::fs::path_to_js(&path))
+        .map_err(storage_error)
+}
+
+#[tauri::command(async)]
 pub async fn codex_mono_store_reveal(
     app: AppHandle,
     provider_account_id: Option<String>,
@@ -936,6 +950,8 @@ impl ClaimedEntry {
         #[cfg(unix)]
         std::fs::remove_file(&self.path).map_err(|e| e.to_string())?;
         self.active = false;
+        #[cfg(test)]
+        crash_tests::checkpoint("after-discard");
         Ok(())
     }
 

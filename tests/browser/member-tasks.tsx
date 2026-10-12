@@ -9,6 +9,7 @@ import type {
 import type { Mono } from "../../src/features/monos/model/mono";
 import { publishCardSessions } from "../../src/features/monos/model/monoCards";
 import "../../src/styles/index.css";
+import "../../src/features/monos/ui/workbench.css";
 
 const mode = new URLSearchParams(location.search).get("mode");
 document.documentElement.classList.toggle("theme-light", mode === "light");
@@ -54,11 +55,19 @@ const history = Array.from({ length: 120 }, (_, i) => ({
   acceptedDispatchId: `Completed assignment ${i}`,
   completionOutcome: "no-changes" as const,
 }));
-const runs = [
-  { tasks: [...current, ...history], dispatches: [] },
+let runs = [
+  { leadId: "original-manager", tasks: [...current, ...history], dispatches: [] },
 ] as unknown as OrchestrationRun[];
+const listeners = new Set<() => void>();
 orchestrator.snapshot = () => runs;
-orchestrator.subscribe = () => () => {};
+orchestrator.subscribe = listener => { listeners.add(listener); return () => { listeners.delete(listener); }; };
+Object.assign(window, { retireFixtureTask: (id: string, reuse: boolean) => {
+  const owner = runs.find(run => run.tasks.some(task => task.id === id))!;
+  const selected = owner.tasks.find(task => task.id === id)!;
+  runs = runs.map(run => ({ ...run, tasks: run.tasks.filter(task => task !== selected) }));
+  if (reuse) runs.push({ ...owner, leadId: "other-manager", tasks: [{ ...selected, prompt: "Other Manager's assignment", sessionId: "other-worker" }] });
+  for (const listener of listeners) listener();
+} });
 publishCardSessions(
   [
     {
@@ -91,7 +100,13 @@ createRoot(document.getElementById("root")!).render(
         hideTurnMetrics
       />
     </div>
-    <MemberWorkLog member={member} />
+    <div
+      data-fixture-work
+      className="shrink-0 overflow-y-auto"
+      style={{ maxHeight: "min(30dvh, 256px)" }}
+    >
+      <MemberWorkLog member={member} />
+    </div>
     <div className="mx-auto w-full max-w-4xl shrink-0 p-4">
       <textarea
         aria-label="Message Rowan"

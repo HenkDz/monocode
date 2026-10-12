@@ -18,6 +18,7 @@ export async function requestOutgoingHandoff(input: {
   modelSettings?: Record<string, string>;
   providerAccountId?: string;
   userRequest: string;
+  validateDispatch?: () => void;
 }): Promise<string> {
   let brief = "";
   const timer = setTimeout(() => {
@@ -33,6 +34,7 @@ export async function requestOutgoingHandoff(input: {
       providerAccountId: input.providerAccountId,
       runtimeMode: "supervised",
       text: buildOutgoingHandoffPrompt(input.userRequest),
+      validateDispatch: input.validateDispatch,
       onEvent: (event) => {
         if (event.type === "message.delta") {
           brief = mergeStream(brief, event.text);

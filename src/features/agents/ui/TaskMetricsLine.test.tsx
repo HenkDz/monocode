@@ -4,6 +4,74 @@ import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
 import { TaskMetricsLine, taskMetricsDetail } from "./TaskMetricsLine";
 import { AgentDetailTooltip } from "./AgentDetailTooltip";
+import { renderToStaticMarkup } from "react-dom/server";
+import { selectTaskMetrics } from "../model/agentMetrics";
+import type { OrchestrationDispatch, OrchestrationTask } from "../../orchestration/model/orchestrationState";
+
+it.each(["running", "completed"] as const)("leaves an unretained %s turn clock unavailable rather than claiming no conversation", status => {
+  const task = { id: "task", sessionId: "worker", status } as OrchestrationTask;
+  const dispatch = { id: "dispatch", taskId: task.id, sessionId: task.sessionId, state: status,
+    stage: status === "completed" ? "settled" : "turn_submitted", startedAt: 1000, updatedAt: 11000,
+    ...(status === "completed" ? { finishedAt: 10000, durationMs: 9000, result: "Retained report" } : {}) } as OrchestrationDispatch;
+  const metrics = selectTaskMetrics(task, [dispatch], [], 12000);
+  expect(metrics).toMatchObject({ turns: 0, partial: true });
+  const html = renderToStaticMarkup(<TaskMetricsLine metrics={metrics} state={{ status: status === "completed" ? "done" : "running-tool" }} />);
+  expect(html).toContain("Elapsed unavailable");
+  expect(html).not.toContain("Conversation not started");
+});
+
+it("refuses a dispatch clock without a canonical recorded turn while retaining zero counters", () => {
+  const html = renderToStaticMarkup(<TaskMetricsLine
+    metrics={{ turns: 1, elapsedMs: 0, inputTokens: 0, cacheReadTokens: 0, outputTokens: 0, partial: true }}
+    startedAt={0}
+    endedAt={3000}
+    state={{ status: "failed" }}
+  />);
+  expect(html).toContain("Elapsed unavailable");
+  expect(html).toContain("Recorded 0 in / 0 cached / 0 out tokens");
+  expect(html).not.toContain("3s");
+});
+
+it("uses recorded completed duration rather than delayed dispatch settlement", () => {
+  const html = renderToStaticMarkup(<TaskMetricsLine
+    metrics={{ turns: 1, startedAt: 0, endedAt: 60_000, elapsedMs: 5000, partial: false }}
+    state={{ status: "done" }}
+  />);
+  expect(html).toContain("5s");
+  expect(html).not.toContain("1m");
+});
+
+it("keeps an explicitly selected completed retry separate from aggregate elapsed", () => {
+  const html = renderToStaticMarkup(<TaskMetricsLine
+    metrics={{ turns: 2, startedAt: 1000, endedAt: 30_000, elapsedMs: 15_000, partial: false }}
+    startedAt={20_000}
+    endedAt={30_000}
+    state={{ status: "done" }}
+  />);
+  expect(html).toContain("10s");
+  expect(html).not.toContain("15s");
+});
+
+it("starts ticking only when the canonical turn is observed, including a zero start", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.useFakeTimers();
+  vi.setSystemTime(0);
+  const host = document.createElement("div"), root = createRoot(host);
+  const metrics = { turns: 1, elapsedMs: 0, partial: true };
+  try {
+    await act(async () => root.render(<TaskMetricsLine metrics={metrics} startedAt={0} state={{ status: "thinking" }} />));
+    expect(host.textContent).toContain("Elapsed unavailable");
+    expect(vi.getTimerCount()).toBe(0);
+    await act(async () => root.render(<TaskMetricsLine metrics={{ ...metrics, startedAt: 0 }} startedAt={0} state={{ status: "thinking" }} />));
+    expect(vi.getTimerCount()).toBe(1);
+    await act(async () => vi.advanceTimersByTime(2000));
+    expect(host.textContent).toContain("2s · Tokens unavailable · Thinking");
+  } finally {
+    await act(async () => root.unmount());
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  }
+});
 
 it("describes the existing row button and shows the full metrics and blocker on keyboard focus", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);

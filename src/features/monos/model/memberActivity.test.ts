@@ -178,3 +178,103 @@ it("keeps the current failed snapshot when only an older completed attempt has a
     )?.error,
   ).toBe("Transport disconnected");
 });
+
+it("labels assignments with the recorded member name and keeps task titles separate from outcomes", () => {
+  const events = memberActivityEvents(
+    [
+      {
+        leadId: "manager",
+        tasks: [{ ...task, memberName: "Reviewer" }],
+        dispatches: [
+          {
+            id: "done",
+            taskId: task.id,
+            state: "completed",
+            startedAt: 10,
+            finishedAt: 20,
+          },
+        ],
+      },
+    ] as OrchestrationRun[],
+    "reviewer",
+    [],
+  );
+  expect(events.map((event) => event.label)).toEqual([
+    "Assigned to Reviewer",
+    "Finished",
+  ]);
+  expect(events.map((event) => event.task?.title)).toEqual([
+    task.title,
+    task.title,
+  ]);
+  expect(
+    memberActivityEvents(
+      [
+        { leadId: "manager", tasks: [task], dispatches: [] },
+      ] as unknown as OrchestrationRun[],
+      "reviewer",
+      [],
+    )[0].label,
+  ).toBe("Assigned to member");
+});
+
+it.each(["queued", "workspace_prepared", "session_prepared"])(
+  "labels a failed %s attempt as stopped before starting only with a recorded preparation stage",
+  (stage) => {
+    const events = memberActivityEvents(
+      [
+        {
+          leadId: "manager",
+          tasks: [task],
+          dispatches: [
+            {
+              id: "failed",
+              taskId: task.id,
+              state: "failed",
+              stage,
+              startedAt: 10,
+            },
+          ],
+        },
+      ] as OrchestrationRun[],
+      "reviewer",
+      [],
+    );
+    expect(events.find((event) => event.kind === "errors")?.label).toBe(
+      "Stopped before starting",
+    );
+  },
+);
+
+it.each([
+  { stage: "submitted" },
+  { stage: "settled" },
+  {},
+  { stage: "session_prepared", turnStartedAt: 0 },
+])(
+  "keeps failure start boundaries unknown or recorded without inventing a launch failure for %s",
+  (boundaries) => {
+    const events = memberActivityEvents(
+      [
+        {
+          leadId: "manager",
+          tasks: [task],
+          dispatches: [
+            {
+              id: "failed",
+              taskId: task.id,
+              state: "failed",
+              startedAt: 10,
+              ...boundaries,
+            },
+          ],
+        },
+      ] as OrchestrationRun[],
+      "reviewer",
+      [],
+    );
+    expect(events.find((event) => event.kind === "errors")?.label).toBe(
+      "Stopped",
+    );
+  },
+);

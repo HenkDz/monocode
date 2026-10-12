@@ -113,7 +113,7 @@ it("shows flat summary rows and counted keyboard tabs, and opens the ready card"
         tool: { title: "Tests passed" },
       },
       { id: "private", role: "reasoning" as const, text: "Private reasoning" },
-      { id: "user", role: "user" as const, text: prompt },
+      { id: "user", role: "user" as const, text: prompt, startedAt: 1000, durationMs: 10000 },
     ],
   };
   const runs = [

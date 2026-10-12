@@ -7,6 +7,8 @@ import { clearComposerDraft, setComposerDraft } from "../model/draftCache";
 import { acceptMonoRotation, discardMonoRotationPendingInputs, loadMonoRotation, MONO_ROTATION_READ_ERROR, saveMonoRotation } from "../../monos/model/monoRotation";
 import { registerBuiltinHarnesses } from "../../../integrations/harness/core/register";
 import { resetHarnessModelOverlays, setHarnessModels } from "../model/models";
+import type { OrchestrationDispatch } from "../../orchestration/model/orchestrationState";
+import { OrchestrationActions } from "../../orchestration/ui/OrchestrationActions";
 
 const probes = vi.hoisted(() => ({
   mono: true,
@@ -28,7 +30,7 @@ const probes = vi.hoisted(() => ({
       status: string;
       prompt?: string;
     }[];
-    dispatches: [];
+    dispatches: OrchestrationDispatch[];
   }[],
 }));
 vi.mock("./ModelPicker", async (original) => {
@@ -246,18 +248,18 @@ it("shows the member work log without a full-height greeting hiding it below the
   render(pane);
   expect(
     container.querySelector('[aria-label="Member work log"]')?.textContent,
-  ).toContain("No assignments yet.");
+  ).toContain("No assignments yet");
   expect(
     container.querySelector("header")?.classList.contains("min-h-full"),
   ).toBe(false);
   expect(field()).not.toBeNull();
   expect(
-    container.querySelector("[data-member-work]")!.classList.contains("flex-1"),
+    container.querySelector("[data-member-work]")!.classList.contains("cc7u-work"),
   ).toBe(true);
   expect(
     container
-      .querySelector('[role="tabpanel"]')!
-      .classList.contains("shrink-0"),
+      .querySelector('[data-workbench-conversation] [role="tabpanel"]')!
+      .classList.contains("flex-1"),
   ).toBe(true);
 });
 
@@ -273,11 +275,10 @@ it("updates the member header from live session and roster state", () => {
 
   render({
     ...pane,
-    monoState: { status: "needs-you", activity: "Review decision" },
+    monoState: { status: "needs-you", liveState: { status: "needs-you", reason: "decision", detail: "Review decision" } },
   });
   expect(
-    container.querySelector('header [data-mono-status="needs-you"]')
-      ?.textContent,
+    container.querySelector('header')?.textContent,
   ).toContain("Review decision");
 
   render({ ...pane, session: { ...pane.session, busy: false } });
@@ -333,11 +334,11 @@ it("puts a member's blocked message queue above the conversation and routes edit
   pane.onDeleteQueuedMessage = vi.fn();
   render(pane);
   const notice = container.querySelector(
-    '[aria-label="Codex storage needs repair"]',
+    '[aria-label="Conversation couldn’t start"]',
   )!;
   const log = container.querySelector('[aria-label="Member work log"]')!;
   const queue = container.querySelector('[aria-label="Message queue"]')!;
-  const conversation = container.querySelector('[role="tabpanel"]')!;
+  const conversation = container.querySelector('[data-workbench-conversation] [role="tabpanel"]')!;
   expect(
     notice.compareDocumentPosition(log) & Node.DOCUMENT_POSITION_FOLLOWING,
   ).toBeTruthy();
@@ -386,6 +387,68 @@ it("puts a member's blocked message queue above the conversation and routes edit
   );
 });
 
+it("renders a saved worker's queue once and preserves its edit, remove and steer actions", () => {
+  probes.mono = false;
+  probes.actualPane = true;
+  probes.runs = [{ leadId: "lead", tasks: [{
+    id: "task", title: "Review saved changes", sessionId: "chat", memberId: "worker", status: "running",
+  }], dispatches: [] }];
+  const pane = props();
+  pane.session.busy = true;
+  pane.session.queuedMessages = [{ id: "worker-message", text: "Review the saved patch", attachments: [] }];
+  pane.onEditQueuedMessage = vi.fn();
+  pane.onDeleteQueuedMessage = vi.fn();
+  pane.onSteerQueuedMessage = vi.fn();
+  render(pane);
+  expect(container.querySelector('[data-member-workbench="true"]')).not.toBeNull();
+  expect(container.querySelectorAll("[data-message-queue]")).toHaveLength(1);
+  expect(container.querySelector(".cc7u-message-queue")).toBeNull();
+  const queue = container.querySelector("[data-message-queue]")!;
+  expect(queue.closest("[data-session-composer]")).not.toBeNull();
+  const steer = [...queue.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent?.trim() === "Steer")!;
+  expect(steer).toBeDefined();
+  act(() => steer.click());
+  expect(pane.onSteerQueuedMessage).toHaveBeenCalledExactlyOnceWith("chat", "worker-message");
+  act(() => queue.querySelector<HTMLButtonElement>('[aria-label="Edit queued message"]')!.click());
+  const input = queue.querySelector<HTMLTextAreaElement>('[aria-label="Edit queued message"]')!;
+  const inputProps = Object.entries(input).find(([key]) => key.startsWith("__reactProps"))![1];
+  act(() => inputProps.onChange({ target: { value: "Review the latest saved patch" } }));
+  act(() => queue.querySelector<HTMLButtonElement>('[aria-label="Save queued message"]')!.click());
+  expect(pane.onEditQueuedMessage).toHaveBeenCalledExactlyOnceWith("chat", "worker-message", "Review the latest saved patch");
+  act(() => queue.querySelector<HTMLButtonElement>('[aria-label="Remove queued message"]')!.click());
+  expect(pane.onDeleteQueuedMessage).toHaveBeenCalledExactlyOnceWith("chat", "worker-message");
+});
+
+it("keeps an earlier member worker in Workbench and opens its own historical session", () => {
+  probes.mono = false;
+  probes.actualPane = true;
+  probes.runs = [{ leadId: "lead", tasks: [{
+    id: "task", title: "Historical assignment", sessionId: "latest-worker", memberId: "worker", status: "running",
+  }], dispatches: [{
+    id: "old-dispatch", taskId: "task", sessionId: "chat", state: "failed", stage: "settled", startedAt: 1000, updatedAt: 2000,
+    workspace: { id: "checkout:historical", projectCwd: "/repo", checkoutCwd: "/historical-worker", kind: "worktree", branch: "historical" },
+    error: "Historical launch failed",
+  }] }];
+  const pane = props();
+  pane.session.worktreeCwd = "/historical-worker";
+  const openWorker = vi.fn();
+  act(() => root.render(createElement(OrchestrationActions.Provider, { value: {
+    open: vi.fn(), update: vi.fn(), confirm: vi.fn(async () => {}), retry: vi.fn(), openWorker,
+  } }, createElement(SessionPane, pane))));
+  expect(container.querySelector('[data-member-workbench="true"]')).not.toBeNull();
+  const header = container.querySelector("[data-workbench-header]")!;
+  expect(header.textContent).toContain("Saved session");
+  expect(header.querySelector('[data-agent-state="failed"]')).not.toBeNull();
+  expect(header.textContent).toContain("Historical launch failed");
+  expect(container.querySelector('[data-member-work]')?.textContent).toContain("Historical assignment");
+  const open = [...header.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Open worktree")!;
+  expect(open.disabled).toBe(false);
+  act(() => open.click());
+  expect(openWorker).toHaveBeenCalledExactlyOnceWith("chat");
+  expect(probes.runs[0].tasks[0].sessionId).toBe("latest-worker");
+  expect(probes.runs[0].tasks[0].status).toBe("running");
+});
+
 it("keeps recovery, draft and the transcript mounted while member tabs change by keyboard", () => {
   probes.member = true;
   const pane = props();
@@ -394,11 +457,11 @@ it("keeps recovery, draft and the transcript mounted while member tabs change by
   setComposerDraft("chat", "Keep my member draft");
   render(pane);
   const draft = field();
-  const tabs = container.querySelectorAll<HTMLButtonElement>('[role="tab"]');
+  const tabs = container.querySelectorAll<HTMLButtonElement>('[aria-label="Member view"] [role="tab"]');
   const conversation =
-    container.querySelector<HTMLElement>('[role="tabpanel"]')!;
+    container.querySelector<HTMLElement>('[data-workbench-conversation] [role="tabpanel"]')!;
   const notice = container.querySelector(
-    '[aria-label="Codex storage needs repair"]',
+    '[aria-label="Conversation couldn’t start"]',
   );
   act(() =>
     tabs[0].dispatchEvent(
@@ -409,7 +472,7 @@ it("keeps recovery, draft and the transcript mounted while member tabs change by
   expect(document.activeElement).toBe(tabs[1]);
   expect(conversation.hidden).toBe(true);
   expect(
-    container.querySelector('[aria-label="Codex storage needs repair"]'),
+    container.querySelector('[aria-label="Conversation couldn’t start"]'),
   ).toBe(notice);
   expect(field()).toBe(draft);
   expect(field().value).toBe("Keep my member draft");
@@ -453,11 +516,11 @@ it("shows the assigned worker's storage recovery at the top and targets that wor
   pane.onCodexStorageRepair = vi.fn(async () => {});
   render(pane);
   const notice = container.querySelector(
-    '[aria-label="Codex storage needs repair"]',
+    '[aria-label="Conversation couldn’t start"]',
   )!;
   expect(notice.textContent).toContain("Assigned worker: Review the patch");
   const repair = [...notice.querySelectorAll<HTMLButtonElement>("button")].find(
-    (button) => button.textContent === "Repair",
+    (button) => button.textContent === "Resolve storage",
   )!;
   await act(async () => repair.click());
   expect(pane.onCodexStorageRepair).toHaveBeenCalledWith("worker");
@@ -484,7 +547,7 @@ it("labels the running member turn metrics separately from assignments", () => {
   render(pane);
   const header = container.querySelector("header")!;
   expect(header.textContent).toContain("Current conversation turn");
-  expect(header.textContent).toContain("1,240 in");
+  expect(header.textContent).toContain("1.2k in");
   expect(header.textContent).not.toContain("No conversation turn running");
   render({
     ...pane,
@@ -495,7 +558,7 @@ it("labels the running member turn metrics separately from assignments", () => {
     },
   });
   expect(container.querySelector("header")!.textContent).toContain(
-    "No conversation turn running",
+    "Last conversation turn",
   );
   expect(
     container.querySelector('header [data-agent-state="blocked"]'),
@@ -512,7 +575,7 @@ it("labels the running member turn metrics separately from assignments", () => {
     "Running tool",
   );
   expect(container.querySelector("header")!.textContent).toContain(
-    "No conversation turn running",
+    "Last conversation turn",
   );
   expect(
     container.querySelector("[data-session-composer]")!.textContent,
@@ -574,6 +637,40 @@ it("routes transcript quotes to the Mono draft", () => {
   ].find((button) => button.textContent === "Quote response")!;
   act(() => quote.click());
   expect(field().value).toBe("> Selected response\n\n");
+});
+
+it("steers through the existing submission boundary and retains a rejected draft", async () => {
+  probes.member = true;
+  const pane = props();
+  pane.session.busy = true;
+  pane.session.blocks[0].startedAt = Date.now();
+  pane.onSubmit = vi.fn(() => false);
+  setComposerDraft("chat", "Check the new evidence first");
+  render(pane);
+  const steer = [...container.querySelectorAll<HTMLButtonElement>("header button")].find((button) => button.textContent === "Steer")!;
+  expect(steer.disabled).toBe(false);
+  expect(container.querySelector(".cc7u-delivery")?.textContent).toBe("Message will join the current turn.");
+  act(() => steer.click());
+  expect(container.querySelector(".cc7u-delivery")?.textContent).toContain("steer the current turn");
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Send"]')!.click());
+  expect(pane.onSubmit).toHaveBeenCalledWith("chat", "Check the new evidence first", [], { followUpBehavior: "steer" });
+  expect(field().value).toBe("Check the new evidence first");
+});
+
+it("disables Workbench steering while recovery or a decision holds the conversation", () => {
+  probes.member = true;
+  const pane = props();
+  pane.session.busy = true;
+  for (const held of [
+    { codexStorageError: "Storage unavailable" },
+    { worktreeRemoved: true },
+    { pendingQuestion: { requestId: 1, questions: [] } },
+    { worktreePreparing: true },
+  ]) {
+    render({ ...pane, session: { ...pane.session, ...held } });
+    const steer = [...container.querySelectorAll<HTMLButtonElement>("header button")].find((button) => button.textContent === "Steer")!;
+    expect(steer.disabled).toBe(true);
+  }
 });
 
 it("shows usage recovery above the Mono input and routes the reset option", () => {

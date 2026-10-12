@@ -1,13 +1,14 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { Storage } from "happy-dom";
-import { loadMonoView, saveMonoView, monoForView, memberDetailsView, memberTasks, selectedOrgMono } from "./monoNavigation";
+import { loadMonoView, saveMonoView, monoForView, memberDetailsView, memberTasks, selectedOrgMono, workbenchSessionTask } from "./monoNavigation";
 import { monoForSession, monoStatusLabel, type Mono } from "./mono";
 import { reconcileProjectReturn } from "../../projects/model/projectReturn";
 import { newTab } from "../../workspace/model/layout";
 import { memberMonoState, monoLiveState } from "./monoNavigation";
 import { newSession } from "../../sessions/model/session";
-import type { OrchestrationRun } from "../../orchestration/model/orchestrationState";
+import { workspaceIdentity, type OrchestrationRun, type OrchestrationTask, type OrchestrationDispatch } from "../../orchestration/model/orchestrationState";
+import { selectAgentLiveState } from "../../agents/model/agentLiveState";
 
 vi.mock("./mono", async (original) => {
   const roster = [
@@ -32,6 +33,99 @@ const runs = [{ tasks: [
   { id: "old", memberId: "backend", sessionId: "old-chat" },
   { id: "new", memberId: "backend", sessionId: "worker-chat" },
 ], dispatches: [{ taskId: "old", startedAt: 10 }, { taskId: "new", startedAt: 20 }] }] as OrchestrationRun[];
+
+function workbenchTask(patch: Partial<OrchestrationTask> = {}): OrchestrationTask {
+  return {
+    id: "review", memberId: "backend", sessionId: "latest-worker", title: "Review the saved change",
+    harness: "codex", model: "fixture", prompt: "Review", files: [], scopes: [], dependsOn: [],
+    status: "running", accepted: false, result: "", delivered: false,
+    workspace: workspaceIdentity("/repo", "/latest", "latest"), activeDispatchId: "latest-dispatch", lastDispatchId: "latest-dispatch",
+    ...patch,
+  };
+}
+function workbenchDispatch(patch: Partial<OrchestrationDispatch> = {}): OrchestrationDispatch {
+  return {
+    id: "old-dispatch", taskId: "review", sessionId: "old-worker",
+    workspace: workspaceIdentity("/repo", "/historical", "historical"),
+    state: "failed", stage: "settled", startedAt: 10, updatedAt: 20,
+    ...patch,
+  };
+}
+function workbenchRun(leadId: string, tasks: OrchestrationTask[], dispatches: OrchestrationDispatch[]): OrchestrationRun {
+  return { version: 2, leadId, cwd: "/repo", status: "active", allowedHarnesses: ["codex"], maxWorkers: 1, cli: "fixture", tasks, dispatches, continuations: 0, requests: {} };
+}
+
+it("keeps the current member worker's binding object authoritative over an older dispatch", () => {
+  const task = workbenchTask();
+  const run = workbenchRun("lead", [task], [workbenchDispatch({ sessionId: task.sessionId, error: "Old failure" })]);
+  expect(workbenchSessionTask([run], task.sessionId)).toBe(task);
+  expect(workbenchSessionTask([run], task.sessionId)?.workspace?.checkoutCwd).toBe("/latest");
+  expect(task.status).toBe("running");
+  expect(task.error).toBeUndefined();
+});
+
+it.each([
+  [{ error: "Historical launch failed" }, "Historical launch failed"],
+  [{ cleanupError: "Historical cleanup failed" }, "Historical cleanup failed"],
+  [{}, undefined],
+] as const)("uses exact historical dispatch workspace/error without mutating the live task: %s", (patch, error) => {
+  const task = workbenchTask({ error: "Latest worker failed" });
+  const dispatch = workbenchDispatch(patch);
+  const run = workbenchRun("lead", [task], [dispatch]);
+  const before = structuredClone(run);
+  const view = workbenchSessionTask([run], "old-worker")!;
+  expect(view).not.toBe(task);
+  expect(view).toMatchObject({ sessionId: "old-worker", status: "failed", lastDispatchId: "old-dispatch", accepted: false });
+  expect(view.activeDispatchId).toBeUndefined();
+  expect(view.workspace).toBe(dispatch.workspace);
+  expect(view.workspace?.checkoutCwd).toBe("/historical");
+  expect(view.error).toBe(error);
+  expect(run).toEqual(before);
+});
+
+it("scopes the historical task link to its exact Manager run when task IDs are reused", () => {
+  const other = workbenchTask({ sessionId: "other-current", error: "Other Manager error", workspace: workspaceIdentity("/other", "/other-current") });
+  const task = workbenchTask({ title: "Correct Manager assignment" });
+  const dispatch = workbenchDispatch({ error: "Correct historical error" });
+  const runs = [
+    workbenchRun("other-lead", [other], [workbenchDispatch({ sessionId: "other-old", workspace: workspaceIdentity("/other", "/other-old"), error: "Other old error" })]),
+    workbenchRun("correct-lead", [task], [dispatch]),
+  ];
+  const view = workbenchSessionTask(runs, "old-worker")!;
+  expect(view.title).toBe("Correct Manager assignment");
+  expect(view.workspace).toBe(dispatch.workspace);
+  expect(view.error).toBe("Correct historical error");
+  expect(view.memberId).toBe(task.memberId);
+});
+
+it("does not join an orphan dispatch to a matching task ID in a different Manager run", () => {
+  const runWithDispatch = workbenchRun("old-lead", [workbenchTask({ id: "unrelated" })], [workbenchDispatch()]);
+  const runWithTask = workbenchRun("other-lead", [workbenchTask()], []);
+  expect(workbenchSessionTask([runWithDispatch, runWithTask], "old-worker")).toBeUndefined();
+  expect(workbenchSessionTask([workbenchRun("lead", [workbenchTask({ memberId: undefined })], [workbenchDispatch()])], "old-worker")).toBeUndefined();
+});
+
+it.each([
+  ["starting", "queued"],
+  ["start_unknown", "interrupted"],
+  ["stop_unknown", "interrupted"],
+] as const)("keeps historical %s dispatches from claiming running or done", (state, status) => {
+  const run = workbenchRun("lead", [workbenchTask()], [workbenchDispatch({ state })]);
+  const view = workbenchSessionTask([run], "old-worker")!;
+  expect(view.status).toBe(status);
+  expect(view.accepted).toBe(false);
+  const liveState = selectAgentLiveState(undefined, { task: view });
+  expect(["thinking", "running-tool", "done"]).not.toContain(liveState.status);
+});
+
+it.each([true, false])("only credits historical review acceptance for its own dispatch (matching: %s)", matching => {
+  const task = workbenchTask({ accepted: true, acceptedDispatchId: matching ? "old-dispatch" : "latest-dispatch" });
+  const view = workbenchSessionTask([workbenchRun("lead", [task], [workbenchDispatch({ state: "completed" })])], "old-worker")!;
+  expect(view.accepted).toBe(matching);
+  expect(view.lastDispatchId).toBe("old-dispatch");
+  expect(selectAgentLiveState(undefined, { task: view }).status).toBe(matching ? "done" : "waiting-review");
+  expect(task.activeDispatchId).toBe("latest-dispatch");
+});
 
 it("keeps own status idle while counting working descendants once, including worker sessions", () => {
   const roster = [

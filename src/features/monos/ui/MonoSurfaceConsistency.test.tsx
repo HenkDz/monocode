@@ -108,7 +108,7 @@ it("uses the reviewed lifecycle on cards, Activity, recent tasks, org task rows,
     ] as const) {
       Object.assign(task, changes);
       await render();
-      if (label.startsWith("Completed")) await act(async () => host.querySelector<HTMLButtonElement>('button[aria-controls$="-history"]')!.click());
+      await act(async () => host.querySelector<HTMLButtonElement>(label.startsWith("Completed") ? '[role="tab"][id$="-history"]' : '[role="tab"][id$="-current"]')!.click());
       expect(host.querySelector("[data-task-status]")?.textContent).toBe(label);
       expect(host.querySelector('[aria-label="Member tasks"]')?.textContent).toContain(label);
       expect(host.querySelector('[data-team-task="t"]')?.textContent).toContain(label);
@@ -125,6 +125,7 @@ it("uses the reviewed lifecycle on cards, Activity, recent tasks, org task rows,
       sessions = [session];
       await act(async () => publishCardSessions([{ id: "worker", title: "", harness: "codex", busy: true, needsInput: true }], noop));
       await render();
+      await act(async () => host.querySelector<HTMLButtonElement>('[role="tab"][id$="-current"]')!.click());
       expect(host.querySelector("[data-task-status]")?.textContent).toBe("Needs you");
       expect(host.querySelector('[aria-label="Member tasks"]')?.textContent).toContain("Needs you");
       expect(host.querySelector('[data-team-task="t"]')?.textContent).toContain("Needs you");

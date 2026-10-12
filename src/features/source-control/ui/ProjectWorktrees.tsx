@@ -79,6 +79,7 @@ import type { Worktree, WorktreeSessionOptions } from "../model/worktrees";
 import { useWorktreeRemovalTasks } from "../model/worktreeRemovalTasks";
 import { useProjectExpansion } from "../../projects/hooks/useProjectExpansion";
 import { readFlag, writeFlag } from "../../settings/model/storageFlags";
+import "./ProjectWorktrees.css";
 
 /** Older idle sessions fold behind "Show more"; anything active stays listed. */
 const SESSION_LIMIT = 5;
@@ -243,6 +244,14 @@ export function ProjectWorktrees({
   // sessions ran elsewhere, so prefer each session's own record.
   const known = new Map([...history, ...openSessions].map((session) => [session.id, session]));
   const trees = data?.worktrees ?? [];
+  const selectSession = (sessionId: string, tree: Worktree) => {
+    const session = known.get(sessionId);
+    onSelectSession(sessionId, { project, tree,
+      // A removed session checkout now runs in its retained parent.
+      ...(session?.worktreeCwd && !trees.some(entry => isEqualOrInside(session.worktreeCwd!, entry.path))
+        ? { orphaned: true } : {}),
+    });
+  };
   const workers = useMemo(
     () => worktreeTaskSessions(project, data?.worktrees ?? [], managerRuns),
     [project, data, managerRuns],
@@ -416,7 +425,7 @@ export function ProjectWorktrees({
             data-worktree-group-list
             hidden={!section.expanded}
             className={
-              section.name === "Your worktrees"
+              section.name !== "History"
                 ? ""
                 : "ml-3 pl-1"
             }
@@ -441,8 +450,7 @@ export function ProjectWorktrees({
                 })),
                 ...userSessions.filter(session => !workerIds.has(session.id)),
               ] : userSessions;
-              const folded = taskTree && sessions.length === 1;
-              const expandable = sessions.length > (taskTree ? 1 : 0);
+              const expandable = !taskTree && sessions.length > 0;
               const expanded = expandable && sessionsExpanded(tree.path);
               const teammates = (taskTree ? [] : teamByPath.get(key) ?? []).map(worker => {
                 const member = worker.task.memberId && findMono(worker.task.memberId);
@@ -458,7 +466,7 @@ export function ProjectWorktrees({
               const hiddenCount = sessions.length - listed.length;
               const selected =
                 !!focusedPath &&
-                !(sessions.some(session => session.id === activeSessionId) && !folded) &&
+                !(sessions.some(session => session.id === activeSessionId) && !taskTree) &&
                 sameProjectPath(focus?.path ?? project, tree.path);
               const managerTask = taskByPath.get(key);
               const checkoutNotice = orchestrator.checkoutNotice("", { cwd: tree.path });
@@ -479,6 +487,12 @@ export function ProjectWorktrees({
               const liveState = [...sessions.map(session => session.id), ...workerSessions.map(worker => worker.sessionId)]
                 .map(id => cardSessions.get(id)?.liveState)
                 .find(state => state && state.status !== "idle" && state.status !== "done");
+              const taskState = liveState ?? (sessions.some(session => approvalSessionIds.has(session.id))
+                ? { status: "needs-you" as const, reason: "approval" as const, detail: "Waiting for user input" }
+                : selectAgentLiveState({ blocks: [], busy: sessions.some(session => busySessionIds.has(session.id)) }, { task: managerTask }));
+              const member = managerTask?.memberId ? findMono(managerTask.memberId) : undefined;
+              const memberName = member ? monoLook(member).name : managerTask?.memberName ?? "Unassigned";
+              const unread = taskTree && sessions.some(session => unseenFinishedIds.has(session.id));
               // Manager can report a PR before the GitHub status cache sees it.
               const openPrUrl =
                 worktreePullRequests(tree.path, prRecords).find((pr) => pr.state === "open" && (!taskTree || pr.url === managerTask?.prUrl))?.url ??
@@ -499,17 +513,21 @@ export function ProjectWorktrees({
                     busySessionIds.has(session.id) ||
                     unseenFinishedIds.has(session.id),
                 );
+              const taskStatus = tree.missing ? "Missing folder"
+                : liveState || !["idle", "done"].includes(taskState.status) ? agentLiveStateLabel(taskState) : outcome || workerStatus || agentLiveStateLabel(taskState);
+              const rowDetail = `${label}\n${tree.branch ?? `Detached ${tree.head.slice(0, 7)}`}\n${prettyCwd(tree.path)}\n${taskTree ? `${memberName} · ${taskStatus}\n${agentLiveStateTooltip(taskState)}` : liveState ? agentLiveStateTooltip(liveState) : outcome || workerStatus || progress}${checkoutNotice ? `\n${checkoutNotice}` : ""}${tree.dirty ? "\nUncommitted changes" : ""}`;
               return (
                 <div
                   key={key}
                   data-worktree={tree.path}
+                  data-task-worktree={taskTree || undefined}
                   onFocusCapture={() => { if (section.name !== "History") setFocusedTreePath(key); }}
                   onBlurCapture={event => {
                     if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocusedTreePath(undefined);
                   }}
                   inert={removing || undefined}
                   aria-busy={removing || undefined}
-                  className={`my-1 rounded-md border border-transparent hover:border-content/15 hover:bg-content/5 focus-within:border-content/15 focus-within:bg-content/5 ${folded && sessions[0].id === activeSessionId ? "bg-selection" : ""} ${menu?.tree.path === tree.path ? "border-content/15 bg-content/5" : ""}`}
+                  className={`my-1 rounded-md border border-transparent hover:border-content/15 hover:bg-content/5 focus-within:border-content/15 focus-within:bg-content/5 ${taskTree && sessions.some(session => session.id === activeSessionId) ? "bg-selection" : ""} ${menu?.tree.path === tree.path ? "border-content/15 bg-content/5" : ""}`}
                 >
                   <div
                     onContextMenu={(event) => {
@@ -559,33 +577,50 @@ export function ProjectWorktrees({
                           <ChevronRight className="size-3" />
                         )}
                       </button>
-                    ) : (
+                    ) : !taskTree ? (
                       <span className="w-4 shrink-0" />
-                    )}
-                    <AgentDetailTooltip detail={liveState && agentLiveStateTooltip(liveState)}>
+                    ) : null}
+                    <AgentDetailTooltip detail={taskTree ? rowDetail : liveState && agentLiveStateTooltip(liveState)}>
                     <button
                       type="button"
                       data-sidebar-row
                       disabled={tree.missing || removing}
-                      aria-current={selected ? "true" : undefined}
+                      aria-current={selected || taskTree && sessions.some(session => session.id === activeSessionId) ? "true" : undefined}
                       aria-expanded={expandable ? expanded : undefined}
                       aria-label={`Open worktree ${label}`}
                       aria-busy={selected && switchPending}
-                      title={`${label}\n${tree.branch ?? `Detached ${tree.head.slice(0, 7)}`}\n${prettyCwd(tree.path)}\n${liveState ? agentLiveStateTooltip(liveState) : outcome || workerStatus || progress}${checkoutNotice ? `\n${checkoutNotice}` : ""}${tree.dirty ? "\nUncommitted changes" : ""}`}
+                      title={rowDetail}
                       // A row with sessions to list only shows or hides them.
                       onClick={() =>
                         expandable
                           ? toggle(tree.path)
                           : taskTree && sessions.length
-                            ? onSelectSession(sessions[0].id, { project, tree })
+                            ? selectSession(sessions.find(session => session.id === activeSessionId)?.id ?? sessions[0].id, tree)
                             : onSelectWorktree(project, tree)
                       }
                       className={`flex h-full min-w-0 flex-1 items-center gap-2 text-left text-xs @max-[180px]/sidebar:min-h-7 @max-[180px]/sidebar:flex-[1_1_calc(100%_-_20px)] ${removing ? "disabled:opacity-70" : "disabled:opacity-40"} ${selected ? "text-content" : "text-content/70"}`}
                     >
+                      {taskTree ? <>
+                        <span data-agent-state={taskState.status} className="agent-state" aria-label={agentLiveStateLabel(taskState)}><span aria-hidden="true" className="agent-state-cue" /></span>
+                        <span className="min-w-0 flex-1 py-2">
+                          <span data-worktree-label className="block truncate text-[11px] font-medium leading-4">{label}</span>
+                          <span data-worktree-summary className="mt-1 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-[10px] text-content/70">
+                            <span data-worktree-member className="max-w-full break-words rounded border border-stroke px-1 py-px text-[9px] text-content">{memberName}</span>
+                            <span data-worktree-metadata className="flex min-w-0 items-center gap-1">
+                              <span className="break-words" title={outcome || undefined}>{taskStatus}</span>
+                              {done ? <WorktreeDoneWarning tree={tree} enabled={enabled && !tree.missing} /> : null}
+                            </span>
+                            <WorktreePrIcon tree={tree} enabled={enabled} taskPrUrl={managerTask?.prUrl ?? null} status={workerStatus || undefined} />
+                            {tree.dirty && <span data-worktree-dirty title="Uncommitted changes" className="shrink-0 text-amber-700 dark:text-amber-400">Changes</span>}
+                            {unread && <span data-worktree-unread className="shrink-0 text-accent">New reply</span>}
+                          </span>
+                          {removing && <span className="block text-[10px] text-content/70">Deleting…</span>}
+                        </span>
+                      </> : <>
                       <WorktreePrIcon tree={tree} enabled={enabled} taskPrUrl={taskTree ? managerTask?.prUrl ?? null : undefined} status={workerStatus || undefined} />
                       <span
                         data-worktree-label
-                        className={`min-w-4 flex-1 ${taskTree ? "line-clamp-2 py-1 leading-4" : "truncate"} ${selected ? "font-medium" : ""}`}
+                        className={`min-w-4 flex-1 truncate ${selected ? "font-medium" : ""}`}
                       >
                         {label}
                       </span>
@@ -600,10 +635,11 @@ export function ProjectWorktrees({
                           {sessions.length}
                         </span>
                       ) : null}
+                      </>}
                     </button>
                     </AgentDetailTooltip>
                     {checkoutNotice && <span role="status" tabIndex={0} title={checkoutNotice} aria-label={checkoutNotice} className="shrink-0 rounded text-content/45 hover:text-content focus-visible:outline-accent"><CircleAlert className="size-3" /></span>}
-                    <div data-worktree-metadata className="ml-auto flex max-w-[45%] shrink-0 items-center gap-1 overflow-hidden pr-1 text-[11px] text-content/70 group-hover/worktree:hidden group-focus-within/worktree:hidden group-data-[actions-open=true]/worktree:hidden [@media(hover:none)]:hidden @max-[180px]/sidebar:hidden!">
+                    {!taskTree && <div data-worktree-metadata className="ml-auto flex max-w-[45%] shrink-0 items-center gap-1 overflow-hidden pr-1 text-[11px] text-content/70 group-hover/worktree:hidden group-focus-within/worktree:hidden group-data-[actions-open=true]/worktree:hidden [@media(hover:none)]:hidden @max-[180px]/sidebar:hidden!">
                       {liveState ? <AgentStatusLabel state={liveState} className="truncate text-content/70" /> : done ? (
                         <>
                         <span title={outcome || undefined} className={`truncate ${outcome === "Merged" ? "text-emerald-700 dark:text-emerald-400" : ""}`}>{outcome === "Closed (not merged)" ? "Closed" : outcome}</span>
@@ -613,7 +649,7 @@ export function ProjectWorktrees({
                         <span className={`truncate ${workerStatus === "PR ready" ? "text-emerald-600 dark:text-emerald-400" : ""}`}>{workerStatus || progress}</span>
                       ) : null}
                       {!done && <WorktreeDiffStat path={tree.path} enabled={enabled && !tree.missing} showLines={!workerStatus && !activeProgress} />}
-                    </div>
+                    </div>}
                     <div data-worktree-actions className="contents @max-[180px]/sidebar:flex @max-[180px]/sidebar:basis-full @max-[180px]/sidebar:justify-end @max-[180px]/sidebar:gap-1 @max-[180px]/sidebar:pb-1">
                     {/* Reserves room for the hover actions beside the branch and badges. */}
                     <span aria-hidden data-worktree-actions-spacer className={`hidden shrink-0 group-hover/worktree:block group-focus-within/worktree:block group-data-[actions-open=true]/worktree:block [@media(hover:none)]:block @max-[180px]/sidebar:hidden! ${openPrUrl ? "w-[5rem]" : "w-13"}`} />
@@ -725,19 +761,7 @@ ${openPrUrl}`}
                                   ? `${title}\n${agentLiveStateTooltip(state)}: ${activity}`
                                   : `${title}\n${agentLiveStateTooltip(state)}`
                               }
-                              onClick={() =>
-                                onSelectSession(session.id, {
-                                  project,
-                                  tree,
-                                  // Its own worktree is gone; it runs here now.
-                                  ...(session.worktreeCwd &&
-                                  !trees.some((entry) =>
-                                    isEqualOrInside(session.worktreeCwd!, entry.path),
-                                  )
-                                    ? { orphaned: true }
-                                    : {}),
-                                })
-                              }
+                              onClick={() => selectSession(session.id, tree)}
                               className={`flex h-7 w-full min-w-0 items-center gap-2 rounded-md px-2 text-left disabled:opacity-40 ${session.id === activeSessionId ? "bg-selection text-content" : "text-content/70 hover:bg-content/5"}`}
                             >
                               <HarnessIcon
@@ -798,18 +822,6 @@ ${openPrUrl}`}
                       ) : null}
                     </div>
                   ) : null}
-                  {folded &&
-                  sessions[0].orchestration?.tasks.length ? (
-                    <div
-                      data-worktree-session={sessions[0].id}
-                      className="ml-7"
-                    >
-                      <OrchestrationSidebarAgents
-                        leadId={sessions[0].id}
-                        summary={sessions[0].orchestration}
-                      />
-                    </div>
-                  ) : null}
                 </div>
               );
             })}
@@ -843,6 +855,16 @@ ${openPrUrl}`}
               label: "Review in Manager",
               disabled: !orchestrationActions?.openManagerCard,
               description: !orchestrationActions?.openManagerCard ? "Manager review is unavailable" : undefined,
+            }] : []),
+            ...(taskByPath.has(pathKey(menu.tree.path)) ? [{
+              kind: "item" as const,
+              id: "sessions",
+              label: "Conversations",
+              disabled: menu.tree.missing,
+              submenu: [
+                ...(workers.get(pathKey(menu.tree.path)) ?? []).map(({ sessionId, task, startedAt }) => ({ kind: "item" as const, id: `session:${sessionId}`, label: `${known.get(sessionId)?.title || task.title} · ${sessionId === task.sessionId ? "Latest worker" : "Earlier worker"}${startedAt ? ` · ${new Date(startedAt).toLocaleString()}` : ""}` })),
+                ...(groups.get(pathKey(menu.tree.path)) ?? []).filter(session => !(workers.get(pathKey(menu.tree.path)) ?? []).some(worker => worker.sessionId === session.id)).map(session => ({ kind: "item" as const, id: `session:${session.id}`, label: `Yours · ${sessionDisplayTitle(session.title, session.harness)}` })),
+              ],
             }] : []),
             {
               kind: "item",
@@ -928,11 +950,11 @@ ${openPrUrl}`}
               description: !menu.tree.branch ? "No branch: this worktree is on a detached commit" : undefined,
             },
             { kind: "sep" },
-            {
-              kind: "item",
+            ...(!taskByPath.has(pathKey(menu.tree.path)) ? [{
+              kind: "item" as const,
               id: "toggle",
               label: sessionsExpanded(menu.tree.path) ? "Collapse sessions" : "Expand sessions",
-            },
+            }] : []),
             { kind: "item", id: "refresh", label: "Refresh worktrees" },
             { kind: "sep" },
             {
@@ -957,7 +979,8 @@ ${openPrUrl}`}
                 const task = taskByPath.get(pathKey(tree.path));
                 const run = managerRuns.find((run) => run.projectManager && sameProjectPath(run.cwd, project) && run.tasks.includes(task!));
                 if (run && task) orchestrationActions?.openManagerCard?.(run.leadId, task.id);
-              } else if (id === "open") onSelectWorktree(project, tree);
+              } else if (id.startsWith("session:")) selectSession(id.slice(8), tree);
+              else if (id === "open") onSelectWorktree(project, tree);
               else if (id === "separate-project") await onAddAsSeparateProject?.(tree);
               else if (id.startsWith("new:")) {
                 setSessionsExpanded(tree.path, true);

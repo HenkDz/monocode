@@ -12,7 +12,6 @@ import { useAnimatedReorder } from "../../shared/hooks/useAnimatedReorder";
 import { MonoRailMascot } from "../../features/monos/ui/MonoRailMascot";
 import { AgentStatusLabel } from "../../features/agents/ui/AgentStatusLabel";
 import { AgentDetailTooltip } from "../../features/agents/ui/AgentDetailTooltip";
-import { agentLiveStateTooltip } from "../../features/agents/model/agentLiveState";
 import { MonoIntroPopover } from "../../features/monos/ui/MonoIntro";
 import { ProjectBackgroundDialog } from "../../features/projects/ui/ProjectBackgroundDialog";
 import { monoBackgroundKey } from "../../features/monos/model/monoBackground";
@@ -148,13 +147,15 @@ export function MonoRailSection({
             state.status === "idle"
               ? undefined
               : (state.activity ?? monoLiveStatusLabel(state));
+          const detail = [look.name, projects, monoLiveStatusLabel(state), state.liveState?.detail ?? status, state.liveState?.warning, monoTeamWorkingLabel(state), unseen ? unreadLabel(unseen) : undefined].filter(Boolean).join("\n");
+          const waiting = state.liveState?.status === "waiting-on-member" || state.liveState?.status === "waiting-review";
           return (
             <div
               key={mono.id}
               ref={(el) => sortable.setItemRef(mono.id, el)}
               data-selected={selected || undefined}
               data-mono-status={state.status}
-              className={`reorder-item project-reorder-item group relative flex h-8 cursor-default touch-none items-stretch rounded-md px-2 ${
+              className={`reorder-item project-reorder-item group relative flex min-h-12 cursor-default touch-none items-stretch rounded-md px-2 py-1.5 ${
                 selected ? "bg-selection-strong text-content" : "opacity-65"
               }`}
               onPointerDown={(event) => {
@@ -185,10 +186,11 @@ export function MonoRailSection({
                 });
               }}
             >
-              <AgentDetailTooltip detail={state.liveState && agentLiveStateTooltip(state.liveState)}>
+              <AgentDetailTooltip detail={detail}>
               <button
                 type="button"
-                title={[look.name, projects, monoLiveStatusLabel(state), state.liveState?.detail ?? status, monoTeamWorkingLabel(state), unseen ? unreadLabel(unseen) : undefined].filter(Boolean).join("\n")}
+                data-sidebar-row
+                title={detail}
                 aria-label={[
                   look.name,
                   monoLiveStatusLabel(state),
@@ -205,25 +207,25 @@ export function MonoRailSection({
                   color={look.color}
                   status={state.status}
                 />
+                <span className="min-w-0 flex-1">
                 {state.status === "working" ? (
                   <Shimmer
                     as="span"
                     duration={1.4}
-                    className="min-w-0 flex-1 truncate text-sm font-medium leading-tight"
+                    className="block min-w-0 truncate text-[11px] font-medium leading-tight"
                   >
                     {look.name}
                   </Shimmer>
                 ) : (
-                  <span className="min-w-0 flex-1 truncate text-sm font-medium leading-tight">
+                  <span className="block min-w-0 truncate text-[11px] font-medium leading-tight">
                     {look.name}
                   </span>
                 )}
-                {state.liveState || state.status === "needs-you" || state.teamWorking ? (
-                  <span className={`min-w-0 truncate text-[10px] ${state.status === "needs-you" ? "text-accent" : "text-content/50"}`}>
-                    {state.liveState && !state.attentionLocation ? <AgentStatusLabel state={state.liveState} /> : state.status === "needs-you" ? monoLiveStatusLabel(state) : null}
-                    {state.teamWorking ? ` · ${monoTeamWorkingLabel(state)}` : null}
+                  <span data-mono-rail-state className={`mt-1 block whitespace-normal text-[10px] leading-4 [&_.agent-state-text]:overflow-visible [&_.agent-state-text]:text-clip ${state.status === "needs-you" ? "text-accent" : "text-content/70"}`}>
+                    {waiting ? <span data-agent-state={state.liveState!.status} className="agent-state"><span aria-hidden="true" className="agent-state-cue" />Waiting</span>
+                      : state.liveState && !state.attentionLocation ? <AgentStatusLabel state={state.liveState} /> : monoLiveStatusLabel(state)}
                   </span>
-                ) : null}
+                </span>
                 {unseen ? (
                   <span
                     aria-hidden

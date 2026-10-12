@@ -51,7 +51,7 @@ export function CompactToolOutput({
             <button type="button" onClick={close} aria-label="Close" className="rounded px-2 py-1 text-xs text-content/65 hover:bg-content/6 hover:text-content focus-visible:ring-2 focus-visible:ring-accent">Close</button>
           </header>
           {copyState ? <p role="status" className="px-4 pt-2 text-xs text-content/65">{copyState}</p> : null}
-          <pre className="min-h-0 min-w-0 overflow-auto whitespace-pre-wrap break-words p-4 font-mono text-xs leading-5 text-content/80">{text}</pre>
+          <pre className="min-h-0 min-w-0 select-text overflow-auto whitespace-pre-wrap break-words p-4 font-mono text-xs leading-5 text-content/80">{text}</pre>
         </Popover>
       ) : null}
     </div>

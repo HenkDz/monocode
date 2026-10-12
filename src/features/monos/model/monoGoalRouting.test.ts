@@ -93,6 +93,27 @@ describe("exact project routes", () => {
         expect(decide(text, { choice: { mode: "goal", override, projectId: "c:/code/atlas" } }))
           .toMatchObject({ kind: "manager", project: { managerMonoId: "atlas-manager" } });
     });
+  it.each(["projects/repos", "projects/repositories", "workspaces/codebases", "codebase/workspace",
+    "project/repo/workspace/codebase", "project-wide/repo-wide", "code-base/work-space",
+    "code/base", "work/space", "code/base/work/space", "PROJECTS/REPOS,", "projects//repos",
+    "projects / repos", "projects/ repos", "projects /repos", "code base/work space",
+    "code**base**/work**space**", "projects\\repos", "code-base\\work-space", "code\\base",
+    "projects \\ repos", "projects\\ repos", "projects \\repos"])(
+    "keeps slash/backslash scope alternatives at Grand: %s", scope => {
+      for (const ctx of [context(), monoGoalRoutingContext(owner, roster, projects, ["C:/code/Beacon"])])
+        for (const override of ["auto", "manager"] as const)
+          expect(decide(`Fix Atlas and all ${scope}`, { context: ctx,
+            choice: { mode: "goal", override, projectId: "c:/code/atlas" } })).toMatchObject({ kind: "grand" });
+    });
+  it.each(["C:/projects/repos", "C:\\workspaces\\codebases", "/projects/repos", "\\\\projects\\repos",
+    "./projects/repos", "../workspaces/codebases", ".\\codebase\\workspace", "~/projects/repos",
+    "projects/repo.ts", "projects/repo.config", "projects/.repos", "projects/../repos",
+    "workspace/settings", "codebase/atlas", "project/index.ts", "code/base.ts"])(
+    "preserves genuine selected path metadata: %s", path => {
+      expect(decide(`Fix Atlas ${path}`)).toMatchObject({ kind: "grand" });
+      expect(decide(`Fix Atlas ${path}`, { choice: { mode: "goal", override: "manager", projectId: "c:/code/atlas" } }))
+        .toMatchObject({ kind: "manager", reason: "Contains file paths: routed to Atlas because you selected it" });
+    });
   it.each(["Fix Atlas project sidebar", "Fix Atlas repository allocations", "Fix Atlas workspace color",
     "Fix Atlas codebase startup", "Fix Atlas reports"])("deliberately over-blocks singular/prefix scope %s", text => {
     for (const override of ["auto", "manager"] as const)
@@ -287,9 +308,11 @@ function setup() {
 }
 
 describe("shared user submission boundary", () => {
-  it.each(["auto", "manager"] as const)("retains an older accepted project-set receipt on unchanged %s retry", async override => {
+  it.each((["auto", "manager"] as const).flatMap(override =>
+    [projectSetGoals[0], "Fix Atlas and all projects/repos"].map(text => ({ override, text }))))(
+    "retains an older accepted project-set receipt on unchanged $override retry: $text", async ({ override, text }) => {
     const f = setup();
-    f.input.text = projectSetGoals[0];
+    f.input.text = text;
     f.input.submission.choice = { mode: "goal", override, projectId: override === "manager" ? f.project.id : undefined };
     f.input.submission.reason = override === "manager" ? "Project selected" : "Exact project name";
     await f.host.persistOrigin(f.input.submission, f.input.text);
@@ -312,9 +335,10 @@ describe("shared user submission boundary", () => {
     expect(f.deliver.mock.calls[1][2]).toBe(f.deliver.mock.calls[0][2]);
     expect(f.source().blocks[0].monoGoalSubmission).toEqual(f.input.submission);
   });
-  it("retains an older project-set origin without creating a new assignment or Grand turn", async () => {
+  it.each([projectSetGoals[0], "Fix Atlas and all projects/repos"])(
+    "retains an older project-set origin without creating a new assignment or Grand turn: %s", async text => {
     const f = setup();
-    f.input.text = projectSetGoals[0];
+    f.input.text = text;
     await f.host.persistOrigin(f.input.submission, f.input.text);
     expect(await submitMonoGoal({ ...f.input, recovery: true }, f.host)).toBe(true);
     expect(f.host.grand).not.toHaveBeenCalled();

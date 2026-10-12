@@ -27,6 +27,24 @@ Evidence root: `C:/Users/nooro/AppData/Local/Temp/monocode-cc/cc5cl/evidence/`. 
 | Additional compound-spacing probe before correction | 292 / 7 / 0 | `runs/compound-spacing-before-fix.*` |
 | Corrected compound-spacing resolver | 299 / 0 / 0 | `runs/compound-spacing-corrected.*` |
 
-Current source is being frozen for historical routing replay and the serialized validation queue. Exact final-source results and commit hashes are appended after those checks. Full Vitest, TypeScript/build and required focused browser cases remain pending an explicit sole-slot grant; native source is unchanged. Source completion is not SHIP; corrected-head independent review remains required.
+Final source is frozen at `b62460400ba915450198b03f1d1e578d4b849b2d` after initial `ac2be75f34e3278ca9fd5b744048409c63c1316e`. The complete earlier focused replay at ac2be75 is retained under `runs/frozen-*`; it is superseded by the fresh final-source replay below. The added compound-spacing test exposed seven failures before the second correction; no source changed while a runner was active.
+
+| Final frozen-source check | Pass / fail / skip | Evidence |
+| --- | --- | --- |
+| Committed resolver/canonical/embedded/floating/Mission/chip | 672 / 0 / 0; six files | `runs/final-committed-routing672.*` |
+| Original slash boundary / stronger boundary / real queue | 36 / 0 / 0 each; original inputs and safe assertions retained | `runs/final-slash-original36.*`, `final-slash-strong.*`, `final-slash-queue.*` |
+| Expanded exact App/writer/queue/hydration | 234 / 0 / 0; 210 scope cases and 24 controls | `runs/final-slash-expanded.*` |
+| Independent resolver/adapter, including original 20 failures and eight paths | 159 / 0 / 0 | `runs/final-independent159.*` |
+| Original actual App/UI scope | 18 / 0 / 0 | `runs/final-app-scope18.*` |
+| Raw ASCII/markup/App/UI boundary | 133 / 0 / 0 | `runs/final-raw-app133.*` |
+| Coordinator original and compound aliases | 8+4 / 0 / 0 | `runs/final-coordinator8.*`, `final-coordinator4.*` |
+| Every historical routing family | 241 / 0 / 0; six files | `runs/final-historical241.*` |
+| Earliest raw routing policy | 224 / 15 / 0; same fifteen historical failures | `runs/final-raw239.*` |
+| Earlier writer/retry/recovery inventory | 72 / 0 / 0; ten files | `runs/final-writers72.*` |
+| Integrated writers / migration writer | 6+2 / 0 / 0 | `runs/final-integrated-writers6.*`, `final-migration-writers2.*` |
+
+`verified-summary.json` and the assert-based `verify.py` confirm zero source mismatches, all 69 fixture/support copies differ only by recorded checkout/output substitutions, all original twelve committed path contracts remain byte-identical, the eight independent paths pass, all 24 original broad-scope submissions have zero Manager goals/origins/queues after hydration, and the fixed twenty original texts still produce 14 Manager/six Grand. Each final run archives its own complete 1,645-file SHA256 snapshot. Counts overlap and must not be added. The new tracked regression count is 58 (35 scope variants, 20 genuine paths, three recovery cases); all prior tracked tests remain present.
+
+Full Vitest, TypeScript/build and required focused browser cases remain pending an explicit sole-slot grant; native source is unchanged. At reporting, `VALIDATION-QUEUE.md` assigns CC6-J the full slot and explicitly limits CC5C-L to source/small probes. No browser, preview, visual or Cargo check was run. Source is VALIDATION-READY, not SHIP; the corrected-head independent review remains required.
 
 The original raw routing replay's fifteen obsolete-policy failures remain failed and separate from the current-policy replay. No live model turns, real profiles, native acknowledgement/floating lifecycle proof, production route-rate/latency proof, preview, other-tree changes, push, merge or rebase are authorized.

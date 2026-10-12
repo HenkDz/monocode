@@ -2,6 +2,12 @@
 
 Branch: `HenkDz/cc8y-binding-provenance`; base
 `56334de5e2480c652fcfc49943b28cba93c3b029`, including CC8X and CC5E-J.
+Under explicit own-branch authorization, nour
+`2bd9b5231b1891fa894dfc3cfc21e36cc097d94b` was merged without conflicts.
+All final checks use frozen merge pin
+`9a2b41adcae4337496cf21baa910aa787d0fd145`. Incoming private-config,
+rotation, routing and persistence guards remain intact; there is no CC8Y
+native delta against the authorized nour pin.
 The coordinator owns integration and the final independent review.
 
 ## Change and reason
@@ -62,17 +68,26 @@ Windows, Node `v26.5.0`, process-local
 unset `CODEX_HOME` and all `ORCA_*` variables. No assertion, timeout or skip in
 the retained external probes changed.
 
-| Probe | Red baseline | Corrected |
+| Probe | Red baseline at 56334de | Final merged source at 9a2b41a |
 | --- | --- | --- |
-| Retained adapter/callback/writer inventory | 105 passed / 6 failed / 0 skipped; 111 tests, 2 files | 111 passed / 0 failed / 0 skipped; 6.41 s Vitest |
-| Retained actual picker/save/restart | 0 passed / 3 failed; 49 unselected by existing name filter | 3 passed / 0 failed; 2.30 s Vitest |
+| Retained adapter/callback/writer inventory | 105 passed / 6 failed / 0 skipped; 111 tests, 2 files | 111 passed / 0 failed / 0 skipped; 6.077 s command / 5.31 s Vitest |
+| Retained actual picker/save/restart | 0 passed / 3 failed; 49 unselected by existing name filter | 3 passed / 0 failed; 2.331 s command / 1.71 s Vitest; same 49 unselected |
 | Committed reducer/migration regressions | 103 passed / 8 failed; 111 tests, 2 files | Included in focused group below |
-| Focused provider, App, queue and migration group | — | 235 passed / 0 failed / 0 skipped, 9 files; 11.43 s Vitest |
+| Focused provider, App, queue and migration group | — | 235 passed / 0 failed / 0 skipped, 9 files; 9.085 s command / 7.10 s Vitest |
+| Complete one-worker Vitest | — | 8,140 passed / 0 failed / 13 skipped / 0 todo; 624 passed / 2 skipped files, 626 total; 329.233 s command / 327.41 s Vitest |
+| `npx tsc --noEmit` | — | Exit 0, no diagnostics; 18.152 s |
+| `npm run build` | — | Exit 0; 31.251 s overall / 16.23 s Vite |
 
-Required full Vitest, typecheck and build are awaiting an explicit slot under
-the coordinator's `VALIDATION-QUEUE.md`. Final results will be recorded here
-and in the external report after that slot completes. No native source changed,
-so no new native compilation is required.
+The coordinator granted the sole FULL heavy slot on 2026-10-12. Required gates
+ran sequentially with one Vitest worker, unchanged assertions/timeouts/skips,
+and unchanged frozen source. The 13 existing skips are Antigravity real/soak
+fixtures. Build retains the CSS highlight, mixed-import and chunk-size warnings.
+No unhandled test error was reported. No CC8Y native delta means no new native
+compilation was needed. All owned validation jobs have stopped.
+
+Earlier pre-integration green checks remain archived; they are not the full
+readiness proof for this merge. The final documentation commit changes only this
+document; source/test/config hashes still match the validated merge pin.
 
 Evidence root: `C:/Users/nooro/AppData/Local/Temp/monocode-cc/cc8y/evidence/`.
 
@@ -85,6 +100,12 @@ Evidence root: `C:/Users/nooro/AppData/Local/Temp/monocode-cc/cc8y/evidence/`.
   fixture-contract mistakes before correction.
 - `caller-inventory.md`: exact base source paths, producer/caller inventory,
   account reachability and conservative account-selection limits.
+- `provider/merged-corrected/`, `merged-focused*`, `merged-vitest-full*`,
+  `merged-tsc*`, `merged-build*`, `merged-validation-summary.json`: final merged
+  replay and required gates, exact commands, raw logs, counts and durations.
+- `merged-frozen-source-manifest.json`, `merged-source-proof-*`,
+  `merged-process-completion.json`: 1,517 unchanged source/config hashes,
+  retained fixture integrity, preserved incoming guards and job completion.
 - Prior `cc8xr/evidence/web-validation/` retains the failed parallel full run
   (7,873 passed / 13 failed / 13 skipped) and passing serial retry on its pin;
   those historical runs do not validate CC8Y.
@@ -104,5 +125,6 @@ against the captured session account. Account routing is outside this correction
 Grok, FX, Devin and Antigravity still omit `onAccepted`; their migration, CC1 and
 CC5E receipts may conservatively remain pending. This inherited P3 adapter
 backlog is documented rather than repaired here. No native storage/permission,
-rotation, renderer, workbench, routing or real-data change was made. No push,
-merge, rebase, deployment, other-worktree edit or board update was performed.
+rotation, renderer, workbench, routing or real-data change was made by CC8Y.
+Only the explicitly authorized own-branch nour merge was performed. No push,
+rebase, deployment, other-worktree edit or board update was performed.

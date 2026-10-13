@@ -321,6 +321,7 @@ mod tests {
         ensure(&desktop, &original, false).unwrap();
         let source = root.join("orca");
         std::fs::create_dir(&source).unwrap();
+        let source = source.canonicalize().unwrap();
         let old = selected_home(&source, &original, true).unwrap();
         std::fs::write(old.join("history.jsonl"), b"CC0J/CC0K separate history").unwrap();
         let binding = std::fs::read(old.join(BINDING)).unwrap();

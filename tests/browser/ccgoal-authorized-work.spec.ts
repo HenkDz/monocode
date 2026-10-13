@@ -23,9 +23,10 @@ test("direct Manager design -> persisted digest -> implementation, foreign refus
   await page.getByRole("button", { name: "Mission control", exact: true }).click();
   await expect(page.getByText("have bot features built robustly").first()).toBeVisible();
   await page.getByRole("button", { name: /^have bot features built robustly/ }).click();
-  await expect(page.getByRole("button", { name: "Open Browser Link Manager", exact: true })).toBeVisible();
+  const chain = page.getByRole("list", { name: "have bot features built robustly delegation chain" });
+  await expect(chain.getByRole("button", { name: "Open Browser Link Manager", exact: true })).toBeVisible();
   await page.screenshot({ path: info.outputPath("authorized-flow.png"), fullPage: true });
-  await page.getByRole("button", { name: "Open Browser Link Manager", exact: true }).click();
+  await chain.getByRole("button", { name: "Open Browser Link Manager", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Browser Link Manager" })).toBeVisible();
   await page.evaluate(() => (window as any).ccgoal.stop());
   expect(await page.evaluate(() => (window as any).ccgoal.snapshot().goals[0].state)).toBe("cancelled");

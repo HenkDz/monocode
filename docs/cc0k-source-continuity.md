@@ -22,25 +22,26 @@ The private-history path/fingerprint/identity checks and post-archive race reche
 
 ## Evidence and limits
 
-Evidence and coordinator reports: `C:/Users/nooro/AppData/Local/Temp/monocode-cc/cc0k/`. The clean-base input manifest and original expected-safe failures are retained. Native process drivers kill immediately after archive creation and after copy/before sync, then restart/retry migration, keep-private and resolve. The connected browser adapter calls actual storage and SQLite/Mono persistence commands in a synthetic, windowless Tauri host; provider transports remain synthetic.
+Evidence and coordinator reports: `C:/Users/nooro/AppData/Local/Temp/monocode-cc/cc0k/`. Clean base/input manifests and original expected-safe failures remain retained. Initial implementation `18fd3f1657ea40db060138b6613d7082c4200327`, tree `ce44fd3964b22c3835459bb3c541744ccc56a67d`, received native and full web/connected checks. A subsequent narrow canonical Mono persistence probe confirmed that metadata upsert erased malformed/unknown maps. That raw failure and the first correction's fingerprint failure remain recorded.
 
-Implementation was frozen at `18fd3f1657ea40db060138b6613d7082c4200327`, tree `ce44fd3964b22c3835459bb3c541744ccc56a67d`, before final gates. This final documentation update changes no executable input. Exact final-doc pins, all 25 changed-path hashes, raw receipts and source equivalence are in the external `REPORT.md`, `VALIDATION-READY.md` and `evidence/final-candidate-manifest.json`.
+Final correction was frozen at `8d9ddc1fb6ff4376318d38c90f94a1308d2b4363`, tree `bd82e5f1f98873c3a4dcb97059def4a3a22f69ba`, before refreshed affected gates. Metadata writes/sanitization and home selection refuse unresolved maps, while pure fingerprints remain readable. No native source/config/Cargo bytes changed; native gates retain their initial execution pins with explicit input equivalence. Fresh web/connected evidence binds final correction. This final doc-only child changes no executable input; exact final-doc pin/tree and all 25 changed-path hashes are in external `REPORT.md`, `VALIDATION-READY.md` and `evidence/final-candidate-manifest.json`.
 
-| Frozen gate | Result |
-| --- | --- |
-| Native Codex storage | 202 passed, 0 failed, 6 ignored |
-| Native harness | 26 passed, 0 failed |
-| Native Mono | 229 passed, 0 failed, 6 ignored |
-| Native session persistence | 62 passed, 0 failed |
-| TypeScript | Exit 0 |
-| Full one-worker Vitest | 8445 passed, 0 failed, 13 skipped |
-| Routing-false build | Exit 0 |
-| Chromium and WebKit connected recovery | 14 passed flows, 30 inspected PNGs, 332 native calls |
+| Applicable gate | Actual source pin | Result |
+| --- | --- | --- |
+| Native Codex storage | 18fd3f1 | 202 passed, 0 failed, 6 ignored |
+| Native harness | 18fd3f1 | 26 passed, 0 failed |
+| Native Mono | 18fd3f1 | 229 passed, 0 failed, 6 ignored |
+| Native session persistence | 18fd3f1 | 62 passed, 0 failed |
+| TypeScript | 8d9ddc1 | Exit 0 |
+| Full one-worker Vitest | 8d9ddc1 | 8450 passed, 0 failed, 13 skipped |
+| Routing-false build | 8d9ddc1 | Exit 0 |
+| Chromium and WebKit connected recovery | 8d9ddc1 | 14 passed flows, 30 inspected PNGs, 332 native calls |
+| Canonical Mono opaque-map persistence | 8d9ddc1 | 4 preserved, 3 save refusals, 1 valid save, 17 native calls |
 
-The final browser proof invokes 134 actual `mono_session_upsert` writes and 12 `mono_session_get` loads. Both launch orders, two Monos plus an unrelated account, reload, recreated original/separate sources and migration kill/restart are covered. Twenty-two expected native refusals retain legacy/expected-home safety. The earlier regular-session browser fixture remains recorded with its narrower applicability; it is not Mono-persistence proof. All 82 newly captured PNGs across the retained pre-freeze and two frozen runs were inspected.
+The final connected browser proof invokes 134 actual `mono_session_upsert` writes and 12 `mono_session_get` loads. Both launch orders, two Monos plus an unrelated account, reload, recreated original/separate sources and migration kill/restart are covered. Twenty-two expected native refusals retain legacy/expected-home safety. The earlier regular-session fixture has narrower applicability and is not Mono-persistence proof. All 112 newly captured PNGs across retained runs were inspected.
 
-Six distinct native kill cases exercise migration, keep-private and resolve at both archive checkpoints. They run in both storage and Mono families, followed by two browser-connected copy kills: 14 actual frozen K2 kills, all reaped/recovered. Numeric source/private identities and PIDs remain in their original receipts. Captured Mono stdout is not rerun just to print identities. Original expected-safe failures and all failed attempts remain recorded without weakening assertions or deadlines.
+Six distinct native kill cases exercise migration, keep-private and resolve at both archive checkpoints, running in both storage and Mono families. Twelve retained native kills plus two latest connected copy kills form the 14-kill current applicable set, all reaped/recovered. Two initial authoritative browser kills remain separately retained (16 actual executions across those authoritative runs). Numeric source/private identities and PIDs stay in original receipts. Captured successful Mono stdout was not rerun for printing. No assertions, skips or deadlines were weakened; failed and intentionally cancelled attempts remain recorded.
 
-The library-test executable needs a test-only Common Controls v6 activation manifest to call the native Tauri host on Windows; bootstrap before/after binary hashes are recorded independently of source pins. The browser exercises the real Notice, extracted App callbacks, prepare bridge and native command functions through mocked IPC and a synthetic windowless AppHandle. It does not establish native WebView/IPC, real provider transport or live acceptance.
+The library-test executable needs a test-only Common Controls v6 activation manifest for the windowless Tauri host; before/after binary hashes are recorded separately from source pins. The browser exercises actual Notice, extracted App callbacks, prepare bridge and native command functions through mocked IPC and a synthetic AppHandle. Provider transport and rollout markers remain synthetic. This does not establish native WebView/IPC, real provider transport or live acceptance.
 
-No real profiles, credentials, Credential Manager, live providers/model turns, ACL/account operations, native preview, push/deploy or other worktrees are used. This is builder evidence, not release acceptance. Literal raw-prefix, routing experimental/default-off old-fixture, MP4/host failures and the cc0ir/cc0jr P3 ledgers remain held evidence; K1/K2 do not expand those fixes. Historical unchanged-helper matrices remain at their original execution pins. Original/partial temp retention can accumulate; unknown state remains conservative. Reattachment preserves old credential namespace ownership bytes; source-identity-sensitive listing/retirement stays conservative. Windows test coverage does not establish power-loss durability, Unix concurrent-writer guarantees or separate long-path-consumer acceptance.
+No real profiles, credentials, Credential Manager, model turns, ACL/account operations, native preview, push/deploy or other worktrees were used. Builder DONE is separate from Claude focused clearance/coordinator integration/release acceptance. Literal raw-prefix, routing experimental/default-off old fixtures, MP4/host failures and cc0ir/cc0jr P3 ledgers remain held. Historical unchanged-helper matrices retain original pins. Unknown temp/partial/choice receipt retention can accumulate; opaque thread maps conservatively refuse saves until explicit repair. Reattachment preserves old credential ownership bytes; source-identity-sensitive listing/retirement stays conservative. Windows tests do not establish power-loss durability, Unix concurrent-writer guarantees or separate long-path-consumer acceptance.

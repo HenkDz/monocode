@@ -10,6 +10,8 @@ import { selectCodexStorageHome } from "../features/monos/model/monoCodexHomes";
 import { loadMonoRotation, MONO_ROTATION_READ_ERROR } from "../features/monos/model/monoRotation";
 import { markHabitRun, clearHabitRun, habitRunMono } from "../features/monos/model/monoHabits";
 import { submitWithSettlement } from "./model/managedSubmission";
+import { assertManagerDelivery } from "../features/monos/model/managerAuthorizedWork";
+import { monoManagerGoals } from "../features/monos/model/monoManagerGoals";
 
 beforeEach(() => vi.stubGlobal("localStorage", { getItem: () => null }));
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
@@ -34,7 +36,7 @@ function evaluate(source: string, context: Record<string, unknown>) {
   const output = ts.transpileModule(`(${source})`, {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
   }).outputText;
-  return runInNewContext(output, { turnGen: { current: new Map() }, ...context, Error });
+  return runInNewContext(output, { turnGen: { current: new Map() }, assertManagerDelivery, monoManagerGoals, ...context, Error });
 }
 
 it("bounds actual autosave scheduling across repeated unresolved-map cycles without changing its notice", async () => {

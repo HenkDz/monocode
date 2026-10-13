@@ -80,6 +80,7 @@ export function selectAttention(input: AttentionInput): AttentionItem[] {
       const id = identity(session.id, "manager-request", block.id);
       add({ ...context, id, revision: identity(id, JSON.stringify(request)), source: "manager-request", category: "decision",
         title: "Continue this request", detail: session.blocks.find(block => block.id === request.userMessageId)?.text ?? block.text,
+        project: projectName(request.projectId), createdAt: session.blocks.find(block => block.id === request.userMessageId)?.startedAt,
         messageId: block.id, route: "user", status: request.state === "pending" ? owner && !session.worktreeRemoved ? "open" : "stale" : "resolved",
         state: { status: request.state === "pending" ? "needs-you" : "done", reason: "decision" } });
     }

@@ -126,6 +126,7 @@ it("shows an unanchored report's original request in Attention and one user clic
   expect(appendManagerRecovery(session, recovery)).toBe(session);
   const input = () => ({ sessions: [session], runs: [run], roster: [manager], goals: f.ledger.goals() });
   const action = selectAttention(input()).find(item => item.source === "manager-request")!;
+  expect(action.project).toBe("browser-link-4");
   const resume = () => resumeManagerRequest(recovery, { session: () => session, manager: () => manager, project: async () => project,
     ledger: f.ledger, goals: f.host, save: async change => { session = change(session); } });
   const callbacks = { continueRequest: resume } as unknown as AttentionCallbacks;

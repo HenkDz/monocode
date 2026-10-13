@@ -104,6 +104,7 @@ export type ManagerGoalHost = {
     text: string,
     receiptId: string,
     cancel: boolean,
+    validate?: () => void,
   ): Promise<void>;
 };
 type Store = {

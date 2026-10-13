@@ -11,7 +11,7 @@ import type { UserQuestionPrompt, UserQuestionReply } from "../../sessions/model
 import { projectName } from "../../../shared/lib/paths";
 import type { TrackedCiRepair } from "../../inbox/model/ciRepairTracking";
 import type { Automation } from "../../automations/model/automations";
-import { canContinueManagerRequest } from "../../monos/model/managerAuthorizedWork";
+import { canContinueManagerRequest, managerRequestState } from "../../monos/model/managerAuthorizedWork";
 
 export type AttentionCategory = "approval" | "decision" | "blocker" | "failure";
 export type AttentionSource = "approval" | "question" | "storage" | "usage" | "preparation" | "delivery" | "task" | "continue" | "manager-request" | "error" | "ci-repair" | "automation";
@@ -76,13 +76,14 @@ export function selectAttention(input: AttentionInput): AttentionItem[] {
     const scope = identity(session.id, session.providerSessionId, turn?.id);
     for (const block of session.blocks.filter(block => block.managerRequestRecovery)) {
       const request = block.managerRequestRecovery!;
+      const state = managerRequestState(request, input.goals);
       const owner = input.roster.find(mono => mono.id === request.monoId && mono.role === "manager" && mono.sessionId === session.id && mono.archivedAt == null);
       const id = identity(session.id, "manager-request", block.id);
-      add({ ...context, id, revision: identity(id, JSON.stringify(request)), source: "manager-request", category: "decision",
+      add({ ...context, id, revision: identity(id, JSON.stringify(request), state), source: "manager-request", category: "decision",
         title: "Continue this request", detail: session.blocks.find(block => block.id === request.userMessageId)?.text ?? block.text,
         project: projectName(request.projectId), createdAt: session.blocks.find(block => block.id === request.userMessageId)?.startedAt,
-        messageId: block.id, route: "user", status: request.state === "pending" ? owner && !session.worktreeRemoved ? "open" : "stale" : "resolved",
-        state: { status: request.state === "pending" ? "needs-you" : "done", reason: "decision" } });
+        messageId: block.id, route: "user", status: state === "pending" ? owner && !session.worktreeRemoved ? "open" : "stale" : "resolved",
+        state: { status: state === "pending" ? "needs-you" : "done", reason: "decision" } });
     }
     for (const block of session.blocks) {
       if (!block.approval) continue;

@@ -32,6 +32,22 @@ test("direct Manager design -> persisted digest -> implementation, foreign refus
   expect(await page.evaluate(() => (window as any).ccgoal.snapshot().goals[0].state)).toBe("cancelled");
 });
 
+test("Cancel retires both recovery surfaces across reload and rejects late Continue", async ({ page }, info) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(fixture);
+  await expect(page.getByRole("heading", { name: "Browser Link Manager" })).toBeVisible();
+  await page.evaluate(() => (window as any).ccgoal.unanchored());
+  await page.evaluate(() => (window as any).ccgoal.cancel());
+  await expect(page.getByRole("button", { name: "Request cancelled", exact: true })).toBeDisabled();
+  await page.reload();
+  await expect(page.getByRole("button", { name: "Request cancelled", exact: true })).toBeDisabled();
+  await page.screenshot({ path: info.outputPath("cancelled-recovery.png"), fullPage: true });
+  await page.getByRole("button", { name: "Attention", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Continue this request", exact: true })).toHaveCount(0);
+  expect(await page.evaluate(() => (window as any).ccgoal.snapshot().runs[0].tasks.length)).toBe(0);
+  expect(await page.evaluate(() => (window as any).ccgoal.snapshot().goals[0].state)).toBe("cancelled");
+});
+
 for (const surface of ["conversation", "attention"]) test(`unanchored event -> one-click Continue from ${surface} -> one implementation`, async ({ page }, info) => {
   await page.goto(fixture + "?theme=light");
   await expect(page.getByRole("heading", { name: "Browser Link Manager" })).toBeVisible();

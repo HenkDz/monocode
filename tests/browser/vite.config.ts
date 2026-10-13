@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { readdirSync } from "node:fs";
 import { defineConfig } from "vite";
 import projectConfig from "../../vite.config";
+import { ccgoalAppPaths } from "./ccgoalAppPaths";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const fixtures = fileURLToPath(new URL("./", import.meta.url));
@@ -11,6 +12,7 @@ export default defineConfig(async (environment) => {
   const config = await projectConfig(environment);
   return {
     ...config,
+    plugins: [...(config.plugins ?? []), ccgoalAppPaths()],
     root,
     build: {
       ...config.build,

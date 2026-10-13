@@ -1,8 +1,8 @@
 import { expect, it, vi } from "vitest";
 import { MonoManagerGoals, type GoalLedger, type ManagerProject } from "./monoManagerGoals";
 import { monoVisibleProjects, type Mono } from "./mono";
-import { newSession, type Block } from "../../sessions/model/session";
-import { appendManagerRecovery, managerDelegateGoal, managerRecoveryRequest, managerReportTasks, resumeManagerRequest } from "./managerAuthorizedWork";
+import { newSession, type Block, type Session } from "../../sessions/model/session";
+import { appendManagerRecovery, managerDelegateGoal, managerRecoveryRequest, managerReportTasks, managerRequestBinding, resumeManagerRequest } from "./managerAuthorizedWork";
 import type { OrchestrationRun, OrchestrationTask } from "../../orchestration/model/orchestrationState";
 import { prepareManagerWake, reconcileManagerWake } from "../../orchestration/model/managerWake";
 import { selectGoalViews } from "../../commandCenter/model/goalView";
@@ -29,7 +29,7 @@ function setup() {
   const saved = new Map<string, GoalLedger>();
   const storage = { load: async (id: string) => saved.get(id) ?? null, save: vi.fn(async (id: string, ledger: GoalLedger) => { saved.set(id, structuredClone(ledger)); }) };
   const ledger = new MonoManagerGoals(storage);
-  const session = { ...newSession("codex", "/synthetic/home"), id: manager.sessionId!, blocks: [request], busy: true };
+  const session = { ...newSession("codex", "/synthetic/home"), codexStorageHome: "/synthetic/home", id: manager.sessionId!, blocks: [request], busy: true };
   const persist = vi.fn(async () => {}), validate = vi.fn(() => {});
   const input = { manager, project, session, ledger, persist, validate, origin: { kind: "user" as const, messageId: "app-turn-1" } };
   const host: ManagerGoalHost = { projects: async () => [project], mayDelegate: () => false, status: async () => ({}), ready: async () => [], deliver: vi.fn(async () => {}) };
@@ -121,7 +121,7 @@ it("shows an unanchored report's original request in Attention and one user clic
   const f = setup(), run = reportRun();
   f.session.blocks.push({ id: "digest", role: "user", internal: true, text: "Delegate implementation", appRequestId: run.wakeState!.receipt!.id });
   await expect(managerDelegateGoal({ ...f.input, run, origin: { kind: "event", messageId: "event" } })).rejects.toThrow("one-click confirmation");
-  const recovery = { monoId: manager.id, sessionId: f.session.id, managerId: project.managerId, projectId: project.id, userMessageId: request.id, state: "pending" as const };
+  const recovery = { monoId: manager.id, sessionId: f.session.id, managerId: project.managerId, projectId: project.id, userMessageId: request.id, binding: managerRequestBinding(f.session), state: "pending" as const };
   let session = appendManagerRecovery({ ...f.session, busy: false }, recovery);
   expect(appendManagerRecovery(session, recovery)).toBe(session);
   const input = () => ({ sessions: [session], runs: [run], roster: [manager], goals: f.ledger.goals() });
@@ -133,7 +133,7 @@ it("shows an unanchored report's original request in Attention and one user clic
   await executeAttentionAction(action, "continue", input(), callbacks);
   expect(f.host.deliver).toHaveBeenCalledOnce();
   expect(vi.mocked(f.host.deliver).mock.calls[0]).toEqual([expect.objectContaining({ userMessageId: request.id, title: request.text }), request.text,
-    `mono-goal-manager-continue-${request.id}`, false]);
+    `mono-goal-manager-continue-${request.id}`, false, expect.any(Function)]);
   expect(selectAttention(input()).find(item => item.id === action.id)?.status).toBe("resolved");
   await expect(executeAttentionAction(action, "continue", input(), callbacks)).rejects.toThrow("changed");
   expect(f.host.deliver).toHaveBeenCalledOnce();
@@ -141,7 +141,7 @@ it("shows an unanchored report's original request in Attention and one user clic
 
 it.each(["busy", "approval", "held", "account", "new-user", "cancelled", "project", "save"])("Continue preserves the %s guard", async guard => {
   const f = setup();
-  const recovery = { monoId: manager.id, sessionId: f.session.id, managerId: project.managerId, projectId: project.id, userMessageId: request.id, state: "pending" as const };
+  const recovery = { monoId: manager.id, sessionId: f.session.id, managerId: project.managerId, projectId: project.id, userMessageId: request.id, binding: managerRequestBinding(f.session), state: "pending" as const };
   const session = appendManagerRecovery({ ...f.session, busy: false }, recovery);
   if (guard === "busy") session.busy = true;
   if (guard === "approval") session.blocks.push({ id: "approval", role: "tool", text: "permission", approval: { requestId: 1 } } as Block);
@@ -161,4 +161,56 @@ it("Grand inherits only active reporting Manager projects on a fresh roster, wit
     { ...manager, id: "archived", archivedAt: 1, projects: ["/archived"] }, { ...manager, id: "unlinked", managerProject: "/previous", projects: ["/wrong"] }];
   expect(monoVisibleProjects(grand, roster)).toEqual([project.folder]);
   expect(grand.projects).toEqual([]);
+});
+
+it.each(["project", "anchor", "receipt", "delivery"])("rechecks recovery identity after awaited %s persistence/preparation", async boundary => {
+  const f = setup();
+  const recovery = { monoId: manager.id, sessionId: f.session.id, managerId: project.managerId, projectId: project.id,
+    userMessageId: request.id, binding: managerRequestBinding(f.session), state: "pending" as const };
+  let session = appendManagerRecovery({ ...f.session, busy: false }, recovery);
+  const drift = () => { session = { ...session, codexStorageHome: "/synthetic/moved-home" }; };
+  if (boundary === "anchor" || boundary === "receipt") {
+    const save = f.storage.save.getMockImplementation()!;
+    let writes = 0;
+    f.storage.save.mockImplementation(async (...args) => { await save(...args); if (++writes === (boundary === "anchor" ? 1 : 2)) drift(); });
+  }
+  const queued = vi.fn();
+  if (boundary === "delivery") f.host.deliver = async (_goal, _text, _receipt, _cancel, validate) => { await Promise.resolve(); drift(); validate!(); queued(); };
+  await expect(resumeManagerRequest(recovery, { session: () => session, manager: () => manager,
+    project: async () => { if (boundary === "project") drift(); return project; }, ledger: f.ledger, goals: f.host,
+    save: async change => { session = change(session); } })).rejects.toThrow("changed");
+  expect(queued).not.toHaveBeenCalled();
+  if (boundary !== "delivery") expect(f.host.deliver).not.toHaveBeenCalled();
+});
+
+it.each(["binding", "home", "unresolved", "return-choice"])("refuses missing or unresolved original recovery %s after JSON reload", async missing => {
+  const f = setup();
+  const recovery = { monoId: manager.id, sessionId: f.session.id, managerId: project.managerId, projectId: project.id,
+    userMessageId: request.id, binding: managerRequestBinding(f.session), state: "pending" as const };
+  if (missing === "binding") delete (recovery as { binding?: unknown }).binding;
+  if (missing === "home") recovery.binding.codexStorageHome = null;
+  let session: Session = JSON.parse(JSON.stringify(appendManagerRecovery({ ...f.session, busy: false }, recovery)));
+  if (missing === "home") session.codexStorageHome = undefined;
+  if (missing === "unresolved") session.codexHomeThreadsUnresolved = true;
+  if (missing === "return-choice") session.codexStorageReturnChoice = "synthetic unresolved source";
+  const retained = session.blocks.at(-1)!.managerRequestRecovery!;
+  await expect(resumeManagerRequest(retained, { session: () => session, manager: () => manager, project: async () => project,
+    ledger: f.ledger, goals: f.host, save: async change => { session = change(session); } })).rejects.toThrow("changed");
+  expect(f.ledger.goals()).toEqual([]); expect(f.host.deliver).not.toHaveBeenCalled();
+});
+
+it("keeps the existing default-account alias and healthy home binding across JSON reload", async () => {
+  const f = setup();
+  const recovery = { monoId: manager.id, sessionId: f.session.id, managerId: project.managerId, projectId: project.id,
+    userMessageId: request.id, binding: managerRequestBinding(f.session), state: "pending" as const };
+  let session: Session = JSON.parse(JSON.stringify(appendManagerRecovery({ ...f.session, busy: false, providerAccountId: "default" }, recovery)));
+  await resumeManagerRequest(session.blocks.at(-1)!.managerRequestRecovery!, { session: () => session, manager: () => manager,
+    project: async () => project, ledger: f.ledger, goals: f.host, save: async change => { session = change(session); } });
+  expect(f.host.deliver).toHaveBeenCalledOnce(); expect(session.blocks.at(-1)!.managerRequestRecovery!.state).toBe("continued");
+});
+
+it("never selects a genuine newer request without controlled report linkage", () => {
+  const f = setup();
+  f.session.blocks.push({ ...request, id: "unrelated-new-request" }, { id: "unknown-report", role: "user", internal: true, appRequestId: "unknown", text: "Report prose" });
+  expect(managerRecoveryRequest(f.session, reportRun())).toBeUndefined();
 });

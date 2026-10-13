@@ -5,7 +5,7 @@ import { selectCodexStorageHome } from "../../monos/model/monoCodexHomes";
 const invoke = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
 
-const { getSession, sanitizeSessionForPersist } = await import("./sessionStore");
+const { getSession, sanitizeSessionForPersist, persistFingerprint } = await import("./sessionStore");
 
 /** A saved Codex session holding the one row this PR repairs. */
 function codexRecord(): SessionRecord {
@@ -84,6 +84,7 @@ describe("restoring a session whose repair cannot be persisted", () => {
     expect(session.codexHomeThreadsUnresolved).toBe(true);
     expect(session.providerSessionIdByHome).toBeUndefined();
     expect(session.modelSettings).toEqual({ reasoningEffort: "high" });
+    expect(() => persistFingerprint(session)).not.toThrow();
     expect(() => sanitizeSessionForPersist({ ...session, title: "Later metadata save" })).toThrow("Preserve the unreadable per-home provider thread map");
     expect(() => selectCodexStorageHome(session, { home: "C:/synthetic/separate", originalHome: "C:/synthetic/original", threadId: null })).toThrow("Preserve the unreadable per-home provider thread map");
   });

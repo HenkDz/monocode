@@ -159,13 +159,16 @@ export function isPersistableId(value: string): boolean {
   return /^[A-Za-z0-9_-]+$/.test(value);
 }
 
+function requireResolvedCodexHomeThreads(session: Session): void {
+  if (session.codexHomeThreadsUnresolved) {
+    throw new Error("Codex storage needs repair: Preserve the unreadable per-home provider thread map before saving.");
+  }
+}
+
 function persistableMeta(
   session: Session,
   includeQueue = true,
 ): Omit<SessionUpsertPayload, "blocks"> {
-  if (session.codexHomeThreadsUnresolved) {
-    throw new Error("Codex storage needs repair: Preserve the unreadable per-home provider thread map before saving.");
-  }
   const linkedWorkItem = sanitizeLinkedWorkItem(session.linkedWorkItem);
   const queuedMessages = includeQueue
     // Keep the existing durable queue format; split app events out on hydration.
@@ -376,6 +379,7 @@ export function sanitizeLinkedWorkItem(
 export function sanitizeSessionForPersist(
   session: Session,
 ): SessionUpsertPayload {
+  requireResolvedCodexHomeThreads(session);
   const firstUser = session.blocks.findIndex((block) => block.role === "user");
   return {
     ...persistableMeta(session),
@@ -472,6 +476,7 @@ async function saveSessionSnapshot(
   if (!shouldPersistSession(session) || deletedSessionIds.has(session.id)) {
     return null;
   }
+  requireResolvedCodexHomeThreads(session);
   const mono = !!session.monoTranscript || isMonoSession(session.id);
   const snapshot = mono
     ? session.blocks.filter((block) => monoPersistedBlock(block) !== null)
@@ -569,7 +574,7 @@ export function persistFingerprint(session: Session): string {
     }
     return token;
   });
-  return `${JSON.stringify(persistableMeta(session, false))}|${queue.length ? (session.queueStatus ?? "active") : ""}:${queue.join(",")}|${session.orchestrationLeadId ?? ""}|${session.blocks
+  return `${session.codexHomeThreadsUnresolved ? "unresolved-codex-home-threads:" : ""}${JSON.stringify(persistableMeta(session, false))}|${queue.length ? (session.queueStatus ?? "active") : ""}:${queue.join(",")}|${session.orchestrationLeadId ?? ""}|${session.blocks
     .map(blockToken)
     .join(",")}`;
 }

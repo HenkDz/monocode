@@ -57,6 +57,32 @@ const conflictDetail = (value = hooksConflict) => `Codex storage needs repair: $
 const buttonNamed = (name: string) => Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
   .find(button => button.textContent?.startsWith(name))!;
 
+it("keeps a preserve refusal visible across stable map notice renders and unrelated error strings", async () => {
+  const homeThreads = { sessionId: "mono", identity: "row:created", fingerprint: "stored", cwd: "/synthetic/repo", providerAccountId: "account", home: "/synthetic/home" };
+  const resolve = vi.fn(async () => { throw new Error("Stored record changed; keep the unsaved edits"); });
+  for (let cycle = 0; cycle < 6; cycle++) {
+    await act(async () => root.render(<MonoCodexStorageNotice {...{ homeThreads }} detail={`Unrelated refusal ${cycle}`} onRepair={async () => {}} onResolve={resolve} />));
+    expect(container.textContent).toContain("Conversation edits are not saved");
+    expect(buttonNamed("Preserve stored map aside")).toBeDefined();
+    if (cycle === 0) await act(async () => buttonNamed("Preserve stored map aside").click());
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("Stored record changed");
+  }
+});
+
+it("offers advisory return as secondary storage details without a blocking notice or separate no-op", async () => {
+  const detail = `Codex storage needs repair: ${JSON.stringify({ recovery: true, reason: "Return available", paths: ["/synthetic/original"], sourceBinding: {
+    resolvedSourceHome: "/synthetic/source", boundSourceHome: "/synthetic/source", canBind: false, canSeparate: true, canReturn: true, sourceIdentity: "1:9",
+  } })}`;
+  const resolve = vi.fn(async () => {});
+  await act(async () => root.render(<MonoCodexStorageNotice {...{ advisory: true }} detail={detail} onRepair={async () => {}} onResolve={resolve} />));
+  expect(container.querySelector('section[role="status"]')).toBeNull();
+  expect(container.querySelector("details")?.open).toBe(false);
+  expect(buttonNamed("Use a separate Mono home")).toBeUndefined();
+  expect(container.textContent).toContain("/synthetic/source");
+  await act(async () => buttonNamed("Return to original home").click());
+  expect(resolve).toHaveBeenCalledExactlyOnceWith("reattach_original_source");
+});
+
 it("requires an explicit scoped confirmation before clearing an inactive owned credential namespace", async () => {
   const receipt = { contextId: "a".repeat(64), contextIdentity: "1:2", owners: [{ entry: ".monocode-credential-owner-cli.json", identity: "1:3", fingerprint: "hash" }] };
   const namespace = { contextId: receipt.contextId, home: "C:/synthetic/private/context", copies: 1, active: false, receipt };

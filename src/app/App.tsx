@@ -2680,9 +2680,12 @@ function Workspace({
     })
       .catch(error => {
         if (!session.codexHomeThreadsUnresolved) return;
-        const detail = String(error);
-        setSessions(previous => previous.map(entry => entry.id === session.id && entry.codexHomeThreadsUnresolved && entry.codexStorageError !== detail
-          ? { ...entry, codexStorageError: detail } : entry));
+        const detail = error instanceof Error ? error.message : String(error);
+        setSessions(previous => {
+          const current = previous.find(entry => entry.id === session.id);
+          if (!current?.codexHomeThreadsUnresolved || current.codexStorageError) return previous;
+          return previous.map(entry => entry.id === session.id ? { ...entry, codexStorageError: detail } : entry);
+        });
       });
   }, []);
 
@@ -10282,7 +10285,7 @@ function Workspace({
     const selectedAccountId = selectedProviderAccountId("codex", session.cwd);
     if (resolution === "preserve_home_threads") {
       if (codexStorageRecovery.current.isRepairingAccount(accountId)) throw new Error("This account already has a recovery action pending. Wait for it to finish.");
-      const expected = parseCodexStorageRecoveryConflict(session.codexStorageError)?.homeThreads;
+      const expected = session.codexHomeThreadsRecovery;
       if (!expected || !session.codexHomeThreadsUnresolved || expected.sessionId !== session.id || expected.cwd !== session.cwd ||
         (expected.providerAccountId ?? undefined) !== session.providerAccountId || (expected.home ?? undefined) !== session.codexStorageHome) {
         throw new Error("Reload the stored conversation's map recovery notice before preserving it.");
@@ -10310,12 +10313,15 @@ function Workspace({
       });
       return onCodexStorageRepair(sessionId);
     }
+    if (session.codexHomeThreadsUnresolved) throw new Error("Preserve the stored provider thread map before repairing or resuming this conversation.");
+    if (resolution === "separate_selected_source" && !session.codexStorageError &&
+      parseCodexStorageRecoveryConflict(session.codexStorageReturnChoice)?.sourceBinding?.canReturn) return;
     if ((sandboxChoice || sourceChoice) && codexStorageRecovery.current.isRepairingAccount(accountId)) throw new Error("This account already has a recovery action pending. Wait for it to finish.");
     if (sandboxChoice && !parseCodexSandboxBlocker(session.codexStorageError)) throw new Error("Refresh the sandbox issue before choosing an engine or access mode.");
     if (resolution === "use_mono_full_access" && session.readOnly) throw new Error("Read-only investigations must retain their filesystem restrictions.");
     if (resolution === "use_mono_full_access" && !codexFullAccessRepairAllowed(session)) throw new Error("Plan and orchestrate messages must retain their sandbox restrictions. Use the unelevated sandbox instead.");
     if (resolution === "use_unelevated_sandbox" && session.windowsSandbox === "elevated") throw new Error("This Mono is set to Elevated. In Permissions, change Sandbox engine to Default or Unelevated, then retry its held message.");
-    const affectedIds = resolution === "use_mono_full_access" || sourceChoice ? [sessionId] : sessionsRef.current.filter(entry => entry.harness === "codex" && (entry.codexStorageError || entry.codexStoragePreparing) &&
+    const affectedIds = resolution === "use_mono_full_access" || sourceChoice ? [sessionId] : sessionsRef.current.filter(entry => entry.harness === "codex" && !entry.codexHomeThreadsUnresolved && (entry.codexStorageError || entry.codexStoragePreparing) &&
       !remoteProjectFor(entry.cwd) && codexStorageAccountId(entry, selectedProviderAccountId("codex", entry.cwd)) === accountId).map(entry => entry.id);
     if (!affectedIds.includes(sessionId)) affectedIds.push(sessionId);
     try {
@@ -10402,6 +10408,8 @@ function Workspace({
         }
       };
       const beforeResume = (resumingId: string) => {
+        if (sessionsRef.current.find(entry => entry.id === resumingId)?.codexHomeThreadsUnresolved)
+          throw new Error("Preserve the stored provider thread map before resuming this conversation.");
         if (!affectedIds.includes(resumingId)) affectedIds.push(resumingId);
         // Keep the dispatcher held until the saved submissions have resumed.
         flushSync(() => setSessions(previous => previous.map(entry => entry.id === resumingId
@@ -10417,14 +10425,14 @@ function Workspace({
       setCodexStorageRepaired(true);
     } catch (error) {
       const storageFailure = isCodexStorageError(error);
-      flushSync(() => setSessions(previous => previous.map(entry => affectedIds.includes(entry.id) &&
+      flushSync(() => setSessions(previous => previous.map(entry => affectedIds.includes(entry.id) && !entry.codexHomeThreadsUnresolved &&
         (storageFailure || codexStorageRecovery.current.hasPending(entry.id))
         ? { ...entry, codexStorageError: storageFailure ? String(error) : parseCodexSandboxBlocker(entry.codexStorageError) ? entry.codexStorageError :
           `Codex storage needs repair: The files are ready, but a held message could not resume. Try Repair again. ${String(error)}`,
           codexStorageAccountId: accountId, codexStorageHeld: codexStorageRecovery.current.held(entry.id) } : entry)));
       throw error;
     } finally {
-      setSessions(previous => previous.map(entry => affectedIds.includes(entry.id)
+      setSessions(previous => previous.map(entry => affectedIds.includes(entry.id) && !entry.codexHomeThreadsUnresolved
         ? { ...entry, codexStoragePreparing: undefined, codexStorageAccountId: entry.codexStorageError || queuedHead(entry) ? accountId : undefined } : entry));
       setQueueDispatchVersion(value => value + 1);
     }

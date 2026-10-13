@@ -539,7 +539,8 @@ const LocalSessionPane = memo(function LocalSessionPane({
   const storageSessionId = storageTask?.sessionId ?? session.id;
   const storageDetail =
     session.codexStorageError ??
-    (storageTask ? memberState.liveState?.detail : undefined) ?? session.codexStorageReturnChoice;
+    (session.codexHomeThreadsUnresolved ? "Conversation edits are not saved" : undefined) ??
+    (storageTask ? memberState.liveState?.detail : undefined);
   const [memberTab, setMemberTab] = useState<"conversation" | "activity">(
     "conversation",
   );
@@ -1131,7 +1132,9 @@ const LocalSessionPane = memo(function LocalSessionPane({
     <div className="mx-auto w-full max-w-4xl shrink-0">
       <MonoCodexStorageNotice
         key={storageSessionId}
-        detail={storageDetail}
+        detail={storageDetail ?? session.codexStorageReturnChoice}
+        homeThreads={session.codexHomeThreadsUnresolved ? session.codexHomeThreadsRecovery : undefined}
+        advisory={!storageDetail && !session.codexHomeThreadsUnresolved}
         workbench={workbench}
         renderDetails={
           workbench

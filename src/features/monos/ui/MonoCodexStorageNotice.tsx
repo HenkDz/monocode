@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { copyText } from "../../../platform/tauri/clipboard";
 import { SecondaryButton } from "../../../shared/ui/SecondaryButton";
+import type { Session } from "../../sessions/model/session";
 import {
   codexStorageIssueTitle,
   parseCodexStorageConflict,
@@ -12,7 +13,9 @@ import {
 
 export function MonoCodexStorageNotice({
   onRepair,
-  detail,
+  detail: suppliedDetail,
+  homeThreads,
+  advisory = false,
   blockedContext,
   onResolve,
   onCompare,
@@ -25,6 +28,8 @@ export function MonoCodexStorageNotice({
 }: {
   onRepair: () => Promise<void>;
   detail?: string;
+  homeThreads?: Session["codexHomeThreadsRecovery"];
+  advisory?: boolean;
   blockedContext?: string;
   onResolve?: (resolution: CodexStorageResolution) => Promise<void>;
   onCompare?: () => Promise<CodexStorageComparison>;
@@ -35,6 +40,10 @@ export function MonoCodexStorageNotice({
   explicitElevated?: boolean;
   remote?: boolean;
 }) {
+  const detail = homeThreads ? `Codex storage needs repair: ${JSON.stringify({ recovery: true,
+    reason: "Preserve the unreadable per-home provider thread map. Conversation edits are not saved yet; keep this conversation open until recovery saves them. The stored map, transcript and provider conversation remain intact.",
+    paths: [homeThreads.home ?? homeThreads.cwd], homeThreads,
+  })}` : suppliedDetail;
   const [busy, setBusy] = useState<"repair" | "compare" | "reveal">();
   const [error, setError] = useState<string>();
   const [success, setSuccess] = useState(false);
@@ -100,6 +109,18 @@ export function MonoCodexStorageNotice({
     </div>
     {copyStatus && <p className="mt-1">{copyStatus}</p>}
   </>;
+  if (advisory && recovery?.sourceBinding?.canReturn) return (
+    <details className="mx-4 my-2 text-xs text-content/70">
+      <summary className="cursor-pointer">Codex source</summary>
+      <p className="mt-2 break-all">Selected source: {recovery.sourceBinding.resolvedSourceHome}</p>
+      <p className="mt-1 break-all">Original source: {recovery.sourceBinding.boundSourceHome}</p>
+      <p className="mt-1">Confirm this recreated source to return to its original private history. Each launch source keeps its own provider conversation.</p>
+      {onResolve && <SecondaryButton disabled={!!busy} onClick={() => void run("repair", () => onResolve("reattach_original_source"))}>Return to original home / re-attach source</SecondaryButton>}
+      {error && <p role="alert" className="mt-2 break-all">{error}</p>}
+      {success && <p className="mt-2">Codex source choice applied.</p>}
+      {detailContent}
+    </details>
+  );
   return (
     <section
       role="status"

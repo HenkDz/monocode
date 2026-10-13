@@ -12,7 +12,7 @@ import { markHabitRun, clearHabitRun, habitRunMono } from "../features/monos/mod
 import { submitWithSettlement } from "./model/managedSubmission";
 
 beforeEach(() => vi.stubGlobal("localStorage", { getItem: () => null }));
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 const app = ts.createSourceFile("App.tsx", readFileSync(new URL("./App.tsx", import.meta.url), "utf8"),
   ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
@@ -36,6 +36,102 @@ function evaluate(source: string, context: Record<string, unknown>) {
   }).outputText;
   return runInNewContext(output, { turnGen: { current: new Map() }, ...context, Error });
 }
+
+it("bounds actual autosave scheduling across repeated unresolved-map cycles without changing its notice", async () => {
+  vi.useFakeTimers();
+  const fixture = sandboxRepairFixture({ codexHomeThreadsUnresolved: true,
+    codexStorageError: 'Codex storage needs repair: {"recovery":true,"reason":"Edits are not saved"}',
+    blocks: [{ id: "u", role: "user", text: "Unsaved draft" }], title: "Unsaved title" });
+  const original = fixture.sessionsRef.current[0];
+  const save = vi.fn(async (session: Session) => { throw new Error(session.codexStorageError); });
+  let transitions = 0, cleanup: (() => void) | undefined;
+  const context: Record<string, unknown> = { ...fixture,
+    window: { setTimeout, clearTimeout }, shouldPersistSession, persistFingerprint: (s: Session) => s.title,
+    removingSessionIds: { current: new Set() }, switchingWorktrees: { current: new Set() },
+    lastPersisted: { current: new Map() }, observedSessions: { current: new Map() },
+    lastBoundProvider: { current: new Map() }, lastPersistedUserBlock: { current: new Map() },
+    pendingPersist: { current: new Map() }, tabsRef: { current: [] }, openSessionIds: () => new Set([original.id]),
+    lastUserBlockId: () => undefined, sidebarCwdRef: { current: original.cwd }, setHistory: vi.fn(),
+    writeSession: async (_id: string, operation: (save: typeof save) => Promise<unknown>) => operation(save),
+    setSessions: (update: (sessions: Session[]) => Session[]) => {
+      const previous = fixture.sessionsRef.current;
+      fixture.sessionsRef.current = update(previous);
+      if (fixture.sessionsRef.current !== previous) { transitions++; schedule(); }
+    },
+  };
+  const persist = evaluate(appCallback("persistSession").getText(app), context);
+  context.persistSession = persist;
+  let effect: ts.ArrowFunction | undefined;
+  const walk = (node: ts.Node) => {
+    if (ts.isCallExpression(node) && node.expression.getText(app) === "useEffect" &&
+      ts.isArrowFunction(node.arguments[0]) && node.arguments[0].getText(app).includes("observedSessions.current")) effect = node.arguments[0];
+    ts.forEachChild(node, walk);
+  };
+  walk(app);
+  if (!effect) throw new Error("Actual autosave scheduling effect missing");
+  function schedule() { cleanup?.(); context.sessions = fixture.sessionsRef.current; cleanup = evaluate(effect!.getText(app), context)(); }
+  schedule();
+  for (let cycle = 0; cycle < 20; cycle++) await vi.advanceTimersByTimeAsync(650);
+  expect(save.mock.calls.length).toBeLessThanOrEqual(2);
+  for (let cycle = 0; cycle < 5; cycle++) { persist(fixture.sessionsRef.current[0]); await vi.advanceTimersByTimeAsync(650); }
+  expect(transitions).toBe(0);
+  expect(fixture.sessionsRef.current[0]).toBe(original);
+  expect(original.codexStorageError).not.toContain("Error:");
+  cleanup?.();
+});
+
+it.each([undefined, "use_unelevated_sandbox"] as const)("keeps an unresolved peer held through another Mono's %s repair and deliberate map recovery", async resolution => {
+  const fixture = sandboxRepairFixture();
+  const expected = { sessionId: "peer", identity: "row:created", fingerprint: "stored-record", cwd: "/synthetic/repo", providerAccountId: "account", home: "/synthetic/home" };
+  const detail = `Codex storage needs repair: ${JSON.stringify({ recovery: true, reason: "Edits are not saved", paths: [expected.home], homeThreads: expected })}`;
+  fixture.sessionsRef.current[1] = { ...fixture.sessionsRef.current[1], codexStorageHome: expected.home,
+    codexHomeThreadsUnresolved: true, codexHomeThreadsRecovery: expected, codexStorageError: detail,
+    providerSessionId: "peer-thread", codexStorageHeld: { intent: "plan" }, title: "Unsaved title",
+    blocks: [{ id: "draft", role: "user", text: "Unsaved draft", draft: true }],
+    queuedMessages: [{ id: "q", text: "Exact queued Plan", intent: "plan", attachments: [] }] };
+  const original = structuredClone(fixture.sessionsRef.current[1]);
+  await fixture.repair("clicked", resolution);
+  expect(fixture.sessionsRef.current[1]).toEqual(original);
+  expect(fixture.peerRetry).not.toHaveBeenCalled();
+  expect(fixture.recovery.hasPending("peer")).toBe(true);
+  fixture.invoke.mockRejectedValueOnce(new Error("Stored record changed"));
+  await expect(fixture.repair("peer", "preserve_home_threads")).rejects.toThrow("record changed");
+  expect(fixture.sessionsRef.current[1]).toEqual(original);
+  // A later unrelated error must not hide the independently held recovery descriptor.
+  fixture.sessionsRef.current[1].codexStorageError = "Unrelated storage refusal";
+  fixture.invoke.mockResolvedValueOnce("/synthetic/preserved/model-settings.json");
+  await fixture.repair("peer", "preserve_home_threads");
+  expect(fixture.sessionsRef.current[1]).toMatchObject({ title: original.title, providerSessionId: original.providerSessionId,
+    queuedMessages: original.queuedMessages, codexHomeThreadsUnresolved: undefined });
+  expect(fixture.invoke).toHaveBeenLastCalledWith("mono_session_preserve_home_threads", { expected });
+});
+
+it("keeps an already separate return choice as a no-op without stopping or resuming account peers", async () => {
+  const choice = `Codex storage needs repair: ${JSON.stringify({ recovery: true, reason: "Return is available", paths: ["/synthetic/original"], sourceBinding: {
+    resolvedSourceHome: "/synthetic/source", boundSourceHome: "/synthetic/source", canBind: false, canSeparate: true, canReturn: true, sourceIdentity: "1:9",
+  } })}`;
+  const fixture = sandboxRepairFixture({ codexStorageError: undefined, codexStorageReturnChoice: choice });
+  await fixture.repair("clicked", "separate_selected_source");
+  expect(fixture.stop).not.toHaveBeenCalled(); expect(fixture.invoke).not.toHaveBeenCalled();
+  expect(fixture.retry).not.toHaveBeenCalled(); expect(fixture.peerRetry).not.toHaveBeenCalled();
+});
+
+it("refuses a peer that becomes unresolved during account repair before clearing its error or consuming its held prompt", async () => {
+  const fixture = sandboxRepairFixture();
+  let release!: () => void, entered!: () => void;
+  const waiting = new Promise<void>(resolve => { entered = resolve; });
+  fixture.prepare.mockImplementationOnce(async () => { entered(); await new Promise<void>(resolve => { release = resolve; }); });
+  const repairing = fixture.repair("clicked");
+  await waiting;
+  fixture.sessionsRef.current[1] = { ...fixture.sessionsRef.current[1], codexHomeThreadsUnresolved: true,
+    codexStorageError: "Keep the original unresolved-map notice", codexStorageHeld: { intent: "plan" } };
+  const original = structuredClone(fixture.sessionsRef.current[1]);
+  release();
+  await expect(repairing).rejects.toThrow("Preserve the stored provider thread map");
+  expect(fixture.sessionsRef.current[1]).toEqual(original);
+  expect(fixture.peerRetry).not.toHaveBeenCalled();
+  expect(fixture.recovery.hasPending("peer")).toBe(true);
+});
 
 it("reveals recovery storage for the held account without forwarding recovery paths", async () => {
   const sessionsRef = { current: [{ id: "recovery", cwd: "/synthetic/repo", providerAccountId: "new-account",

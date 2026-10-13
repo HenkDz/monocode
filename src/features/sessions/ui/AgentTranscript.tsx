@@ -76,10 +76,6 @@ import type { MessageDelivery } from "../../monos/model/monoMessaging";
 import { monoReactionBlocks } from "../../monos/model/monoReaction";
 import type { ApprovalDecision } from "../../../integrations/harness";
 import {
-  isHarnessAuthError,
-  supportsHarnessLogin,
-} from "../../../integrations/harness/core/authSupport";
-import {
   isEditTool,
   stubFilePreview,
 } from "../../../integrations/harness/core/preview";
@@ -351,13 +347,13 @@ function AgentTranscriptComponent({
     const chatBlocks = isMonoChat
       ? monoReactionBlocks(sourceBlocks)
       : sourceBlocks;
-    if (!harness || !supportsHarnessLogin(harness)) return chatBlocks;
+    if (!harness) return chatBlocks;
     const visibleBlocks = chatBlocks.filter(
       (block) =>
         !(
           block.role === "system" &&
           block.notice === "error" &&
-          isHarnessAuthError(block.text)
+          transcriptError(block.text).family === "auth"
         ),
     );
     return visibleBlocks.length === chatBlocks.length

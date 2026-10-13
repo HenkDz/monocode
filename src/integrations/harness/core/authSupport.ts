@@ -28,6 +28,10 @@ export function harnessLoginArgs(harness: HarnessId): readonly string[] | null {
 /** True when a provider error is asking the user to authenticate again. */
 export function isHarnessAuthError(message: string): boolean {
   return [
+    /\b(?:401|unauthorized|unauthenticated)\b/i,
+    /\bmissing bearer(?: token)?\b/i,
+    /\binvalid (?:access |auth |bearer )?(?:token|api[ -]?key)\b/i,
+    /\b(?:login|sign[ -]?in) required\b/i,
     /\bauthentication required\b/i,
     /\bnot (?:authenticated|signed in|logged in)\b/i,
     /\b(?:sign-in|login|session) (?:has )?expired\b/i,

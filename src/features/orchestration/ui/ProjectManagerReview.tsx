@@ -21,6 +21,7 @@ import type {
 } from "../model/orchestrationState";
 import { usePullRequests, prIdentity } from "../../source-control/model/pullRequests";
 import { buildPullRequestRows, openPullRequests } from "../../pullRequests/model/pullRequestView";
+import { transcriptError } from "../../sessions/model/transcriptError";
 
 export function ProjectManagerStatus({
   run,
@@ -33,6 +34,7 @@ export function ProjectManagerStatus({
 }) {
   const statuses = usePrStatusCache();
   const actions = useContext(OrchestrationActions);
+  const authRequired = transcriptError(run.error || run.lastPauseReason || "").family === "auth";
   const groups = [
     {
       label: "running",
@@ -64,16 +66,16 @@ export function ProjectManagerStatus({
         type="button"
         disabled={!needsUser && (run.status !== "paused" || run.recovering)}
         onClick={() =>
-          run.status === "paused"
+          !needsUser && run.status === "paused"
             ? document
-                .getElementById("manager-continue")
+                .getElementById(authRequired ? "provider-sign-in" : "manager-continue")
                 ?.scrollIntoView({ block: "center" })
             : onDecision?.()
         }
         className="rounded px-2 py-1 text-amber-600 dark:text-amber-400 disabled:opacity-40"
       >
         {needsUser || (run.status === "paused" && !run.recovering) ? 1 : 0}{" "}
-        needs you
+        {authRequired && !needsUser ? "sign-in required" : "needs you"}
       </button>
       {groups.map(({ label, tasks }) => (
         <button
@@ -223,12 +225,12 @@ export function ProjectManagerReview({
         }
       }}
     >
-      {!historical && run.recoveryNotice && (
+      {!historical && run.recoveryNotice && transcriptError(run.recoveryNotice).family !== "auth" && (
         <p role="status" className="text-xs text-content/60">
           {run.recoveryNotice}
         </p>
       )}
-      {!historical && run.status === "paused" && !run.recovering && (
+      {!historical && run.status === "paused" && !run.recovering && transcriptError(run.error || run.lastPauseReason || "").family !== "auth" && (
         <section
           id="manager-continue"
           aria-label="Manager needs your decision"

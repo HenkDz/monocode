@@ -1,6 +1,8 @@
 import { orchestrationPathKey } from "./orchestration";
 import type { OrchestrationRun, OrchestrationTask } from "./orchestrationState";
 import type { Session } from "../../sessions/model/session";
+import { HARNESS_TITLE } from "../../sessions/model/session";
+import { transcriptError } from "../../sessions/model/transcriptError";
 import type { GitPr } from "../../../platform/tauri/fs";
 import { prStatusKey } from "../../source-control/hooks/usePrStatus";
 import { isLegacyManagerSession } from "../../monos/model/legacyManagerSessions";
@@ -103,6 +105,7 @@ export type ManagerAttention = {
   kind: "decision" | "reply" | "ready";
   question: string;
   notificationId?: string;
+  authRequired?: boolean;
 };
 
 export function managerAttention(
@@ -132,9 +135,12 @@ export function managerAttention(
       });
   }
   for (const run of runs.filter((r) => r.projectManager)) {
+    const authRequired = transcriptError(run.error || run.lastPauseReason || "").family === "auth";
+    const owner = sessions.find(session => session.id === (run.ownerSessionId ?? run.leadId));
     if (run.status === "paused" && !run.recovering) items.push({
       key: `${run.leadId}:continue`, id: run.ownerSessionId ?? run.leadId, project: run.cwd,
-      kind: "decision", question: run.error || "Manager needs your decision to continue",
+      kind: "decision", question: authRequired ? `Sign in to ${owner ? HARNESS_TITLE[owner.harness] : "your provider"}` : run.error || "Manager needs your decision to continue",
+      ...(authRequired ? { authRequired: true } : {}),
       notificationId: `continue:${run.error ?? run.lastPauseReason ?? "paused"}`,
     });
     for (const task of run.tasks) {

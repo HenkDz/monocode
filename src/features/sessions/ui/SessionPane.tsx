@@ -182,6 +182,8 @@ import { isRemoteProjectPath } from "../../projects/model/recents";
 import type { HostSession } from "../../connections/model/protocol";
 import { SessionRightPanel, shouldShowContextPanel } from "./SessionRightPanel";
 import { RotationPendingInput } from "./RotationPendingInput";
+import { ProviderAuthNotice } from "./ProviderAuthNotice";
+import { sessionAuthDiagnostics } from "../model/sessionAuthDiagnostics";
 
 export type SessionPaneProps = {
   session: Session;
@@ -469,6 +471,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
     (run) =>
       run.projectManager && (run.ownerSessionId ?? run.leadId) === session.id,
   );
+  const authDiagnostics = sessionAuthDiagnostics(session.blocks, ownedRuns);
   const managed =
     ownedRuns.length > 0 ||
     isProjectManager(session.id) ||
@@ -1547,6 +1550,11 @@ const LocalSessionPane = memo(function LocalSessionPane({
                   }}
                 />
               ))}
+              {authDiagnostics && !remote && (
+                <ProviderAuthNotice key={`${session.id}:${session.harness}:${session.providerAccountId}:${authDiagnostics}`}
+                  harness={session.harness} accountId={session.providerAccountId} diagnostics={authDiagnostics}
+                  disabled={!!session.busy || !!session.worktreeRemoved || workspaceSwitchingSessionId === session.id} />
+              )}
               <div
                 ref={transcriptScope}
                 id={workbench ? `${memberPanelId}-conversation` : undefined}

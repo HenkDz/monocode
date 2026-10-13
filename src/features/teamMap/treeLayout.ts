@@ -4,9 +4,8 @@ export const TREE_NODE_WIDTH = 256;
 export const TREE_NODE_HEIGHT = 104;
 /** Below this zoom the tree stops being readable, so the map switches to the ordered list. */
 export const TREE_MIN_READABLE_ZOOM = 0.8;
-const columnWidth = 288;
-const columnGap = 16;
-const rowGap = 24;
+const columnGap = 32;
+const rowGap = 32;
 
 export function treeLayout(map: ReturnType<typeof buildTeamMap>, order: readonly string[]) {
   const nodes = map.nodes.map(node => ({ ...node }));
@@ -18,27 +17,54 @@ export function treeLayout(map: ReturnType<typeof buildTeamMap>, order: readonly
     const ai = order.indexOf(a.id), bi = order.indexOf(b.id);
     return (ai < 0 ? order.length : ai) - (bi < 0 ? order.length : bi);
   });
-  const width = Math.max(columnWidth, columns.length * (columnWidth + columnGap) - columnGap) + 48;
+  type Branch = { width: number; height: number; positions: Map<string, TeamMapPoint>; pods: TeamMapPod[] };
+  const measure = (node: TeamMapNode): Branch => {
+    const branches = children(node.id).map(measure);
+    const positions = new Map<string, TeamMapPoint>();
+    const pods: TeamMapPod[] = [];
+    let childWidth = 0, childHeight = 0;
+    for (let offset = 0; offset < branches.length; offset += 2) {
+      const row = branches.slice(offset, offset + 2);
+      let x = 0;
+      for (const branch of row) {
+        for (const [id, point] of branch.positions) positions.set(id, { x: x + point.x, y: childHeight + point.y });
+        pods.push(...branch.pods.map(pod => ({ ...pod, x: x + pod.x, y: childHeight + pod.y })));
+        x += branch.width + columnGap;
+      }
+      childWidth = Math.max(childWidth, x - columnGap);
+      childHeight += Math.max(...row.map(branch => branch.height)) + rowGap;
+    }
+    childHeight = Math.max(0, childHeight - rowGap);
+    const manager = node.mono.role === "manager";
+    const width = Math.max(TREE_NODE_WIDTH, childWidth) + 32;
+    const nodeY = manager ? 48 : 0;
+    const childY = nodeY + TREE_NODE_HEIGHT + rowGap;
+    const childX = (width - childWidth) / 2;
+    for (const [id, point] of positions) positions.set(id, { x: point.x + childX, y: point.y + childY });
+    for (const pod of pods) { pod.x += childX; pod.y += childY; }
+    const memberIds = [...positions.keys()];
+    positions.set(node.id, { x: (width - TREE_NODE_WIDTH) / 2, y: nodeY });
+    const height = nodeY + TREE_NODE_HEIGHT + (branches.length ? rowGap + childHeight : 0) + 16;
+    if (manager) pods.unshift({ id: node.id, x: 0, y: 0, width, height, memberIds });
+    return { width, height, positions, pods };
+  };
+  const branches = columns.map(measure);
+  const width = Math.max(TREE_NODE_WIDTH + 32, branches.reduce((total, branch) => total + branch.width + columnGap, -columnGap)) + 48;
   if (root) { root.x = (width - TREE_NODE_WIDTH) / 2; root.y = 24; }
-  const top = root ? 232 : 64;
+  const top = root ? 184 : 16;
   const pods: TeamMapPod[] = [];
   const ordered = root ? [root] : [];
-  for (const [index, column] of columns.entries()) {
-    const x = 24 + index * (columnWidth + columnGap);
-    let y = top;
+  let x = 24;
+  for (const [index, branch] of branches.entries()) {
     const visit = (node: TeamMapNode) => {
-      node.x = x + 16;
-      node.y = y;
-      y += TREE_NODE_HEIGHT + rowGap;
+      const point = branch.positions.get(node.id)!;
+      node.x = x + point.x; node.y = top + point.y;
       ordered.push(node);
-      const first = ordered.length;
       for (const child of children(node.id)) visit(child);
-      if (node.mono.role === "manager") pods.push({
-        id: node.id, x, y: node.y - 48, width: columnWidth,
-        height: y - node.y + 48, memberIds: ordered.slice(first).map(child => child.id),
-      });
     };
-    visit(column);
+    visit(columns[index]);
+    pods.push(...branch.pods.map(pod => ({ ...pod, x: pod.x + x, y: pod.y + top })));
+    x += branch.width + columnGap;
   }
   const edges = map.edges.map(edge => {
     const parent = byId.get(edge.source)!, target = byId.get(edge.target)!;
@@ -47,9 +73,10 @@ export function treeLayout(map: ReturnType<typeof buildTeamMap>, order: readonly
     if (parent === root) {
       points = [start, { x: start.x, y: 168 }, { x: target.x + TREE_NODE_WIDTH / 2, y: 168 }, { x: target.x + TREE_NODE_WIDTH / 2, y: target.y - 48 }];
     } else {
-      const spine = parent.x - 8;
-      const mid = target.y + TREE_NODE_HEIGHT / 2;
-      points = [start, { x: start.x, y: start.y + 12 }, { x: spine, y: start.y + 12 }, { x: spine, y: mid }, { x: target.x, y: mid }];
+      const descendants = (node: TeamMapNode): TeamMapNode[] => [node, ...children(node.id).flatMap(descendants)];
+      const spine = Math.min(...descendants(parent).map(node => node.x)) - 8;
+      const end = { x: target.x + TREE_NODE_WIDTH / 2, y: target.mono.role === "manager" ? target.y - 48 : target.y };
+      points = [start, { x: start.x, y: start.y + 12 }, { x: spine, y: start.y + 12 }, { x: spine, y: end.y - 12 }, { x: end.x, y: end.y - 12 }, end];
     }
     return { ...edge, points: points.filter((point, index) => !index || point.x !== points[index - 1].x || point.y !== points[index - 1].y) };
   });

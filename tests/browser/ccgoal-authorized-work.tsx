@@ -5,7 +5,10 @@ import { Orchestrator, type ControlOutcome, type OrchestrationHost, type Orchest
 import { acceptManagerWakeQueue, prepareManagerWake } from "../../src/features/orchestration/model/managerWake";
 import { monoManagerGoals, type GoalLedger, type ManagerGoalHost, type ManagerProject } from "../../src/features/monos/model/monoManagerGoals";
 import { appendManagerRecovery, assertManagerContinuation, assertManagerDelivery, continueManagerRequest, managerDelegateGoal, managerRecoveryRequest, managerRequestBinding, managerRequestBindingCurrent, registerManagerRequestContinuation, resumeManagerRequest } from "../../src/features/monos/model/managerAuthorizedWork";
-import { prepareManagerTurn, delegateManagerRequest, deliverManagerGoal } from "virtual:ccgoal-app";
+import { prepareManagerTurn, delegateManagerRequest, deliverManagerGoal, commitManagerTurn } from "virtual:ccgoal-app";
+import { appendUser } from "../../src/integrations/harness/core/apply";
+import { acknowledgeMonoMessage } from "../../src/features/monos/model/monoMessaging";
+import { dequeueQueuedMessage } from "../../src/features/sessions/model/messageQueue";
 import { pathKey } from "../../src/shared/lib/paths";
 import { monoLook, type Mono } from "../../src/features/monos/model/mono";
 import { newSession, type Session } from "../../src/features/sessions/model/session";
@@ -156,8 +159,11 @@ async function unanchored() {
 async function consumeContinue() {
   const queued = session.queuedMessages![0];
   turn = await prepareManagerTurn({ ...currentApp(), orchestrator: engine }, "engine", { monoSource: queued.monoSource, appRequestId: queued.id });
-  await sessionSave(current => ({ ...current, busy: true, queuedMessages: [], blocks: [...current.blocks,
-    { id: "continue-turn", role: "user", appRequestId: queued.id, text: queued.text, monoSource: queued.monoSource }] }));
+  commitManagerTurn({ ...currentApp(), appendUser, acknowledgeMonoMessage, dequeueQueuedMessage,
+    setSessions: (change: (sessions: Session[]) => Session[]) => { session = change([session])[0]; } }, queued,
+    { monoSource: queued.monoSource, appRequestId: queued.id, queuedMessageId: queued.id });
+  await sessionSave(current => current);
+  session = JSON.parse(localStorage.getItem("ccgoal:session")!);
   await delegate("Atlas"); publish();
 }
 function Fixture() {

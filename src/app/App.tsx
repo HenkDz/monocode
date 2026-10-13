@@ -7933,7 +7933,11 @@ function Workspace({
                 mode: "follow-up",
                 text: submittedText,
                 attachments: displayAttachments(attachments),
-                cards: userTurnCards(noteCard),
+                cards: {
+                  ...userTurnCards(noteCard),
+                  ...(options?.appRequestId ? { appRequestId: options.appRequestId } : {}),
+                  ...(options?.monoSource ? { monoSource: options.monoSource } : {}),
+                },
               }),
             );
             flushHarnessEvents();
@@ -8025,7 +8029,11 @@ function Workspace({
         }
         dismissNoticesForContinuedSession(sessionId);
         const visible = displayAttachments(attachments);
-        const cards = userTurnCards(noteCard);
+        const cards = {
+          ...userTurnCards(noteCard),
+          ...(options?.appRequestId ? { appRequestId: options.appRequestId } : {}),
+          ...(options?.monoSource ? { monoSource: options.monoSource } : {}),
+        };
         const nextSessions = sessionsRef.current.map((s) => {
           if (s.id !== sessionId) return s;
           let next: Session = {

@@ -18,6 +18,18 @@ function message(id: string): QueuedMessage {
 }
 
 describe("optimistic Mono messages", () => {
+  it.each(["new-turn", "follow-up"] as const)("preserves supplied authority when acknowledging a %s bubble after reload", (mode) => {
+    const monoSource = { id: "manager", name: "Manager", mascot: "cat", color: "blue", goalId: "goal",
+      request: { monoId: "manager", sessionId: "chat", managerId: "engine", projectId: "/synthetic", userMessageId: "original", state: "pending" as const } };
+    const cards = { appRequestId: "receipt", monoSource };
+    const queued = enqueueMonoMessage(newSession("codex", "/synthetic"), message("receipt"), cards);
+    const restored = JSON.parse(JSON.stringify(queued));
+    const accepted = acknowledgeMonoMessage(restored, restored.queuedMessages[0], { mode, cards });
+    expect(accepted.blocks).toHaveLength(1);
+    expect(accepted.blocks[0]).toMatchObject({ id: "receipt", appRequestId: "receipt", monoSource });
+    expect(accepted.queuedMessages).toBeUndefined();
+  });
+
   it("marks held bubbles as waiting for storage repair without changing their payload or hiding them", () => {
     const queued = enqueueMonoMessage(newSession("codex", "/tmp"), message("held"));
     const blocked = { ...queued, codexStorageError: "hooks.json conflict" };

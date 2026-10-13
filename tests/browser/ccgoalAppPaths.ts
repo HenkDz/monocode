@@ -15,9 +15,29 @@ export function ccgoalAppPaths() {
       const delegationEnd = app.indexOf('\n        }\n        if (payload.namespace !== "app")', delegation);
       const delivery = app.indexOf('    deliver: async (goal, message, receiptId, cancel, validate, authority) => {', app.indexOf('  managerGoalHost.current = {'));
       const deliveryEnd = app.indexOf('\n  };', delivery);
-      if (preparation < 0 || preparationEnd < preparation || delegation < 0 || delegationEnd < delegation || delivery < 0 || deliveryEnd < delivery)
+      const cards = app.indexOf('      const cards = {', app.indexOf('      const visibleText = operatorCommand.matched'));
+      const cardsEnd = app.indexOf('      const live =', cards);
+      const commit = app.indexOf('      const commitSubmittedTurn = () => {', cardsEnd);
+      const commitEnd = app.indexOf('      if (!options?.resendEdited)', commit);
+      if (preparation < 0 || preparationEnd < preparation || delegation < 0 || delegationEnd < delegation || delivery < 0 || deliveryEnd < delivery || cards < 0 || cardsEnd < cards || commit < 0 || commitEnd < commit)
         throw Error("Current App callback boundaries were not found");
       return ts.transpileModule(`
+        export function commitManagerTurn(host, queued, options) {
+          const { sessionsRef, monoForSession, monoManagerGoals, assertManagerDelivery, setSessions, acknowledgeMonoMessage, appendUser, dequeueQueuedMessage } = host;
+          const current = sessionsRef.current[0], sessionId = current.id;
+          const validateManagerDelivery = () => assertManagerDelivery(options.monoSource, options.appRequestId,
+            sessionsRef.current.find(session => session.id === sessionId), monoForSession(sessionId), monoManagerGoals);
+          const unexpected = () => { throw Error("Unexpected synthetic submission branch"); };
+          const updateMono = unexpected, lockMonoField = unexpected, withPlanBuildTarget = unexpected, stopStreaming = unexpected, appendPreparingHandoff = unexpected;
+          const draftBlock = undefined, isFirstTurn = false, titleSeed = current.title, providerAccountId = current.providerAccountId,
+            createDraftWorktree = false, rawCommand = undefined, editedResend = undefined, approvedPlan = undefined, intent = undefined,
+            pendingSwitch = undefined, queuedMonoMessage = queued, visibleText = queued.text, visible = [], noteCard = undefined, card = undefined,
+            ciContext = undefined, operatorCommand = { matched: false }, userTurnCards = () => ({});
+          ${app.slice(cards, cardsEnd)}
+          const live = true;
+          ${app.slice(commit, commitEnd)}
+          commitSubmittedTurn();
+        }
         export async function prepareManagerTurn(host, id, options) {
           const { orchestrator, probeHarnessAvailability, HARNESSES, isHarnessAvailable, assertManagerDelivery, sessionsRef, monoForSession, monoManagerGoals } = host;
           const sessionId = options.monoSource?.request?.sessionId ?? sessionsRef.current[0].id;

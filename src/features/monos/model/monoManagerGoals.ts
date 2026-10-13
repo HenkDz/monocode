@@ -285,7 +285,8 @@ export class MonoManagerGoals {
         receipt.pending.text,
         `mono-goal-${id}-${requestId}`,
         !!receipt.pending.cancel,
-        ...(receipt.pending.request ? [undefined, receipt.pending.request] as const : []),
+        undefined,
+        receipt.pending.request,
       );
       await this.save(id, {
         ...ledger,

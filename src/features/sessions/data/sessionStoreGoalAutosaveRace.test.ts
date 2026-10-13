@@ -304,12 +304,12 @@ it("the App archive callback preserves an acknowledged goal delivered while canc
   const deliver = new Function("findMono", "managerGoalHost", "listMonos", "projectKey", "remoteProjectFor", "orchestrator",
     "dedicatedMono", "ensureProjectManager", "sessionsRef", "adoptManagerMono", "assertDirectReport", "ensureMonoSession",
     "homeDir", "ensureOpenSession", "saveMonoPermissions", "newDefaultSession", "sessionDefaults", "setSessions",
-    "monoEngineId", "monoLook", "upsertSession", "monoManagerGoals", code(delivery!))(
+    "monoEngineId", "monoLook", "upsertSession", "monoManagerGoals", "pathKey", code(delivery!))(
     (id: string) => id === grand.id ? grand : manager.archivedAt == null ? manager : undefined,
     { current: { projects: async () => [project] } }, () => [grand, manager], (text: string) => text.toLowerCase(),
     () => undefined, engine, () => manager, () => { throw Error("No Manager creation expected"); }, ref,
     () => manager, () => {}, async () => ref.current[0], "synthetic", () => ref.current[0], () => {}, () => {}, {}, () => {},
-    async () => goal.managerId, () => ({ name: "Grand", mascot: "g", color: "#123456" }), exactSessionWrite(ref), ledger,
+    async () => goal.managerId, () => ({ name: "Grand", mascot: "g", color: "#123456" }), exactSessionWrite(ref), ledger, (path: string) => path.toLowerCase(),
   );
   const host = { mayDelegate: () => true, projects: async () => [{ ...project, managerExists: manager.archivedAt == null }],
     status: async () => ({}), ready: async () => [], deliver };

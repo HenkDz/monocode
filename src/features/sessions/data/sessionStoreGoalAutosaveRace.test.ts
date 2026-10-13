@@ -1,5 +1,6 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
+import { pathKey } from "../../../shared/lib/paths";
 import ts from "typescript";
 import { newSession, type Block, type Session } from "../model/session";
 import { isMonoSession } from "../../monos/model/mono";
@@ -309,7 +310,7 @@ it("the App archive callback preserves an acknowledged goal delivered while canc
     { current: { projects: async () => [project] } }, () => [grand, manager], (text: string) => text.toLowerCase(),
     () => undefined, engine, () => manager, () => { throw Error("No Manager creation expected"); }, ref,
     () => manager, () => {}, async () => ref.current[0], "synthetic", () => ref.current[0], () => {}, () => {}, {}, () => {},
-    async () => goal.managerId, () => ({ name: "Grand", mascot: "g", color: "#123456" }), exactSessionWrite(ref), ledger, (path: string) => path.toLowerCase(),
+    async () => goal.managerId, () => ({ name: "Grand", mascot: "g", color: "#123456" }), exactSessionWrite(ref), ledger, pathKey,
   );
   const host = { mayDelegate: () => true, projects: async () => [{ ...project, managerExists: manager.archivedAt == null }],
     status: async () => ({}), ready: async () => [], deliver };

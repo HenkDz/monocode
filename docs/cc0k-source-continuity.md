@@ -22,6 +22,23 @@ The private-history path/fingerprint/identity checks and post-archive race reche
 
 Evidence and coordinator reports: `C:/Users/nooro/AppData/Local/Temp/monocode-cc/cc0k/`. The clean-base input manifest and original expected-safe failures are retained. Native process drivers kill immediately after archive creation and after copy/before sync, then restart/retry migration, keep-private and resolve. The connected browser adapter calls actual storage and SQLite/Mono persistence commands in a synthetic, windowless Tauri host; provider transports remain synthetic.
 
-Final frozen counts, implementation/final-doc pins, changed-path hashes and applicability are recorded in `REPORT.md`, `VALIDATION-READY.md` and `evidence/final-candidate-manifest.json` when final gates complete. The library-test executable needs a test-only Common Controls v6 activation manifest to call the native Tauri host on Windows; bootstrap before/after binary hashes are recorded independently of source pins.
+Implementation was frozen at `18fd3f1657ea40db060138b6613d7082c4200327`, tree `ce44fd3964b22c3835459bb3c541744ccc56a67d`, before final gates. This final documentation update changes no executable input. Exact final-doc pins, all 25 changed-path hashes, raw receipts and source equivalence are in the external `REPORT.md`, `VALIDATION-READY.md` and `evidence/final-candidate-manifest.json`.
 
-No real profiles, credentials, Credential Manager, live providers/model turns, ACL/account operations, native preview, push/deploy or other worktrees are used. This is builder evidence, not release acceptance. Literal raw-prefix, routing experimental/default-off old-fixture, MP4/host failures and the cc0ir/cc0jr P3 ledgers remain held evidence; K1/K2 do not expand those fixes. Original/partial temp retention can accumulate; unknown state remains conservative. Windows test coverage does not establish power-loss durability or Unix concurrent-writer guarantees.
+| Frozen gate | Result |
+| --- | --- |
+| Native Codex storage | 202 passed, 0 failed, 6 ignored |
+| Native harness | 26 passed, 0 failed |
+| Native Mono | 229 passed, 0 failed, 6 ignored |
+| Native session persistence | 62 passed, 0 failed |
+| TypeScript | Exit 0 |
+| Full one-worker Vitest | 8445 passed, 0 failed, 13 skipped |
+| Routing-false build | Exit 0 |
+| Chromium and WebKit connected recovery | 14 passed flows, 30 inspected PNGs, 332 native calls |
+
+The final browser proof invokes 134 actual `mono_session_upsert` writes and 12 `mono_session_get` loads. Both launch orders, two Monos plus an unrelated account, reload, recreated original/separate sources and migration kill/restart are covered. Twenty-two expected native refusals retain legacy/expected-home safety. The earlier regular-session browser fixture remains recorded with its narrower applicability; it is not Mono-persistence proof. All 82 newly captured PNGs across the retained pre-freeze and two frozen runs were inspected.
+
+Six distinct native kill cases exercise migration, keep-private and resolve at both archive checkpoints. They run in both storage and Mono families, followed by two browser-connected copy kills: 14 actual frozen K2 kills, all reaped/recovered. Numeric source/private identities and PIDs remain in their original receipts. Captured Mono stdout is not rerun just to print identities. Original expected-safe failures and all failed attempts remain recorded without weakening assertions or deadlines.
+
+The library-test executable needs a test-only Common Controls v6 activation manifest to call the native Tauri host on Windows; bootstrap before/after binary hashes are recorded independently of source pins. The browser exercises the real Notice, extracted App callbacks, prepare bridge and native command functions through mocked IPC and a synthetic windowless AppHandle. It does not establish native WebView/IPC, real provider transport or live acceptance.
+
+No real profiles, credentials, Credential Manager, live providers/model turns, ACL/account operations, native preview, push/deploy or other worktrees are used. This is builder evidence, not release acceptance. Literal raw-prefix, routing experimental/default-off old-fixture, MP4/host failures and the cc0ir/cc0jr P3 ledgers remain held evidence; K1/K2 do not expand those fixes. Historical unchanged-helper matrices remain at their original execution pins. Original/partial temp retention can accumulate; unknown state remains conservative. Reattachment preserves old credential namespace ownership bytes; source-identity-sensitive listing/retirement stays conservative. Windows test coverage does not establish power-loss durability, Unix concurrent-writer guarantees or separate long-path-consumer acceptance.

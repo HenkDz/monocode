@@ -332,6 +332,7 @@ export type Block = {
   role: BlockRole;
   text: string;
   monoGoalSubmission?: import("../../monos/model/monoGoalRouting").MonoGoalSubmission;
+  managerRequestRecovery?: import("../../monos/model/managerAuthorizedWork").ManagerRequestRecovery;
   image?: GeneratedImageMeta;
   attachments?: Attachment[];
   streaming?: boolean;

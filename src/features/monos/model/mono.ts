@@ -722,11 +722,19 @@ export function monoLook(mono: Mono): MonoLook {
     name: mono.name?.trim() || defaultMonoName(mono.mascot),
     mascot: mono.mascot,
     color: mono.color,
-    projects: mono.projects.map((path) => ({
+    projects: monoVisibleProjects(mono).map((path) => ({
       path,
       name: resolveTabGroupLabel(projectKey(path), labels, projectName(path)),
     })),
   };
+}
+
+/** Grand inherits only the active projects of Managers that actually report to it. */
+export function monoVisibleProjects(mono: Mono, roster: readonly Mono[] = listMonos()): string[] {
+  return uniqueProjects([...mono.projects, ...(mono.role === "orchestrator" && mono.archivedAt == null
+    ? roster.filter(member => member.role === "manager" && member.archivedAt == null && member.reportsTo === mono.id &&
+        member.projects.length === 1 && (!member.managerProject || projectKey(member.managerProject) === projectKey(member.projects[0])))
+      .flatMap(member => member.projects) : [])]);
 }
 
 /** Its projects as a phrase: "app", "app and site", "app, site and api". */

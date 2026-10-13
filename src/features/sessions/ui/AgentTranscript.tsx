@@ -1,5 +1,6 @@
 import { ManagerAvatar } from "../../orchestration/ui/ManagerAvatar";
 import { MonoChatCard } from "../../monos/ui/MonoChatCard";
+import { ManagerRequestNotice } from "../../monos/ui/ManagerRequestNotice";
 import { MonoTeamChangeCard } from "../../monos/ui/MonoTeamChangeCard";
 import { TeamMessage } from "./TeamMessage";
 import { ArtifactText } from "../../artifacts/ui/ArtifactReference";
@@ -2304,6 +2305,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
     );
   }
 
+  if (block.managerRequestRecovery) return <ManagerRequestNotice request={block.managerRequestRecovery} />;
   if (block.monoTeamChange) return <MonoTeamChangeCard {...block.monoTeamChange} />;
   if (block.monoCard && block.monoCardOwner) return <MonoChatCard card={block.monoCard} monoId={block.monoCardOwner} blockId={block.id} />;
 

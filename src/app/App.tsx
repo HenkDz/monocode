@@ -25,6 +25,7 @@ import { recordCrewDecision } from "../features/monos/model/monoCrewEvents";
 import { teamDecisions } from "../features/monos/model/monoTeamActivity";
 import { crewMessages, deliverCrewMessage, recordCrewMessage, teamMessageKind, teamMessageRequiresReply } from "../features/monos/model/monoCrewEvents";
 import { acceptManagerWakeQueue } from "../features/orchestration/model/managerWake";
+import { appendManagerRecovery, continueManagerRequest, managerDelegateGoal, managerRecoveryRequest, registerManagerRequestContinuation, resumeManagerRequest } from "../features/monos/model/managerAuthorizedWork";
 import { requestMemberWork } from "../features/monos/model/memberWorkRequest";
 import {
   assertDirectReport,
@@ -11349,11 +11350,20 @@ function Workspace({
         remoteSessionActions(sessionId)?.stop();
         return;
       }
+      const manager = monoForSession(sessionId);
+      const ownedRuns = orchestrator.snapshot().filter(run => run.ownerSessionId === sessionId || run.leadId === sessionId);
+      const retireRequests = manager?.role === "manager" && (!managed || ownedRuns.some(run => run.status === "stopped")) && !preserveQueue;
+      if (retireRequests) monoGoalOrigins.delete(sessionId);
+      const retired = retireRequests ? Promise.all([
+        ...ownedRuns.map(run => monoManagerGoals.retireManagerRequests(run.leadId)),
+        ...(remote ? [upsertSession(remote, current => ({ ...current, blocks: current.blocks.map(block => block.managerRequestRecovery?.state === "pending"
+          ? { ...block, managerRequestRecovery: { ...block.managerRequestRecovery, state: "cancelled" as const } } : block) }))] : []),
+      ]) : Promise.resolve();
       if (!managed) {
         const stopping = orchestrator.stopForSession(sessionId);
         if (stopping) {
           void stopping.catch(console.error);
-          return stopping;
+          return Promise.all([stopping, retired]);
         }
       }
       const session = sessionsRef.current.find((s) => s.id === sessionId);
@@ -11396,7 +11406,7 @@ function Workspace({
       } else {
         notifyReviewChanged(sessionId);
       }
-      return Promise.all([cancelling, checkpointFinished]);
+      return Promise.all([cancelling, checkpointFinished, retired]);
     },
     [flushHarnessEvents],
   );
@@ -12298,6 +12308,7 @@ function Workspace({
             mono.sessionId &&
             (await ensureOpenSession(mono.sessionId))
           ) {
+            await monoManagerGoals.hydrate(mono.id);
             for (const project of [
               ...new Set([
                 ...mono.projects,
@@ -12572,8 +12583,10 @@ function Workspace({
         current.queuedMessages?.some((item) => item.id === receiptId)
       )
         return;
+      if (!cancel && (monoManagerGoals.isCancelling(goal.id) || monoManagerGoals.goals().some(entry => entry.id === goal.id && entry.state === "cancelled")))
+        throw Error("The original request was cancelled; no work was queued");
       const look = monoLook(mono);
-      await upsertSession(current, current => current.blocks.some(block => block.appRequestId === receiptId) ||
+      const saved = await upsertSession(current, current => current.blocks.some(block => block.appRequestId === receiptId) ||
         current.queuedMessages?.some(item => item.id === receiptId) ? current : ({
         ...current,
         queuedMessages: [
@@ -12593,7 +12606,33 @@ function Workspace({
         ],
         queueStatus: current.queueStatus ?? ("active" as const),
       }));
+      if (!saved) throw Error("The Manager could not retain this request; delivery remains pending");
     },
+  };
+
+  useEffect(() => registerManagerRequestContinuation(async request => {
+    const source = await ensureOpenSession(request.sessionId);
+    if (!source) throw Error("The original Manager conversation is unavailable");
+    if (!source.blocks.some(block => block.id === request.userMessageId)) {
+      const history = await getMonoGoalRecoveryBlocks(source.id);
+      await upsertSession(source, current => mergeMonoGoalRecoverySession(current, history));
+    }
+    await resumeManagerRequest(request, {
+      session: () => sessionsRef.current.find(session => session.id === request.sessionId),
+      manager: () => findMono(request.monoId),
+      project: async () => (await managerGoalHost.current.projects(request.monoId)).find(project => project.id === request.projectId),
+      ledger: monoManagerGoals, goals: managerGoalHost.current,
+      save: async change => {
+        if (!await upsertSession(sessionsRef.current.find(session => session.id === request.sessionId)!, change))
+          throw Error("Request acknowledgement could not be saved");
+      },
+    });
+  }), [ensureOpenSession]);
+
+  const continueAttentionRequest = async (sessionId: string, blockId: string) => {
+    const request = sessionsRef.current.find(session => session.id === sessionId)?.blocks.find(block => block.id === blockId)?.managerRequestRecovery;
+    if (!request) throw Error("The original request is unavailable");
+    await continueManagerRequest(request);
   };
 
   const goalRoutingForMono = (monoId: string) => {
@@ -12770,45 +12809,43 @@ function Workspace({
               }
             }
           }
-          if (
-            payload.action === "delegate" &&
-            payload.input.monoGoalId == null
-          ) {
-            const source = sessionsRef.current.find(
-              (session) => session.id === sourceSessionId,
-            );
-            const origin = source?.blocks
-              .filter((block) => block.role === "user")
-              .slice(-1)[0]?.monoSource;
-            if (origin)
-              payload.input = { ...payload.input, monoGoalId: origin.goalId };
-          }
-          if (
-            payload.action === "delegate" &&
-            payload.input.monoGoalId != null &&
-            !monoManagerGoals
-              .goals()
-              .some(
-                (goal) =>
-                  goal.id === payload.input.monoGoalId &&
-                  goal.managerId === payload.sessionId &&
-                  goal.state !== "cancelled" && !monoManagerGoals.isCancelling(goal.id),
-              )
-          )
-            throw new Error("Goal does not belong to this Manager");
           if (mono && payload.action === "delegate") {
+            const source = sessionsRef.current.find(session => session.id === sourceSessionId)!;
             const origin = monoGoalOrigins.get(sourceSessionId);
-            if (
-              !sessionsRef.current.find(
-                (session) => session.id === sourceSessionId,
-              )?.busy ||
-              !origin ||
-              (origin.kind === "event" && !payload.input.monoGoalId && !payload.input.reviewTaskId)
-            )
-              throw new Error(
-                "Reports cannot start new work; message an existing goal instead",
-              );
+            const generation = turnGen.current.get(sourceSessionId);
+            const turnId = source.blocks.filter(block => block.role === "user" && !block.draft).slice(-1)[0]?.id;
+            const project = (await managerGoalHost.current.projects(mono.id)).find(project => project.managerId === payload.sessionId);
+            if (!project) throw Error("The Manager's registered project is unavailable");
+            const validate = () => {
+              const current = sessionsRef.current.find(session => session.id === sourceSessionId);
+              if (!current?.busy || monoGoalOrigins.get(sourceSessionId) !== origin || turnGen.current.get(sourceSessionId) !== generation ||
+                  current.blocks.filter(block => block.role === "user" && !block.draft).slice(-1)[0]?.id !== turnId ||
+                  findMono(mono.id)?.archivedAt != null || !findMono(mono.id)?.projects.some(path => sameProjectPath(path, project.folder)) ||
+                  orchestrator.run(payload.sessionId)?.status === "stopped") throw Error("The Manager turn changed; no work was dispatched");
+            };
+            try {
+              const goalId = await managerDelegateGoal({ manager: mono, project, session: source, origin,
+                run: orchestrator.run(payload.sessionId), ledger: monoManagerGoals, goalId: payload.input.monoGoalId,
+                reviewTaskId: payload.input.reviewTaskId, persist: async () => {
+                  if (!await upsertSession(source)) throw Error("The original user request could not be saved; no work was dispatched");
+                }, validate });
+              validate();
+              payload.input = { ...payload.input, ...(goalId ? { monoGoalId: goalId } : {}) };
+            } catch (error) {
+              if (String(error).includes("one-click confirmation")) {
+                const original = managerRecoveryRequest(source, orchestrator.run(payload.sessionId));
+                if (original) await upsertSession(source, current => appendManagerRecovery(current, {
+                  monoId: mono.id, sessionId: source.id, managerId: project.managerId, projectId: project.id,
+                  userMessageId: original.id, state: "pending",
+                  providerAccountId: source.providerAccountId,
+                }));
+              }
+              throw error;
+            }
           }
+          if (payload.action === "delegate" && payload.input.monoGoalId != null && !monoManagerGoals.goals().some(goal =>
+              goal.id === payload.input.monoGoalId && goal.managerId === payload.sessionId && goal.state !== "cancelled" && !monoManagerGoals.isCancelling(goal.id)))
+            throw Error("Goal does not belong to this Manager");
           return orchestrator.handle(
             payload.sessionId,
             payload.requestId,
@@ -13495,7 +13532,7 @@ function Workspace({
               return (
                 mono && {
                   id: mono.id,
-                  projects: mono.projects,
+                  projects: monoLook(mono).projects.map(project => project.path),
                   showStartedSessionsInSidebar:
                     mono.showStartedSessionsInSidebar,
                   ...(mono.useSidebarFolders
@@ -15808,7 +15845,7 @@ function Workspace({
                   callbacks={{ approval: onApproval, question: onQuestionReply, questionInteraction: onQuestionInteraction,
                     repair: onCodexStorageRepair, compare: onCodexStorageCompare, reveal: onCodexStorageReveal,
                     resume: onUsageLimitResume, resumeAtReset: onUsageLimitResumeAtReset, retryDelivery: onResumeQueue,
-                    continueManager: id => orchestrator.continueManager(id), inspect: id => { teamMap.close(); return onOpenApprovalSession(id); }, inspectAutomation: () => onOpenAutomations() }} />}
+                    continueManager: id => orchestrator.continueManager(id), continueRequest: continueAttentionRequest, inspect: id => { teamMap.close(); return onOpenApprovalSession(id); }, inspectAutomation: () => onOpenAutomations() }} />}
                 onClose={teamMap.close} onOpenTarget={target => openGoalTarget(target, {
                   close: teamMap.close, request: onOpenApprovalSession, mono: onOpenMono, session: onOpenMonoLaunchedSession,
                 })} />
@@ -15821,7 +15858,7 @@ function Workspace({
                 callbacks={{ approval: onApproval, question: onQuestionReply, questionInteraction: onQuestionInteraction,
                   repair: onCodexStorageRepair, compare: onCodexStorageCompare, reveal: onCodexStorageReveal,
                   resume: onUsageLimitResume, resumeAtReset: onUsageLimitResumeAtReset, retryDelivery: onResumeQueue,
-                  continueManager: id => orchestrator.continueManager(id), inspect: id => { teamMap.close(); return onOpenApprovalSession(id); }, inspectAutomation: () => onOpenAutomations() }} />
+                  continueManager: id => orchestrator.continueManager(id), continueRequest: continueAttentionRequest, inspect: id => { teamMap.close(); return onOpenApprovalSession(id); }, inspectAutomation: () => onOpenAutomations() }} />
               {teamMap.open && teamMap.scope !== MISSION_CONTROL_SCOPE && teamMap.scope !== ATTENTION_QUEUE_SCOPE && <TeamMap key={teamMap.scope ?? "org"} sessions={sessions} runs={orchestrationRuns} statuses={managerPrStatuses} scope={teamMap.scope} onClose={teamMap.close} onOpenMono={id => void onOpenMono(id)} />}
               <div
                 className={

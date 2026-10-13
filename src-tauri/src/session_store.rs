@@ -175,6 +175,8 @@ pub struct SessionSummary {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionRecord {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub codex_home_threads_recovery: Option<Value>,
     #[serde(default)]
     pub sidebar_hidden: bool,
     pub id: String,
@@ -1954,6 +1956,8 @@ fn get_session_record(
                 )
             })?;
             Ok(SessionRecord {
+                codex_home_threads_recovery: crate::codex_mono_store::home_threads::descriptor(conn, session_id)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(e.into()))?,
                 sidebar_hidden: row.get::<_, i64>(21)? != 0,
                 id: row.get(0)?,
                 orchestration_lead_id: worker_parent(conn, session_id)?,

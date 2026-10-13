@@ -521,6 +521,12 @@ export type Session = {
   codexStorageHeld?: { intent?: TurnIntent };
   /** Persisted private home that owns this conversation's provider thread. */
   codexStorageHome?: string;
+  /** Each launch source's private home keeps its own provider conversation. */
+  providerSessionIdByHome?: Record<string, string>;
+  /** An opaque saved map must remain on disk until explicitly repaired. */
+  codexHomeThreadsUnresolved?: boolean;
+  codexHomeThreadsRecovery?: { sessionId: string; identity: string; fingerprint: string; cwd: string; providerAccountId: string | null; home: string | null };
+  codexStorageReturnChoice?: string;
   /** Provider accepted the carry; its durable clearing is being retried. In-memory only. */
   rotationWarning?: string;
   /**

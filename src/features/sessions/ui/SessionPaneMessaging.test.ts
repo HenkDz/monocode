@@ -217,6 +217,25 @@ function field() {
   )!;
 }
 
+it.each(["waiting-review", "waiting-on-member", "failed", "blocked"] as const)("keeps member %s status visible beside advisory return; real storage still needs attention", status => {
+  probes.member = true;
+  probes.runs = [{ leadId: "lead", tasks: [{ id: "task", title: "Assigned work", sessionId: "chat", memberId: "mono", status }], dispatches: [] }];
+  const pane = props();
+  pane.monoState = { status: "needs-you", liveState: { status, detail: "Synthetic hand-off" } };
+  pane.onCodexStorageRepair = vi.fn(async () => {});
+  pane.session.codexStorageReturnChoice = `Codex storage needs repair: ${JSON.stringify({ recovery: true, reason: "Return available", paths: ["/synthetic/original"], sourceBinding: {
+    resolvedSourceHome: "/synthetic/source", boundSourceHome: "/synthetic/source", canBind: false, canReturn: true, sourceIdentity: "1:9",
+  } })}`;
+  render(pane);
+  act(() => container.querySelector<HTMLButtonElement>(".cc7u-work-toggle")!.click());
+  expect(container.querySelector('[aria-label="Assignment status"]')).not.toBeNull();
+  expect(container.querySelector(".cc7u-work-toggle")?.textContent).not.toContain("Needs attention");
+  pane.session = { ...pane.session, codexStorageError: "Genuine storage failure" };
+  render(pane);
+  expect(container.querySelector(".cc7u-work-toggle")?.textContent).toContain("Needs attention");
+  expect(container.querySelector('[aria-label="Conversation couldn’t start"]')).not.toBeNull();
+});
+
 it("passes a new-goal route from the embedded composer to the shared submit boundary", async () => {
   vi.stubEnv("VITE_MONO_DIRECT_PROJECT_ROUTING", "true");
   const pane = props();

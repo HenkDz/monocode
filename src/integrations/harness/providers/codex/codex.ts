@@ -98,6 +98,7 @@ type Live = {
   controlsAgents: boolean;
   ephemeral: boolean;
   codexStore?: "mono";
+  codexStorageHome?: string;
   skillsSignature?: string;
   skillsContextId?: string;
   storeConfig?: Record<string, unknown>;
@@ -503,6 +504,7 @@ export function bindCodexSession(
 export async function migrateMonoCodexSession(input: {
   sessionId: string;
   threadId: string;
+  expectedMonoHome?: string;
   cwd: string;
   providerAccountId?: string;
   skillsRole?: HarnessSessionInput["skillsRole"];
@@ -553,7 +555,8 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     existing.windowsSandbox === windowsSandbox &&
     (codexStore !== "mono" || existing.sandboxRequired === sandboxRequired) &&
     existing.ephemeral === ephemeral &&
-    existing.codexStore === codexStore && existing.skillsSignature === skillsSignature
+    existing.codexStore === codexStore && existing.skillsSignature === skillsSignature && existing.codexStorageHome === input.codexStorageHome &&
+    (!input.codexThreadId || existing.threadId === input.codexThreadId)
   ) {
     existing.onEvent = input.onEvent;
     return existing;
@@ -575,7 +578,10 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     await stopCodexSession(input.sessionId);
   }
 
-  const resume = resumeByThread.get(input.sessionId);
+  const cachedResume = resumeByThread.get(input.sessionId);
+  const resume = input.codexStorageHome ? (input.codexThreadId ? {
+    ...cachedResume, threadId: input.codexThreadId, cwd: input.cwd, providerAccountId: input.providerAccountId,
+  } : undefined) : cachedResume;
   const canResume =
     !ephemeral &&
     resume != null &&
@@ -603,6 +609,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
           windowsSandbox,
           sandboxNetworkAccess: controlsAgents,
           threadId: canResume ? resume?.threadId : undefined,
+          expectedMonoHome: input.codexStorageHome,
         })
       : undefined;
   const storeConfig = store?.config;
@@ -819,6 +826,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       ephemeral,
       codexStore,
       skillsSignature,
+      codexStorageHome: input.codexStorageHome,
       skillsContextId: store?.skillsContextId,
       storeConfig,
       sandboxRequired,

@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { sanitizeCodexHomeThreads } from "../../monos/model/monoCodexHomes";
 import { forgetSessionPullRequests } from "../../source-control/model/pullRequests";
 import { parseCard } from "../../monos/model/monoCards";
 import { isMonoSession } from "../../monos/model/mono";
@@ -61,6 +62,7 @@ const EFFORT_SOURCE_SETTING = "__monocodeEffortSource";
 const RUNTIME_MODE_SOURCE_SETTING = "__monocodeRuntimeModeSource";
 const WINDOWS_SANDBOX_SETTING = "__monocodeWindowsSandbox";
 const CODEX_STORAGE_HOME_SETTING = "__monocodeCodexStorageHome";
+const CODEX_HOME_THREADS_SETTING = "__monocodeCodexHomeThreads";
 const APP_REQUEST_ID = /^[A-Za-z0-9_-]{1,512}$/;
 const LEGACY_MANAGER_DIGEST_ID = /^manager-digest:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -91,6 +93,7 @@ export type SessionSummary = {
 };
 
 type SessionRecord = {
+  codexHomeThreadsRecovery?: Session["codexHomeThreadsRecovery"];
   sidebarHidden?: boolean;
   monoTranscript?: Session["monoTranscript"];
   orchestrationLeadId?: string;
@@ -157,6 +160,12 @@ export function isPersistableId(value: string): boolean {
   return /^[A-Za-z0-9_-]+$/.test(value);
 }
 
+function requireResolvedCodexHomeThreads(session: Session): void {
+  if (session.codexHomeThreadsUnresolved) {
+    throw new Error(session.codexStorageError ?? "Codex storage needs repair: Preserve the unreadable per-home provider thread map before saving.");
+  }
+}
+
 function persistableMeta(
   session: Session,
   includeQueue = true,
@@ -178,6 +187,7 @@ function persistableMeta(
       ...(session.runtimeModeSource ? { [RUNTIME_MODE_SOURCE_SETTING]: session.runtimeModeSource } : {}),
       ...(session.windowsSandbox ? { [WINDOWS_SANDBOX_SETTING]: session.windowsSandbox } : {}),
       ...(session.codexStorageHome ? { [CODEX_STORAGE_HOME_SETTING]: session.codexStorageHome } : {}),
+      ...(sanitizeCodexHomeThreads(session.providerSessionIdByHome) ? { [CODEX_HOME_THREADS_SETTING]: JSON.stringify(session.providerSessionIdByHome) } : {}),
     },
     runtimeMode: session.runtimeMode,
     title: session.title,
@@ -370,6 +380,7 @@ export function sanitizeLinkedWorkItem(
 export function sanitizeSessionForPersist(
   session: Session,
 ): SessionUpsertPayload {
+  requireResolvedCodexHomeThreads(session);
   const firstUser = session.blocks.findIndex((block) => block.role === "user");
   return {
     ...persistableMeta(session),
@@ -466,6 +477,7 @@ async function saveSessionSnapshot(
   if (!shouldPersistSession(session) || deletedSessionIds.has(session.id)) {
     return null;
   }
+  requireResolvedCodexHomeThreads(session);
   const mono = !!session.monoTranscript || isMonoSession(session.id);
   const snapshot = mono
     ? session.blocks.filter((block) => monoPersistedBlock(block) !== null)
@@ -563,7 +575,7 @@ export function persistFingerprint(session: Session): string {
     }
     return token;
   });
-  return `${JSON.stringify(persistableMeta(session, false))}|${queue.length ? (session.queueStatus ?? "active") : ""}:${queue.join(",")}|${session.orchestrationLeadId ?? ""}|${session.blocks
+  return `${session.codexHomeThreadsUnresolved ? "unresolved-codex-home-threads:" : ""}${JSON.stringify(persistableMeta(session, false))}|${queue.length ? (session.queueStatus ?? "active") : ""}:${queue.join(",")}|${session.orchestrationLeadId ?? ""}|${session.blocks
     .map(blockToken)
     .join(",")}`;
 }
@@ -1578,13 +1590,16 @@ function normalizeSummary(summary: SessionSummary): SessionSummary {
 
 function recordToSession(record: SessionRecord): Session {
   const { [READ_ONLY_SETTING]: readOnly, [EFFORT_SOURCE_SETTING]: effortSource,
-    [RUNTIME_MODE_SOURCE_SETTING]: runtimeModeSource, [WINDOWS_SANDBOX_SETTING]: windowsSandbox, [CODEX_STORAGE_HOME_SETTING]: codexStorageHome, ...modelSettings } =
+    [RUNTIME_MODE_SOURCE_SETTING]: runtimeModeSource, [WINDOWS_SANDBOX_SETTING]: windowsSandbox, [CODEX_STORAGE_HOME_SETTING]: codexStorageHome, [CODEX_HOME_THREADS_SETTING]: homeThreads, ...modelSettings } =
     record.modelSettings && typeof record.modelSettings === "object" ? record.modelSettings : {};
   const blocks = Array.isArray(record.blocks)
     ? record.blocks
         .map((block) => sanitizeBlock(block, { hydrate: true }))
         .filter((block): block is Block => block != null)
     : [];
+  let providerSessionIdByHome: Record<string, string> | undefined;
+  try { providerSessionIdByHome = sanitizeCodexHomeThreads(typeof homeThreads === "string" ? JSON.parse(homeThreads) : undefined); } catch { /* Refuse later saves; never infer a foreign thread. */ }
+  const codexHomeThreadsUnresolved = Object.prototype.hasOwnProperty.call(record.modelSettings ?? {}, CODEX_HOME_THREADS_SETTING) && !providerSessionIdByHome;
   const linkedWorkItem = sanitizeLinkedWorkItem(record.linkedWorkItem);
   const waiting = sanitizeQueuedMessages(record.queuedMessages);
   const queuedMessages = waiting.filter(message => !message.monoSessionCompletion);
@@ -1603,6 +1618,14 @@ function recordToSession(record: SessionRecord): Session {
     ...(windowsSandbox === "elevated" || windowsSandbox === "unelevated" ? { windowsSandbox } : {}),
     ...(readOnly === "true" ? { readOnly: true } : {}),
     ...(typeof codexStorageHome === "string" && codexStorageHome.length > 0 && codexStorageHome.length <= 4096 ? { codexStorageHome } : {}),
+    ...(providerSessionIdByHome ? { providerSessionIdByHome } : {}),
+    ...(codexHomeThreadsUnresolved ? { codexHomeThreadsUnresolved: true,
+      codexHomeThreadsRecovery: record.codexHomeThreadsRecovery,
+      codexStorageError: `Codex storage needs repair: ${JSON.stringify({ recovery: true,
+        reason: "Preserve the unreadable per-home provider thread map. Conversation edits are not saved yet; keep this conversation open until recovery saves them. The stored map, transcript and provider conversation remain intact.",
+        paths: [typeof codexStorageHome === "string" ? codexStorageHome : record.cwd],
+        ...(record.codexHomeThreadsRecovery ? { homeThreads: record.codexHomeThreadsRecovery } : {}),
+      })}` } : {}),
     runtimeMode: asRuntimeMode(record.runtimeMode),
     title: record.title,
     blocks,

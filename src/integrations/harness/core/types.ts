@@ -181,6 +181,10 @@ export type HarnessSessionInput = {
   ephemeral?: boolean;
   /** Persist Codex context in MonoCode's private Mono store. */
   codexStore?: "mono";
+  /** The App selected this home before choosing a per-home provider thread. */
+  codexStorageHome?: string;
+  /** Thread selected for that home; undefined deliberately starts a new conversation. */
+  codexThreadId?: string;
   /** Explicit Windows engine for a private Mono home; inherited account settings remain untouched. */
   windowsSandbox?: "elevated" | "unelevated";
   skillsRole?: import("../../../features/monos/model/monoSkills").MonoSkillsRole;

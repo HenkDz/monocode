@@ -3,6 +3,9 @@ use super::*;
 const BINDING: &str = ".monocode-source.json";
 const LIMIT: u64 = 8192;
 
+mod reattach;
+pub(super) use reattach::confirm as reattach_home;
+
 pub(super) fn confirm_home(
     source: &Path,
     home: &Path,
@@ -10,6 +13,8 @@ pub(super) fn confirm_home(
     expected_identity: &str,
 ) -> Result<PathBuf, String> {
     let source = source.canonicalize().map_err(|e| e.to_string())?;
+    #[cfg(windows)]
+    let _source_guard = archive::lock_directory(&source)?;
     let id = entry_identity(&source)?;
     if crate::fs::path_to_js(&source) != expected_source
         || format!("{}:{}", id.0, id.1) != expected_identity
@@ -37,15 +42,30 @@ pub(super) fn selected_home(source: &Path, home: &Path, confirm: bool) -> Result
         .parent()
         .ok_or("Missing Mono homes directory")?
         .join(name);
+    // Original ownership takes precedence over historical separate-home choices.
+    let original_matches = home.join(BINDING).exists() && ensure(&source, home, false).is_ok();
+    let selected = if original_matches {
+        home.to_path_buf()
+    } else if let Some(reattached) = reattach::selected(&source, home)? {
+        reattached
+    } else {
+        selected
+    };
     if !confirm {
         if !selected.join(BINDING).exists() {
+            if let Some(original) = reattach::recreated(&source, home)? {
+                ensure(&source, &original, false)?;
+            }
             return Ok(home.to_path_buf());
         }
         ensure(&source, &selected, false)?;
         return Ok(selected);
     }
     let mut leases = Vec::new();
-    for base in [home, selected.as_path()] {
+    for base in [home, selected.as_path()]
+        .into_iter()
+        .collect::<HashSet<_>>()
+    {
         if !base.exists() {
             continue;
         }
@@ -93,6 +113,20 @@ pub(super) fn check_session_home(
         "sourceBinding":{"resolvedSourceHome":crate::fs::path_to_js(source),"boundSourceHome":null,"canBind":false,"canSeparate":true,"sourceIdentity":format!("{}:{}",id.0,id.1)}}).to_string())
 }
 
+pub(super) fn return_choice(
+    source: &Path,
+    original: &Path,
+    selected: &Path,
+) -> Result<Option<String>, String> {
+    if let Some(candidate) = reattach::recreated(source, original)? {
+        if candidate != selected && ensure(source, &candidate, false).is_err() {
+            return Ok(Some(format!("Codex storage needs repair: {}", issue(&candidate, source, Some(source), false,
+                "This source also has earlier private history. You can keep using the current separate home or explicitly re-attach the earlier home; both homes and their conversations are retained."))));
+        }
+    }
+    Ok(None)
+}
+
 pub(super) fn ensure_context(source: &Path, base: &Path, home: &Path) -> Result<(), String> {
     if base.join(BINDING).exists() {
         ensure(source, base, false)?;
@@ -100,6 +134,34 @@ pub(super) fn ensure_context(source: &Path, base: &Path, home: &Path) -> Result<
         ensure(source, home, true)?;
     }
     Ok(())
+}
+
+pub(super) fn session_thread(
+    home: &Path,
+    original_home: &Path,
+    expected: Option<&str>,
+    current: Option<String>,
+    threads: &HashMap<String, String>,
+) -> Result<Option<String>, String> {
+    if threads.len() > 64
+        || threads.iter().any(|(home, id)| {
+            home.is_empty() || home.len() > 4096 || validate_thread_id(id).is_err()
+        })
+    {
+        return Err(
+            "Invalid per-home provider threads; preserve the conversation before retrying.".into(),
+        );
+    }
+    if let Some(id) = &current {
+        validate_thread_id(id)?;
+    }
+    let selected = crate::fs::path_to_js(home);
+    let original = crate::fs::path_to_js(original_home);
+    // An unmapped legacy thread can only enter the original home, never a foreign one.
+    if expected.unwrap_or(&original) == selected {
+        return Ok(current);
+    }
+    Ok(threads.get(&selected).cloned())
 }
 
 pub(super) fn guard_bound_contexts(base: &Path) -> Result<(), String> {
@@ -158,7 +220,8 @@ fn issue(home: &Path, source: &Path, bound: Option<&Path>, can_bind: bool, reaso
         "paths": [crate::fs::path_to_js(home), crate::fs::path_to_js(source)],
         "sourceBinding": {"resolvedSourceHome": crate::fs::path_to_js(source),
             "boundSourceHome": bound.map(crate::fs::path_to_js), "canBind": can_bind,
-            "canSeparate": bound.is_some(), "sourceIdentity": entry_identity(source).ok().map(|id| format!("{}:{}",id.0,id.1))}
+            "canSeparate": bound.is_some(), "canReturn": bound == Some(source),
+            "sourceIdentity": entry_identity(source).ok().map(|id| format!("{}:{}",id.0,id.1))}
     })
     .to_string()
 }
@@ -198,6 +261,12 @@ pub(super) fn ensure(source: &Path, home: &Path, confirm_legacy: bool) -> Result
                 || binding.source_home.as_os_str().len() > 4096
             {
                 return Err(invalid());
+            }
+            if binding.source_home == source
+                && (binding.source_identity == identity
+                    || reattach::approved(&source, &home, &binding)?)
+            {
+                return Ok(());
             }
             if binding.source_identity != identity || binding.source_home != source {
                 return Err(issue(&home, &source, Some(&binding.source_home), false,
@@ -241,6 +310,93 @@ pub(super) fn ensure(source: &Path, home: &Path, confirm_legacy: bool) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recreated_existing_separate_home_remains_returnable_after_choosing_another_separate_home() {
+        let root = std::env::temp_dir().join(format!(
+            "monocode-cc0l-old-separate-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let (desktop, original) = storage_roots(&root.join("desktop"), &root.join("mono")).unwrap();
+        ensure(&desktop, &original, false).unwrap();
+        let source = root.join("orca");
+        std::fs::create_dir(&source).unwrap();
+        let source = source.canonicalize().unwrap();
+        let old = selected_home(&source, &original, true).unwrap();
+        std::fs::write(old.join("history.jsonl"), b"CC0J/CC0K separate history").unwrap();
+        let binding = std::fs::read(old.join(BINDING)).unwrap();
+        std::fs::rename(&source, root.join("old-orca")).unwrap();
+        std::fs::create_dir(&source).unwrap();
+        let new = selected_home(&source, &original, true).unwrap();
+        assert_ne!(old, new);
+        assert!(return_choice(&source, &original, &new).unwrap().is_some());
+        let id = entry_identity(&source).unwrap();
+        reattach_home(
+            &source,
+            &original,
+            &crate::fs::path_to_js(&source),
+            &format!("{}:{}", id.0, id.1),
+        )
+        .unwrap();
+        assert_eq!(selected_home(&source, &original, false).unwrap(), old);
+        assert_eq!(std::fs::read(old.join(BINDING)).unwrap(), binding);
+        assert_eq!(
+            std::fs::read(old.join("history.jsonl")).unwrap(),
+            b"CC0J/CC0K separate history"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn separate_recreated_sources_keep_an_explicit_return_after_reload_in_both_launch_modes() {
+        for mode in ["desktop", "orca"] {
+            let root = std::env::temp_dir().join(format!(
+                "monocode-cc0l-return-{mode}-{}",
+                uuid::Uuid::new_v4()
+            ));
+            let (source, original) = storage_roots(&root.join(mode), &root.join("mono")).unwrap();
+            ensure(&source, &original, false).unwrap();
+            std::fs::write(original.join("history.jsonl"), b"original private history").unwrap();
+            let binding = std::fs::read(original.join(BINDING)).unwrap();
+            std::fs::rename(&source, root.join("old-source")).unwrap();
+            std::fs::create_dir(&source).unwrap();
+            let separate = selected_home(&source, &original, true).unwrap();
+            std::fs::write(separate.join("history.jsonl"), b"separate history").unwrap();
+            let reloaded = selected_home(&source, &original, false).unwrap();
+            assert_eq!(reloaded, separate);
+            let choice: serde_json::Value = serde_json::from_str(
+                return_choice(&source, &original, &reloaded)
+                    .unwrap()
+                    .unwrap()
+                    .strip_prefix("Codex storage needs repair: ")
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(choice["sourceBinding"]["canReturn"], true);
+            let identity = choice["sourceBinding"]["sourceIdentity"].as_str().unwrap();
+            reattach_home(
+                &source,
+                &original,
+                &crate::fs::path_to_js(&source),
+                identity,
+            )
+            .unwrap();
+            assert_eq!(selected_home(&source, &original, false).unwrap(), original);
+            assert!(return_choice(&source, &original, &original)
+                .unwrap()
+                .is_none());
+            assert_eq!(std::fs::read(original.join(BINDING)).unwrap(), binding);
+            assert_eq!(
+                std::fs::read(original.join("history.jsonl")).unwrap(),
+                b"original private history"
+            );
+            assert_eq!(
+                std::fs::read(separate.join("history.jsonl")).unwrap(),
+                b"separate history"
+            );
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
 
     #[test]
     fn source_transitions_refuse_before_relinking_and_aliases_reuse_binding() {

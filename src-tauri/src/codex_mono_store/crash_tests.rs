@@ -119,13 +119,18 @@ impl Fixture {
             );
             std::thread::sleep(Duration::from_millis(10));
         }
+        let pid = child.0.id();
         child.0.kill().unwrap();
-        assert!(!child.0.wait().unwrap().success());
+        let status = child.0.wait().unwrap();
+        assert!(!status.success());
+        std::fs::write(self.0.join("kill-process.json"), serde_json::to_vec(&serde_json::json!({
+            "pid":pid,"operation":operation,"point":point,"skip":skip,"exit":status.code(),"killed":true,"reaped":true,
+        })).unwrap()).unwrap();
         assert_eq!(std::fs::read_to_string(ready).unwrap(), point);
         assert!(!self.0.join("killed.json").exists());
     }
 
-    fn run(&self, operation: &str, entry: &str, label: &str) -> Result<(), String> {
+    pub(super) fn run(&self, operation: &str, entry: &str, label: &str) -> Result<(), String> {
         let mut child = TestChild(self.command(operation, entry, label).spawn().unwrap());
         let started = Instant::now();
         loop {
@@ -228,6 +233,29 @@ fn crash_child() {
     let (source, home) = storage_roots(&root.join("account"), &root.join("mono")).unwrap();
     let entry = std::env::var("CC0G_CRASH_ENTRY").unwrap();
     let result = match std::env::var("CC0G_CRASH_OPERATION").unwrap().as_str() {
+        "cc0k-resolve" => (|| {
+            transactions::reconcile(&home)?;
+            let conflict = file_conflict(&source, &home, &entry)?;
+            resolve_files(
+                &source,
+                &home,
+                &conflict,
+                StorageResolution::UseAccountVersion,
+            )
+        })(),
+        "cc0k-migrate" => copy_rollouts(
+            &source,
+            &home,
+            "thread",
+            &[source.join("sessions/2026/10/13").join(&entry)],
+        ),
+        "cc0k-keep-private" => (|| {
+            let choice = serde_json::from_slice(
+                &std::fs::read(root.join("choice.json")).map_err(|e| e.to_string())?,
+            )
+            .map_err(|e| e.to_string())?;
+            migration_recovery::keep(&source, &home, &choice)
+        })(),
         "preserve-metadata" => (|| {
             let error = transactions::reconcile(&home)
                 .err()

@@ -21,6 +21,15 @@ import {
 
 let now = 0;
 
+it("refuses a queued provider binding from the previous home and records the current home's own thread", () => {
+  const previous = { ...newSession("codex", "/tmp"), codexStorageHome: "/mono/a", providerSessionId: "thread-a" };
+  const current = { ...previous, codexStorageHome: "/mono/b", providerSessionId: "thread-b", providerSessionIdByHome: { "/mono/a": "thread-a", "/mono/b": "thread-b" } };
+  const stale = bindTurnContextProfile(previous)({ type: "session.providerBound", providerSessionId: "late-a" });
+  expect(applyHarnessEvent(current, stale)).toBe(current);
+  const own = bindTurnContextProfile(current)({ type: "session.providerBound", providerSessionId: "own-b" });
+  expect(applyHarnessEvent(current, own).providerSessionIdByHome).toEqual({ "/mono/a": "thread-a", "/mono/b": "own-b" });
+});
+
 it("retains an advertised compaction threshold through split context reports", () => {
   const first = applyHarnessEvent(newSession("codex", "/tmp"), {
     type: "context", used: 100, window: 1000, effectiveCompactionThreshold: 800,

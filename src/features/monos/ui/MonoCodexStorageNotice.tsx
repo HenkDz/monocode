@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { copyText } from "../../../platform/tauri/clipboard";
 import { SecondaryButton } from "../../../shared/ui/SecondaryButton";
+import type { Session } from "../../sessions/model/session";
 import {
   codexStorageIssueTitle,
   parseCodexStorageConflict,
@@ -12,7 +13,9 @@ import {
 
 export function MonoCodexStorageNotice({
   onRepair,
-  detail,
+  detail: suppliedDetail,
+  homeThreads,
+  advisory = false,
   blockedContext,
   onResolve,
   onCompare,
@@ -25,6 +28,8 @@ export function MonoCodexStorageNotice({
 }: {
   onRepair: () => Promise<void>;
   detail?: string;
+  homeThreads?: Session["codexHomeThreadsRecovery"];
+  advisory?: boolean;
   blockedContext?: string;
   onResolve?: (resolution: CodexStorageResolution) => Promise<void>;
   onCompare?: () => Promise<CodexStorageComparison>;
@@ -35,6 +40,10 @@ export function MonoCodexStorageNotice({
   explicitElevated?: boolean;
   remote?: boolean;
 }) {
+  const detail = homeThreads ? `Codex storage needs repair: ${JSON.stringify({ recovery: true,
+    reason: "Preserve the unreadable per-home provider thread map. Conversation edits are not saved yet; keep this conversation open until recovery saves them. The stored map, transcript and provider conversation remain intact.",
+    paths: [homeThreads.home ?? homeThreads.cwd], homeThreads,
+  })}` : suppliedDetail;
   const [busy, setBusy] = useState<"repair" | "compare" | "reveal">();
   const [error, setError] = useState<string>();
   const [success, setSuccess] = useState(false);
@@ -57,7 +66,7 @@ export function MonoCodexStorageNotice({
   }, [detail]);
 
   const details = error ?? detail;
-  const title = success ? sandbox ? "Codex sandbox choice applied" : "Codex storage repaired" : sandbox ? setupUnavailable ? "Codex elevated sandbox unavailable" : "Codex sandbox needs setup" : recovery?.sourceBinding ? "Choose this Mono's Codex source" : recovery ? "Codex recovery files preserved" : conflict ? codexStorageIssueTitle(conflict) : workbench ? "Conversation couldn’t start" : "Codex storage needs repair";
+  const title = success ? sandbox ? "Codex sandbox choice applied" : "Codex storage repaired" : sandbox ? setupUnavailable ? "Codex elevated sandbox unavailable" : "Codex sandbox needs setup" : recovery?.homeThreads ? "Conversation edits are not saved" : recovery?.sourceBinding ? "Choose this Mono's Codex source" : recovery ? "Codex recovery files preserved" : conflict ? codexStorageIssueTitle(conflict) : workbench ? "Conversation couldn’t start" : "Codex storage needs repair";
   async function run(action: "repair" | "compare" | "reveal", operation: () => Promise<unknown>) {
     if (busy) return;
     setBusy(action);
@@ -100,6 +109,18 @@ export function MonoCodexStorageNotice({
     </div>
     {copyStatus && <p className="mt-1">{copyStatus}</p>}
   </>;
+  if (advisory && recovery?.sourceBinding?.canReturn) return (
+    <details className="mx-4 my-2 text-xs text-content/70">
+      <summary className="cursor-pointer">Codex source</summary>
+      <p className="mt-2 break-all">Selected source: {recovery.sourceBinding.resolvedSourceHome}</p>
+      <p className="mt-1 break-all">Original source: {recovery.sourceBinding.boundSourceHome}</p>
+      <p className="mt-1">Confirm this recreated source to return to its original private history. Each launch source keeps its own provider conversation.</p>
+      {onResolve && <SecondaryButton disabled={!!busy} onClick={() => void run("repair", () => onResolve("reattach_original_source"))}>Return to original home / re-attach source</SecondaryButton>}
+      {error && <p role="alert" className="mt-2 break-all">{error}</p>}
+      {success && <p className="mt-2">Codex source choice applied.</p>}
+      {detailContent}
+    </details>
+  );
   return (
     <section
       role="status"
@@ -145,6 +166,7 @@ export function MonoCodexStorageNotice({
                 <p className="mt-1 break-all">Selected source: {recovery.sourceBinding.resolvedSourceHome}</p>
                 {recovery.sourceBinding.boundSourceHome && <p className="mt-1 break-all">Original source: {recovery.sourceBinding.boundSourceHome}</p>}
                 {recovery.sourceBinding.canSeparate && <p className="mt-1">This starts a new provider conversation in a separate private home. The held prompt and queue stay here; original homes, history and credentials stay in place.</p>}
+                {recovery.sourceBinding.canReturn && <p className="mt-1">Confirm this recreated source to return to its original private history. Each launch source keeps its own provider conversation.</p>}
                 {recovery.sourceBinding.canBind && <p className="mt-1">Confirm only after selecting the account that originally owned these private sessions. Legacy context links alone do not establish that ownership.</p>}
               </> : <p className="mt-1">Review the preserved files in their folder, then refresh this issue.</p>}
               <ul aria-label="Preserved recovery paths" className="mt-1 space-y-1 break-all">
@@ -153,8 +175,10 @@ export function MonoCodexStorageNotice({
             </div>
           )}
           {!remote && <div className="mt-2 flex flex-wrap items-center gap-2">
+            {recovery?.homeThreads && onResolve && <SecondaryButton disabled={!!busy} onClick={() => void run("repair", () => onResolve("preserve_home_threads"))}>Preserve stored map aside and start a fresh map</SecondaryButton>}
             {recovery?.sourceBinding?.canBind && onResolve && <SecondaryButton disabled={!!busy} onClick={() => void run("repair", () => onResolve("bind_selected_source"))}>Confirm selected source as original account</SecondaryButton>}
             {recovery?.sourceBinding?.canSeparate && onResolve && <SecondaryButton disabled={!!busy} onClick={() => void run("repair", () => onResolve("separate_selected_source"))}>Use a separate Mono home for this source</SecondaryButton>}
+            {recovery?.sourceBinding?.canReturn && onResolve && <SecondaryButton disabled={!!busy} onClick={() => void run("repair", () => onResolve("reattach_original_source"))}>Return to original home / re-attach source</SecondaryButton>}
             {recovery?.migration && onResolve && <SecondaryButton disabled={!!busy} onClick={() => void run("repair", () => onResolve("keep_private_history"))}>Keep private history and retry migration</SecondaryButton>}
             {recovery?.metadata && onResolve && (
               <SecondaryButton disabled={!!busy} onClick={() => void run("repair", () => onResolve("preserve_recovery_metadata"))}>

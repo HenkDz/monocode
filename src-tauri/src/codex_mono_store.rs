@@ -17,6 +17,14 @@ mod migration_recovery;
 mod sandbox;
 mod sandbox_config;
 mod source_binding;
+pub(crate) mod home_threads;
+
+#[tauri::command(async)]
+pub fn mono_session_preserve_home_threads(app: AppHandle, store: tauri::State<'_, crate::session_store::SessionStore>, expected: serde_json::Value) -> Result<String, String> {
+    let directory = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let conn = store.lock_conn()?;
+    home_threads::preserve(&conn, &directory, &expected)
+}
 #[tauri::command(async)]
 pub fn codex_mono_use_unelevated_sandbox(
     app: AppHandle,
@@ -30,7 +38,11 @@ use transactions::{ClaimIntent, ClaimJournal};
 #[cfg(test)]
 mod consistency_tests;
 #[cfg(test)]
+mod continuity_tests;
+#[cfg(test)]
 mod crash_tests;
+#[cfg(all(test, feature = "native-storage-probe"))]
+mod native_controls;
 #[cfg(test)]
 mod recovery_tests;
 #[cfg(test)]
@@ -46,6 +58,7 @@ static STORAGE_ISSUES: LazyLock<Mutex<HashSet<String>>> =
 #[cfg(test)]
 thread_local! {
     static BEFORE_CLAIM: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
+    static BEFORE_ARCHIVE_PUBLISH: std::cell::RefCell<Option<Box<dyn FnOnce(&Path)>>> = const { std::cell::RefCell::new(None) };
     static BEFORE_ROLLOUT_PUBLISH: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
 }
 
@@ -153,6 +166,10 @@ impl MonoCodexStore {
 #[serde(rename_all = "camelCase")]
 pub struct PreparedStore {
     home: String,
+    original_home: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    return_choice: Option<String>,
+    thread_id: Option<String>,
     has_thread: bool,
     source_home: String,
     source_kind: &'static str,
@@ -285,6 +302,20 @@ pub fn codex_mono_store_keep_private_history(
     let (source, home, _) = locations(&app, provider_account_id.as_deref())?;
     let _lock = STORAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     migration_recovery::keep(&source, &home, &migration).map_err(storage_error)
+}
+
+#[tauri::command(async)]
+pub fn codex_mono_store_reattach_source(
+    app: AppHandle,
+    provider_account_id: Option<String>,
+    source_home: String,
+    source_identity: String,
+) -> Result<String, String> {
+    let (source, home, _) = unselected_locations(&app, provider_account_id.as_deref())?;
+    let _lock = STORAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    source_binding::reattach_home(&source, &home, &source_home, &source_identity)
+        .map(|home| crate::fs::path_to_js(&home))
+        .map_err(storage_error)
 }
 
 fn unselected_locations(
@@ -446,11 +477,32 @@ pub fn codex_mono_store_prepare(
     windows_sandbox: Option<String>,
     sandbox_network_access: Option<bool>,
     expected_mono_home: Option<String>,
+    provider_session_id_by_home: Option<HashMap<String, String>>,
 ) -> Result<PreparedStore, String> {
     let (source, home, source_kind) =
         locations(&app, provider_account_id.as_deref()).map_err(storage_error)?;
-    source_binding::check_session_home(&source, &home, expected_mono_home.as_deref())
-        .map_err(storage_error)?;
+    let (_, original_home, _) = unselected_locations(&app, provider_account_id.as_deref())?;
+    let original_home = original_home.canonicalize().map_err(|e| e.to_string())?;
+    let thread_id = if let Some(threads) = provider_session_id_by_home {
+        source_binding::session_thread(
+            &home,
+            &original_home,
+            expected_mono_home.as_deref(),
+            thread_id,
+            &threads,
+        )
+        .map_err(storage_error)?
+    } else {
+        if thread_id.is_some() && expected_mono_home.is_none() && home != original_home {
+            return Err(storage_error(transactions::recovery(
+                "This legacy provider thread has no confirmed private home. Reopen with the original launch source before resuming it; no thread was assigned to this separate home.",
+                &[home.clone(), original_home.clone()],
+            )));
+        }
+        source_binding::check_session_home(&source, &home, expected_mono_home.as_deref())
+            .map_err(storage_error)?;
+        thread_id
+    };
     prepare_files(&source, &home).map_err(storage_error)?;
     {
         let _lock = STORAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -482,7 +534,7 @@ pub fn codex_mono_store_prepare(
         None,
     )
     .map_err(storage_error)?;
-    let thread_path = match thread_id {
+    let thread_path = match &thread_id {
         Some(id) => {
             validate_thread_id(&id)?;
             if home.join(".monocode-migrations").join(&id).exists() {
@@ -495,6 +547,9 @@ pub fn codex_mono_store_prepare(
     };
     Ok(PreparedStore {
         home: crate::fs::path_to_js(&home),
+        original_home: crate::fs::path_to_js(&original_home),
+        return_choice: source_binding::return_choice(&source, &original_home, &home).map_err(storage_error)?,
+        thread_id,
         has_thread: thread_path.is_some(),
         source_home: crate::fs::path_to_js(&source),
         source_kind,
@@ -1372,43 +1427,103 @@ fn archive_file(
     expected: &str,
 ) -> Result<PathBuf, String> {
     let root = private_directory(home, ".monocode-conflicts")?;
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|e| e.to_string())?
-        .as_millis();
-    let backup = if name.starts_with("rollout-")
-        && (name.ends_with(".jsonl") || name.ends_with(".jsonl.zst"))
+    #[cfg(windows)]
+    let _root_guard = archive::lock_directory(&root)?;
+    let unique = || private_directory(&root, &format!("{}", uuid::Uuid::new_v4()));
+    let rollout =
+        name.starts_with("rollout-") && (name.ends_with(".jsonl") || name.ends_with(".jsonl.zst"));
+    let canonical = root.join(format!("rollout-{expected}"));
+    let backup = if rollout
+        && !(std::fs::symlink_metadata(&canonical).is_ok() && replaceable_link(&canonical)?)
     {
         private_directory(&root, &format!("rollout-{expected}"))?
     } else {
-        let backup = root.join(format!("{timestamp}-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir(&backup).map_err(|e| e.to_string())?;
-        backup
+        unique()?
     };
-    let saved = backup.join(name);
+    #[cfg(windows)]
+    let _backup_guard = archive::lock_directory(&backup)?;
+    let mut saved = backup.join(name);
+    let identical = |path: &Path| -> Result<bool, String> {
+        match std::fs::symlink_metadata(path) {
+            Ok(meta) if meta.is_file() && !replaceable_link(path)? => {
+                Ok(fingerprint(path)? == expected)
+            }
+            Ok(_) => Ok(false),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(e) => Err(e.to_string()),
+        }
+    };
     if std::fs::symlink_metadata(&saved).is_ok() {
-        if !replaceable_link(&saved)?
-            && fingerprint(&saved)? == expected
-            && fingerprint_file(original)? == expected
-        {
+        if identical(&saved)? && fingerprint_file(original)? == expected {
             return Ok(saved);
         }
-        return Err("The retained rollout archive changed; it was preserved. Review recovery files before retrying.".into());
+        // Old partial archives and foreign entries remain untouched, including their identity.
+        saved = unique()?.join(name);
     }
-    // Archives have their own inode even when the original was a shared hardlink or symlink.
+    #[cfg(windows)]
+    let mut publication_guards = vec![archive::lock_directory(
+        saved.parent().ok_or("Missing archive directory")?,
+    )?];
+    if replaceable_link(saved.parent().ok_or("Missing archive directory")?)? {
+        return Err(
+            "Archive publication directory changed; unfamiliar entries were preserved.".into(),
+        );
+    }
+    // A crash leaves only an owned, non-authoritative temp. Retry allocates another temp.
+    let temp = backup.join(format!(
+        ".monocode-archive-{}.pending",
+        uuid::Uuid::new_v4()
+    ));
     let mut preserved = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(&saved)
+        .open(&temp)
         .map_err(|e| e.to_string())?;
+    #[cfg(test)]
+    crash_tests::checkpoint("archive-created-before-copy");
     original.rewind().map_err(|e| e.to_string())?;
     std::io::copy(original, &mut preserved).map_err(|e| e.to_string())?;
+    #[cfg(test)]
+    crash_tests::checkpoint("archive-copy-before-sync");
     preserved.sync_all().map_err(|e| e.to_string())?;
     drop(preserved);
-    if fingerprint(&saved)? != expected || fingerprint_file(original)? != expected {
-        return Err(format!(
-            "Codex storage bytes changed during archive creation; preserved {}. Retry repair.",
-            saved.display()
+    if fingerprint(&temp)? != expected || fingerprint_file(original)? != expected {
+        return Err(transactions::recovery("Codex storage bytes changed during archive creation; the copy was preserved. Retry repair.", &[temp]));
+    }
+    let record = transactions::RecordedEntry::new(&temp)?;
+    #[cfg(test)]
+    crash_tests::checkpoint("archive-before-publish");
+    #[cfg(test)]
+    BEFORE_ARCHIVE_PUBLISH.with(|hook| {
+        if let Some(writer) = hook.borrow_mut().take() {
+            writer(&saved);
+        }
+    });
+    if let Err(error) = record.publish(&temp, &saved) {
+        if std::fs::symlink_metadata(&saved).is_err() {
+            return Err(error);
+        }
+        if identical(&saved)? && fingerprint_file(original)? == expected {
+            record.cleanup(&temp)?;
+            return Ok(saved);
+        }
+        // A racing publisher owns the existing name. Never replace or retire its bytes.
+        saved = unique()?.join(name);
+        #[cfg(windows)]
+        publication_guards.push(archive::lock_directory(
+            saved.parent().ok_or("Missing archive directory")?,
+        )?);
+        if replaceable_link(saved.parent().ok_or("Missing archive directory")?)? {
+            return Err(
+                "Archive publication directory changed; unfamiliar entries were preserved.".into(),
+            );
+        }
+        record.publish(&temp, &saved)?;
+    }
+    if !identical(&saved)? || fingerprint_file(original)? != expected {
+        return Err(transactions::recovery(
+            "Codex storage bytes changed during archive publication; originals were preserved.",
+            &[saved],
         ));
     }
     #[cfg(test)]

@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionRecord } from "./sessionStore";
+import { selectCodexStorageHome } from "../../monos/model/monoCodexHomes";
+import { parseCodexStorageRecoveryConflict } from "../../monos/model/monoCodexStorage";
 
 const invoke = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
 
-const { getSession, sanitizeSessionForPersist } = await import("./sessionStore");
+const { getSession, sanitizeSessionForPersist, persistFingerprint } = await import("./sessionStore");
 
 /** A saved Codex session holding the one row this PR repairs. */
 function codexRecord(): SessionRecord {
@@ -50,6 +52,43 @@ describe("restoring a session whose repair cannot be persisted", () => {
     expect(session?.queuedMessages).toEqual(queuedMessages);
     expect(session?.modelSettings).toEqual({ reasoningEffort: "high" });
     expect(sanitizeSessionForPersist(session!).modelSettings.__monocodeCodexStorageHome).toBe("C:/synthetic/separate-mono");
+  });
+
+  it("reloads both per-home threads and retains an unmapped legacy thread without exposing the storage setting", async () => {
+    const threads = { "C:/synthetic/original": "thread-a", "C:/synthetic/separate": "thread-b" };
+    invoke.mockImplementation(async command => command === "session_get" ? { ...codexRecord(), blocks: [], providerSessionId: "thread-b", modelSettings: {
+      __monocodeCodexStorageHome: "C:/synthetic/separate", __monocodeCodexHomeThreads: JSON.stringify(threads), reasoningEffort: "high",
+    } } : null);
+    const session = await getSession("s1");
+    expect(session?.providerSessionIdByHome).toEqual(threads);
+    expect(session?.providerSessionId).toBe("thread-b");
+    expect(session?.modelSettings).toEqual({ reasoningEffort: "high" });
+    expect(JSON.parse(sanitizeSessionForPersist(session!).modelSettings.__monocodeCodexHomeThreads)).toEqual(threads);
+    invoke.mockImplementation(async command => command === "session_get" ? { ...codexRecord(), blocks: [], modelSettings: { __monocodeCodexHomeThreads: "{bad" } } : null);
+    const legacy = await getSession("s1");
+    expect(legacy?.providerSessionIdByHome).toBeUndefined();
+    expect(legacy?.providerSessionId).toBe(codexRecord().providerSessionId);
+    expect(legacy?.codexStorageHome).toBeUndefined();
+  });
+
+  it.each([
+    "{bad",
+    JSON.stringify({ "C:/synthetic/original": "thread-a", future: { format: 2 } }),
+    JSON.stringify(Object.fromEntries(Array.from({ length: 65 }, (_, i) => [`C:/synthetic/${i}`, `thread-${i}`]))),
+    null,
+    { future: 2 },
+  ])("refuses metadata saves and home selection for an opaque saved thread map (%j)", async raw => {
+    invoke.mockImplementation(async command => command === "session_get" ? {
+      ...codexRecord(), modelSettings: { reasoningEffort: "high", __monocodeCodexHomeThreads: raw },
+    } : null);
+    const session = (await getSession("s1"))!;
+    expect(session.codexHomeThreadsUnresolved).toBe(true);
+    expect(parseCodexStorageRecoveryConflict(session.codexStorageError)?.reason).toContain("not saved");
+    expect(session.providerSessionIdByHome).toBeUndefined();
+    expect(session.modelSettings).toEqual({ reasoningEffort: "high" });
+    expect(() => persistFingerprint(session)).not.toThrow();
+    expect(() => sanitizeSessionForPersist({ ...session, title: "Later metadata save" })).toThrow("Preserve the unreadable per-home provider thread map");
+    expect(() => selectCodexStorageHome(session, { home: "C:/synthetic/separate", originalHome: "C:/synthetic/original", threadId: null })).toThrow("Preserve the unreadable per-home provider thread map");
   });
 
   it.each(["role", "user"] as const)("restores %s permission ownership and an explicit engine without leaking markers", async runtimeModeSource => {

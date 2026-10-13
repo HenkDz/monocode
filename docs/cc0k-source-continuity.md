@@ -10,6 +10,8 @@ Each conversation retains `providerSessionIdByHome` in the existing session sett
 
 Unmapped legacy threads are restricted to the original home. Older/native callers that supply a thread without confirmed ownership cannot resume it in a foreign separate home. Provider preparation carries the expected home and uses the App-selected thread instead of a cached foreign resume. Queued provider-binding events carry home provenance and cannot stamp a previous home's ID onto the newly selected home.
 
+An unreadable, unknown-format or oversized existing home-thread map is marked unresolved during hydration. Metadata saves and home selection refuse before publication rather than erasing opaque persisted bytes. The marker stays outside provider model settings. A narrow canonical Mono SQLite probe confirmed that native metadata upsert replaces these settings; its original failing expected-safe receipt is retained. Correction pins and refreshed web evidence are recorded in the external report/manifest.
+
 Recreated sources require the explicit **Return to original home / re-attach source** action. It checks canonical path and physical identity, pins source/private directories, and takes exclusive managed context leases. Immutable, bounded, single-link receipts refer to the original binding's identity/fingerprint. The original binding, private rollouts and credential ownership records are preserved. Unknown/ambiguous/invalid ownership remains blocked. Permissions and held intent are not relaxed; source choices retain account/provider/generation, busy/preparing, remote and transport guards.
 
 ## Recoverable archive publication

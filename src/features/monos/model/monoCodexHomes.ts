@@ -10,6 +10,7 @@ export function sanitizeCodexHomeThreads(value: unknown): Record<string, string>
 
 /** Save the outgoing thread before selecting the current launch source's thread. */
 export function selectCodexStorageHome(session: Session, prepared: { home: string; originalHome: string; threadId: string | null }): Session {
+  if (session.codexHomeThreadsUnresolved) throw new Error("Codex storage needs repair: Preserve the unreadable per-home provider thread map before selecting a home.");
   const threads = { ...session.providerSessionIdByHome };
   const previous = session.codexStorageHome ?? prepared.originalHome;
   if (session.providerSessionId) threads[previous] = session.providerSessionId;

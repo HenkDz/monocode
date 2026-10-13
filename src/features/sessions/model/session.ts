@@ -523,6 +523,8 @@ export type Session = {
   codexStorageHome?: string;
   /** Each launch source's private home keeps its own provider conversation. */
   providerSessionIdByHome?: Record<string, string>;
+  /** An opaque saved map must remain on disk until explicitly repaired. */
+  codexHomeThreadsUnresolved?: boolean;
   /** Provider accepted the carry; its durable clearing is being retried. In-memory only. */
   rotationWarning?: string;
   /**

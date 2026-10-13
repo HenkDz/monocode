@@ -163,6 +163,9 @@ function persistableMeta(
   session: Session,
   includeQueue = true,
 ): Omit<SessionUpsertPayload, "blocks"> {
+  if (session.codexHomeThreadsUnresolved) {
+    throw new Error("Codex storage needs repair: Preserve the unreadable per-home provider thread map before saving.");
+  }
   const linkedWorkItem = sanitizeLinkedWorkItem(session.linkedWorkItem);
   const queuedMessages = includeQueue
     // Keep the existing durable queue format; split app events out on hydration.
@@ -1589,7 +1592,8 @@ function recordToSession(record: SessionRecord): Session {
         .filter((block): block is Block => block != null)
     : [];
   let providerSessionIdByHome: Record<string, string> | undefined;
-  try { providerSessionIdByHome = sanitizeCodexHomeThreads(typeof homeThreads === "string" ? JSON.parse(homeThreads) : undefined); } catch { /* Preserve malformed records on disk; never infer a foreign thread. */ }
+  try { providerSessionIdByHome = sanitizeCodexHomeThreads(typeof homeThreads === "string" ? JSON.parse(homeThreads) : undefined); } catch { /* Refuse later saves; never infer a foreign thread. */ }
+  const codexHomeThreadsUnresolved = Object.prototype.hasOwnProperty.call(record.modelSettings ?? {}, CODEX_HOME_THREADS_SETTING) && !providerSessionIdByHome;
   const linkedWorkItem = sanitizeLinkedWorkItem(record.linkedWorkItem);
   const waiting = sanitizeQueuedMessages(record.queuedMessages);
   const queuedMessages = waiting.filter(message => !message.monoSessionCompletion);
@@ -1609,6 +1613,7 @@ function recordToSession(record: SessionRecord): Session {
     ...(readOnly === "true" ? { readOnly: true } : {}),
     ...(typeof codexStorageHome === "string" && codexStorageHome.length > 0 && codexStorageHome.length <= 4096 ? { codexStorageHome } : {}),
     ...(providerSessionIdByHome ? { providerSessionIdByHome } : {}),
+    ...(codexHomeThreadsUnresolved ? { codexHomeThreadsUnresolved: true } : {}),
     runtimeMode: asRuntimeMode(record.runtimeMode),
     title: record.title,
     blocks,

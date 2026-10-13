@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionRecord } from "./sessionStore";
+import { selectCodexStorageHome } from "../../monos/model/monoCodexHomes";
 
 const invoke = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
@@ -67,6 +68,24 @@ describe("restoring a session whose repair cannot be persisted", () => {
     expect(legacy?.providerSessionIdByHome).toBeUndefined();
     expect(legacy?.providerSessionId).toBe(codexRecord().providerSessionId);
     expect(legacy?.codexStorageHome).toBeUndefined();
+  });
+
+  it.each([
+    "{bad",
+    JSON.stringify({ "C:/synthetic/original": "thread-a", future: { format: 2 } }),
+    JSON.stringify(Object.fromEntries(Array.from({ length: 65 }, (_, i) => [`C:/synthetic/${i}`, `thread-${i}`]))),
+    null,
+    { future: 2 },
+  ])("refuses metadata saves and home selection for an opaque saved thread map (%j)", async raw => {
+    invoke.mockImplementation(async command => command === "session_get" ? {
+      ...codexRecord(), modelSettings: { reasoningEffort: "high", __monocodeCodexHomeThreads: raw },
+    } : null);
+    const session = (await getSession("s1"))!;
+    expect(session.codexHomeThreadsUnresolved).toBe(true);
+    expect(session.providerSessionIdByHome).toBeUndefined();
+    expect(session.modelSettings).toEqual({ reasoningEffort: "high" });
+    expect(() => sanitizeSessionForPersist({ ...session, title: "Later metadata save" })).toThrow("Preserve the unreadable per-home provider thread map");
+    expect(() => selectCodexStorageHome(session, { home: "C:/synthetic/separate", originalHome: "C:/synthetic/original", threadId: null })).toThrow("Preserve the unreadable per-home provider thread map");
   });
 
   it.each(["role", "user"] as const)("restores %s permission ownership and an explicit engine without leaking markers", async runtimeModeSource => {

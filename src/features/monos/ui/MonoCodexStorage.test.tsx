@@ -69,18 +69,34 @@ it("keeps a preserve refusal visible across stable map notice renders and unrela
   }
 });
 
-it("offers advisory return as secondary storage details without a blocking notice or separate no-op", async () => {
+it("offers a quiet source row with explicit return and refusal, without a blocking notice or separate no-op", async () => {
   const detail = `Codex storage needs repair: ${JSON.stringify({ recovery: true, reason: "Return available", paths: ["/synthetic/original"], sourceBinding: {
     resolvedSourceHome: "/synthetic/source", boundSourceHome: "/synthetic/source", canBind: false, canSeparate: true, canReturn: true, sourceIdentity: "1:9",
   } })}`;
-  const resolve = vi.fn(async () => {});
+  let finish!: () => void;
+  const resolve = vi.fn(() => new Promise<void>(done => { finish = done; }));
   await act(async () => root.render(<MonoCodexStorageNotice {...{ advisory: true }} detail={detail} onRepair={async () => {}} onResolve={resolve} />));
   expect(container.querySelector('section[role="status"]')).toBeNull();
-  expect(container.querySelector("details")?.open).toBe(false);
+  expect(container.querySelector("details, summary, [aria-expanded]")).toBeNull();
   expect(buttonNamed("Use a separate Mono home")).toBeUndefined();
-  expect(container.textContent).toContain("/synthetic/source");
+  expect(buttonNamed("Return to original home").title).toContain("Selected source: /synthetic/source\nOriginal source: /synthetic/source");
+  expect(resolve).not.toHaveBeenCalled();
   await act(async () => buttonNamed("Return to original home").click());
   expect(resolve).toHaveBeenCalledExactlyOnceWith("reattach_original_source");
+  expect(buttonNamed("Return to original home").disabled).toBe(true);
+  await act(async () => buttonNamed("Return to original home").click());
+  expect(resolve).toHaveBeenCalledTimes(1);
+  await act(async () => finish());
+  expect(container.textContent).toContain("Codex source choice applied.");
+  expect(buttonNamed("Return to original home").disabled).toBe(false);
+  resolve.mockImplementation(async () => { throw new Error("Source identity changed; both homes preserved"); });
+  await act(async () => buttonNamed("Return to original home").click());
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain("Source identity changed; both homes preserved");
+  expect(buttonNamed("Return to original home").disabled).toBe(false);
+  await act(async () => root.render(<MonoCodexStorageNotice advisory remote detail={detail} onRepair={async () => {}} onResolve={resolve} />));
+  expect(buttonNamed("Return to original home")).toBeUndefined();
+  expect(container.textContent).toContain("remote host");
+  expect(resolve).toHaveBeenCalledTimes(2);
 });
 
 it("requires an explicit scoped confirmation before clearing an inactive owned credential namespace", async () => {

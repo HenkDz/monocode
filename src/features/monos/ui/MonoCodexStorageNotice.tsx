@@ -110,16 +110,15 @@ export function MonoCodexStorageNotice({
     {copyStatus && <p className="mt-1">{copyStatus}</p>}
   </>;
   if (advisory && recovery?.sourceBinding?.canReturn) return (
-    <details className="mx-4 my-2 text-xs text-content/70">
-      <summary className="cursor-pointer">Codex source</summary>
-      <p className="mt-2 break-all">Selected source: {recovery.sourceBinding.resolvedSourceHome}</p>
-      <p className="mt-1 break-all">Original source: {recovery.sourceBinding.boundSourceHome}</p>
-      <p className="mt-1">Confirm this recreated source to return to its original private history. Each launch source keeps its own provider conversation.</p>
-      {onResolve && <SecondaryButton disabled={!!busy} onClick={() => void run("repair", () => onResolve("reattach_original_source"))}>Return to original home / re-attach source</SecondaryButton>}
-      {error && <p role="alert" className="mt-2 break-all">{error}</p>}
-      {success && <p className="mt-2">Codex source choice applied.</p>}
-      {detailContent}
-    </details>
+    <div className="mx-4 my-2 text-xs text-content/70">
+      <div className="flex items-center gap-2">
+        <span>Codex source ·</span>
+        {!remote && onResolve && <SecondaryButton disabled={!!busy} title={`Selected source: ${recovery.sourceBinding.resolvedSourceHome}\nOriginal source: ${recovery.sourceBinding.boundSourceHome}`} onClick={() => void run("repair", () => onResolve("reattach_original_source"))}>Return to original home</SecondaryButton>}
+        {remote && <span>Inspect on the remote host</span>}
+      </div>
+      {error && <p role="alert" className="mt-1 break-all">{error}</p>}
+      {success && <p className="mt-1">Codex source choice applied.</p>}
+    </div>
   );
   return (
     <section

@@ -1,0 +1,11 @@
+# CC-GOAL3 durable original authority
+
+FIX-FIRST: the frozen candidate retains controlled original request binding in the existing frontend pending receipt and queued monoSource. Preparation/delegation validates that binding when present; delivery rechecks assignment after owner preparation. Complete production consumption is not closed: coordinator independent review reports actual appendUser/acknowledgeMonoMessage drops monoSource.request from committed turn; own synthetic fixture manually supplies it. Connected significance awaits final independent report. No production edits under active review.
+
+Rejected base89d11ad/tree5706942. Frozen tested source54081d777f20a23eb3edc03388110a81875a3d56/treee8c5df4568e2e0edf762f785e3abe81e7c2262b7, branchHenkDz/ccgoal3-durable-authority. Core implementation7a2 unchanged; subsequent commits repair extracted-test dependency bindings only. This note is the sole docs-only child after the recorded gates.
+
+Original25/0 +expanded74/0 (59/90 unchanged matchers); total116/0. Focused631/0/15files; full8524/0/13 exact inherited skips. TSC exit2/build exit2, TS2345 monoManagerGoals.ts:288 (conditional pending-request spread inferred as optional validator). Chromium/WebKit standard8/0+narrow12/0, including synthetic stale home/account rejection after JSON reload; these passes do not override the reviewed production turn-copy failure.237 DI fixture matcher expressions preserved. All20 final screenshots individually inspected.
+
+Evidence: C:/Users/nooro/AppData/Local/Temp/monocode-cc/ccgoal3/REPORT.md, READY.md, final-manifest.json and evidence/{source-freeze,field-bindings,assertion-preservation,required-di-preservation,gate-summary,screenshot-inspection,cleanup}.json. Baseline70/4/browser8/4, first583/1 DI, interrupted268full and dced8518/6/13+one unhandled DI error remain source-pinned; no old failure relabeled green.
+
+Synthetic IPC/session/worker/browser boundaries; no native/provider/installed acceptance or storage audit. No native/session writer/schema/shared prompt/wake/routing changes. Windows home alias conservative refusal and inherited P3 fades retained. Main65/live68396/WB untouched. Jobs/listeners0; FULL A RELEASED. Fresh independent reviewer clearance is required before root integration; no merge/push/deploy/SHIP authority.

@@ -2,7 +2,7 @@ import type { Session } from "../../../features/sessions/model/session";
 import type { HarnessEvent } from "./types";
 
 export type ContextProfile = Pick<Session, "harness" | "model" | "modelSettings">;
-export type ProviderBindingProfile = Pick<Session, "harness" | "providerAccountId">;
+export type ProviderBindingProfile = Pick<Session, "harness" | "providerAccountId" | "codexStorageHome">;
 
 export function sameContextProfile(session: ContextProfile, profile: ContextProfile): boolean {
   return session.harness === profile.harness && session.model === profile.model &&
@@ -12,7 +12,8 @@ export function sameContextProfile(session: ContextProfile, profile: ContextProf
 
 /** Keep the emitting profile attached until queued events reach the reducer. */
 export function bindTurnContextProfile(session: ContextProfile & ProviderBindingProfile): (event: HarnessEvent) => HarnessEvent {
-  const bindingProfile: ProviderBindingProfile = { harness: session.harness, providerAccountId: session.providerAccountId };
+  const bindingProfile: ProviderBindingProfile = { harness: session.harness, providerAccountId: session.providerAccountId,
+    ...(session.harness === "codex" && session.codexStorageHome ? { codexStorageHome: session.codexStorageHome } : {}) };
   let profile: ContextProfile = {
     harness: session.harness,
     model: session.model,

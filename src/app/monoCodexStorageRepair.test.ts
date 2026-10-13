@@ -6,6 +6,7 @@ import { MonoCodexStorageRecovery, isCodexStorageError, parseCodexStorageConflic
 import type { Session } from "../features/sessions/model/session";
 import { codexStorageAccountId } from "../features/monos/model/monoCodexStorageIssues";
 import { sessionWriteNeedsReconciliation } from "../features/sessions/data/sessionStore";
+import { selectCodexStorageHome } from "../features/monos/model/monoCodexHomes";
 import { loadMonoRotation, MONO_ROTATION_READ_ERROR } from "../features/monos/model/monoRotation";
 
 beforeEach(() => vi.stubGlobal("localStorage", { getItem: () => null }));
@@ -31,7 +32,7 @@ function evaluate(source: string, context: Record<string, unknown>) {
   const output = ts.transpileModule(`(${source})`, {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
   }).outputText;
-  return runInNewContext(output, { ...context, Error });
+  return runInNewContext(output, { turnGen: { current: new Map() }, ...context, Error });
 }
 
 it("reveals recovery storage for the held account without forwarding recovery paths", async () => {
@@ -108,7 +109,7 @@ it.each(["relink", "first replay"])("unblocks a late account member during %s be
       sessionsRef.current = update(sessionsRef.current);
     },
     setQueueDispatchVersion: vi.fn(), setCodexStorageRepaired: vi.fn(),
-    prepareMonoCodexStore: prepare, invoke: vi.fn(), acceptSubmission,
+    prepareMonoCodexStore: prepare, adoptCodexStorageHome: async () => {}, invoke: vi.fn(), acceptSubmission,
     submitSessionRef: { current: undefined as unknown },
   };
   const submit = evaluate(guardedSubmission, context);
@@ -151,7 +152,10 @@ function sandboxRepairFixture(extra: Partial<Session> = {}) {
   const recovery = new MonoCodexStorageRecovery();
   const retry = vi.fn<() => boolean | Promise<boolean>>(() => true), peerRetry = vi.fn(() => true), otherRetry = vi.fn(() => true);
   recovery.hold("clicked", retry); recovery.hold("peer", peerRetry); recovery.hold("other", otherRetry);
-  const stop = vi.fn(async (_harness: string, _sessionId: string) => {}), prepare = vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}), persist = vi.fn(async () => {}), saveMode = vi.fn();
+  const stop = vi.fn(async (_harness: string, _sessionId: string) => {}), prepare = vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}), persist = vi.fn(async (session?: Session, change?: (session: Session) => Session) => {
+    if (session && change) sessionsRef.current = sessionsRef.current.map(current => current.id === session.id ? change(current) : current);
+    return {};
+  }), saveMode = vi.fn();
   const invoke = vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => ({ configPath: "/synthetic/private/config.toml", backupPaths: ["/synthetic/private/config.backup"] }));
   const context = {
     sessionsRef, codexStorageRecovery: { current: recovery }, codexStorageAccountId, isCodexStorageError,
@@ -167,7 +171,11 @@ function sandboxRepairFixture(extra: Partial<Session> = {}) {
     setQueueDispatchVersion: vi.fn(), setCodexStorageRepaired: vi.fn(), prepareMonoCodexStore: prepare,
     prepareCodexMonoContext: prepare, resolveCodexBinary: async () => ({ path: "/synthetic/codex.exe" }), invoke,
     checkMonoCodexSandbox: prepare,
+    selectCodexStorageHome, turnGen: { current: new Map<string, number>() },
+    forgetHarnessSession: vi.fn(async () => {}), bindHarnessSession: vi.fn(),
+    adoptCodexStorageHome: undefined as unknown as (session: Session, prepared: unknown) => Promise<void>,
   };
+  context.adoptCodexStorageHome = evaluate(appCallback("adoptCodexStorageHome").getText(app), context);
   const repair = evaluate(appCallback("onCodexStorageRepair").getText(app), context);
   return { ...context, repair, recovery, retry, peerRetry, otherRetry, stop, prepare, persist, saveMode };
 }
@@ -327,15 +335,21 @@ it("separates the selected source before retrying and detaches the original sour
   const fixture = sandboxRepairFixture({ codexStorageError, providerSessionId: "original-thread", codexStorageHome: "/synthetic/original-mono",
     blocks: [{ id: "held", role: "user", text: "Held source retry" }], queuedMessages: [{ id: "next", text: "Next queued", attachments: [], intent: "plan" }], codexStorageHeld: {} });
   const before = structuredClone(fixture.sessionsRef.current[0]);
+  fixture.sessionsRef.current[1] = { ...fixture.sessionsRef.current[1], providerSessionId: "peer-original", codexStorageHome: "/synthetic/original-mono" };
+  fixture.sessionsRef.current[2] = { ...fixture.sessionsRef.current[2], providerSessionId: "other-original", codexStorageHome: "/synthetic/other-mono" };
+  const peers = structuredClone(fixture.sessionsRef.current.slice(1));
   fixture.invoke.mockResolvedValueOnce("/synthetic/separate-mono");
+  fixture.prepare.mockResolvedValueOnce({ home: "/synthetic/separate-mono", originalHome: "/synthetic/original-mono", threadId: null } as never);
   await fixture.repair("clicked", "separate_selected_source");
   expect(fixture.invoke).toHaveBeenCalledExactlyOnceWith("codex_mono_store_separate_source", { providerAccountId: "account", sourceHome: sourceBinding.resolvedSourceHome, sourceIdentity: "1:2" });
-  expect(fixture.prepare).toHaveBeenCalledExactlyOnceWith("account", undefined, expect.objectContaining({ expectedMonoHome: "/synthetic/separate-mono" }));
+  expect(fixture.prepare).toHaveBeenCalledExactlyOnceWith("account", "original-thread", expect.objectContaining({ expectedMonoHome: "/synthetic/original-mono", providerSessionIdByHome: {} }));
   expect(fixture.retry).toHaveBeenCalledOnce();
   expect(fixture.sessionsRef.current[0].blocks).toEqual(before.blocks);
   expect(fixture.sessionsRef.current[0].queuedMessages).toEqual(before.queuedMessages);
   expect(fixture.sessionsRef.current[0].providerSessionId).toBeUndefined();
   expect(fixture.sessionsRef.current[0].codexStorageHome).toBe("/synthetic/separate-mono");
+  expect(fixture.sessionsRef.current[0].providerSessionIdByHome).toEqual({ "/synthetic/original-mono": "original-thread" });
+  expect(fixture.sessionsRef.current.slice(1)).toEqual(peers);
   expect(fixture.saveMode).not.toHaveBeenCalled();
 });
 
@@ -346,6 +360,31 @@ it("refuses a separate home while a managed peer is active", async () => {
   await expect(fixture.repair("clicked", "separate_selected_source")).rejects.toThrow("current turns");
   expect(fixture.invoke).not.toHaveBeenCalled(); expect(fixture.retry).not.toHaveBeenCalled();
   expect(fixture.persist).not.toHaveBeenCalled(); expect(fixture.recovery.hasPending("clicked")).toBe(true);
+});
+
+it.each(["generation", "account", "permissions"])("refuses a stale source choice after stop changes %s", async field => {
+  const sourceBinding = { resolvedSourceHome: "/synthetic/selected", boundSourceHome: "/synthetic/original", canBind: false, canSeparate: true, sourceIdentity: "1:2" };
+  const fixture = sandboxRepairFixture({ providerSessionId: "original-thread", codexStorageHome: "/synthetic/original-mono", codexStorageError: `Codex storage needs repair: ${JSON.stringify({ recovery: true, reason: "Choose source", paths: ["/synthetic/private"], sourceBinding })}` });
+  fixture.stop.mockImplementationOnce(async () => {
+    if (field === "generation") fixture.turnGen.current.set("clicked", 1);
+    else fixture.sessionsRef.current[0] = { ...fixture.sessionsRef.current[0], ...(field === "account" ? { providerAccountId: "changed" } : { readOnly: true }) };
+  });
+  await expect(fixture.repair("clicked", "separate_selected_source")).rejects.toThrow("changed");
+  expect(fixture.invoke).not.toHaveBeenCalled(); expect(fixture.persist).not.toHaveBeenCalled();
+  expect(fixture.retry).not.toHaveBeenCalled(); expect(fixture.recovery.hasPending("clicked")).toBe(true);
+  expect(fixture.sessionsRef.current[0].providerSessionId).toBe("original-thread");
+});
+
+it("reattaches the recreated original behind its displayed physical identity and resumes its saved thread", async () => {
+  const sourceBinding = { resolvedSourceHome: "/synthetic/original", boundSourceHome: "/synthetic/original", canBind: false, canSeparate: true, canReturn: true, sourceIdentity: "1:9" };
+  const fixture = sandboxRepairFixture({ providerSessionId: "other-thread", codexStorageHome: "/synthetic/other-mono", providerSessionIdByHome: { "/synthetic/original-mono": "original-thread" },
+    codexStorageError: `Codex storage needs repair: ${JSON.stringify({ recovery: true, reason: "Recreated source", paths: ["/synthetic/private"], sourceBinding })}` });
+  fixture.prepare.mockResolvedValueOnce({ home: "/synthetic/original-mono", originalHome: "/synthetic/original-mono", threadId: "original-thread" } as never);
+  await fixture.repair("clicked", "reattach_original_source");
+  expect(fixture.invoke).toHaveBeenCalledExactlyOnceWith("codex_mono_store_reattach_source", { providerAccountId: "account", sourceHome: "/synthetic/original", sourceIdentity: "1:9" });
+  expect(fixture.sessionsRef.current[0].providerSessionId).toBe("original-thread");
+  expect(fixture.sessionsRef.current[0].providerSessionIdByHome).toEqual({ "/synthetic/original-mono": "original-thread", "/synthetic/other-mono": "other-thread" });
+  expect(fixture.peerRetry).not.toHaveBeenCalled(); expect(fixture.otherRetry).not.toHaveBeenCalled();
 });
 
 it("holds prompts and returns the private backup path after an explicit Mono-config write fails", async () => {

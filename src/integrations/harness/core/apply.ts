@@ -185,8 +185,12 @@ export function applyHarnessEvent(
       );
     case "session.providerBound":
       if (event.bindingProfile && (session.harness !== event.bindingProfile.harness ||
-        !sameProviderAccountId(session.providerAccountId, event.bindingProfile.providerAccountId))) return session;
-      return { ...session, providerSessionId: event.providerSessionId };
+        !sameProviderAccountId(session.providerAccountId, event.bindingProfile.providerAccountId) ||
+        (event.bindingProfile.codexStorageHome !== undefined && session.codexStorageHome !== event.bindingProfile.codexStorageHome))) return session;
+      return { ...session, providerSessionId: event.providerSessionId,
+        ...(session.harness === "codex" && session.codexStorageHome ? {
+          providerSessionIdByHome: { ...session.providerSessionIdByHome, [session.codexStorageHome]: event.providerSessionId },
+        } : {}) };
     case "turn.started": {
       const index = lastMatchingBlock(
         session.blocks,

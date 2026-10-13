@@ -3,6 +3,9 @@ use super::*;
 const BINDING: &str = ".monocode-source.json";
 const LIMIT: u64 = 8192;
 
+mod reattach;
+pub(super) use reattach::confirm as reattach_home;
+
 pub(super) fn confirm_home(
     source: &Path,
     home: &Path,
@@ -10,6 +13,8 @@ pub(super) fn confirm_home(
     expected_identity: &str,
 ) -> Result<PathBuf, String> {
     let source = source.canonicalize().map_err(|e| e.to_string())?;
+    #[cfg(windows)]
+    let _source_guard = archive::lock_directory(&source)?;
     let id = entry_identity(&source)?;
     if crate::fs::path_to_js(&source) != expected_source
         || format!("{}:{}", id.0, id.1) != expected_identity
@@ -37,15 +42,30 @@ pub(super) fn selected_home(source: &Path, home: &Path, confirm: bool) -> Result
         .parent()
         .ok_or("Missing Mono homes directory")?
         .join(name);
+    // Original ownership takes precedence over historical separate-home choices.
+    let original_matches = home.join(BINDING).exists() && ensure(&source, home, false).is_ok();
+    let selected = if original_matches {
+        home.to_path_buf()
+    } else if let Some(reattached) = reattach::selected(&source, home)? {
+        reattached
+    } else {
+        selected
+    };
     if !confirm {
         if !selected.join(BINDING).exists() {
+            if let Some(original) = reattach::recreated(&source, home)? {
+                ensure(&source, &original, false)?;
+            }
             return Ok(home.to_path_buf());
         }
         ensure(&source, &selected, false)?;
         return Ok(selected);
     }
     let mut leases = Vec::new();
-    for base in [home, selected.as_path()] {
+    for base in [home, selected.as_path()]
+        .into_iter()
+        .collect::<HashSet<_>>()
+    {
         if !base.exists() {
             continue;
         }
@@ -100,6 +120,34 @@ pub(super) fn ensure_context(source: &Path, base: &Path, home: &Path) -> Result<
         ensure(source, home, true)?;
     }
     Ok(())
+}
+
+pub(super) fn session_thread(
+    home: &Path,
+    original_home: &Path,
+    expected: Option<&str>,
+    current: Option<String>,
+    threads: &HashMap<String, String>,
+) -> Result<Option<String>, String> {
+    if threads.len() > 64
+        || threads.iter().any(|(home, id)| {
+            home.is_empty() || home.len() > 4096 || validate_thread_id(id).is_err()
+        })
+    {
+        return Err(
+            "Invalid per-home provider threads; preserve the conversation before retrying.".into(),
+        );
+    }
+    if let Some(id) = &current {
+        validate_thread_id(id)?;
+    }
+    let selected = crate::fs::path_to_js(home);
+    let original = crate::fs::path_to_js(original_home);
+    // An unmapped legacy thread can only enter the original home, never a foreign one.
+    if expected.unwrap_or(&original) == selected {
+        return Ok(current);
+    }
+    Ok(threads.get(&selected).cloned())
 }
 
 pub(super) fn guard_bound_contexts(base: &Path) -> Result<(), String> {
@@ -158,7 +206,8 @@ fn issue(home: &Path, source: &Path, bound: Option<&Path>, can_bind: bool, reaso
         "paths": [crate::fs::path_to_js(home), crate::fs::path_to_js(source)],
         "sourceBinding": {"resolvedSourceHome": crate::fs::path_to_js(source),
             "boundSourceHome": bound.map(crate::fs::path_to_js), "canBind": can_bind,
-            "canSeparate": bound.is_some(), "sourceIdentity": entry_identity(source).ok().map(|id| format!("{}:{}",id.0,id.1))}
+            "canSeparate": bound.is_some(), "canReturn": bound == Some(source),
+            "sourceIdentity": entry_identity(source).ok().map(|id| format!("{}:{}",id.0,id.1))}
     })
     .to_string()
 }
@@ -198,6 +247,12 @@ pub(super) fn ensure(source: &Path, home: &Path, confirm_legacy: bool) -> Result
                 || binding.source_home.as_os_str().len() > 4096
             {
                 return Err(invalid());
+            }
+            if binding.source_home == source
+                && (binding.source_identity == identity
+                    || reattach::approved(&source, &home, &binding)?)
+            {
+                return Ok(());
             }
             if binding.source_identity != identity || binding.source_home != source {
                 return Err(issue(&home, &source, Some(&binding.source_home), false,

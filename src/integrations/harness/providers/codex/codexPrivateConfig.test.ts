@@ -47,7 +47,7 @@ vi.mock("../../core/child", () => ({
 }));
 
 import { prepareCodexMonoContext } from "./codexStore";
-import { __codexTestReset, sendCodexTurn, stopCodexSession } from "./codex";
+import { __codexTestReset, bindCodexSession, sendCodexTurn, stopCodexSession } from "./codex";
 
 const SOURCE = "# synthetic ordinary account\r\nmodel='account-model'\r\n[windows]\r\nsandbox='elevated'\r\n";
 const PRIVATE = "model='private-model'\n[windows]\nsandbox='unelevated'\n";
@@ -94,6 +94,18 @@ afterEach(async () => {
 
 const input = { sessionId: "witness", path: "/synthetic/codex", cwd: "/synthetic/project", providerAccountId: "account", sandboxRequired: true, sandboxNetworkAccess: false };
 
+it("uses the App's selected-home thread at preparation and transport instead of a cached foreign-home resume", async () => {
+  bindCodexSession("clicked", "thread-a", input.cwd, "account");
+  const homeB = join(root, "separate-mono"); mkdirSync(homeB);
+  mock.store.home = homeB;
+  await sendCodexTurn({ sessionId: "clicked", cwd: input.cwd, model: "synthetic", runtimeMode: "supervised", codexStore: "mono", providerAccountId: "account",
+    codexStorageHome: homeB, codexThreadId: "thread-b", text: "Exact source B prompt", attachments: [], onEvent() {} });
+  expect(mock.prepare).toHaveBeenCalledWith("account", "thread-b", expect.objectContaining({ expectedMonoHome: homeB }));
+  const resumes = mock.sent.filter(request => request.method === "thread/resume");
+  expect(resumes).toHaveLength(1); expect(resumes[0].params).toMatchObject({ threadId: "thread-b", config: { sqlite_home: homeB } });
+  expect(mock.sent.some(request => request.params?.threadId === "thread-a")).toBe(false);
+});
+
 it.each([undefined, "unelevated"] as const)("composes the repaired private engine before readiness with explicit choice %s", async windowsSandbox => {
   // CC0GR3's witness: real codexStore/JsonRpcClient and source/private/context files; native IPC is modeled.
   const prepared = await prepareCodexMonoContext({ ...input, windowsSandbox });
@@ -134,7 +146,7 @@ function repairCallback(context: Record<string, unknown>) {
   walk(app);
   if (!callback) throw new Error("App storage repair callback missing");
   const output = ts.transpileModule(`(${callback.getText(app)})`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
-  return runInNewContext(output, { ...context, Error });
+  return runInNewContext(output, { turnGen: { current: new Map() }, ...context, Error });
 }
 
 it.each(["supervised", "plan"] as const)("private repair replays the inherited %s held prompt through real App, store and provider modules", async mode => {
@@ -172,6 +184,7 @@ it.each(["supervised", "plan"] as const)("private repair replays the inherited %
     monoSkillsForSession: () => ({ skillsRole: "manager", skillsPolicy: { mode: "role" } }), sessionWorkCwd: (current: Session) => current.cwd,
     orchestrator: { forSession: () => undefined }, monoForSession: () => ({ id: "mono" }), saveMonoRuntimeMode: vi.fn(), upsertSession: vi.fn(),
     stopHarnessSession: stop, prepareCodexMonoContext, prepareMonoCodexStore: mock.prepare, resolveCodexBinary: async () => ({ path: input.path }), invoke,
+    adoptCodexStorageHome: async () => {},
     crypto: { randomUUID: () => "synthetic-receipt" }, flushSync: (action: () => void) => action(),
     setSessions: (update: (sessions: Session[]) => Session[]) => { sessionsRef.current = update(sessionsRef.current); },
     setQueueDispatchVersion: vi.fn(), setCodexStorageRepaired: vi.fn(),

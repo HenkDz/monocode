@@ -15,7 +15,7 @@ export type CodexStorageConflict = {
 };
 
 export type CodexStorageResolution = "use_account_version" | "keep_mono_version" |
-  "use_unelevated_sandbox" | "use_mono_full_access" | "preserve_recovery_metadata" | "bind_selected_source" | "separate_selected_source" | "keep_private_history";
+  "use_unelevated_sandbox" | "use_mono_full_access" | "preserve_recovery_metadata" | "bind_selected_source" | "separate_selected_source" | "reattach_original_source" | "keep_private_history";
 
 export type CodexSandboxBlocker = {
   sandbox: true;
@@ -28,7 +28,7 @@ export type CodexStorageRecoveryConflict = {
   reason: string;
   paths: string[];
   metadata?: { path: string; identity: string; fingerprint: string };
-  sourceBinding?: { resolvedSourceHome: string; boundSourceHome: string | null; canBind: boolean; canSeparate?: boolean; sourceIdentity?: string };
+  sourceBinding?: { resolvedSourceHome: string; boundSourceHome: string | null; canBind: boolean; canSeparate?: boolean; canReturn?: boolean; sourceIdentity?: string };
   migration?: { sourcePath: string; monoPath: string; sourceFingerprint: string; monoFingerprint: string; sourceIdentity: string; monoIdentity: string };
 };
 
@@ -102,6 +102,8 @@ export function parseCodexStorageRecoveryConflict(error: unknown): CodexStorageR
       typeof value.sourceBinding.canBind !== "boolean")) return undefined;
     if (value.sourceBinding?.canSeparate !== undefined && (typeof value.sourceBinding.canSeparate !== "boolean" ||
       (value.sourceBinding.canSeparate && typeof value.sourceBinding.sourceIdentity !== "string"))) return undefined;
+    if (value.sourceBinding?.canReturn !== undefined && (typeof value.sourceBinding.canReturn !== "boolean" ||
+      (value.sourceBinding.canReturn && (value.sourceBinding.boundSourceHome !== value.sourceBinding.resolvedSourceHome || typeof value.sourceBinding.sourceIdentity !== "string")))) return undefined;
     if (value.migration !== undefined && (!value.migration ||
       !["sourcePath", "monoPath", "sourceFingerprint", "monoFingerprint", "sourceIdentity", "monoIdentity"].every(key => typeof value.migration[key] === "string" && value.migration[key].length > 0))) return undefined;
     return value as CodexStorageRecoveryConflict;

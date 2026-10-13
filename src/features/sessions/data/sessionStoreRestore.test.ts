@@ -52,6 +52,23 @@ describe("restoring a session whose repair cannot be persisted", () => {
     expect(sanitizeSessionForPersist(session!).modelSettings.__monocodeCodexStorageHome).toBe("C:/synthetic/separate-mono");
   });
 
+  it("reloads both per-home threads and retains an unmapped legacy thread without exposing the storage setting", async () => {
+    const threads = { "C:/synthetic/original": "thread-a", "C:/synthetic/separate": "thread-b" };
+    invoke.mockImplementation(async command => command === "session_get" ? { ...codexRecord(), blocks: [], providerSessionId: "thread-b", modelSettings: {
+      __monocodeCodexStorageHome: "C:/synthetic/separate", __monocodeCodexHomeThreads: JSON.stringify(threads), reasoningEffort: "high",
+    } } : null);
+    const session = await getSession("s1");
+    expect(session?.providerSessionIdByHome).toEqual(threads);
+    expect(session?.providerSessionId).toBe("thread-b");
+    expect(session?.modelSettings).toEqual({ reasoningEffort: "high" });
+    expect(JSON.parse(sanitizeSessionForPersist(session!).modelSettings.__monocodeCodexHomeThreads)).toEqual(threads);
+    invoke.mockImplementation(async command => command === "session_get" ? { ...codexRecord(), blocks: [], modelSettings: { __monocodeCodexHomeThreads: "{bad" } } : null);
+    const legacy = await getSession("s1");
+    expect(legacy?.providerSessionIdByHome).toBeUndefined();
+    expect(legacy?.providerSessionId).toBe(codexRecord().providerSessionId);
+    expect(legacy?.codexStorageHome).toBeUndefined();
+  });
+
   it.each(["role", "user"] as const)("restores %s permission ownership and an explicit engine without leaking markers", async runtimeModeSource => {
     invoke.mockImplementation(async (command: string) => command === "session_get" ? {
       ...codexRecord(), blocks: [], runtimeMode: "auto", modelSettings: { reasoningEffort: "high", __monocodeRuntimeModeSource: runtimeModeSource, __monocodeWindowsSandbox: "elevated" },

@@ -60,6 +60,7 @@ export function prepareCodexMonoContext(input: MonoSkillsContext & {
   cwd: string;
   providerAccountId?: string;
   threadId?: string;
+  expectedMonoHome?: string;
   migrationOnly?: boolean;
   sandboxRequired?: boolean;
   windowsSandbox?: "elevated" | "unelevated";
@@ -67,7 +68,7 @@ export function prepareCodexMonoContext(input: MonoSkillsContext & {
 }): Promise<PreparedContext> {
   const key = `${input.providerAccountId ?? "default"}:${input.sessionId}`;
   const pending = inFlight.get(key);
-  const skills = JSON.stringify([input.cwd, input.skillsRole, input.skillsPolicy, input.sandboxRequired, input.windowsSandbox, input.sandboxNetworkAccess]);
+  const skills = JSON.stringify([input.cwd, input.skillsRole, input.skillsPolicy, input.sandboxRequired, input.windowsSandbox, input.sandboxNetworkAccess, input.expectedMonoHome]);
   if (pending) {
     if (
       pending.threadId === input.threadId &&
@@ -95,7 +96,7 @@ async function prepare(
     input.providerAccountId,
     input.threadId,
     // config/read supplies the effective project settings before any thread or turn RPC.
-    { skillsRole: input.skillsRole, skillsPolicy: input.skillsPolicy, projectPath: input.cwd, sandboxRequired: false, windowsSandbox: input.windowsSandbox, sandboxNetworkAccess: input.sandboxNetworkAccess },
+    { skillsRole: input.skillsRole, skillsPolicy: input.skillsPolicy, projectPath: input.cwd, sandboxRequired: false, windowsSandbox: input.windowsSandbox, sandboxNetworkAccess: input.sandboxNetworkAccess, ...(input.expectedMonoHome ? { expectedMonoHome: input.expectedMonoHome } : {}) },
   );
   if (input.migrationOnly && store.hasThread)
     return { config: {}, hasThread: true, ...(store.threadPath ? { threadPath: store.threadPath } : {}) };

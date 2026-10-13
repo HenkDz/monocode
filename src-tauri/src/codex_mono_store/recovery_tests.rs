@@ -104,10 +104,9 @@ fn cc0j_source_mismatch_offers_a_separate_home_without_touching_the_original() {
         &format!("{}:{}", old_source_identity.0, old_source_identity.1)
     )
     .is_err());
-    assert_eq!(
-        source_binding::selected_home(&other, &home, false).unwrap(),
-        home
-    );
+    let refused = source_binding::selected_home(&other, &home, false).unwrap_err();
+    let refused: serde_json::Value = serde_json::from_str(&refused).unwrap();
+    assert_eq!(refused["sourceBinding"]["canReturn"], true);
     let recreated = source_binding::selected_home(&other, &home, true).unwrap();
     assert_ne!(recreated, separate);
     assert_eq!(

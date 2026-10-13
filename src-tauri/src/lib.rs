@@ -497,6 +497,7 @@ pub fn run() {
             codex_mono_store::codex_mono_store_prepare,
             codex_mono_store::codex_mono_store_bind_source,
             codex_mono_store::codex_mono_store_separate_source,
+            codex_mono_store::codex_mono_store_reattach_source,
             codex_mono_store::codex_mono_store_keep_private_history,
             codex_mono_store::codex_mono_store_retire_credentials,
             codex_mono_store::codex_mono_sandbox_check,

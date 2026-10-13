@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { sanitizeCodexHomeThreads } from "../../monos/model/monoCodexHomes";
 import { forgetSessionPullRequests } from "../../source-control/model/pullRequests";
 import { parseCard } from "../../monos/model/monoCards";
 import { isMonoSession } from "../../monos/model/mono";
@@ -61,6 +62,7 @@ const EFFORT_SOURCE_SETTING = "__monocodeEffortSource";
 const RUNTIME_MODE_SOURCE_SETTING = "__monocodeRuntimeModeSource";
 const WINDOWS_SANDBOX_SETTING = "__monocodeWindowsSandbox";
 const CODEX_STORAGE_HOME_SETTING = "__monocodeCodexStorageHome";
+const CODEX_HOME_THREADS_SETTING = "__monocodeCodexHomeThreads";
 const APP_REQUEST_ID = /^[A-Za-z0-9_-]{1,512}$/;
 const LEGACY_MANAGER_DIGEST_ID = /^manager-digest:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -178,6 +180,7 @@ function persistableMeta(
       ...(session.runtimeModeSource ? { [RUNTIME_MODE_SOURCE_SETTING]: session.runtimeModeSource } : {}),
       ...(session.windowsSandbox ? { [WINDOWS_SANDBOX_SETTING]: session.windowsSandbox } : {}),
       ...(session.codexStorageHome ? { [CODEX_STORAGE_HOME_SETTING]: session.codexStorageHome } : {}),
+      ...(sanitizeCodexHomeThreads(session.providerSessionIdByHome) ? { [CODEX_HOME_THREADS_SETTING]: JSON.stringify(session.providerSessionIdByHome) } : {}),
     },
     runtimeMode: session.runtimeMode,
     title: session.title,
@@ -1578,13 +1581,15 @@ function normalizeSummary(summary: SessionSummary): SessionSummary {
 
 function recordToSession(record: SessionRecord): Session {
   const { [READ_ONLY_SETTING]: readOnly, [EFFORT_SOURCE_SETTING]: effortSource,
-    [RUNTIME_MODE_SOURCE_SETTING]: runtimeModeSource, [WINDOWS_SANDBOX_SETTING]: windowsSandbox, [CODEX_STORAGE_HOME_SETTING]: codexStorageHome, ...modelSettings } =
+    [RUNTIME_MODE_SOURCE_SETTING]: runtimeModeSource, [WINDOWS_SANDBOX_SETTING]: windowsSandbox, [CODEX_STORAGE_HOME_SETTING]: codexStorageHome, [CODEX_HOME_THREADS_SETTING]: homeThreads, ...modelSettings } =
     record.modelSettings && typeof record.modelSettings === "object" ? record.modelSettings : {};
   const blocks = Array.isArray(record.blocks)
     ? record.blocks
         .map((block) => sanitizeBlock(block, { hydrate: true }))
         .filter((block): block is Block => block != null)
     : [];
+  let providerSessionIdByHome: Record<string, string> | undefined;
+  try { providerSessionIdByHome = sanitizeCodexHomeThreads(typeof homeThreads === "string" ? JSON.parse(homeThreads) : undefined); } catch { /* Preserve malformed records on disk; never infer a foreign thread. */ }
   const linkedWorkItem = sanitizeLinkedWorkItem(record.linkedWorkItem);
   const waiting = sanitizeQueuedMessages(record.queuedMessages);
   const queuedMessages = waiting.filter(message => !message.monoSessionCompletion);
@@ -1603,6 +1608,7 @@ function recordToSession(record: SessionRecord): Session {
     ...(windowsSandbox === "elevated" || windowsSandbox === "unelevated" ? { windowsSandbox } : {}),
     ...(readOnly === "true" ? { readOnly: true } : {}),
     ...(typeof codexStorageHome === "string" && codexStorageHome.length > 0 && codexStorageHome.length <= 4096 ? { codexStorageHome } : {}),
+    ...(providerSessionIdByHome ? { providerSessionIdByHome } : {}),
     runtimeMode: asRuntimeMode(record.runtimeMode),
     title: record.title,
     blocks,

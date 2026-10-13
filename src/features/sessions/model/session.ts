@@ -521,6 +521,8 @@ export type Session = {
   codexStorageHeld?: { intent?: TurnIntent };
   /** Persisted private home that owns this conversation's provider thread. */
   codexStorageHome?: string;
+  /** Each launch source's private home keeps its own provider conversation. */
+  providerSessionIdByHome?: Record<string, string>;
   /** Provider accepted the carry; its durable clearing is being retried. In-memory only. */
   rotationWarning?: string;
   /**

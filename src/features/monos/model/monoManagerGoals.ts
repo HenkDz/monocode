@@ -7,6 +7,7 @@ import type { GitPr } from "../../../platform/tauri/fs";
 import type { Mono, MonoProject } from "./mono";
 import type { Block } from "../../sessions/model/session";
 import { assertManagerRequest } from "./managerAuthorizedWork";
+import type { ManagerRequestRecovery } from "./managerAuthorizedWork";
 
 /** Non-repository recents must not hide the projects that can own a Manager. */
 export async function validManagerProjects(projects: readonly MonoProject[], resolve: (path: string) => Promise<string>): Promise<{ project: MonoProject; folder: string }[]> {
@@ -56,7 +57,7 @@ export type MonoManagerGoal = {
 type Receipt = {
   signature: string;
   result: unknown;
-  pending?: { goalId: string; text: string; cancel?: boolean };
+  pending?: { goalId: string; text: string; cancel?: boolean; request?: ManagerRequestRecovery };
 };
 export type GoalLedger = {
   version: 1;
@@ -95,6 +96,7 @@ export type ManagerReadyPr = {
   checks: string;
 };
 export type ManagerGoalHost = {
+  requestAuthority?: ManagerRequestRecovery;
   mayDelegate(monoId: string): boolean;
   projects(monoId: string): Promise<ManagerProject[]>;
   status(monoId: string, projectId: string, before?: string): Promise<unknown>;
@@ -105,6 +107,7 @@ export type ManagerGoalHost = {
     receiptId: string,
     cancel: boolean,
     validate?: () => void,
+    request?: ManagerRequestRecovery,
   ): Promise<void>;
 };
 type Store = {
@@ -282,6 +285,7 @@ export class MonoManagerGoals {
         receipt.pending.text,
         `mono-goal-${id}-${requestId}`,
         !!receipt.pending.cancel,
+        ...(receipt.pending.request ? [undefined, receipt.pending.request] as const : []),
       );
       await this.save(id, {
         ...ledger,
@@ -471,6 +475,7 @@ export class MonoManagerGoals {
               goalId: goal.id,
               text: message,
               cancel: action === "goals.cancel",
+              ...(host.requestAuthority ? { request: structuredClone(host.requestAuthority) } : {}),
             },
           },
         },

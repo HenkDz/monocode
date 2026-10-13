@@ -81,6 +81,7 @@ export async function managerDelegateGoal(input: {
   await ledger.hydrate(manager.id);
   input.validate();
   const reports = managerReportTasks(session, run);
+  assertManagerDelivery(turn?.monoSource, turn?.appRequestId, session, manager, ledger);
   const controlled = turn?.monoSource && turn.appRequestId ? ledger.goals().filter(goal =>
     goal.id === turn.monoSource!.goalId && goal.monoId === turn.monoSource!.id).map(goal => goal.id) : [];
   const allowed = [...new Set([...controlled, ...reports.flatMap(task => task.monoGoalId ? [task.monoGoalId] : [])])];
@@ -130,8 +131,30 @@ export function assertManagerContinuation(request: ManagerRequestRecovery, sessi
       request.state !== "pending" || !sameProviderAccountId(session.providerAccountId, request.providerAccountId) ||
       !managerRequestBindingCurrent(session, request.binding) ||
       managerRequestState(request, ledger.goals(), id => ledger.isCancelling(id)) !== "pending" ||
-      !canContinueManagerRequest(session) || session.blocks.filter(isManagerUserRequest).slice(-1)[0]?.id !== request.userMessageId)
+      !canContinueManagerRequest({ ...session, queuedMessages: session.queuedMessages?.filter(message =>
+        message.id !== `mono-goal-${request.monoId}-continue-${request.userMessageId}` ||
+        JSON.stringify(message.monoSource?.request) !== JSON.stringify(request)) }) ||
+      session.blocks.filter(isManagerUserRequest).slice(-1)[0]?.id !== request.userMessageId)
     throw Error("This request changed or is held; open its Manager conversation before continuing");
+}
+
+/** Queueing a confirmation preserves its original authority; consuming it never captures a new grant. */
+export function assertManagerDelivery(source: Pick<NonNullable<Block["monoSource"]>, "id" | "goalId" | "request"> | undefined, receiptId: string | undefined, session: Session | undefined, manager: Mono | undefined, ledger?: MonoManagerGoals) {
+  const goal = ledger?.goals().find(goal => goal.id === source?.goalId);
+  if (!source?.request && !(receiptId?.startsWith("mono-goal-") && receiptId.includes("-continue-")) &&
+      !(source && goal?.monoId === manager?.id && goal?.requestId === `manager-${goal?.userMessageId}`)) return;
+  const request = source?.request;
+  const retained = session?.blocks.find(block => block.id === `manager-request-${request?.userMessageId}`)?.managerRequestRecovery;
+  if (!request || request.state !== "pending" || !retained || retained.state === "cancelled" || !["pending", "continued"].includes(retained.state) ||
+      JSON.stringify({ ...retained, state: request.state }) !== JSON.stringify(request) ||
+      receiptId !== `mono-goal-${request.monoId}-continue-${request.userMessageId}` || source?.id !== request.monoId ||
+      !session || session.id !== request.sessionId || !manager || manager.id !== request.monoId || manager.sessionId !== session.id ||
+      manager.role !== "manager" || manager.archivedAt != null || !manager.projects.some(path => pathKey(path) === pathKey(request.projectId)) ||
+      !managerRequestBindingCurrent(session, request.binding) || session.queueStatus === "paused" ||
+      session.blocks.filter(isManagerUserRequest).slice(-1)[0]?.id !== request.userMessageId ||
+      ledger && (!goal || goal.monoId !== request.monoId || goal.managerId !== request.managerId || goal.projectId !== request.projectId ||
+        goal.userMessageId !== request.userMessageId || goal.state === "cancelled" || ledger.isCancelling(goal.id)))
+    throw Error("The original Manager request changed or is held; no work was dispatched");
 }
 
 export async function resumeManagerRequest(request: ManagerRequestRecovery, host: {
@@ -159,11 +182,18 @@ export async function resumeManagerRequest(request: ManagerRequestRecovery, host
   validate();
   const receipt = `continue-${request.userMessageId}`;
   await host.ledger.handle(request.monoId, { kind: "user", messageId: original.id }, receipt, "goals.message",
-    { goalId: goal.id, text: original.text }, { ...host.goals, deliver: async (goal, text, receipt, cancel) => {
-      validate(); await host.goals.deliver(goal, text, receipt, cancel, validate);
+    { goalId: goal.id, text: original.text }, { ...host.goals, requestAuthority: request, deliver: async (goal, text, receipt, cancel, _validate, authority) => {
+      validate(); await host.goals.deliver(goal, text, receipt, cancel, validate, authority);
+      validate();
     } });
-  await host.save(session => ({ ...session, blocks: session.blocks.map(block => block.id === blockId && block.managerRequestRecovery?.state === "pending"
-    ? { ...block, managerRequestRecovery: { ...request, state: "continued" } } : block) }));
+  validate();
+  await host.save(session => {
+    validate();
+    return { ...session, blocks: session.blocks.map(block => block.id === blockId && block.managerRequestRecovery?.state === "pending"
+      ? { ...block, managerRequestRecovery: { ...request, state: "continued" } } : block) };
+  });
+  assertManagerDelivery({ id: request.monoId, goalId: goal.id, request },
+    `mono-goal-${request.monoId}-${receipt}`, host.session(), host.manager(), host.ledger);
 }
 
 let continueRequest: ((request: ManagerRequestRecovery) => Promise<void>) | undefined;

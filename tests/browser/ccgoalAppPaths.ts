@@ -13,11 +13,17 @@ export function ccgoalAppPaths() {
       const preparationEnd = app.indexOf("              prepared.push({ id, turnId });", preparation);
       const delegation = app.indexOf('          if (payload.input.origin != null)');
       const delegationEnd = app.indexOf('\n        }\n        if (payload.namespace !== "app")', delegation);
-      if (preparation < 0 || preparationEnd < preparation || delegation < 0 || delegationEnd < delegation)
+      const delivery = app.indexOf('    deliver: async (goal, message, receiptId, cancel, validate, authority) => {', app.indexOf('  managerGoalHost.current = {'));
+      const deliveryEnd = app.indexOf('\n  };', delivery);
+      if (preparation < 0 || preparationEnd < preparation || delegation < 0 || delegationEnd < delegation || delivery < 0 || deliveryEnd < delivery)
         throw Error("Current App callback boundaries were not found");
       return ts.transpileModule(`
         export async function prepareManagerTurn(host, id, options) {
-          const { orchestrator, probeHarnessAvailability, HARNESSES, isHarnessAvailable } = host;
+          const { orchestrator, probeHarnessAvailability, HARNESSES, isHarnessAvailable, assertManagerDelivery, sessionsRef, monoForSession, monoManagerGoals } = host;
+          const sessionId = options.monoSource?.request?.sessionId ?? sessionsRef.current[0].id;
+          const validateManagerDelivery = () => assertManagerDelivery(options.monoSource, options.appRequestId,
+            sessionsRef.current.find(session => session.id === sessionId), monoForSession(sessionId), monoManagerGoals);
+          validateManagerDelivery();
           let turnId;
           ${app.slice(preparation, preparationEnd)}
           return turnId;
@@ -27,8 +33,15 @@ export function ccgoalAppPaths() {
             monoEngineId, sameProjectPath, listMonos, resolveTeamMember, resolveMonoRoleEffort,
             resolveModel, monoLook, managerGoalHost, orchestrator, monoManagerGoals,
             managerDelegateGoal, upsertSession, managerRecoveryRequest, appendManagerRecovery,
-            managerRequestBinding, managerRequestBindingCurrent } = host;
+            managerRequestBinding, managerRequestBindingCurrent, assertManagerDelivery } = host;
           ${app.slice(delegation, delegationEnd)}
+        }
+        export async function deliverManagerGoal(host, ...args) {
+          const { sessionsRef, findMono, assertManagerContinuation, assertManagerDelivery, monoManagerGoals, managerGoalHost,
+            orchestrator, dedicatedMono, ensureProjectManager, ensureMonoSession, monoEngineId, homeDir,
+            ensureOpenSession, saveMonoPermissions, newDefaultSession, sessionDefaults, setSessions,
+            monoLook, upsertSession, pathKey, listMonos, projectKey, remoteProjectFor, adoptManagerMono, assertDirectReport } = host;
+          return await {${app.slice(delivery, deliveryEnd)}}.deliver(...args);
         }
       `, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText;
     },

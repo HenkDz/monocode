@@ -25,7 +25,7 @@ import { recordCrewDecision } from "../features/monos/model/monoCrewEvents";
 import { teamDecisions } from "../features/monos/model/monoTeamActivity";
 import { crewMessages, deliverCrewMessage, recordCrewMessage, teamMessageKind, teamMessageRequiresReply } from "../features/monos/model/monoCrewEvents";
 import { acceptManagerWakeQueue } from "../features/orchestration/model/managerWake";
-import { appendManagerRecovery, assertManagerContinuation, continueManagerRequest, managerDelegateGoal, managerRecoveryRequest, managerRequestBinding, managerRequestBindingCurrent, registerManagerRequestContinuation, resumeManagerRequest } from "../features/monos/model/managerAuthorizedWork";
+import { appendManagerRecovery, assertManagerContinuation, assertManagerDelivery, continueManagerRequest, managerDelegateGoal, managerRecoveryRequest, managerRequestBinding, managerRequestBindingCurrent, registerManagerRequestContinuation, resumeManagerRequest } from "../features/monos/model/managerAuthorizedWork";
 import { requestMemberWork } from "../features/monos/model/memberWorkRequest";
 import {
   assertDirectReport,
@@ -7382,6 +7382,14 @@ function Workspace({
       const remote = sessionsRef.current.find(
         (session) => session.id === sessionId,
       );
+      const validateManagerDelivery = () => assertManagerDelivery(options?.monoSource, options?.appRequestId,
+        sessionsRef.current.find(session => session.id === sessionId), monoForSession(sessionId), monoManagerGoals);
+      try { validateManagerDelivery(); } catch (error) {
+        enqueueHarnessEvent(sessionId, { type: "session.error", message: String(error) });
+        flushHarnessEvents();
+        options?.onSettled?.({ status: "failed", text: "", error: String(error) });
+        return false;
+      }
       if (remote && remoteProjectFor(remote.cwd))
         return !!remoteSessionActions(sessionId)?.submit(
           text,
@@ -7521,13 +7529,16 @@ function Workspace({
             for (const project of mono.projects) {
               if (remoteProjectFor(project)) continue;
               const folder = await invoke<string>("project_root", { project });
+              validateManagerDelivery();
               const id = await monoEngineId(mono, folder);
+              validateManagerDelivery();
               const ownerSessionId = mono.sessionId ?? sessionId;
               if (
                 ownerSessionId !== sessionId &&
                 !(await ensureOpenSession(ownerSessionId))
               )
                 throw new Error("Habit owner conversation is unavailable");
+              validateManagerDelivery();
               orchestrator.registerMonoEngine(
                 id,
                 ownerSessionId,
@@ -7546,12 +7557,14 @@ function Workspace({
                   ],
                 }));
               await orchestrator.hydrate(id);
+              validateManagerDelivery();
               if (orchestrator.run(id)?.status !== "active") {
                 if (options?.managed || options?.monoSessionCompletion)
                   throw new Error(
                     "Manager needs Continue before processing queued reports.",
                   );
                 await probeHarnessAvailability();
+                validateManagerDelivery();
                 await orchestrator.start(
                   id,
                   HARNESSES.filter(isHarnessAvailable),
@@ -7559,11 +7572,13 @@ function Workspace({
                   undefined,
                   true,
                 );
+                validateManagerDelivery();
               }
               turnId = await orchestrator.beginManagerTurn(
                 id,
                 !options?.managed && !options?.monoSessionCompletion,
               );
+              validateManagerDelivery();
               prepared.push({ id, turnId });
             }
             const accepted = await submitSessionRef.current(
@@ -7906,6 +7921,7 @@ function Workspace({
               ),
               attachments: prepared.attachments,
               validateDispatch: () => {
+                validateManagerDelivery();
                 if (turnGen.current.get(sessionId) !== gen) throw new TurnNotReadyError("The active turn changed before the follow-up could be sent.");
                 assertMonoRotationCurrent(sessionId, savedRotation);
               },
@@ -8235,6 +8251,7 @@ function Workspace({
 
       dismissNoticesForContinuedSession(sessionId);
       const commitSubmittedTurn = () => {
+        validateManagerDelivery();
         const mono = monoForSession(sessionId);
         if (options?.buildTarget && mono?.role && current.effortSource === "user") {
           updateMono(mono.id, latest => ({ ...latest, effortSource: "user",
@@ -8836,6 +8853,7 @@ function Workspace({
               text: fallbackText,
               attachments: turnAttachments,
               validateDispatch: () => {
+                validateManagerDelivery();
                 if (turnGen.current.get(sessionId) !== gen) throw new TurnNotReadyError("The turn was stopped before its prompt could be sent.");
                 assertMonoRotationCurrent(sessionId, rotationReceipt);
               },
@@ -12523,12 +12541,19 @@ function Workspace({
             : [];
         }),
       ),
-    deliver: async (goal, message, receiptId, cancel, validate) => {
+    deliver: async (goal, message, receiptId, cancel, validate, authority) => {
       if (!cancel && receiptId === `mono-goal-${goal.monoId}-continue-${goal.userMessageId}`) {
+        if (monoManagerGoals.isCancelling(goal.id) || monoManagerGoals.goals().some(entry => entry.id === goal.id && entry.state === "cancelled"))
+          throw Error("The original request was cancelled; delivery remains pending");
         const source = sessionsRef.current.find(session => session.id === findMono(goal.monoId)?.sessionId);
-        if (source?.blocks.some(block => block.appRequestId === receiptId) || source?.queuedMessages?.some(item => item.id === receiptId)) return;
-        const request = source?.blocks.find(block => block.id === `manager-request-${goal.userMessageId}`)?.managerRequestRecovery;
+        if (source?.blocks.some(block => block.appRequestId === receiptId) || source?.queuedMessages?.some(item => item.id === receiptId)) {
+          if (authority) assertManagerDelivery({ id: goal.monoId, goalId: goal.id, request: authority }, receiptId, source, findMono(goal.monoId), monoManagerGoals);
+          validate?.();
+          return;
+        }
+        const request = authority ?? source?.blocks.find(block => block.id === `manager-request-${goal.userMessageId}`)?.managerRequestRecovery;
         if (!request) throw Error("The original request confirmation is unavailable");
+        authority = structuredClone(request);
         const callerValidate = validate;
         validate = () => {
           callerValidate?.();
@@ -12543,6 +12568,16 @@ function Workspace({
       validate?.();
       if (!mono || !project)
         throw new Error("Goal's project is no longer assigned");
+      const callerValidate = validate;
+      validate = () => {
+        callerValidate?.();
+        const current = findMono(mono.id);
+        if (!current || current.archivedAt != null || !project.managerExists || project.managerId !== goal.managerId ||
+            !cancel && (monoManagerGoals.isCancelling(goal.id) || monoManagerGoals.goals().some(entry => entry.id === goal.id && entry.state === "cancelled")) ||
+            current.role === "manager" && (project.managerMonoId !== current.id || !current.projects.some(path => pathKey(path) === pathKey(project.folder))))
+          throw Error("Goal's project is no longer assigned");
+      };
+      validate();
       if (goal.route) {
         const managers = listMonos(true).filter(member => member.role === "manager" &&
           member.archivedAt == null && member.reportsTo === mono.id &&
@@ -12589,6 +12624,10 @@ function Workspace({
       orchestrator.registerMonoEngine(engineId, id, owner.id, project.folder);
       await orchestrator.hydrate(engineId);
       validate?.();
+      const registered = (await managerGoalHost.current.projects(goal.monoId)).find(current => current.id === project.id);
+      validate?.();
+      if (!registered?.managerExists || registered.managerId !== project.managerId || registered.managerMonoId !== project.managerMonoId ||
+          pathKey(registered.folder) !== pathKey(project.folder)) throw Error("Goal's registered assignment changed; delivery remains pending");
       if (cancel)
         for (const task of orchestrator.run(engineId)?.tasks ?? []) {
           if (task.monoGoalId === goal.id && task.status !== "cancelled")
@@ -12620,6 +12659,7 @@ function Workspace({
                 mascot: look.mascot,
                 color: look.color,
                 goalId: goal.id,
+                ...(authority ? { request: authority } : {}),
               },
             },
           ],
@@ -12627,6 +12667,7 @@ function Workspace({
         });
       });
       if (!saved) throw Error("The Manager could not retain this request; delivery remains pending");
+      validate();
     },
   };
 
@@ -12760,6 +12801,8 @@ function Workspace({
           const mono =
             monoForSession(payload.sessionId) ??
             findMono(habitRunMono(payload.sessionId) ?? "");
+          if (payload.action === "delegate") assertManagerDelivery(caller?.blocks.filter(block => block.role === "user" && !block.draft).slice(-1)[0]?.monoSource,
+            caller?.blocks.filter(block => block.role === "user" && !block.draft).slice(-1)[0]?.appRequestId, caller, mono, monoManagerGoals);
           if (mono) {
             if (mono.role !== "manager")
               throw new Error("Only project Managers can control workers");
@@ -12843,6 +12886,8 @@ function Workspace({
             if (!project) throw Error("The Manager's registered project is unavailable");
             const validate = () => {
               const current = sessionsRef.current.find(session => session.id === sourceSessionId);
+              assertManagerDelivery(current?.blocks.filter(block => block.role === "user" && !block.draft).slice(-1)[0]?.monoSource,
+                current?.blocks.filter(block => block.role === "user" && !block.draft).slice(-1)[0]?.appRequestId, current, findMono(mono.id), monoManagerGoals);
               if (!current?.busy || !managerRequestBindingCurrent(current, binding) || monoGoalOrigins.get(sourceSessionId) !== origin || turnGen.current.get(sourceSessionId) !== generation ||
                   current.blocks.filter(block => block.role === "user" && !block.draft).slice(-1)[0]?.id !== turnId ||
                   findMono(mono.id)?.archivedAt != null || !findMono(mono.id)?.projects.some(path => sameProjectPath(path, project.folder)) ||

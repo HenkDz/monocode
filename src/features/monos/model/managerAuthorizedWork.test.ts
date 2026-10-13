@@ -133,7 +133,7 @@ it("shows an unanchored report's original request in Attention and one user clic
   await executeAttentionAction(action, "continue", input(), callbacks);
   expect(f.host.deliver).toHaveBeenCalledOnce();
   expect(vi.mocked(f.host.deliver).mock.calls[0]).toEqual([expect.objectContaining({ userMessageId: request.id, title: request.text }), request.text,
-    `mono-goal-manager-continue-${request.id}`, false, expect.any(Function)]);
+    `mono-goal-manager-continue-${request.id}`, false, expect.any(Function), recovery]);
   expect(selectAttention(input()).find(item => item.id === action.id)?.status).toBe("resolved");
   await expect(executeAttentionAction(action, "continue", input(), callbacks)).rejects.toThrow("changed");
   expect(f.host.deliver).toHaveBeenCalledOnce();
@@ -207,6 +207,32 @@ it("keeps the existing default-account alias and healthy home binding across JSO
   await resumeManagerRequest(session.blocks.at(-1)!.managerRequestRecovery!, { session: () => session, manager: () => manager,
     project: async () => project, ledger: f.ledger, goals: f.host, save: async change => { session = change(session); } });
   expect(f.host.deliver).toHaveBeenCalledOnce(); expect(session.blocks.at(-1)!.managerRequestRecovery!.state).toBe("continued");
+});
+
+it.each(["codexStorageHome", "providerAccountId", "cwd", "runtimeMode"])("durable consumption retains the original %s grant", async field => {
+  const f = setup(), goalId = await managerDelegateGoal(f.input);
+  const recovery = { monoId: manager.id, sessionId: f.session.id, managerId: project.managerId, projectId: project.id,
+    userMessageId: request.id, binding: managerRequestBinding(f.session), state: "pending" as const };
+  f.session.blocks.push(...appendManagerRecovery({ ...f.session, blocks: [] }, recovery).blocks,
+    { id: "continued", role: "user", text: request.text, appRequestId: `mono-goal-manager-continue-${request.id}`,
+      monoSource: { id: manager.id, name: "Manager", mascot: manager.mascot, color: manager.color, goalId: goalId!, request: recovery } });
+  const session = JSON.parse(JSON.stringify({ ...f.session, [field]: "changed" }));
+  await expect(managerDelegateGoal({ ...f.input, session, origin: { kind: "event", messageId: "continued" } })).rejects.toThrow("changed");
+  expect(f.ledger.goals()).toHaveLength(1);
+});
+
+it("durable original authority is retained in a failed outbox and forwarded after reload", async () => {
+  const f = setup();
+  const recovery = { monoId: manager.id, sessionId: f.session.id, managerId: project.managerId, projectId: project.id,
+    userMessageId: request.id, binding: managerRequestBinding(f.session), state: "pending" as const };
+  let session = appendManagerRecovery({ ...f.session, busy: false }, recovery);
+  f.host.deliver = vi.fn(async () => { throw Error("offline"); });
+  await expect(resumeManagerRequest(recovery, { session: () => session, manager: () => manager, project: async () => project,
+    ledger: f.ledger, goals: f.host, save: async change => { session = change(session); } })).rejects.toThrow("offline");
+  const restored = new MonoManagerGoals(f.storage), deliver = vi.fn(async () => {});
+  await restored.recover(manager.id, { ...f.host, deliver });
+  expect(deliver.mock.calls[0]).toEqual([expect.objectContaining({ userMessageId: request.id }), request.text,
+    `mono-goal-manager-continue-${request.id}`, false, undefined, recovery]);
 });
 
 it("never selects a genuine newer request without controlled report linkage", () => {

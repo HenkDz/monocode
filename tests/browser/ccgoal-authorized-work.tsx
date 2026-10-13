@@ -4,8 +4,9 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { Orchestrator, type ControlOutcome, type OrchestrationHost, type OrchestrationRun } from "../../src/features/orchestration/model/orchestration";
 import { acceptManagerWakeQueue, prepareManagerWake } from "../../src/features/orchestration/model/managerWake";
 import { monoManagerGoals, type GoalLedger, type ManagerGoalHost, type ManagerProject } from "../../src/features/monos/model/monoManagerGoals";
-import { appendManagerRecovery, continueManagerRequest, managerDelegateGoal, managerRecoveryRequest, managerRequestBinding, managerRequestBindingCurrent, registerManagerRequestContinuation, resumeManagerRequest } from "../../src/features/monos/model/managerAuthorizedWork";
-import { prepareManagerTurn, delegateManagerRequest } from "virtual:ccgoal-app";
+import { appendManagerRecovery, assertManagerContinuation, assertManagerDelivery, continueManagerRequest, managerDelegateGoal, managerRecoveryRequest, managerRequestBinding, managerRequestBindingCurrent, registerManagerRequestContinuation, resumeManagerRequest } from "../../src/features/monos/model/managerAuthorizedWork";
+import { prepareManagerTurn, delegateManagerRequest, deliverManagerGoal } from "virtual:ccgoal-app";
+import { pathKey } from "../../src/shared/lib/paths";
 import { monoLook, type Mono } from "../../src/features/monos/model/mono";
 import { newSession, type Session } from "../../src/features/sessions/model/session";
 import { ManagerRequestNotice } from "../../src/features/monos/ui/ManagerRequestNotice";
@@ -75,12 +76,8 @@ const host: OrchestrationHost = {
 const bind = () => { engine.bind(host); engine.registerMonoEngine("engine", session.id, manager.id, project.folder); };
 bind();
 const goalsHost: ManagerGoalHost = { projects: async () => [project], mayDelegate: () => false, status: async () => ({}), ready: async () => [],
-  deliver: async (goal, text, id, cancel, validate) => {
-    validate?.();
-    if (cancel) for (const task of engine.run("engine")?.tasks ?? []) if (task.monoGoalId === goal.id) await engine.cancelTask("engine", task.id);
-    if (session.blocks.some(block => block.appRequestId === id) || session.queuedMessages?.some(message => message.id === id)) return;
-    await sessionSave(current => ({ ...current, queuedMessages: [...(current.queuedMessages ?? []), { id, text, attachments: [],
-      monoSource: { id: manager.id, name: manager.name!, mascot: manager.mascot, color: manager.color, goalId: goal.id } }] }));
+  deliver: async (goal, text, id, cancel, validate, request) => {
+    await deliverManagerGoal({ ...currentApp(), orchestrator: engine }, goal, text, id, cancel, validate, request);
     events.push({ action: "goal-delivered", id, goalId: goal.id });
   } };
 registerManagerRequestContinuation(request => resumeManagerRequest(request, { session: () => session, manager: () => manager,
@@ -97,7 +94,10 @@ const currentApp = () => ({
     run: (id: string) => legacyRun && session.blocks.filter(block => block.role === "user").at(-1)?.appRequestId === "legacy-report" ? legacyRun : engine.run(id),
     handle: engine.handle.bind(engine),
   }, monoManagerGoals: ledger,
-  managerDelegateGoal, managerRecoveryRequest, appendManagerRecovery, managerRequestBinding, managerRequestBindingCurrent,
+  managerDelegateGoal, managerRecoveryRequest, appendManagerRecovery, managerRequestBinding, managerRequestBindingCurrent, assertManagerDelivery,
+  assertManagerContinuation, pathKey, dedicatedMono: () => manager, ensureMonoSession: async () => session,
+  homeDir: "/synthetic", ensureOpenSession: async () => session, saveMonoPermissions: async () => {},
+  newDefaultSession: newSession, sessionDefaults: undefined, setSessions: () => {},
   upsertSession: async (_source: Session, change = (current: Session) => current) => { await sessionSave(change); return session; },
   probeHarnessAvailability: async () => {}, HARNESSES: ["codex"], isHarnessAvailable: () => true,
 });

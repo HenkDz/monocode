@@ -2,6 +2,16 @@ import { expect, it, vi } from "vitest";
 import { codexStorageIssueTitle, isCodexStorageError, MonoCodexStorageRecovery, parseCodexStorageConflict, parseCodexStorageRecoveryConflict, parseCodexSandboxBlocker, codexSandboxRepairSettings, codexFullAccessRepairAllowed } from "./monoCodexStorage";
 import type { Session } from "../../sessions/model/session";
 
+it("retains the first held prompt's intent through failed retries and never adopts the next queued intent", async () => {
+  const recovery = new MonoCodexStorageRecovery();
+  const retry = vi.fn(async () => { throw new Error("Retry still blocked"); });
+  recovery.hold("s", retry, "orchestrate");
+  recovery.hold("s", vi.fn(), "default");
+  expect(recovery.held("s")).toEqual({ intent: "orchestrate" });
+  await expect(recovery.repair("s", async () => {})).rejects.toThrow("Retry still blocked");
+  expect(recovery.held("s")).toEqual({ intent: "orchestrate" });
+});
+
 it("parses actionable sandbox blockers without treating them as file conflicts", () => {
   const blocker = { sandbox: true, reason: "Sandbox machine account is disabled", setupCommand: "codex sandbox -P :workspace -- powershell.exe -Command 'echo ready'" };
   const error = `Codex storage needs repair: ${JSON.stringify(blocker)}`;
@@ -37,7 +47,8 @@ it("keeps read-only and Plan repair restricted while allowing explicit full-acce
 it("offers full-access repair only when it can lift the held message's restrictions", () => {
   const session = { runtimeMode: "supervised", blocks: [] } as unknown as Session;
   expect(codexFullAccessRepairAllowed(session)).toBe(true);
-  expect(codexFullAccessRepairAllowed({ ...session, blocks: [{ id: "old", role: "user", text: "Old plan", intent: "plan" }], queuedMessages: [{ id: "chat", text: "Current chat", attachments: [] }] })).toBe(true);
+  expect(codexFullAccessRepairAllowed({ ...session, codexStorageHeld: { intent: "plan" }, blocks: [{ id: "held", role: "user", text: "Held plan", intent: "plan" }], queuedMessages: [{ id: "chat", text: "Next chat", attachments: [] }] })).toBe(false);
+  expect(codexFullAccessRepairAllowed({ ...session, codexStorageHeld: {}, queuedMessages: [{ id: "plan", text: "Next Plan", attachments: [], intent: "plan" }] })).toBe(true);
   expect(codexFullAccessRepairAllowed({ ...session, readOnly: true })).toBe(false);
   for (const intent of ["plan", "orchestrate"] as const) {
     expect(codexFullAccessRepairAllowed({ ...session, blocks: [{ id: "held", role: "user", text: "Held", intent }] })).toBe(false);

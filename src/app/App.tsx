@@ -7484,14 +7484,17 @@ function Workspace({
         flushSync(() => setSessions(previous => previous.map(session => session.id === sessionId
           ? { ...session, codexStoragePreparing: true, codexStorageAccountId: providerAccountId ?? "default" } : session)));
         return codexStorageRecovery.current.prepare(sessionId,
-          () => prepareMonoCodexStore(providerAccountId, remote.providerSessionId, { ...monoSkillsForSession(sessionId), projectPath: sessionWorkCwd(remote) }),
+          async () => {
+            const prepared = await prepareMonoCodexStore(providerAccountId, remote.providerSessionId, { ...monoSkillsForSession(sessionId), projectPath: sessionWorkCwd(remote), expectedMonoHome: remote.codexStorageHome });
+            if (prepared?.home) await upsertSession(remote, entry => ({ ...entry, codexStorageHome: prepared.home }));
+          },
           () => submitSessionRef.current(sessionId, text, attachments, { ...options, codexStoragePrepared: true }),
           error => {
             console.error("Mono Codex storage preparation failed", error);
             flushSync(() => {
               if (!options?.managed && !options?.queuedMessageId) saveDraftRef.current(sessionId, text, attachments);
               setSessions(previous => previous.map(session => session.id === sessionId
-                ? { ...session, codexStorageError: String(error), codexStorageAccountId: providerAccountId ?? "default" } : session));
+                ? { ...session, codexStorageError: String(error), codexStorageAccountId: providerAccountId ?? "default", codexStorageHeld: options?.queuedMessageId ? undefined : { intent: options?.intent } } : session));
             });
             const draft = !options?.managed && !options?.queuedMessageId && sessionsRef.current.find(session => session.id === sessionId)?.blocks.find(block =>
               block.draft && block.text === text && JSON.stringify(block.attachments ?? []) === JSON.stringify(attachments));
@@ -7500,7 +7503,7 @@ function Workspace({
               const draftBlockId = options?.draftBlockId ?? (draft ? draft.id : undefined);
               if (draftBlockId && !sessionsRef.current.find(session => session.id === sessionId)?.blocks.some(block => block.id === draftBlockId && block.draft)) return true;
               return submitSessionRef.current(sessionId, text, attachments, { ...options, draftBlockId, codexStorageResuming: true });
-            });
+            }, options?.intent);
           },
         ).finally(() => setSessions(previous => previous.map(session => session.id === sessionId
           ? { ...session, codexStoragePreparing: undefined } : session)));
@@ -9101,9 +9104,9 @@ function Workspace({
             codexStorageRecovery.current.hold(sessionId, () => submitSessionRef.current(sessionId, text, attachments, {
               ...options, codexStoragePrepared: false, codexStorageRetryBlockId: submittedBlockId,
               queuedMessageId: undefined, draftBlockId: undefined,
-            }));
+            }), intent);
             flushSync(() => setSessions(previous => previous.map(session => session.id === sessionId
-              ? { ...session, codexStorageError: message, codexStorageAccountId: providerAccountId ?? "default" } : session)));
+              ? { ...session, codexStorageError: message, codexStorageAccountId: providerAccountId ?? "default", codexStorageHeld: { intent } } : session)));
           } else if (error instanceof TurnAuthorizationError) {
             setSessions(prev => prev.map(session => session.id === sessionId
               ? rejectMessageSend(session, {
@@ -10252,14 +10255,31 @@ function Workspace({
           changed = await invoke<{ configPath: string; backupPaths: string[] }>("codex_mono_use_unelevated_sandbox", { providerAccountId: accountId });
         } else if (resolution === "use_mono_full_access") {
           await stopHarnessSession("codex", sessionId);
-        } else if (resolution === "bind_selected_source") {
+        } else if (resolution === "bind_selected_source" || resolution === "separate_selected_source") {
           const binding = parseCodexStorageRecoveryConflict(session.codexStorageError)?.sourceBinding;
-          if (!binding?.canBind) throw new Error("Refresh the source-account issue before confirming its original source.");
+          if (!binding || (resolution === "bind_selected_source" ? !binding.canBind : !binding.canSeparate)) throw new Error("Refresh the source-account issue before choosing its source.");
           const accountSessions = sessionsRef.current.filter(entry => entry.harness === "codex" && !remoteProjectFor(entry.cwd) &&
             codexStorageAccountId(entry, selectedProviderAccountId("codex", entry.cwd)) === accountId);
           if (accountSessions.some(entry => entry.busy || entry.codexStoragePreparing)) throw new Error("Wait for this account's current turns and preparations to finish before confirming its original source.");
           for (const entry of accountSessions) await stopHarnessSession("codex", entry.id);
-          await invoke("codex_mono_store_bind_source", { providerAccountId: accountId, sourceHome: binding.resolvedSourceHome });
+          if (resolution === "bind_selected_source") {
+            await invoke("codex_mono_store_bind_source", { providerAccountId: accountId, sourceHome: binding.resolvedSourceHome });
+          } else {
+            const home = await invoke<string>("codex_mono_store_separate_source", { providerAccountId: accountId, sourceHome: binding.resolvedSourceHome, sourceIdentity: binding.sourceIdentity });
+            for (const entry of accountSessions.filter(entry => affectedIds.includes(entry.id) || monoForSession(entry.id))) {
+              const current = sessionsRef.current.find(current => current.id === entry.id);
+              if (!current || current.busy || current.providerSessionId !== entry.providerSessionId ||
+                codexStorageAccountId(current, selectedProviderAccountId("codex", current.cwd)) !== accountId) {
+                throw new Error("The conversation changed during its source choice. Refresh before retrying.");
+              }
+              await upsertSession(entry, current => ({ ...current, providerSessionId: undefined, codexStorageHome: home }));
+              flushSync(() => setSessions(previous => previous.map(current => current.id === entry.id ? { ...current, providerSessionId: undefined, codexStorageHome: home } : current)));
+            }
+          }
+        } else if (resolution === "keep_private_history") {
+          const migration = parseCodexStorageRecoveryConflict(session.codexStorageError)?.migration;
+          if (!migration) throw new Error("Refresh the history issue before keeping its private version.");
+          await invoke("codex_mono_store_keep_private_history", { providerAccountId: accountId, migration });
         } else if (resolution === "preserve_recovery_metadata") {
           const metadata = parseCodexStorageRecoveryConflict(session.codexStorageError)?.metadata;
           if (!metadata) throw new Error("Refresh the recovery issue before preserving metadata.");
@@ -10281,11 +10301,11 @@ function Workspace({
           if (resolution === "use_mono_full_access") await checkMonoCodexSandbox({ providerAccountId: accountId, ...settings,
             skillsContextId: prepared?.skillsContextId, sandboxConfig: prepared?.config });
         } else {
-          await prepareMonoCodexStore(accountId, session.providerSessionId, { ...monoSkillsForSession(sessionId), projectPath: sessionWorkCwd(session) });
+          await prepareMonoCodexStore(accountId, latest.providerSessionId, { ...monoSkillsForSession(sessionId), projectPath: sessionWorkCwd(latest), expectedMonoHome: latest.codexStorageHome });
         }
         if (resolution === "use_mono_full_access") {
           const current = sessionsRef.current.find(entry => entry.id === sessionId);
-          if (!current || current.busy || !codexFullAccessRepairAllowed(current) ||
+          if (!current || current.busy || !codexFullAccessRepairAllowed(current) || current.codexStorageHeld !== latest.codexStorageHeld ||
             current.runtimeMode !== latest.runtimeMode || current.windowsSandbox !== latest.windowsSandbox ||
             current.queuedMessages?.[0]?.id !== latest.queuedMessages?.[0]?.id ||
             codexStorageAccountId(current, selectedProviderAccountId("codex", current.cwd)) !== accountId) {
@@ -10306,7 +10326,7 @@ function Workspace({
         if (!affectedIds.includes(resumingId)) affectedIds.push(resumingId);
         // Keep the dispatcher held until the saved submissions have resumed.
         flushSync(() => setSessions(previous => previous.map(entry => entry.id === resumingId
-          ? { ...entry, codexStorageError: undefined, codexStoragePreparing: true } : entry)));
+          ? { ...entry, codexStorageError: undefined, codexStorageHeld: undefined, codexStoragePreparing: true } : entry)));
       };
       if (resolution === "use_mono_full_access") {
         await codexStorageRecovery.current.repair(sessionId, async () => { await relink(); beforeResume(sessionId); });
@@ -10322,7 +10342,7 @@ function Workspace({
         (storageFailure || codexStorageRecovery.current.hasPending(entry.id))
         ? { ...entry, codexStorageError: storageFailure ? String(error) : parseCodexSandboxBlocker(entry.codexStorageError) ? entry.codexStorageError :
           `Codex storage needs repair: The files are ready, but a held message could not resume. Try Repair again. ${String(error)}`,
-          codexStorageAccountId: accountId } : entry)));
+          codexStorageAccountId: accountId, codexStorageHeld: codexStorageRecovery.current.held(entry.id) } : entry)));
       throw error;
     } finally {
       setSessions(previous => previous.map(entry => affectedIds.includes(entry.id)

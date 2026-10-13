@@ -262,6 +262,27 @@ it("keeps a held Plan restricted after an explicit Mono full-access choice", asy
   expect(fixture.retry).not.toHaveBeenCalled(); expect(fixture.recovery.hasPending("clicked")).toBe(true);
 });
 
+it.each(["plan", "orchestrate"] as const)("checks the actual held %s ahead of an ordinary queued prompt", async intent => {
+  const fixture = sandboxRepairFixture({ blocks: [{ id: "held", role: "user", text: "Exact held prompt", intent }],
+    queuedMessages: [{ id: "ordinary", text: "Next ordinary prompt", attachments: [] }],
+    ...{ codexStorageHeld: { intent } } });
+  await expect(fixture.repair("clicked", "use_mono_full_access")).rejects.toThrow("Plan and orchestrate");
+  expect(fixture.saveMode).not.toHaveBeenCalled(); expect(fixture.persist).not.toHaveBeenCalled();
+  expect(fixture.prepare).not.toHaveBeenCalled(); expect(fixture.retry).not.toHaveBeenCalled();
+  expect(fixture.sessionsRef.current[0].queuedMessages?.[0].text).toBe("Next ordinary prompt");
+  expect(fixture.recovery.hasPending("clicked")).toBe(true);
+});
+
+it("uses an ordinary held prompt ahead of a queued Plan", async () => {
+  const fixture = sandboxRepairFixture({ blocks: [{ id: "held", role: "user", text: "Exact ordinary prompt" }],
+    queuedMessages: [{ id: "plan", text: "Next Plan", attachments: [], intent: "plan" }],
+    ...{ codexStorageHeld: {} } });
+  await fixture.repair("clicked", "use_mono_full_access");
+  expect(fixture.retry).toHaveBeenCalledOnce();
+  expect(fixture.saveMode).toHaveBeenCalledExactlyOnceWith("mono-clicked", "full-access");
+  expect(fixture.sessionsRef.current[0].queuedMessages?.[0].intent).toBe("plan");
+});
+
 it("does not persist full access when the readiness check fails", async () => {
   const fixture = sandboxRepairFixture();
   fixture.prepare.mockRejectedValueOnce(new Error(sandboxDetail));
@@ -298,6 +319,33 @@ it("confirms a legacy original source only for the held idle account", async () 
   expect(fixture.stop.mock.calls).toEqual([["codex", "clicked"], ["codex", "peer"]]);
   expect(fixture.retry).toHaveBeenCalledOnce(); expect(fixture.otherRetry).not.toHaveBeenCalled();
   expect(fixture.saveMode).not.toHaveBeenCalled();
+});
+
+it("separates the selected source before retrying and detaches the original source thread without changing held or queued content", async () => {
+  const sourceBinding = { resolvedSourceHome: "/synthetic/selected", boundSourceHome: "/synthetic/original", canBind: false, canSeparate: true, sourceIdentity: "1:2" };
+  const codexStorageError = `Codex storage needs repair: ${JSON.stringify({ recovery: true, reason: "Choose source", paths: ["/synthetic/private"], sourceBinding })}`;
+  const fixture = sandboxRepairFixture({ codexStorageError, providerSessionId: "original-thread", codexStorageHome: "/synthetic/original-mono",
+    blocks: [{ id: "held", role: "user", text: "Held source retry" }], queuedMessages: [{ id: "next", text: "Next queued", attachments: [], intent: "plan" }], codexStorageHeld: {} });
+  const before = structuredClone(fixture.sessionsRef.current[0]);
+  fixture.invoke.mockResolvedValueOnce("/synthetic/separate-mono");
+  await fixture.repair("clicked", "separate_selected_source");
+  expect(fixture.invoke).toHaveBeenCalledExactlyOnceWith("codex_mono_store_separate_source", { providerAccountId: "account", sourceHome: sourceBinding.resolvedSourceHome, sourceIdentity: "1:2" });
+  expect(fixture.prepare).toHaveBeenCalledExactlyOnceWith("account", undefined, expect.objectContaining({ expectedMonoHome: "/synthetic/separate-mono" }));
+  expect(fixture.retry).toHaveBeenCalledOnce();
+  expect(fixture.sessionsRef.current[0].blocks).toEqual(before.blocks);
+  expect(fixture.sessionsRef.current[0].queuedMessages).toEqual(before.queuedMessages);
+  expect(fixture.sessionsRef.current[0].providerSessionId).toBeUndefined();
+  expect(fixture.sessionsRef.current[0].codexStorageHome).toBe("/synthetic/separate-mono");
+  expect(fixture.saveMode).not.toHaveBeenCalled();
+});
+
+it("refuses a separate home while a managed peer is active", async () => {
+  const sourceBinding = { resolvedSourceHome: "/synthetic/selected", boundSourceHome: "/synthetic/original", canBind: false, canSeparate: true, sourceIdentity: "1:2" };
+  const fixture = sandboxRepairFixture({ codexStorageError: `Codex storage needs repair: ${JSON.stringify({ recovery: true, reason: "Choose source", paths: ["/synthetic/private"], sourceBinding })}` });
+  fixture.sessionsRef.current[1].busy = true;
+  await expect(fixture.repair("clicked", "separate_selected_source")).rejects.toThrow("current turns");
+  expect(fixture.invoke).not.toHaveBeenCalled(); expect(fixture.retry).not.toHaveBeenCalled();
+  expect(fixture.persist).not.toHaveBeenCalled(); expect(fixture.recovery.hasPending("clicked")).toBe(true);
 });
 
 it("holds prompts and returns the private backup path after an explicit Mono-config write fails", async () => {

@@ -50,7 +50,6 @@ import { FileTypeIcon } from "../../files/ui/FileTypeIcon";
 import { ToolDiffPreview } from "./ToolDiffPreview";
 import { CompactToolOutput } from "./CompactToolOutput";
 import { TranscriptError } from "./TranscriptError";
-import { transcriptError } from "../model/transcriptError";
 import { PlanPreview } from "./PlanPreview";
 import { OrchestrationPreview } from "../../orchestration/ui/OrchestrationPreview";
 import { TaskListPreview } from "./TaskListPreview";

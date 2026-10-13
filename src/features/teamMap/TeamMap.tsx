@@ -36,7 +36,7 @@ import {
   teamMapEdgePath,
 } from "./model";
 import { treeLayout, TREE_MIN_READABLE_ZOOM, TREE_NODE_WIDTH as TEAM_MAP_NODE_WIDTH, TREE_NODE_HEIGHT as TEAM_MAP_NODE_HEIGHT } from "./treeLayout";
-import { fitTeamMap, focusTeamMap, teamMapCompact } from "./camera";
+import { focusTeamMap, teamMapCompact } from "./camera";
 import "./teamMap.css";
 import "./treeMap.css";
 import { OrbitMap } from "./OrbitMap";
@@ -97,8 +97,7 @@ export function TreeMap({
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [order, setOrder] = useState(() => loadOrbitPreferences().order);
   const [undoOrder, setUndoOrder] = useState<string[]>();
-  const [dropTarget, setDropTarget] = useState<string>();
-  const projectDrag = useRef<string>(undefined);
+  const [orderingProject, setOrderingProject] = useState<string>();
   const [hovered, setHovered] = useState<string>();
   const [highlight, setHighlight] = useState<MapEvent>();
   const [focused, setFocused] = useState<string>();
@@ -140,6 +139,12 @@ export function TreeMap({
   const feed = useMemo(() => teamMapFeed(events, roster), [events, roster]);
   const nodeById = new Map(map.nodes.map((node) => [node.mono.id, node]));
   const podBounds = map.pods.find((pod) => pod.id === focusedPod);
+  const orderedPods = map.pods.filter(pod => {
+    const parent = nodeById.get(nodeById.get(pod.id)?.parentId ?? "");
+    return !parent || parent.mono.role === "orchestrator";
+  });
+  const orderTarget = orderedPods.some(pod => pod.id === orderingProject) ? orderingProject! : orderedPods[0]?.id;
+  const orderIndex = orderedPods.findIndex(pod => pod.id === orderTarget);
   const tabStop = nodeById.has(focused ?? "") ? focused : map.nodes[0]?.id;
   const projects = [
     ...new Set(
@@ -185,7 +190,7 @@ export function TreeMap({
     if (!viewport.current) return;
     const { clientWidth: width, clientHeight: height } = viewport.current;
     setCamera(podBounds
-      ? focusTeamMap(width, height, podBounds)
+      ? focusTreePod(width, height, podBounds)
       : readableCamera(width));
     viewport.current.scrollTo?.({ left: 0, top: 0 });
   };
@@ -198,17 +203,21 @@ export function TreeMap({
     setFocusedPod(id);
     setHovered(undefined);
     const pod = map.pods.find((pod) => pod.id === id);
-    if (pod && viewport.current) setCamera(focusTeamMap(viewport.current.clientWidth, viewport.current.clientHeight, pod));
+    if (pod && viewport.current) setCamera(focusTreePod(viewport.current.clientWidth, viewport.current.clientHeight, pod));
   };
-  const reorder = (target: string) => {
-    const source = projectDrag.current;
-    projectDrag.current = undefined;
-    setDropTarget(undefined);
-    if (!source || source === target) return;
-    const ids = projectIds.filter(id => id !== source);
-    if (!ids.includes(target)) return;
-    ids.splice(ids.indexOf(target), 0, source);
-    saveOrder(ids);
+  const focusTreePod = (width: number, height: number, pod: typeof map.pods[number]) => {
+    const fitted = focusTeamMap(width, height, pod);
+    const zoom = Math.max(TREE_MIN_READABLE_ZOOM, fitted.zoom);
+    return { zoom, x: (width - pod.width * zoom) / 2 - pod.x * zoom, y: 24 - pod.y * zoom };
+  };
+  const moveProject = (id: string, direction: number) => {
+    const ids = orderedPods.map(pod => pod.id);
+    const index = ids.indexOf(id), next = index + direction;
+    if (index < 0 || next < 0 || next >= ids.length) return;
+    [ids[index], ids[next]] = [ids[next], ids[index]];
+    const visible = new Set(ids);
+    let slot = 0;
+    saveOrder(projectIds.map(id => visible.has(id) ? ids[slot++] : id));
   };
   const saveOrder = (next: string[]) => {
     setUndoOrder(order);
@@ -325,6 +334,13 @@ export function TreeMap({
           </p>
         </div>
         <div className="team-map-filters">
+          {orderedPods.length > 1 && <div className="tree-project-order">
+            <label>Order <select aria-label="Project to reorder" value={orderTarget} onChange={event => setOrderingProject(event.target.value)}>
+              {orderedPods.map(pod => <option key={pod.id} value={pod.id}>{projectName(nodeById.get(pod.id)?.project ?? "") || monoLook(nodeById.get(pod.id)!.mono).name}</option>)}
+            </select></label>
+            <button type="button" aria-label="Move project left" disabled={orderIndex <= 0} onClick={() => moveProject(orderTarget, -1)}>←</button>
+            <button type="button" aria-label="Move project right" disabled={orderIndex < 0 || orderIndex === orderedPods.length - 1} onClick={() => moveProject(orderTarget, 1)}>→</button>
+          </div>}
           {onToggleView && <button type="button" onClick={onToggleView}>Orbit</button>}
           <button type="button" title="Restore readable spacing and keep your project order" onClick={() => { setFocusedPod(undefined); setCamera(readableCamera(size.width)); viewport.current?.scrollTo?.({ left: 0, top: 0 }); }}>Arrange</button>
           {!listLayout && <div className="team-map-zoom">
@@ -343,7 +359,7 @@ export function TreeMap({
             >
               <Plus className="size-3.5" />
             </button>
-            <button type="button" onClick={() => { setCamera(fitTeamMap(size.width, size.height, map.width, map.height)); viewport.current?.scrollTo?.({ left: 0, top: 0 }); }}>
+            <button type="button" onClick={fit}>
               Fit to view
             </button>
           </div>}
@@ -388,7 +404,7 @@ export function TreeMap({
         <span>Lines: reports to · highlighted: selected chain · dashes: work moving</span>
         {undoOrder
           ? <span className="tree-reorder-toast team-map-hint" role="status">Project order updated <button type="button" onClick={() => { setOrder(undoOrder); saveOrbitPreferences({ ...loadOrbitPreferences(), order: undoOrder }); setUndoOrder(undefined); }}>Undo reorder</button></span>
-          : <span className="team-map-hint">Drag project headers to reorder · arrows to explore</span>}
+          : <span className="team-map-hint">Select a team to focus · arrows to explore</span>}
       </div>
       <div
         ref={viewport}
@@ -465,7 +481,7 @@ export function TreeMap({
                     <title>{edge.tooltip}</title>
                     <path className="team-map-edge-hit" d={edgePath(edge.source, edge.target)} />
                     <path className="team-map-edge-route" d={edgePath(edge.source, edge.target)} />
-                    {edge.flow && <path className="team-map-edge-flow" d={teamMapEdgePath({ points: edge.points.slice(-2) })} />}
+                    {edge.flow && <path className="team-map-edge-flow" d={teamMapEdgePath(edge)} />}
                   </g>
                 );
               })}
@@ -505,29 +521,16 @@ export function TreeMap({
             </svg>
             {map.pods.map(pod => {
               const manager = nodeById.get(pod.id)!;
-              return <div key={pod.id} className="tree-project" data-drop-target={dropTarget === pod.id} style={{ left: pod.x, top: pod.y, width: pod.width, height: pod.height }}>
-                <button type="button" className="tree-project-header" draggable
+              return <div key={pod.id} className="tree-project" style={{ left: pod.x, top: pod.y, width: pod.width, height: pod.height }}>
+                <button type="button" className="tree-project-header"
                   aria-label={`Focus ${manager.project ? projectName(manager.project) : monoLook(manager.mono).name} team`}
-                  title="Drag to reorder projects. Alt + Left or Right moves this project."
-                  onClick={() => { focusPod(pod.id); onSelectMono?.(pod.id); }}
-                  onDragStart={event => { projectDrag.current = pod.id; event.dataTransfer.setData("text/plain", pod.id); event.dataTransfer.effectAllowed = "move"; }}
-                  onDragOver={event => { if (!projectDrag.current) return; event.preventDefault(); setDropTarget(pod.id); event.dataTransfer.dropEffect = "move"; }}
-                  onDrop={event => { event.preventDefault(); reorder(pod.id); }}
-                  onDragEnd={() => { projectDrag.current = undefined; setDropTarget(undefined); }}
+                  title="Focus this team. Use the Order controls or Alt + Left or Right to change project order."
+                  onClick={() => { focusPod(pod.id); setOrderingProject(pod.id); onSelectMono?.(pod.id); }}
                   onKeyDown={event => {
                     if (!event.altKey || !["ArrowLeft", "ArrowRight"].includes(event.key)) return;
                     event.preventDefault();
-                    const ids = map.pods.map(pod => pod.id);
-                    const index = ids.indexOf(pod.id), next = index + (event.key === "ArrowLeft" ? -1 : 1);
-                    if (next < 0 || next >= ids.length) return;
-                    [ids[index], ids[next]] = [ids[next], ids[index]];
-                    const visible = new Set(ids);
-                    const saved = projectIds;
-                    let slot = 0;
-                    const merged = saved.map(id => visible.has(id) ? ids[slot++] : id);
-                    saveOrder(merged);
+                    moveProject(pod.id, event.key === "ArrowLeft" ? -1 : 1);
                   }}>
-                  <span className="tree-project-grip" aria-hidden="true">⠿</span>
                   <span className="tree-project-mark" aria-hidden="true">{(manager.project ? projectName(manager.project) : monoLook(manager.mono).name).slice(0, 2).toUpperCase()}</span>
                   <strong>{manager.project ? projectName(manager.project) : monoLook(manager.mono).name}</strong>
                   <span>{pod.memberIds.length + manager.hiddenCount} workers</span>

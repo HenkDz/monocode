@@ -93,7 +93,7 @@ export function ProjectManagerRow({
   const ready = waiting.some((item) => item.kind === "ready");
   const live = mono && sessions ? monoLiveState(listMonos(), runs, sessions, mono.id) : undefined;
   const label = decision
-    ? waiting.some(item => item.kind === "decision") ? "Needs your decision" : "Needs attention"
+    ? waiting.some(item => item.kind === "decision" && !item.authRequired) ? "Needs your decision" : waiting.some(item => item.authRequired) ? "Sign-in required" : "Needs attention"
     : ready
       ? "Ready to merge"
       : waiting.length

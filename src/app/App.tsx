@@ -182,7 +182,6 @@ import { Sidebar } from "./shell/Sidebar";
 import { ApprovalToasts } from "../features/sessions/ui/ApprovalToasts";
 import { HarnessUpdateNotice } from "../features/providers/ui/HarnessUpdateNotice";
 import { WhatsNewDialog } from "./shell/WhatsNewDialog";
-import { ProviderSignInDialog } from "../features/sessions/ui/ProviderSignInDialog";
 import { TitleBar, type Tab as TitleTab } from "./shell/TitleBar";
 import { WindowControls } from "./shell/WindowControls";
 import { MonoDetails } from "../features/monos/ui/MonoDetails";
@@ -417,7 +416,6 @@ import {
   type HarnessEvent,
   type UserQuestionReply,
 } from "../integrations/harness";
-import { supportsHarnessLogin } from "../integrations/harness/core/authSupport";
 import { prepareCodexMonoContext } from "../integrations/harness/providers/codex/codexStore";
 import { bindTurnContextProfile } from "../integrations/harness/core/contextProfile";
 import {
@@ -1485,25 +1483,6 @@ function Workspace({
   const leaveCoveringMono = useCallback(() => {
     if (monoViewIdRef.current) closeMonoView();
   }, [closeMonoView]);
-  const [providerSignInRequest, setProviderSignInRequest] = useState<{
-    key: string;
-    sessionId: string;
-    harness: HarnessId;
-  } | null>(null);
-  const seenProviderSignInRequestsRef = useRef<Set<string> | null>(null);
-  const seenProviderSignInRequests =
-    seenProviderSignInRequestsRef.current ??
-    (seenProviderSignInRequestsRef.current = new Set(
-      sessions.flatMap((session) => {
-        if (
-          !supportsHarnessLogin(session.harness) ||
-          !latestTurnNeedsHarnessLogin(session.blocks)
-        ) {
-          return [];
-        }
-        return [providerSignInRequestKey(session)];
-      }),
-    ));
   const [settingsSection, setSettingsSection] =
     useState<SettingsSectionId>(loadSettingsSection);
   const [settingsAnchor, setSettingsAnchor] = useState<SettingsAnchor | null>(
@@ -2234,36 +2213,6 @@ function Workspace({
     active?.blocks,
     active?.providerAccountId,
   ]);
-  const activeProviderSignInRequest = useMemo(() => {
-    if (
-      !active ||
-      !supportsHarnessLogin(active.harness) ||
-      !latestTurnNeedsHarnessLogin(active.blocks)
-    ) {
-      return null;
-    }
-    return {
-      key: providerSignInRequestKey(active),
-      sessionId: active.id,
-      harness: active.harness,
-    };
-  }, [active]);
-  useEffect(() => {
-    if (!activeProviderSignInRequest) return;
-    if (seenProviderSignInRequests.has(activeProviderSignInRequest.key)) {
-      return;
-    }
-    seenProviderSignInRequests.add(activeProviderSignInRequest.key);
-    setProviderSignInRequest(activeProviderSignInRequest);
-  }, [activeProviderSignInRequest, seenProviderSignInRequests]);
-  useEffect(() => {
-    if (
-      providerSignInRequest &&
-      active?.id !== providerSignInRequest.sessionId
-    ) {
-      setProviderSignInRequest(null);
-    }
-  }, [active?.id, providerSignInRequest]);
   const runningTerminals = useMemo(() => {
     const files: FilePaneTab[] = [];
     const dock = findProjectTerminal(projectTerminals, projectCwd);
@@ -16434,13 +16383,6 @@ function Workspace({
               }}
             />
           ) : null}
-          {providerSignInRequest ? (
-            <ProviderSignInDialog
-              key={providerSignInRequest.key}
-              harness={providerSignInRequest.harness}
-              onClose={() => setProviderSignInRequest(null)}
-            />
-          ) : null}
         </div>
         <TranscriptPoolOutlet pool={transcriptPool} />
       </OrchestrationWorkers.Provider>
@@ -16466,11 +16408,6 @@ function lastUserBlockId(session: Session): string | undefined {
     if (session.blocks[i]?.role === "user") return session.blocks[i]?.id;
   }
   return undefined;
-}
-
-function providerSignInRequestKey(session: Session): string {
-  const lastBlockId = session.blocks[session.blocks.length - 1]?.id;
-  return `${session.id}:${lastUserBlockId(session) ?? lastBlockId ?? "auth"}`;
 }
 
 function selectedChangePath(

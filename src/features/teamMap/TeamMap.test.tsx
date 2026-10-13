@@ -211,15 +211,13 @@ it("refits the focused team when its viewport resizes", async () => {
   expect([...host.querySelectorAll("button")].some(button => button.textContent === "Whole org")).toBe(true);
 });
 
-it("reorders whole project columns by drag and preserves order when arranged and reopened", async () => {
+it("reorders whole project columns by explicit controls and preserves order when arranged and reopened", async () => {
   await renders();
-  const header = (project: string) => host.querySelector<HTMLButtonElement>(`[aria-label="Focus ${project} team"]`)!;
-  const transfer = { setData: vi.fn(), effectAllowed: "", dropEffect: "" };
-  const drag = (kind: string) => Object.assign(new Event(kind, { bubbles: true, cancelable: true }), { dataTransfer: transfer });
-  await act(async () => header("site").dispatchEvent(drag("dragstart")));
-  await act(async () => header("app").dispatchEvent(drag("dragover")));
-  expect(host.querySelectorAll('.tree-project[data-drop-target="true"]')).toHaveLength(1);
-  await act(async () => header("app").dispatchEvent(drag("drop")));
+  expect(host.querySelector('[draggable="true"], .tree-project-grip')).toBeNull();
+  const project = host.querySelector<HTMLSelectElement>('[aria-label="Project to reorder"]')!;
+  await act(async () => { project.value = "site-manager"; project.dispatchEvent(new Event("change", { bubbles: true })); });
+  expect(host.querySelector<HTMLButtonElement>('[aria-label="Move project right"]')!.disabled).toBe(true);
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Move project left"]')!.click());
   expect([...host.querySelectorAll('.tree-project-header strong')].map(node => node.textContent)).toEqual(["site", "app"]);
   expect(JSON.parse(localStorage.getItem("monocode:team-map-orbit")!).order).toEqual(["site-manager", "manager"]);
   await act(async () => [...host.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === "Arrange")!.click());

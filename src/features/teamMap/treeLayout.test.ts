@@ -12,7 +12,7 @@ const roster: Mono[] = [
   ]),
 ];
 const input = { roster, runs: [], sessions: [] };
-it("keeps ordered projects in one row and each team's workers in one stack across viewport changes", () => {
+it("keeps ordered projects in one row and workers in compact two-column rows across viewport changes", () => {
   const source = buildTeamMap(input);
   const before = JSON.stringify(source);
   const order = ["tools", "app", "site"];
@@ -21,8 +21,11 @@ it("keeps ordered projects in one row and each team's workers in one stack acros
   expect(new Set(map.pods.map(pod => pod.y)).size).toBe(1);
   for (const pod of map.pods) {
     const members = map.nodes.filter(node => pod.memberIds.includes(node.id));
-    expect(new Set(members.map(node => node.x)).size).toBe(1);
-    expect(new Set(members.map(node => node.y)).size).toBe(3);
+    expect(new Set(members.map(node => node.x)).size).toBe(2);
+    expect(new Set(members.map(node => node.y)).size).toBe(2);
+    const manager = map.nodes.find(node => node.id === pod.id)!;
+    expect(manager.x + TREE_NODE_WIDTH / 2).toBe((Math.min(...members.map(node => node.x)) + Math.max(...members.map(node => node.x)) + TREE_NODE_WIDTH) / 2);
+    for (const member of members) expect(member.y).toBeGreaterThan(manager.y + TREE_NODE_HEIGHT);
   }
   expect(treeLayout(buildTeamMap({ ...input, viewport: { width: 800, height: 600 } }), order).nodes.map(node => [node.id, node.x, node.y])).toEqual(map.nodes.map(node => [node.id, node.x, node.y]));
   expect(JSON.stringify(source)).toBe(before);

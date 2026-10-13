@@ -78,7 +78,7 @@ export function prepareMonoCodexStore(
   providerAccountId?: string,
   threadId?: string,
   skills?: MonoSkillsContext & { expectedMonoHome?: string; providerSessionIdByHome?: Record<string, string>; projectPath?: string; sandboxRequired?: boolean; windowsSandbox?: "elevated" | "unelevated"; sandboxNetworkAccess?: boolean },
-): Promise<MonoCodexStorageInfo & { originalHome: string; threadId: string | null; hasThread: boolean; skillsConfig?: Record<string, unknown>; privateConfig?: Record<string, unknown>; skillArgs?: string[]; skillsContextId?: string; threadPath?: string }> {
+): Promise<MonoCodexStorageInfo & { originalHome: string; threadId: string | null; hasThread: boolean; returnChoice?: string; skillsConfig?: Record<string, unknown>; privateConfig?: Record<string, unknown>; skillArgs?: string[]; skillsContextId?: string; threadPath?: string }> {
   return invoke("codex_mono_store_prepare", { providerAccountId, threadId, ...skills });
 }
 

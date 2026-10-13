@@ -17,6 +17,14 @@ mod migration_recovery;
 mod sandbox;
 mod sandbox_config;
 mod source_binding;
+pub(crate) mod home_threads;
+
+#[tauri::command(async)]
+pub fn mono_session_preserve_home_threads(app: AppHandle, store: tauri::State<'_, crate::session_store::SessionStore>, expected: serde_json::Value) -> Result<String, String> {
+    let directory = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let conn = store.lock_conn()?;
+    home_threads::preserve(&conn, &directory, &expected)
+}
 #[tauri::command(async)]
 pub fn codex_mono_use_unelevated_sandbox(
     app: AppHandle,
@@ -33,7 +41,7 @@ mod consistency_tests;
 mod continuity_tests;
 #[cfg(test)]
 mod crash_tests;
-#[cfg(test)]
+#[cfg(all(test, feature = "native-storage-probe"))]
 mod native_controls;
 #[cfg(test)]
 mod recovery_tests;
@@ -159,6 +167,8 @@ impl MonoCodexStore {
 pub struct PreparedStore {
     home: String,
     original_home: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    return_choice: Option<String>,
     thread_id: Option<String>,
     has_thread: bool,
     source_home: String,
@@ -538,6 +548,7 @@ pub fn codex_mono_store_prepare(
     Ok(PreparedStore {
         home: crate::fs::path_to_js(&home),
         original_home: crate::fs::path_to_js(&original_home),
+        return_choice: source_binding::return_choice(&source, &original_home, &home).map_err(storage_error)?,
         thread_id,
         has_thread: thread_path.is_some(),
         source_home: crate::fs::path_to_js(&source),

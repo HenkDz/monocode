@@ -539,7 +539,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
   const storageSessionId = storageTask?.sessionId ?? session.id;
   const storageDetail =
     session.codexStorageError ??
-    (storageTask ? memberState.liveState?.detail : undefined);
+    (storageTask ? memberState.liveState?.detail : undefined) ?? session.codexStorageReturnChoice;
   const [memberTab, setMemberTab] = useState<"conversation" | "activity">(
     "conversation",
   );

@@ -9,8 +9,8 @@ export function sanitizeCodexHomeThreads(value: unknown): Record<string, string>
 }
 
 /** Save the outgoing thread before selecting the current launch source's thread. */
-export function selectCodexStorageHome(session: Session, prepared: { home: string; originalHome: string; threadId: string | null }): Session {
-  if (session.codexHomeThreadsUnresolved) throw new Error("Codex storage needs repair: Preserve the unreadable per-home provider thread map before selecting a home.");
+export function selectCodexStorageHome(session: Session, prepared: { home: string; originalHome: string; threadId: string | null; returnChoice?: string }): Session {
+  if (session.codexHomeThreadsUnresolved) throw new Error(session.codexStorageError ?? "Codex storage needs repair: Preserve the unreadable per-home provider thread map before selecting a home.");
   const threads = { ...session.providerSessionIdByHome };
   const previous = session.codexStorageHome ?? prepared.originalHome;
   if (session.providerSessionId) threads[previous] = session.providerSessionId;
@@ -19,5 +19,5 @@ export function selectCodexStorageHome(session: Session, prepared: { home: strin
   if (threadId) threads[prepared.home] = threadId;
   else delete threads[prepared.home];
   if (!sanitizeCodexHomeThreads(threads)) throw new Error("Codex storage needs repair: Preserve the per-home provider threads before retrying.");
-  return { ...session, codexStorageHome: prepared.home, providerSessionId: threadId, providerSessionIdByHome: threads };
+  return { ...session, codexStorageHome: prepared.home, providerSessionId: threadId, providerSessionIdByHome: threads, codexStorageReturnChoice: prepared.returnChoice };
 }

@@ -2678,7 +2678,12 @@ function Workspace({
         setHistory(history => mergeProjectHistorySummary(history, summary));
       }
     })
-      .catch(() => undefined);
+      .catch(error => {
+        if (!session.codexHomeThreadsUnresolved) return;
+        const detail = String(error);
+        setSessions(previous => previous.map(entry => entry.id === session.id && entry.codexHomeThreadsUnresolved && entry.codexStorageError !== detail
+          ? { ...entry, codexStorageError: detail } : entry));
+      });
   }, []);
 
   useEffect(() => {
@@ -10254,14 +10259,18 @@ function Workspace({
       await forgetHarnessSession("codex", session.id);
       validate(sessionsRef.current.find(entry => entry.id === session.id));
     }
-    const saved = await upsertSession(session, current => { validate(current); return selectCodexStorageHome(current, prepared); });
-    if (saved === null) throw new Error("The per-home provider conversation could not be saved. Retry before sending its prompt.");
-    validate(sessionsRef.current.find(entry => entry.id === session.id), next);
+    if (shouldPersistSession(next)) {
+      const saved = await upsertSession(session, current => { validate(current); return selectCodexStorageHome(current, prepared); });
+      if (saved === null) throw new Error("The per-home provider conversation could not be saved. Retry before sending its prompt.");
+      validate(sessionsRef.current.find(entry => entry.id === session.id), next);
+    } else {
+      validate(sessionsRef.current.find(entry => entry.id === session.id));
+    }
     flushSync(() => setSessions(previous => previous.map(entry => entry.id === session.id ? selectCodexStorageHome(entry, prepared) : entry)));
     if (next.providerSessionId) bindHarnessSession("codex", session.id, next.providerSessionId, sessionWorkCwd(next), accountId);
   }, []);
 
-  const onCodexStorageRepair = useCallback(async (sessionId: string, resolution?: CodexStorageResolution) => {
+  const onCodexStorageRepair = useCallback(async (sessionId: string, resolution?: CodexStorageResolution): Promise<void> => {
     const session = sessionsRef.current.find(entry => entry.id === sessionId);
     if (!session) throw new Error("The conversation is no longer available. Reopen it before repairing Codex storage.");
     if (session.busy) throw new Error("The conversation is busy. Wait for its current turn to finish, then try Repair again.");
@@ -10271,6 +10280,36 @@ function Workspace({
     const sourceChoice = resolution === "bind_selected_source" || resolution === "separate_selected_source" || resolution === "reattach_original_source";
     const sourceGeneration = turnGen.current.get(sessionId);
     const selectedAccountId = selectedProviderAccountId("codex", session.cwd);
+    if (resolution === "preserve_home_threads") {
+      if (codexStorageRecovery.current.isRepairingAccount(accountId)) throw new Error("This account already has a recovery action pending. Wait for it to finish.");
+      const expected = parseCodexStorageRecoveryConflict(session.codexStorageError)?.homeThreads;
+      if (!expected || !session.codexHomeThreadsUnresolved || expected.sessionId !== session.id || expected.cwd !== session.cwd ||
+        (expected.providerAccountId ?? undefined) !== session.providerAccountId || (expected.home ?? undefined) !== session.codexStorageHome) {
+        throw new Error("Reload the stored conversation's map recovery notice before preserving it.");
+      }
+      await writeSession(sessionId, async save => {
+        const validate = () => {
+          const current = sessionsRef.current.find(entry => entry.id === sessionId);
+          if (!current || current.busy || current.codexStoragePreparing || current.harness !== session.harness || current.cwd !== session.cwd ||
+            current.providerAccountId !== session.providerAccountId || current.codexStorageHome !== session.codexStorageHome ||
+            current.providerSessionId !== session.providerSessionId || current.codexStorageHeld !== session.codexStorageHeld ||
+            current.readOnly !== session.readOnly || current.runtimeMode !== session.runtimeMode || current.windowsSandbox !== session.windowsSandbox ||
+            turnGen.current.get(sessionId) !== sourceGeneration || selectedProviderAccountId("codex", current.cwd) !== selectedAccountId ||
+            JSON.stringify(current.codexHomeThreadsRecovery) !== JSON.stringify(expected) || remoteProjectFor(current.cwd)) {
+            throw new Error("The conversation changed before map recovery. Keep its unsaved edits and reload the recovery notice.");
+          }
+          return current;
+        };
+        validate();
+        const preservedPath = await invoke<string>("mono_session_preserve_home_threads", { expected });
+        const current = validate();
+        const next = { ...current, codexHomeThreadsUnresolved: undefined, codexHomeThreadsRecovery: undefined,
+          blocks: [...current.blocks, { id: crypto.randomUUID(), role: "system" as const, text: `The original stored settings were preserved at ${preservedPath}. The current provider conversation and unsaved edits are retained.` }] };
+        flushSync(() => setSessions(previous => previous.map(entry => entry.id === sessionId ? next : entry)));
+        if (await save(next) === null) throw new Error("Recovered map, but conversation edits could not be saved. Keep this conversation open and retry.");
+      });
+      return onCodexStorageRepair(sessionId);
+    }
     if ((sandboxChoice || sourceChoice) && codexStorageRecovery.current.isRepairingAccount(accountId)) throw new Error("This account already has a recovery action pending. Wait for it to finish.");
     if (sandboxChoice && !parseCodexSandboxBlocker(session.codexStorageError)) throw new Error("Refresh the sandbox issue before choosing an engine or access mode.");
     if (resolution === "use_mono_full_access" && session.readOnly) throw new Error("Read-only investigations must retain their filesystem restrictions.");
@@ -10292,7 +10331,7 @@ function Workspace({
         } else if (resolution === "use_mono_full_access") {
           await stopHarnessSession("codex", sessionId);
         } else if (resolution === "bind_selected_source" || resolution === "separate_selected_source" || resolution === "reattach_original_source") {
-          const binding = parseCodexStorageRecoveryConflict(session.codexStorageError)?.sourceBinding;
+          const binding = parseCodexStorageRecoveryConflict(session.codexStorageError ?? session.codexStorageReturnChoice)?.sourceBinding;
           if (!binding || (resolution === "bind_selected_source" ? !binding.canBind : resolution === "reattach_original_source" ? !binding.canReturn : !binding.canSeparate)) throw new Error("Refresh the source-account issue before choosing its source.");
           const accountSessions = sessionsRef.current.filter(entry => entry.harness === "codex" && !remoteProjectFor(entry.cwd) &&
             codexStorageAccountId(entry, selectedProviderAccountId("codex", entry.cwd)) === accountId);

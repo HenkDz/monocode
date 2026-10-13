@@ -543,6 +543,7 @@ pub fn run() {
             mono_transcript::mono_session_get,
             mono_transcript::mono_session_page,
             mono_transcript::mono_session_upsert,
+            codex_mono_store::mono_session_preserve_home_threads,
             mono_transcript::mono_session_find,
             mono_transcript::mono_session_event_delivered,
             session_store::session_delete,

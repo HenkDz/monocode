@@ -13,6 +13,9 @@ license.workspace = true
 name = "monocode_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+native-storage-probe = []
+
 [[bin]]
 name = "monocode-cli"
 path = "src/control_cli_main.rs"

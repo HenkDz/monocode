@@ -118,9 +118,13 @@ pub(super) fn selected(source: &Path, home: &Path) -> Result<Option<PathBuf>, St
 
 pub(super) fn recreated(source: &Path, home: &Path) -> Result<Option<PathBuf>, String> {
     let mut matches = Vec::new();
+    let identity = entry_identity(source)?;
     for candidate in candidates(home)? {
-        if candidate.join(BINDING).exists() && binding(&candidate)?.source_home == source {
-            matches.push(candidate);
+        if candidate.join(BINDING).exists() {
+            let old = binding(&candidate)?;
+            if old.source_home == source && old.source_identity != identity {
+                matches.push(candidate);
+            }
         }
     }
     if matches.contains(&home.to_path_buf()) {
@@ -152,20 +156,7 @@ pub(in crate::codex_mono_store) fn confirm(
             "The selected source changed. Refresh before returning to its original home.".into(),
         );
     }
-    let mut matching = Vec::new();
-    for candidate in candidates(home)? {
-        if candidate.join(BINDING).exists() && binding(&candidate)?.source_home == source {
-            matching.push(candidate);
-        }
-    }
-    // Original home wins over the redundant original-source home created by CC0J.
-    let selected = if matching.contains(&home.to_path_buf()) {
-        home.to_path_buf()
-    } else if matching.len() == 1 {
-        matching.pop().unwrap()
-    } else {
-        return Err("The original private home cannot be identified safely. Preserve the source choices before retrying.".into());
-    };
+    let selected = recreated(&source, home)?.ok_or("The original private home cannot be identified safely. Preserve the source choices before retrying.")?;
     let mut contexts = vec![selected.clone()];
     let root = selected.join(".monocode-skill-contexts");
     if root.exists() {

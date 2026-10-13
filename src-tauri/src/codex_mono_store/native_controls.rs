@@ -77,6 +77,9 @@ fn native_command_child() {
                 ),
             )
             .unwrap()),
+            "preserve-home-threads" => Ok(serde_json::to_value(mono_session_preserve_home_threads(
+                handle.clone(), handle.state(), args["expected"].clone(),
+            )).unwrap()),
             "record-thread" => {
                 let (source, home, _) = locations(&handle, Some(&account))?;
                 source_binding::check_session_home(

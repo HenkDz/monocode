@@ -57,7 +57,7 @@ export function MonoCodexStorageNotice({
   }, [detail]);
 
   const details = error ?? detail;
-  const title = success ? sandbox ? "Codex sandbox choice applied" : "Codex storage repaired" : sandbox ? setupUnavailable ? "Codex elevated sandbox unavailable" : "Codex sandbox needs setup" : recovery?.sourceBinding ? "Choose this Mono's Codex source" : recovery ? "Codex recovery files preserved" : conflict ? codexStorageIssueTitle(conflict) : workbench ? "Conversation couldn’t start" : "Codex storage needs repair";
+  const title = success ? sandbox ? "Codex sandbox choice applied" : "Codex storage repaired" : sandbox ? setupUnavailable ? "Codex elevated sandbox unavailable" : "Codex sandbox needs setup" : recovery?.homeThreads ? "Conversation edits are not saved" : recovery?.sourceBinding ? "Choose this Mono's Codex source" : recovery ? "Codex recovery files preserved" : conflict ? codexStorageIssueTitle(conflict) : workbench ? "Conversation couldn’t start" : "Codex storage needs repair";
   async function run(action: "repair" | "compare" | "reveal", operation: () => Promise<unknown>) {
     if (busy) return;
     setBusy(action);
@@ -154,6 +154,7 @@ export function MonoCodexStorageNotice({
             </div>
           )}
           {!remote && <div className="mt-2 flex flex-wrap items-center gap-2">
+            {recovery?.homeThreads && onResolve && <SecondaryButton disabled={!!busy} onClick={() => void run("repair", () => onResolve("preserve_home_threads"))}>Preserve stored map aside and start a fresh map</SecondaryButton>}
             {recovery?.sourceBinding?.canBind && onResolve && <SecondaryButton disabled={!!busy} onClick={() => void run("repair", () => onResolve("bind_selected_source"))}>Confirm selected source as original account</SecondaryButton>}
             {recovery?.sourceBinding?.canSeparate && onResolve && <SecondaryButton disabled={!!busy} onClick={() => void run("repair", () => onResolve("separate_selected_source"))}>Use a separate Mono home for this source</SecondaryButton>}
             {recovery?.sourceBinding?.canReturn && onResolve && <SecondaryButton disabled={!!busy} onClick={() => void run("repair", () => onResolve("reattach_original_source"))}>Return to original home / re-attach source</SecondaryButton>}

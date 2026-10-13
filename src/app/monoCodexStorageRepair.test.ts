@@ -5,9 +5,11 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { MonoCodexStorageRecovery, isCodexStorageError, parseCodexStorageConflict, parseCodexStorageRecoveryConflict, parseCodexSandboxBlocker, codexSandboxRepairSettings, codexFullAccessRepairAllowed } from "../features/monos/model/monoCodexStorage";
 import type { Session } from "../features/sessions/model/session";
 import { codexStorageAccountId } from "../features/monos/model/monoCodexStorageIssues";
-import { sessionWriteNeedsReconciliation } from "../features/sessions/data/sessionStore";
+import { sessionWriteNeedsReconciliation, shouldPersistSession } from "../features/sessions/data/sessionStore";
 import { selectCodexStorageHome } from "../features/monos/model/monoCodexHomes";
 import { loadMonoRotation, MONO_ROTATION_READ_ERROR } from "../features/monos/model/monoRotation";
+import { markHabitRun, clearHabitRun, habitRunMono } from "../features/monos/model/monoHabits";
+import { submitWithSettlement } from "./model/managedSubmission";
 
 beforeEach(() => vi.stubGlobal("localStorage", { getItem: () => null }));
 afterEach(() => vi.unstubAllGlobals());
@@ -171,7 +173,9 @@ function sandboxRepairFixture(extra: Partial<Session> = {}) {
     setQueueDispatchVersion: vi.fn(), setCodexStorageRepaired: vi.fn(), prepareMonoCodexStore: prepare,
     prepareCodexMonoContext: prepare, resolveCodexBinary: async () => ({ path: "/synthetic/codex.exe" }), invoke,
     checkMonoCodexSandbox: prepare,
-    selectCodexStorageHome, turnGen: { current: new Map<string, number>() },
+    writeSession: async (_id: string, action: (save: (session: Session) => Promise<unknown>) => Promise<unknown>) => action(persist),
+    onCodexStorageRepair: vi.fn(async () => {}),
+    selectCodexStorageHome, shouldPersistSession, turnGen: { current: new Map<string, number>() },
     forgetHarnessSession: vi.fn(async () => {}), bindHarnessSession: vi.fn(),
     adoptCodexStorageHome: undefined as unknown as (session: Session, prepared: unknown) => Promise<void>,
   };
@@ -179,6 +183,99 @@ function sandboxRepairFixture(extra: Partial<Session> = {}) {
   const repair = evaluate(appCallback("onCodexStorageRepair").getText(app), context);
   return { ...context, repair, recovery, retry, peerRetry, otherRetry, stop, prepare, persist, saveMode };
 }
+
+it.each([{ ephemeral: true }, { inboxAsk: {} }, {}])("prepares an unsaved owned conversation in memory (%j)", async extra => {
+  const fixture = sandboxRepairFixture({ ...extra, codexStorageError: undefined } as Partial<Session>);
+  fixture.persist.mockResolvedValueOnce(null as never);
+  const prepared = { home: "/synthetic/original-mono", originalHome: "/synthetic/original-mono", threadId: null };
+  await fixture.adoptCodexStorageHome(fixture.sessionsRef.current[0], prepared);
+  expect(fixture.sessionsRef.current[0].codexStorageHome).toBe(prepared.home);
+  expect(fixture.persist).not.toHaveBeenCalled();
+});
+
+it("offers explicit return after successful preparation of an already bound separate home", async () => {
+  const fixture = sandboxRepairFixture({ blocks: [{ id: "u", role: "user", text: "Saved" }], codexStorageError: undefined });
+  const returnChoice = `Codex storage needs repair: ${JSON.stringify({ recovery: true, reason: "Return is available", paths: ["/synthetic/original-mono"], sourceBinding: {
+    resolvedSourceHome: "/synthetic/original", boundSourceHome: "/synthetic/original", canBind: false, canReturn: true, sourceIdentity: "1:9",
+  } })}`;
+  await fixture.adoptCodexStorageHome(fixture.sessionsRef.current[0], { home: "/synthetic/separate", originalHome: "/synthetic/original-mono", threadId: null, returnChoice });
+  expect((fixture.sessionsRef.current[0] as Session & { codexStorageReturnChoice?: string }).codexStorageReturnChoice).toBe(returnChoice);
+  expect(fixture.sessionsRef.current[0].codexStorageError).toBeUndefined();
+});
+
+it.each(["habit", "owned-worker"])("continues actual App preparation for a fresh %s first send without persistence or a model call", async kind => {
+  const fixture = sandboxRepairFixture({ ephemeral: kind === "habit", codexStorageError: undefined });
+  const owner = { id: "owner", sessionId: "resident", projects: ["/synthetic/repo"] };
+  if (kind === "habit") markHabitRun("clicked", owner.id);
+  const accepted = vi.fn((_id, _text, _attachments, options) => {
+    options?.onSettled?.({ status: "completed", text: "Synthetic acceptance only" });
+    return true;
+  });
+  const context = { ...fixture, habitRunMono, findMono: () => owner, listMonos: () => [owner], monoForSession: () => undefined,
+    orchestrator: { forSession: () => kind === "owned-worker" ? { ownerMonoId: owner.id } : undefined },
+    sessionWriteNeedsReconciliation, loadMonoRotation, MONO_ROTATION_READ_ERROR,
+    isProjectManager: () => false, editedResends: { isActive: () => false },
+    acceptSubmission: (id: string, text: string, attachments: unknown[]) => accepted(id, text, attachments, settlement),
+    submitSessionRef: { current: undefined as unknown }, submitWithSettlement,
+  };
+  const submit = evaluate(guardedSubmission, context);
+  context.submitSessionRef.current = submit;
+  fixture.prepare.mockResolvedValue({ home: "/synthetic/original-mono", originalHome: "/synthetic/original-mono", threadId: null } as never);
+  let settlement: { onSettled?: (value: unknown) => void } = {};
+  try {
+    if (kind === "habit") {
+      let run: ts.Node | undefined;
+      const walk = (node: ts.Node) => {
+        if (ts.isCallExpression(node) && node.expression.getText(app) === "useMonoHabits" && ts.isObjectLiteralExpression(node.arguments[0])) {
+          run = node.arguments[0].properties.find(p => ts.isPropertyAssignment(p) && p.name.getText(app) === "run");
+        }
+        ts.forEachChild(node, walk);
+      };
+      walk(app);
+      if (!run || !ts.isPropertyAssignment(run)) throw new Error("Actual habit submit adapter missing");
+      const habitSubmit = evaluate(run.initializer.getText(app), { submitWithSettlement, submitSession: (id: string, text: string, attachments: unknown[], options: typeof settlement) => {
+        settlement = options; return submit(id, text, attachments, options);
+      } });
+      await expect(habitSubmit("clicked", "/operator Exact synthetic habit")).resolves.toMatchObject({ status: "completed" });
+    } else await expect(submit("clicked", "First owned worker prompt", [], { managed: true })).resolves.toBe(true);
+    expect(accepted).toHaveBeenCalledOnce();
+    expect(fixture.prepare).toHaveBeenCalledOnce();
+    expect(fixture.persist).not.toHaveBeenCalled();
+    expect(fixture.sessionsRef.current[0]).toMatchObject({ codexStorageHome: "/synthetic/original-mono" });
+    expect(fixture.sessionsRef.current[0].blocks).toEqual([]);
+  } finally { clearHabitRun("clicked"); }
+});
+
+it("refuses a persistable conversation whose home selection cannot be saved", async () => {
+  const fixture = sandboxRepairFixture({ blocks: [{ id: "u", role: "user", text: "Stored prompt" }] });
+  fixture.persist.mockResolvedValueOnce(null as never);
+  await expect(fixture.adoptCodexStorageHome(fixture.sessionsRef.current[0], { home: "/synthetic/original-mono", originalHome: "/synthetic/original-mono", threadId: null })).rejects.toThrow("could not be saved");
+  expect(fixture.sessionsRef.current[0].codexStorageHome).toBeUndefined();
+  expect(fixture.bindHarnessSession).not.toHaveBeenCalled();
+});
+
+it.each([false, true])("preserves the displayed opaque map before saving current edits; stale record refusal=%s", async stale => {
+  const expected = { sessionId: "clicked", identity: "row:created", fingerprint: "stored-record", cwd: "/synthetic/repo", providerAccountId: "account", home: "/synthetic/home" };
+  const detail = `Codex storage needs repair: ${JSON.stringify({ recovery: true, reason: "Edits are not saved", paths: [expected.home], homeThreads: expected })}`;
+  const fixture = sandboxRepairFixture({ codexHomeThreadsUnresolved: true, codexHomeThreadsRecovery: expected, codexStorageError: detail,
+    codexStorageHome: expected.home, title: "Unsaved title", providerSessionId: "current-thread", blocks: [{ id: "draft", role: "user", text: "Unsaved draft", draft: true }],
+    queuedMessages: [{ id: "q", text: "Unsaved queued Plan", attachments: [], intent: "plan" }] });
+  const original = structuredClone(fixture.sessionsRef.current[0]);
+  if (stale) fixture.invoke.mockRejectedValueOnce(new Error("Stored record changed"));
+  else fixture.invoke.mockResolvedValueOnce("/synthetic/preserved/model-settings.json");
+  if (stale) {
+    await expect(fixture.repair("clicked", "preserve_home_threads")).rejects.toThrow("record changed");
+    expect(fixture.sessionsRef.current[0]).toEqual(original);expect(fixture.persist).not.toHaveBeenCalled();
+  } else {
+    await fixture.repair("clicked", "preserve_home_threads");
+    expect(fixture.invoke).toHaveBeenCalledExactlyOnceWith("mono_session_preserve_home_threads", { expected });
+    expect(fixture.invoke.mock.invocationCallOrder[0]).toBeLessThan(fixture.persist.mock.invocationCallOrder[0]);
+    expect(fixture.sessionsRef.current[0]).toMatchObject({ title: original.title, providerSessionId: original.providerSessionId,
+      queuedMessages: original.queuedMessages, codexHomeThreadsUnresolved: undefined });
+    expect(fixture.sessionsRef.current[0].blocks[0]).toEqual(original.blocks[0]);
+    expect(fixture.onCodexStorageRepair).toHaveBeenCalledExactlyOnceWith("clicked");
+  }
+});
 
 it("archives incomplete metadata for the held account before retrying its preserved submissions", async () => {
   const metadata = { path: "/synthetic/private/.monocode-txn-id.json.pending", identity: "1:2", fingerprint: "hash" };

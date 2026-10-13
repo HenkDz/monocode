@@ -93,6 +93,7 @@ export type SessionSummary = {
 };
 
 type SessionRecord = {
+  codexHomeThreadsRecovery?: Session["codexHomeThreadsRecovery"];
   sidebarHidden?: boolean;
   monoTranscript?: Session["monoTranscript"];
   orchestrationLeadId?: string;
@@ -161,7 +162,7 @@ export function isPersistableId(value: string): boolean {
 
 function requireResolvedCodexHomeThreads(session: Session): void {
   if (session.codexHomeThreadsUnresolved) {
-    throw new Error("Codex storage needs repair: Preserve the unreadable per-home provider thread map before saving.");
+    throw new Error(session.codexStorageError ?? "Codex storage needs repair: Preserve the unreadable per-home provider thread map before saving.");
   }
 }
 
@@ -1618,7 +1619,13 @@ function recordToSession(record: SessionRecord): Session {
     ...(readOnly === "true" ? { readOnly: true } : {}),
     ...(typeof codexStorageHome === "string" && codexStorageHome.length > 0 && codexStorageHome.length <= 4096 ? { codexStorageHome } : {}),
     ...(providerSessionIdByHome ? { providerSessionIdByHome } : {}),
-    ...(codexHomeThreadsUnresolved ? { codexHomeThreadsUnresolved: true } : {}),
+    ...(codexHomeThreadsUnresolved ? { codexHomeThreadsUnresolved: true,
+      codexHomeThreadsRecovery: record.codexHomeThreadsRecovery,
+      codexStorageError: `Codex storage needs repair: ${JSON.stringify({ recovery: true,
+        reason: "Preserve the unreadable per-home provider thread map. Conversation edits are not saved yet; keep this conversation open until recovery saves them. The stored map, transcript and provider conversation remain intact.",
+        paths: [typeof codexStorageHome === "string" ? codexStorageHome : record.cwd],
+        ...(record.codexHomeThreadsRecovery ? { homeThreads: record.codexHomeThreadsRecovery } : {}),
+      })}` } : {}),
     runtimeMode: asRuntimeMode(record.runtimeMode),
     title: record.title,
     blocks,

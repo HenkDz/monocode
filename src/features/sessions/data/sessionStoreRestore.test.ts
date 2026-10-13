@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionRecord } from "./sessionStore";
 import { selectCodexStorageHome } from "../../monos/model/monoCodexHomes";
+import { parseCodexStorageRecoveryConflict } from "../../monos/model/monoCodexStorage";
 
 const invoke = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
@@ -82,6 +83,7 @@ describe("restoring a session whose repair cannot be persisted", () => {
     } : null);
     const session = (await getSession("s1"))!;
     expect(session.codexHomeThreadsUnresolved).toBe(true);
+    expect(parseCodexStorageRecoveryConflict(session.codexStorageError)?.reason).toContain("not saved");
     expect(session.providerSessionIdByHome).toBeUndefined();
     expect(session.modelSettings).toEqual({ reasoningEffort: "high" });
     expect(() => persistFingerprint(session)).not.toThrow();

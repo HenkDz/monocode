@@ -476,3 +476,31 @@ fn sharing_metadata_replacement_retry_preserves_a_changed_target() {
         .to_string_lossy()
         .starts_with(".monocode-link-")));
 }
+
+#[test]
+fn sharing_migration_preserves_unfamiliar_pending_metadata() {
+    let (_, source, home) = fixture();
+    let dir = source.join("sessions/2026/10/14");
+    std::fs::create_dir_all(&dir).unwrap();
+    let rollout = dir.join("rollout-2026-10-14T00-00-00-meta-thread.jsonl");
+    std::fs::write(
+        &rollout,
+        "{\"type\":\"session_meta\",\"payload\":{\"id\":\"meta-thread\"}}\n",
+    )
+    .unwrap();
+    let marker = home.join(".monocode-migrations/meta-thread");
+    std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
+    std::fs::write(&marker, b"unfamiliar future migration bytes").unwrap();
+    let error = copy_rollouts(&source, &home, "meta-thread", &[rollout]).unwrap_err();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&error).unwrap()["recovery"],
+        true
+    );
+    assert_eq!(
+        std::fs::read(&marker).unwrap(),
+        b"unfamiliar future migration bytes"
+    );
+    assert!(!home
+        .join("sessions/2026/10/14/rollout-2026-10-14T00-00-00-meta-thread.jsonl")
+        .exists());
+}

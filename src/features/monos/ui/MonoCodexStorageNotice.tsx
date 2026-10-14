@@ -66,7 +66,7 @@ export function MonoCodexStorageNotice({
   }, [detail]);
 
   const details = error ?? detail;
-  const title = success ? sandbox ? "Codex sandbox choice applied" : "Codex storage repaired" : sandbox ? setupUnavailable ? "Codex elevated sandbox unavailable" : "Codex sandbox needs setup" : recovery?.homeThreads ? "Conversation edits are not saved" : recovery?.sourceBinding ? "Choose this Mono's Codex source" : recovery ? "Codex recovery files preserved" : conflict ? codexStorageIssueTitle(conflict) : workbench ? "Conversation couldn’t start" : "Codex storage needs repair";
+  const title = success ? sandbox ? "Codex sandbox choice applied" : "Codex storage repaired" : sandbox ? setupUnavailable ? "Codex elevated sandbox unavailable" : "Codex sandbox needs setup" : recovery?.homeThreads ? "Conversation edits are not saved" : recovery?.sourceBinding ? "Choose this Mono's Codex source" : recovery?.io?.retryable ? "Codex file is in use" : recovery ? "Codex recovery files preserved" : conflict ? codexStorageIssueTitle(conflict) : workbench ? "Conversation couldn’t start" : "Codex storage needs repair";
   async function run(action: "repair" | "compare" | "reveal", operation: () => Promise<unknown>) {
     if (busy) return;
     setBusy(action);

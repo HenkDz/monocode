@@ -10290,6 +10290,9 @@ function Workspace({
     const sourceChoice = resolution === "bind_selected_source" || resolution === "separate_selected_source" || resolution === "reattach_original_source";
     const sourceGeneration = turnGen.current.get(sessionId);
     const selectedAccountId = selectedProviderAccountId("codex", session.cwd);
+    const automaticBinding = { providerAccountId: session.providerAccountId, held: session.codexStorageHeld,
+      detail: session.codexStorageError, queueHeadId: session.queuedMessages?.[0]?.id };
+    if (automatic && codexStorageRecovery.current.isRepairingAccount(accountId)) return;
     if (resolution === "preserve_home_threads") {
       if (codexStorageRecovery.current.isRepairingAccount(accountId)) throw new Error("This account already has a recovery action pending. Wait for it to finish.");
       const expected = session.codexHomeThreadsRecovery;
@@ -10418,8 +10421,8 @@ function Workspace({
         if (automatic) {
           const current = sessionsRef.current.find(entry => entry.id === resumingId);
           if (!current || !canAutomaticallyRepairCodexStorage(current) || turnGen.current.get(resumingId) !== sourceGeneration ||
-            current.providerAccountId !== session.providerAccountId || current.codexStorageHeld !== session.codexStorageHeld ||
-            current.codexStorageError !== session.codexStorageError || current.queuedMessages?.[0]?.id !== session.queuedMessages?.[0]?.id ||
+            current.providerAccountId !== automaticBinding.providerAccountId || current.codexStorageHeld !== automaticBinding.held ||
+            current.codexStorageError !== automaticBinding.detail || current.queuedMessages?.[0]?.id !== automaticBinding.queueHeadId ||
             selectedProviderAccountId("codex", current.cwd) !== selectedAccountId || codexStorageAccountId(current, selectedAccountId) !== accountId)
             throw new Error("The conversation changed during automatic storage recovery; its messages remain held.");
         }

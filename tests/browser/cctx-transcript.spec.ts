@@ -317,3 +317,52 @@ test("turn-ending failure stays outside the fold in place of a final answer", as
   await expect(region.locator("[data-compact-tool-call]")).toHaveCount(0);
   await frame(page, testInfo, "atlas-terminal-failure");
 });
+
+for (const theme of ["dark", "light"]) {
+  for (const width of [1440, 430]) {
+    test(`background wait remains folded: ${theme}, ${width}px`, async ({ page }, testInfo) => {
+      await page.setViewportSize({ width, height: 1000 });
+      await page.goto(`/tests/browser/cctx-transcript.html?scenario=background&theme=${theme}&surface=floating&harness=claude`);
+      const region = transcript(page);
+      await expect(region.getByRole('button', { name: 'Show the work', exact: true })).toHaveAttribute('aria-expanded', 'false');
+      await expect(region.locator('.compact-current-action')).toHaveText('Waiting for background tasks…');
+      await expect(region.locator('.compact-current-action')).toHaveAttribute('title', 'Review, Build');
+      await expect(region.locator('[data-compact-tool-call]')).toHaveCount(0);
+      await frame(page, testInfo, `background-${theme}-${width}`);
+    });
+  }
+}
+
+for (const width of [1440, 430]) {
+  test(`saved subagent model, live modal scroll and focus: ${width}px`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height: 1000 });
+    await page.goto('/tests/browser/cctx-transcript.html?scenario=subagent&surface=manager&harness=cursor');
+    const region = transcript(page);
+    await expect(region).not.toContainText('Grok 4.6');
+    await region.getByRole('button', { name: 'Show the work', exact: true }).click();
+    await region.locator('[data-compact-tool-group] > button').click();
+    const reader = region.locator('[data-flat-subagent]').getByRole('button', { name: 'View full output', exact: true });
+    await expect(region.locator('[data-flat-subagent]')).toContainText('Grok 4.6');
+    await reader.click();
+    const dialog = page.getByRole('dialog', { name: 'Auth review', exact: true });
+    await expect(dialog).toContainText('Model: Cursor Grok 4.6');
+    await expect(dialog).toContainText('Saved step 39');
+    await expect(dialog).toContainText('Saved review report');
+    const scroller = dialog.locator('.overflow-y-auto');
+    await expect(scroller).toHaveCount(1);
+    await expect(dialog.locator('.zen-phase-live')).toHaveCount(0);
+    await scroller.evaluate(element => { element.scrollTop = 250; });
+    const top = await scroller.evaluate(element => element.scrollTop);
+    expect(top).toBeGreaterThan(0);
+    const close = dialog.getByRole('button', { name: 'Close', exact: true });
+    await close.focus();
+    await page.getByRole('button', { name: 'Append synthetic saved progress' }).evaluate(button => (button as HTMLButtonElement).click());
+    await expect(dialog).toContainText('New saved progress');
+    expect(await scroller.evaluate(element => element.scrollTop)).toBe(top);
+    await expect(close).toBeFocused();
+    await frame(page, testInfo, `saved-subagent-${width}`);
+    await page.keyboard.press('Escape');
+    await expect(dialog).toHaveCount(0);
+    await expect(reader).toBeFocused();
+  });
+}

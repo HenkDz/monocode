@@ -305,6 +305,7 @@ function AgentTranscriptComponent({
   model,
   modelSettings,
   pendingQuestion = false,
+  backgroundTasks = [],
   onApproval,
   onAddToChat,
   onSaveNote,
@@ -1296,8 +1297,9 @@ function AgentTranscriptComponent({
                 live={live}
                 startedAt={startedAt}
                 durationMs={durationMs}
-                waiting={waitingForApproval || !!pendingQuestion}
-                waitingLabel={managed && waitingForApproval ? "Waiting for orchestrator" : pendingQuestion ? "Waiting for answers" : "Waiting for approval…"}
+                waiting={!!waitingForApproval || backgroundTasks.length > 0}
+                waitingLabel={managed && waitingForApproval ? "Waiting for orchestrator" : pendingQuestion ? "Waiting for answers" : waitingForApproval ? "Waiting for approval…" : `Waiting for background ${backgroundTasks.length === 1 ? "task" : "tasks"}…`}
+                waitingDetail={!waitingForApproval && backgroundTasks.length ? backgroundTasks.join(", ") : undefined}
                 suppressNarration={turn.some(block => block.role === "user" && undeliveredMessageIds.has(block.id))}
                 searchCurrent={searchCurrent}
                 onToggle={() => toggleWork(turnId, workOpen)}
@@ -2536,7 +2538,7 @@ function UserMessageBlock({
  * the fold holds stays one click away, so the settled transcript reads as
  * prompt, answer, and a receipt for the work in between.
  */
-function CompactTurnWork({ turnId, compact, show, open, active, live, startedAt, durationMs, waiting, waitingLabel, suppressNarration, searchCurrent, onToggle, cwd, onOpenFile, onOpenDiff, renderBlock }: {
+function CompactTurnWork({ turnId, compact, show, open, active, live, startedAt, durationMs, waiting, waitingLabel, waitingDetail, suppressNarration, searchCurrent, onToggle, cwd, onOpenFile, onOpenDiff, renderBlock }: {
   turnId: string;
   compact: ReturnType<typeof compactTurn>;
   show: boolean;
@@ -2547,6 +2549,7 @@ function CompactTurnWork({ turnId, compact, show, open, active, live, startedAt,
   durationMs?: number;
   waiting: boolean;
   waitingLabel: string;
+  waitingDetail?: string;
   suppressNarration: boolean;
   searchCurrent: string | null;
   onToggle: () => void;
@@ -2571,7 +2574,7 @@ function CompactTurnWork({ turnId, compact, show, open, active, live, startedAt,
       {active ? <span className="compact-work-spinner" aria-hidden="true" /> : null}
       <span className="compact-work-label">{formatWorkingDuration(active ? elapsed : durationMs ?? null, undefined, !active)}</span>
       <ChevronRight className={`size-3.5 shrink-0 transition-transform ${open ? "rotate-90" : ""}`} aria-hidden="true" />
-      {active ? <span className="compact-current-action" title={action}>{action}</span> : counts ? <span className="compact-work-counts">{counts}</span> : null}
+      {active ? <span className="compact-current-action" title={waitingDetail ?? action}>{action}</span> : counts ? <span className="compact-work-counts">{counts}</span> : null}
     </button>
     <div id={bodyId} data-transcript-work-details hidden={!open}>
       {open ? <ol className="compact-work-timeline" aria-label="Activity in chronological order">
@@ -3224,12 +3227,14 @@ function SubagentRow({
   if (flatWork) {
     const steps = block.agentRun?.steps ?? [];
     const report = subagentReport(block);
+    const model = subagentModelName(block);
     return (
       <div className="min-w-0" data-flat-subagent>
         <div className="flex items-center gap-2 py-1 text-xs">
           <span className="min-w-0 flex-1 truncate" title={presentationText(subagentBrief(block))}>
             {presentationText(subagentName(block))}
           </span>
+          {model ? <span className="truncate text-content/65" title={`Model: ${model}`}>{model}</span> : null}
           <ToolCallStatusIcon state={toolCallState(block)} />
           <span className="text-content/65">{subagentStatusLine(block, steps)}</span>
         </div>
@@ -3242,7 +3247,7 @@ function SubagentRow({
           View full output
         </button>
         {override === true && (
-          <Modal title={presentationText(subagentName(block))} fitViewport onClose={() => setOverride(false)}>
+          <Modal title={presentationText(subagentName(block))} description={model ? `Model: ${model}` : undefined} fitViewport onClose={() => setOverride(false)}>
             <div className="space-y-3 p-4">
               <MonoActivityTrail
                 blocks={steps.map(agentStepBlock)} live={live} cwd={cwd}

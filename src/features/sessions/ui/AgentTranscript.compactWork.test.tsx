@@ -33,6 +33,21 @@ function render(blocks: Block[], props = {}) {
 }
 function toggle() { return container.querySelector<HTMLButtonElement>('[data-transcript-turn-work] > button')!; }
 
+it("retains reducer background waits and task names, with approval and question precedence", () => {
+  const session = applyHarnessEvent({ ...newSession("claude", "/synthetic"), busy: true, blocks: [{ ...user, durationMs: undefined }, { ...note, streaming: true }] }, { type: "background.updated", tasks: ["Review", "Build"] });
+  const props = { busy: session.busy, backgroundTasks: session.backgroundTasks };
+  render(session.blocks, props);
+  expect(toggle().querySelector('.compact-current-action')?.textContent).toBe("Waiting for background tasks…");
+  expect(toggle().querySelector('.compact-current-action')?.getAttribute('title')).toBe("Review, Build");
+  render(session.blocks, { ...props, pendingQuestion: true });
+  expect(toggle().textContent).toContain("Waiting for answers");
+  render([...session.blocks, { ...command, approval: { requestId: 7, command: " exact command " } }], props);
+  expect(toggle().textContent).toContain("Waiting for approval…");
+  expect(container.querySelector('[aria-label="Command awaiting approval"]')?.textContent).toBe(" exact command ");
+  render(session.blocks, { busy: true, backgroundTasks: [] });
+  expect(toggle().textContent).not.toContain("background");
+});
+
 it.each([{}, { inlineWork: true }, { inlineWork: true, flatWork: true }, { managed: true }])("folds work by default with final markdown outside on every presentation path %j", props => {
   render([user, thought, note, command, answer], props);
   expect(toggle().textContent).toContain("Worked for 1m 51s");

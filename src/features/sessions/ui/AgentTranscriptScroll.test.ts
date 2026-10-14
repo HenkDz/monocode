@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Block } from "../model/session";
 import { AgentTranscript } from "./AgentTranscript";
+import { openTranscriptWork, openSubagentOutput } from "./transcriptTestActions";
 
 let container: HTMLDivElement;
 let root: Root;
@@ -114,7 +115,7 @@ describe("Mono transcript pages", () => {
 });
 
 describe("subagent scrolling", () => {
-  it("follows growing content to the bottom with only one live scroll window", () => {
+  it("preserves live output modal scroll position and focus with one scroll window", () => {
     const blocks: Block[] = [
       { id: "user", role: "user", text: "Investigate auth" },
       {
@@ -152,100 +153,37 @@ describe("subagent scrolling", () => {
     act(() =>
       root.render(createElement(AgentTranscript, { blocks, busy: true })),
     );
-    const button = container.querySelector<HTMLButtonElement>(
-      'button[aria-label="Show Auth review\'s work"]',
-    );
-    expect(button).not.toBeNull();
-    act(() => button!.click());
-    const scroller =
-      container.querySelector<HTMLDivElement>(".zen-phase-live")!;
+    expect(container.querySelectorAll('[data-flat-subagent]')).toHaveLength(0);
+    openTranscriptWork(container);
+    const reader = container.querySelector<HTMLButtonElement>('[data-flat-subagent] button')!;
+    const dialog = openSubagentOutput(container);
+    const scroller = dialog.querySelector<HTMLDivElement>('.overflow-y-auto')!;
     expect(scroller).not.toBeNull();
-    expect(scroller.parentElement?.closest(".zen-phase-live")).toBeNull();
-    let height = 600;
-    let top = 0;
-    Object.defineProperties(scroller, {
-      scrollHeight: { get: () => height },
-      clientHeight: { get: () => 280 },
-      scrollTop: {
-        get: () => top,
-        set: (value: number) => {
-          top = Math.max(0, Math.min(value, height - 280));
-        },
-      },
-    });
-    const observer = observers.find((item) =>
-      item.targets.includes(scroller.firstElementChild!),
-    )!;
-    expect(observer).toBeDefined();
-    act(() => observer.resize());
-    expect(top).toBe(320);
-    // A row expansion or a markdown layout change resizes this inner body.
-    height = 900;
-    act(() => observer.resize());
-    expect(top).toBe(620);
-
-    // A queued event from the last pin must not undo an upward wheel.
-    act(() => {
-      scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -4 }));
-      scroller.dispatchEvent(new Event("scroll"));
-    });
-    height = 940;
-    act(() => observer.resize());
-    expect(top).toBe(620);
-
-    act(() => {
-      top = 660;
-      scroller.dispatchEvent(new Event("scroll"));
-    });
-    height = 980;
-    act(() => observer.resize());
-    expect(top).toBe(700);
-
-    // A scrollbar move pauses following, including inside the end margin.
-    act(() => {
-      top = 696;
-      scroller.dispatchEvent(new Event("scroll"));
-    });
-    height = 1000;
-    act(() => observer.resize());
-    expect(top).toBe(696);
-
-    // Reading older work must pause automatic following.
-    act(() =>
-      scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 })),
-    );
-    top = 300;
-    height = 1100;
-    act(() => observer.resize());
+    expect(dialog.querySelectorAll('.overflow-y-auto')).toHaveLength(1);
+    expect(dialog.querySelectorAll('.zen-phase-live')).toHaveLength(0);
+    expect(dialog.textContent).toContain("Inspecting files.");
+    expect(dialog.querySelector('[data-mono-activity-block="step-7"]')).not.toBeNull();
+    let top = 300;
+    Object.defineProperty(scroller, 'scrollTop', { get: () => top, set: (value: number) => { top = value; } });
+    act(() => scroller.dispatchEvent(new WheelEvent('wheel', { deltaY: -100 })));
+    const close = dialog.querySelector<HTMLButtonElement>('[aria-label="Close"]')!;
+    close.focus();
+    const updated: Block[] = [blocks[0], { ...blocks[1], agentRun: { ...blocks[1].agentRun!, steps: [...blocks[1].agentRun!.steps, { id: "new", kind: "message", text: "New saved progress" }] } }];
+    act(() => root.render(createElement(AgentTranscript, { blocks: updated, busy: true })));
+    expect(document.querySelector('[role="dialog"]')).toBe(dialog);
+    expect(dialog.querySelector('.overflow-y-auto')).toBe(scroller);
     expect(top).toBe(300);
+    expect(document.activeElement).toBe(close);
+    expect(dialog.textContent).toContain("New saved progress");
+    const output = [...dialog.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === 'View full output')!;
+    act(() => output.click());
+    expect(document.querySelectorAll('[role="dialog"]')[1].textContent).toContain("Last line of output");
+    act(() => document.querySelectorAll('[role="dialog"]')[1].querySelector<HTMLButtonElement>('[aria-label="Close"]')!.click());
+    expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1);
+    act(() => close.click());
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.activeElement).toBe(reader);
 
-    act(() => {
-      top = 820;
-      scroller.dispatchEvent(new Event("scroll"));
-    });
-    height = 1140;
-    act(() => observer.resize());
-    expect(top).toBe(860);
-
-    // A resize can precede the scroll event from a manual upward move.
-    top = 856;
-    height = 1180;
-    act(() => observer.resize());
-    expect(top).toBe(856);
-
-    act(() => {
-      scroller.dispatchEvent(new Event("scroll"));
-      top = 900;
-      scroller.dispatchEvent(new Event("scroll"));
-      scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -4 }));
-      top = 896;
-      scroller.dispatchEvent(new Event("scroll"));
-      top = 898;
-      scroller.dispatchEvent(new Event("scroll"));
-    });
-    height = 1220;
-    act(() => observer.resize());
-    expect(top).toBe(898);
   });
 });
 

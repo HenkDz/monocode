@@ -39,6 +39,13 @@ describe("code-mode command labels", () => {
     ]) expect(codeModeCommand(code)).toBeUndefined();
   });
 
+  it("normalizes physical template CR/CRLF before escapes without changing escaped carriage returns", () => {
+    expect(codeModeCommand('await tools.exec_command({cmd: `echo first\r\necho second\recho third`});')).toBe("echo first\necho second\necho third");
+    expect(codeModeCommand('await tools.exec_command({cmd: `echo first\\r\\necho second`});')).toBe("echo first\r\necho second");
+    expect(codeModeCommand(String.raw`await tools.exec_command({cmd: "echo first\r\necho second"});`)).toBe("echo first\r\necho second");
+    expect(codeModeCommand('await tools.exec_command({cmd: `echo first\\\r\necho second`});')).toBe("echo firstecho second");
+  });
+
   it("shows the first meaningful line and keeps long commands specific", () => {
     expect(commandSummary("\n# setup\n// context\ncargo check --lib\ncargo test")).toBe("cargo check --lib");
     const command = `cargo check ${"--features abc ".repeat(50)}`;

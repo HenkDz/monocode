@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Block } from "../model/session";
 import { AgentTranscript, MonoActivityTrail } from "./AgentTranscript";
+import { openTranscriptWork } from "./transcriptTestActions";
 
 let container: HTMLDivElement;
 let root: Root;
@@ -48,6 +49,7 @@ describe("tool error disclosure", () => {
       root.render(createElement(AgentTranscript, { blocks, busy: true })),
     );
 
+    openTranscriptWork(container);
     const trigger = container.querySelector<HTMLButtonElement>(
       'button[aria-haspopup="dialog"]',
     );
@@ -94,6 +96,7 @@ describe("MonoCode CLI disclosure", () => {
       root.render(createElement(AgentTranscript, { blocks, busy: true })),
     );
 
+    openTranscriptWork(container);
     const row = container.querySelector<HTMLElement>(
       '[data-monocode-tool-call="notes.list"]',
     );
@@ -101,7 +104,7 @@ describe("MonoCode CLI disclosure", () => {
     expect(row?.querySelector("pre")).toBeNull();
     expect(row?.textContent).toContain("List notes");
     expect(row?.querySelector('img[src="/monocode.png"]')).not.toBeNull();
-    expect(container.textContent).not.toContain("Contents/MacOS/monocode");
+    expect(row?.textContent).not.toContain("Contents/MacOS/monocode");
     expect(container.textContent).not.toContain('"title":"Ideas"');
     act(() => row?.querySelector<HTMLButtonElement>("button")?.click());
     expect(document.querySelector('[role="dialog"]')?.textContent).toContain('"title":"Ideas"');
@@ -122,6 +125,7 @@ describe("MonoCode CLI disclosure", () => {
       root.render(createElement(AgentTranscript, { blocks, busy: true })),
     );
 
+    openTranscriptWork(container);
     const trigger = container.querySelector<HTMLButtonElement>(
       'button[aria-haspopup="dialog"]',
     );
@@ -165,6 +169,7 @@ describe("bare tool result rendering", () => {
     act(() => root.render(surface === "activity"
       ? createElement(MonoActivityTrail, { blocks, live: true, readOutput: true })
       : createElement(AgentTranscript, { blocks, busy: true })));
+    if (surface === "transcript") openTranscriptWork(container);
     expect(container.textContent).not.toContain('"ok":true');
     expect(container.textContent).not.toContain("Useful question");
     expect(container.textContent).not.toContain("team_sender");

@@ -5,6 +5,9 @@ import { AgentTranscript } from "../../src/features/sessions/ui/AgentTranscript"
 // @ts-expect-error Supplied by the browser fixture Vite plugin.
 import { AgentTranscript as BaselineAgentTranscript } from "virtual:cctx-baseline-transcript";
 import { QuestionForm } from "../../src/features/sessions/ui/QuestionForm";
+import { applyHarnessEvent } from "../../src/integrations/harness/core/apply";
+import { newSession } from "../../src/features/sessions/model/session";
+import { sanitizeSessionForPersist } from "../../src/features/sessions/data/sessionStore";
 import type {
   Block,
   HarnessId,
@@ -168,14 +171,16 @@ function Fixture() {
   );
   const [decision, setDecision] = useState<string>();
   const [answer, setAnswer] = useState<string>();
+  const [newSteps, setNewSteps] = useState(false);
   const running = scenario === "running" && !completed;
+  const waiting = scenario === "background";
   const blocks: Block[] = [
     {
       id: "atlas-request",
       role: "user",
       text: "Implement the browser destination catalog and dialog lifecycle changes.",
       startedAt: Date.now() - 111_000,
-      ...(!running && scenario !== "approval" && scenario !== "question"
+      ...(!running && !waiting && scenario !== "approval" && scenario !== "question"
         ? { durationMs: 111_000 }
         : {}),
     },
@@ -189,6 +194,18 @@ function Fixture() {
         : block,
     ),
   ];
+  if (scenario === "subagent") {
+    const saved = newSession("cursor", "/synthetic");
+    saved.blocks = [blocks[0], {
+      id: "saved-child", role: "tool", text: "Auth review",
+      tool: { kind: "agent", status: "completed", detail: "Saved review report" },
+      agentRun: { name: "Auth review", model: "grok-4.6", steps: Array.from({ length: 40 }, (_, index) => ({ id: `saved-step-${index}`, kind: "message", text: `Saved step ${index}: read retained source.` })) },
+    }];
+    const reloaded = JSON.parse(JSON.stringify(sanitizeSessionForPersist(saved))) as typeof saved;
+    if (newSteps) reloaded.blocks[1].agentRun!.steps.push({ id: "updated-step", kind: "message", text: "New saved progress" });
+    blocks.splice(0, blocks.length, ...reloaded.blocks);
+  }
+  const background = applyHarnessEvent(newSession("claude", "/synthetic"), { type: "background.updated", tasks: waiting ? ["Review", "Build"] : [] }).backgroundTasks;
   if (scenario === "approval")
     blocks.push({
       id: "atlas-approval",
@@ -251,16 +268,18 @@ function Fixture() {
             Complete synthetic turn
           </button>
         )}
+        {scenario === "subagent" && <button onClick={() => setNewSteps(true)}>Append synthetic saved progress</button>}
       </header>
       <section className="min-h-0 flex-1" aria-label="Atlas transcript">
         <Transcript
           blocks={blocks}
           busy={
-            running ||
+            running || waiting ||
             (scenario === "approval" && !decision) ||
             (scenario === "question" && !answer)
           }
           pendingQuestion={scenario === "question" && !answer}
+          backgroundTasks={background}
           harness={harness}
           agentName={surface === "task" ? undefined : "Atlas"}
           agentMascot={

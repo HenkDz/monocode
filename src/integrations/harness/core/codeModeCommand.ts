@@ -42,7 +42,8 @@ function decodeLiteral(literal: string): string | undefined {
   try {
     if (/\\(?:[1-9]|0\d)/.test(literal)) return undefined;
     let valid = true;
-    const text = literal.slice(1, -1).replace(/\\(\r?\n|u\{[0-9a-f]+\}|u[0-9a-f]{4}|x[0-9a-f]{2}|.)/gi, (_, escape: string) => {
+    const source = literal.startsWith("`") ? literal.slice(1, -1).replace(/\r\n?/g, "\n") : literal.slice(1, -1);
+    const text = source.replace(/\\(\r?\n|u\{[0-9a-f]+\}|u[0-9a-f]{4}|x[0-9a-f]{2}|.)/gi, (_, escape: string) => {
       if (/^\r?\n$/.test(escape)) return "";
       const simple: Record<string, string> = { n: "\n", r: "\r", t: "\t", b: "\b", f: "\f", v: "\v", "0": "\0" };
       if (simple[escape] != null) return simple[escape];

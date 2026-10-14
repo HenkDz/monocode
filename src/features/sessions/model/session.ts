@@ -286,6 +286,8 @@ export type QueuedMessage = {
   noteCard?: NoteComposerCard;
   handoffCard?: HandoffComposerCard;
   intent?: TurnIntent;
+  /** Explicit composer choice; absent retains legacy automatic Mono follow-ups. */
+  followUpBehavior?: "queue" | "steer";
   /** An app notification that must wait for an idle Mono, never steer its work. */
   monoSessionCompletion?: MonoSessionCompletion;
   /** Delivery failed; the message remains available to retry or edit. */

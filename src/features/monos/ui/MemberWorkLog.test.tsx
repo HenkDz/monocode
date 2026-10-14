@@ -128,7 +128,7 @@ it("links task reports, reviews and PR summaries while keeping artifact reports 
     expect(openCardSession).toHaveBeenCalledWith(task.sessionId);
     await act(async () => root.render(<WorkbenchTask task={task} />));
     expect(
-      document.querySelector('[role="dialog"] .mono-run-report'),
+      container.querySelector('.mono-run-report'),
     ).toBeNull();
     expect(
       container.querySelectorAll('[data-org-artifact]'),

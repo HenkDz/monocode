@@ -270,6 +270,7 @@ const host: any = {
   setMonoTeamRequest: noop,
   setMonoActivity: noop,
   setMonoSessions: noop,
+  setMonoShownSessionFocused: noop,
   setProjectTerminalFocused: noop,
   setComposerFocused: noop,
   setComposerFocusToken: noop,

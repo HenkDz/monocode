@@ -29,7 +29,8 @@ export function memberTasks(runs: readonly OrchestrationRun[], memberId: string)
 }
 
 /** A saved worker keeps its dispatch's status and worktree after the task is retried. */
-export function workbenchSessionTask(runs: readonly OrchestrationRun[], sessionId: string): OrchestrationTask | undefined {
+export type WorkbenchSessionTask = OrchestrationTask & { historical?: boolean };
+export function workbenchSessionTask(runs: readonly OrchestrationRun[], sessionId: string): WorkbenchSessionTask | undefined {
   const current = runs.flatMap(run => run.tasks).find(task => task.sessionId === sessionId && task.memberId);
   if (current) return current;
   for (const run of runs) {
@@ -40,6 +41,11 @@ export function workbenchSessionTask(runs: readonly OrchestrationRun[], sessionI
       : dispatch.state === "start_unknown" || dispatch.state === "stop_unknown" ? "interrupted" : dispatch.state;
     return {
       ...task, sessionId, workspace: dispatch.workspace, status,
+      historical: true, prompt: "", result: dispatch.result ?? "",
+      checkoutBaseline: dispatch.checkoutBaseline,
+      reportArtifactId: undefined, reviewArtifactId: undefined,
+      reviewVerdict: undefined, prSummaryArtifactId: undefined, prUrl: undefined,
+      readOnly: undefined, readOnlyFallback: undefined,
       error: dispatch.error ?? dispatch.cleanupError,
       accepted: !!task.accepted && task.acceptedDispatchId === dispatch.id,
       activeDispatchId: undefined, lastDispatchId: dispatch.id,

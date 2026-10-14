@@ -4296,13 +4296,19 @@ function Workspace({
     tabVisitFromHistoryRef.current = true;
     commitTabVisit(next);
     if (monoForSession(next.current)?.role === "member") {
+      workspaceSessionRequest.current++;
+      workspaceNavigation.cancel();
+      monoViewRequest.current++;
       monoViewIdRef.current = next.current;
       setMonoViewId(next.current);
       setMonoActivity(null);
       setMonoSessions(null);
+      setMonoShownSessionFocused(false);
+      setProjectTerminalFocused(false);
       setComposerFocused(true);
+      setComposerFocusToken((token) => token + 1);
     } else activateTab(next.current);
-  }, [activateTab, commitTabVisit]);
+  }, [activateTab, commitTabVisit, workspaceNavigation.cancel]);
 
   const onVisitForward = useCallback(() => {
     if (monoViewIdRef.current && monoForSession(monoViewIdRef.current)?.role !== "member") {
@@ -4320,13 +4326,19 @@ function Workspace({
     tabVisitFromHistoryRef.current = true;
     commitTabVisit(next);
     if (monoForSession(next.current)?.role === "member") {
+      workspaceSessionRequest.current++;
+      workspaceNavigation.cancel();
+      monoViewRequest.current++;
       monoViewIdRef.current = next.current;
       setMonoViewId(next.current);
       setMonoActivity(null);
       setMonoSessions(null);
+      setMonoShownSessionFocused(false);
+      setProjectTerminalFocused(false);
       setComposerFocused(true);
+      setComposerFocusToken((token) => token + 1);
     } else activateTab(next.current);
-  }, [activateTab, commitTabVisit]);
+  }, [activateTab, commitTabVisit, workspaceNavigation.cancel]);
 
   const onActivate = useCallback(
     (slot: number) => {
@@ -7871,6 +7883,7 @@ function Workspace({
                   noteCard,
                   handoffCard,
                   intent,
+                  followUpBehavior: options?.followUpBehavior,
                   appRequestId: options?.appRequestId,
                 },
                 rawCommand ? undefined : userTurnCards(noteCard),
@@ -7889,6 +7902,7 @@ function Workspace({
         );
         if (
           !message ||
+          options.followUpBehavior === "queue" ||
           !canSteerQueuedHead(current) ||
           !canSteerHarness(current.harness) ||
           operatorCommand.matched
@@ -7993,13 +8007,13 @@ function Workspace({
             : // The agent has yielded and only background work is left, which
               // may never end (a dev server). Queuing would park the message
               // behind it, so hand it to the agent now.
-              current.backgroundTasks?.length
+              options?.followUpBehavior ?? (current.backgroundTasks?.length
               ? "steer"
               : // Messaging a Mono mid-reply is like texting a friend twice:
                 // it reads the new message now, or right after if it can't.
                 mono
-                ? (options?.followUpBehavior ?? (steerable ? "steer" : "queue"))
-                : (options?.followUpBehavior ?? loadFollowUpBehavior());
+                ? (steerable ? "steer" : "queue")
+                : loadFollowUpBehavior());
         if (followUpBehavior === "queue") {
           setSessions((prev) =>
             prev.map((s) =>
@@ -9894,6 +9908,7 @@ function Workspace({
         !(
           canDispatchQueuedHead(session) ||
           (monoForSession(session.id) &&
+            queued[0].followUpBehavior !== "queue" &&
             canSteerQueuedHead(session) &&
             canSteerHarness(session.harness) &&
             !consumeOperatorCommand(queued[0].text).matched)
@@ -9923,6 +9938,7 @@ function Workspace({
             !(
               canDispatchQueuedHead(latest) ||
               (monoForSession(latest.id) &&
+                head.followUpBehavior !== "queue" &&
                 canSteerQueuedHead(latest) &&
                 canSteerHarness(latest.harness) &&
                 !consumeOperatorCommand(head.text).matched)

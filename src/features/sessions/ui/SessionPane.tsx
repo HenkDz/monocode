@@ -624,17 +624,6 @@ const LocalSessionPane = memo(function LocalSessionPane({
     return () => { current = false; };
   }, [checkout, visible, session.id]);
   useEffect(() => {
-    if (!workbench) return;
-    const origin = workbenchOrigin.current;
-    const dock = origin?.querySelector<HTMLElement>("[data-session-composer]");
-    if (!origin || !dock) return;
-    const measure = () => origin.style.setProperty("--ccwb1-composer-height", `${dock.getBoundingClientRect().height + 12}px`);
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(dock);
-    return () => observer.disconnect();
-  }, [workbench, session.id]);
-  useEffect(() => {
     if (!workOpen) return;
     workClose.current?.focus();
     return () => workToggle.current?.focus();
@@ -960,6 +949,17 @@ const LocalSessionPane = memo(function LocalSessionPane({
     remoteSessionLoading ||
     (!draftBlock && (!isEmpty || inSplit || !!session.inboxAsk || !!agent || workbench));
   const composerDockMotion = useComposerDockMotion(dockComposer);
+  useEffect(() => {
+    if (!workbench) return;
+    const origin = workbenchOrigin.current;
+    const dock = origin?.querySelector<HTMLElement>("[data-session-composer]");
+    if (!origin || !dock) return;
+    const measure = () => origin.style.setProperty("--ccwb1-composer-height", `${dock.getBoundingClientRect().height + 12}px`);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(dock);
+    return () => observer.disconnect();
+  }, [workbench, session.id, dockComposer]);
   const draftRef = useRef<string | undefined>(getComposerDraft(session.id));
   const [composerDraft, setComposerDraftText] = useState(
     () =>

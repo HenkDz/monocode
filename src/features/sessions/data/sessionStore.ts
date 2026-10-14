@@ -336,6 +336,8 @@ function sanitizeQueuedMessages(value: unknown): QueuedMessage[] {
         attachments,
         ...(noteCard ? { noteCard } : {}),
         ...(handoffCard ? { handoffCard } : {}),
+        ...(message.followUpBehavior !== undefined
+          ? { followUpBehavior: message.followUpBehavior === "steer" ? "steer" as const : "queue" as const } : {}),
         ...(completion ? { monoSessionCompletion: completion } : {}),
         ...(["default", "plan", "build", "orchestrate"].includes(
           message.intent ?? "",

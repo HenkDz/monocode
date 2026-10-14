@@ -2,13 +2,13 @@ import { useId, useState } from "react";
 import { ChevronDown } from "../../../shared/ui/icons";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { projectName } from "../../../shared/lib/paths";
-import type { OrchestrationTask } from "../../orchestration/model/orchestrationState";
+import type { WorkbenchSessionTask } from "../model/monoNavigation";
 import { OrgArtifactLinks } from "../../artifacts/ui/OrgArtifactLinks";
 import { AgentMarkdown } from "../../sessions/ui/AgentMarkdown";
 import { TranscriptError } from "../../sessions/ui/TranscriptError";
 import { presentationText } from "../../sessions/model/transcriptPresentation";
 
-export function WorkbenchTask({ task }: { task: OrchestrationTask }) {
+export function WorkbenchTask({ task }: { task: WorkbenchSessionTask }) {
   const [expanded, setExpanded] = useState(false);
   const id = useId();
   const [prError, setPrError] = useState<string>();
@@ -34,20 +34,24 @@ export function WorkbenchTask({ task }: { task: OrchestrationTask }) {
           )}
         </div>
         <p id={id} data-expanded={expanded}>
-          {presentationText(task.prompt)}
+          {task.historical
+            ? "Brief and artifacts for this previous dispatch were not saved."
+            : presentationText(task.prompt)}
         </p>
-        <button
-          type="button"
-          aria-expanded={expanded}
-          aria-controls={id}
-          onClick={() => setExpanded(!expanded)}
-        >
-          <span>
-            {expanded ? "Show less" : "Show full brief"}
-            <small>Scope, constraints and deliverables</small>
-          </span>
-          <ChevronDown className={`size-4 ${expanded ? "rotate-180" : ""}`} />
-        </button>
+        {!task.historical && (
+          <button
+            type="button"
+            aria-expanded={expanded}
+            aria-controls={id}
+            onClick={() => setExpanded(!expanded)}
+          >
+            <span>
+              {expanded ? "Show less" : "Show full brief"}
+              <small>Scope, constraints and deliverables</small>
+            </span>
+            <ChevronDown className={`size-4 ${expanded ? "rotate-180" : ""}`} />
+          </button>
+        )}
       </section>
       {task.error &&
         ["failed", "blocked", "interrupted"].includes(task.status) && (
@@ -63,7 +67,8 @@ export function WorkbenchTask({ task }: { task: OrchestrationTask }) {
         task.prSummaryArtifactId) && (
         <section className="ccwb1-report" aria-label="Task report">
           <h3>Report</h3>
-          {["queued", "running", "cancelling"].includes(task.status) && (
+          {(task.historical ||
+            ["queued", "running", "cancelling"].includes(task.status)) && (
             <p className="text-content/60 text-[10px]">Previous dispatch</p>
           )}
           {task.result && !task.reportArtifactId && (

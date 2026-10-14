@@ -1,7 +1,7 @@
 import { defineConfig } from "@playwright/test";
 export default defineConfig({
   testDir: "./tests/browser",
-  testMatch: ["ccwb1-workbench.spec.ts", "cc7u-workbench.spec.ts"],
+  testMatch: ["ccwb1-workbench.spec.ts", "cc7u-workbench.spec.ts", "ccwb1f-workbench.spec.ts"],
   workers: 1,
   outputDir: process.env.CCWB1_OUTPUT ?? "test-results/ccwb1",
   use: {

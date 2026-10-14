@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Block } from "../model/session";
 import { AgentTranscript } from "./AgentTranscript";
+import { openTranscriptWork } from "./transcriptTestActions";
 
 let container: HTMLDivElement, root: Root;
 beforeEach(() => {
@@ -133,23 +134,28 @@ it.each([true, false])(
         draft: true,
       }),
     );
+    expect(container.textContent).not.toContain("I will inspect the native path.");
+    openTranscriptWork(container);
     expect(container.textContent).toContain("I will inspect the native path.");
     expect(container.textContent).toContain("The native checks passed.");
   },
 );
 
 it.each([true, false])(
-  "shows preliminary prose, tools and output readers immediately in flat mode (Mono chrome: %s)",
+  "opens folded preliminary prose, tools and output readers in flat mode (Mono chrome: %s)",
   (inlineWork) => {
     render(work, { inlineWork, flatWork: true });
+    expect(workDisclosures()).toHaveLength(1);
+    expect(container.textContent).not.toContain("I will inspect the native path.");
+    openTranscriptWork(container);
     for (const text of [
       "I will inspect the native path.",
       "Checking the retained checkout next.",
       "The native checks passed.",
     ])
       expect(container.textContent).toContain(text);
-    expect(workDisclosures()).toHaveLength(0);
-    const tool = container.querySelector('[data-mono-activity-block="probe"]');
+    expect(workDisclosures()).toHaveLength(1);
+    const tool = container.querySelector('[data-compact-tool-call="probe"]');
     expect(tool).not.toBeNull();
     const output = [
       ...tool!.querySelectorAll<HTMLButtonElement>("button"),
@@ -172,7 +178,7 @@ it.each([true, false])(
 );
 
 it.each([true, false])(
-  "shows streamed preliminary prose and tools while flat work is still running (Mono chrome: %s)",
+  "opens folded streamed preliminary prose and tools while work is still running (Mono chrome: %s)",
   (inlineWork) => {
     render(
       [
@@ -197,19 +203,21 @@ it.each([true, false])(
       ],
       { inlineWork, flatWork: true, busy: true },
     );
+    expect(container.textContent).not.toContain("Starting the native inspection.");
+    openTranscriptWork(container);
     expect(container.textContent).toContain("Starting the native inspection.");
     expect(container.textContent).toContain(
       "The native inspection is still running.",
     );
     expect(
-      container.querySelector('[data-mono-activity-block="probe"]'),
+      container.querySelector('[data-compact-tool-call="probe"]'),
     ).not.toBeNull();
-    expect(workDisclosures()).toHaveLength(0);
+    expect(workDisclosures()).toHaveLength(1);
   },
 );
 
 it.each([true, false])(
-  "keeps a saved delegated run's output reachable without a work disclosure (Mono chrome: %s)",
+  "keeps a saved delegated run's output reachable through folded work (Mono chrome: %s)",
   (inlineWork) => {
     render(
       [
@@ -256,7 +264,8 @@ it.each([true, false])(
         'button[aria-label="Show Correctness review\'s work"], button[aria-label="Hide Correctness review\'s work"]',
       ),
     ).toBeNull();
-    expect(workDisclosures()).toHaveLength(0);
+    expect(workDisclosures()).toHaveLength(1);
+    openTranscriptWork(container);
     const reader = [
       ...container.querySelectorAll<HTMLButtonElement>("button"),
     ].find((button) => button.textContent === "View full output");
@@ -319,6 +328,7 @@ it.each([true, false])(
       ],
       { inlineWork, flatWork: true },
     );
+    openTranscriptWork(container);
     expect(container.textContent).toContain("Inspect source");
     expect(container.textContent).not.toContain("First saved output line");
     const reader = [
@@ -333,7 +343,7 @@ it.each([true, false])(
 );
 
 it.each([true, false])(
-  "keeps existing collapsed-work defaults when flat mode is omitted or false (Mono chrome: %s)",
+  "keeps the same collapsed-work default regardless of flat mode (Mono chrome: %s)",
   (inlineWork) => {
     render(work, { inlineWork });
     const original = container.textContent;
@@ -341,12 +351,12 @@ it.each([true, false])(
     expect(container.textContent).not.toContain(
       "Checking the retained checkout next.",
     );
-    if (!inlineWork) expect(disclosures).toBe(1);
+    expect(disclosures).toBe(1);
     render(work, { inlineWork, flatWork: false });
     expect(container.textContent).toBe(original);
     expect(workDisclosures()).toHaveLength(disclosures);
     render(work, { inlineWork, flatWork: true });
-    expect(container.textContent).toContain(
+    expect(container.textContent).not.toContain(
       "Checking the retained checkout next.",
     );
     render(work, { inlineWork, flatWork: false });
@@ -480,7 +490,7 @@ it.each(["pending", "paused", "failed", "storage-blocked"] as const)(
     expect(container.querySelectorAll("[data-transcript-turn]")).toHaveLength(
       1,
     );
-    expect(workDisclosures()).toHaveLength(0);
+    expect(workDisclosures()).toHaveLength(1);
     if (status === "failed") {
       const retry = [
         ...followUp.querySelectorAll<HTMLButtonElement>("button"),

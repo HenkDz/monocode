@@ -504,6 +504,7 @@ export function mergeToolPreview(
             ? undefined
             : prev.lines,
     output: next.output || prev.output,
+    rawInput: next.rawInput ?? prev.rawInput,
   };
 }
 
@@ -1031,7 +1032,7 @@ function commandField(value: unknown): string | undefined {
 function firstLine(value: string | undefined): string {
   const text = value?.trim() ?? "";
   if (!text) return "";
-  return text.split(/\r?\n/)[0]?.trim() ?? "";
+  return text.split(/\r?\n/).map((line) => line.trim()).find((line) => line && !/^(?:#|\/\/)/.test(line)) ?? "";
 }
 
 function stripExecutePrefix(title: string): string {

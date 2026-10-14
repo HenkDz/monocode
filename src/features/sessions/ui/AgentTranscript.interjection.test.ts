@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Block } from "../model/session";
 import { AgentTranscript } from "./AgentTranscript";
+import { openTranscriptWork } from "./transcriptTestActions";
 
 let container: HTMLDivElement;
 let root: Root;
@@ -51,6 +52,8 @@ function render(text: string, severity: "blocker" | "concern" = "concern") {
     interjection: { customType: "advisor", severity },
   }];
   act(() => root.render(createElement(AgentTranscript, { blocks, busy: true })));
+  expect(container.querySelector("pre")).toBeNull();
+  openTranscriptWork(container);
 }
 
 const note = "Check the fallback.\n```ts\nconst result = read();\nif (!result) throw new Error('missing');\n```";
@@ -61,18 +64,18 @@ describe("AgentTranscript interjection preview", () => {
     expect(container.querySelector("pre")?.classList.contains("line-clamp-2")).toBe(true);
     expect(container.querySelector("pre")?.textContent).toBe(note);
     expect(container.querySelector('[aria-label="Interjection: Advisor"]')?.textContent).toContain("Blocker");
-    expect(container.querySelector("button")?.getAttribute("aria-expanded")).toBe("false");
+    expect(container.querySelector('[data-transcript-work-details] button[aria-expanded]')?.getAttribute("aria-expanded")).toBe("false");
   });
 
   it("expands and reclamps without losing the collapse control", () => {
     render(note);
-    const button = container.querySelector<HTMLButtonElement>("button")!;
+    const button = container.querySelector<HTMLButtonElement>('[data-transcript-work-details] button[aria-expanded]')!;
     act(() => button.click());
     expect(button.getAttribute("aria-expanded")).toBe("true");
     expect(container.querySelector("pre")?.classList.contains("line-clamp-2")).toBe(false);
     expect(container.querySelector("pre")?.textContent).toBe(note);
     act(() => resize());
-    expect(container.querySelector("button")).toBe(button);
+    expect(container.querySelector('[data-transcript-work-details] button[aria-expanded]')).toBe(button);
     act(() => button.click());
     expect(button.getAttribute("aria-expanded")).toBe("false");
     expect(container.querySelector("pre")?.classList.contains("line-clamp-2")).toBe(true);
@@ -81,16 +84,16 @@ describe("AgentTranscript interjection preview", () => {
   it("omits the toggle for fitting text and remeasures when the transcript reflows", () => {
     bodyHeight = 20;
     render("Check this.");
-    expect(container.querySelector("button")).toBeNull();
+    expect(container.querySelector('[data-transcript-work-details] button[aria-expanded]')).toBeNull();
     bodyHeight = 60;
     act(() => resize());
-    expect(container.querySelector("button")?.getAttribute("aria-expanded")).toBe("false");
+    expect(container.querySelector('[data-transcript-work-details] button[aria-expanded]')?.getAttribute("aria-expanded")).toBe("false");
     bodyHeight = 40;
     act(() => resize());
-    expect(container.querySelector("button")).toBeNull();
+    expect(container.querySelector('[data-transcript-work-details] button[aria-expanded]')).toBeNull();
   });
 
-  it("settles into the work trail as one compact line that opens to the full note", () => {
+  it("keeps the settled advisor label and full note reachable inside work", () => {
     const blocks: Block[] = [{
       id: "advisor",
       role: "system",
@@ -100,18 +103,16 @@ describe("AgentTranscript interjection preview", () => {
     act(() =>
       root.render(createElement(AgentTranscript, { blocks, busy: false })),
     );
-    // No divider, no clamped body: one line in the trail, named and
-    // severity-marked, that opens on a click.
-    expect(container.querySelector('[role="separator"]')).toBeNull();
-    const button = container.querySelector<HTMLButtonElement>(
-      'button[aria-expanded="false"]',
-    )!;
-    expect(button).not.toBeNull();
-    expect(button.textContent).toContain("Advisor");
-    expect(button.textContent).toContain("Concern");
-    expect(button.textContent).toContain("Check the fallback.");
+    openTranscriptWork(container);
+    const label = container.querySelector('[aria-label="Interjection: Advisor"]')!;
+    expect(label.textContent).toContain("Advisor");
+    expect(label.textContent).toContain("Concern");
+    expect(container.querySelector("pre")?.textContent).toBe(note);
+    const button = container.querySelector<HTMLButtonElement>('[data-transcript-work-details] button[aria-expanded]')!;
+    expect(button.getAttribute("aria-expanded")).toBe("false");
     act(() => button.click());
     expect(button.getAttribute("aria-expanded")).toBe("true");
     expect(container.querySelector("pre")?.textContent).toBe(note);
+
   });
 });

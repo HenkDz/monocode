@@ -16,6 +16,7 @@ import {
 import { sanitizeSessionForPersist } from "../data/sessionStore";
 import { newSession, type Block } from "../model/session";
 import { AgentTranscript } from "./AgentTranscript";
+import { openTranscriptWork } from "./transcriptTestActions";
 
 vi.mock("../../../platform/tauri/clipboard", () => ({
   copyMessage: vi.fn().mockResolvedValue(undefined),
@@ -99,7 +100,7 @@ it("gives a standalone habit report its mascot, name, posting time and response 
   const turn = container.querySelector('[data-transcript-turn="report"]')!;
   expect(turn.querySelector(".pixel-mascot")).not.toBeNull();
   expect(turn.textContent).toContain("Captain Awesome");
-  expect(turn.textContent!.indexOf("Captain Awesome")).toBeLessThan(
+  expect(turn.textContent!.indexOf("Captain Awesome")).toBeGreaterThan(
     turn.textContent!.indexOf(report.text),
   );
   expect(turn.querySelector("[data-day-separator]")).not.toBeNull();
@@ -167,10 +168,12 @@ it.each(["current", "older"])(
     render(sanitizeSessionForPersist(session).blocks);
     const turns = container.querySelectorAll("[data-transcript-turn]");
     expect(turns).toHaveLength(1);
+    expect(turns[0].textContent).not.toContain("I have started the review.");
+    openTranscriptWork(container);
     expect(turns[0].textContent).toContain("I have started the review.");
     expect(turns[0].textContent).toContain("The API fix passed all tests.");
     expect(
-      turns[0].querySelectorAll("[data-mono-work]"),
+      turns[0].querySelectorAll("[data-transcript-turn-work]"),
     ).toHaveLength(1);
     expect(container.textContent).not.toContain(notification.text);
     expect(session.queuedMessages).toBeUndefined();
@@ -262,11 +265,9 @@ it.each(["current", "older"])(
     )!;
     expect(completionTurn).not.toBeNull();
     expect(
-      completionTurn.querySelector('[role="status"]')?.textContent,
-    ).toContain("Thinking…");
-    expect(
-      completionTurn.querySelector("[data-mono-work]")?.textContent,
-    ).toContain("Captain Awesome");
+      completionTurn.querySelector('.compact-current-action')?.textContent,
+    ).toContain("Thinking");
+    expect(completionTurn.querySelector(".compact-work-spinner")).not.toBeNull();
     const events = [
       { type: "reasoning.delta", text: "Checking the session report" },
       {
@@ -329,12 +330,8 @@ it("keeps a posted report actionable while the conversation is still running", a
   );
   const chat = container.querySelector('[data-transcript-turn="user"]')!;
   const habit = container.querySelector('[data-transcript-turn="report"]')!;
-  expect(chat.querySelector("[data-mono-work]")?.textContent).toContain(
-    "Captain Awesome",
-  );
-  expect(chat.querySelector('[role="status"]')?.textContent).toContain(
-    "Thinking…",
-  );
+  expect(chat.querySelector(".compact-work-spinner")).not.toBeNull();
+  expect(chat.querySelector(".compact-current-action")?.textContent).toBe("I am investigating.");
   expect(chat.textContent).not.toContain(report.text);
   expect(habit.querySelector('[role="status"]')).toBeNull();
   await act(async () => {

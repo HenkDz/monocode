@@ -256,11 +256,10 @@ pub(super) fn retain_file(
     let mut original = {
         use std::os::windows::fs::OpenOptionsExt;
         use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_DELETE, FILE_SHARE_READ};
-        std::fs::OpenOptions::new()
+        storage_io::run("open resumed rollout excluding writers", source, || std::fs::OpenOptions::new()
             .read(true)
             .share_mode(FILE_SHARE_READ | FILE_SHARE_DELETE)
-            .open(source)
-            .map_err(|e| e.to_string())?
+            .open(source))?
     };
     #[cfg(unix)]
     let mut original = std::fs::File::open(source).map_err(|e| e.to_string())?;

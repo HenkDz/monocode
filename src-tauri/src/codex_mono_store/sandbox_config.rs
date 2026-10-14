@@ -309,7 +309,7 @@ fn change_configs(source: &Path, home: &Path) -> Result<SandboxConfigChange, Str
     if let Some(staged) = staged {
         staged.cleanup(&temp)?;
     } else if temp.exists() {
-        std::fs::remove_file(&temp).map_err(|error| error.to_string())?;
+        super::storage_io::run("remove private config stage", &temp, || std::fs::remove_file(&temp))?;
     }
     result.map_err(|error: String| {
         let saved = if backups.is_empty() {

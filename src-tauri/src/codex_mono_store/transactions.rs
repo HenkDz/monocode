@@ -471,6 +471,7 @@ fn stage_on_close(file: &std::fs::File, delete: bool) -> Result<(), String> {
                 0
             },
     };
+    storage_io::run("set journal retirement on close", &storage_io::handle_path(file), || {
     if unsafe {
         SetFileInformationByHandle(
             file.as_raw_handle() as _,
@@ -480,9 +481,10 @@ fn stage_on_close(file: &std::fs::File, delete: bool) -> Result<(), String> {
         )
     } == 0
     {
-        return Err(std::io::Error::last_os_error().to_string());
+        return Err(std::io::Error::last_os_error());
     }
     Ok(())
+    })
 }
 
 #[cfg(windows)]
@@ -505,6 +507,7 @@ fn stage_delete_pending(file: &std::fs::File, delete: bool) -> Result<(), String
             0
         },
     };
+    storage_io::run("set journal retirement disposition", &storage_io::handle_path(file), || {
     if unsafe {
         SetFileInformationByHandle(
             file.as_raw_handle() as _,
@@ -514,9 +517,10 @@ fn stage_delete_pending(file: &std::fs::File, delete: bool) -> Result<(), String
         )
     } == 0
     {
-        return Err(std::io::Error::last_os_error().to_string());
+        return Err(std::io::Error::last_os_error());
     }
     Ok(())
+    })
 }
 
 fn matches_record(path: &Path, entry: &RecordedEntry) -> Result<bool, String> {
@@ -548,7 +552,7 @@ fn remove_staged(path: &Path, expected: &RecordedEntry) -> Result<(), String> {
     {
         std::fs::remove_dir(path).map_err(|e| e.to_string())
     } else {
-        std::fs::remove_file(path).map_err(|e| e.to_string())
+        storage_io::run("remove verified stage", path, || std::fs::remove_file(path))
     }
 }
 
@@ -663,7 +667,7 @@ fn retire_metadata(_path: &Path, file: &std::fs::File) -> Result<(), String> {
                 &[_path.into()],
             ));
         }
-        std::fs::remove_file(_path).map_err(|e| e.to_string())
+        storage_io::run("retire verified journal", _path, || std::fs::remove_file(_path))
     }
 }
 
@@ -1228,6 +1232,7 @@ fn reconcile_journal(home: &Path, journal: ClaimJournal) -> Result<(), String> {
 }
 
 pub(super) fn reconcile(home: &Path) -> Result<(), String> {
+    let mut deferred_claims = HashSet::new();
     let mut directories = vec![home.to_path_buf()];
     if exists(&home.join(".monocode-links"))? {
         directories.push(private_directory(home, ".monocode-links")?);
@@ -1266,7 +1271,11 @@ pub(super) fn reconcile(home: &Path) -> Result<(), String> {
                     )
                 })
             })?;
-            reconcile_journal(home, journal).map_err(|error| {
+            let optional = matches!(journal.transaction.intent, ClaimIntent::Relink | ClaimIntent::UseAccount)
+                && !required_entry(&journal.transaction.entry) && !private_entry(&journal.transaction.entry);
+            let name = journal.transaction.entry.clone();
+            let claim = journal.transaction.claim.name.clone();
+            let result = reconcile_journal(home, journal).map_err(|error| {
                 if error.starts_with('{') {
                     error
                 } else {
@@ -1275,13 +1284,18 @@ pub(super) fn reconcile(home: &Path) -> Result<(), String> {
                         &[path.clone()],
                     )
                 }
-            })?;
+            });
+            if let Err(error) = result {
+                if !optional || !storage_io::sharing(&error) { return Err(error); }
+                storage_io::defer(home, &name, &error)?;
+                deferred_claims.insert(claim);
+            }
         }
         for path in entries.iter().filter(|path| {
             path.file_name()
                 .is_some_and(|n| n.to_string_lossy().starts_with(".monocode-claim-"))
         }) {
-            if exists(path)? {
+            if exists(path)? && !path.file_name().is_some_and(|name| deferred_claims.contains(name.to_string_lossy().as_ref())) {
                 return Err(recovery("An unlabelled legacy claim was preserved. Its original filename is unknown; inspect it before retrying.", &[path.clone()]));
             }
         }

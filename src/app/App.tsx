@@ -1,4 +1,6 @@
 import { selectCodexStorageHome } from "../features/monos/model/monoCodexHomes";
+import { canAutomaticallyRepairCodexStorage } from "../features/monos/model/monoCodexStorage";
+import { useCodexStorageLockRecovery } from "./hooks/useCodexStorageLockRecovery";
 import { sessionConversationPage } from "../features/agent-app/model/sessionConversation";
 import { selectTaskMetrics } from "../features/agents/model/agentMetrics";
 import { captureTurnEvent, isFirstTokenEvent } from "../features/agents/model/turnMetrics";
@@ -10277,9 +10279,10 @@ function Workspace({
     if (next.providerSessionId) bindHarnessSession("codex", session.id, next.providerSessionId, sessionWorkCwd(next), accountId);
   }, []);
 
-  const onCodexStorageRepair = useCallback(async (sessionId: string, resolution?: CodexStorageResolution): Promise<void> => {
+  const onCodexStorageRepair = useCallback(async (sessionId: string, resolution?: CodexStorageResolution, automatic = false): Promise<void> => {
     const session = sessionsRef.current.find(entry => entry.id === sessionId);
     if (!session) throw new Error("The conversation is no longer available. Reopen it before repairing Codex storage.");
+    if (automatic && !canAutomaticallyRepairCodexStorage(session)) return;
     if (session.busy) throw new Error("The conversation is busy. Wait for its current turn to finish, then try Repair again.");
     if (remoteProjectFor(session.cwd)) throw new Error("Repair this sandbox on its remote host.");
     const accountId = codexStorageAccountId(session, selectedProviderAccountId("codex", session.cwd));
@@ -10325,7 +10328,7 @@ function Workspace({
     if (resolution === "use_mono_full_access" && session.readOnly) throw new Error("Read-only investigations must retain their filesystem restrictions.");
     if (resolution === "use_mono_full_access" && !codexFullAccessRepairAllowed(session)) throw new Error("Plan and orchestrate messages must retain their sandbox restrictions. Use the unelevated sandbox instead.");
     if (resolution === "use_unelevated_sandbox" && session.windowsSandbox === "elevated") throw new Error("This Mono is set to Elevated. In Permissions, change Sandbox engine to Default or Unelevated, then retry its held message.");
-    const affectedIds = resolution === "use_mono_full_access" || sourceChoice ? [sessionId] : sessionsRef.current.filter(entry => entry.harness === "codex" && !entry.codexHomeThreadsUnresolved && (entry.codexStorageError || entry.codexStoragePreparing) &&
+    const affectedIds = automatic || resolution === "use_mono_full_access" || sourceChoice ? [sessionId] : sessionsRef.current.filter(entry => entry.harness === "codex" && !entry.codexHomeThreadsUnresolved && (entry.codexStorageError || entry.codexStoragePreparing) &&
       !remoteProjectFor(entry.cwd) && codexStorageAccountId(entry, selectedProviderAccountId("codex", entry.cwd)) === accountId).map(entry => entry.id);
     if (!affectedIds.includes(sessionId)) affectedIds.push(sessionId);
     try {
@@ -10412,6 +10415,14 @@ function Workspace({
         }
       };
       const beforeResume = (resumingId: string) => {
+        if (automatic) {
+          const current = sessionsRef.current.find(entry => entry.id === resumingId);
+          if (!current || !canAutomaticallyRepairCodexStorage(current) || turnGen.current.get(resumingId) !== sourceGeneration ||
+            current.providerAccountId !== session.providerAccountId || current.codexStorageHeld !== session.codexStorageHeld ||
+            current.codexStorageError !== session.codexStorageError || current.queuedMessages?.[0]?.id !== session.queuedMessages?.[0]?.id ||
+            selectedProviderAccountId("codex", current.cwd) !== selectedAccountId || codexStorageAccountId(current, selectedAccountId) !== accountId)
+            throw new Error("The conversation changed during automatic storage recovery; its messages remain held.");
+        }
         if (sessionsRef.current.find(entry => entry.id === resumingId)?.codexHomeThreadsUnresolved)
           throw new Error("Preserve the stored provider thread map before resuming this conversation.");
         if (!affectedIds.includes(resumingId)) affectedIds.push(resumingId);
@@ -10419,7 +10430,7 @@ function Workspace({
         flushSync(() => setSessions(previous => previous.map(entry => entry.id === resumingId
           ? { ...entry, codexStorageError: undefined, codexStorageHeld: undefined, codexStoragePreparing: true } : entry)));
       };
-      if (resolution === "use_mono_full_access") {
+      if (automatic || resolution === "use_mono_full_access") {
         await codexStorageRecovery.current.repair(sessionId, async () => { await relink(); beforeResume(sessionId); });
       } else {
         await codexStorageRecovery.current.repairAccount(accountId, affectedIds, relink, beforeResume);
@@ -10429,6 +10440,7 @@ function Workspace({
       setCodexStorageRepaired(true);
     } catch (error) {
       const storageFailure = isCodexStorageError(error);
+      if (automatic && !storageFailure) throw error;
       flushSync(() => setSessions(previous => previous.map(entry => affectedIds.includes(entry.id) && !entry.codexHomeThreadsUnresolved &&
         (storageFailure || codexStorageRecovery.current.hasPending(entry.id))
         ? { ...entry, codexStorageError: storageFailure ? String(error) : parseCodexSandboxBlocker(entry.codexStorageError) ? entry.codexStorageError :
@@ -10441,6 +10453,8 @@ function Workspace({
       setQueueDispatchVersion(value => value + 1);
     }
   }, []);
+
+  useCodexStorageLockRecovery(sessions, onCodexStorageRepair);
 
   const onCodexStorageCompare = useCallback(async (sessionId: string): Promise<CodexStorageComparison> => {
     const session = sessionsRef.current.find(entry => entry.id === sessionId);

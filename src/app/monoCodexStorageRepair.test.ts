@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import ts from "typescript";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { MonoCodexStorageRecovery, isCodexStorageError, parseCodexStorageConflict, parseCodexStorageRecoveryConflict, parseCodexSandboxBlocker, codexSandboxRepairSettings, codexFullAccessRepairAllowed } from "../features/monos/model/monoCodexStorage";
+import { MonoCodexStorageRecovery, isCodexStorageError, parseCodexStorageConflict, parseCodexStorageRecoveryConflict, parseCodexSandboxBlocker, codexSandboxRepairSettings, codexFullAccessRepairAllowed, canAutomaticallyRepairCodexStorage } from "../features/monos/model/monoCodexStorage";
 import type { Session } from "../features/sessions/model/session";
 import { codexStorageAccountId } from "../features/monos/model/monoCodexStorageIssues";
 import { sessionWriteNeedsReconciliation, shouldPersistSession } from "../features/sessions/data/sessionStore";
@@ -260,6 +260,7 @@ function sandboxRepairFixture(extra: Partial<Session> = {}) {
   const context = {
     sessionsRef, codexStorageRecovery: { current: recovery }, codexStorageAccountId, isCodexStorageError,
     parseCodexStorageConflict, parseCodexStorageRecoveryConflict, parseCodexSandboxBlocker, codexSandboxRepairSettings, codexFullAccessRepairAllowed, IS_WIN: true,
+    canAutomaticallyRepairCodexStorage,
     monoSkillsForSession: () => ({ skillsRole: "manager", skillsPolicy: { mode: "role" } }),
     sessionWorkCwd: (current: Session) => current.cwd, orchestrator: { forSession: () => undefined },
     remoteProjectFor: (cwd: string) => cwd.startsWith("remote:") ? {} : undefined,
@@ -281,6 +282,53 @@ function sandboxRepairFixture(extra: Partial<Session> = {}) {
   const repair = evaluate(appCallback("onCodexStorageRepair").getText(app), context);
   return { ...context, repair, recovery, retry, peerRetry, otherRetry, stop, prepare, persist, saveMode };
 }
+
+const sharingDetail = `Codex storage needs repair: ${JSON.stringify({ recovery: true, reason: "File held by another reader", paths: ["C:/synthetic/mono/AGENTS.md"],
+  io: { operation: "open storage entry with delete access", path: "C:/synthetic/mono/AGENTS.md", holder: "Codex reader (exact holder unknown)", osError: 32, retryable: true } })}`;
+
+it("uses the actual App callback to automatically release one exact held turn and preserve the queue and peers", async () => {
+  const queue = [{ id: "q1", text: "First exact queued Plan", intent: "plan" as const, attachments: [] }, { id: "q2", text: "Second queued message", attachments: [] }];
+  const held = { intent: "plan" as const };
+  const fixture = sandboxRepairFixture({ codexStorageError: sharingDetail, queuedMessages: queue, codexStorageHeld: held });
+  await fixture.repair("clicked", undefined, true);
+  expect(fixture.retry).toHaveBeenCalledOnce();
+  expect(fixture.peerRetry).not.toHaveBeenCalled();
+  expect(fixture.otherRetry).not.toHaveBeenCalled();
+  expect(fixture.sessionsRef.current[0]).toMatchObject({ codexStorageError: undefined, queuedMessages: queue });
+  await fixture.repair("clicked", undefined, true);
+  expect(fixture.retry).toHaveBeenCalledOnce();
+  expect(fixture.prepare).toHaveBeenCalledOnce();
+});
+
+it.each(["pause", "generation", "question", "approval", "queue head", "account"])("retains messages if %s changes while automatic readiness is awaiting", async change => {
+  const fixture = sandboxRepairFixture({ codexStorageError: sharingDetail, queuedMessages: [{ id: "q1", text: "Exact Plan", intent: "plan", attachments: [] }] });
+  let entered!: () => void, release!: () => void;
+  const waiting = new Promise<void>(resolve => { entered = resolve; });
+  fixture.prepare.mockImplementationOnce(async () => { entered(); await new Promise<void>(resolve => { release = resolve; }); });
+  const repair = fixture.repair("clicked", undefined, true);
+  await waiting;
+  const current = fixture.sessionsRef.current[0];
+  if (change === "pause") current.queueStatus = "paused";
+  if (change === "generation") fixture.turnGen.current.set(current.id, 1);
+  if (change === "question") current.pendingQuestion = { requestId: 1, title: "Choose", questions: [] };
+  if (change === "approval") current.blocks = [{ id: "approval", role: "assistant", approval: { decided: false } }] as Session["blocks"];
+  if (change === "queue head") current.queuedMessages = [{ id: "q2", text: "Edited current queue", attachments: [] }];
+  if (change === "account") current.providerAccountId = "other-account";
+  release();
+  await expect(repair).rejects.toThrow("conversation changed");
+  expect(fixture.retry).not.toHaveBeenCalled();
+  expect(fixture.recovery.hasPending("clicked")).toBe(true);
+  expect(fixture.sessionsRef.current[0].codexStorageError).toBe(sharingDetail);
+});
+
+it.each([{ queueStatus: "paused" as const }, { codexHomeThreadsUnresolved: true }, { busy: true }, { editingQueuedMessageId: "q" },
+  { codexStorageError: sandboxDetail }, { codexStorageError: 'Codex storage needs repair: {"recovery":true,"reason":"Choose a source","paths":["C:/mono"]}' }])(
+  "does not automatically prepare an ineligible conversation (%j)", async extra => {
+    const fixture = sandboxRepairFixture({ codexStorageError: sharingDetail, ...extra });
+    await fixture.repair("clicked", undefined, true);
+    expect(fixture.prepare).not.toHaveBeenCalled();
+    expect(fixture.retry).not.toHaveBeenCalled();
+  });
 
 it.each([{ ephemeral: true }, { inboxAsk: {} }, {}])("prepares an unsaved owned conversation in memory (%j)", async extra => {
   const fixture = sandboxRepairFixture({ ...extra, codexStorageError: undefined } as Partial<Session>);

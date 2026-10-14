@@ -179,9 +179,19 @@ fn sharing_optional_reconciliation_is_pending_then_completes_once() {
     let replacement = source.join("replacement");
     std::fs::write(&replacement, b"new desktop state").unwrap();
     replace_link(&replacement, &original).unwrap();
+    let pending = home.join(".monocode-deferred").join(format!("{name}.json"));
+    std::fs::create_dir_all(pending.parent().unwrap()).unwrap();
+    std::fs::write(
+        &pending,
+        b"unfamiliar pending metadata; preserve these bytes",
+    )
+    .unwrap();
     let held = hold(&target);
     prepare_files(&source, &home).unwrap();
-    let pending = home.join(".monocode-deferred").join(format!("{name}.json"));
+    assert!(std::fs::read_dir(home.join(".monocode-retired-links"))
+        .unwrap()
+        .any(|entry| std::fs::read(entry.unwrap().path()).unwrap()
+            == b"unfamiliar pending metadata; preserve these bytes"));
     let record: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&pending).unwrap()).unwrap();
     assert_eq!(record["entry"], name);

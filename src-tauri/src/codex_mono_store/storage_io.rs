@@ -96,6 +96,12 @@ pub(super) fn defer(home: &Path, name: &str, error: &str) -> Result<(), String> 
             "Pending metadata must remain private".into(),
         ));
     }
+    if path.exists() {
+        if let Err(record_error) = retire_record(home, &path) {
+            log_storage_issue(format!("Previous pending metadata was preserved; reconciliation will be re-scanned: {record_error}"));
+            return Ok(());
+        }
+    }
     if let Err(record_error) =
         write_private_json(&path, &serde_json::json!({"entry": name, "error": error}))
     {

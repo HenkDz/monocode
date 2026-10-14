@@ -20,6 +20,30 @@ import {
   shouldPersistSession,
 } from "./sessionStore";
 
+it.each([{ command: "  exact command\n\n  " }, { command: ["powershell.exe", "-Command", "  exact command\n\n  "] }])(
+  "preserves decided approval commands without reviving pending approval authority: $command", ({ command }) => {
+    const session = newSession("codex", "/repo");
+    session.blocks = [{ id: "t", role: "tool", text: "Run command", tool: { kind: "execute" },
+      approval: { requestId: 42, command, cwd: "C:/repo with spaces", decided: "allow" } }];
+    const saved = sanitizeSessionForPersist(session);
+    expect(saved.blocks[0].approval).toEqual(session.blocks[0].approval);
+    expect(sanitizeSessionForPersist(JSON.parse(JSON.stringify(saved))).blocks[0].approval).toEqual(session.blocks[0].approval);
+    session.blocks[0].approval!.decided = undefined;
+    expect(sanitizeSessionForPersist(session).blocks[0].approval).toBeUndefined();
+  });
+
+it("retains reasoning presentation channels through serialization and rejects malformed metadata", () => {
+  const session = newSession("codex", "/repo");
+  session.blocks = [{ id: "r", role: "reasoning", text: "Raw diagnostics",
+    reasoning: { itemId: "provider-item", partIndex: 1, channel: "raw" } }];
+  const saved = sanitizeSessionForPersist(session);
+  expect(saved.blocks[0].reasoning).toEqual(session.blocks[0].reasoning);
+  expect(sanitizeSessionForPersist(JSON.parse(JSON.stringify(saved))).blocks[0].reasoning).toEqual(session.blocks[0].reasoning);
+  session.blocks[0].reasoning!.partIndex = -1;
+  expect(sanitizeSessionForPersist(session).blocks[0].reasoning).toBeUndefined();
+  expect(sanitizeSessionForPersist(session).blocks[0].text).toBe("Raw diagnostics");
+});
+
 it.each(["role", "user"] as const)("persists %s effort ownership without mutating provider settings", effortSource => {
   const session = { ...newSession("codex", "/tmp"), effortSource, modelSettings: { reasoningEffort: "high" } };
   expect(sanitizeSessionForPersist(session).modelSettings).toEqual({ reasoningEffort: "high", __monocodeEffortSource: effortSource });

@@ -1,4 +1,37 @@
 @import "tailwindcss";
+
+.compact-turn-work { margin-block: 8px 18px; }
+.compact-work-toggle, .compact-group-toggle { display: flex; width: 100%; min-width: 0; align-items: center; gap: 8px; text-align: left; font-family: var(--font-sans); color: color-mix(in srgb, var(--color-content) 58%, transparent); }
+.compact-work-toggle { min-height: 41px; border-bottom: 1px solid color-mix(in srgb, var(--color-content) 8%, transparent); padding: 9px 2px 11px; font-size: 13px; border-radius: 4px 4px 0 0; }
+.compact-work-toggle:hover, .compact-group-toggle:hover { color: var(--color-content); background: color-mix(in srgb, var(--color-content) 3%, transparent); }
+.compact-work-toggle:focus-visible, .compact-group-toggle:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
+.compact-work-label { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.compact-work-counts, .compact-current-action { margin-left: auto; min-width: 0; font-size: 11px; color: color-mix(in srgb, var(--color-content) 48%, transparent); }
+.compact-current-action { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.compact-work-spinner { flex: none; width: 13px; height: 13px; border: 1.5px solid color-mix(in srgb, var(--color-content) 12%, transparent); border-top-color: currentColor; border-radius: 50%; animation: compact-work-spin 1s linear infinite; }
+.compact-work-timeline { margin: 17px 0 2px 5px; padding-left: 20px; border-left: 1px solid color-mix(in srgb, var(--color-content) 10%, transparent); list-style: none; }
+.compact-work-timeline > li { position: relative; min-width: 0; padding-bottom: 14px; }
+.compact-work-timeline > li::before { position: absolute; content: ""; left: -24px; top: 7px; width: 7px; height: 7px; border-radius: 50%; border: 1px solid color-mix(in srgb, var(--color-content) 35%, transparent); background: var(--color-background-base); }
+.compact-work-timeline .agent-markdown { font-size: 12px; line-height: 1.7; color: color-mix(in srgb, var(--color-content) 62%, transparent); }
+.compact-group-toggle { min-height: 32px; padding-block: 5px; font-size: 12px; }
+.compact-group-toggle > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.compact-tool-row { min-width: 0; padding-left: 12px; border-left: 1px solid color-mix(in srgb, var(--color-content) 9%, transparent); }
+.compact-tool-row > div { position: relative; }
+.compact-tool-row [data-flat-work-call] { border: 0; border-radius: 0; background: none; padding: 0; }
+.compact-tool-row .tool-output-affordance { opacity: 0; transition: opacity 120ms; }
+.compact-tool-row:hover .tool-output-affordance, .compact-tool-row:focus-within .tool-output-affordance { opacity: 1; }
+[data-transcript-work-details][hidden], [data-compact-tool-group] > [hidden] { display: none; }
+@keyframes compact-work-spin { to { transform: rotate(360deg); } }
+@media (max-width: 600px) {
+  .compact-work-toggle { flex-wrap: wrap; }
+  .compact-work-counts { margin-left: 0; flex-basis: 100%; }
+  .compact-current-action { flex-basis: 100%; margin-left: 21px; }
+  .compact-tool-row .tool-output-affordance { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .compact-work-spinner { animation: none; }
+  .compact-work-toggle *, .compact-tool-row .tool-output-affordance { transition: none; }
+}
 @source "../../node_modules/streamdown/dist/*.js";
 @source "../../node_modules/@streamdown/code/dist/*.js";
 @source "../../node_modules/@streamdown/mermaid/dist/*.js";

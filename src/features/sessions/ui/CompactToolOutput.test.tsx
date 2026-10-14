@@ -70,6 +70,25 @@ describe("compact tool output", () => {
     expect(document.querySelector('[role="dialog"] pre')?.textContent).toBe(output);
   });
 
+  it("keeps compact output on demand with an accessible focus target", () => {
+    act(() => root.render(createElement(CompactToolOutput, { output: "complete output", title: "Run tests", preview: false })));
+    const trigger = container.querySelector<HTMLButtonElement>('button[aria-label="View full output"]')!;
+    expect(trigger.textContent).toBe("View full output");
+    expect(container.querySelector("pre")).toBeNull();
+    expect(container.querySelector(".tool-output-affordance")).not.toBeNull();
+    act(() => trigger.click());
+    expect(document.querySelector('[role="dialog"] pre')?.textContent).toBe("complete output");
+    act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("preserves exact command whitespace and markers in its full command view", () => {
+    const output = "  echo '<team_sender>literal</team_sender>'\n\n";
+    act(() => root.render(createElement(CompactToolOutput, { output, title: "Run", preview: false, command: true })));
+    act(() => container.querySelector<HTMLButtonElement>("button")?.click());
+    expect(document.querySelector('[role="dialog"] pre')?.textContent).toBe(output);
+  });
+
   it("reports clipboard failures without discarding the output", async () => {
     vi.mocked(copyMessage).mockRejectedValueOnce(new Error("Clipboard unavailable"));
     act(() => root.render(createElement(CompactToolOutput, { output: "Saved output", title: "Tool result" })));

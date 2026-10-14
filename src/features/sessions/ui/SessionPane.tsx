@@ -1771,7 +1771,6 @@ const LocalSessionPane = memo(function LocalSessionPane({
                         }
                         bottomAligned={!!agent}
                         inlineWork={!!agent}
-                        flatWork={workbench}
                         messageDeliveries={messageDeliveries}
                         onRetryMessage={() => onResumeQueue(session.id)}
                         onShowWork={

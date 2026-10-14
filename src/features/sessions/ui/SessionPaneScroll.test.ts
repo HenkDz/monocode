@@ -6,6 +6,7 @@ import { SessionPane, type SessionPaneProps } from "./SessionPane";
 import { TranscriptPool, TranscriptPoolOutlet } from "./TranscriptPool";
 import { getMonoTranscriptPage } from "../data/sessionStore";
 import type { OrchestrationRun } from "../../orchestration/model/orchestrationState";
+import { applyHarnessEvent } from "../../../integrations/harness/core/apply";
 
 const probes = vi.hoisted(() => ({
   composer: vi.fn(() => null),
@@ -80,6 +81,9 @@ beforeEach(() => {
     vi.fn(() => 1),
   );
   vi.stubGlobal("cancelAnimationFrame", vi.fn());
+  vi.spyOn(HTMLElement.prototype, "animate").mockImplementation(
+    () => ({ cancel: vi.fn() }) as unknown as Animation,
+  );
   vi.stubGlobal(
     "ResizeObserver",
     class {
@@ -182,6 +186,20 @@ it.each([false, true])("keeps Mono edit controls alongside member work logs (mem
   expect(probes.changes).toHaveBeenCalled();
   expect(probes.review).not.toHaveBeenCalled();
   expect(!!container.querySelector('[aria-label="Member work log"]')).toBe(member);
+});
+
+it.each([false, true])("shows reducer background waits through the actual SessionPane (pooled: %s)", (pooled) => {
+  const pool = pooled ? new TranscriptPool() : undefined;
+  const pane = props(pool);
+  pane.session = applyHarnessEvent({ ...pane.session, busy: true }, { type: "background.updated", tasks: ["Review"] });
+  act(() => root.render(createElement("div", null, createElement(SessionPane, pane), pool ? createElement(TranscriptPoolOutlet, { pool }) : null)));
+  const action = container.querySelector('.compact-current-action')!;
+  expect(action.textContent).toBe("Waiting for background task…");
+  expect(action.getAttribute('title')).toBe("Review");
+  expect(container.querySelector('[data-transcript-turn-work] > button')?.getAttribute('aria-expanded')).toBe('false');
+  pane.session = applyHarnessEvent(pane.session, { type: "background.updated", tasks: [] });
+  act(() => root.render(createElement("div", null, createElement(SessionPane, pane), pool ? createElement(TranscriptPoolOutlet, { pool }) : null)));
+  expect(container.querySelector('.compact-current-action')?.textContent).not.toContain("background");
 });
 
 it("reveals the archived ready turn from the status count and keeps its card out of the latest-turn footer", async () => {

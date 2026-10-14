@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Block } from "../model/session";
 import { AgentTranscript } from "./AgentTranscript";
+import { openTranscriptWork } from "./transcriptTestActions";
 import { PACED_REVEAL_KEY, WORD_FADE_MS } from "./wordFade";
 
 let container: HTMLDivElement;
@@ -69,17 +70,7 @@ function render(
   );
 }
 
-function stages() {
-  return [...container.querySelectorAll(".zen-phase-step")].map((step) =>
-    step.hasAttribute("data-waiting")
-      ? "waiting"
-      : step.hasAttribute("data-entering")
-        ? "entering"
-        : "settled",
-  );
-}
-
-it("paces a burst of tool calls so each enters after the one before it", () => {
+it("keeps burst tools folded then readable in order without losing row identity", () => {
   const head: Block[] = [
     { id: "user", role: "user", text: "Review the diff" },
     { id: "intro", role: "assistant", text: "Checking the repo first." },
@@ -88,18 +79,18 @@ it("paces a burst of tool calls so each enters after the one before it", () => {
   render(head);
   render([...head, tool("second"), tool("third"), tool("fourth")]);
 
-  // What was on screen when the group mounted is history; the burst queues.
-  expect(stages()).toEqual(["settled", "entering", "waiting", "waiting"]);
-
-  // Later renders must not cut the queue short.
+  expect(container.querySelectorAll('[data-compact-tool-call]')).toHaveLength(0);
+  openTranscriptWork(container);
+  const first = container.querySelector('[data-compact-tool-call="first"]');
+  const ids = () => [...container.querySelectorAll<HTMLElement>('[data-compact-tool-call]')].map(row => row.dataset.compactToolCall);
+  expect(ids()).toEqual(["first", "second", "third", "fourth"]);
   render([...head, tool("second"), tool("third"), tool("fourth")]);
-  expect(stages()).toEqual(["settled", "entering", "waiting", "waiting"]);
-
+  expect(container.querySelector('[data-compact-tool-call="first"]')).toBe(first);
   act(() => vi.advanceTimersByTime(480));
-  expect(stages()).toEqual(["settled", "entering", "entering", "waiting"]);
-
+  expect(ids()).toEqual(["first", "second", "third", "fourth"]);
   act(() => vi.advanceTimersByTime(480));
-  expect(stages()).toEqual(["settled", "entering", "entering", "entering"]);
+  expect(ids()).toEqual(["first", "second", "third", "fourth"]);
+
 });
 
 const reply =
@@ -138,28 +129,21 @@ it("paces a reply whose text and completion arrive in the same render", () => {
   expect(container.querySelector(".word-fading")).toBeNull();
 });
 
-it("paces the first nonempty chunk after an empty streaming block", () => {
-  render([
-    prompt,
-    { id: "answer", role: "assistant", text: "", streaming: true },
-  ]);
-  render([
-    prompt,
-    { id: "answer", role: "assistant", text: reply, streaming: true },
-  ]);
+it("keeps the first nonempty streaming chunk folded and readable on expansion", () => {
+  render([prompt, { id: "answer", role: "assistant", text: "", streaming: true }]);
+  render([prompt, { id: "answer", role: "assistant", text: reply, streaming: true }]);
   expect(answerText()).toBe("");
-
+  openTranscriptWork(container);
+  expect(answerText()).toBe(reply);
+  expect(container.querySelector('[data-transcript-work-details] .agent-markdown')).not.toBeNull();
   act(() => vi.advanceTimersByTime(100));
-  expect(answerText().length).toBeGreaterThan(0);
-  expect(answerText().length).toBeLessThan(reply.length);
+  expect(answerText()).toBe(reply);
 });
 
-it("shows an existing reply immediately when opening a conversation", () => {
-  render([
-    prompt,
-    { id: "answer", role: "assistant", text: reply, streaming: true },
-  ]);
+it("shows an existing settled reply immediately when opening a conversation", () => {
+  render([prompt, { id: "answer", role: "assistant", text: reply, streaming: false }], false);
   expect(answerText()).toBe(reply);
+  expect(container.querySelector('[data-chat-message="answer"]')?.closest('[data-transcript-work-details]')).toBeNull();
 });
 
 it("shows a loaded history page immediately while still pacing a new reply", () => {

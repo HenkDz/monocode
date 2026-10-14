@@ -1,8 +1,27 @@
-import { createElement, type ReactNode } from "react";
+// @vitest-environment happy-dom
+import { act, createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { vi, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, vi, describe, expect, it } from "vitest";
 import type { Block } from "../model/session";
 import { AgentTranscript } from "./AgentTranscript";
+import { openTranscriptWork, openSubagentOutput } from "./transcriptTestActions";
+
+import { createRoot, type Root } from "react-dom/client";
+let container: HTMLDivElement, root: Root;
+let renderId = 0;
+beforeEach(() => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  container = document.createElement("div"); document.body.append(container); root = createRoot(container);
+});
+afterEach(() => { act(() => root.unmount()); container.remove(); vi.unstubAllGlobals(); });
+function renderWork(blocks: Block[], busy = false, output = false) {
+  act(() => root.render(createElement(AgentTranscript, { key: ++renderId, blocks, busy })));
+  expect(container.querySelector('[data-transcript-turn-work] > button')?.getAttribute('aria-expanded')).toBe('false');
+  openTranscriptWork(container);
+  if (output) openSubagentOutput(container);
+  return container.innerHTML + [...document.querySelectorAll('[role="dialog"]')].map(dialog => dialog.outerHTML).join('');
+}
 
 function tool(id: string, approval?: Block["approval"]): Block {
   return {
@@ -59,7 +78,7 @@ describe("AgentTranscript collapsed work", () => {
   it("shows MonoCode CLI actions instead of their long shell commands", () => {
     const command =
       "/repo/target/debug/MonoCode.app/Contents/MacOS/monocode";
-    const markup = render(
+    const markup = renderWork(
       [
         { id: "user", role: "user", text: "/monocode list my notes" },
         {
@@ -77,14 +96,14 @@ describe("AgentTranscript collapsed work", () => {
       ],
       true,
     );
-    expect(markup).toContain("Using MonoCode");
+    expect(container.querySelectorAll("[data-monocode-tool-call]")).toHaveLength(2);
     expect(markup).toContain('data-monocode-tool-call="--help"');
     expect(markup).toContain('data-monocode-tool-call="notes.list"');
     expect(markup).toContain("View CLI commands");
     expect(markup).toContain("List notes");
-    expect(markup).toContain("Running");
-    expect(markup).not.toContain("monocode app");
-    expect(markup).not.toContain("Contents/MacOS/monocode");
+    expect(container.querySelector(".compact-work-spinner")).not.toBeNull();
+    expect(container.querySelector("[data-compact-tool-group]")?.textContent).not.toContain("monocode app");
+    expect(container.querySelector("[data-compact-tool-group]")?.textContent).not.toContain("Contents/MacOS/monocode");
     expect(markup).not.toContain("Show error details for MonoCode");
   });
 
@@ -137,7 +156,7 @@ describe("AgentTranscript collapsed work", () => {
   });
 
   it("keeps a failed MonoCode call compact until its error is opened", () => {
-    const markup = render([
+    const markup = renderWork([
       { id: "user", role: "user", text: "/monocode list notes" },
       {
         id: "notes",
@@ -151,7 +170,7 @@ describe("AgentTranscript collapsed work", () => {
     expect(markup).toContain('data-transcript-error="transport"');
     expect(markup).toContain("Open details");
     expect(markup).toContain("Copy diagnostics");
-    expect(markup).not.toContain("aria-expanded");
+    expect(markup).toContain('aria-haspopup="dialog"');
     expect(markup).not.toContain("Connection refused");
   });
 
@@ -463,12 +482,12 @@ describe("AgentTranscript collapsed work", () => {
       true,
     );
     expect(markup).toContain("hidden-detail-approval");
-    expect(markup).toContain("Please approve the command.");
-    expect(markup.includes('aria-label="Show the work"')).toBe(false);
+    expect(markup).not.toContain("Please approve the command.");
+    expect(markup.includes('aria-label="Show the work"')).toBe(true);
   });
 
-  it("opens a failed subagent's own row on its provider reason", () => {
-    const markup = render(
+  it("opens a failed subagent's output reader on its provider reason", () => {
+    const markup = renderWork(
       [
         { id: "user", role: "user", text: "Delegate this", startedAt: 1_000 },
         {
@@ -484,17 +503,17 @@ describe("AgentTranscript collapsed work", () => {
         },
         { id: "answer", role: "assistant", text: "I could not finish." },
       ],
-      // Live keeps the run pinned on its own row; settled keeps it there too —
-      // a run that died parks under the fold line, already open on the reason.
-      true,
+      // The full reason stays available in both live and settled output readers.
+      true, true,
     );
 
     expect(markup).toContain("Inspect auth");
     expect(markup).toContain("failed");
     expect(markup).toContain("Child process disconnected");
-    expect(markup).toContain("Hide Inspect auth&#x27;s work");
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    act(() => document.querySelector<HTMLButtonElement>('[role="dialog"] [aria-label="Close"]')!.click());
 
-    const settledMarkup = render([
+    renderWork([
       { id: "user", role: "user", text: "Delegate this", startedAt: 1_000 },
       {
         id: "agent",
@@ -509,12 +528,12 @@ describe("AgentTranscript collapsed work", () => {
       },
       { id: "answer", role: "assistant", text: "I could not finish." },
     ]);
-    expect(settledMarkup).toContain("Child process disconnected");
-    expect(settledMarkup).toContain("Hide Inspect auth&#x27;s work");
+    const output = openSubagentOutput(container);
+    expect(output.textContent).toContain("Child process disconnected");
   });
 
-  it("gives each running subagent its own row above the work that folds", () => {
-    const markup = render(
+  it("keeps each running subagent and model in its own expanded work row", () => {
+    const markup = renderWork(
       [
         { id: "user", role: "user", text: "Review this", startedAt: 1_000 },
         { id: "lead", role: "assistant", text: "I will run two reviews." },
@@ -553,28 +572,29 @@ describe("AgentTranscript collapsed work", () => {
       true,
     );
 
-    // A row each, named, hopping while the run is live — no grouped header.
+    // Expanded work preserves each delegated run and its recorded model.
     expect(markup).toContain("Correctness review");
     expect(markup).toContain("Quality review");
     expect(markup).toContain("Haiku 4.5");
     expect(markup).toContain("custom-review-model");
-    expect(markup).toContain("mascot-active");
+    expect(container.querySelectorAll("[data-flat-subagent]")).toHaveLength(2);
     expect(markup).not.toContain("are working");
     // A row counts its agent's work; it does not echo the call in flight,
     // which put a second scrolling command line on every row.
     expect(markup).toContain("1 step");
     expect(markup).not.toContain("Read src/App.tsx");
     expect(markup).not.toContain("starting up");
-    // The name carries the shimmer while the run is live, and each row opens
-    // on its own.
-    expect(markup).toContain("shimmer-text");
-    expect(markup).toContain("Show Correctness review&#x27;s work");
-    // The rows sit outside the fold, so they stay put as the work collapses.
+    // Live work keeps its activity indicator and an output reader for each run.
+    expect(container.querySelector(".compact-work-spinner")).not.toBeNull();
+    expect(markup).toContain("View full output");
+    // Narration remains readable inside expanded work.
     expect(markup).toContain("Both reviewers agree.");
+    const dialog = openSubagentOutput(container);
+    expect(dialog.textContent).toContain("Read src/App.tsx");
   });
 
   it("keeps the turn's status line at the top of the turn above a stack", () => {
-    const markup = render(
+    const markup = renderWork(
       [
         { id: "user", role: "user", text: "Review this", startedAt: 1_000 },
         { id: "lead", role: "assistant", text: "I will run two reviews." },
@@ -594,30 +614,28 @@ describe("AgentTranscript collapsed work", () => {
 
     // The line the work folds behind sits above everything it folds, and a
     // stack of delegated runs no longer pushes it down the turn.
-    const statusAt = markup.indexOf("Show the work");
+    const statusAt = markup.indexOf("Hide the work");
     const stackAt = markup.indexOf("Independently review");
     expect(statusAt).toBeGreaterThan(-1);
     expect(stackAt).toBeGreaterThan(statusAt);
-    // The work around it is collapsed away, and the stack is still on screen:
-    // it is pinned outside the fold's body, not inside it.
-    expect(markup).not.toContain("hidden-detail-t1");
-    expect(markup).not.toContain("Splitting the review in two.");
+    // The expanded timeline retains surrounding calls and narration.
+    expect(markup).toContain("hidden-detail-t1");
+    expect(markup).toContain("Splitting the review in two.");
     // A row-length name is capped, and the whole brief stays on the hover.
     expect(markup).toContain(
-      "Independently review the current repository&#x27;s recent…",
+      "Independently review the current repository",
     );
     expect(markup).toContain("Inspect the uncommitted diff.");
   });
 
-  it("groups an opened subagent's trail the way the main transcript does", () => {
-    const markup = render(
+  it("retains an opened subagent's full trail in one output reader", () => {
+    const markup = renderWork(
       [
         { id: "user", role: "user", text: "Review this", durationMs: 4_000 },
         {
           id: "a1",
           role: "tool",
-          // A failed run opens itself, which is the only way to see an open
-          // panel without a click.
+          // A failed run remains available through its output reader.
           text: "Correctness review",
           tool: { callId: "agent-1", kind: "agent", status: "failed" },
           agentRun: {
@@ -631,29 +649,19 @@ describe("AgentTranscript collapsed work", () => {
         },
         { id: "answer", role: "assistant", text: "It could not finish." },
       ],
-      true,
+      true, true,
     );
 
-    // The run's own words title a group, with the calls they introduced under
-    // it — not one flat dump of every step it took.
-    expect(markup).toContain("Reading the diff first.");
-    expect(markup).toContain("Show the steps for Reading the diff first.");
-    // An open row holds its wash, so the panel reads as hanging off it.
-    expect(markup).toContain("hover:bg-content/8 bg-content/8");
-    // The panel opens straight onto its phases. A scroll window of its own
-    // here would nest one 17.5rem scroller inside the window each phase
-    // already keeps, and the inner one could never reach its last row.
-    expect(markup).toContain(
-      'data-open="true"><div class="flex min-w-0 flex-col pb-1">',
-    );
-    // A settled group stays folded behind its header, so opening a long run
-    // no longer dumps every call it made on screen at once.
-    expect(markup).toContain('class="zen-phase-body" data-open="false"');
-    expect(markup).not.toContain("src/lib/session.ts");
+    const dialog = document.querySelector('[role="dialog"]')!;
+    expect(dialog.textContent).toContain("Reading the diff first.");
+    expect(dialog.textContent).toContain("Read src/App.tsx");
+    expect(dialog.textContent).toContain("Read src/lib/session.ts");
+    expect(dialog.querySelectorAll('[data-mono-activity-block]')).toHaveLength(3);
+    expect(dialog.querySelectorAll('.zen-phase-live')).toHaveLength(0);
   });
 
   it("offers failed subagent tool results in the same error control as top-level tools", () => {
-    const markup = render([
+    const markup = renderWork([
       { id: "user", role: "user", text: "Run tests" },
       {
         id: "agent",
@@ -669,21 +677,27 @@ describe("AgentTranscript collapsed work", () => {
               text: "npm test",
               toolKind: "execute",
               status: "failed",
-              detail: "Tests failed: assertion error",
+              detail: "Tests failed: assertion error\n    at retained-test.ts:42",
             },
           ],
         },
       },
-    ]);
+    ], false, true);
 
-    expect(markup).toContain('data-transcript-error="other"');
-    expect(markup).toContain("Open details");
-    expect(markup).toContain("Copy diagnostics");
-    expect(markup).not.toContain("Tests failed: assertion error");
+    expect(document.querySelector('[role="dialog"] [aria-label^="Failed tool call:"]')).not.toBeNull();
+    expect(markup).toContain("View full output");
+    const dialog = document.querySelector('[role="dialog"]')!;
+    const reader = dialog.querySelector<HTMLButtonElement>('button[aria-haspopup="dialog"]')!;
+    expect(dialog.textContent).toContain("Tests failed: assertion error");
+    expect(dialog.textContent).not.toContain("at retained-test.ts:42");
+    act(() => reader.click());
+    expect(document.querySelectorAll('[role="dialog"]')[1].querySelector("pre")?.textContent).toBe("Tests failed: assertion error\n    at retained-test.ts:42");
+    expect(document.querySelectorAll('[role="dialog"]')[1].textContent).toContain("Copy output");
+    expect(container.textContent).not.toContain("Tests failed: assertion error");
   });
 
   it("counts a failed step on a folded subagent row, so it is not hidden", () => {
-    const markup = render([
+    const markup = renderWork([
       { id: "user", role: "user", text: "Run tests" },
       {
         id: "agent",
@@ -712,7 +726,7 @@ describe("AgentTranscript collapsed work", () => {
   });
 
   it("opens a lone subagent straight into its own transcript", () => {
-    const markup = render(
+    const markup = renderWork(
       [
         { id: "user", role: "user", text: "Review this", durationMs: 4_000 },
         {
@@ -743,7 +757,7 @@ describe("AgentTranscript collapsed work", () => {
     expect(markup).toContain("Correctness review");
     expect(markup).toContain("1 step");
     expect(markup).not.toContain("done");
-    expect(markup).toContain("Show Correctness review&#x27;s work");
+    expect(markup).toContain("View full output");
   });
 
   it("places a session accessory after the latest reply and before its action row", () => {
@@ -844,7 +858,7 @@ describe("AgentTranscript collapsed work", () => {
   it("renders an advisor interjection between answered work phases", () => {
     // Live: the interjection lands on its own labeled row. Once the turn
     // settles it folds into the work trail — covered below.
-    const markup = render(
+    const markup = renderWork(
       [
         tool("before"),
         { id: "answer", role: "assistant", text: "Complete answer." },
@@ -900,13 +914,13 @@ describe("AgentTranscript collapsed work", () => {
     const settled = render(blocks);
     // One fold line for the whole trail: the calls, and the notes they
     // absorbed. The dividers themselves stay behind the fold until opened.
-    expect(settled).toContain("Ran 2 commands · 3 notes");
+    expect(settled.match(/data-transcript-turn-work/g)).toHaveLength(1);
     expect(settled).toContain("The investigation is complete.");
     expect(settled).not.toContain('aria-label="Interjection:');
     expect(settled).not.toContain("ping from #general");
 
     // While the turn is live the same notes still land as their own rows.
-    const live = render(blocks, true);
+    const live = renderWork(blocks, true);
     expect(live.match(/aria-label="Interjection: irc:incoming"/g)).toHaveLength(
       3,
     );
@@ -960,19 +974,19 @@ describe("Mono inline work", () => {
       ];
       const markup = renderMono(blocks, busy);
       const header = markup.indexOf(
-        busy ? "Running command…" : "MonoCat worked for 9s",
+        busy ? "Working for" : "Worked for 9s",
       );
-      expect(header).toBeGreaterThanOrEqual(markup.indexOf("MonoCat"));
+      expect(header).toBeGreaterThan(0);
       expect(markup).not.toContain("I will check the first part.");
       expect(markup).not.toContain(
         "The first part passed. Checking the next part.",
       );
-      expect(markup.match(/data-mono-work/g)).toHaveLength(1);
+      expect(markup.match(/data-transcript-turn-work/g)).toHaveLength(1);
       if (!busy)
         expect(markup.indexOf("Everything passed.")).toBeGreaterThan(header);
-      expect(markup).not.toContain("hidden-detail-");
-      expect(markup).not.toContain('aria-label="Show the work"');
-      expect(markup).not.toContain("aria-expanded");
+      expect(markup).not.toContain("data-compact-tool-call");
+      expect(markup).toContain('aria-label="Show the work"');
+      expect(markup).toContain('aria-expanded="false"');
       expect(markup).not.toContain("zen-phase-step");
     },
   );
@@ -991,10 +1005,10 @@ describe("Mono inline work", () => {
         busy,
       );
       expect(markup).toContain(
-        busy ? "Running command…" : "MonoCat worked for 1s",
+        busy ? "Working for" : "Worked for 1s",
       );
-      expect(markup).not.toContain("hidden-detail-single");
-      expect(markup).not.toContain("aria-expanded");
+      expect(markup).not.toContain('data-compact-tool-call="single"');
+      expect(markup).toContain('aria-expanded="false"');
     },
   );
 
@@ -1020,7 +1034,7 @@ describe("Mono inline work", () => {
         tool: { kind: "shell", status: "completed" },
       },
     ]);
-    expect(approved).toContain("MonoCat worked for 1s");
+    expect(approved).toContain("Worked for 1s");
     expect(approved).not.toContain("hidden-detail-approval");
     expect(approved).not.toContain("Allow</button>");
   });
@@ -1052,7 +1066,7 @@ describe("Mono inline work", () => {
     expect(markup).toContain("The review could not finish.");
     expect(markup).not.toContain("Private provider failure detail");
     expect(markup).not.toContain("Private delegated work");
-    expect(markup).not.toContain("aria-expanded");
+    expect(markup).toContain('aria-expanded="false"');
   });
 });
 

@@ -5,11 +5,12 @@ import { expect, it, vi } from "vitest";
 import { newSession } from "../model/session";
 import { getSession, sanitizeSessionForPersist } from "../data/sessionStore";
 import { AgentTranscript } from "./AgentTranscript";
+import { openTranscriptWork, openSubagentOutput } from "./transcriptTestActions";
 
 const invoke = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 
-it("reopens a saved Cursor placeholder as a named, expandable subagent with a step count", async () => {
+it("reopens a saved Cursor placeholder through folded work with model, step count and output", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const saved = newSession("cursor", "/repo");
   saved.providerSessionId = "parent";
@@ -79,26 +80,25 @@ it("reopens a saved Cursor placeholder as a named, expandable subagent with a st
         }),
       ),
     );
-    const button = container.querySelector<HTMLButtonElement>(
-      'button[aria-label="Show Review ACP routing\'s work"]',
-    );
-    expect(button).not.toBeNull();
-    expect(button!.textContent).toContain("1 step");
-    expect(button!.textContent).toContain("Grok 4.6");
+    expect(container.querySelector('[data-transcript-turn-work] > button')?.getAttribute('aria-expanded')).toBe('false');
+    openTranscriptWork(container);
+    const row = container.querySelector('[data-flat-subagent]')!;
+    expect(row.textContent).toContain("1 step");
+    expect(row.textContent).toContain("Grok 4.6");
     expect(
       sanitizeSessionForPersist(session!).blocks.find(
         (block) => block.tool?.callId === "call-1",
       )?.agentRun?.model,
     ).toBe("grok-4.6");
-    expect(button!.getAttribute("aria-expanded")).toBe("false");
-    act(() => button!.click());
-    expect(button!.getAttribute("aria-expanded")).toBe("true");
-    expect(container.textContent).toContain(
-      "Checked the notification routing.",
-    );
+    const reader = row.querySelector<HTMLButtonElement>('button[aria-haspopup="dialog"]')!;
+    const dialog = openSubagentOutput(container);
+    expect(dialog.textContent).toContain("Grok 4.6");
+    expect(dialog.textContent).toContain("Checked the notification routing.");
+    expect(dialog.textContent).toContain("acp.ts");
     expect(container.textContent).not.toContain("Subagent task");
-    act(() => button!.click());
-    expect(button!.getAttribute("aria-expanded")).toBe("false");
+    act(() => dialog.querySelector<HTMLButtonElement>('[aria-label="Close"]')!.click());
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.activeElement).toBe(reader);
   } finally {
     act(() => root.unmount());
     container.remove();

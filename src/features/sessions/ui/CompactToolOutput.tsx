@@ -19,14 +19,14 @@ export function CompactToolOutput({
   const trigger = useRef<HTMLButtonElement>(null);
   const heading = useId();
   // Commands are shown verbatim: presentation filtering must never alter what a user approves.
-  const text = command ? output.trim() : presentationText(output).trim();
+  const text = command ? output : presentationText(output).trim();
   if (!text) return null;
   const structured = /(?:^|\n)\s*[{[]|[\[{]\s*"[^"\n]+"\s*:/.test(text);
   const excerpt = text.split("\n").slice(0, 3).map((line) => line.slice(0, 160)).join("\n");
   const label = command ? "View command" : "View full output";
   const close = () => { setOpen(false); trigger.current?.focus(); };
   return (
-    <div className="min-w-0 py-1" data-tool-output>
+    <div className={preview || command ? "min-w-0 py-1" : "tool-output-affordance min-w-0 shrink-0"} data-tool-output>
       {preview ? (
         structured ? (
           <p className="text-xs text-content/75">Structured output</p>
@@ -38,6 +38,8 @@ export function CompactToolOutput({
         type="button"
         ref={trigger}
         aria-haspopup="dialog"
+        aria-label={label}
+        title={label}
         onClick={(event) => { event.currentTarget.focus(); setOpen(true); }}
         className="rounded text-xs text-content/75 hover:text-content focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
       >

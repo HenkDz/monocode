@@ -9,6 +9,13 @@ import { registerBuiltinHarnesses } from "../../../integrations/harness/core/reg
 import { resetHarnessModelOverlays, setHarnessModels } from "../model/models";
 import type { OrchestrationDispatch } from "../../orchestration/model/orchestrationState";
 import { OrchestrationActions } from "../../orchestration/ui/OrchestrationActions";
+import { listDir, revealPath } from "../../../platform/tauri/fs";
+import { publishCardSessions } from "../../monos/model/monoCards";
+vi.mock("../../../platform/tauri/fs", async original => ({
+  ...(await original<typeof import("../../../platform/tauri/fs")>()),
+  listDir: vi.fn(async () => []),
+  revealPath: vi.fn(async () => {}),
+}));
 
 const probes = vi.hoisted(() => ({
   mono: true,
@@ -29,6 +36,7 @@ const probes = vi.hoisted(() => ({
       memberId: string;
       status: string;
       prompt?: string;
+      workspace?: {checkoutCwd: string};
     }[];
     dispatches: OrchestrationDispatch[];
   }[],
@@ -130,6 +138,9 @@ beforeEach(() => {
   );
   vi.stubGlobal("cancelAnimationFrame", vi.fn());
   localStorage.clear();
+  vi.mocked(listDir).mockReset().mockResolvedValue([]);
+  vi.mocked(revealPath).mockReset().mockResolvedValue();
+  publishCardSessions([], () => {});
   resetHarnessModelOverlays();
   probes.transcript.mockClear();
   probes.composer.mockClear();
@@ -412,7 +423,7 @@ it("renders a saved worker's queue once and preserves its edit, remove and steer
   probes.mono = false;
   probes.actualPane = true;
   probes.runs = [{ leadId: "lead", tasks: [{
-    id: "task", title: "Review saved changes", sessionId: "chat", memberId: "worker", status: "running",
+    id: "task", title: "Review saved changes", prompt: "Review the saved patch", sessionId: "chat", memberId: "worker", status: "running",
   }], dispatches: [] }];
   const pane = props();
   pane.session.busy = true;
@@ -440,11 +451,11 @@ it("renders a saved worker's queue once and preserves its edit, remove and steer
   expect(pane.onDeleteQueuedMessage).toHaveBeenCalledExactlyOnceWith("chat", "worker-message");
 });
 
-it("keeps an earlier member worker in Workbench and opens its own historical session", () => {
+it("keeps an earlier member worker in Workbench and reveals its historical checkout", async () => {
   probes.mono = false;
   probes.actualPane = true;
   probes.runs = [{ leadId: "lead", tasks: [{
-    id: "task", title: "Historical assignment", sessionId: "latest-worker", memberId: "worker", status: "running",
+    id: "task", title: "Historical assignment", prompt: "Preserve the historical checkout", sessionId: "latest-worker", memberId: "worker", status: "running",
   }], dispatches: [{
     id: "old-dispatch", taskId: "task", sessionId: "chat", state: "failed", stage: "settled", startedAt: 1000, updatedAt: 2000,
     workspace: { id: "checkout:historical", projectCwd: "/repo", checkoutCwd: "/historical-worker", kind: "worktree", branch: "historical" },
@@ -453,19 +464,21 @@ it("keeps an earlier member worker in Workbench and opens its own historical ses
   const pane = props();
   pane.session.worktreeCwd = "/historical-worker";
   const openWorker = vi.fn();
-  act(() => root.render(createElement(OrchestrationActions.Provider, { value: {
+  await act(async () => root.render(createElement(OrchestrationActions.Provider, { value: {
     open: vi.fn(), update: vi.fn(), confirm: vi.fn(async () => {}), retry: vi.fn(), openWorker,
   } }, createElement(SessionPane, pane))));
   expect(container.querySelector('[data-member-workbench="true"]')).not.toBeNull();
   const header = container.querySelector("[data-workbench-header]")!;
-  expect(header.textContent).toContain("Saved session");
+  expect(header.textContent).toContain("Task");
   expect(header.querySelector('[data-agent-state="failed"]')).not.toBeNull();
   expect(header.textContent).toContain("Historical launch failed");
-  expect(container.querySelector('[data-member-work]')?.textContent).toContain("Historical assignment");
-  const open = [...header.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Open worktree")!;
+  expect(header.textContent).toContain("Historical assignment");
+  expect(container.querySelector('[aria-label="Task brief"]')).not.toBeNull();
+  const open = [...header.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent?.trim() === "Open worktree")!;
   expect(open.disabled).toBe(false);
-  act(() => open.click());
-  expect(openWorker).toHaveBeenCalledExactlyOnceWith("chat");
+  await act(async () => open.click());
+  expect(revealPath).toHaveBeenCalledExactlyOnceWith("/historical-worker");
+  expect(openWorker).not.toHaveBeenCalled();
   expect(probes.runs[0].tasks[0].sessionId).toBe("latest-worker");
   expect(probes.runs[0].tasks[0].status).toBe("running");
 });
@@ -668,11 +681,11 @@ it("steers through the existing submission boundary and retains a rejected draft
   pane.onSubmit = vi.fn(() => false);
   setComposerDraft("chat", "Check the new evidence first");
   render(pane);
-  const steer = [...container.querySelectorAll<HTMLButtonElement>("header button")].find((button) => button.textContent === "Steer")!;
+  const steer = [...container.querySelectorAll<HTMLButtonElement>('[aria-label="Message delivery"] button')].find((button) => button.textContent === "Steer")!;
   expect(steer.disabled).toBe(false);
-  expect(container.querySelector(".cc7u-delivery")?.textContent).toBe("Message will join the current turn.");
+  expect(container.querySelector(".cc7u-delivery")?.textContent).toBe("Message will follow the current turn");
   act(() => steer.click());
-  expect(container.querySelector(".cc7u-delivery")?.textContent).toContain("steer the current turn");
+  expect(container.querySelector(".cc7u-delivery")?.textContent).toBe("Steers the running turn");
   await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Send"]')!.click());
   expect(pane.onSubmit).toHaveBeenCalledWith("chat", "Check the new evidence first", [], { followUpBehavior: "steer" });
   expect(field().value).toBe("Check the new evidence first");
@@ -689,9 +702,56 @@ it("disables Workbench steering while recovery or a decision holds the conversat
     { worktreePreparing: true },
   ]) {
     render({ ...pane, session: { ...pane.session, ...held } });
-    const steer = [...container.querySelectorAll<HTMLButtonElement>("header button")].find((button) => button.textContent === "Steer")!;
-    expect(steer.disabled).toBe(true);
+    expect(container.querySelector('[aria-label="Message delivery"]')).toBeNull();
   }
+});
+
+it("resets Steer after a guarded turn and explicitly queues the next supported turn", async () => {
+  probes.member = true;
+  const pane = props();
+  pane.session.busy = true;
+  pane.session.blocks[0].startedAt = Date.now();
+  pane.onSubmit = vi.fn(() => false);
+  setComposerDraft("chat", "Keep the queued follow-up");
+  render(pane);
+  act(() => container.querySelector<HTMLButtonElement>('[aria-label="Message delivery"] button:last-child')!.click());
+  expect(container.querySelector(".cc7u-delivery")?.textContent).toBe("Steers the running turn");
+  render({...pane, session: {...pane.session, codexStorageError: "Storage unavailable"}});
+  expect(container.querySelector('[aria-label="Message delivery"]')).toBeNull();
+  render(pane);
+  expect(container.querySelector('[aria-label="Message delivery"] button:first-child')?.getAttribute("aria-pressed")).toBe("true");
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Send"]')!.click());
+  expect(pane.onSubmit).toHaveBeenCalledWith("chat", "Keep the queued follow-up", [], {followUpBehavior: "queue"});
+  expect(field().value).toBe("Keep the queued follow-up");
+});
+
+it.each(["different session", "hidden pane"])("ignores an old checkout-open completion after navigation to a %s", async navigation => {
+  probes.mono = false;
+  probes.actualPane = true;
+  probes.runs = [{leadId: "lead", tasks: [{ id: "task", title: "Read-only task", prompt: "Inspect checkout", sessionId: "chat", memberId: "worker", status: "running", workspace: {checkoutCwd: "/old-checkout"} }], dispatches: []}];
+  const pane = props();
+  await act(async () => render(pane));
+  let complete!: (value: []) => void;
+  vi.mocked(listDir).mockImplementationOnce(() => new Promise(resolve => {complete = resolve;}));
+  act(() => [...container.querySelectorAll<HTMLButtonElement>("header button")].find(button => button.textContent?.trim() === "Open worktree")!.click());
+  await act(async () => render(navigation === "hidden pane" ? {...pane, visible: false} : {...pane, session: {...pane.session, id: "another-session"}}));
+  await act(async () => complete([]));
+  expect(revealPath).not.toHaveBeenCalled();
+  expect(container.querySelector('[role="alert"]')).toBeNull();
+});
+
+it("keeps an empty queued task's composer docked with its own target and delivery help", () => {
+  probes.mono = false;
+  probes.actualPane = true;
+  probes.runs = [{leadId: "lead", tasks: [{id: "queued-task", title: "Queued task", prompt: "Review queued work", sessionId: "chat", memberId: "worker", status: "queued"}], dispatches: []}];
+  const pane = props();
+  pane.session.blocks = [];
+  render(pane);
+  const dock = container.querySelector(".cc7u-composer")!;
+  expect(dock).not.toBeNull();
+  expect(dock.querySelector('[aria-label="Composer target"]')?.textContent).toBe("Member · Task");
+  expect(dock.querySelector(".cc7u-delivery")?.textContent).toBe("Message will start the next turn.");
+  expect(container.querySelectorAll("[data-session-composer]")).toHaveLength(1);
 });
 
 it("shows usage recovery above the Mono input and routes the reset option", () => {

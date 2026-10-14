@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { MonoActivityContent } from "./MonoActivityPanel";
+import { WorkbenchTask } from "./WorkbenchTask";
 import { orchestrator } from "../../orchestration/model/orchestration";
 import {
   workspaceIdentity,
@@ -212,11 +213,14 @@ it("filters one flat member timeline and keeps injected protocol and diagnostics
         )!
         .click(),
     );
-    expect(document.querySelector('[role="dialog"]')?.textContent).toContain(
+    expect(openCardSession).toHaveBeenCalledWith(task.sessionId);
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    await act(async () => root.render(<WorkbenchTask task={task} />));
+    expect(host.textContent).toContain(
       "Check reconciliation.",
     );
     expect(
-      document.querySelector('[role="dialog"]')?.textContent,
+      host.textContent,
     ).not.toContain("Private authority");
   } finally {
     await act(async () => root.unmount());
@@ -271,12 +275,15 @@ it("keeps default failed task cards and their readers free of raw storage errors
         .find((button) => button.textContent === "Open")!
         .click(),
     );
+    expect(openCardSession).toHaveBeenCalledWith(task.sessionId);
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    await act(async () => root.render(<WorkbenchTask task={task} />));
     expect(
-      document.querySelector('[role="dialog"]')?.textContent,
+      host.textContent,
     ).not.toContain(task.error);
     expect(
-      document.querySelector(
-        '[role="dialog"] [data-transcript-error="storage"]',
+      host.querySelector(
+        '[data-transcript-error="storage"]',
       ),
     ).not.toBeNull();
   } finally {
@@ -317,15 +324,11 @@ it("opens the exact assignment when different Managers reuse a task identity", a
     );
     expect(assignments).toHaveLength(2);
     await act(async () => assignments[1].click());
-    const dialog = document.querySelector('[role="dialog"]')!;
-    expect(dialog.textContent).toContain("Instructions b");
-    expect(dialog.textContent).not.toContain("Instructions a");
-    await act(async () =>
-      [...dialog.querySelectorAll<HTMLButtonElement>("button")]
-        .find((button) => button.textContent === "Open worker session")!
-        .click(),
-    );
     expect(openCardSession).toHaveBeenCalledWith("worker-b");
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    await act(async () => root.render(<WorkbenchTask task={runs[1].tasks[0]} />));
+    expect(host.textContent).toContain("Instructions b");
+    expect(host.textContent).not.toContain("Instructions a");
   } finally {
     await act(async () => root.unmount());
     host.remove();

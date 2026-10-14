@@ -282,6 +282,8 @@ type Props = {
   canSaveDraft?: boolean;
   onSaveDraft?: (text: string, attachments: Attachment[]) => boolean | void;
   onStop?: () => void;
+  actionControls?: ReactNode;
+  stopInHeader?: boolean;
   onCompactContext?: () => boolean;
   onPlaceInFolder?: (target: SessionFolderTarget) => void;
   onDeleteQueuedMessage?: (messageId: string) => void;
@@ -401,6 +403,8 @@ export function Composer({
   canSaveDraft = false,
   onSaveDraft,
   onStop,
+  actionControls,
+  stopInHeader = false,
   onCompactContext,
   onPlaceInFolder,
   onDeleteQueuedMessage,
@@ -2405,8 +2409,9 @@ export function Composer({
               </button>
             ) : null}
             <div className="flex shrink-0 items-center gap-1">
+              {actionControls}
               <ComposerAction
-                busy={busy}
+                busy={busy && !stopInHeader}
                 disabled={disabled}
                 hasValue={hasValue && !worktreeRemoved}
                 allowBusySubmit={allowBusySubmit}

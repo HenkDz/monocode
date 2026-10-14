@@ -2869,15 +2869,17 @@ function Workspace({
   }, []);
 
   useEffect(() => {
-    const openIds = new Set(tabs.map((tab) => tab.id));
-    let next = pruneTabVisitHistory(tabVisitRef.current, openIds, activeTabId);
+    const memberHomes = listMonos().filter(mono => mono.role === "member" && mono.archivedAt == null && mono.sessionId).map(mono => mono.sessionId!);
+    const openIds = new Set([...tabs.map((tab) => tab.id), ...memberHomes]);
+    const activeVisit = monoViewId && memberHomes.includes(monoViewId) ? monoViewId : activeTabId;
+    let next = pruneTabVisitHistory(tabVisitRef.current, openIds, activeVisit);
     if (tabVisitFromHistoryRef.current) {
       tabVisitFromHistoryRef.current = false;
-    } else if (next.current !== activeTabId) {
-      next = recordTabVisit(next, activeTabId);
+    } else if (next.current !== activeVisit) {
+      next = recordTabVisit(next, activeVisit);
     }
-    commitTabVisit(pruneTabVisitHistory(next, openIds, activeTabId));
-  }, [activeTabId, commitTabVisit, tabs]);
+    commitTabVisit(pruneTabVisitHistory(next, openIds, activeVisit));
+  }, [activeTabId, monoViewId, monosSnap, commitTabVisit, tabs]);
 
   /** `cwd` scopes group inheritance: a tab from another project starts alone. */
   const insertBeside = useCallback(
@@ -4279,39 +4281,51 @@ function Workspace({
   }, [activateTab, activeTabId, deckProjectTabs]);
 
   const onVisitBack = useCallback(() => {
-    if (monoViewIdRef.current) {
+    if (monoViewIdRef.current && monoForSession(monoViewIdRef.current)?.role !== "member") {
       activateTab(activeTabIdRef.current);
       return;
     }
-    const openIds = new Set(tabsRef.current.map((tab) => tab.id));
+    const openIds = new Set([...tabsRef.current.map((tab) => tab.id), ...listMonos().filter(mono => mono.role === "member" && mono.archivedAt == null && mono.sessionId).map(mono => mono.sessionId!)]);
     const pruned = pruneTabVisitHistory(
       tabVisitRef.current,
       openIds,
-      activeTabIdRef.current,
+      monoViewIdRef.current ?? activeTabIdRef.current,
     );
     const next = tabVisitBack(pruned);
     if (!next || !openIds.has(next.current)) return;
     tabVisitFromHistoryRef.current = true;
     commitTabVisit(next);
-    activateTab(next.current);
+    if (monoForSession(next.current)?.role === "member") {
+      monoViewIdRef.current = next.current;
+      setMonoViewId(next.current);
+      setMonoActivity(null);
+      setMonoSessions(null);
+      setComposerFocused(true);
+    } else activateTab(next.current);
   }, [activateTab, commitTabVisit]);
 
   const onVisitForward = useCallback(() => {
-    if (monoViewIdRef.current) {
+    if (monoViewIdRef.current && monoForSession(monoViewIdRef.current)?.role !== "member") {
       activateTab(activeTabIdRef.current);
       return;
     }
-    const openIds = new Set(tabsRef.current.map((tab) => tab.id));
+    const openIds = new Set([...tabsRef.current.map((tab) => tab.id), ...listMonos().filter(mono => mono.role === "member" && mono.archivedAt == null && mono.sessionId).map(mono => mono.sessionId!)]);
     const pruned = pruneTabVisitHistory(
       tabVisitRef.current,
       openIds,
-      activeTabIdRef.current,
+      monoViewIdRef.current ?? activeTabIdRef.current,
     );
     const next = tabVisitForward(pruned);
     if (!next || !openIds.has(next.current)) return;
     tabVisitFromHistoryRef.current = true;
     commitTabVisit(next);
-    activateTab(next.current);
+    if (monoForSession(next.current)?.role === "member") {
+      monoViewIdRef.current = next.current;
+      setMonoViewId(next.current);
+      setMonoActivity(null);
+      setMonoSessions(null);
+      setComposerFocused(true);
+    } else activateTab(next.current);
   }, [activateTab, commitTabVisit]);
 
   const onActivate = useCallback(
@@ -7984,9 +7998,7 @@ function Workspace({
               : // Messaging a Mono mid-reply is like texting a friend twice:
                 // it reads the new message now, or right after if it can't.
                 mono
-                ? steerable
-                  ? "steer"
-                  : "queue"
+                ? (options?.followUpBehavior ?? (steerable ? "steer" : "queue"))
                 : (options?.followUpBehavior ?? loadFollowUpBehavior());
         if (followUpBehavior === "queue") {
           setSessions((prev) =>
@@ -14579,7 +14591,7 @@ function Workspace({
       setAutomationsViewOpen(false);
       return;
     }
-    if (monoViewIdRef.current) {
+    if (monoViewIdRef.current && monoForSession(monoViewIdRef.current)?.role !== "member") {
       closeMonoView();
       setComposerFocused(true);
       return;

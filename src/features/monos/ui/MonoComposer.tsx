@@ -86,6 +86,7 @@ type Props = {
    * share the field's line.
    */
   controls?: ReactNode;
+  actionControls?: ReactNode;
 };
 
 /**
@@ -109,6 +110,7 @@ export function MonoComposer({
   onSubmit,
   onFocus,
   controls,
+  actionControls,
 }: Props) {
   const [text, setText] = useState(() => getComposerDraft(sessionId) ?? "");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -553,6 +555,7 @@ export function MonoComposer({
           // bottom as the text grows.
           <div className="flex items-end gap-1.5 p-1.25">
             {input("flex-1 self-center px-1.5")}
+            {actionControls}
             {sendButton("shrink-0")}
           </div>
         )}

@@ -103,6 +103,12 @@ import {
 } from "../../monos/model/mono";
 import { MonoHeader } from "../../monos/ui/MonoHeader";
 import { WorkbenchHeader } from "../../monos/ui/WorkbenchHeader";
+import { WorkbenchTask } from "../../monos/ui/WorkbenchTask";
+import { cardSession, openCardSession, subscribeCardSessions } from "../../monos/model/monoCards";
+import { selectTaskMetrics } from "../../agents/model/agentMetrics";
+import { TaskMetricsLine } from "../../agents/ui/TaskMetricsLine";
+import { presentationText } from "../model/transcriptPresentation";
+import { listDir, revealPath } from "../../../platform/tauri/fs";
 import { WorkbenchDrawer } from "../../monos/ui/WorkbenchDrawer";
 import { ManagerWorkbenchNote } from "../../monos/ui/ManagerWorkbenchNote";
 import { WorkbenchSessionDetails } from "../../monos/ui/WorkbenchSessionDetails";
@@ -530,9 +536,16 @@ const LocalSessionPane = memo(function LocalSessionPane({
   const conversationLiveState = selectAgentLiveState(session);
   const assignments = isMember ? memberTasks(orchestrationRuns, mono.id) : [];
   const assignedTask =
-    assignments.find((task) =>
-      ["queued", "running", "cancelling"].includes(task.status),
-    ) ?? assignments[0];
+    assignments.find((task) => ["running", "cancelling"].includes(task.status)) ??
+    assignments.find((task) => task.status === "queued") ?? assignments[0];
+  const liveTask = isMember && assignedTask && ["queued", "running", "cancelling"].includes(assignedTask.status) ? assignedTask : undefined;
+  useSyncExternalStore(subscribeCardSessions, () => cardSession(liveTask?.sessionId ?? ""));
+  const liveTaskSession = cardSession(liveTask?.sessionId ?? "");
+  const liveTaskRun = orchestrationRuns.find((run) => run.tasks.some((task) => task === assignedTask));
+  const liveTaskMetrics = liveTask ? liveTaskSession?.taskMetrics?.[liveTask.id] ?? selectTaskMetrics(liveTask, liveTaskRun?.dispatches ?? [], []) : undefined;
+  const liveDispatch = liveTaskRun?.dispatches?.find(dispatch => dispatch.id === (liveTask?.activeDispatchId ?? liveTask?.lastDispatchId));
+  const liveTaskClock = liveTask && liveDispatch ? selectTaskMetrics(liveTask, [liveDispatch], []) : liveTaskMetrics;
+  const currentTaskMetrics = liveTaskMetrics && liveTaskClock ? {...liveTaskMetrics, startedAt: liveTaskClock.startedAt, endedAt: liveTaskClock.endedAt, elapsedMs: liveTaskClock.elapsedMs, turns: liveTaskClock.turns, partial: liveTaskMetrics.partial || liveTaskClock.partial} : liveTaskMetrics;
   const storageTask =
     isMember &&
     !session.codexStorageError &&
@@ -577,7 +590,9 @@ const LocalSessionPane = memo(function LocalSessionPane({
   const workbenchLook = workbenchMember ? monoLook(workbenchMember) : undefined;
   const workbenchTask = isMember ? assignedTask : savedMemberTask;
   const workbenchState =
-    isMember && memberState.liveState
+    liveTask
+      ? liveTaskSession?.liveState ?? selectAgentLiveState(undefined, { task: liveTask, tasks: liveTaskRun?.tasks, runStatus: liveTaskRun?.status, pauseReason: liveTaskRun?.lastPauseReason })
+      : isMember && memberState.liveState
       ? memberState.liveState
       : selectAgentLiveState(session, { task: workbenchTask });
   const [workOpen, setWorkOpen] = useState(false);
@@ -594,24 +609,52 @@ const LocalSessionPane = memo(function LocalSessionPane({
     !session.codexStoragePreparing;
   const steering = steerMode && canSteer;
   const workbenchOrigin = useRef<HTMLDivElement>(null);
-  const focusWorkbenchComposer = (steer = false) => {
-    setMemberTab("conversation");
-    setSteerMode(steer);
-    setWorkOpen(false);
-    requestAnimationFrame(() =>
-      workbenchOrigin.current
-        ?.querySelector<HTMLElement>(
-          "[data-session-composer] textarea, [data-session-composer] [contenteditable=true]",
-        )
-        ?.focus(),
-    );
-  };
+  const workToggle = useRef<HTMLButtonElement>(null);
+  const workClose = useRef<HTMLButtonElement>(null);
+  const checkout = !isMember && !session.worktreeRemoved && !session.worktreePreparing ? workbenchTask?.workspace?.checkoutCwd : undefined;
+  const [availableCheckout, setAvailableCheckout] = useState<string>();
+  const [folderError, setFolderError] = useState<string>();
+  useEffect(() => {
+    let current = true;
+    setAvailableCheckout(undefined);
+    setFolderError(undefined);
+    if (checkout && visible) void listDir(checkout).then(() => {
+      if (current) setAvailableCheckout(checkout);
+    }).catch(() => {});
+    return () => { current = false; };
+  }, [checkout, visible, session.id]);
+  useEffect(() => {
+    if (!workbench) return;
+    const origin = workbenchOrigin.current;
+    const dock = origin?.querySelector<HTMLElement>("[data-session-composer]");
+    if (!origin || !dock) return;
+    const measure = () => origin.style.setProperty("--ccwb1-composer-height", `${dock.getBoundingClientRect().height + 12}px`);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(dock);
+    return () => observer.disconnect();
+  }, [workbench, session.id]);
+  useEffect(() => {
+    if (!workOpen) return;
+    workClose.current?.focus();
+    return () => workToggle.current?.focus();
+  }, [workOpen]);
   useEffect(() => {
     setSteerMode(false);
     setWorkOpen(false);
     setDetailsOpen(false);
     setErrorDetailsOpen(false);
   }, [session.id]);
+  useEffect(() => { if (!canSteer) setSteerMode(false); }, [canSteer]);
+  const deliveryMode = workbench && canSteer ? <div role="group" aria-label="Message delivery" className="ccwb1-delivery-mode">
+    {([false, true] as const).map((steer) => <button key={String(steer)} type="button" aria-pressed={steering === steer} onClick={() => setSteerMode(steer)} onKeyDown={(event) => {
+      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+      event.preventDefault();
+      const next = event.key === "Home" ? false : event.key === "End" ? true : !steer;
+      setSteerMode(next);
+      event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>("button")[Number(next)]?.focus();
+    }}>{steer ? "Steer" : "Queue"}</button>)}
+  </div> : undefined;
   // A Mono shows only its own background, never the project's or the app's.
   const projectBackground = mono
     ? monoChatBackground(mono.id)
@@ -915,7 +958,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
   // The agent's input always sits at the bottom, like a chat.
   const dockComposer =
     remoteSessionLoading ||
-    (!draftBlock && (!isEmpty || inSplit || !!session.inboxAsk || !!agent));
+    (!draftBlock && (!isEmpty || inSplit || !!session.inboxAsk || !!agent || workbench));
   const composerDockMotion = useComposerDockMotion(dockComposer);
   const draftRef = useRef<string | undefined>(getComposerDraft(session.id));
   const [composerDraft, setComposerDraftText] = useState(
@@ -1090,11 +1133,13 @@ const LocalSessionPane = memo(function LocalSessionPane({
             session.id,
             text,
             attachments,
-            steering ? { ...options, followUpBehavior: "steer" } : options,
+            workbench && canSteer ? { ...options, followUpBehavior: steering ? "steer" : "queue" } : options,
           );
         }}
         onBtwCommand={btw.openWith}
         onStop={() => onStop(session.id)}
+        actionControls={deliveryMode}
+        stopInHeader={workbench}
         onCompactContext={() => onCompactContext(session.id)}
         onPlaceInFolder={(target) => onPlaceSessionInFolder(session.id, target)}
         queuedMessages={session.queuedMessages}
@@ -1228,7 +1273,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
     </>
   );
   const memberDelivery = steering
-    ? "Message will steer the current turn."
+    ? "Steers the running turn"
     : session.codexStorageError
       ? "Message will queue until storage is repaired."
       : session.codexStoragePreparing
@@ -1238,9 +1283,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
           : session.queueStatus === "paused"
             ? "Message will queue until you resume delivery."
             : session.busy
-              ? isMember && canSteer
-                ? "Message will join the current turn."
-                : "Message will follow the current turn."
+              ? "Message will follow the current turn"
               : conversationLiveState.status === "needs-you"
                 ? "Message will queue until the pending request is resolved."
                 : ["queued", "blocked", "failed"].includes(
@@ -1254,6 +1297,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
       ref={workbenchOrigin}
       data-member-workbench={workbench || undefined}
       data-session-drop={session.id}
+      data-task-checkout={checkout}
       data-session-empty={isEmpty}
       data-project-chat-background={!!projectBackground}
       data-project-background-effect={projectBackground?.effect}
@@ -1330,29 +1374,34 @@ const LocalSessionPane = memo(function LocalSessionPane({
           {workbench && (
             <WorkbenchHeader
               session={session}
-              name={isMember ? (workbenchLook?.name ?? "Member") : title}
+              name={isMember ? (workbenchLook?.name ?? "Member") : presentationText(workbenchTask?.title ?? title)}
               role={
                 isMember
                   ? (workbenchMember?.specialty ?? "Team member")
-                  : `Saved session · ${workbenchLook?.name ?? workbenchTask?.memberName ?? "Member"}`
+                  : ""
               }
               mascot={workbenchLook?.mascot ?? workbenchTask?.memberMascot}
               color={workbenchLook?.color ?? workbenchTask?.memberColor}
               state={workbenchState}
-              onMessage={() => focusWorkbenchComposer()}
-              onSteer={() => focusWorkbenchComposer(true)}
-              canSteer={canSteer}
-              onOpenWorktree={
-                workbenchTask?.workspace?.checkoutCwd &&
-                (!workbenchTask.readOnly || workbenchTask.readOnlyFallback) &&
-                !session.worktreeRemoved &&
-                reviewActions?.openWorker
-                  ? () => reviewActions.openWorker?.(workbenchTask.sessionId)
-                  : undefined
-              }
+              task={!isMember}
+              memberName={workbenchLook?.name ?? workbenchTask?.memberName ?? "Member"}
+              onHome={!isMember && workbenchMember?.sessionId ? () => openCardSession(workbenchMember.sessionId!) : undefined}
+              currentTaskMetrics={currentTaskMetrics}
+              onViewLive={liveTask ? () => openCardSession(liveTask.sessionId) : undefined}
+              onStop={session.busy && workspaceSwitchingSessionId !== session.id ? () => onStop(session.id) : undefined}
+              onOpenWorktree={checkout && availableCheckout === checkout ? () => {
+                setFolderError(undefined);
+                const current = () => reviewVisible.current && workbenchOrigin.current?.dataset.sessionDrop === session.id && workbenchOrigin.current.dataset.taskCheckout === checkout;
+                void listDir(checkout).then(() => { if (current()) return revealPath(checkout); }).catch((error) => {
+                  if (!current()) return;
+                  setAvailableCheckout(undefined);
+                  setFolderError(String(error));
+                });
+              } : undefined}
               onDetails={() => setDetailsOpen(true)}
             />
           )}
+          {workbench && folderError && <p role="alert" className="mb-3 text-xs text-red-700 dark:text-red-400">{folderError}</p>}
           <div className={workbench ? "cc7u-body" : "contents"}>
             {workbench && (
               <section
@@ -1361,10 +1410,17 @@ const LocalSessionPane = memo(function LocalSessionPane({
                 data-open={workOpen}
                 aria-label="Work"
                 tabIndex={0}
+                onKeyDown={(event) => {
+                  if (workOpen && event.key === "Escape") {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setWorkOpen(false);
+                  }
+                }}
               >
                 <div className="cc7u-work-caption">
                   <span>Work</span>
-                  <button type="button" onClick={() => setWorkOpen(false)}>
+                  <button ref={workClose} type="button" onClick={() => setWorkOpen(false)}>
                     Close work
                   </button>
                 </div>
@@ -1404,7 +1460,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
                       </button>
                     </section>
                   )}
-                {workbenchMember ? (
+                {!isMember && workbenchTask ? <WorkbenchTask key={`${session.id}-${workbenchTask.id}`} task={workbenchTask} /> : workbenchMember ? (
                   <MemberWorkLog
                     key={workbenchMember.id}
                     member={workbenchMember}
@@ -1434,6 +1490,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
                   <button
                     type="button"
                     className="cc7u-work-toggle"
+                    ref={workToggle}
                     aria-expanded={workOpen}
                     onClick={() => setWorkOpen(!workOpen)}
                   >
@@ -1609,6 +1666,13 @@ const LocalSessionPane = memo(function LocalSessionPane({
                 />
                 {remoteSessionLoading ? null : isEmpty ? (
                   workbench ? (
+                    liveTask ? <div className="ccwb1-live-work">
+                      <h3>{workbenchLook?.name ?? "Member"} is {liveTask.status === "queued" ? "queued for" : "working on"}</h3>
+                      <p>{presentationText(liveTask.title)}</p>
+                      <TaskMetricsLine metrics={currentTaskMetrics} state={workbenchState} showState={false} />
+                      <button type="button" onClick={() => openCardSession(liveTask.sessionId)}>View live</button>
+                      <small>This is {workbenchLook?.name ?? "your member"}'s home chat.</small>
+                    </div> :
                     <p className="px-4 py-5 text-xs text-content/55">
                       No conversation yet. Send a message to get started.
                     </p>
@@ -1996,6 +2060,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
                             : undefined
                         }
                         onFocus={() => onFocus(session.id)}
+                        actionControls={deliveryMode}
                         onSubmit={(text, attachments, monoGoal) =>
                           monoGoal
                             ? (onSubmitGoal?.(
@@ -2004,9 +2069,9 @@ const LocalSessionPane = memo(function LocalSessionPane({
                                 attachments,
                                 monoGoal,
                               ) ?? false)
-                            : steering
+                            : workbench && canSteer
                               ? onSubmit(session.id, text, attachments, {
-                                  followUpBehavior: "steer",
+                                  followUpBehavior: steering ? "steer" : "queue",
                                 })
                               : onSubmit(session.id, text, attachments)
                         }
@@ -2069,9 +2134,12 @@ const LocalSessionPane = memo(function LocalSessionPane({
                     composer
                   )}
                   {workbench && (
+                    <div className="ccwb1-delivery-footer">
                     <p role="status" className="cc7u-delivery">
                       {memberDelivery}
                     </p>
+                    <span aria-label="Composer target">{workbenchLook?.name ?? workbenchTask?.memberName ?? "Member"} · {isMember ? "Home" : "Task"}</span>
+                    </div>
                   )}
                 </div>
               ) : null}

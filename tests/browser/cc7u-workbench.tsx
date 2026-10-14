@@ -496,6 +496,7 @@ setComposerDraft(sessionId, "Keep my draft");
 mockWindows("main");
 mockIPC(
   (command, args) => {
+    if (command === "list_dir") return [];
     if (command === "git_worktrees")
       return {
         defaultRoot: cwd,

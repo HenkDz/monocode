@@ -24,6 +24,30 @@ function conversation(): Session {
 }
 
 describe("batched harness events", () => {
+  it("keeps interleaved provider reasoning parts and canonical snapshots separate", () => {
+    const summary = { itemId: "r", partIndex: 0, channel: "summary" as const };
+    const raw = { itemId: "r", partIndex: 0, channel: "raw" as const };
+    const next = { ...summary, partIndex: 1 };
+    const events: HarnessEvent[] = [
+      { type: "reasoning.delta", reasoning: summary, text: "very " },
+      { type: "reasoning.delta", reasoning: summary, text: "very " },
+      { type: "reasoning.delta", reasoning: raw, text: "Raw body" },
+      { type: "reasoning.delta", reasoning: next, text: "**Next heading**" },
+      { type: "reasoning.delta", reasoning: summary, text: "good." },
+      { type: "reasoning.delta", reasoning: summary, snapshot: true, text: "very very good." },
+      { type: "reasoning.delta", reasoning: next, snapshot: true, text: "**Next heading**\n\nBody" },
+      { type: "reasoning.completed", itemId: "r" },
+      { type: "reasoning.delta", reasoning: summary, snapshot: true, text: "very very good." },
+    ];
+    const session = conversation();
+    const batched = applyHarnessEvents(session, events);
+    expect(content(batched)).toEqual(content(events.reduce(applyHarnessEvent, session)));
+    expect(batched.blocks.filter(block => block.role === "reasoning").map(block => block.text)).toEqual([
+      "very very good.", "Raw body", "**Next heading**\n\nBody",
+    ]);
+    expect(batched.blocks.filter(block => block.role === "reasoning").every(block => !block.streaming)).toBe(true);
+  });
+
   it("preserves mixed snapshots, repeated tokens, whitespace and message boundaries", () => {
     const events: HarnessEvent[] = [
       { type: "message.delta", text: " " },

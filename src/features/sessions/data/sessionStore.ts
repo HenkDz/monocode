@@ -1031,6 +1031,12 @@ function sanitizeBlock(
     role: block.role,
     text: block.text,
   };
+  const reasoning = block.reasoning;
+  if (block.role === "reasoning" && reasoning && typeof reasoning.itemId === "string" &&
+      reasoning.itemId.length <= 512 && Number.isSafeInteger(reasoning.partIndex) && reasoning.partIndex >= 0 &&
+      (reasoning.channel === "summary" || reasoning.channel === "raw")) {
+    next.reasoning = { itemId: reasoning.itemId, partIndex: reasoning.partIndex, channel: reasoning.channel };
+  }
   if (block.role === "user" && !block.internal && !block.draft && !block.attachments?.length && block.appRequestId == null &&
       block.monoSource == null && block.monoSessionCompletion == null &&
       block.monoTeamMessage == null && block.monoHabit == null) {
@@ -1115,9 +1121,13 @@ function sanitizeBlock(
   if (block.role === "user" && turnMetrics) next.turnMetrics = turnMetrics;
   if (block.tool) next.tool = block.tool;
   if (block.approval?.decided) {
+    const { command, cwd } = block.approval;
     next.approval = {
       requestId: block.approval.requestId,
       decided: block.approval.decided,
+      ...((typeof command === "string" || (Array.isArray(command) && command.every(part => typeof part === "string")))
+        ? { command } : {}),
+      ...(typeof cwd === "string" ? { cwd } : {}),
     };
   } else if (block.approval && !block.approval.decided) {
     // Drop stale live approval prompts; request ids don't survive restarts.

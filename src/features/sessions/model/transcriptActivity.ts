@@ -18,6 +18,7 @@ import { INTERRUPT_MESSAGE } from "./inFlight";
 import type { Block, ToolPreview } from "./session";
 import { allModels } from "./models";
 import { monoCodeWorkSummary } from "./monocodeToolCall";
+import { codeModeCommand } from "../../../integrations/harness/core/codeModeCommand";
 
 export type ToolCallState = "pending" | "accepted" | "rejected";
 
@@ -66,13 +67,20 @@ export function toolCallState(block: Block): ToolCallState {
 
 export function toolCallLabel(block: Block, cwd?: string): string {
   const preview = block.tool?.preview;
+  const title = block.text || block.tool?.title;
+  const code = preview?.rawInput ?? (preview?.title?.includes("tools.exec_command")
+    ? preview.title
+    : title);
+  const command = code ? codeModeCommand(code) : undefined;
+  const codeMode = code?.includes("tools.exec_command") && /^\s*(?:await\b|const\b|let\b|var\b|text\s*\(|tools\.exec_command\s*\()/.test(code);
   const path = preview?.path
     ? displayPath(preview.path, cwd)
     : preview?.fileName;
   return (
     composeToolTitle({
       kind: block.tool?.kind,
-      title: block.text || block.tool?.title,
+      title: command || (codeMode ? "Run shell command" : title),
+      command,
       path,
       query: preview?.query,
       previewKind: preview?.kind,

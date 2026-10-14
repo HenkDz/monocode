@@ -35,7 +35,8 @@ export function applyHarnessEvents(
   let next = session;
   for (let index = 0; index < events.length; index++) {
     const event = events[index];
-    if (event.type !== "message.delta" && event.type !== "reasoning.delta") {
+    if ((event.type !== "message.delta" && event.type !== "reasoning.delta") ||
+        (event.type === "reasoning.delta" && event.reasoning)) {
       next = applyHarnessEvent(next, event);
       continue;
     }
@@ -43,6 +44,7 @@ export function applyHarnessEvents(
     while (index + 1 < events.length) {
       const following = events[index + 1];
       if (following.type !== event.type) break;
+      if (following.type === "reasoning.delta" && following.reasoning) break;
       texts.push(following.text);
       index++;
     }
@@ -70,8 +72,12 @@ export function applyHarnessEvent(
       if (!("path" in event)) return session;
       return appendImage(session, event);
     case "reasoning.delta":
+      if (event.reasoning) return patchReasoning(session, event);
       return patchStreaming(session, "reasoning", event.text, true);
     case "reasoning.completed":
+      if (event.itemId) return { ...session, blocks: session.blocks.map(block =>
+        block.reasoning?.itemId === event.itemId && block.streaming
+          ? { ...block, streaming: false } : block) };
       return finishRole(session, "reasoning");
     case "tool.started":
       return upsertTool(session, {
@@ -792,6 +798,30 @@ function appendBlock(session: Session, block: Block): Session {
   };
 }
 
+function patchReasoning(
+  session: Session,
+  event: Extract<HarnessEvent, { type: "reasoning.delta" }>,
+): Session {
+  if (!event.text || !event.reasoning) return session;
+  const part = event.reasoning;
+  const turnStart = currentTurnIndex(session);
+  for (let index = session.blocks.length - 1; index > turnStart; index--) {
+    const block = session.blocks[index];
+    if (block.role === "reasoning" && block.reasoning?.itemId === part.itemId &&
+        block.reasoning.partIndex === part.partIndex && block.reasoning.channel === part.channel) {
+      const text = event.snapshot ? event.text : block.text + event.text;
+      if (text === block.text) return session;
+      const blocks = session.blocks.slice();
+      blocks[index] = { ...block, text };
+      return { ...session, blocks };
+    }
+  }
+  return appendBlock(session, {
+    id: crypto.randomUUID(), role: "reasoning", text: event.text,
+    reasoning: part, streaming: true,
+  });
+}
+
 /** Only ordinary status rows leave an open prose stream intact. */
 function patchStreaming(
   session: Session,
@@ -875,7 +905,10 @@ function attachApproval(
               ...(preview ? { preview } : {}),
             }
           : prev.tool,
-      approval: { requestId: event.requestId, autoApprovalReason: event.autoApprovalReason },
+      approval: { requestId: event.requestId, autoApprovalReason: event.autoApprovalReason,
+        ...(event.command !== undefined ? { command: event.command } : {}),
+        ...(event.cwd !== undefined ? { cwd: event.cwd } : {}),
+      },
     };
     return { ...session, blocks };
   }
@@ -893,7 +926,10 @@ function attachApproval(
       kind: event.kind,
       ...(preview ? { preview } : {}),
     },
-    approval: { requestId: event.requestId, autoApprovalReason: event.autoApprovalReason },
+    approval: { requestId: event.requestId, autoApprovalReason: event.autoApprovalReason,
+      ...(event.command !== undefined ? { command: event.command } : {}),
+      ...(event.cwd !== undefined ? { cwd: event.cwd } : {}),
+    },
   });
 }
 

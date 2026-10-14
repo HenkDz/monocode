@@ -195,6 +195,8 @@ export type ToolPreviewLine = {
 
 export type ToolPreview = {
   kind: ToolPreviewKind;
+  /** Original code-mode input, retained independently of command and output. */
+  rawInput?: string;
   title?: string;
   path?: string;
   fileName?: string;
@@ -331,6 +333,8 @@ export type Block = {
   id: string;
   role: BlockRole;
   text: string;
+  /** Provider reasoning parts stay separate from raw diagnostic text. */
+  reasoning?: { itemId: string; partIndex: number; channel: "summary" | "raw" };
   monoGoalSubmission?: import("../../monos/model/monoGoalRouting").MonoGoalSubmission;
   managerRequestRecovery?: import("../../monos/model/managerAuthorizedWork").ManagerRequestRecovery;
   image?: GeneratedImageMeta;
@@ -372,6 +376,9 @@ export type Block = {
   };
   approval?: {
     requestId: number;
+    /** Exact provider command shown beside the live decision controls. */
+    command?: string | string[];
+    cwd?: string;
     autoApprovalReason?: string;
     decided?: "allow" | "deny" | "cancelled";
   };

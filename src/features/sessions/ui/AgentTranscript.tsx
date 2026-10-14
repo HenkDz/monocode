@@ -31,6 +31,7 @@ import {
   startTransition,
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -112,8 +113,6 @@ import { useBottomChatMotion } from "../hooks/useBottomChatMotion";
 import { useTranscriptSelection } from "../hooks/useTranscriptSelection";
 import type { TranscriptLayout } from "../../settings/model/appearance";
 import { AgentMarkdown } from "./AgentMarkdown";
-import { MonoWorkTicker } from "./MonoWorkTicker";
-import { monoWorkStatus } from "../model/monoWorkStatus";
 import { isEmojiOnlyMessage } from "../model/emojiMessage";
 import { attachmentPreviewSrc } from "../model/attachments";
 import { TranscriptSelectionMenu } from "./TranscriptSelectionMenu";
@@ -121,17 +120,11 @@ import { parseUserMessageLink } from "../model/linkPreview";
 import { UserLinkPreview } from "./UserLinkPreview";
 import {
   activityPhaseTitle,
-  activityStillRunning,
   buildActivityPhases,
-  firstFoldableIndex,
-  foldableWork,
-  foldedBlocks,
-  initialThinkingIndex,
   isFailedStatus,
   isIncompleteTool,
   isSubagentBlock,
   isThinkingBlock,
-  lastActivityIndex,
   isProseBlock,
   needsApproval,
   nestedScrollAbsorbsWheel,
@@ -144,7 +137,6 @@ import {
   toolCallLabel,
   toolCallState,
   turnCopyText,
-  workKind,
   workSummaryLine,
   monoTurnLatestStart,
   monoTurnRuns,
@@ -154,6 +146,8 @@ import {
   type ToolCallState,
   type TurnItem,
 } from "../model/transcriptActivity";
+import { compactTurn } from "../model/compactTurn";
+import { commandSummary } from "../../../integrations/harness/core/codeModeCommand";
 import { lastUserTurnBlock } from "../model/editLastTurn";
 import {
   monoCodeToolCall,
@@ -311,7 +305,6 @@ function AgentTranscriptComponent({
   model,
   modelSettings,
   pendingQuestion = false,
-  backgroundTasks,
   onApproval,
   onAddToChat,
   onSaveNote,
@@ -403,6 +396,7 @@ function AgentTranscriptComponent({
   const [searchQuery, setSearchQuery] = useState("");
   const highlightOwner = useRef(Symbol("transcript-search"));
   const toggleWork = useCallback((turnId: string, currentlyOpen: boolean) => {
+    if (!currentlyOpen) stickToBottom.current = false;
     setOpenWork((open) => ({ ...open, [turnId]: !currentlyOpen }));
   }, []);
   // Stretch the last turn after a send while this tab stays open. Closing
@@ -1131,8 +1125,6 @@ function AgentTranscriptComponent({
           });
           // Earlier activity groups have already been followed by prose or
           // more work. Only the last one can still be the live group.
-          const foldedAt = lastActivityIndex(items);
-          const initialThinkingAt = initialThinkingIndex(items);
           const startedAt =
             userBlock?.startedAt ?? habit?.at ?? turn[0].startedAt;
           const previousTurn = turns[firstVisibleTurn + turnIndex - 1];
@@ -1149,17 +1141,6 @@ function AgentTranscriptComponent({
             opensNewStretch(startedAt, previousAt)
               ? startedAt
               : undefined;
-          // The agent starting its answer is the end of the work: fold the
-          // groups then, not when the turn finally settles, so the collapse
-          // never lands under the text you have already started reading.
-          const answering =
-            foldedAt >= 0 &&
-            items
-              .slice(foldedAt + 1)
-              .some(
-                (item) => item.type === "block" && isProseBlock(item.block),
-              );
-          const workStillRunning = activityStillRunning(turn);
           // New turns carry immutable model provenance. Legacy turns do not,
           // so omit their model instead of rewriting history from the picker.
           const turnModel = userBlock?.turnModel;
@@ -1170,7 +1151,6 @@ function AgentTranscriptComponent({
           // leaving the prompt and the answer to it.
           const turnId = turn[0].id;
           const spawnedSessions = inlineWork ? monoSpawnedSessions(turn, knownLaunchedSessions) : [];
-          const launchCards = launchAnchors(items, spawnedSessions);
           const renderLaunches = (
             launches: readonly MonoSpawnedSession[],
             key: string,
@@ -1196,13 +1176,7 @@ function AgentTranscriptComponent({
               ))}
             </div>
           );
-          const fold = inlineWork || flatWork ? undefined : foldableWork(items);
-          const folded = fold ? foldedBlocks(items, fold) : [];
-          const summarizedWork = inlineWork
-            ? items.flatMap((item) =>
-                item.type === "block" ? [] : item.blocks,
-              )
-            : folded;
+          const compact = compactTurn(turn, settled, isLastTurn && pendingQuestion, managed);
           const workOpen = openWork[turnId] ?? false;
           // The action keeps the pane's props, which go stale once parked.
           const turnEditAction =
@@ -1218,36 +1192,6 @@ function AgentTranscriptComponent({
             agentName ??
             turnModel?.name ??
             (live ? currentModelName : undefined);
-          // The fold line speaks for the main agent only. A delegated run has
-          // its own row, which says who is working and how it went, so saying
-          // it again here would be two lines telling the same story.
-          const foldTitle: ReactNode =
-            habit || standaloneReply ? (
-              (agentName ?? habit?.name)
-            ) : live ? (
-              <LiveFoldTitle
-                startedAt={startedAt}
-                paused={waitingForApproval}
-                waitingLabel={
-                  managed && waitingForApproval
-                    ? "Waiting for orchestrator"
-                    : pendingQuestion
-                      ? "Waiting for answers"
-                      : undefined
-                }
-                background={backgroundTasks}
-                modelName={turnModelName}
-              />
-            ) : agentMascot && agentName ? (
-              // A Mono signs its settled turns with just its mascot and name.
-              <span className="font-medium text-content/80">{agentName}</span>
-            ) : durationMs != null ? (
-              formatWorkingDuration(durationMs, turnModelName, true)
-            ) : inlineWork && turnModelName ? (
-              turnModelName
-            ) : (
-              workSummaryLine(summarizedWork)
-            );
           // A Mono that only reacted answered on the message itself.
           const reactedOnly =
             inlineWork &&
@@ -1258,39 +1202,8 @@ function AgentTranscriptComponent({
             items.some(
               (item) => item.type === "block" && !!item.block.monoReaction,
             );
-          const showFoldLine =
-            !reactedOnly &&
-            (!!habit ||
-              standaloneReply ||
-              live ||
-              durationMs != null ||
-              (inlineWork
-                ? items.some(
-                    (item) =>
-                      item.type !== "block" || item.block.role !== "user",
-                  )
-                : !!fold));
-          // It sits where the work starts, from before there is any: the row
-          // is there from the first token, so nothing shoves the answer down
-          // when the turn folds.
-          const firstWork =
-            habit || standaloneReply
-              ? 0
-              : inlineWork
-                ? items.findIndex(
-                    (item) =>
-                      item.type !== "block" || item.block.role !== "user",
-                  )
-                : firstFoldableIndex(items);
-          const foldLineAt = fold
-            ? fold.start
-            : firstWork >= 0
-              ? firstWork
-              : items.length;
-          const isCurrentItem = (item: TurnItem) =>
-            item.type === "block"
-              ? item.block.id === searchCurrent
-              : item.blocks.some((block) => block.id === searchCurrent);
+          const showFoldLine = !reactedOnly && (!!habit || standaloneReply || compact.work.length > 0 || live || durationMs != null);
+          const firstWork = compact.work.length ? 0 : -1;
           const isCompactFollowUp = (item: TurnItem, index: number) => {
             const next = items[index + 1];
             return (
@@ -1301,60 +1214,7 @@ function AgentTranscriptComponent({
               next.block.role === "user"
             );
           };
-          const renderItem = (item: TurnItem, itemIndex: number) =>
-            item.type === "subagents" && !inlineWork && !flatWork ? (
-              <SubagentStack
-                key={item.blocks[0].id}
-                blocks={item.blocks}
-                cwd={cwd}
-                live={live}
-                onOpenFile={onOpenFile}
-                onOpenDiff={onOpenDiff}
-              />
-            ) : item.type !== "block" ? (
-              flatWork ? (
-                <MonoActivityTrail
-                  key={item.blocks[0].id}
-                  blocks={item.blocks}
-                  live={live}
-                  cwd={cwd}
-                  onApproval={onApproval}
-                  onOpenFile={onOpenFile}
-                  onOpenDiff={onOpenDiff}
-                  readOutput
-                  flatWork
-                />
-              ) : inlineWork ? (
-                <MonoWorkApprovals
-                  key={item.blocks[0].id}
-                  blocks={item.blocks}
-                  cwd={cwd}
-                  onApproval={onApproval}
-                  onOpenFile={onOpenFile}
-                  onOpenDiff={onOpenDiff}
-                />
-              ) : itemIndex === initialThinkingAt ? (
-                <InitialThinking
-                  key={item.blocks[0].id}
-                  live={visible && !settled}
-                />
-              ) : (
-                <ActivityPhases
-                  key={item.blocks[0].id}
-                  blocks={item.blocks}
-                  cwd={cwd}
-                  done={
-                    !visible ||
-                    settled ||
-                    itemIndex < foldedAt ||
-                    (answering && !workStillRunning)
-                  }
-                  onApproval={onApproval}
-                  onOpenFile={onOpenFile}
-                  onOpenDiff={onOpenDiff}
-                />
-              )
-            ) : (
+          const renderItem = (item: { type: "block"; block: Block }, itemIndex: number) => (
               <TranscriptBlock
                 key={item.block.id}
                 block={item.block}
@@ -1377,7 +1237,7 @@ function AgentTranscriptComponent({
                   isProseBlock(item.block) &&
                   (items[itemIndex - 1]?.type === "activity" ||
                     items[itemIndex - 1]?.type === "subagents" ||
-                    (itemIndex === foldLineAt && showFoldLine))
+                    (showFoldLine && compact.outside.has(item.block)))
                 }
                 onApproval={onApproval}
                 onSaveNote={onSaveNote}
@@ -1409,67 +1269,6 @@ function AgentTranscriptComponent({
                 }
               />
             );
-          // The fold reaches across a stack of delegated runs, but those rows
-          // do not collapse with it: they are lifted out and parked under the
-          // work, where they stay put however often it re-folds.
-          const foldEntries = fold
-            ? items.slice(fold.start, fold.end + 1).map((entry, offset) => ({
-                entry,
-                index: fold.start + offset,
-              }))
-            : [];
-          const foldSubagents = foldEntries.filter(
-            ({ entry }) => entry.type === "subagents",
-          );
-          const foldWork = foldEntries.filter(
-            ({ entry }) => entry.type !== "subagents",
-          );
-          const foldLineRow = (
-            <TurnRow key="work-fold" folded={!showFoldLine}>
-              {inlineWork ? (
-                <MonoTurnHeader
-                  managerProject={managerProject}
-                  blocks={turn}
-                  title={foldTitle}
-                  name={turnModelName}
-                  harness={turnHarness}
-                  agentMascot={agentMascot}
-                  active={!settled}
-                  live={live}
-                  waitingForAnswers={!!pendingQuestion}
-                  backgroundTasks={backgroundTasks}
-                  onShowWork={
-                    onShowWork ? () => onShowWork(turnId, turn) : undefined
-                  }
-                  workExpanded={activeWorkTurnId === turnId}
-                  searchCurrent={
-                    turn.some((block) => block.id === searchCurrent) &&
-                    !items.some((item) =>
-                      item.type === "block"
-                        ? item.block.id === searchCurrent
-                        : item.blocks.some(
-                            (block) =>
-                              block.id === searchCurrent &&
-                              needsApproval(block),
-                          ),
-                    )
-                  }
-                />
-              ) : (
-                <WorkFoldLine
-                  managerProject={managerProject}
-                  title={foldTitle}
-                  kind={workKind(summarizedWork)}
-                  harness={turnHarness}
-                  agentMascot={agentMascot}
-                  live={live}
-                  expandable={!!fold}
-                  open={workOpen && !!fold}
-                  onToggle={() => toggleWork(turnId, workOpen)}
-                />
-              )}
-            </TurnRow>
-          );
           return (
             <div
               key={turn[0].id}
@@ -1488,103 +1287,30 @@ function AgentTranscriptComponent({
                   Decision requested · {turn[0].monoSessionCompletion.blocker.requests.length} requests
                 </div>
               )}
-              {items
-                .flatMap((item, itemIndex) => {
-                  // The header carries the process; only approvals need a row
-                  // in the chat. The full turn remains in the activity sidebar.
-                  if (
-                    inlineWork &&
-                    !flatWork &&
-                    item.type !== "block" &&
-                    !item.blocks.some(needsApproval)
-                  )
-                    return itemIndex === foldLineAt ? [foldLineRow] : [];
-                  const inFold =
-                    !!fold && itemIndex >= fold.start && itemIndex <= fold.end;
-                  if (inFold) {
-                    if (itemIndex !== fold.start) return [];
-                    return [
-                      foldLineRow,
-                      <TurnRow key="work-details" folded={!workOpen}>
-                        {() =>
-                          foldWork.map(({ entry, index }, offset) => (
-                            <div
-                              key={turnItemKey(entry)}
-                              data-transcript-search-item
-                              data-transcript-search-current={
-                                isCurrentItem(entry) || undefined
-                              }
-                              className={`flow-root pb-1 last:pb-0 pl-5 zen-fold-rail ${
-                                offset === foldWork.length - 1
-                                  ? "zen-fold-tail"
-                                  : ""
-                              }${
-                                // Prose the trail holds is the agent talking
-                                // while it works; the marker lets it read as
-                                // process, not result.
-                                entry.type === "block" &&
-                                isProseBlock(entry.block)
-                                  ? " zen-fold-prose"
-                                  : ""
-                              }`}
-                            >
-                              {renderItem(entry, index)}
-                            </div>
-                          ))
-                        }
-                      </TurnRow>,
-                      // Delegated runs sit under the agent's own work, not
-                      // among it: they are a second thing the turn is doing,
-                      // and reading them as the first steps of the main trail
-                      // is what made them look like its work.
-                      ...foldSubagents.map(({ entry, index }) => (
-                        <div
-                          key={turnItemKey(entry)}
-                          data-transcript-search-item
-                          data-transcript-search-current={
-                            isCurrentItem(entry) || undefined
-                          }
-                          className="flow-root pb-1"
-                        >
-                          {renderItem(entry, index)}
-                        </div>
-                      )),
-                    ];
-                  }
-                  const row = (
-                    <div
-                      key={turnItemKey(item)}
-                      data-transcript-search-item
-                      data-transcript-search-current={
-                        isCurrentItem(item) || undefined
-                      }
-                      className={`flow-root ${isCompactFollowUp(item, itemIndex) ? "pb-0" : "pb-1"}`}
-                    >
-                      {renderItem(item, itemIndex)}
-                    </div>
-                  );
-                  // A launch's cards follow the reply after it once that reply
-                  // has finished streaming (CSS holds them through its fade).
-                  // That never reverts, so a report back reopening the turn
-                  // does not take them away again.
-                  const launches = launchCards.afterItem.get(itemIndex);
-                  const cards =
-                    launches &&
-                    (settled ||
-                      itemIndex < items.length - 1 ||
-                      (item.type === "block" && !item.block.streaming))
-                      ? [
-                          renderLaunches(
-                            launches,
-                            `launches-${turnItemKey(item)}`,
-                            "pb-3",
-                          ),
-                        ]
-                      : [];
-                  if (itemIndex !== foldLineAt) return [row, ...cards];
-                  return [foldLineRow, row, ...cards];
-                })
-                .concat(foldLineAt >= items.length ? [foldLineRow] : [])}
+              <CompactTurnWork
+                turnId={turnId}
+                compact={compact}
+                show={showFoldLine}
+                open={workOpen}
+                active={!settled}
+                live={live}
+                startedAt={startedAt}
+                durationMs={durationMs}
+                waiting={waitingForApproval || !!pendingQuestion}
+                waitingLabel={managed && waitingForApproval ? "Waiting for orchestrator" : pendingQuestion ? "Waiting for answers" : "Waiting for approval…"}
+                suppressNarration={turn.some(block => block.role === "user" && undeliveredMessageIds.has(block.id))}
+                searchCurrent={searchCurrent}
+                onToggle={() => toggleWork(turnId, workOpen)}
+                cwd={cwd}
+                onOpenFile={onOpenFile}
+                onOpenDiff={onOpenDiff}
+                renderBlock={block => {
+                  const itemIndex = items.findIndex(item => item.type === "block" && item.block.id === block.id);
+                  return <div key={block.id} data-transcript-search-item data-transcript-search-current={block.id === searchCurrent || undefined}>
+                    {renderItem({ type: "block", block }, itemIndex)}
+                  </div>;
+                }}
+              />
               {settled &&
                 proposals
                   .filter((block) => block.orchestration?.status !== "planning")
@@ -1598,9 +1324,9 @@ function AgentTranscriptComponent({
                     </div>
                   ))}
               {/* Launches no reply followed wait for the turn to end. */}
-              {settled && launchCards.atEnd.length > 0
+              {(settled || durationMs != null) && spawnedSessions.length > 0
                 ? renderLaunches(
-                    launchCards.atEnd,
+                    spawnedSessions,
                     "launches-end",
                     artifacts.length > 0 ? "pb-1" : "pb-3",
                   )
@@ -1632,13 +1358,14 @@ function AgentTranscriptComponent({
                 (inlineWork && firstWork >= 0)) ? (
                 <TurnDuration
                   managerProject={managerProject}
+                  agentMascot={agentMascot}
                   revealOnHover={inlineWork}
                   elapsedMs={durationMs ?? null}
                   label={
-                    standaloneReply ? (agentName ?? habit?.name) : undefined
+                    standaloneReply || inlineWork ? (agentName ?? habit?.name) : undefined
                   }
                   metrics={hideTurnMetrics ? undefined : userBlock?.turnMetrics}
-                  labelHidden={showFoldLine}
+                  labelHidden={showFoldLine && !standaloneReply && !habit && !(inlineWork && agentName)}
                   modelName={turnModelName}
                   completedAt={
                     habit?.at ??
@@ -1769,70 +1496,6 @@ function DaySeparator({ at }: { at: number }) {
   );
 }
 
-/** Placeholder for private reasoning before the first assistant text arrives. */
-function InitialThinking({
-  live,
-  embedded = false,
-}: {
-  live: boolean;
-  embedded?: boolean;
-}) {
-  return (
-    <div
-      className={`min-w-0 pt-3 pb-1 font-sans text-sm text-content/50 ${embedded ? "" : "px-4"}`}
-    >
-      {live ? <Shimmer duration={1.6}>Thinking…</Shimmer> : "Thinking…"}
-    </div>
-  );
-}
-
-/**
- * The clock on a turn's fold line: how long the agent has been at it, or what
- * it is waiting on. The band that sweeps the text is sized off this element,
- * so it shrinks to the words — stretched across the row, the sweep spends its
- * time on empty space and the line just sits there looking dim.
- */
-function LiveFoldTitle({
-  startedAt,
-  paused,
-  waitingLabel,
-  background,
-  modelName,
-}: {
-  startedAt?: number;
-  paused: boolean;
-  waitingLabel?: string;
-  background?: string[];
-  modelName?: string;
-}) {
-  const elapsedMs = useElapsedFrom(startedAt, paused);
-  // Yielding with a command still going is not the end of the turn. The clock
-  // keeps running and the line says what it is waiting on.
-  const text = paused
-    ? (waitingLabel ?? "Waiting for approval")
-    : background?.length
-      ? `${formatWorkingDuration(elapsedMs, modelName)} · ${backgroundLabel(background)}`
-      : formatWorkingDuration(elapsedMs, modelName);
-  const shimmer = (
-    <Shimmer className="min-w-0 truncate font-sans text-sm" duration={1}>
-      {text}
-    </Shimmer>
-  );
-  return background?.length ? (
-    <span className="flex min-w-0" title={background.join("\n")}>
-      {shimmer}
-    </span>
-  ) : (
-    shimmer
-  );
-}
-
-function backgroundLabel(tasks: string[]): string {
-  return tasks.length === 1
-    ? "running in background"
-    : `${tasks.length} tasks running in background`;
-}
-
 /**
  * What a finished turn leaves under the answer: what you can do with it, and
  * when it landed. The clock lives on the fold line above, from the first token
@@ -1840,6 +1503,7 @@ function backgroundLabel(tasks: string[]): string {
  */
 function TurnDuration({
   managerProject,
+  agentMascot,
   elapsedMs,
   label: completionLabel,
   metrics,
@@ -1859,6 +1523,7 @@ function TurnDuration({
   revealOnHover = false,
 }: {
   managerProject?: string;
+  agentMascot?: Props["agentMascot"];
   elapsedMs: number | null;
   label?: string;
   metrics?: TurnMetrics;
@@ -1936,7 +1601,7 @@ function TurnDuration({
         <span className="flex min-w-0 items-center gap-2.5">
           {dot}
           <span className="flex min-w-0 items-center gap-1.5">
-            {managerProject ? <ManagerAvatar project={managerProject} /> : harness ? (
+            {managerProject ? <ManagerAvatar project={managerProject} /> : agentMascot ? <PixelMascot name={agentMascot.mascot} color={agentMascot.color} still className="size-3.5 shrink-0" /> : harness ? (
               <HarnessIcon harness={harness} className="size-3.5 shrink-0" />
             ) : null}
             <span className="min-w-0 truncate" title={label}>
@@ -2866,236 +2531,92 @@ function UserMessageBlock({
 }
 
 /**
- * Animate one fold, then release its contents. Closed work must not retain
- * a component and DOM tree for every tool; only expansion builds those rows.
- * Visible rows stay out of Grid so they rewrap when their pane changes width.
- */
-function TurnRow({
-  folded,
-  children,
-}: {
-  folded: boolean;
-  children: ReactNode | (() => ReactNode);
-}) {
-  const [foldState, setFoldState] = useState<
-    "open" | "opening" | "closing" | "closed"
-  >(folded ? "closed" : "open");
-
-  useLayoutEffect(() => {
-    setFoldState((current) => {
-      if (folded) {
-        return current === "closed" || current === "closing"
-          ? current
-          : "closing";
-      }
-      return current === "open" || current === "opening" ? current : "opening";
-    });
-  }, [folded]);
-
-  useEffect(() => {
-    if (foldState !== "opening" && foldState !== "closing") return;
-    // Hidden tabs and reduced-motion styles may never fire animationend.
-    const timer = window.setTimeout(() => {
-      setFoldState(folded ? "closed" : "open");
-    }, 350);
-    return () => window.clearTimeout(timer);
-  }, [foldState, folded]);
-
-  if (folded && foldState === "closed") return null;
-
-  return (
-    // `inert` keeps folded work out of tab order and off the screen reader.
-    <div
-      className="zen-fold-item"
-      data-fold-state={foldState}
-      inert={folded}
-      onAnimationEnd={(event) => {
-        if (event.target !== event.currentTarget) return;
-        setFoldState(folded ? "closed" : "open");
-      }}
-    >
-      {/* Keep padding off the Grid item itself. Otherwise its 4px bottom
-       * padding survives a 0fr track and every folded row leaves a gap. */}
-      <div>
-        <div className="pb-1">
-          {typeof children === "function" ? children() : children}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/** A turn item's identity, stable as the group it names grows. */
-/**
- * Where a turn's launched sessions go: each after the first reply that came
- * after its launch, so a Mono reporting back later in the same turn writes
- * below them, as it happened. A launch no reply has followed goes at the end.
- */
-function launchAnchors(
-  items: readonly TurnItem[],
-  launches: readonly MonoSpawnedSession[],
-): {
-  afterItem: Map<number, MonoSpawnedSession[]>;
-  atEnd: MonoSpawnedSession[];
-} {
-  const afterItem = new Map<number, MonoSpawnedSession[]>();
-  const atEnd: MonoSpawnedSession[] = [];
-  if (launches.length === 0) return { afterItem, atEnd };
-  const launched = items.map((item) =>
-    monoSpawnedSessions(
-      item.type === "block" ? [item.block] : item.blocks,
-      launches,
-    ).map((entry) => entry.sessionId),
-  );
-  for (const launch of launches) {
-    // The tool call that started it; the prompt also lists it, as a fallback.
-    const isPrompt = (index: number) => {
-      const item = items[index];
-      return item.type === "block" && item.block.role === "user";
-    };
-    const has = (index: number) => launched[index].includes(launch.sessionId);
-    let at = items.findIndex((_, index) => has(index) && !isPrompt(index));
-    if (at < 0) at = items.findIndex((_, index) => has(index));
-    const reply =
-      at < 0
-        ? -1
-        : items.findIndex(
-            (item, index) =>
-              index > at && item.type === "block" && isProseBlock(item.block),
-          );
-    if (reply < 0) atEnd.push(launch);
-    else afterItem.set(reply, [...(afterItem.get(reply) ?? []), launch]);
-  }
-  return { afterItem, atEnd };
-}
-
-function turnItemKey(item: TurnItem): string {
-  return item.type === "block" ? item.block.id : item.blocks[0].id;
-}
-
-/**
  * The line a turn's work folds behind: the agent's mark, and the clock —
  * ticking while the agent works, how long it took once it is done. Everything
  * the fold holds stays one click away, so the settled transcript reads as
  * prompt, answer, and a receipt for the work in between.
  */
-function WorkFoldLine({
-  managerProject,
-  title,
-  kind,
-  harness,
-  agentMascot,
-  live = false,
-  expandable,
-  open,
-  onToggle,
-}: {
-  managerProject?: string;
-  title: ReactNode;
-  kind: ActivityPhaseKind;
-  harness?: HarnessId;
-  agentMascot?: Props["agentMascot"];
-  live?: boolean;
-  expandable: boolean;
+function CompactTurnWork({ turnId, compact, show, open, active, live, startedAt, durationMs, waiting, waitingLabel, suppressNarration, searchCurrent, onToggle, cwd, onOpenFile, onOpenDiff, renderBlock }: {
+  turnId: string;
+  compact: ReturnType<typeof compactTurn>;
+  show: boolean;
   open: boolean;
+  active: boolean;
+  live: boolean;
+  startedAt?: number;
+  durationMs?: number;
+  waiting: boolean;
+  waitingLabel: string;
+  suppressNarration: boolean;
+  searchCurrent: string | null;
   onToggle: () => void;
+  cwd?: string;
+  onOpenFile?: (path: string) => void;
+  onOpenDiff?: (path: string) => void;
+  renderBlock: (block: Block) => ReactNode;
 }) {
-  const icon = (
-    <span className="relative flex size-3.5 shrink-0 items-center justify-center">
-      {open ? (
-        // Open, the chevron stays put: it is the way back, and hunting for it
-        // under the cursor is no way to close what you opened.
-        <ChevronRight
-          className="size-3.5 rotate-90 text-content/45"
-          strokeWidth={1.75}
-        />
-      ) : (
-        <>
-          {managerProject ? <ManagerAvatar project={managerProject} /> : agentMascot ? (
-            <PixelMascot
-              name={agentMascot.mascot}
-              color={agentMascot.color}
-              still
-              className={`size-3.5 shrink-0 ${expandable ? "group-hover:opacity-0" : ""}`}
-            />
-          ) : harness ? (
-            <HarnessIcon
-              harness={harness}
-              className={`size-3.5 shrink-0 ${expandable ? "group-hover:opacity-0" : ""}`}
-            />
-          ) : (
-            <ActivityPhaseIcon
-              kind={kind}
-              className={expandable ? "group-hover:opacity-0" : ""}
-            />
-          )}
-          {expandable ? (
-            <ChevronRight
-              className="absolute size-3.5 text-content/45 opacity-0 transition-opacity duration-200 group-hover:opacity-100"
-              strokeWidth={1.75}
-            />
-          ) : null}
-        </>
-      )}
-    </span>
-  );
-  // While the agent runs, the clock shimmers here rather than at the bottom,
-  // which is now bare.
-  const label = live ? (
-    title
-  ) : (
-    <span className="min-w-0 flex-1 truncate font-sans text-sm text-content/50 transition-colors duration-200 group-hover:text-content/80">
-      {title}
-    </span>
-  );
-  // A settled Mono turn signs off in a pill, like the day separators.
-  const content =
-    agentMascot && !live ? (
-      <MonoSignaturePill>
-        {icon}
-        {label}
-      </MonoSignaturePill>
-    ) : (
-      <>
-        {icon}
-        {label}
-      </>
-    );
-  const row = `flex w-full min-w-0 items-center gap-1.5 px-4 py-1 text-left${
-    open ? " zen-fold-drop" : ""
-  }`;
-
-  if (!expandable) {
-    return (
-      <div
-        className={`group ${row}`}
-        role={live ? "status" : undefined}
-        aria-live={live ? "polite" : undefined}
-      >
-        {content}
-      </div>
-    );
+  const bodyId = useId();
+  const elapsed = useElapsedFrom(live ? startedAt : undefined, waiting);
+  const current = [...compact.work].reverse().find(block => block.tool || (!suppressNarration && isProseBlock(block)) || (isThinkingBlock(block) && block.reasoning?.channel !== "raw"));
+  const action = waiting ? waitingLabel : current?.tool ? displayedToolLabel(current, cwd) : current ? proseSummary(presentationText(current.text)) : "Thinking";
+  const counts = [compact.edits ? `${compact.edits} ${compact.edits === 1 ? "file" : "files"} edited` : "", compact.failures ? `${compact.failures} failed ${compact.failures === 1 ? "command" : "commands"}` : ""].filter(Boolean).join(" · ");
+  const segments: Block[][] = [];
+  for (const block of compact.work) {
+    const last = segments[segments.length - 1];
+    if (block.tool && last?.[0].tool) last.push(block);
+    else segments.push([block]);
   }
-  return (
-    <button
-      type="button"
-      aria-expanded={open}
-      aria-label={open ? "Hide the work" : "Show the work"}
-      aria-live={live ? "polite" : undefined}
-      onClick={onToggle}
-      className={`group ${row}`}
-    >
-      {content}
+  const work = show ? <div key="work" data-transcript-turn-work={turnId} className="compact-turn-work px-4">
+    <button type="button" className="compact-work-toggle" aria-label={open ? "Hide the work" : "Show the work"} aria-expanded={open} aria-controls={bodyId} onClick={onToggle}>
+      {active ? <span className="compact-work-spinner" aria-hidden="true" /> : null}
+      <span className="compact-work-label">{formatWorkingDuration(active ? elapsed : durationMs ?? null, undefined, !active)}</span>
+      <ChevronRight className={`size-3.5 shrink-0 transition-transform ${open ? "rotate-90" : ""}`} aria-hidden="true" />
+      {active ? <span className="compact-current-action" title={action}>{action}</span> : counts ? <span className="compact-work-counts">{counts}</span> : null}
     </button>
-  );
+    <div id={bodyId} data-transcript-work-details hidden={!open}>
+      {open ? <ol className="compact-work-timeline" aria-label="Activity in chronological order">
+        {segments.map(segment => <li key={segment[0].id} data-transcript-search-item data-transcript-search-current={segment.some(block => block.id === searchCurrent) || undefined} data-mono-activity-block={segment[0].id}>
+          {segment[0].tool ? <CompactToolGroup blocks={segment} live={live} cwd={cwd} searchCurrent={searchCurrent} onOpenFile={onOpenFile} onOpenDiff={onOpenDiff} /> : segment[0].role === "reasoning" ? (
+            segment[0].reasoning?.channel === "raw" ? <ActivityThinkingRow block={segment[0]} cwd={cwd} expandable bare reveal={segment[0].id === searchCurrent} onOpenFile={onOpenFile} /> : <AgentMarkdown text={segment[0].text} cwd={cwd} onOpenFile={onOpenFile} className="agent-reasoning" />
+          ) : isProseBlock(segment[0]) ? <div className="zen-fold-prose"><AgentMarkdown text={segment[0].text} cwd={cwd} onOpenFile={onOpenFile} /></div> : renderBlock(segment[0])}
+        </li>)}
+      </ol> : null}
+    </div>
+  </div> : null;
+  let inserted = false;
+  const rows: ReactNode[] = [];
+  for (const block of compact.visible) {
+    if (block.role !== "user" && !inserted) {
+      rows.push(work);
+      inserted = true;
+    }
+    if (compact.outside.has(block)) rows.push(renderBlock(block));
+  }
+  if (!inserted) rows.push(work);
+  return <>{rows}</>;
 }
 
-function MonoSignaturePill({ children }: { children: ReactNode }) {
-  return (
-    <span className="flex min-w-0 items-center gap-1.5 rounded-full bg-content/[0.07] py-0.5 pr-3 pl-2">
-      {children}
-    </span>
-  );
+function CompactToolGroup({ blocks, live, cwd, searchCurrent, onOpenFile, onOpenDiff }: {
+  blocks: Block[];
+  live: boolean;
+  cwd?: string;
+  searchCurrent: string | null;
+  onOpenFile?: (path: string) => void;
+  onOpenDiff?: (path: string) => void;
+}) {
+  const [override, setOverride] = useState<boolean | null>(null);
+  const open = blocks.some(block => block.id === searchCurrent) || (override ?? blocks.some(block => toolCallState(block) === "rejected" || isEditTool(block.tool?.kind, block.text, block.tool?.preview)));
+  const bodyId = useId();
+  return <div data-compact-tool-group>
+    <button type="button" className="compact-group-toggle" aria-expanded={open} aria-controls={bodyId} onClick={() => setOverride(!open)}>
+      <span>{workSummaryLine(blocks)}</span><ChevronRight className={`size-3 shrink-0 ${open ? "rotate-90" : ""}`} aria-hidden="true" />
+    </button>
+    <div id={bodyId} hidden={!open}>
+      {open ? blocks.map(block => <div key={block.id} data-compact-tool-call={block.id} data-transcript-search-item data-transcript-search-current={block.id === searchCurrent || undefined} className="compact-tool-row">
+        <ActivityRow block={block} cwd={cwd} live={live} onOpenFile={onOpenFile} onOpenDiff={onOpenDiff} flatWork />
+      </div>) : null}
+    </div>
+  </div>;
 }
 
 /**
@@ -3309,173 +2830,6 @@ function markScrollEdges(el: HTMLElement) {
   el.dataset.fadeTop = String(el.scrollTop > 1);
   el.dataset.fadeBottom = String(below > 1);
 }
-
-/** The live ticker shares the identity line instead of adding a work row. */
-function MonoTurnHeader({
-  managerProject,
-  blocks,
-  title,
-  name,
-  harness,
-  agentMascot,
-  active,
-  live,
-  waitingForAnswers,
-  backgroundTasks,
-  onShowWork,
-  workExpanded,
-  searchCurrent,
-}: {
-  managerProject?: string;
-  blocks: Block[];
-  title: ReactNode;
-  name?: string;
-  harness?: HarnessId;
-  agentMascot?: Props["agentMascot"];
-  active: boolean;
-  live: boolean;
-  waitingForAnswers: boolean;
-  backgroundTasks?: string[];
-  onShowWork?: () => void;
-  workExpanded?: boolean;
-  searchCurrent: boolean;
-}) {
-  const activity = useMemo(
-    () => blocks.filter((block) => !block.internal && !block.draft),
-    [blocks],
-  );
-  let status = useMemo(
-    () => monoWorkStatus(activity, active),
-    [activity, active],
-  );
-  if (active && waitingForAnswers && !activity.some(needsApproval)) {
-    status = { ...status, key: "question", label: "Waiting for answers…" };
-  } else if (active && backgroundTasks?.length && status.kind === "think") {
-    status = {
-      ...status,
-      key: "background",
-      label:
-        backgroundTasks.length === 1
-          ? "Waiting for background task…"
-          : `Waiting for ${backgroundTasks.length} background tasks…`,
-    };
-  }
-  const mark = managerProject ? (
-    <ManagerAvatar project={managerProject} />
-  ) : agentMascot ? (
-    <PixelMascot
-      name={agentMascot.mascot}
-      color={agentMascot.color}
-      still
-      className="size-3.5 shrink-0"
-    />
-  ) : harness ? (
-    <HarnessIcon harness={harness} className="size-3.5 shrink-0" />
-  ) : (
-    <ActivityPhaseIcon kind={status.kind} />
-  );
-  const ticker = (
-    <MonoWorkTicker status={{ ...status, active: live }} showIcon={false} />
-  );
-  return (
-    <div
-      data-mono-work
-      data-transcript-search-item
-      data-transcript-search-current={searchCurrent || undefined}
-      className="flex min-w-0 items-center gap-1.5 px-4 py-1 font-sans text-sm text-content/50"
-    >
-      {active ? (
-        <>
-          {agentMascot ? (
-            // The pill holds the Mono's signature from the first token on;
-            // the ticker runs beside it.
-            <>
-              <span className="max-w-[45%] shrink-0">
-                <MonoSignaturePill>
-                  {mark}
-                  {name ? (
-                    <span className="min-w-0 truncate font-medium text-content/80">
-                      {name}
-                    </span>
-                  ) : null}
-                </MonoSignaturePill>
-              </span>
-              <span aria-hidden className="shrink-0 text-content/25">
-                ·
-              </span>
-            </>
-          ) : (
-            <>
-              {mark}
-              {name ? (
-                <>
-                  <span className="max-w-[45%] truncate">{name}</span>
-                  <span aria-hidden className="shrink-0 text-content/25">
-                    ·
-                  </span>
-                </>
-              ) : null}
-            </>
-          )}
-          {onShowWork ? (
-            <button
-              type="button"
-              title={workExpanded ? "Hide activity" : "Show activity"}
-              aria-label={workExpanded ? "Hide activity" : "Show activity"}
-              aria-expanded={!!workExpanded}
-              onClick={onShowWork}
-              className="min-w-0 flex-1 cursor-pointer text-left outline-none transition-opacity duration-150 hover:opacity-70 focus-visible:opacity-70"
-            >
-              {ticker}
-            </button>
-          ) : (
-            <div className="min-w-0 flex-1">{ticker}</div>
-          )}
-        </>
-      ) : agentMascot ? (
-        <MonoSignaturePill>
-          {mark}
-          <span className="min-w-0 truncate">{title}</span>
-        </MonoSignaturePill>
-      ) : (
-        <>
-          {mark}
-          <span className="min-w-0 truncate">{title}</span>
-        </>
-      )}
-    </div>
-  );
-}
-
-type MonoWorkApprovalsProps = Pick<
-  ActivityPhasesProps,
-  "blocks" | "cwd" | "onApproval" | "onOpenFile" | "onOpenDiff"
->;
-
-/** Pending approvals stay actionable while the rest of the work is hidden. */
-const MonoWorkApprovals = memo(function MonoWorkApprovals({
-  blocks,
-  cwd,
-  onApproval,
-  onOpenFile,
-  onOpenDiff,
-}: MonoWorkApprovalsProps) {
-  return (
-    <div className="flex min-w-0 flex-col px-4">
-      {blocks.filter(needsApproval).map((block) => (
-        <ToolCall
-          key={block.id}
-          block={block}
-          cwd={cwd}
-          embedded
-          onApproval={onApproval}
-          onOpenFile={onOpenFile}
-          onOpenDiff={onOpenDiff}
-        />
-      ))}
-    </div>
-  );
-}, sameActivity);
 
 /** Full turn activity in transcript order, without the chat's work folding. */
 export function MonoActivityTrail({
@@ -3839,46 +3193,6 @@ function PhaseStep({
       }}
     >
       {children}
-    </div>
-  );
-}
-
-/**
- * Every delegated run in the turn, one row each. The main transcript cycles —
- * work folds behind a line, prose replaces prose — and a subagent you are
- * watching must not move while that happens, so these rows are never part of a
- * fold and hold their place from the moment the agents start.
- *
- * A row is a mascot, a name, and what that agent is doing right now. Click it
- * and the agent's own trail opens underneath.
- */
-function SubagentStack({
-  blocks,
-  cwd,
-  live = false,
-  embedded = false,
-  onOpenFile,
-  onOpenDiff,
-}: {
-  blocks: Block[];
-  cwd?: string;
-  live?: boolean;
-  embedded?: boolean;
-  onOpenFile?: (path: string) => void;
-  onOpenDiff?: (path: string) => void;
-}) {
-  return (
-    <div className={`flex min-w-0 flex-col ${embedded ? "" : "px-4"}`}>
-      {blocks.map((block) => (
-        <SubagentRow
-          key={block.id}
-          block={block}
-          cwd={cwd}
-          live={live}
-          onOpenFile={onOpenFile}
-          onOpenDiff={onOpenDiff}
-        />
-      ))}
     </div>
   );
 }
@@ -4380,16 +3694,20 @@ function ActivityThinkingRow({
   cwd,
   expandable = false,
   bare = false,
+  reveal = false,
   onOpenFile,
 }: {
   block: Block;
   cwd?: string;
   expandable?: boolean;
   bare?: boolean;
+  reveal?: boolean;
   onOpenFile?: (path: string) => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const text = proseSummary(presentationText(block.text)) || "Thinking";
+  const [open, setOpen] = useState(reveal);
+  useEffect(() => { if (reveal) setOpen(true); }, [reveal]);
+  const raw = block.reasoning?.channel === "raw";
+  const text = raw ? "Raw reasoning" : proseSummary(presentationText(block.text)) || "Thinking";
   // In a group the rail is the bullet, so there is nothing to breathe while
   // reasoning streams in — the line itself does.
   const pulse = block.streaming ? "zen-thinking-pulse" : "";
@@ -4437,7 +3755,7 @@ function ActivityThinkingRow({
           }`}
         >
           {/* Open, the body starts with the paragraph the summary came from. */}
-          {open ? "Thinking" : text}
+          {open ? raw ? "Raw reasoning" : "Thinking" : text}
         </span>
       </button>
       {open ? (
@@ -4517,10 +3835,7 @@ function ActivityNoteRow({
 function displayedToolLabel(block: Block, cwd?: string): string {
   // A pending approval shows its exact label; the raw command is also shown beside Allow/Deny.
   if (needsApproval(block)) return toolCallLabel(block, cwd) || "Tool call";
-  const label = presentationText(toolCallLabel(block, cwd));
-  return label.length > 160 || /\r?\n|[{}]|(?:^|\s)\[/.test(label)
-    ? block.tool?.preview?.kind === "shell" || block.tool?.kind === "shell" ? "Run shell command" : "Tool call"
-    : label || "Tool call";
+  return commandSummary(presentationText(toolCallLabel(block, cwd))) || "Tool call";
 }
 
 function toolOutput(block: Block): string {
@@ -4528,6 +3843,8 @@ function toolOutput(block: Block): string {
 }
 
 function toolCommand(block: Block): string {
+  if (typeof block.approval?.command === "string") return block.approval.command;
+  if (Array.isArray(block.approval?.command)) return JSON.stringify(block.approval.command);
   return (block.tool?.preview?.kind === "shell" ? block.tool.preview.title : undefined) || block.tool?.title || block.text;
 }
 
@@ -4564,6 +3881,7 @@ function ActivityToolRow({
   const summary = (
     <ToolCallSummary
       label={label}
+      fullLabel={toolCommand(block)}
       preview={block.tool?.preview}
       cwd={cwd}
       chip={bare}
@@ -4579,10 +3897,15 @@ function ActivityToolRow({
       <div
         aria-label={`${errorDetail ? "Failed tool call" : "Tool call"}: ${label}`}
         className="flex min-w-0 items-center gap-1.5 py-1"
+        title={toolCommand(block)}
       >
         {bare ? null : <ActivityToolIcon state={state} live={live} />}
         {summary}
+        {flatWork && block.tool?.preview?.kind === "write" ? <span className="shrink-0 text-[11px]">
+          <span className="text-emerald-500">+{block.tool.preview.additions ?? 0}</span>{" "}<span className="text-red-400">−{block.tool.preview.deletions ?? 0}</span>
+        </span> : null}
         {pending ? null : <ToolCallStatusIcon state={state} />}
+        {flatWork && output && !pending && !errorDetail ? <CompactToolOutput output={output} title={label} preview={false} /> : null}
       </div>
       {pending ? (
         <>
@@ -4590,7 +3913,10 @@ function ActivityToolRow({
           <ApprovalControls block={block} onApproval={onApproval} />
         </>
       ) : null}
-      {errorDetail ? <TranscriptError error={errorDetail} /> : output && !pending ? <CompactToolOutput output={output} title={label} preview={!flatWork} /> : null}
+      {errorDetail && flatWork ? <>
+        <p role="alert" className="py-1 font-mono text-xs text-red-400">{commandSummary(errorDetail)}</p>
+        <CompactToolOutput output={errorDetail} title={label} preview={false} />
+      </> : errorDetail ? <TranscriptError error={errorDetail} /> : output && !pending && !flatWork ? <CompactToolOutput output={output} title={label} /> : null}
     </div>
   );
 }
@@ -4801,7 +4127,7 @@ function ToolCall({
     );
   }
 
-  if (isIncompleteTool(block, label, state)) return null;
+  if (!needsApproval(block) && isIncompleteTool(block, label, state)) return null;
 
   return (
     <div className={frame}>
@@ -4826,6 +4152,7 @@ function ToolCall({
 
 function ToolCallSummary({
   label,
+  fullLabel,
   preview,
   cwd,
   onOpenFile,
@@ -4836,6 +4163,7 @@ function ToolCallSummary({
   status = "accepted",
 }: {
   label: string;
+  fullLabel?: string;
   preview?: ToolPreview;
   cwd?: string;
   onOpenFile?: (path: string) => void;
@@ -4854,7 +4182,7 @@ function ToolCallSummary({
         className={`min-w-0 flex-1 truncate font-mono text-[13px] ${
           failed ? "text-red-400" : chip ? "text-content/65" : "text-content/80"
         }`}
-        title={label}
+        title={fullLabel ?? label}
       >
         {label}
       </span>
@@ -4968,7 +4296,7 @@ function ApprovalControls({
   const approval = block.approval;
   if (!approval || approval.decided) return null;
   // Exactly what will run, unfiltered, next to the decision controls.
-  const command = toolCommand(block).trim();
+  const command = toolCommand(block);
   return (
     <div className="mt-1.5">
       {command && <pre aria-label="Command awaiting approval" className="mb-1.5 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-md bg-content/5 px-2 py-1.5 font-mono text-[11px] leading-4 text-content/85">{command}</pre>}

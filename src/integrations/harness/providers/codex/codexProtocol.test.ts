@@ -16,6 +16,8 @@ import {
 } from "./codexProtocol";
 import { parseCodexModelList } from "./codexCatalog";
 import windowsReadOnlyMono from "./fixtures/windows-read-only-mono.json";
+import { applyHarnessEvents } from "../../core/apply";
+import { newSession } from "../../../../features/sessions/model/session";
 
 it("maps explicit completed Codex compaction notifications without finishing the turn", () => {
   const scope = { threadId: "thread", turnId: "turn" };
@@ -70,12 +72,31 @@ it("shows code-mode custom tools using raw scoped call identity without parsing 
   const context = { threadId: "thread", turnId: "turn" };
   const started = mapCodexNotification("rawResponseItem/completed", { ...context,
     item: { type: "custom_tool_call", call_id: "call-1", name: "exec", input: "text(await tools.exec_command({cmd:'git status'}))" } });
-  expect(started.events[0]).toMatchObject({ type: "tool.started", callId: "raw:thread:turn:call-1", title: "Run shell command", kind: "execute", status: "in_progress" });
+  expect(started.events[0]).toMatchObject({ type: "tool.started", callId: "raw:thread:turn:call-1", title: "git status", kind: "execute", status: "in_progress",
+    preview: { kind: "shell", title: "git status", rawInput: "text(await tools.exec_command({cmd:'git status'}))" } });
   const completed = mapCodexNotification("rawResponseItem/completed", { ...context,
     item: { type: "custom_tool_call_output", call_id: "call-1", output: [{ type: "input_text", text: "Script completed" }] } });
   expect(completed.events[0]).toMatchObject({ type: "tool.updated", callId: "raw:thread:turn:call-1", status: "completed", detail: "Script completed" });
   expect(mapCodexNotification("rawResponseItem/completed", { ...context, item: { type: "message", text: "Calling tools" } }).events).toEqual([]);
   expect(mapCodexNotification("rawResponseItem/completed", { item: { type: "custom_tool_call", call_id: "call-1" } }).events).toEqual([]);
+});
+
+it.each([
+  { code: 'text(await tools.exec_command({cmd:"git status"}))', command: "git status" },
+  { code: 'text(await tools.exec_command({cmd:"# setup\\n\\ncargo check --lib"}))', command: "# setup\n\ncargo check --lib" },
+  { code: `text(await tools.exec_command({command:${JSON.stringify("npm test " + "x".repeat(200))}}))`, command: "npm test " + "x".repeat(200) },
+  { code: 'text(await tools.exec_command({cmd: ))', command: undefined },
+])("retains full code-mode source and literal command through output updates: $code", ({ code, command }) => {
+  const context = { threadId: "thread", turnId: "turn" };
+  const started = mapCodexNotification("rawResponseItem/completed", { ...context,
+    item: { type: "custom_tool_call", call_id: "literal", name: "exec", input: code } });
+  const completed = mapCodexNotification("rawResponseItem/completed", { ...context,
+    item: { type: "custom_tool_call_output", call_id: "literal", output: "Process exited with code 0\nOutput:\nok" } });
+  const session = applyHarnessEvents(newSession("codex", "/repo"), [...started.events, ...completed.events]);
+  expect(session.blocks[0].tool?.preview?.rawInput).toBe(code);
+  expect(session.blocks[0].tool?.preview?.title).toBe(command);
+  expect(session.blocks[0].tool?.detail).toContain("ok");
+  if (!command) expect(session.blocks[0].text).toBe("Run shell command");
 });
 
 describe("code-mode yielded cells", () => {
@@ -558,7 +579,7 @@ describe("mapCodexNotification", () => {
       delta: "thinking…",
     });
     expect(mapped.events).toEqual([
-      { type: "reasoning.delta", text: "thinking…" },
+      { type: "reasoning.delta", text: "thinking…", reasoning: { itemId: "", partIndex: 0, channel: "summary" } },
     ]);
   });
 
@@ -1067,6 +1088,22 @@ describe("mapCodexNotification", () => {
 });
 
 describe("approvals", () => {
+  it.each([
+    { command: "  printf 'exact  spaces'\n\n  " },
+    { command: ["C:/Program Files/PowerShell/7/pwsh.exe", "-Command", "  Write-Output 'exact  spaces'\n\n"] },
+  ])("keeps provider approval commands verbatim on new and existing tools: $command", ({ command }) => {
+    const mapped = mapApprovalRequest("item/commandExecution/requestApproval", {
+      itemId: "pending-command", command, cwd: "C:/repo with spaces", reason: "Review command",
+    }, 42)!;
+    for (const started of [[], mapCodexNotification("item/started", { item: {
+      id: "pending-command", type: "commandExecution", command,
+    } }).events]) {
+      const session = applyHarnessEvents(newSession("codex", "/repo"), [...started, mapped.event]);
+      expect(session.blocks[0].approval).toMatchObject({ command, cwd: "C:/repo with spaces", requestId: 42 });
+      expect(session.blocks[0].approval?.command).toEqual(command);
+    }
+  });
+
   it("maps command approval requests", () => {
     const mapped = mapApprovalRequest(
       "item/commandExecution/requestApproval",

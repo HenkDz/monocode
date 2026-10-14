@@ -53,6 +53,19 @@ function saved(session: Session) {
 }
 
 describe("Mono database pagination and writes", () => {
+  it.each([undefined, "queue", "steer", "unknown", null, { mode: "steer" }])("preserves valid delivery choices and holds malformed choices: %j", async behavior => {
+    const stored = record();
+    call.mockResolvedValueOnce({ ...stored, queuedMessages: [{ id: "choice", text: "Keep this message", attachments: [], ...(behavior !== undefined ? { followUpBehavior: behavior } : {}) }] });
+    const session = (await getSession(stored.id))!;
+    const expected = behavior === undefined ? undefined : behavior === "steer" ? "steer" : "queue";
+    expect(session.queuedMessages?.[0]).toMatchObject({ id: "choice", text: "Keep this message" });
+    expect(session.queuedMessages?.[0].followUpBehavior).toBe(expected);
+    expect(session.queueStatus).toBe("paused");
+    call.mockResolvedValueOnce(saved(session));
+    await upsertSession(session);
+    const payload = (call.mock.calls.at(-1)![1] as { session: Session }).session;
+    expect(payload.queuedMessages?.[0].followUpBehavior).toBe(expected);
+  });
   it("saves a configured empty Mono header and restores its chosen provider, model and permissions", async () => {
     const blank = { ...record(), harness: "claude", model: "claude:sonnet-4-6",
       modelSettings: { effort: "high" }, runtimeMode: "supervised", blocks: [] } as unknown as Session;
@@ -218,6 +231,7 @@ describe("Mono database pagination and writes", () => {
         text: "First",
         attachments: [],
         noteCard,
+        followUpBehavior: "queue",
       },
       {
         id: "waiting-second",
@@ -234,6 +248,7 @@ describe("Mono database pagination and writes", () => {
           },
         ],
         error: "Connection lost",
+        followUpBehavior: "steer",
       },
     ];
     session.queueStatus = "active";
@@ -269,6 +284,7 @@ describe("Mono database pagination and writes", () => {
     ]);
     expect(restored.queuedMessages?.[0].noteCard).toEqual(noteCard);
     expect(restored.queuedMessages?.[0].blockId).toBe("optimistic-first");
+    expect(restored.queuedMessages?.map(message => message.followUpBehavior)).toEqual(["queue", "steer"]);
     expect(restored.queuedMessages?.[1].attachments[0].data).toBe(
       "image-bytes",
     );

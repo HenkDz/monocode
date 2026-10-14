@@ -47,11 +47,8 @@ function session(patch: Partial<Session> = {}): Session {
 function render(
   value = session(),
   state: AgentLiveState = { status: "failed", detail: "Review couldn’t start" },
-  canSteer = false,
 ) {
   const actions = {
-    onMessage: vi.fn(),
-    onSteer: vi.fn(),
     onOpenWorktree: vi.fn(),
     onDetails: vi.fn(),
   };
@@ -62,7 +59,6 @@ function render(
         name="Reviewer"
         role="Quality & safety"
         state={state}
-        canSteer={canSteer}
         {...actions}
       />,
     ),
@@ -135,7 +131,7 @@ it("ticks a running conversation and stops when the turn is saved", () => {
     durationMs: undefined,
     turnMetrics: { inputTokens: 100, outputTokens: 0 },
   };
-  render(value, { status: "running-tool", detail: "Checking files" }, true);
+  render(value, { status: "running-tool", detail: "Checking files" });
   expect(host.textContent).toContain(
     "Current conversation turn · 1s · 100 in · 0 out",
   );
@@ -213,30 +209,24 @@ it("uses a later recorded turn when its timing is unavailable", () => {
   expect(value.blocks.map((block) => block.id)).toEqual(["turn", "later"]);
 });
 
-it("reuses the supplied action handlers and disables unavailable steering/worktree actions", () => {
+it("shows only available folder, home and stop actions without redundant focus actions", () => {
   const actions = render();
-  const buttons = [...host.querySelectorAll<HTMLButtonElement>("button")];
-  act(() => buttons.forEach((button) => button.click()));
-  expect(actions.onMessage).toHaveBeenCalledOnce();
-  expect(actions.onSteer).not.toHaveBeenCalled();
+  act(() => host.querySelectorAll<HTMLButtonElement>("button").forEach(button => button.click()));
   expect(actions.onOpenWorktree).toHaveBeenCalledOnce();
   expect(actions.onDetails).toHaveBeenCalledOnce();
-  act(() =>
-    root.render(
-      <WorkbenchHeader
-        session={session()}
-        name="Reviewer"
-        role="Quality & safety"
-        state={{ status: "thinking" }}
-        canSteer
-        onMessage={actions.onMessage}
-        onSteer={actions.onSteer}
-        onDetails={actions.onDetails}
-      />,
-    ),
-  );
-  const next = [...host.querySelectorAll<HTMLButtonElement>("button")];
-  act(() => next[1].click());
-  expect(actions.onSteer).toHaveBeenCalledOnce();
-  expect(next[2].disabled).toBe(true);
+  const onHome = vi.fn(), onStop = vi.fn();
+  act(() => root.render(<WorkbenchHeader session={session()} name="Task title" role="" state={{status: "thinking"}} task memberName="Iris" onHome={onHome} onStop={onStop} onDetails={actions.onDetails} />));
+  expect(host.textContent).toContain("Task");
+  expect(host.textContent).toContain("Back to Iris home");
+  expect(host.textContent).not.toContain("Open worktree");
+  expect([...host.querySelectorAll("button")].map(button => button.textContent)).toEqual(["Back to Iris home", "Stop", "Details"]);
+  act(() => host.querySelectorAll<HTMLButtonElement>("button").forEach(button => button.click()));
+  expect(onHome).toHaveBeenCalledOnce();
+  expect(onStop).toHaveBeenCalledOnce();
+});
+
+it("keeps a queued task's unknown timing separate from the home's completed turn", () => {
+  act(() => root.render(<WorkbenchHeader session={session()} name="Iris" role="Design" state={{status: "queued"}} currentTaskMetrics={{turns: 0, elapsedMs: 0, partial: false}} onDetails={() => {}} />));
+  expect(host.querySelector("[data-workbench-metrics]")?.textContent).toBe("Current task · Conversation not started · Tokens unavailable");
+  expect(vi.getTimerCount()).toBe(0);
 });

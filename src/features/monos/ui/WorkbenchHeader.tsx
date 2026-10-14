@@ -3,7 +3,11 @@ import {
   agentLiveStateLabel,
   type AgentLiveState,
 } from "../../agents/model/agentLiveState";
-import { selectAgentMetrics } from "../../agents/model/agentMetrics";
+import {
+  selectAgentMetrics,
+  type AgentMetrics,
+} from "../../agents/model/agentMetrics";
+import { ArrowLeft, Folder, Square } from "../../../shared/ui/icons";
 import { currentTurnIndex } from "../../agents/model/turnMetrics";
 import { AgentStatusLabel } from "../../agents/ui/AgentStatusLabel";
 import { taskMetricsDetail } from "../../agents/ui/TaskMetricsLine";
@@ -18,9 +22,12 @@ type Props = {
   mascot?: string;
   color?: string;
   state: AgentLiveState;
-  onMessage: () => void;
-  onSteer: () => void;
-  canSteer: boolean;
+  currentTaskMetrics?: AgentMetrics;
+  task?: boolean;
+  memberName?: string;
+  onHome?: () => void;
+  onViewLive?: () => void;
+  onStop?: () => void;
   onOpenWorktree?: () => void;
   onDetails: () => void;
 };
@@ -53,31 +60,46 @@ export function WorkbenchHeader({
   mascot,
   color,
   state,
-  onMessage,
-  onSteer,
-  canSteer,
+  currentTaskMetrics,
+  task,
+  memberName,
+  onHome,
+  onViewLive,
+  onStop,
   onOpenWorktree,
   onDetails,
 }: Props) {
   const [now, setNow] = useState(Date.now);
   const turn = workbenchTurn(session);
-  const live =
-    !!session.busy &&
-    !!turn &&
-    turn.durationMs == null &&
-    turn.turnMetrics?.endedAt == null;
+  const live = currentTaskMetrics
+    ? ["thinking", "running-tool", "compacting"].includes(state.status) &&
+      currentTaskMetrics.endedAt == null
+    : !!session.busy &&
+      !!turn &&
+      turn.durationMs == null &&
+      turn.turnMetrics?.endedAt == null;
   useEffect(() => {
-    if (!live || turn?.startedAt == null) return;
+    if (!live || (currentTaskMetrics?.startedAt ?? turn?.startedAt) == null)
+      return;
     setNow(Date.now());
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
-  }, [live, turn?.startedAt]);
-  const metrics = selectAgentMetrics(
-    { ...session, busy: live, blocks: turn ? [turn] : [] },
-    now,
-  );
-  const elapsed =
-    metrics.startedAt != null && (metrics.endedAt != null || live)
+  }, [live, turn?.startedAt, currentTaskMetrics?.startedAt]);
+  const metrics =
+    currentTaskMetrics ??
+    selectAgentMetrics(
+      { ...session, busy: live, blocks: turn ? [turn] : [] },
+      now,
+    );
+  const elapsed = currentTaskMetrics
+    ? metrics.startedAt != null && live && metrics.endedAt == null
+      ? formatLiveElapsed(metrics.startedAt, now)
+      : metrics.turns === 0 && !metrics.partial
+        ? "Conversation not started"
+        : metrics.startedAt != null || metrics.elapsedMs
+          ? formatLiveElapsed(0, metrics.elapsedMs)
+          : "Elapsed unavailable"
+    : metrics.startedAt != null && (metrics.endedAt != null || live)
       ? formatLiveElapsed(metrics.startedAt, metrics.endedAt ?? now)
       : turn?.durationMs != null
         ? formatLiveElapsed(0, turn.durationMs)
@@ -115,6 +137,15 @@ export function WorkbenchHeader({
         />
       </div>
       <div className="cc7u-header-identity">
+        <div className="ccwb1-view-identity">
+          <span>{task ? "Task" : "Home chat"}</span>
+          {onHome && (
+            <button type="button" onClick={onHome}>
+              <ArrowLeft className="size-3" />
+              Back to {memberName} home
+            </button>
+          )}
+        </div>
         <div className="cc7u-header-name">
           <h2>{name}</h2>
           <span>{role}</span>
@@ -126,31 +157,42 @@ export function WorkbenchHeader({
         <p
           data-workbench-metrics
           className="cc7u-header-metrics"
-          title={turn ? taskMetricsDetail(metrics, headerState) : undefined}
+          title={
+            turn || currentTaskMetrics
+              ? taskMetricsDetail(metrics, headerState)
+              : undefined
+          }
         >
-          {turn
-            ? `${live ? "Current" : "Last"} conversation turn · ${elapsed} · ${counts}`
+          {turn || currentTaskMetrics
+            ? `${currentTaskMetrics ? "Current task" : `${live ? "Current" : "Last"} conversation turn`} · ${elapsed} · ${counts}`
             : "No conversation turn recorded"}
         </p>
       </div>
       <div className="cc7u-header-actions">
-        <button type="button" onClick={onMessage}>
-          Message
-        </button>
-        <button type="button" onClick={onSteer} disabled={!canSteer}>
-          Steer
-        </button>
+        {onViewLive && (
+          <button type="button" onClick={onViewLive}>
+            View live
+          </button>
+        )}
+        {onOpenWorktree && (
+          <button type="button" onClick={onOpenWorktree}>
+            <Folder className="size-3" />
+            Open worktree
+          </button>
+        )}
+        {onStop && (
+          <button type="button" onClick={onStop}>
+            <Square className="size-3" />
+            Stop
+          </button>
+        )}
         <button
           type="button"
-          onClick={onOpenWorktree}
-          disabled={!onOpenWorktree}
+          onClick={(event) => {
+            event.currentTarget.focus();
+            onDetails();
+          }}
         >
-          Open worktree
-        </button>
-        <button type="button" onClick={(event) => {
-          event.currentTarget.focus();
-          onDetails();
-        }}>
           Details
         </button>
       </div>

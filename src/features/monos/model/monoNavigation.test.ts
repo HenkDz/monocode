@@ -98,6 +98,23 @@ it("scopes the historical task link to its exact Manager run when task IDs are r
   expect(view.memberId).toBe(task.memberId);
 });
 
+it.each(["completed", "running"] as const)("keeps %s historical dispatch content separate from the latest task", state => {
+  const task = workbenchTask({ prompt: "New brief", result: "New report", reportArtifactId: "new-report", reviewArtifactId: "new-review", prSummaryArtifactId: "new-summary", prUrl: "https://example.test/new", checkoutBaseline: { head: "new", fingerprint: "new", inheritedChangedPaths: ["new-a", "new-b"] } });
+  const dispatch = workbenchDispatch({ state, result: "Old report", checkoutBaseline: { head: "old", fingerprint: "old", inheritedChangedPaths: ["old-a"] } });
+  const view = workbenchSessionTask([workbenchRun("lead", [task], [dispatch])], "old-worker")!;
+  expect(view).toMatchObject({ historical: true, prompt: "", result: "Old report", checkoutBaseline: dispatch.checkoutBaseline });
+  for (const key of ["reportArtifactId", "reviewArtifactId", "reviewVerdict", "prSummaryArtifactId", "prUrl"] as const) expect(view[key]).toBeUndefined();
+  expect(task.result).toBe("New report");
+});
+
+it("withholds historical content when the dispatch never saved it", () => {
+  const task = workbenchTask({ result: "New report", checkoutBaseline: { head: "new", fingerprint: "new" } });
+  const view = workbenchSessionTask([workbenchRun("lead", [task], [workbenchDispatch()])], "old-worker")!;
+  expect(view.result).toBe("");
+  expect(view.prompt).toBe("");
+  expect(view.checkoutBaseline).toBeUndefined();
+});
+
 it("does not join an orphan dispatch to a matching task ID in a different Manager run", () => {
   const runWithDispatch = workbenchRun("old-lead", [workbenchTask({ id: "unrelated" })], [workbenchDispatch()]);
   const runWithTask = workbenchRun("other-lead", [workbenchTask()], []);

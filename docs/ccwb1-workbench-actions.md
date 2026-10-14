@@ -1,0 +1,15 @@
+# CC-WB1: Workbench navigation and actions
+
+Assignment Open now navigates directly to the exact task session. Member Home shows the active task's canonical live state and current-dispatch timing with task counters; its composer and Stop keep Home's own session authority. Task shows its assignment title, a Task chip, exact member-home return, and Brief/report cards using the existing presentation and artifact renderers. A four-line Brief preview has a labelled keyboard-accessible expansion control.
+
+Queue/Steer lives beside Send and uses the existing submission boundary. The App honors an explicit Queue choice for an active Mono. Recovery, approvals, unsupported providers, checkout preparation and provider-generation validation retain their existing guards. Stop appears once for the controlled active session. No header Message/Steer focus actions remain.
+
+Open worktree checks the task's actual checkout with existing `list_dir`, then invokes existing `reveal_path`. It includes read-only work, hides removed/unavailable checkouts, checks again at click time, and ignores stale completion after navigation. Errors remain visible outside the narrow Work drawer. No native command or storage changes were needed.
+
+The existing tab visit history now includes valid member homes, so cross-worktree navigation can return through Back/Forward without creating another router. Archived homes are pruned. Nonmember Mono navigation keeps its existing behavior. Narrow Work scrolls above the measured full composer/target/help area; Close stays reachable and Escape restores the Work trigger without stopping the session.
+
+Validation: focused real-component tests **92 passed, 0 failed, 0 skipped**; complete Vitest **8,530 passed, 0 failed, 13 unchanged skips** with maxWorkers1; connected Chromium checks **48 passed, 0 failed, 0 skipped**; type check and production build both exit **0**. All 28 final screenshots were individually inspected. Exact execution pins and retained failures are recorded under `C:/Users/nooro/AppData/Local/Temp/monocode-cc/ccwb1/final-gate-manifest.json` and `REPORT.md`.
+
+Browser evidence mounts real SessionPane/composers/cards and executes the current App navigation/history callbacks with synthetic storage/native boundaries. It checks both composer submission options and the actual App follow-up decision expression. It does not mount the whole native App or prove native Explorer/provider acceptance. Existing Workbench regression checks retain queue editing, allow/deny approval identity, output readers, session retry/history and focus behavior. Removed popup lifetime tests were replaced by direct-navigation and Brief/report renderer checks; no deadline increase or new skip was introduced.
+
+Historical failed runs and the inherited failure/skip ledger remain external. Transcript/protocol/label/reasoning, storage/native, sign-in, Manager durable-goal authority, CC9 efficiency and unrelated UI were not changed. Own branch only; no push, integration, deployment or profile launch. Fresh independent review is required before root integrates.

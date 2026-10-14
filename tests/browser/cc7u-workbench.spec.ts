@@ -145,7 +145,8 @@ test("header actions and tab keyboard navigation preserve the composer draft", a
     name: "Message Native Core",
     exact: true,
   });
-  await header.getByRole("button", { name: "Message", exact: true }).click();
+  await expect(header.getByRole("button", { name: "Message", exact: true })).toHaveCount(0);
+  await composer.focus();
   await expect(composer).toBeFocused();
   await composer.fill("Keep the focused review boundary.");
   const effort = page.locator(
@@ -189,8 +190,8 @@ test("header actions and tab keyboard navigation preserve the composer draft", a
   ).toHaveValue("Native Core");
   await page.keyboard.press("Escape");
   await expect(composer).toHaveValue("Keep the focused review boundary.");
-  await header.getByRole("button", { name: "Steer", exact: true }).click();
-  await expect(composer).toBeFocused();
+  await page.getByRole("group", { name: "Message delivery" }).getByRole("button", { name: "Steer", exact: true }).click();
+  await expect(composer).toHaveValue("Keep the focused review boundary.");
 });
 
 test("assignment keyboard segments and direct details retain exact task identity", async ({
@@ -213,8 +214,9 @@ test("assignment keyboard segments and direct details retain exact task identity
   const card = work.locator("[data-member-task]").first();
   const title = await card.locator("strong").first().innerText();
   await card.getByRole("button", { name: "Open", exact: true }).click();
-  await expect(page.getByRole("dialog")).toContainText(title);
-  await page.keyboard.press("Escape");
+  const id = await card.getAttribute("data-member-task");
+  expect(title).toBeTruthy();
+  expect(await page.evaluate(() => (window as any).workbenchFixture.events)).toContainEqual({ action: "open-session", text: `worker-${id}` });
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await filter.getByRole("tab", { name: "History", exact: true }).focus();
   await page.keyboard.press("End");
@@ -234,13 +236,13 @@ test("member-owned saved session uses the Workbench and retains session title", 
     timeout: 90_000,
   });
   await expect(page.locator("[data-workbench-header]")).toContainText(
-    "Window activation review",
+    "Review native window restoration, foreground focus and browser activation",
   );
   await expect(page.locator("[data-workbench-header]")).toContainText(
-    "Reviewer",
+    "Back to Reviewer home",
   );
   await expect(page.locator("[data-member-work]")).toContainText(
-    "Review native window",
+    "Brief",
   );
 });
 
@@ -474,10 +476,8 @@ for (const [label, decision] of [
       "printf '%s\\n' '<monocode_context>keep the exact command</monocode_context>'",
     );
     await expect(
-      page
-        .locator("[data-workbench-header]")
-        .getByRole("button", { name: "Steer", exact: true }),
-    ).toBeDisabled();
+      page.getByRole("group", { name: "Message delivery" }),
+    ).toHaveCount(0);
     const button = transcript.getByRole("button", { name: label, exact: true });
     if (decision === "allow") await button.click();
     else {
@@ -680,7 +680,7 @@ test("flat historical session Conversation keeps its saved dispatch and queue af
     timeout: 90_000,
   });
   const header = page.locator("[data-workbench-header]");
-  await expect(header).toContainText("Window activation review");
+  await expect(header).toContainText("Review native window restoration, foreground focus and browser activation");
   await expect(header).not.toContainText("Latest worker failure");
   await expect(header).not.toContainText("Blocked");
   await header
@@ -693,10 +693,10 @@ test("flat historical session Conversation keeps its saved dispatch and queue af
           workbenchFixture: { events: { action: string; text?: string }[] };
         }
       ).workbenchFixture.events.filter(
-        (event) => event.action === "open-worktree",
+        (event) => event.action === "ipc:reveal_path",
       ),
     ),
-  ).toEqual([{ action: "open-worktree", text: "old-review-worker" }]);
+  ).toEqual([{ action: "ipc:reveal_path", text: JSON.stringify({path: "C:/synthetic/BrowserLink/old-attempt"}) }]);
   await expect(page.locator("[data-message-queue]")).toHaveCount(1);
   await expect(
     page.getByText("Review the saved changes when storage is repaired.", {

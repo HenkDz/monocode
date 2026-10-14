@@ -3,7 +3,7 @@ import {
   buildDeterministicHandoff,
   pendingHandoff,
 } from "../../sessions/model/handoff";
-import type { Session } from "../../sessions/model/session";
+import type { Block, Session } from "../../sessions/model/session";
 import {
   selectUsageFailoverAccount,
   type UsageFailoverCandidate,
@@ -25,6 +25,7 @@ export type MonoUsageFailoverHost = {
   /**
    * Serialize with session writes. Validate before save and after its await;
    * persist without exposing `next` to dispatch, then CAS-publish only if valid.
+   * Retain a reconciliation to the live session if a saved switch is rejected.
    * Return false on rejection/save failure. Never publish on a failed save.
    */
   commit(expected: Session, next: Session, validate: () => boolean): Promise<boolean>;
@@ -37,9 +38,13 @@ export type MonoUsageFailoverResult =
 
 export function usageFailoverBoundarySafe(session: Session): boolean {
   const origin = requestId(session);
+  const turn = session.blocks.find(block => block.id === origin);
   const turnStart = session.blocks.findIndex(block => block.id === origin);
   const finished = ["completed", "failed", "cancelled"];
-  return !!session.usageLimit && !session.busy &&
+  return !!session.usageLimit && !session.usageLimit.resumeAtReset && !session.busy &&
+    !session.blocks.some(block => block.managerRequestRecovery && block.managerRequestRecovery.state !== "cancelled") &&
+    !(turn && accountBoundManagerRequest(turn)) &&
+    !session.queuedMessages?.some(message => message.managerWake || accountBoundManagerRequest(message)) &&
     (!session.queuedMessages?.length || session.queueStatus === "paused") &&
     !session.compacting && !session.backgroundTasks?.length && !session.pendingSwitch &&
     !pendingHandoff(session) && !session.pendingQuestion &&
@@ -50,6 +55,11 @@ export function usageFailoverBoundarySafe(session: Session): boolean {
     !session.blocks.some((block, index) => block.streaming || block.approval && !block.approval.decided ||
       block.tool && (["running", "pending", "in_progress", "in-progress"].includes(block.tool.status ?? "") ||
         (block.tool.background || index > turnStart) && !finished.includes(block.tool.status ?? "")));
+}
+
+function accountBoundManagerRequest(message: Pick<Block, "id" | "appRequestId" | "monoSource">): boolean {
+  return !!message.monoSource?.request || [message.id, message.appRequestId].some(id =>
+    !!id && (id.startsWith("mono-goal-") && id.includes("-continue-") || /^manager-digest[-:]/.test(id)));
 }
 
 function requestId(session: Session): string | undefined {

@@ -6,6 +6,8 @@ import { pendingHandoff, consumeHandoff, wrapHandoffPrompt } from "../../session
 import { parseClaudeOAuthUsage } from "../../providers/model/rateLimits";
 import { MANUAL_USAGE_FAILOVER, type UsageFailoverCandidate } from "../../providers/model/usageFailover";
 import { createMonoUsageFailoverController, type MonoUsageFailoverHost } from "./monoUsageFailover";
+import { assertManagerDelivery, managerRequestBinding, type ManagerRequestRecovery } from "./managerAuthorizedWork";
+import type { Mono } from "./mono";
 
 const invoke = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
@@ -120,6 +122,78 @@ describe("automatic Mono usage recovery", () => {
     const original = f.current();
     expect(await createMonoUsageFailoverController()(f.host)).toEqual({ kind: "pause-and-ask", reason: "no-eligible-account" });
     expect(f.current()).toBe(original); expect(canDispatchQueuedHead(f.current())).toBe(false);
+  });
+  it.each(["pending", "continued"] as const)("holds %s Manager authority and preserves delivery on the original account", async state => {
+    const f = fixture(); const original = f.current();
+    const manager: Mono = { id: "manager", sessionId: original.id, role: "manager", projects: [original.cwd], mascot: "cat", color: "blue" };
+    const request: ManagerRequestRecovery = { monoId: manager.id, sessionId: original.id, managerId: "engine", projectId: original.cwd,
+      userMessageId: "request", providerAccountId: original.providerAccountId, binding: managerRequestBinding(original), state: "pending" };
+    const source = { id: manager.id, name: "Manager", mascot: manager.mascot, color: manager.color, goalId: "goal", request };
+    const receiptId = "mono-goal-manager-continue-request";
+    f.setSession({ ...original, blocks: [...original.blocks,
+      { id: "manager-request-request", role: "system", text: "Continue this request", managerRequestRecovery: { ...request, state } }] });
+    const held = f.current();
+    expect(await createMonoUsageFailoverController()(f.host)).toEqual({ kind: "pause-and-ask", reason: "held" });
+    expect(f.current()).toBe(held); expect(f.host.commit).not.toHaveBeenCalled();
+    // The user resumes the original account; its retained grant still validates.
+    const resumed: Session = { ...f.current(), usageLimit: undefined, queueStatus: "active", queuedMessages: [],
+      blocks: [...held.blocks, { id: "continued", role: "user", text: "Continue", appRequestId: receiptId, monoSource: source }] };
+    expect(() => assertManagerDelivery(source, receiptId, resumed, manager)).not.toThrow();
+    expect(() => assertManagerDelivery(source, receiptId, { ...resumed, providerAccountId: "work" }, manager)).toThrow("changed or is held");
+  });
+  it.each(["request", "id", "appRequestId", "wake"])("holds queued Manager %s even without a loaded recovery card", async authority => {
+    const f = fixture();
+    const message = { id: "queued", text: "Continue", attachments: [] } as NonNullable<Session["queuedMessages"]>[number];
+    if (authority === "request") message.monoSource = { id: "manager", name: "Manager", mascot: "cat", color: "blue", goalId: "goal",
+      request: { monoId: "manager", sessionId: f.current().id, managerId: "engine", projectId: f.current().cwd, userMessageId: "request", state: "pending" } };
+    if (authority === "id") message.id = "mono-goal-manager-continue-request";
+    if (authority === "appRequestId") message.appRequestId = "mono-goal-manager-continue-request";
+    if (authority === "wake") message.managerWake = { leadId: "engine", receiptId: message.id };
+    f.setSession({ ...f.current(), queueStatus: "paused", queuedMessages: [message] }); const original = f.current();
+    expect(await createMonoUsageFailoverController()(f.host)).toEqual({ kind: "pause-and-ask", reason: "held" });
+    expect(f.current()).toBe(original); expect(f.host.commit).not.toHaveBeenCalled();
+  });
+  it.each(["request", "id", "appRequestId", "digest", "legacy-digest"])("holds committed Manager %s when the recovery card is outside the loaded window", async authority => {
+    const f = fixture();
+    const turn = { ...f.current().blocks[0] };
+    if (authority === "request") turn.monoSource = { id: "manager", name: "Manager", mascot: "cat", color: "blue", goalId: "goal",
+      request: { monoId: "manager", sessionId: f.current().id, managerId: "engine", projectId: f.current().cwd, userMessageId: "request", state: "pending" } };
+    if (authority === "id") turn.id = "mono-goal-manager-continue-request";
+    if (authority === "appRequestId") turn.appRequestId = "mono-goal-manager-continue-request";
+    if (authority === "digest") { turn.internal = true; turn.appRequestId = "manager-digest-synthetic"; }
+    if (authority === "legacy-digest") { turn.internal = true; turn.appRequestId = "manager-digest:00000000-0000-0000-0000-000000000001"; }
+    f.setSession({ ...f.current(), blocks: [turn] });
+    expect(await createMonoUsageFailoverController()(f.host)).toEqual({ kind: "pause-and-ask", reason: "held" });
+    expect(f.host.commit).not.toHaveBeenCalled();
+  });
+  it("does not hold an unrelated cancelled Manager recovery card", async () => {
+    const f = fixture();
+    f.setSession({ ...f.current(), blocks: [...f.current().blocks, { id: "manager-request-old", role: "system", text: "Cancelled",
+      managerRequestRecovery: { monoId: "manager", sessionId: f.current().id, managerId: "engine", projectId: f.current().cwd, userMessageId: "old", state: "cancelled" } }] });
+    expect((await createMonoUsageFailoverController()(f.host)).kind).toBe("switched");
+  });
+  it("respects resume-at-reset across later telemetry polls and controller recreation until a deliberate user change", async () => {
+    const f = fixture(); const run = createMonoUsageFailoverController();
+    f.candidates[0].ready = false;
+    expect(await run(f.host)).toEqual({ kind: "pause-and-ask", reason: "no-eligible-account" });
+    f.setSession({ ...f.current(), usageLimit: { resetsAt: now + 60_000, resumeAtReset: true } });
+    const waiting = f.current(); f.candidates[0].ready = true;
+    for (const clock of [now + 1_000, now + 61_000]) {
+      f.host.now = () => clock;
+      expect(await run(f.host)).toEqual({ kind: "pause-and-ask", reason: "held" });
+      expect(await createMonoUsageFailoverController()(f.host)).toEqual({ kind: "pause-and-ask", reason: "held" });
+    }
+    expect(f.current()).toBe(waiting); expect(f.host.commit).not.toHaveBeenCalled();
+    f.setSession({ ...waiting, usageLimit: { ...waiting.usageLimit, resumeAtReset: false } });
+    expect((await run(f.host)).kind).toBe("switched");
+  });
+  it("holds an armed reset choice while its reset is unknown, then leaves reset resume to its existing owner", async () => {
+    const f = fixture(); const run = createMonoUsageFailoverController();
+    f.setSession({ ...f.current(), usageLimit: { resumeAtReset: true } });
+    expect(await run(f.host)).toEqual({ kind: "pause-and-ask", reason: "held" });
+    f.setSession({ ...f.current(), usageLimit: undefined });
+    expect(await run(f.host)).toEqual({ kind: "manual" });
+    expect(f.host.commit).not.toHaveBeenCalled();
   });
   it("does not retry a failed save/rejected switch on each poll", async () => {
     const f = fixture(); const original = f.current();

@@ -59,3 +59,21 @@ it("reflects settings from another window and exposes failed opt-in without fals
   expect(container.querySelector('[role="alert"]')?.textContent).toContain("Could not save");
   expect(loadUsageFailoverPolicy("claude").enabled).toBe(false);
 });
+it("preserves temporarily unloaded ranked accounts when adding, moving and removing loaded accounts", async () => {
+  saveUsageFailoverPolicy("claude", { enabled: true, rankedAccountIds: ["unloaded", "work", "another-unloaded"] });
+  await render(); await click("Add Personal to order");
+  expect(loadUsageFailoverPolicy("claude").rankedAccountIds).toEqual(["unloaded", "work", "another-unloaded", "default"]);
+  expect(container.querySelector("li")?.textContent).toContain("2. Work");
+  await click("Move Personal earlier");
+  expect(loadUsageFailoverPolicy("claude").rankedAccountIds).toEqual(["unloaded", "default", "another-unloaded", "work"]);
+  await click("Move Personal later");
+  expect(loadUsageFailoverPolicy("claude").rankedAccountIds).toEqual(["unloaded", "work", "another-unloaded", "default"]);
+  await click("Remove Work from failover");
+  expect(loadUsageFailoverPolicy("claude").rankedAccountIds).toEqual(["unloaded", "another-unloaded", "default"]);
+});
+it("explains held authority, reset choices and Codex home-bound manual recovery", async () => {
+  await act(async () => root.render(<UsageFailoverSettings provider="codex" accounts={accounts} />));
+  expect(container.textContent).toContain("Manager request authority");
+  expect(container.textContent).toContain("Resume at reset");
+  expect(container.textContent).toContain("Codex conversations bound to a storage home or saved thread map still pause and ask");
+});

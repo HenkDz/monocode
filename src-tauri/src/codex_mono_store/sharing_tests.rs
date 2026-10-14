@@ -47,7 +47,11 @@ fn diagnosis_windows_sharing_sites() {
             32,
             open_entry(&path, true).map(|_| ()),
         ),
-        ("replace_link(MoveFileExW)", 5, replace_link(&temp, &path)),
+        (
+            "replace_link(sharing preflight)",
+            32,
+            replace_link(&temp, &path),
+        ),
         (
             "remove_file",
             32,
@@ -307,4 +311,66 @@ fn sharing_optional_journal_cleanup_defers_without_losing_authority() {
         .file_name()
         .to_string_lossy()
         .starts_with(".monocode-txn-")));
+}
+
+#[test]
+fn sharing_private_hook_and_snapshot_envelopes_stay_parseable_until_release() {
+    let (_, source, home) = fixture();
+    let hooks = source.join("hooks.json");
+    std::fs::write(&hooks, br#"{"hooks":{"Stop":[]}}"#).unwrap();
+    std::fs::hard_link(&hooks, home.join("hooks.json")).unwrap();
+    let held = hold(&hooks);
+    let error = prepare_files(&source, &home).unwrap_err();
+    assert!(storage_io::sharing(&error), "{error}");
+    let value: serde_json::Value = serde_json::from_str(&error).unwrap();
+    assert!(value["io"]["path"]
+        .as_str()
+        .unwrap()
+        .ends_with("hooks.json"));
+    assert_eq!(std::fs::read(&hooks).unwrap(), br#"{"hooks":{"Stop":[]}}"#);
+    drop(held);
+    prepare_files(&source, &home).unwrap();
+    assert!(!same_entry(&hooks, &home.join("hooks.json")));
+    std::fs::write(source.join("AGENTS.md"), b"synthetic instructions").unwrap();
+    prepare_files(&source, &home).unwrap();
+    let snapshot = home.join(".monocode-links/AGENTS.md.json");
+    let before = std::fs::read(&snapshot).unwrap();
+    let held = hold(&snapshot);
+    let error = prepare_files(&source, &home).unwrap_err();
+    assert!(storage_io::sharing(&error), "{error}");
+    let value: serde_json::Value = serde_json::from_str(&error).unwrap();
+    assert!(value["io"]["path"]
+        .as_str()
+        .unwrap()
+        .ends_with("AGENTS.md.json"));
+    assert_eq!(std::fs::read(&snapshot).unwrap(), before);
+    drop(held);
+    prepare_files(&source, &home).unwrap();
+}
+
+#[test]
+fn sharing_config_read_names_the_file_and_preserves_missing_config_default() {
+    let (_, source, _) = fixture();
+    assert!(skills::read_config(&source)
+        .unwrap()
+        .as_table()
+        .unwrap()
+        .is_empty());
+    let path = source.join("config.toml");
+    std::fs::write(&path, "model = \"synthetic\"\n").unwrap();
+    let held = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(&path)
+        .unwrap();
+    let error = skills::read_config(&source).unwrap_err();
+    let value: serde_json::Value = serde_json::from_str(&error).unwrap();
+    assert_eq!(value["io"]["operation"], "read Codex configuration");
+    assert_eq!(value["io"]["path"], crate::fs::path_to_js(&path));
+    assert_eq!(value["io"]["osError"], 32);
+    drop(held);
+    assert_eq!(
+        skills::read_config(&source).unwrap()["model"].as_str(),
+        Some("synthetic")
+    );
 }

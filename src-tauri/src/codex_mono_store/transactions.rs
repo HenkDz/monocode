@@ -117,9 +117,9 @@ pub(super) fn create_json(path: &Path, value: &impl Serialize) -> Result<(), Str
         .write(true)
         .create_new(true)
         .open(path)
-        .map_err(|e| e.to_string())?;
-    file.write_all(&bytes).map_err(|e| e.to_string())?;
-    file.sync_all().map_err(|e| e.to_string())
+        .map_err(|e| storage_io::context("create transaction metadata", path, e.to_string()))?;
+    file.write_all(&bytes).map_err(|e| storage_io::context("write transaction metadata", path, e.to_string()))?;
+    file.sync_all().map_err(|e| storage_io::context("sync transaction metadata", path, e.to_string()))
 }
 
 const JOURNAL_LIMIT: u64 = 64 * 1024;

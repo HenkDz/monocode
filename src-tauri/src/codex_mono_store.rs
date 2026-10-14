@@ -813,10 +813,8 @@ fn login_entry(name: &str) -> bool {
 }
 
 fn storage_roots(source: &Path, home: &Path) -> Result<(PathBuf, PathBuf), String> {
-    std::fs::create_dir_all(source)
-        .map_err(|e| format!("Could not open the Codex account directory: {e}"))?;
-    std::fs::create_dir_all(home)
-        .map_err(|e| format!("Could not create Mono Codex storage: {e}"))?;
+    storage_io::run("open Codex account directory", source, || std::fs::create_dir_all(source))?;
+    storage_io::run("create Mono Codex storage", home, || std::fs::create_dir_all(home))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -827,8 +825,8 @@ fn storage_roots(source: &Path, home: &Path) -> Result<(PathBuf, PathBuf), Strin
 }
 
 fn canonical_roots(source: &Path, home: &Path) -> Result<(PathBuf, PathBuf), String> {
-    let source = source.canonicalize().map_err(|e| e.to_string())?;
-    let canonical_home = home.canonicalize().map_err(|e| e.to_string())?;
+    let source = storage_io::run("resolve Codex account directory", source, || source.canonicalize())?;
+    let canonical_home = storage_io::run("resolve Mono storage directory", home, || home.canonicalize())?;
     if canonical_home.starts_with(&source) || source.starts_with(&canonical_home) {
         return Err("Mono Codex storage must be separate from the normal Codex home".into());
     }
@@ -1624,7 +1622,7 @@ fn prepare_isolated_hooks(home: &Path) -> Result<(), String> {
     if let Some(staged) = staged {
         staged.cleanup(&temp)?;
     }
-    result.map_err(|error| format!("Could not isolate Mono hooks {}: {error}", target.display()))
+    result.map_err(|error| storage_io::context("isolate private Mono hooks", &target, error))
 }
 
 fn resolve_files(
@@ -2127,6 +2125,10 @@ fn replace_link(temp: &Path, target: &Path) -> Result<(), String> {
         .map_err(|e| e.to_string())?
         .is_file()
     {
+        // MoveFileEx reports some held targets as access denied; identify sharing before publication.
+        if std::fs::symlink_metadata(target).is_ok() {
+            drop(open_entry(target, true)?);
+        }
         // File replacement uses DOS paths; the junction rename below uses NT paths.
         let wide = |path: &Path| {
             path.as_os_str()
@@ -2518,7 +2520,7 @@ fn copy_rollouts_with_edges(
     let pending_dir = home.join(".monocode-migrations");
     std::fs::create_dir_all(&pending_dir).map_err(|e| e.to_string())?;
     let pending = pending_dir.join(thread_id);
-    std::fs::write(&pending, b"pending").map_err(|e| e.to_string())?;
+    storage_io::run("publish rollout migration marker", &pending, || std::fs::write(&pending, b"pending"))?;
     // Copy descendants first and the root last, so a partial migration is not
     // mistaken for a successfully migrated root on the next connection.
     for (path, dest) in staged.iter().rev() {
@@ -2535,8 +2537,8 @@ fn copy_rollouts_with_edges(
     if !edges.is_empty() {
         let path = edge_snapshot;
         std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
-        std::fs::write(&path, serde_json::to_vec(edges).map_err(|e| e.to_string())?)
-            .map_err(|e| e.to_string())?;
+        let bytes = serde_json::to_vec(edges).map_err(|e| e.to_string())?;
+        storage_io::run("publish agent state snapshot", &path, || std::fs::write(&path, &bytes))?;
         std::fs::File::options()
             .write(true)
             .open(&path)
@@ -2569,7 +2571,7 @@ fn state_db(home: &Path) -> Result<Option<PathBuf>, String> {
     let entries = match std::fs::read_dir(home) {
         Ok(entries) => entries,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(e.to_string()),
+        Err(e) => return Err(storage_io::context("list private Codex databases", home, e.to_string())),
     };
     let mut databases = Vec::new();
     for entry in entries {
@@ -2624,7 +2626,7 @@ fn restore_agent_edges(home: &Path, thread_id: &str) -> Result<(), String> {
     let bytes = match std::fs::read(&snapshot) {
         Ok(bytes) => bytes,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => return Err(e.to_string()),
+        Err(e) => return Err(storage_io::context("read agent state snapshot", &snapshot, e.to_string())),
     };
     let edges: Vec<AgentEdge> = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
     let path = state_db(home)?.ok_or("Codex has not initialized the private Mono index")?;

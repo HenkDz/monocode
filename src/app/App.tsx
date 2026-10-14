@@ -10443,7 +10443,7 @@ function Workspace({
       setCodexStorageRepaired(true);
     } catch (error) {
       const storageFailure = isCodexStorageError(error);
-      if (automatic && !storageFailure) throw error;
+      if (automatic && !storageFailure && sessionsRef.current.find(entry => entry.id === sessionId)?.codexStorageError) throw error;
       flushSync(() => setSessions(previous => previous.map(entry => affectedIds.includes(entry.id) && !entry.codexHomeThreadsUnresolved &&
         (storageFailure || codexStorageRecovery.current.hasPending(entry.id))
         ? { ...entry, codexStorageError: storageFailure ? String(error) : parseCodexSandboxBlocker(entry.codexStorageError) ? entry.codexStorageError :

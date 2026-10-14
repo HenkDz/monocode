@@ -321,6 +321,16 @@ it.each(["pause", "generation", "question", "approval", "queue head", "account"]
   expect(fixture.sessionsRef.current[0].codexStorageError).toBe(sharingDetail);
 });
 
+it("restores the held descriptor and blocks dispatch if readiness succeeds but the automatic submission refuses", async () => {
+  const fixture = sandboxRepairFixture({ codexStorageError: sharingDetail, queuedMessages: [{ id: "q1", text: "Exact queued Plan", intent: "plan", attachments: [] }] });
+  fixture.retry.mockReturnValueOnce(false);
+  await expect(fixture.repair("clicked", undefined, true)).rejects.toThrow("prompt was retained");
+  expect(fixture.recovery.hasPending("clicked")).toBe(true);
+  expect(fixture.sessionsRef.current[0].codexStorageHeld).toEqual(fixture.recovery.held("clicked"));
+  expect(fixture.sessionsRef.current[0].codexStorageError).toContain("held message could not resume");
+  expect(fixture.sessionsRef.current[0].queuedMessages?.[0]?.text).toBe("Exact queued Plan");
+});
+
 it.each([{ queueStatus: "paused" as const }, { codexHomeThreadsUnresolved: true }, { busy: true }, { editingQueuedMessageId: "q" },
   { codexStorageError: sandboxDetail }, { codexStorageError: 'Codex storage needs repair: {"recovery":true,"reason":"Choose a source","paths":["C:/mono"]}' }])(
   "does not automatically prepare an ineligible conversation (%j)", async extra => {

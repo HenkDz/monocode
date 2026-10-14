@@ -62,7 +62,7 @@ const buttonNamed = (name: string) => Array.from(container.querySelectorAll<HTML
 it("copies the exact path-bearing lock envelope and automatically resumes once after release without clicking Repair", async () => {
   vi.useFakeTimers();
   const recovery = new MonoCodexStorageRecovery();
-  const sent = vi.fn(() => true);
+  const sent = vi.fn((_text: string, _attachments: string[], _intent: string) => true);
   recovery.hold("manager", () => sent("Exact held Plan", ["original attachment"], "plan"), "plan");
   const detail = `Codex storage needs repair: ${JSON.stringify({ recovery: true, reason: "Codex reader holds this file", paths: ["C:/synthetic/mono/AGENTS.md"],
     io: { operation: "open storage entry with delete access", path: "C:/synthetic/mono/AGENTS.md", holder: "Codex reader (exact holder unknown)", osError: 32, retryable: true } })}`;

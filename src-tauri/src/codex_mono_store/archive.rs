@@ -359,12 +359,11 @@ pub(super) fn lock_directory(path: &Path) -> Result<std::fs::File, String> {
         FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE,
     };
     // Exclude directory replacement while allowing native file publication beneath it.
-    std::fs::OpenOptions::new()
+    storage_io::run("guard private rollout directory", path, || std::fs::OpenOptions::new()
         .read(true)
         .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
-        .open(path)
-        .map_err(|e| e.to_string())
+        .open(path))
 }
 
 fn index_path(path: &str) -> String {

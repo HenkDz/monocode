@@ -640,7 +640,7 @@ pub fn codex_mono_store_copy(
                 .map(PathBuf::from)
         })
         .unwrap_or_else(|| source.clone());
-    let edges = closed_agent_edges(&sqlite_home, &thread_id)?;
+    let edges = closed_agent_edges(&sqlite_home, &thread_id).map_err(storage_error)?;
     copy_rollouts_with_edges(
         &source,
         &home,
@@ -665,7 +665,7 @@ pub fn codex_mono_store_restore_agent_state(
     let (_, home, _) = locations(&app, provider_account_id.as_deref())?;
     let _lock = STORAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     transactions::reconcile(&home).map_err(storage_error)?;
-    restore_agent_edges(&home, &thread_id)
+    restore_agent_edges(&home, &thread_id).map_err(storage_error)
 }
 
 pub(crate) fn prepare(
@@ -2599,8 +2599,8 @@ fn closed_agent_edges(home: &Path, thread_id: &str) -> Result<Vec<AgentEdge>, St
         return Ok(Vec::new());
     };
     let db =
-        rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .map_err(|e| e.to_string())?;
+        rusqlite::Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|e| storage_io::context("open Codex agent state database", &path, e.to_string()))?;
     db.busy_timeout(std::time::Duration::from_secs(5))
         .map_err(|e| e.to_string())?;
     let exists: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='thread_spawn_edges')", [], |row| row.get(0)).map_err(|e| e.to_string())?;
@@ -2618,7 +2618,7 @@ fn closed_agent_edges(home: &Path, thread_id: &str) -> Result<Vec<AgentEdge>, St
         })
         .map_err(|e| e.to_string())?;
     rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())
+        .map_err(|e| storage_io::context("read closed Codex agent edges", &path, e.to_string()))
 }
 
 fn restore_agent_edges(home: &Path, thread_id: &str) -> Result<(), String> {
@@ -2631,17 +2631,17 @@ fn restore_agent_edges(home: &Path, thread_id: &str) -> Result<(), String> {
     let edges: Vec<AgentEdge> = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
     let path = state_db(home)?.ok_or("Codex has not initialized the private Mono index")?;
     let mut db =
-        rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
-            .map_err(|e| e.to_string())?;
+        rusqlite::Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
+            .map_err(|e| storage_io::context("open private Codex agent state database", &path, e.to_string()))?;
     db.busy_timeout(std::time::Duration::from_secs(5))
         .map_err(|e| e.to_string())?;
-    let tx = db.transaction().map_err(|e| e.to_string())?;
+    let tx = db.transaction().map_err(|e| storage_io::context("begin private agent edge restore", &path, e.to_string()))?;
     for edge in edges {
         validate_thread_id(&edge.parent)?;
         validate_thread_id(&edge.child)?;
         tx.execute("INSERT INTO thread_spawn_edges(parent_thread_id, child_thread_id, status) VALUES (?1, ?2, ?3) ON CONFLICT(child_thread_id) DO UPDATE SET status=excluded.status WHERE parent_thread_id=excluded.parent_thread_id", rusqlite::params![edge.parent, edge.child, edge.status]).map_err(|e| e.to_string())?;
     }
-    tx.commit().map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| storage_io::context("commit private agent edge restore", &path, e.to_string()))?;
     storage_io::run("retire applied agent state snapshot", &snapshot, || std::fs::remove_file(&snapshot))?;
     Ok(())
 }

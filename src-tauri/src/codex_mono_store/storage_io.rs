@@ -6,7 +6,14 @@ pub(super) fn context(operation: &str, path: &Path, error: String) -> String {
     if error.starts_with('{') {
         return error;
     }
-    let sharing = cfg!(windows) && error.contains("(os error 32)");
+    let code = error
+        .rsplit_once("(os error ")
+        .and_then(|(_, tail)| tail.split_once(')'))
+        .and_then(|(code, _)| code.parse::<i32>().ok());
+    if code.is_none() && error.contains(&path.display().to_string()) {
+        return format!("{operation}: {error}");
+    }
+    let sharing = cfg!(windows) && code == Some(32);
     let name = path.file_name().unwrap_or_default().to_string_lossy();
     let holder = if name.contains(".sqlite") || name.ends_with("-wal") || name.ends_with("-shm") {
         "SQLite connection (Codex app-server or another context)"
@@ -23,7 +30,7 @@ pub(super) fn context(operation: &str, path: &Path, error: String) -> String {
         } else { format!("Could not {operation}: {path}. {error}") },
         "paths": [path],
         "io": {"operation": operation, "path": path, "holder": if sharing { Some(holder) } else { None },
-            "osError": if sharing { Some(32) } else { None }, "retryable": sharing}
+            "osError": code, "retryable": sharing}
     }).to_string()
 }
 

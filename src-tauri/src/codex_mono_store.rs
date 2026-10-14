@@ -1017,17 +1017,31 @@ fn write_snapshot(home: &Path, name: &str, snapshot: &LinkSnapshot) -> Result<()
 fn write_private_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
     let temp = path.with_file_name(format!(".monocode-link-{}", uuid::Uuid::new_v4()));
     let result = (|| {
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temp)
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            use windows_sys::Win32::{Foundation::{GENERIC_READ, GENERIC_WRITE}, Storage::FileSystem::{DELETE, FILE_SHARE_READ}};
+            options.access_mode(GENERIC_READ | GENERIC_WRITE | DELETE).share_mode(FILE_SHARE_READ);
+        }
+        let mut file = options.open(&temp)
             .map_err(|e| storage_io::context("create private metadata stage", &temp, e.to_string()))?;
         file.write_all(&serde_json::to_vec(value).map_err(|e| e.to_string())?)
             .map_err(|e| storage_io::context("write private metadata", &temp, e.to_string()))?;
         file.sync_all().map_err(|e| storage_io::context("sync private metadata", &temp, e.to_string()))?;
-        drop(file);
-        replace_link(&temp, &path)
+        #[cfg(windows)]
+        {
+            let result = replace_private_file(&file, path);
+            if result.is_err() {
+                if let Err(error) = discard_handle(&file) { log_storage_issue(error); }
+            }
+            result
+        }
+        #[cfg(unix)]
+        { drop(file); replace_link(&temp, path) }
     })();
+    #[cfg(unix)]
     if result.is_err() {
         if let Err(error) = storage_io::run("remove private metadata stage", &temp, || std::fs::remove_file(&temp)) {
             log_storage_issue(error);
@@ -2095,18 +2109,33 @@ fn remove_link(path: &Path) -> Result<(), String> {
     }
     #[cfg(windows)]
     {
-        use std::os::windows::fs::MetadataExt;
-        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_DIRECTORY;
-        if std::fs::symlink_metadata(path)
-            .map_err(|e| e.to_string())?
-            .file_attributes()
-            & FILE_ATTRIBUTE_DIRECTORY
-            != 0
-        {
-            return storage_io::run("remove storage junction", path, || std::fs::remove_dir(path));
+        let inspected = entry_identity(path)?;
+        let file = open_entry(path, true)?;
+        if file_identity(&file)? != inspected || !replaceable_link(path)? {
+            return Err(storage_io::context("remove storage link", path, "The entry changed while waiting; replacement bytes were preserved".into()));
         }
+        return discard_handle(&file);
     }
+    #[cfg(unix)]
     storage_io::run("remove storage link", path, || std::fs::remove_file(path))
+}
+
+#[cfg(windows)]
+fn replace_private_file(file: &std::fs::File, target: &Path) -> Result<(), String> {
+    let existing = match std::fs::symlink_metadata(target) {
+        Ok(_) => {
+            let identity = entry_identity(target)?;
+            let fingerprint = fingerprint(target)?;
+            let mut previous = open_entry(target, true)?;
+            if file_identity(&previous)? != identity || fingerprint_file(&mut previous)? != fingerprint {
+                return Err(storage_io::context("replace private metadata", target, "The entry changed while waiting; both versions were preserved".into()));
+            }
+            Some(previous)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(storage_io::context("inspect private metadata target", target, error.to_string())),
+    };
+    rename_handle(file, target, existing.is_some())
 }
 
 #[cfg(unix)]
@@ -2116,33 +2145,16 @@ fn replace_link(temp: &Path, target: &Path) -> Result<(), String> {
 
 #[cfg(windows)]
 fn replace_link(temp: &Path, target: &Path) -> Result<(), String> {
-    use std::os::windows::{ffi::OsStrExt, fs::OpenOptionsExt};
+    use std::os::windows::fs::OpenOptionsExt;
     use windows_sys::Win32::Storage::FileSystem::{
-        MoveFileExW, DELETE, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
-        FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, MOVEFILE_REPLACE_EXISTING,
+        DELETE, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+        FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
     };
     if std::fs::symlink_metadata(temp)
         .map_err(|e| e.to_string())?
         .is_file()
     {
-        // MoveFileEx reports some held targets as access denied; identify sharing before publication.
-        if std::fs::symlink_metadata(target).is_ok() {
-            drop(open_entry(target, true)?);
-        }
-        // File replacement uses DOS paths; the junction rename below uses NT paths.
-        let wide = |path: &Path| {
-            path.as_os_str()
-                .encode_wide()
-                .chain(Some(0))
-                .collect::<Vec<_>>()
-        };
-        let source = wide(temp);
-        let destination = wide(target);
-        return storage_io::run("replace private metadata", target, || {
-            if unsafe { MoveFileExW(source.as_ptr(), destination.as_ptr(), MOVEFILE_REPLACE_EXISTING) } == 0 {
-                Err(std::io::Error::last_os_error())
-            } else { Ok(()) }
-        });
+        return replace_private_file(&open_entry(temp, true)?, target);
     }
     // Open the junction itself, never the directory it points to.
     let file = std::fs::OpenOptions::new()
@@ -2517,10 +2529,25 @@ fn copy_rollouts_with_edges(
     {
         return Err("The saved Mono root does not match its thread id".into());
     }
-    let pending_dir = home.join(".monocode-migrations");
-    std::fs::create_dir_all(&pending_dir).map_err(|e| e.to_string())?;
+    let pending_dir = private_directory(&home, ".monocode-migrations")?;
     let pending = pending_dir.join(thread_id);
-    storage_io::run("publish rollout migration marker", &pending, || std::fs::write(&pending, b"pending"))?;
+    let pending_record = if pending.exists() {
+        #[cfg(windows)]
+        let _guard = open_entry(&pending, true)?;
+        if replaceable_link(&pending)? || std::fs::read(&pending).map_err(|e| storage_io::context("read migration marker", &pending, e.to_string()))? != b"pending" {
+            return Err(transactions::recovery("An unfamiliar migration marker was preserved; review it before resuming this thread.", &[pending.clone()]));
+        }
+        transactions::RecordedEntry::new(&pending)?
+    } else {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(windows)]
+        { use std::os::windows::fs::OpenOptionsExt; options.share_mode(windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ); }
+        let mut marker = storage_io::run("create rollout migration marker", &pending, || options.open(&pending))?;
+        marker.write_all(b"pending").map_err(|e| storage_io::context("write migration marker", &pending, e.to_string()))?;
+        marker.sync_all().map_err(|e| storage_io::context("sync migration marker", &pending, e.to_string()))?;
+        transactions::RecordedEntry::new(&pending)?
+    };
     // Copy descendants first and the root last, so a partial migration is not
     // mistaken for a successfully migrated root on the next connection.
     for (path, dest) in staged.iter().rev() {
@@ -2537,18 +2564,12 @@ fn copy_rollouts_with_edges(
     if !edges.is_empty() {
         let path = edge_snapshot;
         std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
-        let bytes = serde_json::to_vec(edges).map_err(|e| e.to_string())?;
-        storage_io::run("publish agent state snapshot", &path, || std::fs::write(&path, &bytes))?;
-        std::fs::File::options()
-            .write(true)
-            .open(&path)
-            .and_then(|f| f.sync_all())
-            .map_err(|e| e.to_string())?;
+        write_private_json(&path, &edges)?;
     } else if edge_snapshot.exists() {
         // A retry must not apply a closure changed in the original meanwhile.
-        storage_io::run("remove previous agent state snapshot", &edge_snapshot, || std::fs::remove_file(&edge_snapshot))?;
+        transactions::RecordedEntry::new(&edge_snapshot)?.cleanup(&edge_snapshot)?;
     }
-    storage_io::run("finish rollout migration", &pending, || std::fs::remove_file(&pending))?;
+    pending_record.cleanup(&pending)?;
     Ok(())
 }
 
@@ -2623,6 +2644,7 @@ fn closed_agent_edges(home: &Path, thread_id: &str) -> Result<Vec<AgentEdge>, St
 
 fn restore_agent_edges(home: &Path, thread_id: &str) -> Result<(), String> {
     let snapshot = edge_snapshot_path(home, thread_id);
+    let record = if snapshot.exists() { Some(transactions::RecordedEntry::new(&snapshot)?) } else { None };
     let bytes = match std::fs::read(&snapshot) {
         Ok(bytes) => bytes,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -2642,7 +2664,7 @@ fn restore_agent_edges(home: &Path, thread_id: &str) -> Result<(), String> {
         tx.execute("INSERT INTO thread_spawn_edges(parent_thread_id, child_thread_id, status) VALUES (?1, ?2, ?3) ON CONFLICT(child_thread_id) DO UPDATE SET status=excluded.status WHERE parent_thread_id=excluded.parent_thread_id", rusqlite::params![edge.parent, edge.child, edge.status]).map_err(|e| e.to_string())?;
     }
     tx.commit().map_err(|e| storage_io::context("commit private agent edge restore", &path, e.to_string()))?;
-    storage_io::run("retire applied agent state snapshot", &snapshot, || std::fs::remove_file(&snapshot))?;
+    record.ok_or("Agent state snapshot disappeared before restoration")?.cleanup(&snapshot)?;
     Ok(())
 }
 

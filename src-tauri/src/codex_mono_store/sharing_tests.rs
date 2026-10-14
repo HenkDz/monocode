@@ -426,3 +426,53 @@ fn sharing_unreadable_journal_retries_read_without_bypassing_the_original_choice
         b"source instructions"
     );
 }
+
+#[test]
+fn sharing_stale_link_retry_preserves_a_replacement_real_file() {
+    let (root, source, home) = fixture();
+    let old = source.join("old-shared.json");
+    let target = home.join("stale-cache.json");
+    std::fs::write(&old, b"original linked bytes").unwrap();
+    std::fs::hard_link(&old, &target).unwrap();
+    let held = hold(&target);
+    let changed = target.clone();
+    let archived = root.join("old-alias");
+    let thread = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        drop(held);
+        std::fs::rename(&changed, &archived).unwrap();
+        std::fs::write(&changed, b"unfamiliar replacement bytes").unwrap();
+    });
+    let error = remove_link(&target).unwrap_err();
+    thread.join().unwrap();
+    assert!(error.contains("preserved"), "{error}");
+    assert_eq!(
+        std::fs::read(&target).unwrap(),
+        b"unfamiliar replacement bytes"
+    );
+    assert_eq!(std::fs::read(&old).unwrap(), b"original linked bytes");
+}
+
+#[test]
+fn sharing_metadata_replacement_retry_preserves_a_changed_target() {
+    let (_, _, home) = fixture();
+    let target = home.join("metadata.json");
+    std::fs::write(&target, b"old metadata").unwrap();
+    let held = hold(&target);
+    let changed = target.clone();
+    let thread = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        drop(held);
+        std::fs::write(&changed, b"new user metadata").unwrap();
+    });
+    let error =
+        write_private_json(&target, &serde_json::json!({"owned":"new metadata"})).unwrap_err();
+    thread.join().unwrap();
+    assert!(error.contains("preserved"), "{error}");
+    assert_eq!(std::fs::read(&target).unwrap(), b"new user metadata");
+    assert!(!std::fs::read_dir(&home).unwrap().any(|e| e
+        .unwrap()
+        .file_name()
+        .to_string_lossy()
+        .starts_with(".monocode-link-")));
+}

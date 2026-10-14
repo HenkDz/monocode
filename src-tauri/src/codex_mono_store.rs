@@ -34,6 +34,8 @@ pub fn codex_mono_use_unelevated_sandbox(
 }
 mod skills;
 mod transactions;
+#[cfg(all(test, windows))]
+mod sharing_tests;
 use transactions::{ClaimIntent, ClaimJournal};
 #[cfg(test)]
 mod consistency_tests;

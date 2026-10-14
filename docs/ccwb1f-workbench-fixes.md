@@ -1,0 +1,15 @@
+# CC-WB1-F: reviewed Workbench fixes
+
+Home enqueue keeps the explicit Queue/Steer choice. Both scheduler eligibility checks hold an explicit Queue while the current turn runs; the submission boundary also refuses an explicit queued dispatch into a busy turn. Manual Steer of a held row remains available, as does legacy automatic Mono follow-up delivery. Explicit Task Queue precedes the background-task default. Existing queue ordering, pause, provider readiness, storage, intent, generation and authority guards remain in place.
+
+`QueuedMessage.followUpBehavior` is an optional durable enum in the existing JSON queue. The existing sanitizer preserves queue/steer on save and reload, holds malformed present choices as queue, and keeps absent legacy metadata absent. Recovery still pauses the queue. Native `Vec<Value>` transport/schema remain unchanged. Root accepted the necessary narrow sanitizer edit; Claude must review this persistence contract at the frozen candidate and again if integration changes it.
+
+Member Back/Forward now invalidate pending workspace and Mono-open requests, cancel workspace navigation, clear hidden terminal/side-session focus, and request composer focus while retaining the existing history stacks.
+
+Historical worker panes use their selected dispatch's result, baseline, workspace and failure. The view withholds the newer task's brief, report/review/PR artifact IDs, PR link and unverified read-only chip. Brief/artifact availability is stated explicitly, and historical results are labelled Previous dispatch for settled and in-progress workers. No historical persistence was invented.
+
+Composer measurement reattaches when dock presence changes, disconnecting the previous observer. The regression transitions through a saved draft, replacement dock, multiline follow-up and Open Work; checks old-observer cleanup, drawer geometry, Close/Escape and input focus. The retained report suppression assertion now checks the mounted WorkbenchTask container.
+
+Validation: focused **174 passed/0 failed/0 skipped**; connected Chromium **52 passed/0 failed/0 skipped**, with 12 PNGs individually inspected; full Vitest maxWorkers1 **8,556 passed/0 failed/13 unchanged skips**, 637 passed/2 skipped files; type check and production build **exit0**. Each heavy job started after fresh RAM >=3 GiB and at most one other heavy job; own jobs ran sequentially. The initial focused fixture URL failure remains retained; corrected source expectations and deadlines were unchanged. Existing build chunk-size and dependency-install warnings remain in raw logs.
+
+Exact candidate and evidence are recorded in `C:/Users/nooro/AppData/Local/Temp/monocode-cc/ccwb1f/REPORT.md`. Focused tests execute actual App enqueue/scheduler/queued-delivery/history callbacks with production queue and acknowledgement helpers, supplying synthetic provider/storage boundaries. Browser tests mount actual SessionPane/Workbench controls. Full native App, Explorer, live provider and private-profile acceptance remain outside this builder's scope. No transcript, native or schema changes, push, deployment, nour integration or preview launch.

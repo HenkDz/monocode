@@ -18,17 +18,13 @@ import {
 import { usePrStatusCache } from "../../source-control/hooks/usePrStatus";
 import { OrchestrationActions } from "../../orchestration/ui/OrchestrationActions";
 import { PixelMascot } from "../../projects/ui/PixelMascot";
-import { AgentMarkdown } from "../../sessions/ui/AgentMarkdown";
 import { formatRelativeTime } from "../../inbox/model/githubTasks";
-import { projectName } from "../../../shared/lib/paths";
 import {
   cardSession,
   openCardSession,
   subscribeCardSessions,
 } from "../model/monoCards";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { OrgArtifactLinks } from "../../artifacts/ui/OrgArtifactLinks";
-import { Modal } from "../../../shared/ui/Modal";
 import { selectAgentLiveState } from "../../agents/model/agentLiveState";
 import {
   TaskMetricsLine,
@@ -63,10 +59,6 @@ export function MemberWorkLog({
   );
   const statuses = usePrStatusCache();
   const actions = useContext(OrchestrationActions);
-  const [openedTask, setOpenedTask] = useState<{
-    id: string;
-    leadId?: string;
-  }>();
   const [pendingTask, setPendingTask] = useState<string>();
   const [actionError, setActionError] = useState<{
     memberId: string;
@@ -84,7 +76,6 @@ export function MemberWorkLog({
   useEffect(() => {
     setFilter("current");
     setPage(0);
-    setOpenedTask(undefined);
     setActionError(undefined);
   }, [member.id]);
   useEffect(() => {
@@ -273,15 +264,15 @@ export function MemberWorkLog({
             )}
           </span>
           <AgentDetailTooltip
-            detail={openedTask ? undefined : taskMetricsDetail(metrics, state)}
+            detail={taskMetricsDetail(metrics, state)}
           >
             <button
               type="button"
-              aria-haspopup="dialog"
+              data-task-open
               className={`${button} shrink-0 bg-content/8 font-medium`}
               onClick={(event) => {
                 event.currentTarget.focus();
-                setOpenedTask({ id: task.id, leadId: run?.leadId });
+                openCardSession(task.sessionId);
               }}
             >
               Open
@@ -310,17 +301,6 @@ export function MemberWorkLog({
               <button
                 type="button"
                 className={button}
-                onClick={() =>
-                  actions
-                    ? actions.open(task.sessionId)
-                    : openCardSession(task.sessionId)
-                }
-              >
-                Open worker session
-              </button>
-              <button
-                type="button"
-                className={button}
                 disabled={pendingTask !== undefined || !run?.leadId}
                 onClick={async () => {
                   if (!run?.leadId || pendingTask) return;
@@ -345,119 +325,6 @@ export function MemberWorkLog({
           )}
         </div>
       </article>
-    );
-  };
-  const selected = tasks.find(
-    ({ task, run }) =>
-      task.id === openedTask?.id && run?.leadId === openedTask?.leadId,
-  );
-  useEffect(() => {
-    if (openedTask && !selected) {
-      setOpenedTask(undefined);
-      taskToggleRef.current?.focus();
-    }
-  }, [openedTask, selected]);
-  const renderDetails = ({ task, links }: (typeof tasks)[number]) => {
-    const cwd = task.workspace?.checkoutCwd;
-    return (
-      <Modal
-        title={presentationText(task.title)}
-        fitViewport
-        onClose={() => {
-          setOpenedTask(undefined);
-          if (!visibleTasks.some((item) => item.task === task))
-            taskToggleRef.current?.focus();
-        }}
-      >
-        <div
-          id={`member-task-${task.id}`}
-          className="space-y-3 p-4 text-xs"
-          onClickCapture={(event) => {
-            if (
-              event.target instanceof Element &&
-              event.target.closest("[data-org-artifact]")
-            )
-              setOpenedTask(undefined);
-          }}
-        >
-          <OrgArtifactLinks monoId={member.id} links={links} />
-          {cwd && (
-            <p title={cwd} className="truncate font-mono text-content/60">
-              {task.workspace?.branch || projectName(cwd)}
-            </p>
-          )}
-          {!!task.checkoutBaseline?.inheritedChangedPaths?.length && (
-            <p className="text-content/60">
-              Started with {task.checkoutBaseline.inheritedChangedPaths.length}{" "}
-              inherited changes
-            </p>
-          )}
-          {task.readOnly && (
-            <p className="text-content/60">
-              Read-only task
-              {task.readOnlyFallback ? ` · ${task.readOnlyFallback}` : ""}
-            </p>
-          )}
-          {task.error &&
-            ["failed", "blocked", "interrupted"].includes(task.status) && (
-              <TranscriptError
-                error={task.error}
-                title={`Couldn't complete ${presentationText(task.title)}`}
-              />
-            )}
-          <div>
-            <h3 className="font-medium text-content/60">Assignment</h3>
-            <p className="mt-2 whitespace-pre-wrap break-words">
-              {presentationText(task.prompt)}
-            </p>
-          </div>
-          {task.result && !task.reportArtifactId && (
-            <div>
-              <div className="mb-2 text-content/60">Report</div>
-              <AgentMarkdown
-                className="agent-chat-bubble-md mono-run-report"
-                text={presentationText(task.result)}
-                streaming={false}
-                cwd={cwd}
-              />
-            </div>
-          )}
-          <div className="flex flex-wrap gap-1 border-t border-content/10 pt-2">
-            <button
-              type="button"
-              className={button}
-              onClick={() => {
-                setOpenedTask(undefined);
-                openCardSession(task.sessionId);
-              }}
-            >
-              Open worker session
-            </button>
-            {cwd && (!task.readOnly || task.readOnlyFallback) && (
-              <button
-                type="button"
-                className={button}
-                disabled={!actions?.openWorker}
-                onClick={() => {
-                  setOpenedTask(undefined);
-                  actions?.openWorker?.(task.sessionId);
-                }}
-              >
-                Open worktree
-              </button>
-            )}
-            {task.prUrl && (
-              <button
-                type="button"
-                className={button}
-                onClick={() => void openUrl(task.prUrl!)}
-              >
-                Open PR
-              </button>
-            )}
-          </div>
-        </div>
-      </Modal>
     );
   };
   if (activity) {
@@ -500,14 +367,10 @@ export function MemberWorkLog({
                   <div className="flex min-w-0 items-center gap-2">
                     <button
                       type="button"
-                      aria-haspopup="dialog"
                       className="min-w-0 truncate text-left text-xs font-medium hover:text-accent focus-visible:outline-accent"
                       onClick={(click) => {
                         click.currentTarget.focus();
-                        setOpenedTask({
-                          id: event.task.id,
-                          leadId: taskRuns.get(event.task)?.leadId,
-                        });
+                        openCardSession(event.task.sessionId);
                       }}
                     >
                       {event.label}
@@ -553,7 +416,6 @@ export function MemberWorkLog({
             No {activity.filter === "all" ? "activity" : activity.filter} yet.
           </p>
         )}
-        {selected && renderDetails(selected)}
       </div>
     );
   }
@@ -684,7 +546,6 @@ export function MemberWorkLog({
           </nav>
         )}
       </div>
-      {selected && renderDetails(selected)}
     </section>
   );
 }

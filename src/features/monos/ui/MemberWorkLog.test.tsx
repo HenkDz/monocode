@@ -2,6 +2,7 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
+import { WorkbenchTask } from "./WorkbenchTask";
 import { MemberWorkLog } from "./MemberWorkLog";
 import { orchestrator } from "../../orchestration/model/orchestration";
 import type {
@@ -16,7 +17,6 @@ import {
 } from "../../source-control/hooks/usePrStatus";
 import { OrchestrationActions } from "../../orchestration/ui/OrchestrationActions";
 import { openCardSession, cardSession } from "../model/monoCards";
-import { openUrl } from "@tauri-apps/plugin-opener";
 
 vi.mock("../../source-control/hooks/usePrStatus", async (original) => ({
   ...(await original<
@@ -122,19 +122,21 @@ it("links task reports, reviews and PR summaries while keeping artifact reports 
     }
     await act(async () =>
       container
-        .querySelector<HTMLButtonElement>('[aria-haspopup="dialog"]')!
+        .querySelector<HTMLButtonElement>('[data-task-open]')!
         .click(),
     );
+    expect(openCardSession).toHaveBeenCalledWith(task.sessionId);
+    await act(async () => root.render(<WorkbenchTask task={task} />));
     expect(
-      document.querySelector('[role="dialog"] .mono-run-report'),
+      container.querySelector('.mono-run-report'),
     ).toBeNull();
     expect(
-      document.querySelectorAll('[role="dialog"] [data-org-artifact]'),
+      container.querySelectorAll('[data-org-artifact]'),
     ).toHaveLength(3);
     await act(async () =>
-      document
+      container
         .querySelector<HTMLButtonElement>(
-          '[role="dialog"] [data-org-artifact="report-1"]',
+          '[data-org-artifact="report-1"]',
         )!
         .click(),
     );
@@ -150,101 +152,19 @@ it("links task reports, reviews and PR summaries while keeping artifact reports 
   }
 });
 
-it("shows a summary and opens sanitized Markdown with assignment and worker actions in a dialog", async () => {
+it("opens the exact worker directly without a detail popup", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  localStorage.setItem(
-    "monocode:mono-roster",
-    JSON.stringify([manager, member]),
-  );
-  const runs = [
-    {
-      tasks: [base],
-      dispatches: [
-        {
-          id: "dispatch",
-          taskId: base.id,
-          startedAt: Date.now() - 120000,
-          updatedAt: Date.now() - 60000,
-        },
-      ],
-    },
-  ] as OrchestrationRun[];
-  vi.spyOn(orchestrator, "snapshot").mockReturnValue(runs);
+  vi.spyOn(orchestrator, "snapshot").mockReturnValue([{ tasks: [base], dispatches: [] }] as unknown as OrchestrationRun[]);
   vi.spyOn(orchestrator, "subscribe").mockReturnValue(() => {});
-  const openWorktree = vi.fn();
-  const container = document.createElement("div"),
-    root = createRoot(container);
-  const render = () => (
-    <OrchestrationActions.Provider
-      value={{
-        update: vi.fn(),
-        confirm: vi.fn(),
-        retry: vi.fn(),
-        open: vi.fn(),
-        openWorker: openWorktree,
-      }}
-    >
-      <MemberWorkLog member={member} />
-    </OrchestrationActions.Provider>
-  );
+  const host = document.createElement("div"), root = createRoot(host);
   try {
-    await act(async () => root.render(render()));
-    const header = () =>
-      container.querySelector<HTMLButtonElement>('[aria-haspopup="dialog"]')!;
-    expect(header().textContent).toBe("Open");
-    expect(container.querySelector("details")).toBeNull();
-    expect(container.textContent).not.toContain("Assignment instructions");
-    expect(container.textContent).toContain("From Project Manager");
-    expect(container.textContent).toContain("PR #7");
-    expect(container.querySelector("time")?.textContent).toBeTruthy();
-    expect(container.querySelector("strong")?.className).toContain("truncate");
-    await act(async () => header().click());
-    const dialog = document.querySelector('[role="dialog"]')!;
-    expect(container.querySelector("details")).toBeNull();
-    expect(dialog.textContent).toContain("Assignment instructions");
-    expect(
-      dialog.querySelector(`[title="${base.workspace!.checkoutCwd}"]`)
-        ?.textContent,
-    ).toBe("feature/cards");
-    expect(container.textContent).not.toContain(base.workspace!.checkoutCwd);
-    const report = dialog.querySelector(".mono-run-report")!;
-    expect(report.querySelector("details summary")?.textContent).toBe(
-      "Verification",
-    );
-    expect(report.querySelector(".markdown-code-shell")).not.toBeNull();
-    expect(report.textContent).toContain("const checked = true;");
-    expect(report.querySelector("script")).toBeNull();
-    for (const label of ["Open worker session", "Open worktree", "Open PR"]) {
-      if (!document.querySelector('[role="dialog"]'))
-        await act(async () => header().click());
-      await act(async () =>
-        [
-          ...document.querySelectorAll<HTMLButtonElement>(
-            '[role="dialog"] button',
-          ),
-        ]
-          .find((button) => button.textContent === label)!
-          .click(),
-      );
-      if (label !== "Open PR")
-        expect(document.querySelector('[role="dialog"]')).toBeNull();
-    }
+    await act(async () => root.render(<MemberWorkLog member={member} />));
+    expect(host.textContent).not.toContain("Assignment instructions");
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-task-open]")!.click());
     expect(openCardSession).toHaveBeenCalledWith("worker");
-    expect(openWorktree).toHaveBeenCalledWith("worker");
-    expect(openUrl).toHaveBeenCalledWith(base.prUrl);
-    await act(async () => root.render(null));
-    await act(async () => root.render(render()));
     expect(document.querySelector('[role="dialog"]')).toBeNull();
-    await act(async () => header().click());
-    await act(async () =>
-      document
-        .querySelector<HTMLButtonElement>('[aria-label="Close"]')!
-        .click(),
-    );
-    expect(document.querySelector('[role="dialog"]')).toBeNull();
-  } finally {
-    await act(async () => root.unmount());
-  }
+    expect(host.querySelector("details")).toBeNull();
+  } finally { await act(async () => root.unmount()); }
 });
 
 it("keeps lifecycle and verified PR outcomes separate from canonical availability without treating stale acceptance as ready", async () => {
@@ -384,7 +304,7 @@ it("keeps lifecycle and verified PR outcomes separate from canonical availabilit
         if (["running", "queued", "cancelling", "stale-verdict"].includes(id))
           expect(card.querySelector('[title="Review notes"]')).toBeNull();
         expect(
-          card.querySelector('[aria-haspopup="dialog"]')?.textContent,
+          card.querySelector('[data-task-open]')?.textContent,
         ).toBe("Open");
       }
       const next = container.querySelector<HTMLButtonElement>(
@@ -470,19 +390,12 @@ it("pages large histories five at a time, prioritizes attention and reaches ever
     const lastTitle = last.querySelector("strong")!.textContent!;
     await act(async () =>
       last
-        .querySelector<HTMLButtonElement>('button[aria-haspopup="dialog"]')!
+        .querySelector<HTMLButtonElement>('button[data-task-open]')!
         .click(),
     );
-    expect(document.querySelector('[role="dialog"]')?.textContent).toContain(
-      lastTitle,
-    );
-    await act(async () =>
-      document
-        .querySelector<HTMLButtonElement>(
-          '[role="dialog"] [aria-label="Close"]',
-        )!
-        .click(),
-    );
+    expect(openCardSession).toHaveBeenCalledWith("worker");
+    expect(lastTitle).toContain("Past assignment");
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
     await act(async () =>
       historyToggle.dispatchEvent(
         new KeyboardEvent("keydown", { key: "Home", bubbles: true }),
@@ -521,7 +434,7 @@ it("pages large histories five at a time, prioritizes attention and reaches ever
   }
 });
 
-it("keeps opened details readable when a current task moves into History", async () => {
+it("keeps direct navigation available when a current task moves into History", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const snapshot = vi
     .spyOn(orchestrator, "snapshot")
@@ -535,7 +448,7 @@ it("keeps opened details readable when a current task moves into History", async
     await act(async () => root.render(<MemberWorkLog member={member} />));
     await act(async () =>
       host
-        .querySelector<HTMLButtonElement>('[aria-haspopup="dialog"]')!
+        .querySelector<HTMLButtonElement>('[data-task-open]')!
         .click(),
     );
     snapshot.mockReturnValue([
@@ -553,16 +466,8 @@ it("keeps opened details readable when a current task moves into History", async
     ] as unknown as OrchestrationRun[]);
     await act(async () => root.render(<MemberWorkLog member={member} />));
     expect(host.querySelectorAll("[data-member-task]")).toHaveLength(0);
-    expect(document.querySelector('[role="dialog"]')?.textContent).toContain(
-      "Assignment instructions",
-    );
-    await act(async () =>
-      document
-        .querySelector<HTMLButtonElement>(
-          '[role="dialog"] [aria-label="Close"]',
-        )!
-        .click(),
-    );
+    expect(openCardSession).toHaveBeenCalledWith("worker");
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
     await act(async () =>
       host
         .querySelector<HTMLButtonElement>('[role="tab"][id$="-history"]')!
@@ -595,13 +500,13 @@ it("highlights a task awaiting the user without automatically opening its body",
   try {
     await act(async () => root.render(<MemberWorkLog member={member} />));
     const header = () =>
-      host.querySelector<HTMLButtonElement>('[aria-haspopup="dialog"]')!;
+      host.querySelector<HTMLButtonElement>('[data-task-open]')!;
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(host.querySelector("[data-task-status]")?.textContent).toBe(
       "Needs you",
     );
     await act(async () => header().click());
-    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
     await act(async () => root.render(null));
     await act(async () => root.render(<MemberWorkLog member={member} />));
     expect(document.querySelector('[role="dialog"]')).toBeNull();
@@ -849,10 +754,10 @@ it("opens queued workers and cancels the exact task with pending and retryable e
     );
     await act(async () =>
       [...host.querySelectorAll<HTMLButtonElement>("button")]
-        .find((button) => button.textContent === "Open worker session")!
+        .find((button) => button.textContent === "Open")!
         .click(),
     );
-    expect(open).toHaveBeenCalledWith(task.sessionId);
+    expect(openCardSession).toHaveBeenCalledWith(task.sessionId);
     await act(async () => cancelButton().click());
     expect(cancel).toHaveBeenCalledWith("engine", task.id);
     expect(cancelButton().disabled).toBe(true);
@@ -876,125 +781,29 @@ it("opens queued workers and cancels the exact task with pending and retryable e
   }
 });
 
-it("restores focus to the Current segment when an open assignment moves into History", async () => {
+it("renders the Brief with keyboard expansion and sanitized report using existing Markdown", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  const snapshot = vi
-    .spyOn(orchestrator, "snapshot")
-    .mockReturnValue([
-      { tasks: [base], dispatches: [] },
-    ] as unknown as OrchestrationRun[]);
-  vi.spyOn(orchestrator, "subscribe").mockReturnValue(() => {});
-  const host = document.createElement("div"),
-    root = createRoot(host);
-  document.body.append(host);
-  try {
-    await act(async () => root.render(<MemberWorkLog member={member} />));
-    const open = host.querySelector<HTMLButtonElement>(
-      '[aria-haspopup="dialog"]',
-    )!;
-    await act(async () => open.focus());
-    await act(async () => open.click());
-    snapshot.mockReturnValue([
-      {
-        tasks: [
-          {
-            ...base,
-            accepted: true,
-            acceptedDispatchId: "dispatch",
-            completionOutcome: "no-changes",
-          },
-        ],
-        dispatches: [],
-      },
-    ] as unknown as OrchestrationRun[]);
-    await act(async () => root.render(<MemberWorkLog member={member} />));
-    await act(async () =>
-      document
-        .querySelector<HTMLButtonElement>(
-          '[role="dialog"] [aria-label="Close"]',
-        )!
-        .click(),
-    );
-    expect(document.activeElement).toBe(
-      host.querySelector('[role="tab"][id$="-current"]'),
-    );
-  } finally {
-    await act(async () => root.unmount());
-    host.remove();
-  }
-});
-
-it.each([false, true])("restores the active filter when the reader's task retires (another Manager reuses its ID: %s)", async reused => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  const original = { leadId: "original-manager", tasks: [base], dispatches: [] } as unknown as OrchestrationRun;
-  let runs = [original];
-  let notify = () => {};
-  vi.spyOn(orchestrator, "snapshot").mockImplementation(() => runs);
-  vi.spyOn(orchestrator, "subscribe").mockImplementation(listener => {
-    notify = listener;
-    return () => {};
-  });
   const host = document.createElement("div"), root = createRoot(host);
   document.body.append(host);
   try {
-    await act(async () => root.render(<MemberWorkLog member={member} />));
-    const open = host.querySelector<HTMLButtonElement>('[aria-haspopup="dialog"]')!;
-    await act(async () => { open.focus(); open.click(); });
-    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
-    runs = reused ? [{ ...original, leadId: "other-manager", tasks: [{ ...base, prompt: "Other Manager's assignment" }] }] : [];
-    await act(async () => notify());
-    expect(open.isConnected).toBe(false);
-    expect(document.querySelector('[role="dialog"]')).toBeNull();
-    expect(document.body.textContent).not.toContain("Other Manager's assignment");
-    expect(document.activeElement).toBe(host.querySelector('[role="tab"][id$="-current"]'));
-    runs = [original];
-    await act(async () => notify());
-    expect(document.querySelector('[role="dialog"]')).toBeNull();
-  } finally {
-    await act(async () => root.unmount());
-    host.remove();
-  }
-});
-
-it("dismisses hovered task hints while a reader is open so Escape closes it and restores the same trigger", async () => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  vi.spyOn(orchestrator, "snapshot").mockReturnValue([
-    { tasks: [base], dispatches: [] },
-  ] as unknown as OrchestrationRun[]);
-  vi.spyOn(orchestrator, "subscribe").mockReturnValue(() => {});
-  const host = document.createElement("div"),
-    root = createRoot(host);
-  document.body.append(host);
-  try {
-    await act(async () => root.render(<MemberWorkLog member={member} />));
-    const open = host.querySelector<HTMLButtonElement>(
-      '[aria-haspopup="dialog"]',
-    )!;
-    await act(async () => {
-      open.focus();
-      open.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
-    });
-    expect(document.querySelector('[role="tooltip"]')).not.toBeNull();
-    await act(async () => open.click());
-    expect(document.querySelector('[role="tooltip"]')).toBeNull();
-    expect(host.querySelector('[aria-haspopup="dialog"]')).toBe(open);
-    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
-    await act(async () =>
-      window.dispatchEvent(
-        new KeyboardEvent("keydown", {
-          key: "Escape",
-          bubbles: true,
-          cancelable: true,
-        }),
-      ),
-    );
-    expect(document.querySelector('[role="dialog"]')).toBeNull();
-    expect(host.querySelector('[aria-haspopup="dialog"]')).toBe(open);
-    expect(document.activeElement).toBe(open);
-  } finally {
-    await act(async () => root.unmount());
-    host.remove();
-  }
+    await act(async () => root.render(<WorkbenchTask task={{ ...base, readOnly: true, checkoutBaseline: { inheritedChangedPaths: ["one", "two"] } as OrchestrationTask["checkoutBaseline"] }} />));
+    const brief = host.querySelector('[aria-label="Task brief"]')!;
+    const toggle = brief.querySelector<HTMLButtonElement>("button")!;
+    expect(brief.textContent).toContain("Assignment instructions");
+    expect(brief.textContent).toContain("Read-only");
+    expect(brief.textContent).toContain("2 inherited changes");
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(brief.querySelector("details, summary")).toBeNull();
+    expect(document.getElementById(toggle.getAttribute("aria-controls")!)?.getAttribute("data-expanded")).toBe("false");
+    await act(async () => toggle.click());
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(toggle.textContent).toContain("Show less");
+    const report = host.querySelector(".mono-run-report")!;
+    expect(report.querySelector("details summary")?.textContent).toBe("Verification");
+    expect(report.querySelector(".markdown-code-shell")).not.toBeNull();
+    expect(report.textContent).toContain("const checked = true;");
+    expect(report.querySelector("script")).toBeNull();
+  } finally { await act(async () => root.unmount()); host.remove(); }
 });
 
 it("keeps zero assignments usable across all segments without adding disclosures or paging", async () => {
@@ -1088,7 +897,9 @@ it("keeps a prepared failed launch distinct from a recorded conversation turn", 
     expect(host.querySelector('[data-member-task="launch"] [data-transcript-error]')).toBeNull();
     expect(host.querySelector('[data-member-task="launch"] [data-task-reason]')?.textContent).not.toContain("Storage not available");
     await act(async () => host.querySelector<HTMLButtonElement>('[data-member-task="launch"] button')!.click());
-    const reader = document.querySelector('[role="dialog"]')!;
+    expect(openCardSession).toHaveBeenCalledWith("worker");
+    await act(async () => root.render(<WorkbenchTask task={{ ...base, status: "failed", error: "Storage not available" }} />));
+    const reader = host;
     expect(reader.querySelector('[data-transcript-error]')).not.toBeNull();
     const diagnostics = [...reader.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Open details")!;
     await act(async () => diagnostics.click());

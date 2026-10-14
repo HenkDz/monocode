@@ -11,9 +11,10 @@ import type { UserQuestionPrompt, UserQuestionReply } from "../../sessions/model
 import { projectName } from "../../../shared/lib/paths";
 import type { TrackedCiRepair } from "../../inbox/model/ciRepairTracking";
 import type { Automation } from "../../automations/model/automations";
+import { canContinueManagerRequest, managerRequestState } from "../../monos/model/managerAuthorizedWork";
 
 export type AttentionCategory = "approval" | "decision" | "blocker" | "failure";
-export type AttentionSource = "approval" | "question" | "storage" | "usage" | "preparation" | "delivery" | "task" | "continue" | "error" | "ci-repair" | "automation";
+export type AttentionSource = "approval" | "question" | "storage" | "usage" | "preparation" | "delivery" | "task" | "continue" | "manager-request" | "error" | "ci-repair" | "automation";
 export type AttentionItem = {
   id: string;
   revision: string;
@@ -73,6 +74,17 @@ export function selectAttention(input: AttentionInput): AttentionItem[] {
     const context = base(session);
     const turn = session.blocks[currentTurnIndex(session)];
     const scope = identity(session.id, session.providerSessionId, turn?.id);
+    for (const block of session.blocks.filter(block => block.managerRequestRecovery)) {
+      const request = block.managerRequestRecovery!;
+      const state = managerRequestState(request, input.goals);
+      const owner = input.roster.find(mono => mono.id === request.monoId && mono.role === "manager" && mono.sessionId === session.id && mono.archivedAt == null);
+      const id = identity(session.id, "manager-request", block.id);
+      add({ ...context, id, revision: identity(id, JSON.stringify(request), state), source: "manager-request", category: "decision",
+        title: "Continue this request", detail: session.blocks.find(block => block.id === request.userMessageId)?.text ?? block.text,
+        project: projectName(request.projectId), createdAt: session.blocks.find(block => block.id === request.userMessageId)?.startedAt,
+        messageId: block.id, route: "user", status: state === "pending" ? owner && !session.worktreeRemoved ? "open" : "stale" : "resolved",
+        state: { status: state === "pending" ? "needs-you" : "done", reason: "decision" } });
+    }
     for (const block of session.blocks) {
       if (!block.approval) continue;
       const id = identity(session.id, session.providerSessionId, "approval", block.id, block.approval.requestId);
@@ -194,6 +206,7 @@ export type AttentionCallbacks = {
   resumeAtReset: (sessionId: string, enabled: boolean) => void | Promise<void>;
   retryDelivery: (sessionId: string) => void | Promise<void>;
   continueManager: (leadId: string) => Promise<void>;
+  continueRequest?: (sessionId: string, blockId: string) => Promise<void>;
   inspect: (sessionId: string) => void | Promise<void>;
   inspectAutomation?: (automationId: string) => void | Promise<void>;
 };
@@ -236,6 +249,10 @@ export async function executeAttentionAction(item: AttentionItem, action: Attent
         session.editingQueuedMessageId || session.queueStatus !== "paused" || session.queuedMessages?.[0]?.id !== item.messageId) throw Error("Open the conversation to review this delivery before retrying.");
       return callbacks.retryDelivery(item.sessionId);
     case "continue":
+      if (item.source === "manager-request") {
+        if (!callbacks.continueRequest || !canContinueManagerRequest(session)) throw Error("Finish the current operation or pending decision before continuing this request.");
+        return callbacks.continueRequest(item.sessionId, item.messageId!);
+      }
       if (item.source !== "continue") throw Error("Manager continuation unavailable");
       return callbacks.continueManager(item.leadId!);
   }

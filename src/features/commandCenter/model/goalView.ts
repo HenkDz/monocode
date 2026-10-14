@@ -170,7 +170,8 @@ export function selectGoalViews(input: GoalViewInput): GoalViewModel {
         attempts, review: task.reviewOf ? { ...task.reviewOf, title: reviewed?.title ?? "Unknown task",
           available: !!reviewed && dispatchesForReview(workerRun, task.reviewOf.taskId, task.reviewOf.dispatchId) } : undefined } satisfies GoalNode;
     }));
-    const nodes = [actor("orchestrator", origin, originSessionId), actor("manager", manager, run?.ownerSessionId ?? run?.leadId ?? manager?.sessionId), ...workers];
+    const nodes = [...(origin?.role === "manager" ? [] : [actor("orchestrator", origin, originSessionId)]),
+      actor("manager", manager ?? (origin?.role === "manager" ? origin : undefined), run?.ownerSessionId ?? run?.leadId ?? manager?.sessionId), ...workers];
     return { goal, projectId: goal.projectId, project: projectName(run?.workspace?.projectCwd ?? run?.cwd ?? goal.projectId), nodes,
       wallElapsedMs: !finished && Number.isFinite(goal.createdAt) ? Math.max(0, now - goal.createdAt) : undefined,
       metrics: selectGoalMetrics(goal, runs, input.sessions, now), rosterIssue: rosterIssue(nodes, input.roster) };

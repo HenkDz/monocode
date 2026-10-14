@@ -132,6 +132,7 @@ export function AttentionQueueView({ input, callbacks, readInput, open, onClose,
               <button type="button" disabled={locked} onClick={() => perform(item, "deny")}>Deny</button>
             </>}
             {item.source === "continue" && item.route === "user" && <button type="button" disabled={locked} onClick={() => perform(item, "continue")}>Continue Manager</button>}
+            {item.source === "manager-request" && item.route === "user" && <button type="button" disabled={locked || !callbacks.continueRequest} onClick={() => perform(item, "continue")}>Continue this request</button>}
             {item.source === "delivery" && session?.queuedMessages?.[0]?.id === item.messageId && <button type="button" disabled={locked || session?.queueStatus !== "paused"} onClick={() => perform(item, "retry-delivery")}>Retry delivery</button>}
             <button type="button" disabled={receipt?.status === "pending"} onClick={() => perform(item, "inspect")}>{item.source === "automation" ? "Review in Automations" : item.route === "lead" ? item.source === "task" ? "Review retry with lead" : "Open lead" : "Open conversation"}</button>
           </div>

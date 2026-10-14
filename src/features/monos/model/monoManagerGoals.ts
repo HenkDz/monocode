@@ -4,7 +4,10 @@ import type { OrchestrationRun } from "../../orchestration/model/orchestration";
 import { managerTaskFinished } from "../../orchestration/model/projectManager";
 import { prStatusKey } from "../../source-control/hooks/usePrStatus";
 import type { GitPr } from "../../../platform/tauri/fs";
-import type { MonoProject } from "./mono";
+import type { Mono, MonoProject } from "./mono";
+import type { Block } from "../../sessions/model/session";
+import { assertManagerRequest } from "./managerAuthorizedWork";
+import type { ManagerRequestRecovery } from "./managerAuthorizedWork";
 
 /** Non-repository recents must not hide the projects that can own a Manager. */
 export async function validManagerProjects(projects: readonly MonoProject[], resolve: (path: string) => Promise<string>): Promise<{ project: MonoProject; folder: string }[]> {
@@ -54,7 +57,7 @@ export type MonoManagerGoal = {
 type Receipt = {
   signature: string;
   result: unknown;
-  pending?: { goalId: string; text: string; cancel?: boolean };
+  pending?: { goalId: string; text: string; cancel?: boolean; request?: ManagerRequestRecovery };
 };
 export type GoalLedger = {
   version: 1;
@@ -93,6 +96,7 @@ export type ManagerReadyPr = {
   checks: string;
 };
 export type ManagerGoalHost = {
+  requestAuthority?: ManagerRequestRecovery;
   mayDelegate(monoId: string): boolean;
   projects(monoId: string): Promise<ManagerProject[]>;
   status(monoId: string, projectId: string, before?: string): Promise<unknown>;
@@ -102,6 +106,8 @@ export type ManagerGoalHost = {
     text: string,
     receiptId: string,
     cancel: boolean,
+    validate?: () => void,
+    request?: ManagerRequestRecovery,
   ): Promise<void>;
 };
 type Store = {
@@ -196,6 +202,38 @@ export class MonoManagerGoals {
   hydrate(id: string) {
     return this.serial(() => this.load(id));
   }
+  anchorManagerRequest(manager: Mono, project: ManagerProject, block: Block) {
+    return this.serial(async () => {
+      assertManagerRequest(manager, project, block);
+      const ledger = await this.load(manager.id);
+      const existing = ledger.goals.find(goal => goal.userMessageId === block.id);
+      if (existing) {
+        if (existing.managerId !== project.managerId || existing.projectId !== project.id ||
+            existing.state === "cancelled" || this.isCancelling(existing.id))
+          throw Error("The original request is cancelled or its Manager changed");
+        return existing;
+      }
+      if (ledger.goals.filter(goal => !terminal(goal.state)).length >= 100)
+        throw Error("Finish active goals before adding more");
+      const goal: MonoManagerGoal = {
+        id: crypto.randomUUID(), monoId: manager.id, managerId: project.managerId,
+        projectId: project.id, userMessageId: block.id, requestId: `manager-${block.id}`,
+        title: block.text.trim().slice(0, 8000), state: "queued", prUrls: [],
+        createdAt: Date.now(), updatedAt: Date.now(),
+      };
+      await this.save(manager.id, { ...ledger, goals: [...ledger.goals, goal] });
+      return goal;
+    });
+  }
+  retireManagerRequests(managerId: string) {
+    return this.serial(async () => {
+      for (const [id, ledger] of this.ledgers) {
+        const goals = ledger.goals.map(goal => goal.managerId === managerId && !terminal(goal.state)
+          ? { ...goal, state: "cancelled" as const, updatedAt: Date.now() } : goal);
+        if (goals.some((goal, index) => goal !== ledger.goals[index])) await this.save(id, { ...ledger, goals });
+      }
+    });
+  }
   events(id: string) {
     return Object.values(this.ledgers.get(id)?.events ?? {});
   }
@@ -247,6 +285,8 @@ export class MonoManagerGoals {
         receipt.pending.text,
         `mono-goal-${id}-${requestId}`,
         !!receipt.pending.cancel,
+        undefined,
+        receipt.pending.request,
       );
       await this.save(id, {
         ...ledger,
@@ -436,6 +476,7 @@ export class MonoManagerGoals {
               goalId: goal.id,
               text: message,
               cancel: action === "goals.cancel",
+              ...(host.requestAuthority ? { request: structuredClone(host.requestAuthority) } : {}),
             },
           },
         },
@@ -468,7 +509,9 @@ export class MonoManagerGoals {
             run?.ownerSessionId ?? goal.managerId,
           )
             ? "needs-you"
-            : run?.status === "paused" ||
+              : run?.status === "stopped"
+                ? "cancelled"
+              : run?.status === "paused" ||
                 tasks.some((task) =>
                   ["failed", "blocked", "interrupted"].includes(task.status),
                 )
@@ -537,7 +580,7 @@ export class MonoManagerGoals {
               ...ledger.events,
               ...Object.fromEntries(
                 changed
-                  .filter((goal) => goal.monoId === id)
+                  .filter((goal) => goal.monoId === id && !runs.some(run => run.leadId === goal.managerId && run.ownerMonoId === id))
                   .map((goal) => [goal.id, goal]),
               ),
             },

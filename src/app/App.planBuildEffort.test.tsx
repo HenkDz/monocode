@@ -6,6 +6,7 @@ import ts from "typescript";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { MonoDetails } from "../features/monos/ui/MonoDetails";
 import { findMono, updateMono } from "../features/monos/model/mono";
+import { assertManagerDelivery } from "../features/monos/model/managerAuthorizedWork";
 import { lockMonoField } from "../features/monos/model/monoTeam";
 import { resolveMonoRoleEffort } from "../features/monos/model/monoRoleEffort";
 import { BuildTargetButton } from "../features/sessions/ui/SecondOpinionButton";
@@ -85,9 +86,10 @@ afterEach(() => {
 function commitTarget(target: PlanBuildTarget) {
   session = withPlanBuildTarget(session, target);
   const setSessions = vi.fn();
-  new Function("monoForSession", "updateMono", "lockMonoField", "setSessions", "sessionId", "options", "current",
+  new Function("monoForSession", "updateMono", "lockMonoField", "setSessions", "sessionId", "options", "current", "validateManagerDelivery",
     ts.transpile(`const ${commit.getText(source)}; commitSubmittedTurn();`, { target: ts.ScriptTarget.ES2022 }),
-  )(() => findMono("manager"), updateMono, lockMonoField, setSessions, session.id, { buildTarget: target }, session);
+  )(() => findMono("manager"), updateMono, lockMonoField, setSessions, session.id, { buildTarget: target }, session,
+    () => assertManagerDelivery(undefined, undefined, session, findMono("manager")));
   expect(setSessions).toHaveBeenCalledOnce();
 }
 

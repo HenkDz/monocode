@@ -21,6 +21,14 @@ import {
 
 let now = 0;
 
+it.each([appendUser, appendSteerUser])("retains controlled Manager authority on new and follow-up turns", (append) => {
+  const monoSource = { id: "manager", name: "Manager", mascot: "cat", color: "blue", goalId: "goal",
+    request: { monoId: "manager", sessionId: "chat", managerId: "engine", projectId: "/synthetic", userMessageId: "original", state: "pending" as const } };
+  const session = append(newSession("codex", "/synthetic"), "Continue", [], { appRequestId: "receipt", monoSource });
+  expect(session.blocks.at(-1)).toMatchObject({ appRequestId: "receipt", monoSource });
+  expect(append(session, "Ordinary user request").blocks.at(-1)?.monoSource).toBeUndefined();
+});
+
 it("refuses a queued provider binding from the previous home and records the current home's own thread", () => {
   const previous = { ...newSession("codex", "/tmp"), codexStorageHome: "/mono/a", providerSessionId: "thread-a" };
   const current = { ...previous, codexStorageHome: "/mono/b", providerSessionId: "thread-b", providerSessionIdByHome: { "/mono/a": "thread-a", "/mono/b": "thread-b" } };

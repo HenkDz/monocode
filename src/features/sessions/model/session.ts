@@ -277,7 +277,7 @@ export type QueuedMessage = {
   /** A durably accepted Manager digest; wait for idle and preserve its receipt. */
   managerWake?: { leadId: string; receiptId: string };
   appRequestId?: string;
-  monoSource?: { id: string; name: string; mascot: string; color: string; goalId: string };
+  monoSource?: { id: string; name: string; mascot: string; color: string; goalId: string; request?: import("../../monos/model/managerAuthorizedWork").ManagerRequestRecovery };
   id: string;
   /** User bubble already shown optimistically in a Mono's conversation. */
   blockId?: string;
@@ -332,6 +332,7 @@ export type Block = {
   role: BlockRole;
   text: string;
   monoGoalSubmission?: import("../../monos/model/monoGoalRouting").MonoGoalSubmission;
+  managerRequestRecovery?: import("../../monos/model/managerAuthorizedWork").ManagerRequestRecovery;
   image?: GeneratedImageMeta;
   attachments?: Attachment[];
   streaming?: boolean;

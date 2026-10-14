@@ -66,12 +66,11 @@ impl RecordedEntry {
                 FILE_SHARE_READ, FILE_WRITE_ATTRIBUTES,
             },
         };
-        let mut file = std::fs::OpenOptions::new()
+        let mut file = storage_io::run("pin private config stage", path, || std::fs::OpenOptions::new()
             .access_mode(GENERIC_READ | DELETE | FILE_WRITE_ATTRIBUTES)
             .share_mode(FILE_SHARE_READ)
             .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
-            .open(path)
-            .map_err(|e| e.to_string())?;
+            .open(path))?;
         let info = handle_file_info(&file)?;
         if !file.metadata().map_err(|e| e.to_string())?.is_file()
             || info.nNumberOfLinks != 1
@@ -152,7 +151,7 @@ fn publish_journal(path: &Path, transaction: &Transaction) -> Result<RecordedEnt
             .access_mode(GENERIC_READ | GENERIC_WRITE | DELETE)
             .share_mode(FILE_SHARE_READ);
     }
-    let mut file = options.open(&pending).map_err(|e| e.to_string())?;
+    let mut file = storage_io::run("allocate transaction journal", &pending, || options.open(&pending))?;
     #[cfg(test)]
     crash_tests::checkpoint("journal-after-create");
     file.write_all(&bytes).map_err(|e| e.to_string())?;
@@ -1264,6 +1263,7 @@ pub(super) fn reconcile(home: &Path) -> Result<(), String> {
                 continue;
             }
             let journal = read_journal(path).map_err(|error| {
+                if storage_io::sharing(&error) { return error; }
                 incomplete_recovery(path).unwrap_or_else(|_| {
                     recovery(
                         &format!("An unreadable storage transaction was preserved: {error}"),

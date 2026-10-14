@@ -2671,7 +2671,7 @@ fn find_thread(dir: &Path, id: &str) -> Result<Option<PathBuf>, String> {
 
 fn history_base(path: &Path) -> Result<Option<String>, String> {
     use std::io::BufRead;
-    let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let file = storage_io::run("open resumed rollout metadata", path, || std::fs::File::open(path))?;
     let reader: Box<dyn std::io::Read> = if path.extension().is_some_and(|ext| ext == "zst") {
         Box::new(zstd::stream::read::Decoder::new(file).map_err(|e| e.to_string())?)
     } else {
@@ -2679,7 +2679,7 @@ fn history_base(path: &Path) -> Result<Option<String>, String> {
     };
     let mut reader = std::io::BufReader::new(reader);
     let mut first = String::new();
-    reader.read_line(&mut first).map_err(|e| e.to_string())?;
+    reader.read_line(&mut first).map_err(|e| storage_io::context("read resumed rollout metadata", path, e.to_string()))?;
     if first.trim().is_empty() {
         return Ok(None);
     }

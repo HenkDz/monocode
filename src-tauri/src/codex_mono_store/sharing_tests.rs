@@ -384,3 +384,45 @@ fn sharing_config_read_names_the_file_and_preserves_missing_config_default() {
         Some("synthetic")
     );
 }
+
+#[test]
+fn sharing_unreadable_journal_retries_read_without_bypassing_the_original_choice() {
+    let (_, source, home) = fixture();
+    let target = home.join("AGENTS.md");
+    std::fs::write(source.join("AGENTS.md"), b"source instructions").unwrap();
+    std::fs::write(&target, b"private instructions").unwrap();
+    let claim = home.join(format!(".monocode-claim-{}", uuid::Uuid::new_v4()));
+    let journal = ClaimJournal::new(
+        &target,
+        &claim,
+        ClaimIntent::Keep,
+        None,
+        entry_identity(&target).unwrap(),
+    )
+    .unwrap();
+    drop(journal);
+    let path = std::fs::read_dir(&home)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| {
+            p.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(".monocode-txn-")
+        })
+        .unwrap();
+    let before = std::fs::read(&path).unwrap();
+    let held = hold(&path);
+    let error = prepare_files(&source, &home).unwrap_err();
+    assert!(storage_io::sharing(&error), "{error}");
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    drop(held);
+    let conflict: serde_json::Value =
+        serde_json::from_str(&prepare_files(&source, &home).unwrap_err()).unwrap();
+    assert_eq!(conflict["entry"], "AGENTS.md");
+    assert_eq!(std::fs::read(&target).unwrap(), b"private instructions");
+    assert_eq!(
+        std::fs::read(source.join("AGENTS.md")).unwrap(),
+        b"source instructions"
+    );
+}

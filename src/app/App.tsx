@@ -10287,6 +10287,7 @@ function Workspace({
     if (remoteProjectFor(session.cwd)) throw new Error("Repair this sandbox on its remote host.");
     const accountId = codexStorageAccountId(session, selectedProviderAccountId("codex", session.cwd));
     const sandboxChoice = resolution === "use_unelevated_sandbox" || resolution === "use_mono_full_access";
+    if (automatic && accountId !== (session.providerAccountId ?? selectedProviderAccountId("codex", session.cwd) ?? "default")) return;
     const sourceChoice = resolution === "bind_selected_source" || resolution === "separate_selected_source" || resolution === "reattach_original_source";
     const sourceGeneration = turnGen.current.get(sessionId);
     const selectedAccountId = selectedProviderAccountId("codex", session.cwd);

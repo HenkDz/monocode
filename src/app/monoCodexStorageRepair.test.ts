@@ -332,6 +332,7 @@ it("restores the held descriptor and blocks dispatch if readiness succeeds but t
 });
 
 it.each([{ queueStatus: "paused" as const }, { codexHomeThreadsUnresolved: true }, { busy: true }, { editingQueuedMessageId: "q" },
+  { providerAccountId: "changed-account" },
   { codexStorageError: sandboxDetail }, { codexStorageError: 'Codex storage needs repair: {"recovery":true,"reason":"Choose a source","paths":["C:/mono"]}' }])(
   "does not automatically prepare an ineligible conversation (%j)", async extra => {
     const fixture = sandboxRepairFixture({ codexStorageError: sharingDetail, ...extra });

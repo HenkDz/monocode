@@ -2135,7 +2135,9 @@ fn replace_private_file(file: &std::fs::File, target: &Path) -> Result<(), Strin
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => return Err(storage_io::context("inspect private metadata target", target, error.to_string())),
     };
-    rename_handle(file, target, existing.is_some())
+    let replace = existing.is_some();
+    drop(existing);
+    rename_handle(file, target, replace)
 }
 
 #[cfg(unix)]
@@ -2190,7 +2192,7 @@ fn rename_handle(file: &std::fs::File, target: &Path, replace: bool) -> Result<(
     // usize storage supplies the alignment required by FILE_RENAME_INFO.
     let mut buffer = vec![0usize; bytes.div_ceil(std::mem::size_of::<usize>())];
     let info = buffer.as_mut_ptr().cast::<FILE_RENAME_INFO>();
-    storage_io::run("rename/publish storage entry", target, || { unsafe {
+    let mut rename = || { unsafe {
         (*info).Anonymous.Flags = if replace { 3 } else { 2 }; // REPLACE_IF_EXISTS | POSIX_SEMANTICS
         (*info).FileNameLength = (name.len() * 2) as u32;
         std::ptr::copy_nonoverlapping(
@@ -2209,7 +2211,13 @@ fn rename_handle(file: &std::fs::File, target: &Path, replace: bool) -> Result<(
         }
     }
     Ok(())
-    })
+    };
+    // Replacement is one atomic attempt after target validation; only no-replace publication may retry by path.
+    if replace {
+        rename().map_err(|e| storage_io::context("replace private metadata", target, e.to_string()))
+    } else {
+        storage_io::run("rename/publish storage entry", target, rename)
+    }
 }
 
 fn create_link(source: &Path, target: &Path) -> Result<(), String> {

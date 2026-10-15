@@ -4,7 +4,11 @@ import { fileURLToPath } from "node:url";
 const evidence = process.env.CCFB3_RUN ?? "../../target/ccfb3-browser";
 export default defineConfig({
   testDir: ".",
-  testMatch: ["ccfb3-startup.spec.ts", "ccfb2-shell.spec.ts"],
+  testMatch: [
+    "ccfb3-startup.spec.ts",
+    "ccfb3-review.spec.cjs",
+    "ccfb2-shell.spec.ts",
+  ],
   grep: /startup|source-selected window chrome in dark regular/,
   workers: 1,
   retries: 0,

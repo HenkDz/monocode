@@ -161,11 +161,20 @@ test("startup hung boot watchdog cannot continue into missing UI", async ({
   expect(await glassCalls(page)).toHaveLength(0);
 });
 
-test("startup unsupported timing keeps working opaque UI", async ({ page }) => {
+test("startup unsupported timing preserves healthy appearance after a bounded paint opportunity", async ({
+  page,
+}) => {
   await page.goto("/?boot=unsupported");
   await expect(page.locator("#boot-splash")).toHaveCount(0);
-  await expect(page.locator("html")).toHaveClass(/boot-opaque/);
-  expect(await glassCalls(page)).toHaveLength(0);
+  await expect(page.locator("html")).not.toHaveClass(/boot-opaque/);
+  await expect.poll(async () => (await glassCalls(page)).length).toBe(1);
+  expect(
+    await page.evaluate(
+      () =>
+        performance.getEntriesByName("monocode:content-paint-opportunity")
+          .length,
+    ),
+  ).toBe(1);
   await page.getByRole("button", { name: "Check workspace" }).click();
   await expect(
     page.getByRole("button", { name: "Workspace responds" }),

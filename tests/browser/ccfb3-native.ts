@@ -1,4 +1,6 @@
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
+// @ts-expect-error source-bound guard provided by the startup Vite plugin
+export { confirmReload } from "virtual:ccfb3-reload-guard";
 
 const params = new URLSearchParams(location.search);
 const mode = params.get("boot");
@@ -8,6 +10,8 @@ mockIPC(
   (command, args) => {
     calls.push({ command, args });
     if (command === "plugin:window|is_maximized") return false;
+    if (command === "plugin:dialog|message")
+      return window.confirm(String(args.message)) ? "Reload" : "No";
     return null;
   },
   { shouldMockEvents: true },

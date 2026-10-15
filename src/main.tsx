@@ -11,6 +11,7 @@ import {
   abortQuit,
   askQuitConfirmation,
   commitQuit,
+  confirmReload,
   loadBootWorkspace,
   reportQuitPoll,
 } from "./app/model/appLifecycle";
@@ -29,14 +30,18 @@ import "./features/connections/model/remoteCommands";
 import "./styles/index.css";
 
 performance.mark("monocode:bootstrap");
-const startup = startStartupRecovery(activateWindowAppearance, () => {
-  if (IS_MAC) return () => {};
-  const controls = ReactDOM.createRoot(
-    document.querySelector("[data-boot-controls]")!,
-  );
-  controls.render(<WindowControls />);
-  return () => controls.unmount();
-});
+const startup = startStartupRecovery(
+  activateWindowAppearance,
+  () => {
+    if (IS_MAC) return () => {};
+    const controls = ReactDOM.createRoot(
+      document.querySelector("[data-boot-controls]")!,
+    );
+    controls.render(<WindowControls />);
+    return () => controls.unmount();
+  },
+  () => confirmReload(true),
+);
 // Let local boot IPC overlap loading/evaluating the workspace UI.
 const appLoaded = import("./app/App");
 

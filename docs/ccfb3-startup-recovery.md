@@ -10,10 +10,21 @@ cover. Theme preferences and the native glass implementation are unchanged.
 
 Boot rejection shows a safe message and keyboard-accessible Retry. Retry performs
 one explicit window reload, resetting cached import/restore failures instead of
-overlapping another restore attempt. A ten-second watchdog restores the opaque
+overlapping another restore attempt. Once content has committed, Retry first uses
+the existing `confirmReload(true)` unsaved-change confirmation. It conservatively
+asks even when no dirty editor is known to startup. Cancelled/failed/stale
+confirmations retain the workspace; pending or accepted reload disables duplicate
+clicks. Pre-mount rejection still retries without that confirmation.
+A ten-second watchdog restores the opaque
 cover with Retry and existing window controls. It offers Continue without
 transparency only after the workspace has committed. Underlying content is inert
-and hidden from accessibility while recovery is open. Late paint callbacks cannot
+and hidden from accessibility while recovery is open. Recovery also temporarily
+excludes every body sibling, including existing and newly added portals, retaining
+their original inert/aria-hidden attributes for restoration. Its key/focus capture
+handlers are installed before App's effects, suspend portal/global key handlers
+only during recovery, and trap Tab within recovery actions. It initially focuses
+an enabled action and restores prior focus after opaque continuation, preserving
+portal state and the normal shared Modal implementation. Late paint callbacks cannot
 enable glass after timeout; effect cleanup fences stale StrictMode callbacks.
 
 Performance entries record bootstrap, workspace readiness, content commit, opaque
@@ -23,8 +34,14 @@ can belong to the HTML splash, so are not used as workspace readiness.
 
 Element Timing is a renderer signal for a companion text marker, not proof that
 the complete workspace was composited or presented by Windows. It does not detect
-a later WebView2/GPU lost frame. Unsupported engines retain opaque working UI;
-they do not automatically enable glass. Hidden windows or engines that withhold
+a later WebView2/GPU lost frame. Engines without Element Timing use a compatibility
+path: reveal on the opaque surface, then check for nonempty workspace layout after
+another frame and a 100ms paint opportunity. Visible documents with content call
+the existing appearance initializer, preserving healthy glass and later theme
+changes. This is scheduling/layout evidence, not renderer or compositor proof;
+it is marked `content-paint-opportunity`, not `content-renderer-paint`. Empty/hidden
+content retries that bounded check until the same ten-second watchdog. Hidden
+windows or supported engines that withhold
 the signal may require opaque continuation. These limits need real WebView2 and
 other-platform acceptance; this builder neither launched nor stopped an app.
 The watchdog requires the entry module and event loop to run. It cannot recover
@@ -43,6 +60,13 @@ suite covers boot ordering, rejection, timeout, late callbacks, StrictMode,
 disposal and unavailable timing; existing lifecycle/appearance/native-glass tests
 are retained. Seven startup browser cases plus one existing FB2 chrome case cover
 Retry, slow/never renderer notifications, hung boot, themes and usable opaque UI.
+Three additional source-bound reviewer probes retain the no-discard assertion,
+the exact ordinary keyboard sequence, and actual shared body-portal Modal keyboard
+assertion. The native confirmation IPC is represented by a browser dialog; its
+confirmation function is extracted from actual appLifecycle source, not replaced
+with a fake guard. The no-discard probe waits for cancellation rather than a load
+event, since cancelling a reload must not load a new page. Original reviewer and
+builder failures remain in the external history.
 
 External report, exact candidate pins, actual counts, raw earlier failures and
 selected individually inspected screenshots:

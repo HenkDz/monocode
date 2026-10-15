@@ -12,8 +12,10 @@ let observers: { disconnect: ReturnType<typeof vi.fn> }[];
 let boot: ReturnType<typeof startStartupRecovery>;
 let glass: ReturnType<typeof vi.fn>;
 let frame: FrameRequestCallback;
+let reload: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
   vi.useFakeTimers();
+  reload = vi.spyOn(window.location, "reload").mockImplementation(() => {});
   callbacks = [];
   observers = [];
   vi.stubGlobal(
@@ -55,6 +57,7 @@ afterEach(() => {
   boot?.dispose();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 function paint(index = callbacks.length - 1, overrides = {}) {
   callbacks[index](
@@ -117,7 +120,9 @@ it("shows a visible recoverable rejection without exposing the underlying UI", (
   ).toBe(false);
   expect(continueButton().hidden).toBe(true);
   expect(document.getElementById("root")?.hasAttribute("inert")).toBe(true);
-  expect(document.getElementById("root")?.getAttribute("aria-hidden")).toBe("true");
+  expect(document.getElementById("root")?.getAttribute("aria-hidden")).toBe(
+    "true",
+  );
   boot.contentMounted();
   expect(glass).not.toHaveBeenCalled();
   expect(vi.getTimerCount()).toBe(0);
@@ -137,7 +142,9 @@ it("bounds a never-painted frame and ignores its late callback until explicit op
   expect(splash()).toBeNull();
   expect(document.documentElement.classList.contains("boot-opaque")).toBe(true);
   expect(document.getElementById("root")?.hasAttribute("inert")).toBe(false);
-  expect(document.getElementById("root")?.hasAttribute("aria-hidden")).toBe(false);
+  expect(document.getElementById("root")?.hasAttribute("aria-hidden")).toBe(
+    false,
+  );
 });
 
 it("keeps Retry available for hung boot and permits opaque continuation only after late mount", () => {
@@ -174,13 +181,170 @@ it("disposes watchdog, pending reveal, and observer without enabling glass", () 
   expect(vi.getTimerCount()).toBe(0);
 });
 
-it("uses opaque UI when Element Timing is unavailable", () => {
+it("initializes healthy appearance after a bounded paint opportunity when Element Timing is unavailable", () => {
+  vi.stubGlobal("PerformanceObserver", undefined);
+  vi.spyOn(
+    document.querySelector("main")!,
+    "getBoundingClientRect",
+  ).mockReturnValue({ width: 400, height: 300 } as DOMRect);
+  boot.contentMounted();
+  reveal();
+  expect(glass).not.toHaveBeenCalled();
+  frame(0);
+  vi.advanceTimersByTime(101);
+  expect(splash()).toBeNull();
+  expect(glass).toHaveBeenCalledTimes(1);
+  expect(document.documentElement.classList.contains("boot-opaque")).toBe(
+    false,
+  );
+});
+
+it("unsupported timing still reaches opaque watchdog if content has no layout", () => {
   vi.stubGlobal("PerformanceObserver", undefined);
   boot.contentMounted();
   reveal();
-  expect(splash()).toBeNull();
+  frame(0);
+  vi.advanceTimersByTime(STARTUP_TIMEOUT_MS);
+  expect(splash()?.dataset.state).toBe("timeout");
   expect(glass).not.toHaveBeenCalled();
-  expect(document.documentElement.classList.contains("boot-opaque")).toBe(true);
+});
+
+it("confirms mounted Retry and retains edits when confirmation is cancelled or fails", async () => {
+  boot.dispose();
+  const confirm = vi.fn().mockResolvedValue(false);
+  boot = startStartupRecovery(glass, undefined, confirm);
+  boot.contentMounted();
+  reveal();
+  vi.advanceTimersByTime(STARTUP_TIMEOUT_MS);
+  const retry = document.querySelector<HTMLButtonElement>("[data-boot-retry]")!;
+  retry.click();
+  await Promise.resolve();
+  expect(confirm).toHaveBeenCalledTimes(1);
+  expect(reload).not.toHaveBeenCalled();
+  expect(retry.disabled).toBe(false);
+  confirm.mockRejectedValue(new Error("dialog failed"));
+  retry.click();
+  await Promise.resolve();
+  expect(reload).not.toHaveBeenCalled();
+  expect(retry.disabled).toBe(false);
+});
+
+it("reloads once only after mounted confirmation, with duplicate clicks disabled", async () => {
+  boot.dispose();
+  let accept!: (yes: boolean) => void;
+  const confirm = vi.fn(
+    () =>
+      new Promise<boolean>((resolve) => {
+        accept = resolve;
+      }),
+  );
+  boot = startStartupRecovery(glass, undefined, confirm);
+  boot.contentMounted();
+  reveal();
+  vi.advanceTimersByTime(STARTUP_TIMEOUT_MS);
+  const retry = document.querySelector<HTMLButtonElement>("[data-boot-retry]")!;
+  retry.click();
+  retry.click();
+  expect(confirm).toHaveBeenCalledTimes(1);
+  accept(true);
+  await Promise.resolve();
+  expect(reload).toHaveBeenCalledTimes(1);
+  expect(retry.disabled).toBe(true);
+  boot.dispose();
+});
+
+it.each(["unmount", "dispose"])(
+  "does not reload after a pending confirmation loses its mounted generation via %s",
+  async (action) => {
+    boot.dispose();
+    let accept!: (yes: boolean) => void;
+    boot = startStartupRecovery(
+      glass,
+      undefined,
+      () =>
+        new Promise<boolean>((resolve) => {
+          accept = resolve;
+        }),
+    );
+    const unmount = boot.contentMounted();
+    reveal();
+    vi.advanceTimersByTime(STARTUP_TIMEOUT_MS);
+    document.querySelector<HTMLButtonElement>("[data-boot-retry]")!.click();
+    if (action === "unmount") unmount();
+    else boot.dispose();
+    accept(true);
+    await Promise.resolve();
+    expect(reload).not.toHaveBeenCalled();
+  },
+);
+
+it("excludes newly appended body portals during recovery and restores them on disposal", async () => {
+  boot.fail();
+  const portal = document.createElement("div");
+  document.body.append(portal);
+  await vi.waitFor(() =>
+    expect(portal.getAttribute("aria-hidden")).toBe("true"),
+  );
+  expect(portal.hasAttribute("inert")).toBe(true);
+  boot.dispose();
+  expect(portal.hasAttribute("aria-hidden")).toBe(false);
+  expect(portal.hasAttribute("inert")).toBe(false);
+});
+
+it("pre-mount rejection Retry reloads once without a confirmation", () => {
+  boot.fail();
+  const retry = document.querySelector<HTMLButtonElement>("[data-boot-retry]")!;
+  retry.click();
+  retry.click();
+  expect(reload).toHaveBeenCalledTimes(1);
+});
+
+it("keeps Retry guarded after previously committed content unmounts", async () => {
+  boot.dispose();
+  const confirm = vi.fn().mockResolvedValue(false);
+  boot = startStartupRecovery(glass, undefined, confirm);
+  const unmount = boot.contentMounted();
+  unmount();
+  boot.fail();
+  document.querySelector<HTMLButtonElement>("[data-boot-retry]")!.click();
+  await Promise.resolve();
+  expect(confirm).toHaveBeenCalledTimes(1);
+  expect(reload).not.toHaveBeenCalled();
+});
+
+it("restores pre-existing body portal attributes and focus on safe continuation", () => {
+  const portal = document.createElement("div");
+  portal.setAttribute("aria-hidden", "false");
+  portal.innerHTML = '<input aria-label="portal input" value="unsaved" />';
+  document.body.append(portal);
+  const input = portal.querySelector("input")!;
+  input.focus();
+  boot.contentMounted();
+  reveal();
+  vi.advanceTimersByTime(STARTUP_TIMEOUT_MS);
+  expect(portal.hasAttribute("inert")).toBe(true);
+  expect(portal.getAttribute("aria-hidden")).toBe("true");
+  expect(document.activeElement).toBe(continueButton());
+  continueButton().click();
+  expect(portal.hasAttribute("inert")).toBe(false);
+  expect(portal.getAttribute("aria-hidden")).toBe("false");
+  expect(document.activeElement).toBe(input);
+  expect(input.value).toBe("unsaved");
+});
+
+it("disposal restores body siblings and releases the recovery key interceptor", () => {
+  const portal = document.createElement("div");
+  portal.setAttribute("inert", "");
+  document.body.append(portal);
+  boot.fail();
+  boot.dispose();
+  expect(portal.hasAttribute("inert")).toBe(true);
+  expect(portal.hasAttribute("aria-hidden")).toBe(false);
+  const handler = vi.fn();
+  window.addEventListener("keydown", handler, true);
+  window.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab" }));
+  expect(handler).toHaveBeenCalledTimes(1);
+  window.removeEventListener("keydown", handler, true);
 });
 
 it("does not enable glass for a hidden document", () => {

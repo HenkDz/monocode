@@ -15,6 +15,7 @@ import {
   rejectMessageSend,
 } from "../../monos/model/monoMessaging";
 import { AgentTranscript, MonoActivityTrail } from "./AgentTranscript";
+import { openTranscriptWork } from "./transcriptTestActions";
 import { PACED_REVEAL_KEY, WORD_FADE_MS } from "./wordFade";
 
 vi.mock("../../../platform/tauri/clipboard", () => ({
@@ -98,7 +99,7 @@ function render(
 }
 
 function status() {
-  return container.querySelector('[data-mono-work] [role="status"] .sr-only')
+  return container.querySelector('.compact-current-action')
     ?.textContent;
 }
 
@@ -200,7 +201,7 @@ it.each([true, false])(
     expect(bubble.querySelector('[role="alert"]')?.textContent).toBe(
       `Not sent · ${error}`,
     );
-    expect(container.querySelector("[data-mono-work]")).toBeNull();
+    expect(container.querySelector("[data-transcript-turn-work]")).toBeNull();
     expect(container.textContent).not.toMatch(/worked for/i);
     const button = [
       ...bubble.querySelectorAll<HTMLButtonElement>("button"),
@@ -361,7 +362,8 @@ it("keeps launched sessions under the reply that started them when the Mono repo
   ];
   render(blocks, { onOpenSession: vi.fn(), agentName: "MonoSkull" });
   expect(container.querySelectorAll("[data-transcript-turn]")).toHaveLength(1);
-  const started = container.querySelector('[data-chat-message="started"]')!;
+  expect(container.querySelector('[data-chat-message="started"]')).toBeNull();
+  const started = container.querySelector("[data-transcript-turn-work]")!;
   const cards = container.querySelector("[data-launched-sessions]")!;
   const report = container.querySelector('[data-chat-message="report"]')!;
   expect(container.querySelectorAll("[data-launched-sessions]")).toHaveLength(
@@ -371,7 +373,7 @@ it("keeps launched sessions under the reply that started them when the Mono repo
     started.compareDocumentPosition(cards) & Node.DOCUMENT_POSITION_FOLLOWING,
   ).toBeTruthy();
   expect(
-    cards.compareDocumentPosition(report) & Node.DOCUMENT_POSITION_FOLLOWING,
+    report.compareDocumentPosition(cards) & Node.DOCUMENT_POSITION_FOLLOWING,
   ).toBeTruthy();
 });
 
@@ -437,9 +439,7 @@ it("keeps launched session cards in place while the Mono's report back arrives",
   );
   expect(cards()).toBe(shown);
   expect(
-    cards()!.compareDocumentPosition(
-      container.querySelector('[data-chat-message="report"]')!,
-    ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    container.querySelector('[data-chat-message="report"]')!.compareDocumentPosition(cards()!) & Node.DOCUMENT_POSITION_FOLLOWING,
   ).toBeTruthy();
 });
 
@@ -523,13 +523,11 @@ it.each([false, true])("shows reused sessions after the handoff and before the r
   ).toBe("user");
   expect(
     container
-      .querySelector('[data-chat-message="started"]')!
+      .querySelector('[data-transcript-turn="user"] [data-transcript-turn-work]')!
       .compareDocumentPosition(cards) & Node.DOCUMENT_POSITION_FOLLOWING,
   ).toBeTruthy();
   expect(
-    cards.compareDocumentPosition(
-      container.querySelector('[data-chat-message="report"]')!,
-    ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    container.querySelector('[data-chat-message="report"]')!.compareDocumentPosition(cards) & Node.DOCUMENT_POSITION_FOLLOWING,
   ).toBeTruthy();
   act(() =>
     cards.querySelector<HTMLButtonElement>("[data-launched-session]")!.click(),
@@ -570,7 +568,7 @@ it("waits for the final reply's reveal, then shows its artifact before the actio
   // Session cards wait for the reply, so it never lands above them.
   expect(container.querySelector("[data-launched-sessions]")).toBeNull();
   expect(
-    container.querySelector('[data-mono-work] [aria-label="Show activity"]'),
+    container.querySelector('[data-transcript-turn-work] [aria-label="Show the work"]'),
   ).not.toBeNull();
 
   const reply: Block = {
@@ -645,7 +643,7 @@ it("waits for the final reply's reveal, then shows its artifact before the actio
   ).toBeTruthy();
 });
 
-it("shows only the final reply, with no separate work summary or opening narration", () => {
+it("shows the final reply below one collapsed work row without opening narration", () => {
   render([
     { id: "user", role: "user", text: "Inspect" },
     { id: "intro", role: "assistant", text: "I will inspect the files." },
@@ -655,14 +653,13 @@ it("shows only the final reply, with no separate work summary or opening narrati
     { id: "answer", role: "assistant", text: "Everything passed." },
   ]);
   expect(status()).toBeUndefined();
-  const work = container.querySelector("[data-mono-work]")!;
-  expect(work.querySelector("button")).toBeNull();
-  act(() => work.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+  const work = container.querySelector("[data-transcript-turn-work]")!;
+  expect(work.querySelector("button")?.getAttribute("aria-expanded")).toBe("false");
   expect(container.textContent).not.toContain("Trying another approach.");
   expect(container.textContent).not.toContain("Inspect first");
   expect(container.textContent).not.toContain("I will inspect the files.");
   expect(container.textContent).toContain("Everything passed.");
-  expect(container.querySelectorAll("[data-mono-work]")).toHaveLength(1);
+  expect(container.querySelectorAll("[data-transcript-turn-work]")).toHaveLength(1);
 });
 
 it("opens the full turn activity from the footer beside copy and notes", () => {
@@ -692,14 +689,14 @@ it("opens the full turn activity from the footer beside copy and notes", () => {
       button.getAttribute("aria-label"),
     ),
   ).toEqual(["Copy response", "Save as note", "Show activity"]);
-  expect(turn.querySelector("[data-mono-work] button")).toBeNull();
+  expect(turn.querySelector("[data-transcript-turn-work] button")).not.toBeNull();
   act(() =>
     turn
       .querySelector<HTMLButtonElement>('[aria-label="Show activity"]')!
       .click(),
   );
   expect(onShowWork).toHaveBeenLastCalledWith("user", blocks.slice(2));
-  expect(turn.querySelector('[aria-label="Show the work"]')).toBeNull();
+  expect(turn.querySelector('[aria-label="Show the work"]')).not.toBeNull();
   expect(onShowWork).toHaveBeenCalledOnce();
   expect(container.textContent).not.toContain("Trying another approach.");
   expect(container.textContent).not.toContain("Inspect first");
@@ -722,8 +719,8 @@ it("keeps streamed progress inside the status row and reveals the final reply wh
     { id: "intro", role: "assistant", text: "I will inspect the files." },
   ];
   render([...opening, tool("first", "in_progress")], { busy: true });
-  const group = container.querySelector("[data-mono-work]");
-  expect(status()).toBe("Running command…");
+  const group = container.querySelector("[data-transcript-turn-work]");
+  expect(status()).toBe("Inspect first");
   const narrated: Block[] = [
     ...opening,
     tool("first"),
@@ -736,8 +733,8 @@ it("keeps streamed progress inside the status row and reveals the final reply wh
   ];
   render(narrated, { busy: true });
   settleTicker();
-  expect(status()).toBe("Pondering…");
-  expect(container.textContent).not.toContain("Private streamed progress");
+  expect(status()).toBe("Private streamed progress");
+  expect(container.querySelector('[data-chat-message="progress"]')).toBeNull();
   const worked: Block[] = [
     ...narrated,
     tool("second"),
@@ -750,8 +747,8 @@ it("keeps streamed progress inside the status row and reveals the final reply wh
   ];
   render(worked, { busy: true });
   settleTicker();
-  expect(status()).toBe("Considering…");
-  expect(container.querySelector("[data-mono-work]")).toBe(group);
+  expect(status()).toBe("Everything passed.");
+  expect(container.querySelector("[data-transcript-turn-work]")).toBe(group);
   expect(container.querySelector('[data-chat-message="answer"]')).toBeNull();
   render(worked.map((block) => ({ ...block, streaming: false })));
   settleTicker();
@@ -797,7 +794,7 @@ it("keeps pending edit approvals actionable beside the compact status", () => {
   expect(onApproval).toHaveBeenCalledWith(42, "allow");
 });
 
-it("opens live activity from the header ticker before any tool, while a direct answer waits for completion", () => {
+it("expands live work before any tool and keeps the final activity callback after completion", () => {
   const user: Block = { id: "user", role: "user", text: "Hello" };
   const props = {
     busy: true,
@@ -806,23 +803,16 @@ it("opens live activity from the header ticker before any tool, while a direct a
     onShowWork: vi.fn(),
   };
   render([user], props);
-  const header = container.querySelector("[data-mono-work]")!;
-  expect(header.querySelector(".pixel-mascot")).not.toBeNull();
-  expect(header.textContent).toContain("Captain");
-  expect(status()).toBe("Thinking…");
-  expect(container.textContent).not.toContain("working for");
-  const activity = header.querySelector<HTMLButtonElement>(
-    '[aria-label="Show activity"]',
-  )!;
-  expect(activity.contains(header.querySelector('[role="status"]'))).toBe(true);
+  const header = container.querySelector("[data-transcript-turn-work]")!;
+  expect(header.querySelector('.compact-work-spinner')).not.toBeNull();
+  expect(status()).toBe("Thinking");
+  const activity = header.querySelector<HTMLButtonElement>('[aria-label="Show the work"]')!;
   expect(activity.getAttribute("aria-expanded")).toBe("false");
   act(() => activity.click());
-  expect(props.onShowWork).toHaveBeenCalledWith("user", [user]);
-  render([user], { ...props, activeWorkTurnId: "user" });
-  expect(activity.getAttribute("aria-label")).toBe("Hide activity");
+  expect(activity.getAttribute("aria-label")).toBe("Hide the work");
   expect(activity.getAttribute("aria-expanded")).toBe("true");
   act(() => activity.click());
-  expect(props.onShowWork).toHaveBeenCalledTimes(2);
+  expect(props.onShowWork).not.toHaveBeenCalled();
 
   const answer: Block = {
     id: "answer",
@@ -832,11 +822,11 @@ it("opens live activity from the header ticker before any tool, while a direct a
   };
   render([user, answer], props);
   settleTicker();
-  expect(container.querySelector("[data-mono-work]")).toBe(header);
-  expect(container.textContent).not.toContain(answer.text);
+  expect(container.querySelector("[data-transcript-turn-work]")).toBe(header);
+  expect(container.querySelector('[data-chat-message="answer"]')).toBeNull();
   expect(container.querySelector('[aria-label="Copy response"]')).toBeNull();
   act(() => activity.click());
-  expect(props.onShowWork).toHaveBeenLastCalledWith("user", [user, answer]);
+  expect(header.textContent).toContain(answer.text);
 
   render(
     [
@@ -846,10 +836,12 @@ it("opens live activity from the header ticker before any tool, while a direct a
     { ...props, busy: false },
   );
   expect(container.textContent).toContain(answer.text);
-  expect(header.querySelector("button")).toBeNull();
+  expect(header.querySelector("button")).not.toBeNull();
   expect(
     container.querySelector('[data-turn-actions] [aria-label="Show activity"]'),
   ).not.toBeNull();
+  act(() => container.querySelector<HTMLButtonElement>('[data-turn-actions] [aria-label="Show activity"]')!.click());
+  expect(props.onShowWork).toHaveBeenLastCalledWith("user", [{ ...user, durationMs: 1200 }, { ...answer, streaming: false }]);
 });
 
 it("copies and saves only the final answer while the activity trail retains every step", async () => {
@@ -936,14 +928,14 @@ it("uses the header to show questions and background work while answers are hidd
     },
   ];
   render(blocks, { busy: true, pendingQuestion: true });
-  expect(status()).toBe("Waiting for answers…");
+  expect(status()).toBe("Waiting for answers");
   expect(container.textContent).not.toContain("I have a question.");
   render(blocks, { busy: true, backgroundTasks: ["Review"] });
   settleTicker();
   expect(status()).toBe("Waiting for background task…");
 });
 
-it("marks the compact group for search without expanding its commands or narration", () => {
+it("reveals narration search results and selects their compact work row", () => {
   let navigate: ((blockId: string | null) => boolean) | undefined;
   render(
     [
@@ -966,9 +958,9 @@ it("marks the compact group for search without expanding its commands or narrati
     '[data-transcript-search-current="true"]',
   );
   expect(current).toHaveLength(1);
-  expect(current[0].hasAttribute("data-mono-work")).toBe(true);
-  expect(container.textContent).not.toContain("Trying another approach.");
-  expect(container.querySelector("[data-mono-work] button")).toBeNull();
+  expect(current[0].getAttribute("data-mono-activity-block")).toBe("progress");
+  expect(container.textContent).toContain("Trying another approach.");
+  expect(container.querySelector("[data-transcript-turn-work] button")?.getAttribute("aria-expanded")).toBe("true");
 });
 
 it("keeps interrupted Mono messages together above one working indicator", () => {
@@ -1001,12 +993,16 @@ it("keeps interrupted Mono messages together above one working indicator", () =>
     ),
   ).toEqual(["first-message", "second-message", "third-message"]);
   expect(turn.querySelectorAll('[data-message-stack="true"]')).toHaveLength(2);
-  expect(turn.querySelectorAll("[data-mono-work]")).toHaveLength(1);
+  expect(turn.querySelectorAll("[data-transcript-turn-work]")).toHaveLength(1);
   const rows = [...turn.querySelectorAll("[data-transcript-search-item]")];
   expect(
     rows.slice(0, 3).every((row) => row.querySelector("[data-prompt-anchor]")),
   ).toBe(true);
-  expect(rows[3].hasAttribute("data-mono-work")).toBe(true);
+  const work = turn.querySelector("[data-transcript-turn-work]")!;
+  expect(turn.querySelector('[data-prompt-anchor="first-message"]')!.compareDocumentPosition(work) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  for (const prompt of turn.querySelectorAll("[data-prompt-anchor]")) {
+    expect(prompt.closest("[data-transcript-work-details]")).toBeNull();
+  }
   render([...blocks, { id: "answer", role: "assistant", text: "Done" }], {
     ...props,
     busy: false,
@@ -1024,7 +1020,7 @@ it("keeps interrupted Mono messages together above one working indicator", () =>
   expect(container.querySelectorAll(".transcript-turn")).toHaveLength(2);
 });
 
-it("shows answers to mid-turn follow-ups immediately and retains them during later work", () => {
+it("reveals follow-up answers inside work and retains them during later work", () => {
   const props = { busy: true, agentName: "MonoInvader" };
   const blocks: Block[] = [
     { id: "user", role: "user", text: "Review the PR", startedAt: 1000 },
@@ -1044,8 +1040,10 @@ it("shows answers to mid-turn follow-ups immediately and retains them during lat
     },
   ];
   render(blocks, props);
+  expect(container.querySelector('[data-chat-message="status-reply"]')).toBeNull();
+  openTranscriptWork(container);
   expect(container.textContent).toContain("I am checking browser security.");
-  expect(container.textContent).not.toContain("I will inspect the files.");
+  expect(container.textContent).toContain("I will inspect the files.");
   const continued: Block[] = [
     ...blocks.map((block) =>
       block.id === "status-reply" ? { ...block, streaming: false } : block,
@@ -1060,7 +1058,7 @@ it("shows answers to mid-turn follow-ups immediately and retains them during lat
   expect(container.textContent).toContain("I am checking browser security.");
   expect(container.textContent).toContain("Stopping the review now.");
   expect(container.textContent).not.toContain("Inspect second");
-  expect(container.querySelectorAll("[data-mono-work]")).toHaveLength(1);
+  expect(container.querySelectorAll("[data-transcript-turn-work]")).toHaveLength(1);
   render(continued, { ...props, busy: false });
   expect(container.textContent).toContain("I am checking browser security.");
   expect(container.textContent).toContain("Stopping the review now.");

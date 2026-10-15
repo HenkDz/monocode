@@ -23,6 +23,7 @@ import {
 } from "../../core/preview";
 import { formatShellIntent, inferShellIntent } from "../../core/shellIntent";
 import { streamTextDelta } from "../../core/streamText";
+import { codeModeCommand } from "../../core/codeModeCommand";
 import type { HarnessEvent } from "../../core/types";
 
 export function codexWindowsSandbox(input: {
@@ -427,12 +428,16 @@ export function mapCodexNotification(
     if (type === "custom_tool_call") {
       const name = stringField(item, "name") ?? "Tool";
       const exec = name === "exec" || name === "functions.exec";
-      // shortcut: nested exec events are unavailable; use code text until Codex reports them.
-      const shell = exec && /\btools\.exec_command\s*\(/.test(stringField(item, "input") ?? "");
+      const input = stringField(item, "input") ?? "";
+      const command = exec ? codeModeCommand(input) : undefined;
+      const shell = exec && /\btools\.exec_command\s*\(/.test(input);
+      const presentation = command ? codexCommandPresentation({}, command) : undefined;
       codeMode?.calls.set(callId, { callId, shell, silentMs: 0, lastOutputAt: Date.now() });
       return { events: [{ type: "tool.started", callId,
-        title: shell ? "Run shell command" : exec ? "Run tools" : name,
-        kind: "execute", status: "in_progress" }] };
+        title: presentation?.title ?? (shell ? "Run shell command" : exec ? "Run tools" : name),
+        kind: "execute", status: "in_progress",
+        ...(input ? { preview: { ...(presentation?.preview ?? { kind: "shell" as const }), rawInput: input } } : {}),
+      }] };
     }
     const cell = codeMode?.calls.get(callId) ?? { callId, shell: false, silentMs: 0, lastOutputAt: Date.now() };
     if (type !== "custom_tool_call_output" && !(type === "function_call_output" && codeMode?.calls.has(callId))) return { events: [] };
@@ -469,16 +474,15 @@ export function mapCodexNotification(
     return { events: [{ type: "message.delta", text: delta }] };
   }
 
-  if (method === "item/reasoning/summaryTextDelta") {
+  if (method === "item/reasoning/summaryTextDelta" || method === "item/reasoning/textDelta") {
     const delta = streamTextDelta(rec.delta);
     if (!delta) return { events: [] };
-    return { events: [{ type: "reasoning.delta", text: delta }] };
-  }
-
-  if (method === "item/reasoning/textDelta") {
-    const delta = streamTextDelta(rec.delta);
-    if (!delta) return { events: [] };
-    return { events: [{ type: "reasoning.delta", text: delta }] };
+    const channel = method === "item/reasoning/summaryTextDelta" ? "summary" : "raw";
+    const itemId = stringField(rec, "itemId");
+    return { events: [{ type: "reasoning.delta", text: delta,
+      reasoning: { itemId: itemId ?? "", channel,
+        partIndex: numberField(rec, channel === "summary" ? "summaryIndex" : "contentIndex") },
+    }] };
   }
 
   if (method === "item/plan/delta") {
@@ -789,26 +793,17 @@ function mapItemLifecycle(
 
   if (itemType === "reasoning") {
     if (completed) {
-      const summary = item.summary;
-      if (Array.isArray(summary)) {
-        const text = summary
-          .map((part) => {
-            if (typeof part === "string") return part;
-            const row = asRecord(part);
-            return stringField(row, "text") ?? "";
-          })
-          .filter(Boolean)
-          .join("\n");
-        if (text) {
-          return {
-            events: [
-              { type: "reasoning.delta", text },
-              { type: "reasoning.completed" },
-            ],
-          };
+      const events: HarnessEvent[] = [];
+      for (const [channel, parts] of [["summary", item.summary], ["raw", item.content]] as const) {
+        if (!Array.isArray(parts)) continue;
+        for (const [partIndex, part] of parts.entries()) {
+          const text = typeof part === "string" ? part : streamTextDelta(asRecord(part)?.text);
+          if (text) events.push({ type: "reasoning.delta", text, snapshot: true,
+            reasoning: { itemId: callId, partIndex, channel } });
         }
       }
-      return { events: [{ type: "reasoning.completed" }] };
+      events.push({ type: "reasoning.completed", itemId: callId });
+      return { events };
     }
     return { events: [] };
   }
@@ -1285,11 +1280,12 @@ export function mapCodexSubagentSteps(
         ];
       }
       if (event.type === "reasoning.delta") {
+        if (event.reasoning?.channel === "raw") return [];
         return [
           {
             type: "agent.step",
             callId,
-            stepId: `${itemId}:reasoning`,
+            stepId: `${itemId}:reasoning:${event.reasoning?.partIndex ?? 0}`,
             kind: "reasoning",
             text: event.text,
           },

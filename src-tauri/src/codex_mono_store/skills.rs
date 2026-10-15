@@ -362,13 +362,10 @@ fn canonical_skill_path(path: &Path) -> PathBuf {
 
 pub(super) fn read_config(source: &Path) -> Result<toml::Value, String> {
     let path = source.join("config.toml");
-    let text = match std::fs::read_to_string(path) {
-        Ok(text) => text,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(toml::Value::Table(Default::default()))
-        }
-        Err(error) => return Err(error.to_string()),
-    };
+    let text = storage_io::run("read Codex configuration", &path, || match std::fs::read_to_string(&path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        result => result,
+    })?;
     toml::from_str(&text).map_err(|_| "Could not parse Codex account configuration".into())
 }
 

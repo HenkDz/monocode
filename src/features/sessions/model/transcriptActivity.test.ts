@@ -1584,6 +1584,17 @@ describe("lastActivityIndex", () => {
 });
 
 describe("toolCallLabel", () => {
+  it("recovers real commands from stored code-mode previews without altering raw data", () => {
+    const code = 'text(await tools.exec_command({cmd: "cargo check --lib"}));';
+    const block: Block = { id: "code-mode", role: "tool", text: "Run shell command", tool: { kind: "shell", title: "Run shell command", preview: { kind: "shell", title: code } } };
+    expect(toolCallLabel(block)).toBe("cargo check --lib");
+    expect(block.tool?.preview?.title).toBe(code);
+    expect(toolCallLabel({ ...block, tool: { ...block.tool, preview: { kind: "shell", title: 'tools.exec_command({cmd: invalid})' } } })).toBe("Run shell command");
+    expect(toolCallLabel({ ...block, text: 'rg tools.exec_command src', tool: { kind: "shell" } })).toBe("Find tools.exec_command");
+    const multiline = 'text(await tools.exec_command({cmd: "# setup\\ncargo check --lib\\ncargo test"}));';
+    expect(toolCallLabel({ ...block, tool: { ...block.tool, preview: { kind: "shell", title: "Run shell command", rawInput: multiline } } })).toBe("cargo check --lib");
+  });
+
   it("shows the shell command, not the tool name", () => {
     expect(
       toolCallLabel({

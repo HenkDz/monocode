@@ -1057,7 +1057,15 @@ function handleNotification(
       continue;
     }
     if (event.type === "reasoning.delta") {
-      publishCodexText(live, "reasoning", event.text, snapshot, itemId);
+      if (event.reasoning) {
+        const key = JSON.stringify([event.reasoning.itemId, event.reasoning.channel, event.reasoning.partIndex]);
+        const already = live.emittedReasoningByItem.get(key) ?? "";
+        const text = event.snapshot ? event.text : already + event.text;
+        if (text !== already) {
+          live.emittedReasoningByItem.set(key, text);
+          live.onEvent(event);
+        }
+      } else publishCodexText(live, "reasoning", event.text, snapshot, itemId);
       continue;
     }
     live.onEvent(event);

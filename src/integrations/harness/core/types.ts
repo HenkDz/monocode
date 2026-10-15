@@ -1,6 +1,7 @@
 import type {
   AgentStepKind,
   Attachment,
+  Block,
   InterjectionMeta,
   RuntimeMode,
   TaskListItem,
@@ -52,8 +53,8 @@ export type HarnessEvent =
       size: number;
       alt?: string;
     }
-  | { type: "reasoning.delta"; text: string }
-  | { type: "reasoning.completed" }
+  | { type: "reasoning.delta"; text: string; reasoning?: Block["reasoning"]; snapshot?: boolean }
+  | { type: "reasoning.completed"; itemId?: string }
   | {
       type: "tool.started";
       agentModel?: string;

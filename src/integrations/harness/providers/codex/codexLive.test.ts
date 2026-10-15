@@ -1184,6 +1184,38 @@ describe("codex live turn sequence", () => {
     ).toEqual(["First thought.", "Next thought."]);
   });
 
+  it.each(["fully streamed", "partially streamed", "completion only"])(
+    "separates multi-part summary and raw reasoning with %s completion snapshots", async mode => {
+      const { events, turn } = await startTurn("codex-live");
+      const first = "**Handling dialogs**\n\nFirst thought.";
+      const second = "**Managing lifecycle**\n\nNext thought.";
+      const raw = "First thought. Raw diagnostics.";
+      // Source-backed synthetic sequence: no raw captured event stream was retained with CC-TX.
+      if (mode !== "completion only") {
+        notify("item/reasoning/summaryTextDelta", { itemId: "reason", summaryIndex: 0,
+          delta: mode === "fully streamed" ? first : "**Handling dialogs**" });
+        notify("item/reasoning/textDelta", { itemId: "reason", contentIndex: 0, delta: raw });
+        notify("item/reasoning/summaryTextDelta", { itemId: "reason", summaryIndex: 1, delta: second });
+      }
+      const item = { id: "reason", type: "reasoning", summary: [
+        { type: "summary_text", text: first }, { type: "summary_text", text: second },
+      ], content: [{ type: "reasoning_text", text: raw }] };
+      notify("item/completed", { item });
+      notify("item/completed", { item });
+      // An unrelated item and a later snapshot must not reopen the first item.
+      notify("item/completed", { item: { id: "next_reason", type: "reasoning", summary: ["very very good."] } });
+      notify("item/completed", { item });
+      notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+      await turn;
+      const session = events.reduce(applyHarnessEvent, newSession("codex", "/repo"));
+      const parts = session.blocks.filter(block => block.role === "reasoning");
+      expect(parts.filter(block => block.reasoning?.channel === "summary").map(block => block.text)).toEqual([
+        first, second, "very very good.",
+      ]);
+      expect(parts.filter(block => block.reasoning?.channel === "raw").map(block => block.text)).toEqual([raw]);
+      expect(parts.every(block => !block.streaming)).toBe(true);
+    });
+
   it("resets text tracking between turns when an item id is reused", async () => {
     const itemId = "reused_item";
     const { events, turn } = await startTurn("codex-live");

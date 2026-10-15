@@ -10225,26 +10225,32 @@ function Workspace({
   );
 
   const onUsageLimitDismiss = useCallback((sessionId: string) => {
-    sessionsRef.current = sessionsRef.current.map((session) =>
+    flushSync(() => setSessions(previous => {
+      const next = previous.map((session) =>
         session.id === sessionId && session.usageLimit
           ? { ...session, usageLimit: undefined }
           : session,
-    );
-    setSessions(sessionsRef.current);
+      );
+      sessionsRef.current = next;
+      return next;
+    }));
   }, []);
 
   const onUsageLimitResumeAtReset = useCallback(
     (sessionId: string, enabled: boolean) => {
       usageRecoveryStopped.current.delete(sessionId);
-      sessionsRef.current = sessionsRef.current.map((session) =>
+      flushSync(() => setSessions(previous => {
+        const next = previous.map((session) =>
           session.id === sessionId && session.usageLimit
             ? {
                 ...session,
                 usageLimit: { ...session.usageLimit, resumeAtReset: enabled },
               }
             : session,
-      );
-      setSessions(sessionsRef.current);
+        );
+        sessionsRef.current = next;
+        return next;
+      }));
     },
     [],
   );
@@ -10257,10 +10263,13 @@ function Workspace({
       if (!session?.usageLimit || session.busy) return;
       usageRecoveryStopped.current.delete(sessionId);
       if (isMonoSession(sessionId)) {
-        sessionsRef.current = sessionsRef.current.map((entry) =>
+        flushSync(() => setSessions(previous => {
+          const next = previous.map((entry) =>
             entry.id === sessionId ? resumeMonoUsageLimit(entry) : entry,
-        );
-        setSessions(sessionsRef.current);
+          );
+          sessionsRef.current = next;
+          return next;
+        }));
         return;
       }
       onUsageLimitDismiss(sessionId);
@@ -10517,12 +10526,15 @@ function Workspace({
         !providerAccountExists(session.harness, accountId)
       )
         return;
-      sessionsRef.current = sessionsRef.current.map((entry) =>
-          entry.id === sessionId
+      flushSync(() => setSessions(previous => {
+        const next = previous.map((entry) =>
+          entry.id === sessionId && entry.harness === session.harness
             ? switchMonoUsageLimitAccount(entry, accountId)
             : entry,
-      );
-      setSessions(sessionsRef.current);
+        );
+        sessionsRef.current = next;
+        return next;
+      }));
     },
     [],
   );
@@ -10549,12 +10561,15 @@ function Workspace({
           repair = true;
           lastPersisted.current.delete(sessionId);
           retainSessionWrite(sessionId, async () => {
+            // Drain pending React updates before choosing the authoritative repair snapshot.
+            flushSync(() => setSessions(previous => { sessionsRef.current = previous; return previous; }));
             const live = sessionsRef.current.find(entry => entry.id === sessionId);
             if (!live) throw Error("The conversation is unavailable; usage recovery storage repair is still held");
             // A lost acknowledgement can leave the diff cache behind disk; retain the live page's anchor.
             if (uncertain) resetMonoSessionWriteBaseline(sessionId);
             if (await save(live) === null)
               throw Error("The conversation could not be restored; usage recovery storage repair is still held");
+            flushSync(() => setSessions(previous => { sessionsRef.current = previous; return previous; }));
             if (sessionsRef.current.find(entry => entry.id === sessionId) !== live)
               throw Error("The conversation changed during usage recovery storage repair; retry reconciliation");
             lastPersisted.current.delete(sessionId);
@@ -10576,8 +10591,15 @@ function Workspace({
           retainLiveWrite();
           return false;
         }
-        sessionsRef.current = sessionsRef.current.map(entry => entry.id === sessionId ? next : entry);
-        flushSync(() => setSessions(sessionsRef.current));
+        let accepted = false;
+        flushSync(() => setSessions(previous => {
+          accepted = previous.find(entry => entry.id === sessionId) === expected && valid();
+          return accepted ? previous.map(entry => entry.id === sessionId ? next : entry) : previous;
+        }));
+        if (!accepted) {
+          retainLiveWrite();
+          return false;
+        }
         lastPersisted.current.delete(sessionId);
         return true;
       });

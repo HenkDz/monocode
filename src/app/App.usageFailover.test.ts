@@ -14,7 +14,7 @@ import { USAGE_LIMIT_RESUME_GRACE_MS, usageLimitResumeDue } from "../features/se
 import { identityKey } from "../features/providers/model/providerAccountIdentity";
 import { supportsAccountProfiles, supportsProviderAccounts } from "../features/providers/model/providerAccounts";
 import { parseClaudeOAuthUsage } from "../features/providers/model/rateLimits";
-import { applyHarnessEvent, stopStreaming } from "../integrations/harness/core/apply";
+import { applyHarnessEvent, applyHarnessEvents, stopStreaming } from "../integrations/harness/core/apply";
 import { assertManagerDelivery, managerRequestBinding, type ManagerRequestRecovery } from "../features/monos/model/managerAuthorizedWork";
 
 const transport = vi.hoisted(() => ({ invoke: vi.fn() }));
@@ -185,9 +185,9 @@ it.each([false, true])("repairs uncertain initial save outcomes, windowed=%s", a
   expect(sessionWriteNeedsReconciliation(f.original.id)).toBe(false);
 });
 
-it("an actual manual account choice invalidates a saved switch before React publishes its state", async () => {
+it("an actual manual account choice flushes its state and invalidates a saved switch", async () => {
   const f = await fixture(true);
-  afterCandidate = () => callback("onUsageLimitAccountChange", { ...f.scope, setSessions: vi.fn(), supportsProviderAccounts,
+  afterCandidate = () => callback("onUsageLimitAccountChange", { ...f.scope, supportsProviderAccounts,
     providerAccountExists: () => true, switchMonoUsageLimitAccount })(f.original.id, "manual");
   expect(await f.recover()).toEqual({ kind: "pause-and-ask", reason: "save-rejected" });
   expect(f.current().providerAccountId).toBe("manual");
@@ -197,6 +197,150 @@ it("an actual manual account choice invalidates a saved switch before React publ
   expect(reload?.blocks.some(block => block.id.startsWith("usage-failover-") || block.handoff)).toBe(false);
   expect(reload?.blocks.slice(0, 2)).toEqual(f.earlier);
   expect(sessionWriteNeedsReconciliation(f.original.id)).toBe(false);
+});
+
+it.each(["edit", "pending deletion", "delete click", "Stop", "manual account", "independent Mono", "repair edit", "manual account with sibling", "reset wait with sibling"])("retains %s through the real React state-publication boundary", async mode => {
+  const React = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { flushSync } = await import("react-dom");
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const f = await fixture(true);
+  f.change({ queuedMessages: [{ id: "queued-user", text: "Before edit", attachments: [] }], queueStatus: "paused" });
+  await upsertSession(f.current());
+  const other = await fixture();
+  other.change({ queuedMessages: [{ id: "other-queue", text: "Before independent edit", attachments: [] }], queueStatus: "paused" });
+  await upsertSession(other.current());
+  f.scope.sessionsRef.current = [f.current(), other.current()];
+  let publish!: (next: Session[] | ((previous: Session[]) => Session[])) => void;
+  function StateHost() {
+    const [sessions, setSessions] = React.useState(f.scope.sessionsRef.current);
+    f.scope.sessionsRef.current = sessions;
+    publish = setSessions;
+    return React.createElement("button", { onClick: () => callback("onDeleteQueuedMessage", { ...f.scope, ...queue, setSessions })(f.original.id, "queued-user") }, "Delete queued request");
+  }
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await React.act(async () => root.render(React.createElement(StateHost)));
+    const scope = { ...f.scope, ...queue, setSessions: publish, flushSync };
+    const retry = callback("retryUsageRecovery", scope);
+    const commit = callback("commitUsageFailover", { ...scope, retryUsageRecovery: retry });
+    const recover = callback("recoverUsageLimit", { ...scope, commitUsageFailover: commit });
+    if (mode === "repair edit") {
+      const base = transport.invoke.getMockImplementation()!;
+      let edited = false;
+      transport.invoke.mockImplementation(async (command, args) => {
+        const result = await base(command, args);
+        if (command === "mono_session_upsert" && args.session.providerAccountId === "default" && !edited) {
+          edited = true;
+          callback("onEditQueuedMessage", scope)(f.original.id, "queued-user", "Latest operator queue edit");
+        }
+        return result;
+      });
+    }
+    afterCandidate = () => {
+      if (mode.includes("with sibling")) callback("onEditQueuedMessage", scope)(other.original.id, "other-queue", "Latest independent edit");
+      if (mode === "edit") callback("onEditQueuedMessage", scope)(f.original.id, "queued-user", "Latest operator queue edit");
+      if (mode === "pending deletion") callback("onDeleteQueuedMessage", scope)(f.original.id, "queued-user");
+      if (mode === "delete click") container.querySelector<HTMLButtonElement>("button")!.click();
+      if (mode.startsWith("manual account")) callback("onUsageLimitAccountChange", { ...scope, supportsProviderAccounts, providerAccountExists: () => true, switchMonoUsageLimitAccount })(f.original.id, "manual");
+      if (mode === "reset wait with sibling") callback("onUsageLimitResumeAtReset", scope)(f.original.id, true);
+      if (mode === "independent Mono") callback("onEditQueuedMessage", scope)(other.original.id, "other-queue", "Latest independent edit");
+      if (mode === "repair edit") f.scope.turnGen.current.set(f.original.id, 2);
+      if (mode === "Stop") void callback("onStop", { ...scope, monoGoalOrigins: new Map(), upsertSession, sessionChildHarnesses: () => [],
+        finishSessionTurn: async () => {}, stopStreaming, isPreparingHandoff: () => false, notifyReviewChanged: () => {}, nudgeWorkspace: () => {}, notifyGitChanged: () => {}, nudgeWatchedFiles: () => {} })(f.original.id);
+    };
+    let result: unknown;
+    await React.act(async () => { result = await recover(f.original.id); });
+    if (sessionWriteNeedsReconciliation(f.original.id)) await React.act(async () => { await retry(f.original.id); });
+    if (mode === "independent Mono") {
+      expect(result).toEqual({ kind: "switched", accountId: "work" });
+      const latest = f.scope.sessionsRef.current.find(session => session.id === other.original.id)!;
+      expect(latest.queuedMessages?.[0].text).toBe("Latest independent edit");
+      await upsertSession(latest);
+      expect((await readPersistedSession(latest.id))?.queuedMessages?.[0].text).toBe("Latest independent edit");
+    } else {
+      expect(result).toEqual({ kind: "pause-and-ask", reason: "save-rejected" });
+      expect(f.current().providerAccountId).toBe(mode.startsWith("manual account") ? "manual" : "default");
+      if (mode.includes("with sibling")) expect(f.scope.sessionsRef.current.find(session => session.id === other.original.id)?.queuedMessages?.[0].text).toBe("Latest independent edit");
+      if (mode === "reset wait with sibling") expect(f.current().usageLimit?.resumeAtReset).toBe(true);
+      if (mode === "edit" || mode === "repair edit") expect(f.current().queuedMessages?.[0].text).toBe("Latest operator queue edit");
+      if (mode.includes("delet")) expect(f.current().queuedMessages?.some(message => message.id === "queued-user") ?? false).toBe(false);
+      const reload = await readPersistedSession(f.original.id);
+      expect(reload?.providerAccountId).toBe(f.current().providerAccountId);
+      expect(reload?.queuedMessages).toEqual(f.current().queuedMessages?.length ? f.current().queuedMessages : undefined);
+      expect(reload?.blocks).toEqual([...f.earlier, ...f.current().blocks]);
+      expect(reload?.blocks.some(block => block.id.startsWith("usage-failover-"))).toBe(false);
+      expect(sessionWriteNeedsReconciliation(f.original.id)).toBe(false);
+    }
+  } finally { await React.act(async () => root.unmount()); container.remove(); }
+});
+
+it.each(["without recovery", "with recovery", "combined target edit"])("preserves the actual async sibling queue rejection %s", async mode => {
+  const React = await import("react"), { createRoot } = await import("react-dom/client"), { flushSync } = await import("react-dom");
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const f = await fixture(true), sibling = await fixture();
+  f.change({ queuedMessages: [{ id: "target-queue", text: "Before edit", attachments: [] }], queueStatus: "paused" });
+  const queuedSibling: Session = { ...sibling.current(), usageLimit: undefined, queueStatus: "active",
+    queuedMessages: [{ id: "sibling-request", text: "Keep rejected request paused", attachments: [] }] };
+  f.scope.sessionsRef.current = [f.current(), queuedSibling];
+  let publish!: (next: Session[] | ((previous: Session[]) => Session[])) => void;
+  function StateHost() { const [sessions, setSessions] = React.useState(f.scope.sessionsRef.current); f.scope.sessionsRef.current = sessions; publish = setSessions; return null; }
+  const container = document.createElement("div"); document.body.append(container); const root = createRoot(container);
+  try {
+    await React.act(async () => root.render(React.createElement(StateHost)));
+    const scope = { ...f.scope, setSessions: publish, flushSync };
+    const retry = callback("retryUsageRecovery", scope), commit = callback("commitUsageFailover", { ...scope, retryUsageRecovery: retry });
+    const recover = callback("recoverUsageLimit", { ...scope, commitUsageFailover: commit });
+    const scheduler = find(node => ts.isCallExpression(node) && node.expression.getText(app) === "useEffect" && node.arguments[0]?.getText(app).includes("queueDispatchingRef.current.add")) as ts.CallExpression;
+    const timers: (() => Promise<void>)[] = [], submitted = vi.fn(() => false);
+    const cleanup = execute(scheduler.arguments[0].getText(app), { ...scope, ...queue, sessions: [queuedSibling],
+      window: { setTimeout: (run: () => Promise<void>) => timers.push(run), clearTimeout: vi.fn() }, queueDispatchingRef: { current: new Set<string>() },
+      submitSession: submitted, setQueueDispatchVersion: vi.fn(), canSteerHarness: () => false, consumeOperatorCommand: () => ({ matched: false }) })();
+    expect(timers).toHaveLength(1);
+    afterCandidate = async () => {
+      if (mode === "combined target edit") callback("onEditQueuedMessage", scope)(f.original.id, "target-queue", "Latest operator queue edit");
+      await timers[0]();
+    };
+    await React.act(async () => { if (mode === "without recovery") await timers[0](); else await recover(f.original.id); }); cleanup();
+    expect(submitted).toHaveBeenCalledOnce();
+    const latest = f.scope.sessionsRef.current.find(session => session.id === queuedSibling.id)!;
+    expect(latest.queueStatus).toBe("paused"); expect(latest.queuedMessages?.[0].error).toContain("Delivery is unavailable");
+    await upsertSession(latest);
+    expect((await readPersistedSession(latest.id))?.queuedMessages?.[0].error).toContain("Delivery is unavailable");
+    if (mode === "combined target edit") {
+      expect(f.current().providerAccountId).toBe("default");
+      expect(f.current().queuedMessages?.[0].text).toBe("Latest operator queue edit");
+      expect((await readPersistedSession(f.original.id))?.queuedMessages?.[0].text).toBe("Latest operator queue edit");
+    }
+  } finally { await React.act(async () => root.unmount()); container.remove(); }
+});
+
+it.each([false, true])("preserves actual HarnessEventQueue delivery with concurrent recovery=%s", async recoverConcurrent => {
+  const React = await import("react"), { createRoot } = await import("react-dom/client"), { flushSync } = await import("react-dom");
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const f = await fixture(), sibling = await fixture();
+  const streamed: Session = { ...sibling.current(), usageLimit: undefined, busy: true,
+    blocks: [...sibling.current().blocks, { id: "stream-answer", role: "assistant", text: "Before", streaming: true }] };
+  f.scope.sessionsRef.current = [f.current(), streamed];
+  let publish!: (next: Session[] | ((previous: Session[]) => Session[])) => void;
+  function StateHost() { const [sessions, setSessions] = React.useState(f.scope.sessionsRef.current); f.scope.sessionsRef.current = sessions; publish = setSessions; return null; }
+  const container = document.createElement("div"); document.body.append(container); const root = createRoot(container);
+  try {
+    await React.act(async () => root.render(React.createElement(StateHost)));
+    const scope = { ...f.scope, setSessions: publish, flushSync };
+    const retry = callback("retryUsageRecovery", scope), commit = callback("commitUsageFailover", { ...scope, retryUsageRecovery: retry });
+    const recover = callback("recoverUsageLimit", { ...scope, commitUsageFailover: commit });
+    const queueConstructor = find(node => ts.isNewExpression(node) && node.expression.getText(app) === "HarnessEventQueue") as ts.NewExpression;
+    const deliver = execute(queueConstructor.arguments![1].getText(app), { ...scope, applyHarnessEvents, syncDockBadge: vi.fn() });
+    const delta = () => deliver(new Map([[streamed.id, [{ type: "message.delta", text: " + preserved delta" }]]]));
+    afterCandidate = delta;
+    await React.act(async () => { if (recoverConcurrent) await recover(f.original.id); else delta(); });
+    const latest = f.scope.sessionsRef.current.find(session => session.id === streamed.id)!;
+    expect(latest.blocks.find(block => block.id === "stream-answer")?.text).toBe("Before + preserved delta");
+    await upsertSession(latest);
+    expect((await readPersistedSession(latest.id))?.blocks.find(block => block.id === "stream-answer")?.text).toBe("Before + preserved delta");
+  } finally { await React.act(async () => root.unmount()); container.remove(); }
 });
 
 it("a rejected initial write preserves original disk state and unseen pages", async () => {

@@ -18,11 +18,25 @@ import { homeDir } from "./platform/tauri/fs";
 import { setHomeDir } from "./shared/lib/paths";
 import { consumeInstalledUpdate } from "./app/model/updateNotice";
 import { initializeProviderBinaryPaths } from "./features/providers/model/providerBinaryPaths";
+import {
+  startStartupRecovery,
+  STARTUP_PAINT_ID,
+} from "./app/model/startupRecovery";
+import { WindowControls } from "./app/shell/WindowControls";
+import { IS_MAC } from "./platform/tauri/platform";
 // Lets file commands reach a connected machine for `remote://` paths.
 import "./features/connections/model/remoteCommands";
 import "./styles/index.css";
 
 performance.mark("monocode:bootstrap");
+const startup = startStartupRecovery(activateWindowAppearance, () => {
+  if (IS_MAC) return () => {};
+  const controls = ReactDOM.createRoot(
+    document.querySelector("[data-boot-controls]")!,
+  );
+  controls.render(<WindowControls />);
+  return () => controls.unmount();
+});
 // Let local boot IPC overlap loading/evaluating the workspace UI.
 const appLoaded = import("./app/App");
 
@@ -38,34 +52,22 @@ const providerBinaryPathsPrimed = initializeProviderBinaryPaths().catch(
   () => undefined,
 );
 
-function dismissBootSplash() {
-  const splash = document.getElementById("boot-splash");
-  if (!splash || splash.dataset.dismissed === "1") return;
-  splash.dataset.dismissed = "1";
-  const fade = () => {
-    activateWindowAppearance();
-    splash.classList.add("boot-splash-out");
-    window.setTimeout(() => {
-      splash.remove();
-      performance.mark("monocode:ui-ready");
-      performance.measure("monocode:navigation-to-ui", {
-        start: 0,
-        end: "monocode:ui-ready",
-      });
-    }, 180);
-  };
-  // useLayoutEffect runs before paint. Two frames later the app is on
-  // screen, so the fade reveals UI instead of the desktop blur.
-  requestAnimationFrame(() => {
-    requestAnimationFrame(fade);
-  });
-}
-
 function BootGate({ children }: { children: React.ReactNode }) {
-  useLayoutEffect(() => {
-    dismissBootSplash();
-  }, []);
-  return children;
+  useLayoutEffect(() => startup.contentMounted(), []);
+  return (
+    <>
+      {children}
+      <span
+        id={STARTUP_PAINT_ID}
+        {...{ elementtiming: STARTUP_PAINT_ID }}
+        className="boot-paint-marker"
+        style={{ visibility: "hidden" }}
+        aria-hidden="true"
+      >
+        MonoCode
+      </span>
+    </>
+  );
 }
 
 void listen<number>("quit_poll", (event) => {
@@ -92,27 +94,34 @@ void Promise.all([
   providerBinaryPathsPrimed,
   loadBootWorkspace(),
   appLoaded,
-]).then(
-  ([
-    ,
-    ,
-    { windowTransfer, resumed, history, historyCwd },
-    { default: App },
-  ]) => {
-    performance.mark("monocode:workspace-ready");
-    const installedUpdate = windowTransfer ? null : consumeInstalledUpdate();
-    ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
-      <React.StrictMode>
-        <BootGate>
-          <App
-            windowTransfer={windowTransfer}
-            resumed={resumed}
-            installedUpdate={installedUpdate}
-            history={history}
-            historyCwd={historyCwd}
-          />
-        </BootGate>
-      </React.StrictMode>,
-    );
-  },
-);
+])
+  .then(
+    ([
+      ,
+      ,
+      { windowTransfer, resumed, history, historyCwd },
+      { default: App },
+    ]) => {
+      performance.mark("monocode:workspace-ready");
+      const installedUpdate = windowTransfer ? null : consumeInstalledUpdate();
+      ReactDOM.createRoot(
+        document.getElementById("root") as HTMLElement,
+      ).render(
+        <React.StrictMode>
+          <BootGate>
+            <App
+              windowTransfer={windowTransfer}
+              resumed={resumed}
+              installedUpdate={installedUpdate}
+              history={history}
+              historyCwd={historyCwd}
+            />
+          </BootGate>
+        </React.StrictMode>,
+      );
+    },
+  )
+  .catch((error: unknown) => {
+    console.error("MonoCode startup failed", error);
+    startup.fail();
+  });

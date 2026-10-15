@@ -14,7 +14,11 @@ import {
 } from "../../features/providers/model/rateLimits";
 import { UsageProviderChip } from "./UsageProviderChip";
 
-export function PiUsage({ model, now }: { model?: string; now: number }) {
+export function PiUsage({ model, now, onOpenUsage }: {
+  model?: string;
+  now: number;
+  onOpenUsage?: () => void;
+}) {
   const provider = piUsageProvider(model);
   if (!provider) {
     return (
@@ -31,15 +35,17 @@ export function PiUsage({ model, now }: { model?: string; now: number }) {
       </span>
     );
   }
-  return <PiProviderUsage key={provider} provider={provider} now={now} />;
+  return <PiProviderUsage key={provider} provider={provider} now={now} onOpenUsage={onOpenUsage} />;
 }
 
 function PiProviderUsage({
   provider,
   now,
+  onOpenUsage,
 }: {
   provider: PiUsageProvider;
   now: number;
+  onOpenUsage?: () => void;
 }) {
   const [limits, setLimits] = useState(() =>
     idleRateLimits(piBillingProvider(provider)),
@@ -89,6 +95,7 @@ function PiProviderUsage({
     <>
       <UsageProviderChip
         limits={limits}
+        onOpenUsage={onOpenUsage}
         now={now}
         presentation={{
           sourceLabel: "Pi's saved OAuth account",

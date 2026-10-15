@@ -51,6 +51,20 @@ async function show(model: string, id = "pi-session") {
   );
 }
 
+it("passes all-usage navigation through the Pi footer and closes the popover", async () => {
+  const onOpenUsage = vi.fn();
+  await act(async () => root.render(createElement(UsageFooter, {
+    providers: [], session: { id: "pi-session", harness: "pi", model: "pi:anthropic/claude-sonnet-4-6" }, onOpenUsage,
+  })));
+  const trigger = container.querySelector<HTMLButtonElement>('[aria-haspopup="dialog"]')!;
+  await act(async () => trigger.click());
+  const action = [...document.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "See all usage →")!;
+  await act(async () => action.click());
+  expect(onOpenUsage).toHaveBeenCalledOnce();
+  expect(document.querySelector('[role="dialog"]')).toBeNull();
+  expect(trigger.getAttribute("aria-expanded")).toBe("false");
+});
+
 it("renders Pi-owned quotas without fetching another CLI account", async () => {
   await show("pi:anthropic/claude-sonnet-4-6");
   expect(invoke).toHaveBeenCalledExactlyOnceWith("fetch_pi_usage", {

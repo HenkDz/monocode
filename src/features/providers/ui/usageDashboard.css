@@ -52,7 +52,7 @@
 .usage-vital { display: block; min-width: 0; width: 100%; text-align: left; cursor: pointer; }
 .usage-vital > span { display: block; font-size: 10px; color: var(--mc-muted, var(--color-content)); }
 .usage-vital > strong { margin-block: 5px; }
-.usage-vital > small { display: block; font-size: 10px; color: var(--mc-muted, var(--color-content)); overflow-wrap: anywhere; }
+.mc-vitals .usage-vital > small { display: block; font-size: 10px; color: var(--mc-muted, var(--color-content)); overflow-wrap: anywhere; white-space: normal; margin-left: 0; }
 .usage-agent-accounts { display: flex; flex-wrap: wrap; gap: 4px 8px; font-size: 10px; color: var(--mc-muted, var(--color-content)); }
 @media (max-width: 550px) {
   .usage-dashboard { padding: 22px 14px; }

@@ -12,7 +12,13 @@ removed sessions stay removed, and the existing foreground/background cadence is
 unchanged. There is no synchronous React flush in delivery: foreground delivery
 also runs inside App's layout effect.
 
-Only the App publication callback and connected tests change. No caller, export,
+Replays share lazy UUID/time values per session and original event index.
+Turn-metric and turn-end clock reads stay distinct. Skipping an allocation,
+removing/reordering a session or replaying in StrictMode cannot shift another
+event's generated identity. Caches belong only to the captured delivery batch;
+ordinary reducer calls without a replay cache retain their existing defaults.
+
+Only the App publication callback, event reducer and connected tests change. No other caller, export,
 fixture outside the new regression, config, dependency, UI or native change is
 needed. Receipt, generation and authority checks stay at their existing callers.
 Usage retained repair and manual controls remain unchanged.
@@ -22,6 +28,8 @@ real React setters (including StrictMode), actual HarnessEventQueue and event
 reducers, and real JS session writes/reload with synthetic native transport.
 It covers same/sibling/combined rejection orderings with no-delivery controls,
 multiple batches, exact receipt IDs, Stop/generation, removal and layout delivery.
+Generated block IDs and timestamps are also compared between synchronous ref
+snapshots and committed state, including changed allocation paths across replays.
 Durable reload uses explicit JS upsert/read; this is not native filesystem or
 installed-App autosave acceptance.
 

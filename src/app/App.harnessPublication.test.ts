@@ -52,7 +52,7 @@ beforeEach(() => {
     return { id: args.session.id, cwd: "/synthetic", harness: "claude", model: "", title: "", runtimeMode: "supervised", createdAt: 1, updatedAt: 2 };
   });
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 function mono(): Session {
   const session: Session = { ...newSession("claude", "/synthetic"), queueStatus: "paused",
@@ -85,6 +85,68 @@ async function stateHost(initial: Session[], strict: boolean, layoutDelivery = f
 }
 
 for (const strict of [false, true]) {
+  it(`keeps generated identities across removed/reordered sessions and successive batches, StrictMode=${strict}`, async () => {
+    const original = [mono(), mono(), mono()].map(session => ({ ...session, busy: true,
+      blocks: [{ id: `turn-${session.id}`, role: "user" as const, text: "Run", startedAt: 100 }] }));
+    const [removed, target, sibling] = original;
+    const host = await stateHost(original, strict);
+    let at = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => at++);
+    const snapshots = new Map<string, Session["blocks"]>();
+    try {
+      await React.act(async () => {
+        host.setSessions(previous => [previous[2], previous[1]]);
+        callback("onEditQueuedMessage", host)(target.id, "exact-request", "Latest pending edit");
+        for (const session of original) {
+          host.events.enqueue(session.id, { type: "message.delta", text: `Answer ${session.id}` });
+          host.events.enqueue(session.id, { type: "tool.started", callId: "first", title: "First tool" });
+        }
+        host.events.flush();
+        for (const session of original) host.events.enqueue(session.id, { type: "message.delta", text: "Second batch" });
+        host.events.flush();
+        for (const session of host.sessionsRef.current) snapshots.set(session.id, structuredClone(session.blocks));
+        at += 1_000;
+      });
+      expect(host.sessionsRef.current.map(session => session.id)).toEqual([sibling.id, target.id]);
+      expect(host.sessionsRef.current.find(session => session.id === removed.id)).toBeUndefined();
+      for (const session of host.sessionsRef.current) expect(session.blocks).toEqual(snapshots.get(session.id));
+      expect(host.sessionsRef.current[1].queuedMessages?.[0].text).toBe("Latest pending edit");
+    } finally { await host.close(); }
+  });
+
+  it.each(["same", "sibling", "combined"])(`retains generated block IDs and timestamps through %s pending updates, StrictMode=${strict}`, async placement => {
+    const target = { ...mono(), busy: true, blocks: [{ id: "turn", role: "user" as const, text: "Run", startedAt: 100 }] };
+    const sibling = { ...mono(), queueStatus: "active" as const };
+    const host = await stateHost([target, sibling], strict);
+    const timers: (() => Promise<void>)[] = [];
+    const cleanup = execute(scheduler.arguments[0], { ...host, ...queue, monoForSession, sessions: [sibling],
+      window: { setTimeout: (run: () => Promise<void>) => timers.push(run), clearTimeout: vi.fn() },
+      queueDispatchingRef: { current: new Set<string>() }, submitSession: async () => false, setQueueDispatchVersion: vi.fn(),
+      canSteerHarness: () => false, consumeOperatorCommand: () => ({ matched: false }) })();
+    let at = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => at++);
+    let synchronous!: Session;
+    try {
+      await React.act(async () => {
+        if (placement !== "same") await timers[0]();
+        if (placement !== "sibling") callback("onEditQueuedMessage", host)(target.id, "exact-request", "Latest pending edit");
+        host.events.enqueue(target.id, { type: "message.delta", text: "New answer" });
+        host.events.enqueue(target.id, { type: "reasoning.delta", text: "Reason", reasoning: { itemId: "part", partIndex: 0, channel: "summary" } });
+        host.events.enqueue(target.id, { type: "tool.started", callId: "call", title: "Run" });
+        host.events.enqueue(target.id, { type: "approval.requested", callId: "call", requestId: 7, title: "Run" });
+        host.events.enqueue(target.id, { type: "session.error", message: "Synthetic final error" });
+        host.events.flush();
+        synchronous = structuredClone(host.sessionsRef.current[0]);
+        expect(host.syncDockBadge).toHaveBeenLastCalledWith(host.sessionsRef.current);
+        at += 1_000;
+      });
+      expect(host.sessionsRef.current[0].blocks).toEqual(synchronous.blocks);
+      expect(host.sessionsRef.current[0].blocks.map(block => block.role)).toEqual(["user", "assistant", "reasoning", "tool", "system"]);
+      if (placement !== "same") expect(host.sessionsRef.current[1].queueStatus).toBe("paused");
+      if (placement !== "sibling") expect(host.sessionsRef.current[0].queuedMessages?.[0].text).toBe("Latest pending edit");
+    } finally { cleanup(); await host.close(); }
+  });
+
   for (const placement of ["same", "sibling", "combined"] as const) {
     it.each([false, true])(`actual async scheduler rejection survives delivery=%s, ${placement}, StrictMode=${strict}`, async deliver => {
       const rejected = mono(), streamed = placement === "same" ? rejected : mono(), edited = mono();

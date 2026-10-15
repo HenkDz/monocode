@@ -27,17 +27,31 @@ import { captureTurnEvent, currentTurnIndex } from "../../../features/agents/mod
 import { sameContextProfile } from "./contextProfile";
 import { sameProviderAccountId } from "../../../features/providers/model/providerAccounts";
 
+type EventValues = { id?: string; at?: number; endedAt?: number };
+
+function eventId(values?: EventValues): string {
+  return values ? values.id ??= crypto.randomUUID() : crypto.randomUUID();
+}
+
+function eventTime(values?: EventValues): number {
+  return values ? values.at ??= Date.now() : Date.now();
+}
+
 /** Apply one delivery batch without copying the transcript for every token. */
 export function applyHarnessEvents(
   session: Session,
   events: readonly HarnessEvent[],
+  replay?: Map<number, EventValues>,
 ): Session {
   let next = session;
   for (let index = 0; index < events.length; index++) {
     const event = events[index];
+    // Index by event, so skipped allocations cannot shift another event's identity.
+    let values = replay?.get(index);
+    if (replay && !values) { values = {}; replay.set(index, values); }
     if ((event.type !== "message.delta" && event.type !== "reasoning.delta") ||
         (event.type === "reasoning.delta" && event.reasoning)) {
-      next = applyHarnessEvent(next, event);
+      next = applyEvent(next, event, values);
       continue;
     }
     const texts = [event.text];
@@ -49,10 +63,11 @@ export function applyHarnessEvents(
       index++;
     }
     next = patchStreaming(
-      captureTurnEvent(next, event),
+      captureTurnEvent(next, event, eventTime(values)),
       event.type === "message.delta" ? "assistant" : "reasoning",
       texts,
       true,
+      values,
     );
   }
   return next;
@@ -62,18 +77,22 @@ export function applyHarnessEvent(
   session: Session,
   event: HarnessEvent,
 ): Session {
-  session = captureTurnEvent(session, event);
+  return applyEvent(session, event);
+}
+
+function applyEvent(session: Session, event: HarnessEvent, values?: EventValues): Session {
+  session = captureTurnEvent(session, event, eventTime(values));
   switch (event.type) {
     case "message.delta":
-      return patchStreaming(session, "assistant", event.text, true);
+      return patchStreaming(session, "assistant", event.text, true, values);
     case "message.completed":
       return finishRole(session, "assistant");
     case "image.generated":
       if (!("path" in event)) return session;
-      return appendImage(session, event);
+      return appendImage(session, event, values);
     case "reasoning.delta":
-      if (event.reasoning) return patchReasoning(session, event);
-      return patchStreaming(session, "reasoning", event.text, true);
+      if (event.reasoning) return patchReasoning(session, event, values);
+      return patchStreaming(session, "reasoning", event.text, true, values);
     case "reasoning.completed":
       if (event.itemId) return { ...session, blocks: session.blocks.map(block =>
         block.reasoning?.itemId === event.itemId && block.streaming
@@ -90,7 +109,7 @@ export function applyHarnessEvent(
         streaming: true,
         agentModel: event.agentModel,
         ...(event.background ? { background: true } : {}),
-      });
+      }, values);
     case "tool.updated":
       return upsertTool(session, {
         callId: event.callId,
@@ -102,11 +121,11 @@ export function applyHarnessEvent(
         paths: event.paths,
         streaming: event.status !== "completed" && event.status !== "failed",
         agentModel: event.agentModel,
-      });
+      }, values);
     case "agent.step":
       return recordAgentStep(session, event);
     case "approval.requested":
-      return attachApproval(session, event);
+      return attachApproval(session, event, values);
     case "approval.resolved": {
       const blocks = session.blocks.map((block) =>
         block.approval?.requestId === event.requestId
@@ -162,7 +181,7 @@ export function applyHarnessEvent(
     case "turn.compaction":
       return session;
     case "tasks.updated":
-      return upsertTaskList(session, event);
+      return upsertTaskList(session, event, values);
     case "background.updated":
       if (event.tasks.length === 0) {
         if (!session.backgroundTasks) return session;
@@ -171,7 +190,7 @@ export function applyHarnessEvent(
       }
       return { ...session, backgroundTasks: event.tasks };
     case "plan":
-      return upsertPlan(session, event);
+      return upsertPlan(session, event, values);
     case "session.error":
       return appendBlock(
         (event.followUp || event.message === MONO_ROTATION_READ_ERROR) && session.busy ? session : failStreaming({
@@ -181,9 +200,9 @@ export function applyHarnessEvent(
           queueStatus: session.queuedMessages?.length
             ? "paused"
             : session.queueStatus,
-        }),
+        }, values),
         {
-          id: crypto.randomUUID(),
+          id: eventId(values),
           role: "system",
           text: event.message,
           notice: "error",
@@ -234,8 +253,8 @@ export function applyHarnessEvent(
       };
     case "status":
       return event.key
-        ? upsertKeyedStatus(session, event.key, event.text)
-        : appendStatus(session, event.text);
+        ? upsertKeyedStatus(session, event.key, event.text, values)
+        : appendStatus(session, event.text, values);
     case "usage.limited":
       return {
         ...session,
@@ -245,7 +264,7 @@ export function applyHarnessEvent(
       // A visible boundary the user must not miss, so unlike status it never
       // deduplicates and never reads as turn lifecycle.
       return appendBlock(session, {
-        id: crypto.randomUUID(),
+        id: eventId(values),
         role: "system",
         text: event.text,
         interjection: {
@@ -261,6 +280,7 @@ export function applyHarnessEvent(
 function upsertPlan(
   session: Session,
   event: Extract<HarnessEvent, { type: "plan" }>,
+  values?: EventValues,
 ): Session {
   const key = event.key?.trim() || undefined;
   const lastUser = lastMatchingBlock(
@@ -298,7 +318,7 @@ function upsertPlan(
 
   if (!event.text) return session;
   return appendBlock(session, {
-    id: crypto.randomUUID(),
+    id: eventId(values),
     role: "plan",
     text: event.text,
     streaming,
@@ -313,6 +333,7 @@ function upsertPlan(
 function upsertTaskList(
   session: Session,
   event: Extract<HarnessEvent, { type: "tasks.updated" }>,
+  values?: EventValues,
 ): Session {
   const key = event.key?.trim() || undefined;
   const lastUser = lastMatchingBlock(
@@ -371,7 +392,7 @@ function upsertTaskList(
   }
 
   return appendBlock(session, {
-    id: crypto.randomUUID(),
+    id: eventId(values),
     role: "tasks",
     text,
     taskList,
@@ -578,7 +599,7 @@ function settlePendingApprovals(session: Session): Session {
  * lost with the transport. Leaving those calls `in_progress` hides the real
  * failure behind a neutral completed-turn summary.
  */
-function failStreaming(session: Session): Session {
+function failStreaming(session: Session, values?: EventValues): Session {
   const openTools = new Set(
     session.blocks.flatMap((block) => {
       if (block.role !== "tool" && block.role !== "approval") return [];
@@ -591,7 +612,7 @@ function failStreaming(session: Session): Session {
         : [];
     }),
   );
-  const stopped = stopStreaming(session);
+  const stopped = stopStreaming(session, values ? values.endedAt ??= Date.now() : undefined);
   return {
     ...stopped,
     blocks: stopped.blocks.map((block) => {
@@ -720,7 +741,7 @@ function stampTurnDuration(session: Session, endedAt: number): Block[] {
 }
 
 /** Status pings repeat; keep one row per run instead of stacking identical lines. */
-function appendStatus(session: Session, text: string): Session {
+function appendStatus(session: Session, text: string, values?: EventValues): Session {
   const trimmed = text.trim();
   if (!trimmed) return session;
   const last = [...session.blocks]
@@ -728,7 +749,7 @@ function appendStatus(session: Session, text: string): Session {
     .find((block) => block.role !== "reasoning");
   if (last?.role === "system" && last.text === trimmed) return session;
   return appendBlock(session, {
-    id: crypto.randomUUID(),
+    id: eventId(values),
     role: "system",
     text: trimmed,
   });
@@ -738,6 +759,7 @@ function upsertKeyedStatus(
   session: Session,
   key: string,
   text: string,
+  values?: EventValues,
 ): Session {
   const trimmed = text.trim();
   const turnStart = lastMatchingBlock(
@@ -755,7 +777,7 @@ function upsertKeyedStatus(
   if (index < 0) {
     if (!trimmed) return session;
     return appendBlock(session, {
-      id: crypto.randomUUID(),
+      id: eventId(values),
       role: "system",
       text: trimmed,
       statusKey: key,
@@ -771,9 +793,10 @@ function upsertKeyedStatus(
 function appendImage(
   session: Session,
   event: Extract<HarnessEvent, { type: "image.generated"; path: string }>,
+  values?: EventValues,
 ): Session {
   return appendBlock(session, {
-    id: crypto.randomUUID(),
+    id: eventId(values),
     role: "image",
     text: "",
     image: {
@@ -801,6 +824,7 @@ function appendBlock(session: Session, block: Block): Session {
 function patchReasoning(
   session: Session,
   event: Extract<HarnessEvent, { type: "reasoning.delta" }>,
+  values?: EventValues,
 ): Session {
   if (!event.text || !event.reasoning) return session;
   const part = event.reasoning;
@@ -817,7 +841,7 @@ function patchReasoning(
     }
   }
   return appendBlock(session, {
-    id: crypto.randomUUID(), role: "reasoning", text: event.text,
+    id: eventId(values), role: "reasoning", text: event.text,
     reasoning: part, streaming: true,
   });
 }
@@ -828,6 +852,7 @@ function patchStreaming(
   role: "assistant" | "reasoning",
   input: string | readonly string[],
   streaming: boolean,
+  values?: EventValues,
 ): Session {
   if (
     role === "reasoning" &&
@@ -863,7 +888,7 @@ function patchStreaming(
   }
   const blocks = sealLastStream(session.blocks);
   blocks.push({
-    id: crypto.randomUUID(),
+    id: eventId(values),
     role,
     text: typeof input === "string" ? input : input.reduce(joinStreamText, ""),
     streaming,
@@ -874,6 +899,7 @@ function patchStreaming(
 function attachApproval(
   session: Session,
   event: Extract<HarnessEvent, { type: "approval.requested" }>,
+  values?: EventValues,
 ): Session {
   const index = findToolForApproval(session, event);
   if (index >= 0) {
@@ -917,7 +943,7 @@ function attachApproval(
     finalToolLabel(session, event.kind, preferLabel(event.title), preview) ||
     kindTitle(event.kind);
   return appendBlock(session, {
-    id: crypto.randomUUID(),
+    id: eventId(values),
     role: "tool",
     text: label,
     tool: {
@@ -978,6 +1004,7 @@ function upsertTool(
     agentModel?: string;
     background?: boolean;
   },
+  values?: EventValues,
 ): Session {
   const index = findToolIndex(session, patch);
   if (index < 0) {
@@ -990,7 +1017,7 @@ function upsertTool(
       preview,
     );
     return appendBlock(session, {
-      id: crypto.randomUUID(),
+      id: eventId(values),
       role: "tool",
       text: label,
       streaming: patch.streaming,

@@ -1848,10 +1848,11 @@ function Workspace({
           );
         },
         (batches) => {
+          const replays = new Map([...batches.keys()].map(id => [id, new Map<number, { id?: string; at?: number; endedAt?: number }>()]));
           const prev = sessionsRef.current;
           const next = prev.map((session) => {
             const events = batches.get(session.id);
-            return events ? applyHarnessEvents(session, events) : session;
+            return events ? applyHarnessEvents(session, events, replays.get(session.id)) : session;
           });
           if (!next.some((session, index) => session !== prev[index])) return;
           sessionsRef.current = next;
@@ -1859,7 +1860,7 @@ function Workspace({
           // Keep synchronous receipts above; rebase the batch over pending React updates.
           setSessions((current) => current === prev ? next : current.map((session) => {
             const events = batches.get(session.id);
-            return events ? applyHarnessEvents(session, events) : session;
+            return events ? applyHarnessEvents(session, events, replays.get(session.id)) : session;
           }));
         },
       ),

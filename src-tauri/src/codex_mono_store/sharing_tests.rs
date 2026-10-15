@@ -323,6 +323,107 @@ fn sharing_optional_journal_cleanup_defers_without_losing_authority() {
         .starts_with(".monocode-txn-")));
 }
 
+// A validated interrupted relink with an old claim and a new account stage.
+fn interrupted_relink(source: &Path, home: &Path, name: &str, published: bool) -> (PathBuf, PathBuf) {
+    let original = source.join(name);
+    let target = home.join(name);
+    std::fs::write(&original, b"old shared bytes").unwrap();
+    std::fs::hard_link(&original, &target).unwrap();
+    std::fs::rename(&original, source.join(format!(".monocode-preserved-{name}"))).unwrap();
+    std::fs::write(&original, b"new account bytes").unwrap();
+    let temp = home.join(format!(".monocode-link-{}", uuid::Uuid::new_v4()));
+    std::fs::hard_link(&original, &temp).unwrap();
+    let staged = transactions::RecordedEntry::new(&temp).unwrap();
+    let claim = home.join(format!(".monocode-claim-{}", uuid::Uuid::new_v4()));
+    let mut journal = ClaimJournal::new(
+        &target,
+        &claim,
+        ClaimIntent::Relink,
+        Some(&staged),
+        entry_identity(&target).unwrap(),
+    )
+    .unwrap();
+    publish_new_entry(&target, &claim).unwrap();
+    journal.verify(None).unwrap();
+    if published {
+        staged.publish(&temp, &target).unwrap();
+    }
+    let journal_path = home.join(format!(
+        ".monocode-txn-{}.json",
+        claim.file_name().unwrap().to_str().unwrap().strip_prefix(".monocode-claim-").unwrap()
+    ));
+    (claim, journal_path)
+}
+
+#[test]
+fn sharing_deferred_journals_skip_source_loop_until_rewrite_replay_succeeds() {
+    let (root, source, home) = fixture();
+    let names = [".codex-global-state.json", "optional-cache.json"];
+    let interrupted = names.map(|name| interrupted_relink(&source, &home, name, false));
+    let held = interrupted.iter().map(|(claim, _)| hold(claim)).collect::<Vec<_>>();
+    let journal_bytes = interrupted.iter().map(|(_, path)| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+    prepare_files(&source, &home).unwrap();
+    let first_absent = names.map(|name| !home.join(name).exists());
+    for name in names {
+        let replacement = root.join("replacement");
+        std::fs::write(&replacement, b"desktop rewrite during deferral").unwrap();
+        replace_link(&replacement, &source.join(name)).unwrap();
+    }
+    let repeated_prepare = prepare_files(&source, &home);
+    let repeated_absent = names.map(|name| !home.join(name).exists());
+    for ((claim, path), bytes) in interrupted.iter().zip(journal_bytes) {
+        assert_eq!(std::fs::read(path).unwrap(), bytes);
+        assert_eq!(std::fs::read(claim).unwrap(), b"old shared bytes");
+    }
+    drop(held);
+    let replay = prepare_files(&source, &home);
+    let repeated_replay = prepare_files(&source, &home);
+    println!("DEFERRED_REWRITE first_absent={first_absent:?} repeated_absent={repeated_absent:?} repeated_prepare={repeated_prepare:?} replay={replay:?} repeated_replay={repeated_replay:?} fixture={}", root.display());
+    assert!(first_absent.into_iter().all(|absent| absent), "prepare recreated a deferred original");
+    assert!(repeated_absent.into_iter().all(|absent| absent), "repeated prepare recreated a deferred original");
+    repeated_prepare.unwrap();
+    replay.unwrap();
+    repeated_replay.unwrap();
+    prepare_files(&source, &home).unwrap();
+    for (name, (claim, journal)) in names.into_iter().zip(interrupted) {
+        assert_eq!(std::fs::read(source.join(name)).unwrap(), b"desktop rewrite during deferral");
+        assert_eq!(std::fs::read(source.join(format!(".monocode-preserved-{name}"))).unwrap(), b"old shared bytes");
+        assert!(same_entry(&source.join(name), &home.join(name)));
+        assert!(!claim.exists());
+        assert!(!journal.exists());
+        assert!(!home.join(".monocode-deferred").join(format!("{name}.json")).exists());
+    }
+}
+
+#[test]
+fn sharing_deferred_journal_skips_home_loop_until_source_returns() {
+    let (root, source, home) = fixture();
+    let name = ".codex-global-state.json";
+    let (claim, journal) = interrupted_relink(&source, &home, name, true);
+    let bytes = std::fs::read(&journal).unwrap();
+    let target = home.join(name);
+    let identity = entry_identity(&target).unwrap();
+    std::fs::rename(source.join(name), root.join("unpublished-account")).unwrap();
+    let held = hold(&claim);
+    for _ in 0..2 {
+        prepare_files(&source, &home).unwrap();
+        assert!(target.exists(), "home loop removed a deferred original");
+        assert_eq!(entry_identity(&target).unwrap(), identity);
+        assert_eq!(std::fs::read(&target).unwrap(), b"new account bytes");
+        assert_eq!(std::fs::read(&journal).unwrap(), bytes);
+        assert_eq!(std::fs::read(&claim).unwrap(), b"old shared bytes");
+    }
+    std::fs::write(source.join(name), b"desktop rewrite during deferral").unwrap();
+    drop(held);
+    prepare_files(&source, &home).unwrap();
+    prepare_files(&source, &home).unwrap();
+    assert!(same_entry(&source.join(name), &target));
+    assert_eq!(std::fs::read(&target).unwrap(), b"desktop rewrite during deferral");
+    assert_eq!(std::fs::read(root.join("unpublished-account")).unwrap(), b"new account bytes");
+    assert!(!claim.exists());
+    assert!(!journal.exists());
+}
+
 #[test]
 fn sharing_private_hook_and_snapshot_envelopes_stay_parseable_until_release() {
     let (_, source, home) = fixture();

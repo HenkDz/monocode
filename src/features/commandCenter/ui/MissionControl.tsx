@@ -8,6 +8,8 @@ import { listMonos, monosSnapshot, subscribeMonos } from "../../monos/model/mono
 import { monoManagerGoals } from "../../monos/model/monoManagerGoals";
 import type { OrchestrationRun } from "../../orchestration/model/orchestrationState";
 import type { Session } from "../../sessions/model/session";
+import type { UsageDashboardSnapshot } from "../../providers/model/usageDashboard";
+import { UsageAgentAccountLabels, UsageVital } from "../../providers/ui/UsageVital";
 import { selectAttention, type AttentionInput } from "../model/attention";
 import { useAttentionSources } from "../model/useAttentionSources";
 import { selectCockpit, type CockpitAgent, type CockpitModel } from "../model/cockpit";
@@ -36,13 +38,14 @@ function loadPreferences(): Preferences {
 }
 const emptyCockpit: CockpitModel = { agents: [], activity: [], active: 0, idle: 0, handoffSamples: 0, tokensPartial: false };
 type ViewProps = {
+  usageSnapshot?: UsageDashboardSnapshot; onOpenUsage?: () => void;
   view: GoalViewModel; cockpit?: CockpitModel; attentionInput?: AttentionInput; attentionSourceError?: string;
   timeline?: (id: string) => GoalTimeline | undefined; command?: ReactNode;
   renderAttention?: (onClose: () => void) => ReactNode;
   onOpenTarget: (target: GoalTarget) => void | Promise<void>; onClose: () => void; open?: boolean;
 };
 
-export function MissionControlView({ view, cockpit = emptyCockpit, attentionInput, attentionSourceError, timeline, command, renderAttention, onOpenTarget, onClose, open = true }: ViewProps) {
+export function MissionControlView({ view, cockpit = emptyCockpit, attentionInput, attentionSourceError, timeline, command, renderAttention, onOpenTarget, onClose, open = true, usageSnapshot, onOpenUsage }: ViewProps) {
   const [preferences, setPreferences] = useState(loadPreferences);
   const [panel, setPanel] = useState<string>();
   const [navigationError, setNavigationError] = useState<string>();
@@ -86,6 +89,7 @@ export function MissionControlView({ view, cockpit = emptyCockpit, attentionInpu
     <span className="mc-agent-top"><span className="mc-avatar" aria-hidden="true">{agent.initials}</span><span><strong>{agent.name}</strong><small>{agent.role}</small></span></span>
     <span id={`${descriptionId}-${agent.id}-activity`} className="mc-activity-text" title={agent.activity}>{agent.activity}</span>
     <span id={`${descriptionId}-${agent.id}-state`} className="mc-agent-bottom"><AgentStatusLabel state={agent.state} />{agent.elapsedMs != null && <span className="mc-elapsed" title="Current observed turn time">{goalElapsedLabel(agent.elapsedMs)}</span>}</span>
+    {usageSnapshot && <UsageAgentAccountLabels snapshot={usageSnapshot} monoId={agent.id} />}
   </button>;
   return <section ref={section} className="mission-control" data-density={density} aria-labelledby="mission-control-title" hidden={!open} inert={!open || undefined}>
     <div className="mc-topbar"><span>Workspace <span>/</span> <strong>Mission control</strong></span><span><i />Updated just now</span></div>
@@ -102,11 +106,12 @@ export function MissionControlView({ view, cockpit = emptyCockpit, attentionInpu
         }}>
           <span><strong>{item.title}</strong><small>{item.project} · {item.owner}</small></span><span className="mc-attention-kind">{item.category} →</span></button>)}
         <button type="button" className="mc-attention-all" onClick={event => { event.currentTarget.focus(); setPanel("attention"); }}>View all →</button></aside>}
-      <section className="mc-vitals" aria-label="Organization vitals">
+      <section className="mc-vitals" data-usage={!!usageSnapshot && !!onOpenUsage || undefined} aria-label="Organization vitals">
         <div><strong>{cockpit.active}<small>/ {cockpit.agents.length} agents</small></strong><span>Active now</span></div>
         <div><strong>{cockpit.idle}</strong><span>Idle and available</span></div><div><strong>{view.live.length}</strong><span>Goals in flight</span></div>
         <div title={`Dispatch to recorded turn start · ${cockpit.handoffSamples} samples`}><strong data-unavailable={cockpit.handoffMs == null || undefined}>{cockpit.handoffMs == null ? "No samples" : goalElapsedLabel(cockpit.handoffMs)}</strong><span>Average hand-off</span></div>
         <div title="Unique loaded conversations and recorded turns today; input includes cache. Coverage can be incomplete."><strong data-unavailable={cockpit.tokensToday == null || undefined}>{cockpit.tokensToday == null ? "Not recorded" : `${cockpit.tokensPartial ? "≥ " : ""}${cockpit.tokensToday.toLocaleString()}`}</strong><span>Tokens today</span></div>
+        {usageSnapshot && onOpenUsage && <div><UsageVital snapshot={usageSnapshot} onOpen={onOpenUsage} /></div>}
       </section>
       <div className="mc-filters"><div className="mc-segmented" aria-label="Project filter"><button type="button" aria-pressed={!activeProject} onClick={() => patch({ project: "" })}>All projects</button>
         {projects.map(([id, name]) => <button type="button" key={id} title={id} aria-pressed={activeProject === id} onClick={() => patch({ project: id })}>{name}</button>)}</div>
@@ -146,7 +151,8 @@ export function MissionControlView({ view, cockpit = emptyCockpit, attentionInpu
   </section>;
 }
 
-export function MissionControl({ sessions, runs, onOpenTarget, onClose, open, command, renderAttention, selectedAccount, isLocalSession, statuses }: {
+export function MissionControl({ sessions, runs, onOpenTarget, onClose, open, command, renderAttention, selectedAccount, isLocalSession, statuses, usageSnapshot, onOpenUsage }: {
+  usageSnapshot?: UsageDashboardSnapshot; onOpenUsage?: () => void;
   sessions: readonly Session[]; runs: readonly OrchestrationRun[]; onOpenTarget: ViewProps["onOpenTarget"]; onClose: () => void; open: boolean;
   command?: ReactNode; renderAttention?: ViewProps["renderAttention"]; selectedAccount?: AttentionInput["selectedAccount"]; isLocalSession?: AttentionInput["isLocalSession"]; statuses?: ReadonlyMap<string, GitPr | null>;
 }) {
@@ -162,5 +168,5 @@ export function MissionControl({ sessions, runs, onOpenTarget, onClose, open, co
   const cockpit = useMemo(() => selectCockpit(input, statuses), [input, statuses]);
   const attentionInput = useMemo(() => ({ ...input, selectedAccount, isLocalSession, repairs, automations }), [input, selectedAccount, isLocalSession, repairs, automations]);
   return <MissionControlView view={view} cockpit={cockpit} attentionInput={attentionInput} attentionSourceError={sourceError} timeline={id => selectGoalTimeline({ ...input, goalId: id })}
-    command={command} renderAttention={renderAttention} onOpenTarget={onOpenTarget} onClose={onClose} open={open} />;
+    command={command} renderAttention={renderAttention} onOpenTarget={onOpenTarget} onClose={onClose} open={open} usageSnapshot={usageSnapshot} onOpenUsage={onOpenUsage} />;
 }

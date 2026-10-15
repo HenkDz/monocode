@@ -15,6 +15,7 @@ import {
   providerAccounts,
   saveProviderAccount,
 } from "../../providers/model/providerAccounts";
+import { loadUsageFailoverPolicy } from "../../providers/model/usageFailoverSettings";
 import {
   clearCachedRateLimits,
   setCachedRateLimits,
@@ -107,6 +108,17 @@ beforeEach(() => {
   root = createRoot(container);
   onSelectSection = vi.fn();
   vi.mocked(invoke).mockReset().mockResolvedValue(undefined);
+});
+
+it("mounts separate OFF-default ranked recovery settings for actual Codex and Claude accounts", async () => {
+  saveProviderAccount({ id: "reserve", provider: "claude", label: "Recovery reserve" });
+  await render("providers");
+  const settings = [...container.querySelectorAll('fieldset')].filter(fieldset => fieldset.querySelector('legend')?.textContent === "Usage limit recovery");
+  expect(settings).toHaveLength(2);
+  expect(loadUsageFailoverPolicy("claude").enabled).toBe(false);
+  expect(loadUsageFailoverPolicy("codex").enabled).toBe(false);
+  expect([...settings].some(section => section.textContent?.includes("Recovery reserve"))).toBe(true);
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => /login|create|remove/.test(command))).toBe(false);
 });
 
 afterEach(async () => {

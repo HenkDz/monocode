@@ -6,6 +6,7 @@ import { MissionControlNav, MissionControlView } from "./MissionControl";
 import { selectGoalViews, type GoalTarget } from "../model/goalView";
 import { selectCockpit } from "../model/cockpit";
 import { selectGoalTimeline } from "../model/timeline";
+import { selectUsageDashboard } from "../../providers/model/usageDashboard";
 import { goals, roster, runs, sessions, now } from "../fixtures/syntheticMission";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => null) }));
@@ -26,6 +27,29 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); });
 
 describe("CC7N Cockpit", () => {
+  it("adds the shared Usage vital and labels every loaded account without changing token coverage", async () => {
+    const input = fixture();
+    input.sessions[0].providerAccountId = "home-account";
+    input.sessions[1].providerAccountId = "engine-account";
+    input.sessions[2].providerAccountId = "task-account";
+    const snapshot = selectUsageDashboard({ ...input, accounts: ["default", "home-account", "engine-account", "task-account"].map(id => ({ provider: "codex", id, label: id })), usage: {} });
+    const open = vi.fn();
+    const cockpit = selectCockpit(input);
+    const view = selectGoalViews(input);
+    await act(async () => root.render(<MissionControlView view={view} cockpit={cockpit} onOpenTarget={() => {}} onClose={() => {}} usageSnapshot={snapshot} onOpenUsage={open} />));
+    const vitals = host.querySelector('.mc-vitals')!;
+    expect(vitals.children).toHaveLength(6);
+    expect(vitals.getAttribute("data-usage")).toBe("true");
+    expect(vitals.children[4].textContent).toContain("Tokens today");
+    expect(vitals.children[4].textContent).toContain(`${cockpit.tokensPartial ? "≥ " : ""}${cockpit.tokensToday!.toLocaleString()}`);
+    expect(host.querySelector('[data-agent="synthetic-grand"] .usage-agent-accounts')?.textContent).toContain("home-account");
+    expect(host.querySelector('[data-agent="synthetic-manager"] .usage-agent-accounts')?.textContent).toContain("engine-account");
+    expect(host.querySelector('[data-agent="synthetic-builder"] .usage-agent-accounts')?.textContent).toContain("task-account");
+    await act(async () => host.querySelector<HTMLButtonElement>('.usage-vital')!.click());
+    expect(open).toHaveBeenCalledOnce();
+    await act(async () => render(input));
+    expect(host.querySelector('.mc-vitals')!.children).toHaveLength(5);
+  });
   it("omits unavailable card timers and repeated timing captions while keeping honest organization coverage", async () => {
     const input = fixture(); input.sessions = input.sessions.map(session => ({ ...session, blocks: [] }));
     input.runs = input.runs.map(run => ({ ...run, dispatches: [] }));

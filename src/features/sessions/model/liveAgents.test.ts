@@ -207,6 +207,24 @@ describe("liveAgentsFromSessions", () => {
 });
 
 describe("formatLiveElapsed", () => {
+  it.each([
+    [0, "1s"],
+    [-1000, "1s"],
+    [59_000, "59s"],
+    [60_000, "1m"],
+    [61_000, "1m 1s"],
+    [3_599_000, "59m 59s"],
+    [3_600_000, "1h"],
+    [3_601_000, "1h 1s"],
+    [86_399_000, "23h 59m 59s"],
+    [86_400_000, "1d"],
+    [86_401_000, "1d 1s"],
+    [(1642 * 60 + 8) * 1000, "1d 3h 22m 8s"],
+    [(3 * 86_400 + 2 * 3_600 + 5 * 60 + 6) * 1000, "3d 2h 5m 6s"],
+  ])("formats %dms with bounded day/hour/minute/second units", (elapsed, label) => {
+    expect(formatLiveElapsed(5000, 5000 + elapsed)).toBe(label);
+  });
+
   it("formats seconds, minutes, and hours", () => {
     expect(formatLiveElapsed(0, 1_000)).toBe("1s");
     expect(formatLiveElapsed(0, 38_000)).toBe("38s");

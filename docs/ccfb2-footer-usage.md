@@ -22,3 +22,39 @@ Logs and screenshots are retained at
 Reports and the open-batch checkpoint are in the parent `ccfeedback2` directory.
 No broad suite, production build, native/profile/provider acceptance, or release
 was attempted. Root freezes the batch and owns fresh review/integration/release.
+
+## Follow-up: long elapsed time
+
+The transcript's running and completed work rows now use `formatLiveElapsed`,
+the same helper as live-agent previews, task metrics, Workbench headers/details,
+and Mono activity. It formats nonzero days, hours, minutes, and seconds while
+preserving the existing rounding and minimum one-second display. The reported
+`1642m 8s` becomes `1d 3h 22m 8s`. Measurement, timestamps, and timer behavior
+are unchanged. Focused tests passed 120/0/0 across eight affected files,
+including minute/hour/day boundaries, a multi-day example, both fold states,
+timer ticks and cleanup. TypeScript passed. Dark/light running and completed
+row screenshots were individually inspected.
+
+## Follow-up: hidden window controls, App hold
+
+The top-left destinations are Mission Control, Usage, Attention, Map (tree and
+orbit), Search, Inbox, Pull Requests, Notes, Automations, and Settings. The last
+six already own their window chrome. The first four share `teamMap.open`, which
+hides/inerts the workspace subtree containing the existing TitleBar and its
+WindowControls. This was reproduced with real page components and placement
+expressions extracted from current App source by the synthetic fixture.
+
+The smallest fix is App-only and is still held for the accepted State handoff:
+hoist the same existing title bar while non-macOS TeamMap pages are open, and
+let it own controls while the underlying Mono panel is hidden. No page-specific
+buttons, new chrome component, z-index change, or native callback change is
+needed. The fixture currently verifies the accepted base's missing controls;
+replace that reproduction assertion with positive geometry/hit-testing,
+callback and keyboard cases after the held App edit is authorized. This is not
+a repaired-window-controls acceptance claim.
+
+Final follow-up images are under `evidence/browser-20261015T102821Z/`.
+Earlier passing capture runs at `102434Z` and `102637Z` are retained, but their
+running-row screenshots were clipped by the original fixture containers and
+are not visual acceptance evidence. The fixture containers/capture were fixed;
+product layout, timers and assertions were not weakened.

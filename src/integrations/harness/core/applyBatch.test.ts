@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   newSession,
   type Session,
@@ -24,6 +24,54 @@ function conversation(): Session {
 }
 
 describe("batched harness events", () => {
+  it("reuses every generated event identity and time on replay", () => {
+    let at = 10_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => at++);
+    try {
+      const session = { ...conversation(), busy: true, blocks: [{ id: "user", role: "user" as const, text: "Run", startedAt: 100 }] };
+      const events: HarnessEvent[] = [
+        { type: "message.delta", text: "Answer" }, { type: "message.delta", text: "." },
+        { type: "reasoning.delta", text: "Thought" },
+        { type: "reasoning.delta", text: "Part", reasoning: { itemId: "r", partIndex: 0, channel: "summary" } },
+        { type: "tool.started", callId: "first", title: "First" },
+        { type: "tool.updated", callId: "second", title: "Second", status: "in_progress" },
+        { type: "approval.requested", callId: "approval", requestId: 7, title: "Unmatched" },
+        { type: "plan", key: "plan", text: "A plan" },
+        { type: "tasks.updated", items: [{ text: "Task", status: "pending" }] },
+        { type: "image.generated", itemId: "image", path: "/synthetic/image", name: "image", mimeType: "image/png", size: 1 },
+        { type: "status", text: "Status" }, { type: "status", key: "key", text: "Keyed" },
+        { type: "interjection", text: "Notice", customType: "review" },
+        { type: "turn.compaction", phase: "started", id: "compaction" },
+        { type: "turn.compaction", phase: "completed", id: "compaction" },
+        { type: "session.error", message: "Synthetic failure" },
+      ];
+      const replay = new Map();
+      const first = applyHarnessEvents(session, events, replay);
+      const ids = first.blocks.map(block => block.id);
+      expect(new Set(ids).size).toBe(ids.length);
+      expect(first.blocks[0].durationMs).toBeGreaterThan(0);
+      expect(first.blocks[0].turnMetrics?.firstTokenAt).toBeDefined();
+      at += 1_000;
+      expect(applyHarnessEvents(session, events, replay)).toEqual(first);
+      expect(applyHarnessEvents(session, events, replay)).toEqual(first);
+    } finally { clock.mockRestore(); }
+  });
+
+  it.each([false, true])("does not shift generated IDs when an earlier allocation changes, initiallyCreates=%s", initiallyCreates => {
+    const base = { ...conversation(), blocks: [] as Session["blocks"] };
+    const duplicate: Session["blocks"] = [{ id: "existing-status", role: "system", text: "Status" }];
+    const original = { ...base, blocks: initiallyCreates ? [] : duplicate };
+    const edited = { ...base, blocks: initiallyCreates ? duplicate : [] };
+    const events: HarnessEvent[] = [{ type: "status", text: "Status" },
+      { type: "tool.started", callId: "tool", title: "Tool" }, { type: "message.delta", text: "Answer" }];
+    const replay = new Map();
+    const first = applyHarnessEvents(original, events, replay);
+    const rebased = applyHarnessEvents(edited, events, replay);
+    expect(rebased.blocks.slice(1).map(block => block.id)).toEqual(first.blocks.slice(1).map(block => block.id));
+    expect(new Set(rebased.blocks.map(block => block.id)).size).toBe(3);
+    expect(applyHarnessEvents(edited, events, replay)).toEqual(rebased);
+  });
+
   it("keeps interleaved provider reasoning parts and canonical snapshots separate", () => {
     const summary = { itemId: "r", partIndex: 0, channel: "summary" as const };
     const raw = { itemId: "r", partIndex: 0, channel: "raw" as const };

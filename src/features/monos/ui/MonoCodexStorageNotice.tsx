@@ -66,7 +66,7 @@ export function MonoCodexStorageNotice({
   }, [detail]);
 
   const details = error ?? detail;
-  const title = success ? sandbox ? "Codex sandbox choice applied" : "Codex storage repaired" : sandbox ? setupUnavailable ? "Codex elevated sandbox unavailable" : "Codex sandbox needs setup" : recovery?.homeThreads ? "Conversation edits are not saved" : recovery?.sourceBinding ? "Choose this Mono's Codex source" : recovery ? "Codex recovery files preserved" : conflict ? codexStorageIssueTitle(conflict) : workbench ? "Conversation couldn’t start" : "Codex storage needs repair";
+  const title = success ? sandbox ? "Codex sandbox choice applied" : "Codex storage repaired" : sandbox ? setupUnavailable ? "Codex elevated sandbox unavailable" : "Codex sandbox needs setup" : recovery?.homeThreads ? "Conversation edits are not saved" : recovery?.sourceBinding ? "Choose this Mono's Codex source" : recovery?.io?.retryable ? "Codex file is in use" : recovery ? "Codex recovery files preserved" : conflict ? codexStorageIssueTitle(conflict) : workbench ? "Conversation couldn’t start" : "Codex storage needs repair";
   async function run(action: "repair" | "compare" | "reveal", operation: () => Promise<unknown>) {
     if (busy) return;
     setBusy(action);
@@ -167,7 +167,7 @@ export function MonoCodexStorageNotice({
                 {recovery.sourceBinding.canSeparate && <p className="mt-1">This starts a new provider conversation in a separate private home. The held prompt and queue stay here; original homes, history and credentials stay in place.</p>}
                 {recovery.sourceBinding.canReturn && <p className="mt-1">Confirm this recreated source to return to its original private history. Each launch source keeps its own provider conversation.</p>}
                 {recovery.sourceBinding.canBind && <p className="mt-1">Confirm only after selecting the account that originally owned these private sessions. Legacy context links alone do not establish that ownership.</p>}
-              </> : <p className="mt-1">Review the preserved files in their folder, then refresh this issue.</p>}
+              </> : recovery.io?.retryable ? <p className="mt-1">Waiting messages will continue automatically when this file is available.</p> : <p className="mt-1">Review the preserved files in their folder, then refresh this issue.</p>}
               <ul aria-label="Preserved recovery paths" className="mt-1 space-y-1 break-all">
                 {recovery.paths.map(path => <li key={path}>{path}</li>)}
               </ul>

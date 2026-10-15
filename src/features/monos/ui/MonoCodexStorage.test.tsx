@@ -1,10 +1,12 @@
 // @vitest-environment happy-dom
-import { act } from "react";
+import { act, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { MonoCodexStorageNotice } from "./MonoCodexStorageNotice";
 import { MonoCodexStorageSource } from "./MonoCodexStorageSource";
 import { MonoCodexStorageRecovery } from "../model/monoCodexStorage";
+import { useCodexStorageLockRecovery } from "../../../app/hooks/useCodexStorageLockRecovery";
+import { newSession } from "../../sessions/model/session";
 
 const native = vi.hoisted(() => ({
   info: vi.fn(),
@@ -56,6 +58,42 @@ const hooksConflict = {
 const conflictDetail = (value = hooksConflict) => `Codex storage needs repair: ${JSON.stringify(value)}`;
 const buttonNamed = (name: string) => Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
   .find(button => button.textContent?.startsWith(name))!;
+
+it("copies the exact path-bearing lock envelope and automatically resumes once after release without clicking Repair", async () => {
+  vi.useFakeTimers();
+  const recovery = new MonoCodexStorageRecovery();
+  const sent = vi.fn((_text: string, _attachments: string[], _intent: string) => true);
+  recovery.hold("manager", () => sent("Exact held Plan", ["original attachment"], "plan"), "plan");
+  const detail = `Codex storage needs repair: ${JSON.stringify({ recovery: true, reason: "Codex reader holds this file", paths: ["C:/synthetic/mono/AGENTS.md"],
+    io: { operation: "open storage entry with delete access", path: "C:/synthetic/mono/AGENTS.md", holder: "Codex reader (exact holder unknown)", osError: 32, retryable: true } })}`;
+  let locked = true;
+  const prepare = vi.fn(async () => { if (locked) throw new Error(detail); });
+  function ConnectedNotice() {
+    const [sessions, setSessions] = useState([{ ...newSession("codex", "C:/synthetic/repo"), id: "manager", codexStorageError: detail }]);
+    useCodexStorageLockRecovery(sessions, async id => {
+      await recovery.repair(id, prepare);
+      setSessions(current => current.map(session => session.id === id ? { ...session, codexStorageError: "" } : session));
+    });
+    return <MonoCodexStorageNotice detail={sessions[0].codexStorageError} onRepair={async () => {}} />;
+  }
+  try {
+    await act(async () => root.render(<ConnectedNotice />));
+    expect(container.textContent).toContain("AGENTS.md");
+    expect(container.textContent).toContain("continue automatically");
+    await act(async () => buttonNamed("Copy details").click());
+    expect(native.copy).toHaveBeenCalledExactlyOnceWith(detail);
+    await act(async () => vi.advanceTimersByTimeAsync(5000));
+    expect(sent).not.toHaveBeenCalled();
+    locked = false;
+    await act(async () => vi.advanceTimersByTimeAsync(5000));
+    expect(sent).toHaveBeenCalledExactlyOnceWith("Exact held Plan", ["original attachment"], "plan");
+    expect(container.textContent).not.toContain("AGENTS.md");
+    await act(async () => vi.advanceTimersByTimeAsync(15000));
+    expect(sent).toHaveBeenCalledOnce();
+    expect(prepare).toHaveBeenCalledTimes(2);
+    await act(async () => root.render(null));
+  } finally { vi.useRealTimers(); }
+});
 
 it("keeps a preserve refusal visible across stable map notice renders and unrelated error strings", async () => {
   const homeThreads = { sessionId: "mono", identity: "row:created", fingerprint: "stored", cwd: "/synthetic/repo", providerAccountId: "account", home: "/synthetic/home" };

@@ -1,4 +1,4 @@
-import type { Session, TurnIntent } from "../../sessions/model/session";
+import { hasPendingApproval, type Session, type TurnIntent } from "../../sessions/model/session";
 
 export type CodexStorageConflict = {
   entry: string;
@@ -27,6 +27,7 @@ export type CodexStorageRecoveryConflict = {
   recovery: true;
   reason: string;
   paths: string[];
+  io?: { operation: string; path: string; holder: string | null; osError: number | null; retryable: boolean };
   metadata?: { path: string; identity: string; fingerprint: string };
   homeThreads?: NonNullable<Session["codexHomeThreadsRecovery"]>;
   sourceBinding?: { resolvedSourceHome: string; boundSourceHome: string | null; canBind: boolean; canSeparate?: boolean; canReturn?: boolean; sourceIdentity?: string };
@@ -97,6 +98,10 @@ export function parseCodexStorageRecoveryConflict(error: unknown): CodexStorageR
       !value.paths.every((path: unknown) => typeof path === "string" && path.length > 0)) return undefined;
     if (value.metadata !== undefined && (!value.metadata ||
       !["path", "identity", "fingerprint"].every(key => typeof value.metadata[key] === "string" && value.metadata[key].length > 0))) return undefined;
+    if (value.io !== undefined && (!value.io ||
+      !["operation", "path"].every(key => typeof value.io[key] === "string" && value.io[key].length > 0) ||
+      (value.io.holder !== null && typeof value.io.holder !== "string") ||
+      (value.io.osError !== null && !Number.isSafeInteger(value.io.osError)) || typeof value.io.retryable !== "boolean")) return undefined;
     if (value.homeThreads !== undefined && (!value.homeThreads ||
       !["sessionId", "identity", "fingerprint", "cwd"].every(key => typeof value.homeThreads[key] === "string" && value.homeThreads[key].length > 0) ||
       !["providerAccountId", "home"].every(key => value.homeThreads[key] === null || typeof value.homeThreads[key] === "string"))) return undefined;
@@ -127,6 +132,15 @@ export function isCodexStorageError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return message.includes(STORAGE_ERROR_PREFIX) ||
     message.includes("Unexpected link in Mono Codex storage:");
+}
+
+export function canAutomaticallyRepairCodexStorage(session: Session): boolean {
+  const recovery = parseCodexStorageRecoveryConflict(session.codexStorageError);
+  return session.harness === "codex" && recovery?.io?.retryable === true && recovery.io.osError === 32 &&
+    !recovery.metadata && !recovery.homeThreads && !recovery.sourceBinding && !recovery.migration &&
+    !session.busy && !session.codexStoragePreparing && !session.codexHomeThreadsUnresolved &&
+    session.queueStatus !== "paused" && !session.pendingQuestion && !hasPendingApproval(session.blocks) &&
+    !session.editingQueuedMessageId && !session.sendingQueuedMessageId && !session.worktreeRemoved;
 }
 
 /** Hold the exact submission until repair succeeds, before a Manager turn exists. */

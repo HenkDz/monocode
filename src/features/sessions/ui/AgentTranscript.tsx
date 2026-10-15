@@ -88,6 +88,7 @@ import { playCue } from "../../settings/model/sounds";
 import { legacyTaskListFromText } from "../model/taskList";
 import { resolveModel } from "../model/models";
 import { harnessForTurn } from "../model/secondOpinion";
+import { formatLiveElapsed } from "../model/liveAgents";
 import { TranscriptTurnCache } from "../model/transcriptTurnCache";
 import { Shimmer } from "../../../shared/ui/Shimmer";
 import {
@@ -4043,22 +4044,13 @@ function formatWorkingDuration(
   done = false,
 ): string {
   const who = modelName?.trim();
-  const elapsed = formatElapsed(elapsedMs);
+  const elapsed = elapsedMs == null ? null : formatLiveElapsed(0, elapsedMs);
   const verb = done ? (who ? "worked" : "Worked") : who ? "working" : "Working";
   if (elapsed == null) {
     if (done) return who ? `${who} ${verb}` : verb;
     return who ? `${who} ${verb}…` : `${verb}…`;
   }
   return who ? `${who} ${verb} for ${elapsed}` : `${verb} for ${elapsed}`;
-}
-
-function formatElapsed(elapsedMs: number | null): string | null {
-  if (elapsedMs == null) return null;
-  const totalSec = Math.max(1, Math.round(elapsedMs / 1000));
-  if (totalSec < 60) return `${totalSec}s`;
-  const minutes = Math.floor(totalSec / 60);
-  const seconds = totalSec % 60;
-  return seconds ? `${minutes}m ${seconds}s` : `${minutes}m`;
 }
 
 function ToolCall({

@@ -21,6 +21,7 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 const user: Block = { id: "user", role: "user", text: "Fix the chooser", startedAt: 1000, durationMs: 111000 };
@@ -43,6 +44,24 @@ function render(blocks: Block[], props = {}) {
   act(() => root.render(createElement(AgentTranscript, { blocks, ...props })));
 }
 function toggle() { return container.querySelector<HTMLButtonElement>('[data-transcript-turn-work] > button')!; }
+
+it.each([false, true])("uses days/hours for the reported long turn and preserves the fold (busy: %s)", busy => {
+  const elapsed = (1642 * 60 + 8) * 1000;
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-10-15T12:00:00Z"));
+  render([{ ...user, startedAt: Date.now() - elapsed, durationMs: busy ? undefined : elapsed }, thought, ...(busy ? [] : [answer])], { busy });
+  expect(toggle().textContent).toContain(`${busy ? "Working" : "Worked"} for 1d 3h 22m 8s`);
+  expect(toggle().getAttribute("aria-expanded")).toBe("false");
+  if (busy) {
+    act(() => vi.advanceTimersByTime(1000));
+    expect(toggle().textContent).toContain("Working for 1d 3h 22m 9s");
+  }
+  act(() => toggle().click());
+  expect(toggle().getAttribute("aria-expanded")).toBe("true");
+  act(() => root.unmount());
+  expect(vi.getTimerCount()).toBe(0);
+  root = createRoot(container);
+});
 
 it("retains reducer background waits and task names, with approval and question precedence", () => {
   const session = applyHarnessEvent({ ...newSession("claude", "/synthetic"), busy: true, blocks: [{ ...user, durationMs: undefined }, { ...note, streaming: true }] }, { type: "background.updated", tasks: ["Review", "Build"] });

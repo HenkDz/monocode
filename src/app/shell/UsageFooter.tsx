@@ -67,6 +67,7 @@ export function UsageFooter({
   projectTerminalActive = false,
   onSelectAccount,
   onManageAccounts,
+  onOpenUsage,
 }: {
   providers: RateLimitProvider[];
   session?: UsageFooterSession;
@@ -82,6 +83,7 @@ export function UsageFooter({
     accountId: string,
   ) => void;
   onManageAccounts?: (provider: ProviderAccountProvider) => void;
+  onOpenUsage?: () => void;
 }) {
   const wantClaude = providers.includes("claude");
   const wantCodex = providers.includes("codex");
@@ -324,12 +326,13 @@ export function UsageFooter({
       className="flex h-7 shrink-0 items-center gap-1.5 overflow-x-auto border-t border-stroke px-3 text-[11px] text-content/55"
     >
       {session?.harness === "pi" ? (
-        <PiUsage key={`${session.id}:${session.model}`} model={session.model} now={now} />
+        <PiUsage key={`${session.id}:${session.model}`} model={session.model} now={now} onOpenUsage={onOpenUsage} />
       ) : showUsage ? (
         <>
           {wantClaude ? (
             <UsageProviderChip
               limits={claude}
+              onOpenUsage={onOpenUsage}
               now={now}
               accounts={claudeAccounts}
               accountId={claudeAccountId}
@@ -346,6 +349,7 @@ export function UsageFooter({
           {wantCodex ? (
             <UsageProviderChip
               limits={codex}
+              onOpenUsage={onOpenUsage}
               now={now}
               project={project}
               accounts={codexAccounts}
@@ -360,12 +364,13 @@ export function UsageFooter({
             />
           ) : null}
           {showOpencodeChip ? (
-            <UsageProviderChip limits={opencode} now={now} project={project} />
+            <UsageProviderChip limits={opencode} now={now} project={project} onOpenUsage={onOpenUsage} />
           ) : null}
           {wantDevin ? (
             // Devin has one login per machine, so there is no account picker.
             <UsageProviderChip
               limits={devin}
+              onOpenUsage={onOpenUsage}
               now={now}
               project={project}
               onReconnect={reconnectDevin}

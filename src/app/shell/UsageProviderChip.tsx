@@ -73,6 +73,7 @@ export function UsageProviderChip({
   onSelectAccount,
   onAddAccount,
   onManageAccounts,
+  onOpenUsage,
   onConsumeReset,
   onReconnect,
   presentation,
@@ -86,6 +87,7 @@ export function UsageProviderChip({
   onSelectAccount?: (accountId: string) => void;
   onAddAccount?: (label: string) => Promise<ProviderAccount>;
   onManageAccounts?: () => void;
+  onOpenUsage?: () => void;
   onConsumeReset?: (creditId?: string) => Promise<CodexRateLimitResetOutcome>;
   onReconnect?: () => Promise<void>;
 }) {
@@ -424,6 +426,19 @@ export function UsageProviderChip({
                     {formatExtraUsageBalance(limits.extraUsageBalance)}
                   </span>
                 </section>
+              ) : null}
+
+              {onOpenUsage ? (
+                <button
+                  type="button"
+                  className="mt-2.5 flex min-h-8 w-full items-center justify-between rounded-lg px-3 text-[11px] font-medium text-content/70 hover:bg-content/10 hover:text-content focus-visible:outline-2 focus-visible:outline-accent"
+                  onClick={() => {
+                    setOpen(false);
+                    onOpenUsage();
+                  }}
+                >
+                  See all usage <span aria-hidden>→</span>
+                </button>
               ) : null}
 
               {suggestion && onSelectAccount ? (

@@ -173,6 +173,25 @@ function props(transcriptPool?: TranscriptPool): SessionPaneProps {
   };
 }
 
+it("shows an explicit usage storage repair hold, retries through its App callback, and clears after success", async () => {
+  probes.member = false;
+  const pane = props();
+  const retry = vi.fn(async () => {});
+  pane.session.usageLimit = {};
+  pane.usageRecoveryError = () => "Usage recovery storage repair is pending: synthetic rejected write";
+  pane.onRetryUsageRecovery = retry;
+  pane.onOpenUsage = vi.fn();
+  act(() => root.render(createElement(SessionPane, pane)));
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain("Sending stays paused until repair succeeds");
+  const button = [...container.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === "Retry usage recovery repair")!;
+  await act(async () => button.click());
+  expect(retry).toHaveBeenCalledWith("chat");
+  const usage = [...container.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === "View all account usage")!;
+  act(() => usage.click()); expect(pane.onOpenUsage).toHaveBeenCalledOnce();
+  act(() => root.render(createElement(SessionPane, { ...pane, usageRecoveryError: () => undefined })));
+  expect(container.textContent).not.toContain("Retry usage recovery repair");
+});
+
 it.each([false, true])("keeps Mono edit controls alongside member work logs (member: %s)", (member) => {
   probes.member = member;
   const pane = props();

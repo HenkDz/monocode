@@ -5,6 +5,15 @@ import { clampUsedPercent, formatResetDuration, formatUsagePercent, formatWindow
 import { AccountStatusLabel } from "./ProviderAccountUsage";
 import "./usageDashboard.css";
 
+export const USAGE_DASHBOARD_SCOPE = "command-center:usage";
+
+export function UsageDashboardNav({ onOpen, compact = false }: { onOpen: () => void; compact?: boolean }) {
+  return <button type="button" onClick={onOpen} title="Usage" aria-label="Usage"
+    className={`flex shrink-0 items-center gap-2 rounded-md text-[13px] text-content/65 hover:bg-content/8 hover:text-content focus-visible:outline-accent ${compact ? "mx-auto size-8 justify-center" : "mx-2 my-1 h-8 px-2"}`}>
+    <span aria-hidden="true">◴</span>{!compact && "Usage"}
+  </button>;
+}
+
 export function UsageAssignments({ assignments }: { assignments: UsageAssignment[] }) {
   return <div className="usage-associations">
     {assignments.length === 0 ? "No loaded Mono associations" : assignments.map(assignment =>

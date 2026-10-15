@@ -1760,7 +1760,7 @@ fn prepare_files_with_state_locked(
     state_home: Option<&Path>,
 ) -> Result<(), String> {
     let (source, home) = storage_roots(source, home)?;
-    transactions::reconcile(&home)?;
+    let deferred_entries = transactions::reconcile(&home)?;
     storage_io::retire_transients(&home)?;
     if let Some(base) = state_home {
         archive::prepare_context_state(base, &home)?;
@@ -1785,6 +1785,9 @@ fn prepare_files_with_state_locked(
     for entry in std::fs::read_dir(&home).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
         let name = entry.file_name();
+        if name.to_str().is_some_and(|name| deferred_entries.contains(name)) {
+            continue;
+        }
         if name.to_string_lossy().eq_ignore_ascii_case("skills")
             || (!share_hooks && name.to_string_lossy().eq_ignore_ascii_case("hooks.json"))
         {
@@ -1827,6 +1830,9 @@ fn prepare_files_with_state_locked(
     for entry in std::fs::read_dir(&source).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
         let name = entry.file_name();
+        if name.to_str().is_some_and(|name| deferred_entries.contains(name)) {
+            continue;
+        }
         if name.to_string_lossy().eq_ignore_ascii_case("skills")
             || (!share_hooks && name.to_string_lossy().eq_ignore_ascii_case("hooks.json"))
         {

@@ -14,19 +14,12 @@ pub(super) fn context(operation: &str, path: &Path, error: String) -> String {
         return format!("{operation}: {error}");
     }
     let sharing = cfg!(windows) && code == Some(32);
-    let name = path.file_name().unwrap_or_default().to_string_lossy();
-    let holder = if name.contains(".sqlite") || name.ends_with("-wal") || name.ends_with("-shm") {
-        "SQLite connection (Codex app-server or another context)"
-    } else if name.contains("codex-global-state") || transient(&name) {
-        "Codex desktop state writer or another file reader"
-    } else {
-        "another Codex process or file reader (exact holder unknown)"
-    };
+    let holder = "Likely holders include the Codex desktop app, Orca Codex terminals, other Monos, or another Codex app-server/file reader (exact holder unknown)";
     let path = crate::fs::path_to_js(path);
     serde_json::json!({
         "recovery": true,
         "reason": if sharing {
-            format!("Could not {operation}: {path}. {holder} is keeping this file open. Let its write finish or close the program using this file; MonoCode will check again automatically. {error}")
+            format!("Could not {operation}: {path}. {holder}. Let its write finish or close the program using this file; MonoCode will check again automatically. {error}")
         } else { format!("Could not {operation}: {path}. {error}") },
         "paths": [path],
         "io": {"operation": operation, "path": path, "holder": if sharing { Some(holder) } else { None },

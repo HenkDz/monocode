@@ -2664,64 +2664,6 @@ function Workspace({
       });
   }, []);
 
-  const retryUsageRecovery = useCallback(async (sessionId: string) => {
-    try { await writeSession(sessionId, async () => {}); }
-    catch (error) {
-      const text = `Usage recovery storage repair is pending: ${String(error)}`;
-      setUsageRecoveryErrors(previous => ({ ...previous, [sessionId]: text }));
-      enqueueHarnessEvent(sessionId, { type: "status", text });
-      flushHarnessEvents();
-    }
-  }, [enqueueHarnessEvent, flushHarnessEvents]);
-
-  const commitUsageFailover = useCallback(async (expected: Session, next: Session, valid: () => boolean) => {
-    const sessionId = expected.id;
-    let repair = false;
-    try {
-      return await writeSession(sessionId, async save => {
-        let uncertain = false;
-        const retainLiveWrite = () => {
-          repair = true;
-          lastPersisted.current.delete(sessionId);
-          retainSessionWrite(sessionId, async () => {
-            const live = sessionsRef.current.find(entry => entry.id === sessionId);
-            if (!live) throw Error("The conversation is unavailable; usage recovery storage repair is still held");
-            // A lost acknowledgement can leave the diff cache behind disk; retain the live page's anchor.
-            if (uncertain) resetMonoSessionWriteBaseline(sessionId);
-            if (await save(live) === null)
-              throw Error("The conversation could not be restored; usage recovery storage repair is still held");
-            if (sessionsRef.current.find(entry => entry.id === sessionId) !== live)
-              throw Error("The conversation changed during usage recovery storage repair; retry reconciliation");
-            lastPersisted.current.delete(sessionId);
-            setUsageRecoveryErrors(previous => {
-              if (!previous[sessionId]) return previous;
-              const next = { ...previous }; delete next[sessionId]; return next;
-            });
-          });
-        };
-        if (!valid() || sessionsRef.current.find(entry => entry.id === sessionId) !== expected) return false;
-        try {
-          if (await save({ ...next, queueStatus: "paused" }) === null) return false;
-        } catch (error) {
-          uncertain = true;
-          retainLiveWrite();
-          throw error;
-        }
-        if (!valid() || sessionsRef.current.find(entry => entry.id === sessionId) !== expected) {
-          retainLiveWrite();
-          return false;
-        }
-        sessionsRef.current = sessionsRef.current.map(entry => entry.id === sessionId ? next : entry);
-        flushSync(() => setSessions(sessionsRef.current));
-        lastPersisted.current.delete(sessionId);
-        return true;
-      });
-    } finally {
-      // Retained callbacks already hold the queue; start repair only after this write settles.
-      if (repair) await retryUsageRecovery(sessionId);
-    }
-  }, [retryUsageRecovery]);
-
   useEffect(() => {
     const liveIds = new Set(sessions.map((session) => session.id));
     const visibleIds = openSessionIds(tabsRef.current);
@@ -10587,6 +10529,64 @@ function Workspace({
 
   const [usageLimitTick, setUsageLimitTick] = useState(0);
   useEffect(() => subscribeUsageFailoverPolicy(() => setUsageLimitTick(tick => tick + 1)), []);
+  const retryUsageRecovery = useCallback(async (sessionId: string) => {
+    try { await writeSession(sessionId, async () => {}); }
+    catch (error) {
+      const text = `Usage recovery storage repair is pending: ${String(error)}`;
+      setUsageRecoveryErrors(previous => ({ ...previous, [sessionId]: text }));
+      enqueueHarnessEvent(sessionId, { type: "status", text });
+      flushHarnessEvents();
+    }
+  }, [enqueueHarnessEvent, flushHarnessEvents]);
+
+  const commitUsageFailover = useCallback(async (expected: Session, next: Session, valid: () => boolean) => {
+    const sessionId = expected.id;
+    let repair = false;
+    try {
+      return await writeSession(sessionId, async save => {
+        let uncertain = false;
+        const retainLiveWrite = () => {
+          repair = true;
+          lastPersisted.current.delete(sessionId);
+          retainSessionWrite(sessionId, async () => {
+            const live = sessionsRef.current.find(entry => entry.id === sessionId);
+            if (!live) throw Error("The conversation is unavailable; usage recovery storage repair is still held");
+            // A lost acknowledgement can leave the diff cache behind disk; retain the live page's anchor.
+            if (uncertain) resetMonoSessionWriteBaseline(sessionId);
+            if (await save(live) === null)
+              throw Error("The conversation could not be restored; usage recovery storage repair is still held");
+            if (sessionsRef.current.find(entry => entry.id === sessionId) !== live)
+              throw Error("The conversation changed during usage recovery storage repair; retry reconciliation");
+            lastPersisted.current.delete(sessionId);
+            setUsageRecoveryErrors(previous => {
+              if (!previous[sessionId]) return previous;
+              const next = { ...previous }; delete next[sessionId]; return next;
+            });
+          });
+        };
+        if (!valid() || sessionsRef.current.find(entry => entry.id === sessionId) !== expected) return false;
+        try {
+          if (await save({ ...next, queueStatus: "paused" }) === null) return false;
+        } catch (error) {
+          uncertain = true;
+          retainLiveWrite();
+          throw error;
+        }
+        if (!valid() || sessionsRef.current.find(entry => entry.id === sessionId) !== expected) {
+          retainLiveWrite();
+          return false;
+        }
+        sessionsRef.current = sessionsRef.current.map(entry => entry.id === sessionId ? next : entry);
+        flushSync(() => setSessions(sessionsRef.current));
+        lastPersisted.current.delete(sessionId);
+        return true;
+      });
+    } finally {
+      // Retained callbacks already hold the queue; start repair only after this write settles.
+      if (repair) await retryUsageRecovery(sessionId);
+    }
+  }, [retryUsageRecovery]);
+
   const recoverUsageLimit = useCallback((sessionId: string) => {
     const original = sessionsRef.current.find(entry => entry.id === sessionId);
     if (!original || !isMonoSession(sessionId) || !supportsAccountProfiles(original.harness)) return;

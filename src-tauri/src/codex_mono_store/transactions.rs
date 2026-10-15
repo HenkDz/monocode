@@ -1230,7 +1230,8 @@ fn reconcile_journal(home: &Path, journal: ClaimJournal) -> Result<(), String> {
     Err(recovery("An interrupted storage transaction has another entry at its original path. Both versions were preserved; inspect the recovery files before retrying.", &paths))
 }
 
-pub(super) fn reconcile(home: &Path) -> Result<(), String> {
+pub(super) fn reconcile(home: &Path) -> Result<HashSet<String>, String> {
+    let mut deferred_entries = HashSet::new();
     let mut deferred_claims = HashSet::new();
     let mut directories = vec![home.to_path_buf()];
     if exists(&home.join(".monocode-links"))? {
@@ -1288,6 +1289,7 @@ pub(super) fn reconcile(home: &Path) -> Result<(), String> {
             if let Err(error) = result {
                 if !optional || !storage_io::sharing(&error) { return Err(error); }
                 storage_io::defer(home, &name, &error)?;
+                deferred_entries.insert(name);
                 deferred_claims.insert(claim);
             }
         }
@@ -1300,5 +1302,5 @@ pub(super) fn reconcile(home: &Path) -> Result<(), String> {
             }
         }
     }
-    Ok(())
+    Ok(deferred_entries)
 }

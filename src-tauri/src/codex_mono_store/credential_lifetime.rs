@@ -63,7 +63,7 @@ pub(super) fn open_lease(path: &Path, exclusive: bool) -> Result<std::fs::File, 
         use std::os::unix::fs::OpenOptionsExt;
         options.custom_flags(libc::O_NOFOLLOW);
     }
-    let file = options.open(path).map_err(|e| e.to_string())?;
+    let file = storage_io::run("open managed credential lease", path, || options.open(path))?;
     #[cfg(unix)]
     {
         use std::os::fd::AsRawFd;

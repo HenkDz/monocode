@@ -34,6 +34,9 @@ pub fn codex_mono_use_unelevated_sandbox(
 }
 mod skills;
 mod transactions;
+mod storage_io;
+#[cfg(all(test, windows))]
+mod sharing_tests;
 use transactions::{ClaimIntent, ClaimJournal};
 #[cfg(test)]
 mod consistency_tests;
@@ -637,7 +640,7 @@ pub fn codex_mono_store_copy(
                 .map(PathBuf::from)
         })
         .unwrap_or_else(|| source.clone());
-    let edges = closed_agent_edges(&sqlite_home, &thread_id)?;
+    let edges = closed_agent_edges(&sqlite_home, &thread_id).map_err(storage_error)?;
     copy_rollouts_with_edges(
         &source,
         &home,
@@ -662,7 +665,7 @@ pub fn codex_mono_store_restore_agent_state(
     let (_, home, _) = locations(&app, provider_account_id.as_deref())?;
     let _lock = STORAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     transactions::reconcile(&home).map_err(storage_error)?;
-    restore_agent_edges(&home, &thread_id)
+    restore_agent_edges(&home, &thread_id).map_err(storage_error)
 }
 
 pub(crate) fn prepare(
@@ -810,10 +813,8 @@ fn login_entry(name: &str) -> bool {
 }
 
 fn storage_roots(source: &Path, home: &Path) -> Result<(PathBuf, PathBuf), String> {
-    std::fs::create_dir_all(source)
-        .map_err(|e| format!("Could not open the Codex account directory: {e}"))?;
-    std::fs::create_dir_all(home)
-        .map_err(|e| format!("Could not create Mono Codex storage: {e}"))?;
+    storage_io::run("open Codex account directory", source, || std::fs::create_dir_all(source))?;
+    storage_io::run("create Mono Codex storage", home, || std::fs::create_dir_all(home))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -824,8 +825,8 @@ fn storage_roots(source: &Path, home: &Path) -> Result<(PathBuf, PathBuf), Strin
 }
 
 fn canonical_roots(source: &Path, home: &Path) -> Result<(PathBuf, PathBuf), String> {
-    let source = source.canonicalize().map_err(|e| e.to_string())?;
-    let canonical_home = home.canonicalize().map_err(|e| e.to_string())?;
+    let source = storage_io::run("resolve Codex account directory", source, || source.canonicalize())?;
+    let canonical_home = storage_io::run("resolve Mono storage directory", home, || home.canonicalize())?;
     if canonical_home.starts_with(&source) || source.starts_with(&canonical_home) {
         return Err("Mono Codex storage must be separate from the normal Codex home".into());
     }
@@ -843,9 +844,9 @@ fn private_directory(home: &Path, name: &str) -> Result<PathBuf, String> {
             ))
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            std::fs::create_dir(&path).map_err(|e| e.to_string())?;
+            storage_io::run("create private directory", &path, || std::fs::create_dir(&path))?;
         }
-        Err(error) => return Err(error.to_string()),
+        Err(error) => return Err(storage_io::context("inspect private directory", &path, error.to_string())),
     }
     Ok(path)
 }
@@ -1004,7 +1005,7 @@ fn read_snapshot(home: &Path, name: &str) -> Result<Option<LinkSnapshot>, String
                 Ok(None)
             }
         }
-        Err(error) => Err(error.to_string()),
+        Err(error) => Err(storage_io::context("read link snapshot", &path, error.to_string())),
     }
 }
 
@@ -1016,26 +1017,42 @@ fn write_snapshot(home: &Path, name: &str, snapshot: &LinkSnapshot) -> Result<()
 fn write_private_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
     let temp = path.with_file_name(format!(".monocode-link-{}", uuid::Uuid::new_v4()));
     let result = (|| {
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temp)
-            .map_err(|e| e.to_string())?;
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            use windows_sys::Win32::{Foundation::{GENERIC_READ, GENERIC_WRITE}, Storage::FileSystem::{DELETE, FILE_SHARE_READ}};
+            options.access_mode(GENERIC_READ | GENERIC_WRITE | DELETE).share_mode(FILE_SHARE_READ);
+        }
+        let mut file = options.open(&temp)
+            .map_err(|e| storage_io::context("create private metadata stage", &temp, e.to_string()))?;
         file.write_all(&serde_json::to_vec(value).map_err(|e| e.to_string())?)
-            .map_err(|e| e.to_string())?;
-        file.sync_all().map_err(|e| e.to_string())?;
-        drop(file);
-        replace_link(&temp, &path)
+            .map_err(|e| storage_io::context("write private metadata", &temp, e.to_string()))?;
+        file.sync_all().map_err(|e| storage_io::context("sync private metadata", &temp, e.to_string()))?;
+        #[cfg(windows)]
+        {
+            let result = replace_private_file(&file, path);
+            if result.is_err() {
+                if let Err(error) = discard_handle(&file) { log_storage_issue(error); }
+            }
+            result
+        }
+        #[cfg(unix)]
+        { drop(file); replace_link(&temp, path) }
     })();
+    #[cfg(unix)]
     if result.is_err() {
-        let _ = std::fs::remove_file(temp);
+        if let Err(error) = storage_io::run("remove private metadata stage", &temp, || std::fs::remove_file(&temp)) {
+            log_storage_issue(error);
+        }
     }
     result
 }
 
 fn fingerprint(path: &Path) -> Result<String, String> {
-    let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
-    fingerprint_file(&mut file)
+    let mut file = storage_io::run("open for fingerprint", path, || std::fs::File::open(path))?;
+    fingerprint_file(&mut file).map_err(|e| storage_io::context("fingerprint", path, e))
 }
 
 fn fingerprint_file(file: &mut std::fs::File) -> Result<String, String> {
@@ -1176,7 +1193,7 @@ impl ClaimedEntry {
         #[cfg(windows)]
         discard_handle(&self.file)?;
         #[cfg(unix)]
-        std::fs::remove_file(&self.path).map_err(|e| e.to_string())?;
+        storage_io::run("discard verified claim", &self.path, || std::fs::remove_file(&self.path))?;
         self.active = false;
         #[cfg(test)]
         crash_tests::checkpoint("after-discard");
@@ -1217,6 +1234,7 @@ fn discard_handle(file: &std::fs::File) -> Result<(), String> {
                 0
             },
     };
+    storage_io::run("unlink verified storage handle", &storage_io::handle_path(file), || {
     if unsafe {
         SetFileInformationByHandle(
             file.as_raw_handle() as _,
@@ -1226,9 +1244,10 @@ fn discard_handle(file: &std::fs::File) -> Result<(), String> {
         )
     } == 0
     {
-        return Err(std::io::Error::last_os_error().to_string());
+        return Err(std::io::Error::last_os_error());
     }
     Ok(())
+    })
 }
 
 impl Drop for ClaimedEntry {
@@ -1254,7 +1273,7 @@ fn open_entry(path: &Path, locked: bool) -> Result<std::fs::File, String> {
             FILE_SHARE_READ, FILE_SHARE_WRITE,
         },
     };
-    std::fs::OpenOptions::new()
+    storage_io::run(if locked { "open storage entry with delete access" } else { "inspect storage entry" }, path, || std::fs::OpenOptions::new()
         .access_mode(GENERIC_READ | if locked { DELETE } else { 0 })
         .share_mode(if locked {
             FILE_SHARE_READ
@@ -1262,8 +1281,7 @@ fn open_entry(path: &Path, locked: bool) -> Result<std::fs::File, String> {
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
         })
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
-        .open(path)
-        .map_err(|e| e.to_string())
+        .open(path))
 }
 
 fn entry_identity(path: &Path) -> Result<(u64, u64), String> {
@@ -1299,6 +1317,7 @@ fn file_identity(file: &std::fs::File) -> Result<(u64, u64), String> {
 #[cfg(unix)]
 fn rename_no_replace(source: &Path, target: &Path) -> Result<(), String> {
     use std::os::unix::ffi::OsStrExt;
+    let destination = target.to_path_buf();
     let source =
         std::ffi::CString::new(source.as_os_str().as_bytes()).map_err(|e| e.to_string())?;
     let target =
@@ -1318,7 +1337,7 @@ fn rename_no_replace(source: &Path, target: &Path) -> Result<(), String> {
     if result == 0 {
         Ok(())
     } else {
-        Err(std::io::Error::last_os_error().to_string())
+        Err(storage_io::context("rename without replacement", &destination, std::io::Error::last_os_error().to_string()))
     }
 }
 
@@ -1617,7 +1636,7 @@ fn prepare_isolated_hooks(home: &Path) -> Result<(), String> {
     if let Some(staged) = staged {
         staged.cleanup(&temp)?;
     }
-    result.map_err(|error| format!("Could not isolate Mono hooks {}: {error}", target.display()))
+    result.map_err(|error| storage_io::context("isolate private Mono hooks", &target, error))
 }
 
 fn resolve_files(
@@ -1742,6 +1761,7 @@ fn prepare_files_with_state_locked(
 ) -> Result<(), String> {
     let (source, home) = storage_roots(source, home)?;
     transactions::reconcile(&home)?;
+    storage_io::retire_transients(&home)?;
     if let Some(base) = state_home {
         archive::prepare_context_state(base, &home)?;
     }
@@ -1770,7 +1790,7 @@ fn prepare_files_with_state_locked(
         {
             continue;
         }
-        if private_entry(&name.to_string_lossy()) {
+        if private_entry(&name.to_string_lossy()) || storage_io::transient(&name.to_string_lossy()) {
             continue;
         }
         if let Some(base) = state_home {
@@ -1794,13 +1814,11 @@ fn prepare_files_with_state_locked(
             Ok(_) => Ok(()),
         };
         if let Err(error) = result {
-            let error = format!(
-                "Could not reconcile Codex storage {}: {error}",
-                entry.path().display()
-            );
+            let error = storage_io::context("reconcile shared entry", &entry.path(), error);
             if required_entry(&name.to_string_lossy()) {
-                return Err(error);
+                return Err(storage_io::context("reconcile shared entry", &entry.path(), error));
             }
+            if storage_io::sharing(&error) { storage_io::defer(&home, &name.to_string_lossy(), &error)?; }
             log_storage_issue(format!(
                 "Mono Codex storage skipped optional entry: {error}"
             ));
@@ -1814,7 +1832,7 @@ fn prepare_files_with_state_locked(
         {
             continue;
         }
-        if private_entry(&name.to_string_lossy()) {
+        if private_entry(&name.to_string_lossy()) || storage_io::transient(&name.to_string_lossy()) {
             continue;
         }
         let target = home.join(&name);
@@ -1907,16 +1925,17 @@ fn prepare_files_with_state_locked(
             Ok(())
         })();
         if let Err(error) = result {
-            if error.starts_with('{') && required_entry(&name.to_string_lossy()) {
-                return Err(error);
-            }
-            let error = format!("Codex storage entry {}: {error}", target.display());
-            if required_entry(&name.to_string_lossy()) {
-                return Err(error);
+            let error = storage_io::context("reconcile shared entry", &target, error);
+            if required_entry(&name.to_string_lossy()) { return Err(error); }
+            if storage_io::sharing(&error) {
+                storage_io::defer(&home, &name.to_string_lossy(), &error)?;
+                continue;
             }
             log_storage_issue(format!(
                 "Mono Codex storage skipped optional entry: {error}"
             ));
+        } else {
+            storage_io::clear_deferred(&home, &name.to_string_lossy())?;
         }
     }
     // Keep the auth link valid even if login creates/replaces the original later.
@@ -1997,10 +2016,7 @@ fn link_entry_with_account(
         })();
         if let Err(error) = result {
             staged.cleanup(&temp)?;
-            return Err(format!(
-                "Could not relink Codex storage {}: {error}",
-                target.display()
-            ));
+            return Err(storage_io::context("relink shared entry", target, error));
         }
     } else {
         create_link(source, target)?;
@@ -2047,7 +2063,7 @@ fn file_info(
         .read(true)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
         .open(path)
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| storage_io::context("read file identity", path, e.to_string()))?;
     handle_file_info(&file)
 }
 
@@ -2061,7 +2077,7 @@ fn handle_file_info(
     };
     let mut info = BY_HANDLE_FILE_INFORMATION::default();
     if unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, &mut info) } == 0 {
-        return Err(std::io::Error::last_os_error().to_string());
+        return Err(storage_io::context("read handle identity", &storage_io::handle_path(file), std::io::Error::last_os_error().to_string()));
     }
     Ok(info)
 }
@@ -2093,50 +2109,54 @@ fn remove_link(path: &Path) -> Result<(), String> {
     }
     #[cfg(windows)]
     {
-        use std::os::windows::fs::MetadataExt;
-        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_DIRECTORY;
-        if std::fs::symlink_metadata(path)
-            .map_err(|e| e.to_string())?
-            .file_attributes()
-            & FILE_ATTRIBUTE_DIRECTORY
-            != 0
-        {
-            return std::fs::remove_dir(path).map_err(|e| e.to_string());
+        let inspected = entry_identity(path)?;
+        let file = open_entry(path, true)?;
+        if file_identity(&file)? != inspected || !replaceable_link(path)? {
+            return Err(storage_io::context("remove storage link", path, "The entry changed while waiting; replacement bytes were preserved".into()));
         }
+        return discard_handle(&file);
     }
-    std::fs::remove_file(path).map_err(|e| e.to_string())
+    #[cfg(unix)]
+    storage_io::run("remove storage link", path, || std::fs::remove_file(path))
+}
+
+#[cfg(windows)]
+fn replace_private_file(file: &std::fs::File, target: &Path) -> Result<(), String> {
+    let existing = match std::fs::symlink_metadata(target) {
+        Ok(_) => {
+            let identity = entry_identity(target)?;
+            let fingerprint = fingerprint(target)?;
+            let mut previous = open_entry(target, true)?;
+            if file_identity(&previous)? != identity || fingerprint_file(&mut previous)? != fingerprint {
+                return Err(storage_io::context("replace private metadata", target, "The entry changed while waiting; both versions were preserved".into()));
+            }
+            Some(previous)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(storage_io::context("inspect private metadata target", target, error.to_string())),
+    };
+    let replace = existing.is_some();
+    drop(existing);
+    rename_handle(file, target, replace)
 }
 
 #[cfg(unix)]
 fn replace_link(temp: &Path, target: &Path) -> Result<(), String> {
-    std::fs::rename(temp, target).map_err(|e| e.to_string())
+    storage_io::run("replace private metadata", target, || std::fs::rename(temp, target))
 }
 
 #[cfg(windows)]
 fn replace_link(temp: &Path, target: &Path) -> Result<(), String> {
-    use std::os::windows::{ffi::OsStrExt, fs::OpenOptionsExt};
+    use std::os::windows::fs::OpenOptionsExt;
     use windows_sys::Win32::Storage::FileSystem::{
-        MoveFileExW, DELETE, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
-        FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, MOVEFILE_REPLACE_EXISTING,
+        DELETE, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+        FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
     };
     if std::fs::symlink_metadata(temp)
         .map_err(|e| e.to_string())?
         .is_file()
     {
-        // File replacement uses DOS paths; the junction rename below uses NT paths.
-        let wide = |path: &Path| {
-            path.as_os_str()
-                .encode_wide()
-                .chain(Some(0))
-                .collect::<Vec<_>>()
-        };
-        let source = wide(temp);
-        let target = wide(target);
-        if unsafe { MoveFileExW(source.as_ptr(), target.as_ptr(), MOVEFILE_REPLACE_EXISTING) } == 0
-        {
-            return Err(std::io::Error::last_os_error().to_string());
-        }
-        return Ok(());
+        return replace_private_file(&open_entry(temp, true)?, target);
     }
     // Open the junction itself, never the directory it points to.
     let file = std::fs::OpenOptions::new()
@@ -2144,7 +2164,7 @@ fn replace_link(temp: &Path, target: &Path) -> Result<(), String> {
         .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
         .open(temp)
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| storage_io::context("open junction for replacement", temp, e.to_string()))?;
     rename_handle(&file, target, true)
 }
 
@@ -2172,7 +2192,7 @@ fn rename_handle(file: &std::fs::File, target: &Path, replace: bool) -> Result<(
     // usize storage supplies the alignment required by FILE_RENAME_INFO.
     let mut buffer = vec![0usize; bytes.div_ceil(std::mem::size_of::<usize>())];
     let info = buffer.as_mut_ptr().cast::<FILE_RENAME_INFO>();
-    unsafe {
+    let mut rename = || { unsafe {
         (*info).Anonymous.Flags = if replace { 3 } else { 2 }; // REPLACE_IF_EXISTS | POSIX_SEMANTICS
         (*info).FileNameLength = (name.len() * 2) as u32;
         std::ptr::copy_nonoverlapping(
@@ -2187,10 +2207,17 @@ fn rename_handle(file: &std::fs::File, target: &Path, replace: bool) -> Result<(
             bytes as u32,
         ) == 0
         {
-            return Err(std::io::Error::last_os_error().to_string());
+            return Err(std::io::Error::last_os_error());
         }
     }
     Ok(())
+    };
+    // Replacement is one atomic attempt after target validation; only no-replace publication may retry by path.
+    if replace {
+        rename().map_err(|e| storage_io::context("replace private metadata", target, e.to_string()))
+    } else {
+        storage_io::run("rename/publish storage entry", target, rename)
+    }
 }
 
 fn create_link(source: &Path, target: &Path) -> Result<(), String> {
@@ -2211,8 +2238,7 @@ fn create_link(source: &Path, target: &Path) -> Result<(), String> {
         } else if source.is_file() {
             // A file symlink follows temp+rename writes; hardlinks need snapshot recovery on prepare.
             if std::os::windows::fs::symlink_file(source, target).is_err() {
-                std::fs::hard_link(source, target)
-                    .map_err(|e| format!("Could not share Codex configuration: {e}"))?;
+                storage_io::run("create shared hardlink", target, || std::fs::hard_link(source, target))?;
             }
         } else {
             return Err(format!(
@@ -2511,10 +2537,25 @@ fn copy_rollouts_with_edges(
     {
         return Err("The saved Mono root does not match its thread id".into());
     }
-    let pending_dir = home.join(".monocode-migrations");
-    std::fs::create_dir_all(&pending_dir).map_err(|e| e.to_string())?;
+    let pending_dir = private_directory(&home, ".monocode-migrations")?;
     let pending = pending_dir.join(thread_id);
-    std::fs::write(&pending, b"pending").map_err(|e| e.to_string())?;
+    let pending_record = if pending.exists() {
+        #[cfg(windows)]
+        let _guard = open_entry(&pending, true)?;
+        if replaceable_link(&pending)? || std::fs::read(&pending).map_err(|e| storage_io::context("read migration marker", &pending, e.to_string()))? != b"pending" {
+            return Err(transactions::recovery("An unfamiliar migration marker was preserved; review it before resuming this thread.", &[pending.clone()]));
+        }
+        transactions::RecordedEntry::new(&pending)?
+    } else {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(windows)]
+        { use std::os::windows::fs::OpenOptionsExt; options.share_mode(windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ); }
+        let mut marker = storage_io::run("create rollout migration marker", &pending, || options.open(&pending))?;
+        marker.write_all(b"pending").map_err(|e| storage_io::context("write migration marker", &pending, e.to_string()))?;
+        marker.sync_all().map_err(|e| storage_io::context("sync migration marker", &pending, e.to_string()))?;
+        transactions::RecordedEntry::new(&pending)?
+    };
     // Copy descendants first and the root last, so a partial migration is not
     // mistaken for a successfully migrated root on the next connection.
     for (path, dest) in staged.iter().rev() {
@@ -2531,18 +2572,12 @@ fn copy_rollouts_with_edges(
     if !edges.is_empty() {
         let path = edge_snapshot;
         std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
-        std::fs::write(&path, serde_json::to_vec(edges).map_err(|e| e.to_string())?)
-            .map_err(|e| e.to_string())?;
-        std::fs::File::options()
-            .write(true)
-            .open(&path)
-            .and_then(|f| f.sync_all())
-            .map_err(|e| e.to_string())?;
+        write_private_json(&path, &edges)?;
     } else if edge_snapshot.exists() {
         // A retry must not apply a closure changed in the original meanwhile.
-        std::fs::remove_file(edge_snapshot).map_err(|e| e.to_string())?;
+        transactions::RecordedEntry::new(&edge_snapshot)?.cleanup(&edge_snapshot)?;
     }
-    std::fs::remove_file(pending).map_err(|e| e.to_string())?;
+    pending_record.cleanup(&pending)?;
     Ok(())
 }
 
@@ -2565,7 +2600,7 @@ fn state_db(home: &Path) -> Result<Option<PathBuf>, String> {
     let entries = match std::fs::read_dir(home) {
         Ok(entries) => entries,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(e.to_string()),
+        Err(e) => return Err(storage_io::context("list private Codex databases", home, e.to_string())),
     };
     let mut databases = Vec::new();
     for entry in entries {
@@ -2593,8 +2628,8 @@ fn closed_agent_edges(home: &Path, thread_id: &str) -> Result<Vec<AgentEdge>, St
         return Ok(Vec::new());
     };
     let db =
-        rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .map_err(|e| e.to_string())?;
+        rusqlite::Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|e| storage_io::context("open Codex agent state database", &path, e.to_string()))?;
     db.busy_timeout(std::time::Duration::from_secs(5))
         .map_err(|e| e.to_string())?;
     let exists: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='thread_spawn_edges')", [], |row| row.get(0)).map_err(|e| e.to_string())?;
@@ -2612,31 +2647,32 @@ fn closed_agent_edges(home: &Path, thread_id: &str) -> Result<Vec<AgentEdge>, St
         })
         .map_err(|e| e.to_string())?;
     rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())
+        .map_err(|e| storage_io::context("read closed Codex agent edges", &path, e.to_string()))
 }
 
 fn restore_agent_edges(home: &Path, thread_id: &str) -> Result<(), String> {
     let snapshot = edge_snapshot_path(home, thread_id);
+    let record = if snapshot.exists() { Some(transactions::RecordedEntry::new(&snapshot)?) } else { None };
     let bytes = match std::fs::read(&snapshot) {
         Ok(bytes) => bytes,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => return Err(e.to_string()),
+        Err(e) => return Err(storage_io::context("read agent state snapshot", &snapshot, e.to_string())),
     };
     let edges: Vec<AgentEdge> = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
     let path = state_db(home)?.ok_or("Codex has not initialized the private Mono index")?;
     let mut db =
-        rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
-            .map_err(|e| e.to_string())?;
+        rusqlite::Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
+            .map_err(|e| storage_io::context("open private Codex agent state database", &path, e.to_string()))?;
     db.busy_timeout(std::time::Duration::from_secs(5))
         .map_err(|e| e.to_string())?;
-    let tx = db.transaction().map_err(|e| e.to_string())?;
+    let tx = db.transaction().map_err(|e| storage_io::context("begin private agent edge restore", &path, e.to_string()))?;
     for edge in edges {
         validate_thread_id(&edge.parent)?;
         validate_thread_id(&edge.child)?;
         tx.execute("INSERT INTO thread_spawn_edges(parent_thread_id, child_thread_id, status) VALUES (?1, ?2, ?3) ON CONFLICT(child_thread_id) DO UPDATE SET status=excluded.status WHERE parent_thread_id=excluded.parent_thread_id", rusqlite::params![edge.parent, edge.child, edge.status]).map_err(|e| e.to_string())?;
     }
-    tx.commit().map_err(|e| e.to_string())?;
-    std::fs::remove_file(snapshot).map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| storage_io::context("commit private agent edge restore", &path, e.to_string()))?;
+    record.ok_or("Agent state snapshot disappeared before restoration")?.cleanup(&snapshot)?;
     Ok(())
 }
 
@@ -2665,7 +2701,7 @@ fn find_thread(dir: &Path, id: &str) -> Result<Option<PathBuf>, String> {
 
 fn history_base(path: &Path) -> Result<Option<String>, String> {
     use std::io::BufRead;
-    let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let file = storage_io::run("open resumed rollout metadata", path, || std::fs::File::open(path))?;
     let reader: Box<dyn std::io::Read> = if path.extension().is_some_and(|ext| ext == "zst") {
         Box::new(zstd::stream::read::Decoder::new(file).map_err(|e| e.to_string())?)
     } else {
@@ -2673,7 +2709,7 @@ fn history_base(path: &Path) -> Result<Option<String>, String> {
     };
     let mut reader = std::io::BufReader::new(reader);
     let mut first = String::new();
-    reader.read_line(&mut first).map_err(|e| e.to_string())?;
+    reader.read_line(&mut first).map_err(|e| storage_io::context("read resumed rollout metadata", path, e.to_string()))?;
     if first.trim().is_empty() {
         return Ok(None);
     }

@@ -177,12 +177,7 @@ fn change_configs(source: &Path, home: &Path) -> Result<SandboxConfigChange, Str
             .share_mode(FILE_SHARE_READ | FILE_SHARE_DELETE)
             .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     }
-    let mut original_file = options.open(original_path).map_err(|error| {
-        format!(
-            "Could not open Codex config {}: {error}",
-            original_path.display()
-        )
-    })?;
+    let mut original_file = super::storage_io::run("open private config excluding writers", original_path, || options.open(original_path))?;
     let metadata = original_file
         .metadata()
         .map_err(|error| error.to_string())?;
@@ -309,7 +304,7 @@ fn change_configs(source: &Path, home: &Path) -> Result<SandboxConfigChange, Str
     if let Some(staged) = staged {
         staged.cleanup(&temp)?;
     } else if temp.exists() {
-        std::fs::remove_file(&temp).map_err(|error| error.to_string())?;
+        super::storage_io::run("remove private config stage", &temp, || std::fs::remove_file(&temp))?;
     }
     result.map_err(|error: String| {
         let saved = if backups.is_empty() {

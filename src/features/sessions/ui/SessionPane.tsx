@@ -293,6 +293,9 @@ export type SessionPaneProps = {
   onUsageLimitResumeAtReset: (sessionId: string, enabled: boolean) => void;
   onUsageLimitDismiss: (sessionId: string) => void;
   onUsageLimitAccountChange?: (sessionId: string, accountId: string) => void;
+  onOpenUsage?: () => void;
+  usageRecoveryError?: (sessionId: string) => string | undefined;
+  onRetryUsageRecovery?: (sessionId: string) => Promise<void>;
   onInboxCardDismiss?: (sessionId: string) => void;
   onLinkedWorkItemUpdateCardDismiss?: (sessionId: string) => void;
   onNoteCardDismiss?: (sessionId: string) => void;
@@ -435,6 +438,9 @@ const LocalSessionPane = memo(function LocalSessionPane({
   onUsageLimitResumeAtReset,
   onUsageLimitDismiss,
   onUsageLimitAccountChange,
+  onOpenUsage,
+  usageRecoveryError,
+  onRetryUsageRecovery,
   onInboxCardDismiss,
   onLinkedWorkItemUpdateCardDismiss,
   onNoteCardDismiss,
@@ -1253,7 +1259,11 @@ const LocalSessionPane = memo(function LocalSessionPane({
           onInteraction={(id) => onQuestionInteraction?.(session.id, id)}
         />
       )}
-      {session.usageLimit && (
+      {usageRecoveryError?.(session.id) && <div role="alert" className="mx-3 my-2 rounded-md border border-red-400/30 px-3 py-2 text-xs">
+        <p>{usageRecoveryError(session.id)} Sending stays paused until repair succeeds.</p>
+        {onRetryUsageRecovery && <button type="button" onClick={() => void onRetryUsageRecovery(session.id)} className="mt-2 underline focus-visible:outline-accent">Retry usage recovery repair</button>}
+      </div>}
+      {session.usageLimit && <>
         <MonoUsageLimitNotice
           session={session}
           onModelChange={(harness, model) =>
@@ -1269,7 +1279,8 @@ const LocalSessionPane = memo(function LocalSessionPane({
             onUsageLimitResumeAtReset(session.id, enabled)
           }
         />
-      )}
+        {onOpenUsage && <button type="button" onClick={onOpenUsage} className="self-start px-3 py-2 text-xs text-content/65 hover:text-content focus-visible:outline-accent">View all account usage</button>}
+      </>}
     </>
   );
   const memberDelivery = steering

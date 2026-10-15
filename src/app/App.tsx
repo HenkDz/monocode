@@ -19,6 +19,12 @@ import { MonoTeamActivity } from "../features/monos/ui/MonoTeamActivity";
 import { TeamMap } from "../features/teamMap/TeamMap";
 // CC7C integration: Mission control uses the existing full-view navigation.
 import { MissionControl, MISSION_CONTROL_SCOPE } from "../features/commandCenter/ui/MissionControl";
+import { useUsageDashboard } from "../features/providers/model/useUsageDashboard";
+import { UsageDashboard, USAGE_DASHBOARD_SCOPE } from "../features/providers/ui/UsageDashboard";
+import { identityKey, useProviderAccountIdentities } from "../features/providers/model/providerAccountIdentity";
+import { getAllRateLimits } from "../features/providers/model/rateLimitsCache";
+import { loadUsageFailoverPolicy, subscribeUsageFailoverPolicy } from "../features/providers/model/usageFailoverSettings";
+import { createMonoUsageFailoverController } from "../features/monos/model/monoUsageFailover";
 import { MissionCommandBar } from "../features/commandCenter/ui/MissionCommandBar";
 import { AttentionQueue, ATTENTION_QUEUE_SCOPE } from "../features/commandCenter/ui/AttentionQueue";
 import { openGoalTarget } from "../features/commandCenter/model/goalView";
@@ -558,6 +564,8 @@ import {
   sameProviderAccountId,
   selectedProviderAccountId,
   supportsProviderAccounts,
+  supportsAccountProfiles,
+  providerAccounts,
   type ProviderAccountProvider,
 } from "../features/providers/model/providerAccounts";
 import {
@@ -631,6 +639,7 @@ import {
   setSessionPinned,
   shouldPersistSession,
   retainSessionWrite,
+  resetMonoSessionWriteBaseline,
   sessionWriteNeedsReconciliation,
   writeSession,
   flushSessionWrites,
@@ -1463,6 +1472,20 @@ function Workspace({
     () => true,
   );
   const monosSnap = useSyncExternalStore(subscribeMonos, monosSnapshot);
+  const usageRoster = useMemo(() => listMonos(), [monosSnap]);
+  const usage = useUsageDashboard({ roster: usageRoster, runs: orchestrationRuns, sessions });
+  const usageAccounts = usage.snapshot.groups.flatMap(group => group.provider === "codex" || group.provider === "claude" ? providerAccounts(group.provider) : []);
+  const usageIdentities = useProviderAccountIdentities(usageAccounts);
+  const usageIdentitiesRef = useRef(usageIdentities);
+  usageIdentitiesRef.current = usageIdentities;
+  const automaticUsageRecovery = useRef(createMonoUsageFailoverController());
+  const usageRecoveryStopped = useRef(new Set<string>());
+  const [usageRecoveryErrors, setUsageRecoveryErrors] = useState<Record<string, string>>({});
+  const usageSurface = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (teamMap.open && teamMap.scope === USAGE_DASHBOARD_SCOPE)
+      usageSurface.current?.querySelector<HTMLHeadingElement>("h1")?.focus();
+  }, [teamMap.open, teamMap.scope]);
   useEffect(() => { ensureAssignedManagers(); }, [monosSnap]);
   const restoreOffered = useRef(new Set<string>());
   useEffect(() => {
@@ -10202,27 +10225,32 @@ function Workspace({
   );
 
   const onUsageLimitDismiss = useCallback((sessionId: string) => {
-    setSessions((prev) =>
-      prev.map((session) =>
+    flushSync(() => setSessions(previous => {
+      const next = previous.map((session) =>
         session.id === sessionId && session.usageLimit
           ? { ...session, usageLimit: undefined }
           : session,
-      ),
-    );
+      );
+      sessionsRef.current = next;
+      return next;
+    }));
   }, []);
 
   const onUsageLimitResumeAtReset = useCallback(
     (sessionId: string, enabled: boolean) => {
-      setSessions((prev) =>
-        prev.map((session) =>
+      usageRecoveryStopped.current.delete(sessionId);
+      flushSync(() => setSessions(previous => {
+        const next = previous.map((session) =>
           session.id === sessionId && session.usageLimit
             ? {
                 ...session,
                 usageLimit: { ...session.usageLimit, resumeAtReset: enabled },
               }
             : session,
-        ),
-      );
+        );
+        sessionsRef.current = next;
+        return next;
+      }));
     },
     [],
   );
@@ -10233,12 +10261,15 @@ function Workspace({
         (entry) => entry.id === sessionId,
       );
       if (!session?.usageLimit || session.busy) return;
+      usageRecoveryStopped.current.delete(sessionId);
       if (isMonoSession(sessionId)) {
-        setSessions((prev) =>
-          prev.map((entry) =>
+        flushSync(() => setSessions(previous => {
+          const next = previous.map((entry) =>
             entry.id === sessionId ? resumeMonoUsageLimit(entry) : entry,
-          ),
-        );
+          );
+          sessionsRef.current = next;
+          return next;
+        }));
         return;
       }
       onUsageLimitDismiss(sessionId);
@@ -10495,18 +10526,129 @@ function Workspace({
         !providerAccountExists(session.harness, accountId)
       )
         return;
-      setSessions((prev) =>
-        prev.map((entry) =>
-          entry.id === sessionId
+      flushSync(() => setSessions(previous => {
+        const next = previous.map((entry) =>
+          entry.id === sessionId && entry.harness === session.harness
             ? switchMonoUsageLimitAccount(entry, accountId)
             : entry,
-        ),
-      );
+        );
+        sessionsRef.current = next;
+        return next;
+      }));
     },
     [],
   );
 
   const [usageLimitTick, setUsageLimitTick] = useState(0);
+  useEffect(() => subscribeUsageFailoverPolicy(() => setUsageLimitTick(tick => tick + 1)), []);
+  const retryUsageRecovery = useCallback(async (sessionId: string) => {
+    try { await writeSession(sessionId, async () => {}); }
+    catch (error) {
+      const text = `Usage recovery storage repair is pending: ${String(error)}`;
+      setUsageRecoveryErrors(previous => ({ ...previous, [sessionId]: text }));
+      enqueueHarnessEvent(sessionId, { type: "status", text });
+      flushHarnessEvents();
+    }
+  }, [enqueueHarnessEvent, flushHarnessEvents]);
+
+  const commitUsageFailover = useCallback(async (expected: Session, next: Session, valid: () => boolean) => {
+    const sessionId = expected.id;
+    let repair = false;
+    try {
+      return await writeSession(sessionId, async save => {
+        let uncertain = false;
+        const retainLiveWrite = () => {
+          repair = true;
+          lastPersisted.current.delete(sessionId);
+          retainSessionWrite(sessionId, async () => {
+            // Drain pending React updates before choosing the authoritative repair snapshot.
+            flushSync(() => setSessions(previous => { sessionsRef.current = previous; return previous; }));
+            const live = sessionsRef.current.find(entry => entry.id === sessionId);
+            if (!live) throw Error("The conversation is unavailable; usage recovery storage repair is still held");
+            // A lost acknowledgement can leave the diff cache behind disk; retain the live page's anchor.
+            if (uncertain) resetMonoSessionWriteBaseline(sessionId);
+            if (await save(live) === null)
+              throw Error("The conversation could not be restored; usage recovery storage repair is still held");
+            flushSync(() => setSessions(previous => { sessionsRef.current = previous; return previous; }));
+            if (sessionsRef.current.find(entry => entry.id === sessionId) !== live)
+              throw Error("The conversation changed during usage recovery storage repair; retry reconciliation");
+            lastPersisted.current.delete(sessionId);
+            setUsageRecoveryErrors(previous => {
+              if (!previous[sessionId]) return previous;
+              const next = { ...previous }; delete next[sessionId]; return next;
+            });
+          });
+        };
+        if (!valid() || sessionsRef.current.find(entry => entry.id === sessionId) !== expected) return false;
+        try {
+          if (await save({ ...next, queueStatus: "paused" }) === null) return false;
+        } catch (error) {
+          uncertain = true;
+          retainLiveWrite();
+          throw error;
+        }
+        if (!valid() || sessionsRef.current.find(entry => entry.id === sessionId) !== expected) {
+          retainLiveWrite();
+          return false;
+        }
+        let accepted = false;
+        flushSync(() => setSessions(previous => {
+          accepted = previous.find(entry => entry.id === sessionId) === expected && valid();
+          return accepted ? previous.map(entry => entry.id === sessionId ? next : entry) : previous;
+        }));
+        if (!accepted) {
+          retainLiveWrite();
+          return false;
+        }
+        lastPersisted.current.delete(sessionId);
+        return true;
+      });
+    } finally {
+      // Retained callbacks already hold the queue; start repair only after this write settles.
+      if (repair) await retryUsageRecovery(sessionId);
+    }
+  }, [retryUsageRecovery]);
+
+  const recoverUsageLimit = useCallback((sessionId: string) => {
+    const original = sessionsRef.current.find(entry => entry.id === sessionId);
+    if (!original || !isMonoSession(sessionId) || !supportsAccountProfiles(original.harness)) return;
+    const provider = original.harness;
+    const relevantRuns = () => orchestrator.snapshot().filter(run => run.leadId === sessionId || run.ownerSessionId === sessionId || run.tasks.some(task => task.sessionId === sessionId));
+    const queuedIds = new Set(original.queuedMessages?.map(message => message.blockId ?? message.id));
+    const origin = original.blocks.filter(block => block.role === "user" && !block.draft && !queuedIds.has(block.id)).slice(-1)[0];
+    const goalIds = new Set([
+      ...(origin?.monoSource?.goalId ? [origin.monoSource.goalId] : []),
+      ...(original.queuedMessages ?? []).flatMap(message => message.monoSource?.goalId ?? []),
+      ...relevantRuns().flatMap(run => run.tasks.filter(task => task.sessionId === sessionId).flatMap(task => task.monoGoalId ?? [])),
+    ]);
+    const authority = () => JSON.stringify([monoForSession(sessionId), relevantRuns(), monoManagerGoals.goals().filter(goal => goalIds.has(goal.id))]);
+    const expectedAuthority = authority();
+    return automaticUsageRecovery.current({
+      session: () => sessionsRef.current.find(entry => entry.id === sessionId),
+      generation: () => turnGen.current.get(sessionId) ?? 0,
+      held: () => usageRecoveryStopped.current.has(sessionId) || sessionWriteNeedsReconciliation(sessionId) ||
+        removingSessionIds.current.has(sessionId) || switchingWorktrees.current.has(sessionId) || workspaceNavigation.isSwitching(sessionId) ||
+        usageResumingRef.current.has(sessionId) || !!remoteProjectFor(original.cwd) ||
+        [...removingWorktreePaths.current].some(path => isEqualOrInside(sessionWorkCwd(original), path)) ||
+        monoForSession(sessionId)?.archivedAt != null || authority() !== expectedAuthority ||
+        (!!original.orchestrationLeadId && relevantRuns().length === 0) ||
+        relevantRuns().some(run => run.status === "stopped" || run.status === "paused" || run.tasks.some(task => task.sessionId === sessionId && ["cancelled", "cancelling"].includes(task.status))) ||
+        [...goalIds].some(id => monoManagerGoals.isCancelling(id) || monoManagerGoals.goals().some(goal => goal.id === id && goal.state === "cancelled")),
+      policy: () => loadUsageFailoverPolicy(provider),
+      candidates: () => providerAccounts(provider).map(account => {
+        const identity = usageIdentitiesRef.current[identityKey(account)];
+        return { account, identity, ready: !!identity, limits: getAllRateLimits()[identityKey(account)] };
+      }),
+      now: Date.now,
+      commit: commitUsageFailover,
+    });
+  }, [commitUsageFailover]);
+  useEffect(() => {
+    for (const session of sessions) {
+      if (!session.usageLimit) usageRecoveryStopped.current.delete(session.id);
+      else void recoverUsageLimit(session.id);
+    }
+  }, [sessions, usage.snapshot, usageIdentities, usageLimitTick, orchestrationRuns, monosSnap, recoverUsageLimit]);
   useEffect(() => {
     const now = Date.now();
     const timers: number[] = [];
@@ -11417,6 +11559,7 @@ function Workspace({
 
   const onStop = useCallback(
     (sessionId: string, managed = false, preserveQueue = false) => {
+      usageRecoveryStopped.current.add(sessionId);
       const remote = sessionsRef.current.find((s) => s.id === sessionId);
       if (remote && remoteProjectFor(remote.cwd)) {
         remoteSessionActions(sessionId)?.stop();
@@ -15272,6 +15415,9 @@ function Workspace({
   }, orchestrationRuns);
 
   const sessionPaneProps = {
+    usageRecoveryError: (sessionId: string) => usageRecoveryErrors[sessionId],
+    onRetryUsageRecovery: retryUsageRecovery,
+    onOpenUsage: () => onOpenTeamMap(USAGE_DASHBOARD_SCOPE),
     onWindowsSandboxChange,
     workspaceSwitchingSessionId: workspaceNavigation.pending
       ? active?.id
@@ -15902,6 +16048,7 @@ function Workspace({
               onOpenAutomations={onOpenAutomations}
               onOpenTeamMap={monosEnabled ? () => onOpenTeamMap() : undefined}
               onOpenMissionControl={monosEnabled ? () => onOpenTeamMap(MISSION_CONTROL_SCOPE) : undefined}
+              onOpenUsage={() => onOpenTeamMap(USAGE_DASHBOARD_SCOPE)}
               onOpenAttentionQueue={monosEnabled ? () => onOpenTeamMap(ATTENTION_QUEUE_SCOPE) : undefined}
               onGoToFile={onGoToFile}
               searchActive={searchViewOpen}
@@ -15952,6 +16099,7 @@ function Workspace({
             <div className="body-glass flex min-h-0 min-w-0 flex-1 flex-col">
               {/* CC7N shell hook: isolated command surface uses the existing submission adapters. */}
               <MissionControl sessions={sessions} runs={orchestrationRuns} statuses={managerPrStatuses} open={teamMap.open && teamMap.scope === MISSION_CONTROL_SCOPE}
+                usageSnapshot={usage.snapshot} onOpenUsage={() => onOpenTeamMap(USAGE_DASHBOARD_SCOPE)}
                 selectedAccount={session => selectedProviderAccountId("codex", session.cwd)}
                 isLocalSession={session => !remoteProjectFor(session.cwd)}
                 command={<MissionCommandBar open={teamMap.open && teamMap.scope === MISSION_CONTROL_SCOPE}
@@ -15988,7 +16136,14 @@ function Workspace({
                   repair: onCodexStorageRepair, compare: onCodexStorageCompare, reveal: onCodexStorageReveal,
                   resume: onUsageLimitResume, resumeAtReset: onUsageLimitResumeAtReset, retryDelivery: onResumeQueue,
                   continueManager: id => orchestrator.continueManager(id), continueRequest: continueAttentionRequest, inspect: id => { teamMap.close(); return onOpenApprovalSession(id); }, inspectAutomation: () => onOpenAutomations() }} />
-              {teamMap.open && teamMap.scope !== MISSION_CONTROL_SCOPE && teamMap.scope !== ATTENTION_QUEUE_SCOPE && <TeamMap key={teamMap.scope ?? "org"} sessions={sessions} runs={orchestrationRuns} statuses={managerPrStatuses} scope={teamMap.scope} onClose={teamMap.close} onOpenMono={id => void onOpenMono(id)} />}
+              {teamMap.open && teamMap.scope === USAGE_DASHBOARD_SCOPE && <div ref={usageSurface} className="flex min-h-0 flex-1 flex-col overflow-y-auto" onKeyDown={event => {
+                if (event.key === "Escape" && !event.defaultPrevented && !document.querySelector('[role="dialog"][aria-modal="true"], [role="menu"]')) { event.preventDefault(); teamMap.close(); }
+              }}>
+                <div className="px-6 pt-4"><button type="button" onClick={teamMap.close} className="text-xs text-content/65 hover:text-content focus-visible:outline-accent">Back to conversation</button></div>
+                {usage.historyWarning && <p role="status" className="px-6 pt-3 text-xs text-content/65">{usage.historyWarning}</p>}
+                <UsageDashboard snapshot={usage.snapshot} history={usage.history} onRefresh={usage.refresh} onOpenSettings={() => openSettings("providers", "provider-accounts")} />
+              </div>}
+              {teamMap.open && teamMap.scope !== MISSION_CONTROL_SCOPE && teamMap.scope !== ATTENTION_QUEUE_SCOPE && teamMap.scope !== USAGE_DASHBOARD_SCOPE && <TeamMap key={teamMap.scope ?? "org"} sessions={sessions} runs={orchestrationRuns} statuses={managerPrStatuses} scope={teamMap.scope} onClose={teamMap.close} onOpenMono={id => void onOpenMono(id)} />}
               <div
                 className={
                   teamMap.open ||

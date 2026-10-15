@@ -28,6 +28,17 @@ const thought: Block = { id: "reason", role: "reasoning", text: "**Reviewing dia
 const note: Block = { id: "note", role: "assistant", text: "I found the callback." };
 const command: Block = { id: "tool", role: "tool", text: "cargo check", tool: { kind: "shell", status: "completed", detail: "Finished successfully" } };
 const answer: Block = { id: "answer", role: "assistant", text: "**Fixed.**\n\n- Dialogs close correctly." };
+
+it.each([false, true])("retains the automatic recovery receipt inside Worked and the accepted handoff divider outside (busy: %s)", busy => {
+  const receipt: Block = { id: "usage-failover-request", role: "system", text: "Automatic usage recovery: continuing with Work on claude." };
+  const handoff: Block = { id: "handoff", role: "handoff", text: "Preserve original constraints", handoff: { from: "claude", to: "claude", status: "ready", pending: true } };
+  render([user, thought, receipt, handoff, answer], { busy });
+  expect(container.textContent).not.toContain(receipt.text);
+  act(() => toggle().click());
+  const receiptNode = [...container.querySelectorAll('*')].filter(node => node.textContent === receipt.text).pop()!;
+  expect(receiptNode.closest('[data-transcript-work-details]')).not.toBeNull();
+  expect(container.querySelector('[role="separator"][aria-label^="Continued with Claude"]')).not.toBeNull();
+});
 function render(blocks: Block[], props = {}) {
   act(() => root.render(createElement(AgentTranscript, { blocks, ...props })));
 }

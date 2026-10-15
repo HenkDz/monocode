@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ConnectionsSettings } from "../../connections/ui/ConnectionsSettings";
 import { ask } from "@tauri-apps/plugin-dialog";
+import { UsageFailoverSettings } from "../../providers/ui/UsageFailoverSettings";
 import {
   ArrowDownCircle,
   Check,
@@ -3571,6 +3572,7 @@ function ProviderAccountsSettings() {
                 </button>
               ) : null}
             </div>
+            {supportsAccountProfiles(provider) && <div className="px-4 pb-3"><UsageFailoverSettings provider={provider} accounts={accounts} /></div>}
             <div className="border-t border-content/5 bg-content/[0.015] pl-10">
               {accounts.map((account) => {
                 const editing =

@@ -1856,7 +1856,11 @@ function Workspace({
           if (!next.some((session, index) => session !== prev[index])) return;
           sessionsRef.current = next;
           syncDockBadge(next);
-          setSessions(next);
+          // Keep synchronous receipts above; rebase the batch over pending React updates.
+          setSessions((current) => current === prev ? next : current.map((session) => {
+            const events = batches.get(session.id);
+            return events ? applyHarnessEvents(session, events) : session;
+          }));
         },
       ),
   );

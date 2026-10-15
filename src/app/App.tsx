@@ -15783,6 +15783,7 @@ function Workspace({
   const compactTitleNavigation =
     IS_MAC && compactRailActive && !chromeSurfaceOpen;
   const compactTitleBar = compactTitleNavigation && !monoCovers;
+  const topTitleBar = compactTitleBar || (!IS_MAC && teamMap.open);
   const workspaceTitleBar = (
     <TitleBar
       // A Mono in full view stands apart from the project's tabs.
@@ -15810,7 +15811,7 @@ function Workspace({
         } else setMonoDetailsOpen(true);
       } : undefined}
       monoPanelOpen={monoSidebarOpen}
-      hideWindowControls={monoCovers && monoSidebarOpen && !!monoDetailsPanel}
+      hideWindowControls={!teamMap.open && monoCovers && monoSidebarOpen && !!monoDetailsPanel}
       activeId={monoViewSession ? "" : activeTabId}
       standaloneTitle={!monoCovers && managerActive ? "Manager" : undefined}
       cwd={sidebarCwd}
@@ -15853,7 +15854,7 @@ function Workspace({
               : "bg-background-base"
           }`}
         >
-          {compactTitleBar ? workspaceTitleBar : null}
+          {topTitleBar ? workspaceTitleBar : null}
           <GithubBudgetNotice cwd={sidebarCwd} />
           <WorktreeRemovalTasks />
           {projectAdditionDialog}
@@ -16213,7 +16214,7 @@ function Workspace({
                 ) : null}
                 <div className="flex min-h-0 min-w-0 flex-1">
                   <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-                    {compactTitleBar ? null : workspaceTitleBar}
+                    {topTitleBar ? null : workspaceTitleBar}
 
                     <main className="relative flex min-h-0 min-w-0 flex-1">
                       <div
@@ -16608,6 +16609,7 @@ function Workspace({
               monoCovers ? null : (
                 <UsageFooter
                   providers={usageProviders}
+                  onOpenUsage={() => onOpenTeamMap(USAGE_DASHBOARD_SCOPE)}
                   session={usageSession}
                   project={active?.cwd ?? projectCwd}
                   onSelectAccount={onSelectProviderAccount}

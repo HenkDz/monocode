@@ -91,6 +91,19 @@ function button(label: string): HTMLButtonElement {
 }
 
 describe("UsageProviderChip", () => {
+  it("opens all usage once and closes the popover", async () => {
+    const onOpenUsage = vi.fn();
+    await act(async () => root.render(createElement(UsageProviderChip, {
+      limits: codexLimits(), now, onOpenUsage,
+    })));
+    const trigger = button("Codex usage details");
+    await act(async () => trigger.click());
+    await act(async () => button("See all usage →").click());
+    expect(onOpenUsage).toHaveBeenCalledOnce();
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+  });
+
   it("offers the provider-owned login flow for an expired Claude session", async () => {
     const limits: ProviderRateLimits = {
       provider: "claude",
@@ -103,17 +116,20 @@ describe("UsageProviderChip", () => {
       status: "error",
     };
     const onReconnect = vi.fn(async () => undefined);
+    const onOpenUsage = vi.fn();
     act(() =>
       root.render(
-        createElement(UsageProviderChip, { limits, now, onReconnect }),
+        createElement(UsageProviderChip, { limits, now, onReconnect, onOpenUsage }),
       ),
     );
 
     await act(async () => button("Claude Code usage details").click());
     expect(document.querySelector(".size-9")).not.toBeNull();
+    expect(document.body.textContent).not.toContain("See all usage");
     await act(async () => button("Sign in to Claude Code").click());
 
     expect(onReconnect).toHaveBeenCalledOnce();
+    expect(onOpenUsage).not.toHaveBeenCalled();
     expect(document.body.textContent).toContain("Signed in to Claude Code");
   });
 

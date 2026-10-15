@@ -11,6 +11,8 @@ const rateLimitsFetch = vi.hoisted(() => ({
   consumeCodexRateLimitResetCredit: vi.fn(),
   fetchClaudeRateLimits: vi.fn(),
   fetchCodexRateLimits: vi.fn(),
+  fetchDevinRateLimits: vi.fn(),
+  fetchOpencodeGoRateLimits: vi.fn(),
 }));
 
 vi.mock("../../integrations/harness/core/auth", async (importOriginal) => ({
@@ -47,6 +49,8 @@ beforeEach(() => {
   rateLimitsFetch.consumeCodexRateLimitResetCredit.mockReset();
   rateLimitsFetch.fetchClaudeRateLimits.mockReset();
   rateLimitsFetch.fetchCodexRateLimits.mockReset();
+  rateLimitsFetch.fetchDevinRateLimits.mockReset();
+  rateLimitsFetch.fetchOpencodeGoRateLimits.mockReset();
   clearCachedRateLimits();
   container = document.createElement("div");
   document.body.append(container);
@@ -91,6 +95,28 @@ function connectedLimits(provider: RateLimitProvider): ProviderRateLimits {
 }
 
 describe("UsageFooter provider authentication", () => {
+  it.each(["claude", "codex", "opencode", "devin"] as const)(
+    "opens all usage from the %s footer chip and closes its popover",
+    async (provider) => {
+      const fetch = provider === "claude" ? rateLimitsFetch.fetchClaudeRateLimits
+        : provider === "codex" ? rateLimitsFetch.fetchCodexRateLimits
+        : provider === "devin" ? rateLimitsFetch.fetchDevinRateLimits
+        : rateLimitsFetch.fetchOpencodeGoRateLimits;
+      fetch.mockResolvedValue(connectedLimits(provider));
+      const onOpenUsage = vi.fn();
+      await act(async () => root.render(createElement(UsageFooter, {
+        providers: [provider], onOpenUsage,
+      })));
+      const trigger = container.querySelector<HTMLButtonElement>('[aria-haspopup="dialog"]')!;
+      await act(async () => trigger.click());
+      await act(async () => button("See all usage →").click());
+      expect(onOpenUsage).toHaveBeenCalledOnce();
+      expect(document.querySelector('[role="dialog"]')).toBeNull();
+      expect(trigger.getAttribute("aria-expanded")).toBe("false");
+      expect(auth.loginHarness).not.toHaveBeenCalled();
+    },
+  );
+
   it("reuses usage on remount and only fetches again on Refresh", async () => {
     rateLimitsFetch.fetchCodexRateLimits.mockResolvedValue(
       connectedLimits("codex"),

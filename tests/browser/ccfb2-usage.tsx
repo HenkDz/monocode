@@ -1,6 +1,8 @@
 import { useEffect, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import { mockIPC } from "@tauri-apps/api/mocks";
+// @ts-expect-error supplied by the fixture's source-bound Vite plugin
+import expressions from "virtual:ccfb2-shell";
 import { UsageFooter } from "../../src/app/shell/UsageFooter";
 import { setCachedRateLimits } from "../../src/features/providers/model/rateLimitsCache";
 import { selectUsageDashboard } from "../../src/features/providers/model/usageDashboard";
@@ -27,6 +29,7 @@ const snapshot = selectUsageDashboard({
 
 function Fixture() {
   const teamMap = useTeamMap();
+  const onOpenUsage = new Function("onOpenTeamMap", "USAGE_DASHBOARD_SCOPE", `return ${expressions.footerOpen};`)(teamMap.show, USAGE_DASHBOARD_SCOPE);
   const surface = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (teamMap.open) surface.current?.querySelector<HTMLHeadingElement>("h1")?.focus();
@@ -37,7 +40,7 @@ function Fixture() {
         ? <UsageDashboard snapshot={snapshot} />
         : <p className="p-6 text-sm text-content/40">Synthetic footer fixture</p>}
     </main>
-    <UsageFooter providers={["codex"]} onOpenUsage={() => teamMap.show(USAGE_DASHBOARD_SCOPE)} />
+    <UsageFooter providers={["codex"]} onOpenUsage={onOpenUsage} />
   </div>;
 }
 createRoot(document.getElementById("root")!).render(<Fixture />);

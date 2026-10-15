@@ -8,9 +8,24 @@ export function ccfb2ShellExpressions() {
   const declarations = new Map<string, string>();
   const placements: string[] = [];
   let hideControls = "";
+  let workspaceClass = "", workspaceInert = "", chromeOpen = "", footerOpen = "";
   const visit = (node: ts.Node) => {
     if (ts.isVariableDeclaration(node) && ["compactTitleNavigation", "compactTitleBar", "topTitleBar"].includes(node.name.getText(ast))) {
       declarations.set(node.name.getText(ast), node.initializer!.getText(ast));
+    }
+    if (ts.isVariableDeclaration(node) && node.name.getText(ast) === "chromeSurfaceOpen") chromeOpen = node.initializer!.getText(ast);
+    if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(ast) === "UsageFooter") {
+      const prop = node.attributes.properties.find(prop => ts.isJsxAttribute(prop) && prop.name.getText(ast) === "onOpenUsage") as ts.JsxAttribute;
+      footerOpen = (prop.initializer as ts.JsxExpression).expression!.getText(ast);
+    }
+    if (ts.isJsxOpeningElement(node) && node.tagName.getText(ast) === "div") {
+      const attrs = node.attributes.properties.filter(ts.isJsxAttribute);
+      const cls = attrs.find(attr => attr.name.getText(ast) === "className")?.initializer;
+      if (cls && ts.isJsxExpression(cls) && cls.expression && ts.isConditionalExpression(cls.expression) && cls.expression.whenTrue.getText(ast) === '"hidden"' && cls.expression.condition.getText(ast).includes("teamMap.open")) {
+        workspaceClass = cls.expression.getText(ast);
+        const inert = attrs.find(attr => attr.name.getText(ast) === "inert")!.initializer as ts.JsxExpression;
+        workspaceInert = inert.expression!.getText(ast);
+      }
     }
     if (ts.isJsxExpression(node) && node.expression && /^(compactTitleBar|topTitleBar) \? (workspaceTitleBar \: null|null \: workspaceTitleBar)$/.test(node.expression.getText(ast))) {
       placements.push(node.expression.getText(ast));
@@ -21,10 +36,10 @@ export function ccfb2ShellExpressions() {
     ts.forEachChild(node, visit);
   };
   visit(ast);
-  if (placements.length !== 2 || !hideControls || !declarations.has("compactTitleBar")) throw Error("CC-FB2 App chrome seams missing");
+  if (placements.length !== 2 || !hideControls || !workspaceClass || !workspaceInert || !chromeOpen || !footerOpen || !declarations.has("compactTitleBar")) throw Error("CC-FB2 App chrome seams missing");
   return {
     declarations: [...declarations].map(([name, expression]) => `const ${name} = ${expression};`).join("\n"),
-    top: placements[0], inner: placements[1], hideControls,
+    top: placements[0], inner: placements[1], hideControls, workspaceClass, workspaceInert, chromeOpen, footerOpen,
   };
 }
 

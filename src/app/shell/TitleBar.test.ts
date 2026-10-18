@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import {
   tabCopy,
+  TitleBar,
   tabStripOverflow,
   titleTabContextCloseIds,
   titleTabClosable,
@@ -20,6 +23,21 @@ function tab(overrides: Partial<Tab> = {}): Tab {
     ...overrides,
   };
 }
+
+it("renders a standalone Manager header without worktree tabs or tab actions", () => {
+  const noop = () => {};
+  const html = renderToStaticMarkup(createElement(TitleBar, {
+    tabs: [tab({ title: "Worker conversation" }), tab({ id: "manager", title: "Manager" })],
+    activeId: "manager", cwd: "/repo", standaloneTitle: "Manager",
+    onToggleSidebar: noop, onSelect: noop, onNew: noop,
+    onClose: noop, onCloseMany: noop, onReorder: noop,
+  }));
+  expect(html).toContain('aria-label="Standalone chat"');
+  expect(html).toContain('Manager');
+  expect(html).not.toContain('Worker conversation');
+  expect(html).not.toContain('New session');
+  expect(html).not.toContain('Close Manager');
+});
 
 describe("tabCopy", () => {
   it("layers conversation and file when split across panes", () => {

@@ -760,6 +760,77 @@ describe("AgentTranscript collapsed work", () => {
     );
   });
 
+  it("keeps a habit artifact attached to a reaction visible", () => {
+    const markup = renderToStaticMarkup(
+      createElement(AgentTranscript, {
+        agentMascot: { mascot: "cat", color: "#6ba" },
+        inlineWork: true,
+        blocks: [
+          { id: "user", role: "user", text: "Thanks" },
+          {
+            id: "habit",
+            role: "assistant",
+            text: "<reaction>👍</reaction>",
+            monoHabit: { id: "daily", name: "Daily report", at: 1 },
+            artifactCards: [{ id: "report", kind: "document", title: "Durable habit report" }],
+          },
+        ],
+      }),
+    );
+    expect(markup).toContain('data-mono-reaction="👍"');
+    expect(markup).toContain("Durable habit report");
+    expect(markup).toContain("data-artifact-results");
+    expect(markup).not.toContain("&lt;reaction&gt;");
+  });
+
+  it("keeps a Mono's changes action with its historical org output", () => {
+    const blocks: Block[] = [
+      {
+        id: "edit-user",
+        role: "user",
+        text: "Write the report",
+        startedAt: 1_000,
+        durationMs: 500,
+      },
+      {
+        id: "edit",
+        role: "tool",
+        text: "Write report.md",
+        tool: { kind: "edit", status: "completed" },
+      },
+      { id: "edit-answer", role: "assistant", text: "Report written." },
+      {
+        id: "later-user",
+        role: "user",
+        text: "Rerun the checks",
+        startedAt: 2_000,
+        durationMs: 500,
+      },
+      { id: "later-answer", role: "assistant", text: "Checks rerunning." },
+    ];
+    const markup = renderToStaticMarkup(
+      createElement(AgentTranscript, {
+        blocks,
+        editTurnAction: createElement("button", {}, "+7 -0"),
+        turnAccessories: new Map([
+          ["edit-user", createElement("div", {}, "Team review receipt")],
+        ]),
+        latestTurnAccessory: createElement("div", {}, "Member work log"),
+      }),
+    );
+    const action = markup.indexOf("+7 -0");
+    expect(markup.match(/\+7 -0/g)).toHaveLength(1);
+    expect(action).toBeGreaterThan(markup.indexOf("Report written."));
+    expect(action).toBeLessThan(markup.indexOf("Rerun the checks"));
+    expect(markup.indexOf("Team review receipt")).toBeLessThan(action);
+    expect(markup.indexOf("Member work log")).toBeGreaterThan(
+      markup.indexOf("Checks rerunning."),
+    );
+    expect(markup.lastIndexOf("data-turn-actions", action)).toBeGreaterThan(
+      markup.indexOf("Report written."),
+    );
+  });
+
   it("renders an advisor interjection between answered work phases", () => {
     // Live: the interjection lands on its own labeled row. Once the turn
     // settles it folds into the work trail — covered below.

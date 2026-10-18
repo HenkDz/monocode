@@ -11,6 +11,9 @@ import {
   removeMono,
   removeMonoProject,
   reorderMonos,
+  setOrchestrator,
+  ensureAssignedManagers,
+  dedicatedMono,
 } from "./mono";
 import { monoBackgroundKey, monoChatBackground } from "./monoBackground";
 import { saveProjectChatBackgroundSettings } from "../../projects/model/projectChatBackground";
@@ -42,6 +45,42 @@ it("adds each project once and takes one away by its path", () => {
   expect(monoWorksOn(findMono(id)!, "/code/site/")).toBe(true);
   removeMonoProject(id, "/code/app/");
   expect(findMono(id)?.projects).toEqual(["/code/site"]);
+});
+
+it("creates empty Manager records for assigned projects without starting sessions", () => {
+  const leader = createMono(["/code/app"]);
+  setOrchestrator(leader.id, true);
+  const manager = dedicatedMono("/code/app")!;
+  expect(manager).toMatchObject({ role: "manager", reportsTo: leader.id, projects: ["/code/app"] });
+  expect(manager.sessionId).toBeUndefined();
+  expect(manager.teamInitialized).toBeUndefined();
+  expect(listMonos().filter(mono => mono.reportsTo === manager.id)).toEqual([]);
+  addMonoProject(leader.id, "/code/site");
+  expect(dedicatedMono("/code/site")?.reportsTo).toBe(leader.id);
+  ensureAssignedManagers();
+  expect(dedicatedMono("/code/app")?.id).toBe(manager.id);
+  expect(listMonos()).toHaveLength(3);
+});
+
+it("migrates previously assigned projects and preserves archived team visibility", () => {
+  localStorage.setItem("monocode:mono-roster", JSON.stringify([
+    { id: "leader", role: "orchestrator", projects: ["/code/app", "/code/old"], mascot: "cat", color: "#aaa" },
+    { id: "old", role: "manager", reportsTo: "leader", projects: ["/code/old"], archivedAt: 1, mascot: "cat", color: "#aaa" },
+  ]));
+  ensureAssignedManagers();
+  expect(dedicatedMono("/code/app")?.sessionId).toBeUndefined();
+  expect(dedicatedMono("/code/old")).toBeUndefined();
+  expect(listMonos(true)).toHaveLength(3);
+});
+
+it("connects an existing cold Manager to its assigned Orchestrator without replacing it", () => {
+  localStorage.setItem("monocode:mono-roster", JSON.stringify([
+    { id: "leader", role: "orchestrator", projects: ["/code/app"], mascot: "cat", color: "#aaa" },
+    { id: "manager", role: "manager", projects: ["/code/app"], mascot: "cat", color: "#aaa" },
+  ]));
+  ensureAssignedManagers();
+  expect(dedicatedMono("/code/app")).toMatchObject({ id: "manager", reportsTo: "leader" });
+  expect(listMonos()).toHaveLength(2);
 });
 
 it("keeps the rail's order and forgets a removed Mono", () => {

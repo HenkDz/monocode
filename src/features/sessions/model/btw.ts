@@ -1,3 +1,4 @@
+import { teamMessage } from "./teamMessage";
 import { applyHarnessEvent } from "../../../integrations/harness/core/apply";
 import type { HarnessEvent } from "../../../integrations/harness/core/types";
 import { displayPath } from "../../../shared/lib/paths";
@@ -318,7 +319,8 @@ export function serializeBtwBlock(block: Block, cwd?: string): string {
       .filter(Boolean)
       .join("\n");
   }
-  const label =
+  const incoming = teamMessage(block);
+  const label = incoming ? `Team message from ${incoming.name}` :
     block.role === "user"
       ? "User"
       : block.role === "assistant"

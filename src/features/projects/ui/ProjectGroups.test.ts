@@ -12,6 +12,7 @@ import {
 import { savePinnedProjects } from "../model/recents";
 import { ProjectRail } from "../../../app/shell/ProjectRail";
 import { useProjectDiffStats } from "../../source-control/hooks/useProjectDiffStats";
+import { recordPullRequest } from "../../source-control/model/pullRequests";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async () => null),
@@ -55,6 +56,58 @@ async function renderRail(visible = true) {
     ),
   );
 }
+
+it("badges only actionable PRs using their sibling worktree session's project", async () => {
+  const project = "/work/sidebar-pr", checkout = "/sibling-worktrees/sidebar-pr";
+  const pr = { number: 932, title: "Ready", url: "https://github.com/example/repo/pull/932", state: "open", checksStatus: "success" as const, mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", headOid: "head" };
+  const link = { sessionId: "sidebar-pr", sessionTitle: "Fix", turnId: "first", blockId: "answer", at: 1 };
+  recordPullRequest(checkout, pr, link);
+  const props = { cwd: project, recents: [{ path: project, openedAt: 1 }], sessions: [{ id: link.sessionId, cwd: project, worktreeCwd: checkout }], onSelectProject: vi.fn(), onOpenProject: vi.fn() };
+  await act(async () => root.render(createElement(ProjectRail, props)));
+  expect(container.querySelector('[aria-label="1 pull requests need attention"]')).not.toBeNull();
+  await act(async () => recordPullRequest(checkout, { ...pr, state: "merged" }));
+  expect(container.querySelector('[aria-label="1 pull requests need attention"]')).toBeNull();
+});
+
+it("retains expanded projects after Settings and a fresh rail mount", async () => {
+  const props = {
+    cwd: "/work/personal",
+    recents: [{ path: "/work/client", openedAt: 1 }, { path: "/work/personal", openedAt: 2 }],
+    onSelectProject: vi.fn(), onOpenProject: vi.fn(),
+    renderProjectWorktrees: (path: string) => createElement("span", null, `${path} worktrees`),
+  };
+  await act(async () => root.render(createElement(ProjectRail, props)));
+  act(() => button("Expand worktrees in client").click());
+  act(() => button("Collapse worktrees in personal").click());
+  await act(async () => root.render(createElement(ProjectRail, { ...props, settingsOpen: true })));
+  await act(async () => root.render(createElement(ProjectRail, props)));
+  expect(button("Collapse worktrees in client").getAttribute("aria-expanded")).toBe("true");
+  expect(button("Expand worktrees in personal").getAttribute("aria-expanded")).toBe("false");
+  act(() => root.unmount());
+  root = createRoot(container);
+  await act(async () => root.render(createElement(ProjectRail, props)));
+  expect(button("Collapse worktrees in client").getAttribute("aria-expanded")).toBe("true");
+  expect(button("Expand worktrees in personal").getAttribute("aria-expanded")).toBe("false");
+});
+
+it("persists default expansion when Settings returns to a different selected project", async () => {
+  const props = {
+    cwd: "/work/personal",
+    recents: [{ path: "/work/client", openedAt: 1 }, { path: "/work/personal", openedAt: 2 }],
+    onSelectProject: vi.fn(), onOpenProject: vi.fn(),
+    renderProjectWorktrees: () => createElement("span", null, "Worktrees"),
+  };
+  await act(async () => root.render(createElement(ProjectRail, props)));
+  expect(button("Collapse worktrees in personal").getAttribute("aria-expanded")).toBe("true");
+  await act(async () => root.render(createElement(ProjectRail, { ...props, cwd: "/work/client", settingsOpen: true })));
+  const returned = { ...props, cwd: "/work/client" };
+  await act(async () => root.render(createElement(ProjectRail, returned)));
+  expect(button("Collapse worktrees in personal").getAttribute("aria-expanded")).toBe("true");
+  act(() => root.unmount());
+  root = createRoot(container);
+  await act(async () => root.render(createElement(ProjectRail, returned)));
+  expect(button("Collapse worktrees in personal").getAttribute("aria-expanded")).toBe("true");
+});
 
 it("suspends project Git stats while the rail is hidden", async () => {
   await renderRail();

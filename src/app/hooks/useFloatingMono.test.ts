@@ -11,6 +11,7 @@ import type {
   FloatingMonoRequest,
 } from "../../features/monos/model/floatingMono";
 import { useFloatingMono } from "./useFloatingMono";
+import type { OrchestrationRun } from "../../features/orchestration/model/orchestrationState";
 import { saveMonoMenuBarIcon } from "../../features/settings/model/settings";
 
 const native = vi.hoisted(() => ({ invoke: vi.fn(), listen: vi.fn() }));
@@ -25,30 +26,30 @@ vi.mock("../../platform/tauri/platform", async (importOriginal) => ({
   ...(await importOriginal<object>()),
   IS_MAC: true,
 }));
-vi.mock("../../features/monos/model/mono", () => ({
+vi.mock("../../features/monos/model/mono", async (original) => ({
+  ...(await original<object>()),
   findMono: (id: string) => ({ id, sessionId: `chat-${id}` }),
   listMonos: () =>
-    ["first", "second"].map((id) => ({ id, sessionId: `chat-${id}` })),
+    ["first", "second"].map((id, index) => ({ id, sessionId: `chat-${id}`, projects: [], role: index ? "manager" : "orchestrator", reportsTo: index ? "first" : undefined })),
   monoLook: () => ({ name: "Mono", mascot: "crab", color: "#aaf" }),
-  monoState: (session: Session) => ({
-    status: session.busy ? "working" : "idle",
-  }),
 }));
 
 let container: HTMLDivElement;
 let root: Root;
 let requests: FloatingMonoRequest[];
 let sessions: Session[];
-let host: FloatingMonoHost;
+let host: Omit<FloatingMonoHost, "create"> & { create(): string };
 
 function Harness({
   sessions,
   enabled = true,
+  runs = [],
 }: {
   sessions: Session[];
   enabled?: boolean;
+  runs?: OrchestrationRun[];
 }) {
-  useFloatingMono(sessions, "roster", enabled, host);
+  useFloatingMono(sessions, "roster", enabled, host, runs);
   return null;
 }
 
@@ -65,6 +66,7 @@ beforeEach(() => {
     action: { kind: "open" },
   }));
   host = {
+    create: vi.fn(() => "new-mono"),
     open: vi.fn(async (id) => sessions.find((s) => s.id === `chat-${id}`)),
     submit: vi.fn(),
     stop: vi.fn(),
@@ -145,7 +147,7 @@ it("streams each open Mono on transcript commits without waiting for a poll", as
   await act(async () => root.render(createElement(Harness, { sessions })));
   expect(native.invoke).toHaveBeenCalledExactlyOnceWith("mono_chat_publish", {
     monoId: "first",
-    session: sessions[0],
+    session: { ...sessions[0], monoLiveState: { status: "working", activity: "Thinking", teamWorking: 1 } },
   });
 });
 
@@ -161,6 +163,29 @@ it("stops publishing when Monos are disabled", async () => {
       ([command]) => command === "mono_chat_publish",
     ),
   ).toBe(false);
+});
+
+it("publishes descendant start and finish, and run decisions while the owner's session is unchanged", async () => {
+  sessions = sessions.map(session => ({ ...session, busy: false }));
+  await act(async () => root.render(createElement(Harness, { sessions })));
+  native.invoke.mockClear();
+  const owner = sessions[0];
+  const publishedState = () => native.invoke.mock.calls.find(([command, args]) => command === "mono_chat_publish" && args.monoId === "first")?.[1].session.monoLiveState.status;
+  sessions = [owner, { ...sessions[1], busy: true }];
+  await act(async () => root.render(createElement(Harness, { sessions })));
+  expect(publishedState()).toBe("idle");
+  expect(native.invoke.mock.calls.find(([command, args]) => command === "mono_chat_publish" && args.monoId === "first")?.[1].session.monoLiveState.teamWorking).toBe(1);
+  native.invoke.mockClear();
+  sessions = [owner, { ...sessions[1], busy: false }];
+  await act(async () => root.render(createElement(Harness, { sessions })));
+  expect(publishedState()).toBe("idle");
+  native.invoke.mockClear();
+  const runs = [{ leadId: "engine", projectManager: true, ownerMonoId: "second", ownerSessionId: "chat-second", cwd: "/app", status: "paused", tasks: [] }] as unknown as OrchestrationRun[];
+  await act(async () => root.render(createElement(Harness, { sessions, runs })));
+  expect(publishedState()).toBe("needs-you");
+  native.invoke.mockClear();
+  await act(async () => root.render(createElement(Harness, { sessions, runs: [] })));
+  expect(publishedState()).toBe("idle");
 });
 
 it("resyncs the roster with each Mono's status for the rail", async () => {

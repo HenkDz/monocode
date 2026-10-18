@@ -1,3 +1,9 @@
+import { ManagerAvatar } from "../../orchestration/ui/ManagerAvatar";
+import { MonoChatCard } from "../../monos/ui/MonoChatCard";
+import { MonoTeamChangeCard } from "../../monos/ui/MonoTeamChangeCard";
+import { TeamMessage } from "./TeamMessage";
+import { ArtifactText } from "../../artifacts/ui/ArtifactReference";
+import { isUserMessage, teamMessage } from "../model/teamMessage";
 import {
   ArrowUp,
   Chatting,
@@ -37,6 +43,7 @@ import { GeneratedImage } from "./GeneratedImage";
 import { MonocodeSparkles } from "./MonocodeSparkles";
 import { OrchestratorConstellation } from "./OrchestratorConstellation";
 import { PlanStepsBurst } from "./PlanStepsBurst";
+import { settleWordFades } from "./wordFade";
 import { FilePreview } from "../../files/ui/FilePreview";
 import { FileTypeIcon } from "../../files/ui/FileTypeIcon";
 import { ToolDiffPreview } from "./ToolDiffPreview";
@@ -56,6 +63,7 @@ import { PixelMascot } from "../../projects/ui/PixelMascot";
 import type { MonoLook } from "../../monos/model/mono";
 import { monoSpawnedSessions } from "../../monos/model/monoSpawnedSessions";
 import type { MessageDelivery } from "../../monos/model/monoMessaging";
+import { monoReactionBlocks } from "../../monos/model/monoReaction";
 import type { ApprovalDecision } from "../../../integrations/harness";
 import {
   isHarnessAuthError,
@@ -181,6 +189,7 @@ const FIRST_PAINT_TURNS = 3;
 const TURN_PAGE_SIZE = 20;
 
 type Props = {
+  managerProject?: string;
   blocks: Block[];
   /** Archived messages render immediately, even when first loaded in this visit. */
   historicalBlockIds?: ReadonlySet<string>;
@@ -243,6 +252,13 @@ type Props = {
   ) => void;
   /** Session-level output shown after the latest reply and before its action row. */
   latestTurnAccessory?: ReactNode;
+  /** Event output stays with its original turn as newer turns arrive. */
+  turnAccessories?: ReadonlyMap<string, ReactNode>;
+  /**
+   * Session-level control in the action row of the latest turn that edited
+   * files. A Mono's chat never ends, so its review stays where it began.
+   */
+  editTurnAction?: ReactNode;
   /** False while another tab is in front; local transcript state is retained. */
   visible?: boolean;
   /** Kept mounted after its pane closed. Showing it again counts as a new visit. */
@@ -253,6 +269,7 @@ type Props = {
 };
 
 function AgentTranscriptComponent({
+  managerProject,
   blocks: sourceBlocks,
   historicalBlockIds,
   initialTurns = INITIAL_TURNS,
@@ -301,15 +318,22 @@ function AgentTranscriptComponent({
   onRevealReady,
   onNavigateReady,
   latestTurnAccessory,
+  turnAccessories,
+  editTurnAction,
 
   visible = true,
   parked = false,
   onScrollerChange,
   managed = false,
 }: Props) {
+  const isMonoChat = !!agentMascot;
   const blocks = useMemo(() => {
-    if (!harness || !supportsHarnessLogin(harness)) return sourceBlocks;
-    const visibleBlocks = sourceBlocks.filter(
+    // A Mono's reaction sits on the message it answers, not in a bubble.
+    const chatBlocks = isMonoChat
+      ? monoReactionBlocks(sourceBlocks)
+      : sourceBlocks;
+    if (!harness || !supportsHarnessLogin(harness)) return chatBlocks;
+    const visibleBlocks = chatBlocks.filter(
       (block) =>
         !(
           block.role === "system" &&
@@ -317,10 +341,10 @@ function AgentTranscriptComponent({
           isHarnessAuthError(block.text)
         ),
     );
-    return visibleBlocks.length === sourceBlocks.length
-      ? sourceBlocks
+    return visibleBlocks.length === chatBlocks.length
+      ? chatBlocks
       : visibleBlocks;
-  }, [harness, sourceBlocks]);
+  }, [harness, isMonoChat, sourceBlocks]);
   const editableUserBlockId = useMemo(
     () => lastUserTurnBlock(blocks)?.id,
     [blocks],
@@ -332,6 +356,7 @@ function AgentTranscriptComponent({
   const showJumpRef = useRef(false);
   const distanceFromBottom = useRef(0);
   const lastScrollTop = useRef(0);
+  const pointerScrolling = useRef(false);
   const wheelHold = useRef(0);
   const prependHeight = useRef<number | null>(null);
   const prependAnchor = useRef<{ element: HTMLElement; top: number } | null>(
@@ -413,10 +438,10 @@ function AgentTranscriptComponent({
 
   const syncPinned = useCallback(
     (el: HTMLElement) => {
-      // Layout and our own pins also queue scroll events. Those events must
-      // not stop a Mono following the end before its layout has settled.
-      // Upward wheel, touch, keyboard and scrollbar input release the pin.
-      if (bottomAligned && stickToBottom.current) {
+      // Rendering can shrink and regrow the transcript before observers run,
+      // leaving a browser-clamped offset above the new bottom. An offset alone
+      // cannot identify manual scrolling. Input handlers release the pin.
+      if (stickToBottom.current && !pointerScrolling.current) {
         lastScrollTop.current = el.scrollTop;
         distanceFromBottom.current = 0;
         setShowJump(false);
@@ -438,7 +463,7 @@ function AgentTranscriptComponent({
       if (stickToBottom.current && !wasFollowing) refreshChatMotion.current?.();
       setShowJump(!stickToBottom.current && el.scrollHeight > el.clientHeight);
     },
-    [bottomAligned, setShowJump],
+    [setShowJump],
   );
 
   const rememberScroll = useCallback((el: HTMLElement) => {
@@ -514,40 +539,107 @@ function AgentTranscriptComponent({
         syncPinned(scrollerEl);
     };
     let release: ReturnType<typeof setTimeout> | undefined;
+    let heldScrollTop: number | undefined;
+    const pauseFollowing = () => {
+      stickToBottom.current = false;
+      setShowJump(scrollerEl.scrollHeight > scrollerEl.clientHeight);
+    };
+    const holdFollowing = () => {
+      heldScrollTop ??= scrollerEl.scrollTop;
+      wheelHold.current = performance.now() + WHEEL_HOLD_MS;
+      clearTimeout(release);
+      release = setTimeout(() => {
+        if (!scrollerEl.isConnected) return;
+        if (
+          heldScrollTop !== undefined &&
+          scrollerEl.scrollTop < heldScrollTop &&
+          !scrollClampedToBottom(scrollerEl, heldScrollTop)
+        )
+          pauseFollowing();
+        heldScrollTop = undefined;
+        followTranscript(scrollerEl);
+      }, WHEEL_HOLD_MS);
+    };
     const onWheel = (e: WheelEvent) => {
       if (innerScrollerTakes(scrollerEl, e)) return;
       if (e.deltaY < 0) {
-        stickToBottom.current = false;
-        setShowJump(true);
+        pauseFollowing();
       } else if (e.deltaY === 0) {
         // A trackpad gesture can open with an event that carries no
         // direction, and the rest of it may reach us after the scroll has
         // moved. Hold the pin until its upward events can release it.
-        wheelHold.current = performance.now() + WHEEL_HOLD_MS;
-        clearTimeout(release);
-        release = setTimeout(() => {
-          if (scrollerEl.isConnected) followTranscript(scrollerEl);
-        }, WHEEL_HOLD_MS);
+        holdFollowing();
       }
     };
     const onPointerDown = (event: PointerEvent) => {
-      if (bottomAligned && event.target === scrollerEl) {
-        stickToBottom.current = false;
+      if (event.pointerType !== "touch") pointerScrolling.current = true;
+      if (event.target === scrollerEl) pauseFollowing();
+    };
+    const onPointerUp = () => {
+      if (pointerScrolling.current && scrollerEl.isConnected)
+        syncPinned(scrollerEl);
+      pointerScrolling.current = false;
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      const target = event.target;
+      if (
+        target instanceof HTMLElement &&
+        (target.isContentEditable || target.closest("input, textarea, select"))
+      )
+        return;
+      if (
+        event.key !== "ArrowUp" &&
+        event.key !== "PageUp" &&
+        event.key !== "Home" &&
+        !(event.key === " " && event.shiftKey)
+      )
+        return;
+      if (!innerScrollerTakes(scrollerEl, { target, deltaX: 0, deltaY: -1 }))
+        pauseFollowing();
+    };
+    let touchY: number | undefined;
+    const onTouchStart = (event: TouchEvent) => {
+      touchY = event.touches[0]?.clientY;
+      holdFollowing();
+    };
+    const onTouchMove = (event: TouchEvent) => {
+      const next = event.touches[0]?.clientY;
+      if (touchY !== undefined && next !== undefined && next > touchY) {
+        if (
+          !innerScrollerTakes(scrollerEl, {
+            target: event.target,
+            deltaX: 0,
+            deltaY: touchY - next,
+          })
+        )
+          pauseFollowing();
       }
+      touchY = next;
     };
     scrollerEl.addEventListener("scroll", onScroll, { passive: true });
     scrollerEl.addEventListener("wheel", onWheel, { passive: true });
     scrollerEl.addEventListener("pointerdown", onPointerDown, {
       passive: true,
     });
+    document.addEventListener("pointerup", onPointerUp, { passive: true });
+    document.addEventListener("pointercancel", onPointerUp, { passive: true });
+    scrollerEl.addEventListener("keydown", onKeyDown);
+    scrollerEl.addEventListener("touchstart", onTouchStart, { passive: true });
+    scrollerEl.addEventListener("touchmove", onTouchMove, { passive: true });
     return () => {
       clearTimeout(release);
       scrollerEl.removeEventListener("scroll", onScroll);
       scrollerEl.removeEventListener("wheel", onWheel);
       scrollerEl.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("pointerup", onPointerUp);
+      document.removeEventListener("pointercancel", onPointerUp);
+      pointerScrolling.current = false;
+      scrollerEl.removeEventListener("keydown", onKeyDown);
+      scrollerEl.removeEventListener("touchstart", onTouchStart);
+      scrollerEl.removeEventListener("touchmove", onTouchMove);
     };
   }, [
-    bottomAligned,
     scrollerEl,
     followTranscript,
     setShowJump,
@@ -590,6 +682,7 @@ function AgentTranscriptComponent({
     if (!opened) return;
     const el = scroller.current;
     if (!el) return;
+    settleWordFades(el);
     syncTranscriptViewport(el);
     const restore = restoreScroll.current;
     restoreScroll.current = false;
@@ -651,6 +744,11 @@ function AgentTranscriptComponent({
     (latest, turn, index) =>
       turn[0].monoHabit || turn[0].role === "handoff" ? latest : index,
     -1,
+  );
+  const hasEditTurnAction = editTurnAction != null;
+  const editTurnIndex = useMemo(
+    () => (hasEditTurnAction ? lastEditTurnIndex(turns) : -1),
+    [hasEditTurnAction, turns],
   );
   const firstVisibleTurn = Math.max(0, turns.length - visibleTurnCount);
   const visibleTurns = turns.slice(firstVisibleTurn);
@@ -914,12 +1012,14 @@ function AgentTranscriptComponent({
 
   refreshChatMotion.current = useBottomChatMotion(
     scrollerEl,
-    visible && bottomAligned,
+    visible,
     stickToBottom,
     blocks,
-    !!busy && userTurnCount(blocks, managed) === 1,
+    bottomAligned && !!busy && userTurnCount(blocks, managed) === 1,
     !!busy,
     historicalBlockIds,
+    bottomAligned,
+    wheelHold,
   );
 
   return (
@@ -1063,6 +1163,11 @@ function AgentTranscriptComponent({
               )
             : folded;
           const workOpen = openWork[turnId] ?? false;
+          // The action keeps the pane's props, which go stale once parked.
+          const turnEditAction =
+            firstVisibleTurn + turnIndex === editTurnIndex && !parked
+              ? editTurnAction
+              : undefined;
           // The fold line is the turn's status line from the first token to
           // the last: the mark, and the clock beside it. It never moves, so a
           // turn settling does not shuffle the layout around the answer.
@@ -1102,16 +1207,28 @@ function AgentTranscriptComponent({
             ) : (
               workSummaryLine(summarizedWork)
             );
+          // A Mono that only reacted answered on the message itself.
+          const reactedOnly =
+            inlineWork &&
+            !live &&
+            items.every(
+              (item) => item.type === "block" && item.block.role === "user",
+            ) &&
+            items.some(
+              (item) => item.type === "block" && !!item.block.monoReaction,
+            );
           const showFoldLine =
-            !!habit ||
-            standaloneReply ||
-            live ||
-            durationMs != null ||
-            (inlineWork
-              ? items.some(
-                  (item) => item.type !== "block" || item.block.role !== "user",
-                )
-              : !!fold);
+            !reactedOnly &&
+            (!!habit ||
+              standaloneReply ||
+              live ||
+              durationMs != null ||
+              (inlineWork
+                ? items.some(
+                    (item) =>
+                      item.type !== "block" || item.block.role !== "user",
+                  )
+                : !!fold));
           // It sits where the work starts, from before there is any: the row
           // is there from the first token, so nothing shoves the answer down
           // when the turn folds.
@@ -1257,6 +1374,7 @@ function AgentTranscriptComponent({
             <TurnRow key="work-fold" folded={!showFoldLine}>
               {inlineWork ? (
                 <MonoTurnHeader
+                  managerProject={managerProject}
                   blocks={turn}
                   title={foldTitle}
                   name={turnModelName}
@@ -1286,6 +1404,7 @@ function AgentTranscriptComponent({
                 />
               ) : (
                 <WorkFoldLine
+                  managerProject={managerProject}
                   title={foldTitle}
                   kind={workKind(summarizedWork)}
                   harness={turnHarness}
@@ -1311,6 +1430,11 @@ function AgentTranscriptComponent({
               }`}
             >
               {stampAt != null ? <DaySeparator at={stampAt} /> : null}
+              {turn[0].monoSessionCompletion?.blocker && (
+                <div data-blocker-notice className="px-4 py-1 text-xs text-content/50">
+                  Decision requested · {turn[0].monoSessionCompletion.blocker.requests.length} requests
+                </div>
+              )}
               {items
                 .flatMap((item, itemIndex) => {
                   // The header carries the process; only approvals need a row
@@ -1416,15 +1540,19 @@ function AgentTranscriptComponent({
                 </div>
               ) : null}
               {/* The accessory keeps the pane's props, which go stale once parked. */}
+              {!parked ? turnAccessories?.get(turn[0].id) : null}
               {isLastTurn && latestTurnAccessory && !parked
                 ? latestTurnAccessory
                 : null}
               {settled &&
+              !reactedOnly &&
               (durationMs != null ||
+                turnEditAction ||
                 standaloneReply ||
                 (inlineWork && firstWork >= 0) ||
                 (spawnedSessions.length > 0 && onShowSessions)) ? (
                 <TurnDuration
+                  managerProject={managerProject}
                   elapsedMs={durationMs ?? null}
                   label={
                     standaloneReply ? (agentName ?? habit?.name) : undefined
@@ -1472,6 +1600,7 @@ function AgentTranscriptComponent({
                   onHandoff={
                     onHandoff ? (target) => onHandoff(target, turn) : undefined
                   }
+                  extraAction={turnEditAction}
                 />
               ) : null}
             </div>
@@ -1497,13 +1626,16 @@ function TranscriptContent({
   bottomAligned: boolean;
   children: ReactNode;
 }) {
+  // The clip keeps the follow motion's in-flight offset out of scrollHeight.
   if (!bottomAligned) {
     return (
-      <div
-        data-transcript-content
-        className="mx-auto flex w-full min-w-0 max-w-4xl flex-col gap-1 pb-8"
-      >
-        {children}
+      <div className="mx-auto w-full min-w-0 max-w-4xl overflow-clip">
+        <div
+          data-transcript-content
+          className="flex min-w-0 flex-col gap-1 pb-8"
+        >
+          {children}
+        </div>
       </div>
     );
   }
@@ -1634,6 +1766,7 @@ function backgroundLabel(tasks: string[]): string {
  * to the last, so it is not repeated here.
  */
 function TurnDuration({
+  managerProject,
   elapsedMs,
   label: completionLabel,
   metrics,
@@ -1652,7 +1785,9 @@ function TurnDuration({
   fromModel,
   onSecondOpinion,
   onHandoff,
+  extraAction,
 }: {
+  managerProject?: string;
   elapsedMs: number | null;
   label?: string;
   metrics?: TurnMetrics;
@@ -1673,6 +1808,7 @@ function TurnDuration({
   fromModel?: string;
   onSecondOpinion?: (target: ModelTarget) => void;
   onHandoff?: (target: ModelTarget) => void;
+  extraAction?: ReactNode;
 }) {
   const label =
     completionLabel ?? formatWorkingDuration(elapsedMs, modelName, true);
@@ -1736,13 +1872,14 @@ function TurnDuration({
             excludeFromModel
           />
         ) : null}
+        {extraAction}
         <TurnMetricsBadge metrics={metrics} elapsedMs={elapsedMs} />
       </span>
       {labelHidden ? null : (
         <span className="flex min-w-0 items-center gap-2.5">
           {dot}
           <span className="flex min-w-0 items-center gap-1.5">
-            {harness ? (
+            {managerProject ? <ManagerAvatar project={managerProject} /> : harness ? (
               <HarnessIcon harness={harness} className="size-3.5 shrink-0" />
             ) : null}
             <span className="min-w-0 truncate" title={label}>
@@ -2077,8 +2214,12 @@ const TranscriptBlock = memo(function TranscriptBlock({
   onEditLastTurn?: () => void;
   editing?: boolean;
 }) {
+  const incoming = teamMessage(block);
+  if (incoming) return <TeamMessage message={incoming} cwd={cwd} />;
   if (block.role === "user") {
     return (
+      <>
+      {block.monoSource && <div className="mb-1 flex items-center justify-end gap-2 text-xs text-content/60"><PixelMascot name={block.monoSource.mascot} color={block.monoSource.color} still className="size-5" />From {block.monoSource.name}</div>}
       <UserMessageBlock
         block={block}
         layout={layout}
@@ -2095,8 +2236,12 @@ const TranscriptBlock = memo(function TranscriptBlock({
         onSendDraft={onSendDraft}
         onRemoveDraft={onRemoveDraft}
       />
+      </>
     );
   }
+
+  if (block.monoTeamChange) return <MonoTeamChangeCard {...block.monoTeamChange} />;
+  if (block.monoCard && block.monoCardOwner) return <MonoChatCard card={block.monoCard} monoId={block.monoCardOwner} blockId={block.id} />;
 
   if (block.role === "image") {
     return block.image ? <GeneratedImage image={block.image} /> : null;
@@ -2184,7 +2329,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
     return (
       <div className={`${embedded ? "" : "px-4"} py-2 text-content/50`}>
         <pre className="min-w-0 whitespace-pre-wrap break-words">
-          {block.text}
+          <ArtifactText text={block.text} />
         </pre>
       </div>
     );
@@ -2209,6 +2354,25 @@ const TranscriptBlock = memo(function TranscriptBlock({
     </div>
   );
 });
+
+/**
+ * A Mono's emoji answer, on the corner of the message it answers. The top
+ * left keeps it clear of the bubble's tail and the hover actions below.
+ */
+function MonoReactionBadge({ emoji, live }: { emoji: string; live: boolean }) {
+  return (
+    <span
+      role="img"
+      aria-label={`Reacted ${emoji}`}
+      data-mono-reaction={emoji}
+      className={`${live ? "mono-reaction-in " : ""}absolute -top-4 -left-2 z-[1] rounded-full bg-background-base p-0.5 leading-none`}
+    >
+      <span className="grid h-6 min-w-7 place-items-center rounded-full bg-content/10 px-1.5 font-sans text-[14px]">
+        {emoji}
+      </span>
+    </span>
+  );
+}
 
 function UserMessageBlock({
   block,
@@ -2244,6 +2408,8 @@ function UserMessageBlock({
   const [expanded, setExpanded] = useState(false);
   const [overflows, setOverflows] = useState(false);
   const [singleLine, setSingleLine] = useState(false);
+  // Only a reaction that arrives while the chat is open pops in.
+  const [reactionAtMount] = useState(block.monoReaction);
   const textRef = useRef<HTMLElement>(null);
   const card = block.secondOpinion;
   const note = block.noteCard;
@@ -2393,9 +2559,15 @@ function UserMessageBlock({
         <div
           data-chat-message={block.id}
           data-chat-message-role="user"
-          className="select-none font-sans text-6xl leading-none"
+          className="relative select-none font-sans text-6xl leading-none"
         >
           {displayText.trim()}
+          {block.monoReaction ? (
+            <MonoReactionBadge
+              emoji={block.monoReaction}
+              live={block.monoReaction !== reactionAtMount}
+            />
+          ) : null}
         </div>
         {deliveryControl}
       </div>
@@ -2571,6 +2743,12 @@ function UserMessageBlock({
                   startedAt={block.startedAt}
                 />
               ) : null}
+              {block.monoReaction ? (
+                <MonoReactionBadge
+                  emoji={block.monoReaction}
+                  live={block.monoReaction !== reactionAtMount}
+                />
+              ) : null}
             </div>
           )}
         </div>
@@ -2679,6 +2857,7 @@ function turnItemKey(item: TurnItem): string {
  * prompt, answer, and a receipt for the work in between.
  */
 function WorkFoldLine({
+  managerProject,
   title,
   kind,
   harness,
@@ -2688,6 +2867,7 @@ function WorkFoldLine({
   open,
   onToggle,
 }: {
+  managerProject?: string;
   title: ReactNode;
   kind: ActivityPhaseKind;
   harness?: HarnessId;
@@ -2708,7 +2888,7 @@ function WorkFoldLine({
         />
       ) : (
         <>
-          {agentMascot ? (
+          {managerProject ? <ManagerAvatar project={managerProject} /> : agentMascot ? (
             <PixelMascot
               name={agentMascot.mascot}
               color={agentMascot.color}
@@ -3000,6 +3180,7 @@ function useLivePhaseScroll(
 
 /** The live ticker shares the identity line instead of adding a work row. */
 function MonoTurnHeader({
+  managerProject,
   blocks,
   title,
   name,
@@ -3013,6 +3194,7 @@ function MonoTurnHeader({
   workExpanded,
   searchCurrent,
 }: {
+  managerProject?: string;
   blocks: Block[];
   title: ReactNode;
   name?: string;
@@ -3043,7 +3225,9 @@ function MonoTurnHeader({
           : `Waiting for ${backgroundTasks.length} background tasks…`,
     };
   }
-  const mark = agentMascot ? (
+  const mark = managerProject ? (
+    <ManagerAvatar project={managerProject} />
+  ) : agentMascot ? (
     <PixelMascot
       name={agentMascot.mascot}
       color={agentMascot.color}
@@ -3166,7 +3350,8 @@ export function MonoActivityTrail({
   onApproval,
   onOpenFile,
   onOpenDiff,
-}: Omit<ActivityPhasesProps, "done" | "padded"> & { live?: boolean }) {
+  readOutput = false,
+}: Omit<ActivityPhasesProps, "done" | "padded"> & { live?: boolean; readOutput?: boolean }) {
   const steps = blocks.filter(
     (block) =>
       !block.internal &&
@@ -3233,7 +3418,9 @@ export function MonoActivityTrail({
                   aria-hidden="true"
                   className="absolute left-0 top-[10px] size-1.5 rounded-full bg-content/25"
                 />
-                {block.role === "plan" ||
+                {readOutput && !block.tool && !isSubagentBlock(block) && !block.plan && !block.taskList && !block.image ? (
+                  <AgentMarkdown text={block.text} cwd={cwd} onOpenFile={onOpenFile} className="mono-run-report" />
+                ) : block.role === "plan" ||
                 block.role === "tasks" ||
                 block.role === "image" ? (
                   <TranscriptBlock
@@ -3245,7 +3432,10 @@ export function MonoActivityTrail({
                   />
                 ) : (
                   <ActivityRow
-                    block={block}
+                    block={readOutput && block.tool && !needsApproval(block) ? {
+                      ...block,
+                      tool: { ...block.tool, detail: undefined, preview: block.tool.preview ? { ...block.tool.preview, output: undefined } : undefined },
+                    } : block}
                     live={live}
                     cwd={cwd}
                     onApproval={onApproval}
@@ -3253,6 +3443,9 @@ export function MonoActivityTrail({
                     onOpenDiff={onOpenDiff}
                   />
                 )}
+                {readOutput && block.tool && !needsApproval(block) && (block.tool.detail?.trim() || block.tool.preview?.output?.trim()) ? (
+                  <pre className="min-w-0 whitespace-pre-wrap break-words py-2 font-mono text-[12px] leading-5 text-content/65">{[...new Set([block.tool.detail?.trim(), block.tool.preview?.output?.trim()].filter(Boolean))].join("\n\n")}</pre>
+                ) : null}
               </div>
             ))}
           </li>
@@ -3758,18 +3951,22 @@ function SubagentMascot({
   state: ToolCallState;
   active?: boolean;
 }) {
+  // The slot keeps the row's 14px icon width; the sprite sits a size smaller
+  // inside it so it weighs the same as the line icons around it.
   return (
-    <ProjectMascot
-      project={name}
-      active={active}
-      className={`size-3.5 shrink-0 ${
-        state === "rejected"
-          ? "text-red-400"
-          : state === "pending"
-            ? "text-content/70"
-            : "text-content/45"
-      }`}
-    />
+    <span className="flex size-3.5 shrink-0 items-center justify-center">
+      <ProjectMascot
+        project={name}
+        active={active}
+        className={`size-3 shrink-0 ${
+          state === "rejected"
+            ? "text-red-400"
+            : state === "pending"
+              ? "text-content/70"
+              : "text-content/45"
+        }`}
+      />
+    </span>
   );
 }
 
@@ -4678,9 +4875,11 @@ function ApprovalControls({
   onApproval?: (requestId: number, decision: ApprovalDecision) => void;
 }) {
   const approval = block.approval;
-  if (!approval || approval.decided || !onApproval) return null;
+  if (!approval || approval.decided) return null;
   return (
-    <div className="mt-1.5 flex gap-2">
+    <div className="mt-1.5">
+      {approval.autoApprovalReason && <p className="mb-1.5 break-words text-[11px] text-content/60" aria-label="Automatic approval status">{approval.autoApprovalReason}</p>}
+      {onApproval && <div className="flex gap-2">
       <button
         type="button"
         className="rounded-md bg-content px-2.5 py-0.5 text-[11px] hover:bg-content/80     text-background-base"
@@ -4695,6 +4894,7 @@ function ApprovalControls({
       >
         Deny
       </button>
+      </div>}
     </div>
   );
 }
@@ -4866,6 +5066,23 @@ function monoTurnUserBlock(
   return blocks.find((block) => block.role === "user");
 }
 
+/** Matches the edit tools whose files the session's review records. */
+function lastEditTurnIndex(turns: Block[][]): number {
+  for (let index = turns.length - 1; index >= 0; index--) {
+    const edited = turns[index].some(
+      (block) =>
+        block.role === "tool" &&
+        isEditTool(
+          block.tool?.kind,
+          block.text || block.tool?.title,
+          block.tool?.preview,
+        ),
+    );
+    if (edited) return index;
+  }
+  return -1;
+}
+
 function sumDurations(durations: (number | undefined)[]): number | undefined {
   const known = durations.filter((ms): ms is number => ms != null);
   return known.length ? known.reduce((total, ms) => total + ms, 0) : undefined;
@@ -4873,7 +5090,7 @@ function sumDurations(durations: (number | undefined)[]): number | undefined {
 
 function userTurnCount(blocks: Block[], managed = false): number {
   return blocks.filter(
-    (block) => block.role === "user" && (managed || !block.internal),
+    (block) => isUserMessage(block) && (managed || !block.internal),
   ).length;
 }
 
@@ -4954,7 +5171,7 @@ function pinToBottom(el: HTMLElement | null) {
 /** Keep the live turn's min-height in lockstep with the visible transcript. */
 function syncTranscriptViewport(el: HTMLElement | null) {
   if (!el || el.clientHeight <= 0) return;
-  const inner = el.firstElementChild as HTMLElement | null;
+  const inner = el.querySelector<HTMLElement>("[data-transcript-content]");
   const pad = inner
     ? Number.parseFloat(getComputedStyle(inner).paddingBottom) || 0
     : 0;

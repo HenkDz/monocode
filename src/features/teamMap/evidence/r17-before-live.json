@@ -1,0 +1,29 @@
+{
+  "phase": "before",
+  "identifier": "com.monocode.r17.layout-evidence",
+  "isolatedFolder": "C:/Users/nooro/AppData/Local/Temp/monocode-r17-layout-evidence",
+  "syntheticRoster": true,
+  "checks": [
+    {
+      "scenario": "user-org",
+      "theme": "dark",
+      "canvas": {
+        "width": 1100,
+        "height": 1250
+      },
+      "zoom": "41%\nFit to view",
+      "nodes": 12
+    },
+    {
+      "scenario": "user-org",
+      "theme": "light",
+      "canvas": {
+        "width": 1100,
+        "height": 1250
+      },
+      "zoom": "41%\nFit to view",
+      "nodes": 12
+    }
+  ],
+  "errors": []
+}

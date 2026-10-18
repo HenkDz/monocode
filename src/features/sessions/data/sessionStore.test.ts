@@ -20,6 +20,27 @@ import {
   shouldPersistSession,
 } from "./sessionStore";
 
+it("persists internal events without adding them to the user outbox", () => {
+  const session = newSession("claude", "/tmp");
+  const event = { id: "event", text: "Manager needs a decision", attachments: [],
+    monoSessionCompletion: { sessionId: "manager", title: "Manager", status: "completed" as const } };
+  const pending = { ...session, pendingMonoEvents: [event] };
+  expect(persistFingerprint(pending)).not.toBe(persistFingerprint(session));
+  expect(sanitizeSessionForPersist(pending).queuedMessages).toEqual([event]);
+  expect(pending.queuedMessages).toBeUndefined();
+});
+
+it("preserves bounded team card references through persistence and reload", () => {
+  const session = newSession("codex", "/tmp");
+  session.blocks = [{ id: "team-card", role: "assistant", text: "", monoTeamChange: { managerId: "manager-1", changeId: "change-1" } }];
+  const saved = sanitizeSessionForPersist(session);
+  expect(saved.blocks[0].monoTeamChange).toEqual({ managerId: "manager-1", changeId: "change-1" });
+  expect(sanitizeSessionForPersist(JSON.parse(JSON.stringify(saved))).blocks[0].monoTeamChange).toEqual(saved.blocks[0].monoTeamChange);
+  expect(persistFingerprint(session)).not.toBe(persistFingerprint({ ...session, blocks: [{ ...session.blocks[0], monoTeamChange: undefined }] }));
+  session.blocks[0].monoTeamChange = { managerId: "x".repeat(1000), changeId: "change-1" };
+  expect(sanitizeSessionForPersist(session).blocks[0].monoTeamChange).toBeUndefined();
+});
+
 it("persists sidebar visibility without making the session ephemeral", () => {
   const session = newSession("codex", "/tmp");
   session.blocks = [{ id: "u", role: "user", text: "Review" }];
@@ -954,6 +975,10 @@ describe("persistFingerprint", () => {
 
   it("ignores state that is never written", () => {
     const before = base();
+    const preparing = { ...before, codexStoragePreparing: true, codexStorageError: "Codex storage needs repair: AGENTS.md" };
+    expect(persistFingerprint(preparing)).toBe(persistFingerprint(before));
+    expect(sanitizeSessionForPersist(preparing)).not.toHaveProperty("codexStoragePreparing");
+    expect(sanitizeSessionForPersist(preparing)).not.toHaveProperty("codexStorageError");
     expect(persistFingerprint({ ...before, busy: true })).toBe(
       persistFingerprint(before),
     );

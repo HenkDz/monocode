@@ -45,8 +45,8 @@ import {
   ChangeList,
   FileSection,
   GitSyncActions,
-  usePrStatus,
 } from "../../source-control/ui/GitChangesPanel";
+import { usePrStatus } from "../../source-control/hooks/usePrStatus";
 
 /** One session file, with its path inside the repository that holds it. */
 export type MonoProjectFile = { file: CheckpointFile; relative: string };

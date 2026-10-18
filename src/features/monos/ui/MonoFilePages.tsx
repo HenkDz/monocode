@@ -18,6 +18,7 @@ import {
   type MemoryLine,
 } from "../model/monoMemory";
 import { HabitButton } from "./MonoHabits";
+import { MonoFieldLock } from "./MonoFieldLock";
 import {
   AutoTextarea,
   Empty,
@@ -65,6 +66,7 @@ export function SoulPage({
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-mono-soul>
       <PageHeader title="Soul" onBack={onBack} />
+      <div className="px-3"><MonoFieldLock monoId={monoId} field="soul" /></div>
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-none">
         {files ? (
           <FileField
@@ -265,6 +267,7 @@ function FactRow({
       <FactIcon dim={struck} />
       <span className="flex min-w-0 flex-1 flex-col">
         <span
+          title={text}
           className={`truncate text-[12px] leading-5 ${
             struck ? "text-content/35 line-through" : "text-content/85"
           }`}

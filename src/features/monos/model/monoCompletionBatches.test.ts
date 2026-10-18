@@ -130,7 +130,8 @@ describe("Mono completion batches", () => {
     b(result("b"));
     expect(mono.queuedMessages).toHaveLength(1);
     a(result("a"));
-    expect(mono.queuedMessages).toHaveLength(2);
+    expect(mono.queuedMessages).toHaveLength(1);
+    expect(mono.pendingMonoEvents).toHaveLength(1);
     const notification = {
       ...mono,
       queuedMessages: mono.queuedMessages!.slice(1),

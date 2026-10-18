@@ -1,0 +1,155 @@
+{
+  "native": {
+    "binary": "C:/Users/nooro/orca/workspaces/monocode/r14-team-map/target/r14-preview/monocode-r14-stream.exe",
+    "sha256": "450cdbec42dfad0690e64f8a5684fc06b8d05942da2b7cdbf9a2ca5038d3b167",
+    "builtAt": "2026-10-08T10:28:46.697Z",
+    "identifier": "com.monocode.desktop.r14-team-map-test",
+    "embeddedFrontendAssets": [
+      "App-DUEFOdYu.js"
+    ],
+    "pid": 123272,
+    "cwd": "C:\\Users\\nooro\\AppData\\Local\\Temp\\monocode-r14-empty-d03ded10a5e745c1b353f20595828c81",
+    "loadedAssets": [
+      "http://tauri.localhost/assets/App-DUEFOdYu.js",
+      "http://tauri.localhost/assets/App-C-Pl6AZq.css"
+    ]
+  },
+  "goal": {
+    "id": "673a9e52-9693-4aa8-9c20-d019516e00f1",
+    "state": "done"
+  },
+  "task": {
+    "id": "674104f0-0c66-4917-81fa-e65b078804ef",
+    "status": "completed",
+    "readOnly": true,
+    "accepted": true,
+    "lastDispatchId": "71c83289-a180-47eb-a0a6-4a0a9a1aef68",
+    "acceptedDispatchId": "71c83289-a180-47eb-a0a6-4a0a9a1aef68",
+    "completionOutcome": "no-changes",
+    "result": "I’ll run the supplied assertion, including the 12-second wait, then save its prepared report.\n\nVerified `R14-ATLAS-UNCHANGED`: the repeated README read remained unchanged after the successful 12-second assertion. Report saved and attached.\n\n<details><summary>Command output</summary>\n\n```text\nR14-ATLAS-UNCHANGED: repeated read assertion passed after 12 seconds\nReport: Atlas streaming marker — saved=true, attached=true\n```\n\n</details>\n\nNo project files changed. Checks were limited to this acceptance; nothing remains open."
+  },
+  "dispatch": {
+    "id": "71c83289-a180-47eb-a0a6-4a0a9a1aef68",
+    "startedAt": 1791455493729,
+    "state": "completed"
+  },
+  "continuousFlow": [
+    {
+      "at": "2026-10-08T10:31:41.429Z",
+      "elapsedSinceDispatchMs": 7700,
+      "pulseIds": [],
+      "taskStatus": "running",
+      "edges": [
+        {
+          "path": "M 576 178 C 576 221, 304 221, 304 264",
+          "flow": "up",
+          "animation": "team-map-work-flow",
+          "direction": "reverse",
+          "iterations": "infinite",
+          "dasharray": "6px, 6px",
+          "dashoffset": "-2.77841px"
+        },
+        {
+          "path": "M 304 394 C 304 437, 168 437, 168 480",
+          "flow": "up",
+          "animation": "team-map-work-flow",
+          "direction": "reverse",
+          "iterations": "infinite",
+          "dasharray": "6px, 6px",
+          "dashoffset": "-7.1952px"
+        }
+      ]
+    },
+    {
+      "at": "2026-10-08T10:31:41.927Z",
+      "elapsedSinceDispatchMs": 8198,
+      "pulseIds": [],
+      "taskStatus": "running",
+      "edges": [
+        {
+          "path": "M 576 178 C 576 221, 304 221, 304 264",
+          "flow": "up",
+          "animation": "team-map-work-flow",
+          "direction": "reverse",
+          "iterations": "infinite",
+          "dasharray": "6px, 6px",
+          "dashoffset": "-14.7784px"
+        },
+        {
+          "path": "M 304 394 C 304 437, 168 437, 168 480",
+          "flow": "up",
+          "animation": "team-map-work-flow",
+          "direction": "reverse",
+          "iterations": "infinite",
+          "dasharray": "6px, 6px",
+          "dashoffset": "-19.1952px"
+        }
+      ]
+    }
+  ],
+  "needsYouFilter": {
+    "activeEdges": [
+      {
+        "flow": "up",
+        "dimmed": "true",
+        "opacity": "0.25"
+      },
+      {
+        "flow": "up",
+        "dimmed": "true",
+        "opacity": "0.25"
+      }
+    ]
+  },
+  "reducedMotion": {
+    "matches": true,
+    "activeEdges": [
+      {
+        "flow": "up",
+        "animation": "none",
+        "dasharray": "6px, 6px"
+      },
+      {
+        "flow": "up",
+        "animation": "none",
+        "dasharray": "6px, 6px"
+      }
+    ]
+  },
+  "finished": {
+    "at": "2026-10-08T10:32:40.580Z",
+    "runStatus": "finished",
+    "inFlight": [],
+    "activeFlowEdges": 0,
+    "animatedEdges": 0
+  },
+  "repositoryChecks": [
+    {
+      "project": "Atlas",
+      "head": "485acfe1a851d6af752fdb5de4fb49edc75f36ec",
+      "clean": true,
+      "readmeUnchanged": true
+    },
+    {
+      "project": "Beacon",
+      "head": "b418f8e89ec425b2f000b5cfa7366b5c3e8ea556",
+      "clean": true,
+      "readmeUnchanged": true
+    }
+  ],
+  "finalViewport": {
+    "nativeSize": {
+      "width": 1280,
+      "height": 1038
+    },
+    "innerHeight": 1038,
+    "dialogBottom": 1022,
+    "deviceMetricsOverride": false,
+    "mediaOverride": false
+  },
+  "screenshots": {
+    "active": "streaming-active.png",
+    "finished": "streaming-finished.png"
+  },
+  "baselineReceiptPreserved": "native-verification.json"
+}

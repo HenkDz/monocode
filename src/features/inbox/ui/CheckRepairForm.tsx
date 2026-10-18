@@ -20,14 +20,29 @@ import {
   githubActionsJobId,
   type GithubPrCheck,
 } from "../model/githubPrChecks";
+import { ProjectMascot } from "../../projects/ui/ProjectMascot";
+import type { TrackedCiRepair } from "../model/ciRepairTracking";
 
 export type CheckRepair = {
+  state?: "open" | "merged" | "closed";
+  onNotNeeded?: (
+    attempt: TrackedCiRepair,
+    state: "merged" | "closed",
+  ) => Promise<void>;
+  manager?: {
+    id: string;
+    name: string;
+    mascot: string;
+    color: string;
+    role: "manager";
+  };
   onOpenSession?: (sessionId: string) => void | Promise<void>;
   number: number;
   sessions: readonly { id: string; title: string }[];
   onStart: (
     request: CiRepairRequest,
     sessionId?: string,
+    managerMonoId?: string,
   ) => void | Promise<void>;
 };
 
@@ -58,6 +73,12 @@ export function CheckRepairForm({
   const listId = useId();
   const choices = [
     { id: "", title: "New project chat" },
+    ...(repair.manager &&
+    repair.manager.name
+      .toLocaleLowerCase()
+      .includes(query.trim().toLocaleLowerCase())
+      ? [{ id: `manager:${repair.manager.id}`, title: repair.manager.name }]
+      : []),
     ...repair.sessions.filter((session) =>
       (session.title || "Untitled chat")
         .toLocaleLowerCase()
@@ -65,7 +86,9 @@ export function CheckRepairForm({
     ),
   ];
   const selectedTitle = sessionId
-    ? repair.sessions.find((session) => session.id === sessionId)?.title ||
+    ? (sessionId === `manager:${repair.manager?.id}`
+        ? repair.manager?.name
+        : repair.sessions.find((session) => session.id === sessionId)?.title) ||
       "Untitled chat"
     : "New project chat";
   useEffect(() => {
@@ -90,6 +113,7 @@ export function CheckRepairForm({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const starting = useRef(false);
+  const requestId = useRef(crypto.randomUUID());
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
@@ -98,7 +122,13 @@ export function CheckRepairForm({
     };
   }, []);
   async function start() {
-    if (starting.current || blocked) return;
+    if (
+      starting.current ||
+      blocked ||
+      repair.state === "merged" ||
+      repair.state === "closed"
+    )
+      return;
     starting.current = true;
     setBusy(true);
     setError(null);
@@ -117,7 +147,8 @@ export function CheckRepairForm({
               : undefined;
           } catch {
             details = {
-              notice: "Job details unavailable. Inspect the check URL for logs.",
+              notice:
+                "Job details unavailable. Inspect the check URL for logs.",
             };
           }
           if (!mounted.current) return;
@@ -128,15 +159,19 @@ export function CheckRepairForm({
         Array.from({ length: Math.min(3, checks.length) }, () => loadNext()),
       );
       if (!mounted.current) return;
-      await repair.onStart(
-        buildCiRepairRequest({
-          repo,
-          number: repair.number,
-          headOid,
-          evidence,
-        }),
-        sessionId || undefined,
-      );
+      const request = buildCiRepairRequest({
+        repo,
+        number: repair.number,
+        headOid,
+        evidence,
+      });
+      if (sessionId.startsWith("manager:"))
+        await repair.onStart(
+          { ...request, requestId: requestId.current },
+          undefined,
+          sessionId.slice(8),
+        );
+      else await repair.onStart(request, sessionId || undefined);
       if (mounted.current) onClose();
     } catch (reason) {
       if (mounted.current)
@@ -244,15 +279,29 @@ export function CheckRepairForm({
               onClick={() => setSessionId(session.id)}
               className={`flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-[12px] disabled:opacity-50 ${index === active ? "bg-selection text-content" : "text-content/70 hover:bg-content/5 hover:text-content"}`}
             >
-              <Icon
-                className="size-3.5 shrink-0 text-content/50"
-                strokeWidth={1.75}
-              />
+              {session.id.startsWith("manager:") && repair.manager ? (
+                <ProjectMascot
+                  project={cwd}
+                  name={repair.manager.mascot}
+                  color={repair.manager.color}
+                  className="size-4 shrink-0"
+                />
+              ) : (
+                <Icon
+                  className="size-3.5 shrink-0 text-content/50"
+                  strokeWidth={1.75}
+                />
+              )}
               <span
                 className="min-w-0 flex-1 truncate"
                 title={session.title || "Untitled chat"}
               >
                 {session.title || "Untitled chat"}
+                {session.id.startsWith("manager:") ? (
+                  <span className="ml-1.5 text-[10px] text-content/45">
+                    Manager
+                  </span>
+                ) : null}
               </span>
               {selected ? (
                 <Check
@@ -278,7 +327,10 @@ export function CheckRepairForm({
         </p>
       ) : null}
       {blocked && !busy ? (
-        <p role="status" className="px-3.5 pb-3 text-[12px] leading-4 text-content/55">
+        <p
+          role="status"
+          className="px-3.5 pb-3 text-[12px] leading-4 text-content/55"
+        >
           Wait for the latest checks before starting a fix.
         </p>
       ) : null}

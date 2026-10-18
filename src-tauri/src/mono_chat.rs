@@ -24,8 +24,9 @@ const TRAY: &str = "mono-menu-bar";
 const SELECT: &str = "mono-chat:";
 const CHANGED: &str = "mono_chat_changed";
 const REQUEST: &str = "mono_chat_request";
-/// A 464pt conversation plus the 56pt Mono rail beside it.
-const WIDTH: f64 = 520.0;
+/// A 384pt conversation plus the 56pt Mono rail beside it.
+const WIDTH: f64 = 440.0;
+const HEIGHT: f64 = 560.0;
 
 #[derive(Clone, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -35,6 +36,8 @@ pub struct MonoEntry {
     mascot: String,
     color: String,
     session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    role: Option<String>,
     /// Drives the rail's status circle; the tray menu ignores it.
     #[serde(default)]
     status: String,
@@ -599,8 +602,8 @@ fn build(app: &AppHandle, mono_id: &str) -> tauri::Result<WebviewWindow> {
         .or_else(|| app.primary_monitor().ok().flatten());
     let height = monitor
         .as_ref()
-        .map(|m| (f64::from(m.work_area().size.height) / m.scale_factor() - 24.0).min(680.0))
-        .unwrap_or(680.0);
+        .map(|m| (f64::from(m.work_area().size.height) / m.scale_factor() - 24.0).min(HEIGHT))
+        .unwrap_or(HEIGHT);
     let window = WebviewWindowBuilder::new(
         app,
         label(mono_id),
@@ -837,8 +840,17 @@ pub async fn mono_chat_action(
             | "openFile"
             | "openArtifact"
             | "resume"
+            | "runtimeMode"
     ) {
         return Err("Unknown chat action.".into());
+    }
+    if kind == "runtimeMode"
+        && !matches!(
+            action.get("mode").and_then(Value::as_str),
+            Some("supervised" | "auto-accept-edits" | "auto" | "full-access")
+        )
+    {
+        return Err("Unknown permission mode.".into());
     }
     if action.to_string().len() > 32 * 1024 * 1024 {
         return Err("That message is too large.".into());
@@ -919,6 +931,26 @@ pub fn window_closed(app: &AppHandle, label: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn floating_roster_preserves_org_roles_and_accepts_legacy_entries() {
+        let mut entry = json!({
+            "id": "mono", "name": "Mono", "mascot": "orbit", "color": "blue",
+            "sessionId": null
+        });
+        let legacy: MonoEntry = serde_json::from_value(entry.clone()).unwrap();
+        assert!(legacy.role.is_none());
+        assert!(legacy.status.is_empty());
+        assert!(serde_json::to_value(legacy).unwrap().get("role").is_none());
+        entry["status"] = json!("working");
+        for role in ["orchestrator", "manager", "member"] {
+            entry["role"] = json!(role);
+            let mono: MonoEntry = serde_json::from_value(entry.clone()).unwrap();
+            let published = serde_json::to_value(mono).unwrap();
+            assert_eq!(published["role"], role);
+            assert_eq!(published["status"], "working");
+        }
+    }
 
     #[test]
     fn menu_bar_mark_is_sixteen_points_inside_the_standard_eighteen_point_image() {

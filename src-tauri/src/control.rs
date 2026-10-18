@@ -1,6 +1,6 @@
 //! Authenticated loopback transport. App windows own execution; callers never
 //! receive arbitrary Tauri command access or direct database write access.
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Component, Path, PathBuf};
@@ -27,8 +27,9 @@ struct Pending {
 }
 struct ActiveTurn {
     window: String,
-    cwd: String,
     app_allowed: bool,
+    mono_manager_id: Option<String>,
+    org_member: bool,
 }
 #[derive(Default)]
 struct Inner {
@@ -36,14 +37,46 @@ struct Inner {
     app_grants: HashMap<String, Grant>,
     pending: HashMap<String, Pending>,
     workers: HashMap<String, String>,
+    unreserved_workers: HashSet<String>,
     scratch: HashMap<String, PathBuf>,
     active: HashMap<String, ActiveTurn>,
+    mono_sessions: HashSet<String>,
+    habit_grants: HashMap<String, Grant>,
 }
 impl Inner {
+    fn attached_worker(&self, session: &str, window: &str) -> bool {
+        !self.habit_grants.contains_key(session)
+            && self
+                .workers
+                .get(session)
+                .and_then(|lead| self.grants.get(lead))
+                .is_some_and(|lead| lead.window == window)
+    }
+    fn checkout_grant(&self, session: &str, cwd: &str) -> Option<&Grant> {
+        self.app_grants.values().find(|grant| {
+            grant.session != session
+                && self.active.contains_key(&grant.session)
+                && self.attached_worker(&grant.session, &grant.window)
+                && !self.unreserved_workers.contains(&grant.session)
+                && path_within(cwd, &grant.cwd)
+        })
+    }
+
+    fn authorize_checkout(&self, session: &str, window: &str, cwd: &str) -> Result<(), String> {
+        // Checkout reservations serialize workers; they never exclude the user.
+        if self.attached_worker(session, window)
+            && !self.unreserved_workers.contains(session)
+            && self.checkout_grant(session, cwd).is_some()
+        {
+            return Err("Another worker is assigned to this checkout. Wait for that task before starting another agent.".into());
+        }
+        Ok(())
+    }
+
     // Provider processes can stay alive between turns, so install the token
     // before their first spawn. request_grant still requires an opted-in turn.
     fn prepare_app_grant(&mut self, session: &str, window: &str, cwd: &str) -> bool {
-        if self.workers.contains_key(session) || self.grants.contains_key(session) {
+        if self.grants.contains_key(session) && !self.mono_sessions.contains(session) {
             return false;
         }
         let token = self
@@ -104,8 +137,11 @@ impl Inner {
         self.grants.retain(|id, _| !ids.contains(id));
         self.app_grants.retain(|id, _| !ids.contains(id));
         self.workers.retain(|id, _| !ids.contains(id));
+        self.unreserved_workers.retain(|id| !ids.contains(id));
         self.scratch.retain(|id, _| !ids.contains(id));
         self.active.retain(|id, _| !ids.contains(id));
+        self.mono_sessions.retain(|id| !ids.contains(id));
+        self.habit_grants.retain(|id, _| !ids.contains(id));
         self.pending.retain(|_, pending| {
             if pending.window != label {
                 return true;
@@ -123,8 +159,8 @@ pub struct ControlHost {
     inner: Arc<Mutex<Inner>>,
 }
 
-fn paths_overlap(a: &str, b: &str) -> bool {
-    a == b || a.starts_with(&format!("{b}/")) || b.starts_with(&format!("{a}/"))
+fn path_within(path: &str, checkout: &str) -> bool {
+    path == checkout || path.starts_with(&format!("{checkout}/"))
 }
 
 /** Windows paths compare case-insensitively; POSIX paths must retain case. */
@@ -158,23 +194,80 @@ struct Event {
     input: Value,
 }
 
+#[cfg(test)]
 fn request_grant(host: &Inner, namespace: &str, token: &str) -> Result<Grant, String> {
+    request_action_grant(host, namespace, token, "")
+}
+
+fn request_action_grant(
+    host: &Inner,
+    namespace: &str,
+    token: &str,
+    action: &str,
+) -> Result<Grant, String> {
     let grant = match namespace {
-        "control" => host.grants.values().find(|grant| grant.token == token),
+        "control" => host
+            .grants
+            .values()
+            .chain(host.habit_grants.values())
+            .find(|grant| grant.token == token),
         "app" => host.app_grants.values().find(|grant| grant.token == token),
         _ => return Err("Unknown control namespace".into()),
     }
     .cloned()
     .ok_or("Connection revoked or unauthorized")?;
+    let org_member = host
+        .active
+        .get(&grant.session)
+        .is_some_and(|turn| turn.org_member);
+    if namespace == "app" && org_member && !host.attached_worker(&grant.session, &grant.window) {
+        return Err(APP_TURN_INACTIVE.into());
+    }
+    let member_artifact = org_member
+        && matches!(
+            action,
+            "artifacts.list" | "artifacts.read" | "artifacts.write"
+        );
+    let member_message = org_member && action == "team.message";
+    let member_metadata = org_member && matches!(action, "projects.status" | "models.list");
+    if namespace == "control"
+        && host.habit_grants.contains_key(&grant.session)
+        && (host.workers.get(&grant.session).is_none_or(|owner| {
+            host.grants
+                .get(owner)
+                .is_none_or(|parent| parent.window != grant.window)
+        }) || host
+            .active
+            .get(&grant.session)
+            .is_none_or(|turn| turn.window != grant.window || !turn.app_allowed))
+    {
+        return Err(APP_TURN_INACTIVE.into());
+    }
     if namespace == "app"
-        && (host.grants.contains_key(&grant.session)
-            || host.workers.contains_key(&grant.session)
+        && ((host.grants.contains_key(&grant.session)
+            && !host.mono_sessions.contains(&grant.session))
+            || (host.workers.contains_key(&grant.session)
+                && !host.habit_grants.contains_key(&grant.session)
+                && !matches!(action, "reviews.submit" | "memory.add")
+                && !member_artifact
+                && !member_message
+                && !member_metadata)
             || !host
                 .active
                 .get(&grant.session)
                 .is_some_and(|turn| turn.window == grant.window && turn.app_allowed))
     {
         return Err(APP_TURN_INACTIVE.into());
+    }
+    if namespace == "app"
+        && action.starts_with("team.")
+        && !matches!(action, "team.answer" | "team.message")
+        && host
+            .active
+            .get(&grant.session)
+            .is_none_or(|turn| turn.mono_manager_id.is_none())
+    {
+        return Err("Only a Manager can manage its own team".into());
     }
     Ok(grant)
 }
@@ -234,11 +327,19 @@ fn serve(mut stream: TcpStream, app: &AppHandle, inner: &Arc<Mutex<Inner>>) {
         {
             return Err("Invalid input or request ID".into());
         }
+        if request.namespace == "app" {
+            crate::control_cli::validate_app_request(
+                &request.action,
+                &request.input,
+                &request.request_id,
+            )?;
+        }
         let id = uuid::Uuid::new_v4().to_string();
         let (tx, rx) = mpsc::channel();
         let grant = {
             let mut host = inner.lock().map_err(|_| "Control service unavailable")?;
-            let grant = request_grant(&host, &request.namespace, &request.token)?;
+            let grant =
+                request_action_grant(&host, &request.namespace, &request.token, &request.action)?;
             if host.pending.len() >= 24 {
                 return Err("Too many pending control requests".into());
             }
@@ -297,20 +398,6 @@ pub fn control_enable(
         .inner
         .lock()
         .map_err(|_| "Control service unavailable")?;
-    if let Some((id, _)) = inner
-        .active
-        .iter()
-        .find(|(id, turn)| *id != &session_id && paths_overlap(&turn.cwd, &cwd))
-    {
-        return Err(format!(
-            "Another session ({id}) is running in this checkout. Stop it before enabling orchestration."
-        ));
-    }
-    if inner.grants.values().any(|g| {
-        paths_overlap(&g.cwd, &cwd) && (g.session != session_id || g.window != window.label())
-    }) {
-        return Err("This checkout already has an orchestrator in another session".into());
-    }
     // A lead may return to ordinary chat without respawning its provider.
     // Keep its app token installed but unusable until a later opted-in turn.
     inner.prepare_app_grant(&session_id, window.label(), &cwd);
@@ -327,8 +414,7 @@ pub fn control_enable(
             ),
         },
     );
-    let executable = std::env::current_exe().map_err(|e| e.to_string())?;
-    Ok(executable.to_string_lossy().into_owned())
+    crate::control_cli::running_executable()
 }
 
 #[tauri::command]
@@ -349,6 +435,10 @@ pub fn control_disable(
         inner.grants.remove(&session_id);
         inner.workers.retain(|_, parent| parent != &session_id);
         let workers = inner.workers.clone();
+        inner
+            .unreserved_workers
+            .retain(|id| workers.contains_key(id));
+        inner.habit_grants.retain(|id, _| workers.contains_key(id));
         inner.scratch.retain(|id, _| workers.contains_key(id));
     }
     Ok(())
@@ -360,6 +450,8 @@ pub fn control_attach_worker(
     host: State<'_, ControlHost>,
     lead_id: String,
     session_id: String,
+    mono_habit: Option<bool>,
+    checkout_reserved: Option<bool>,
 ) -> Result<String, String> {
     let mut inner = host
         .inner
@@ -376,10 +468,33 @@ pub fn control_attach_worker(
         Some(path) if path.is_dir() => path.clone(),
         _ => create_worker_scratch()?,
     };
+    if mono_habit == Some(true) {
+        let parent = inner.grants[&lead_id].clone();
+        inner
+            .habit_grants
+            .entry(session_id.clone())
+            .or_insert_with(|| Grant {
+                window: parent.window,
+                cwd: parent.cwd,
+                session: session_id.clone(),
+                token: format!(
+                    "{}{}",
+                    uuid::Uuid::new_v4().simple(),
+                    uuid::Uuid::new_v4().simple()
+                ),
+            });
+    } else {
+        inner.habit_grants.remove(&session_id);
+    }
+    if checkout_reserved == Some(false) {
+        inner.unreserved_workers.insert(session_id.clone());
+    } else {
+        inner.unreserved_workers.remove(&session_id);
+    }
     inner.workers.insert(session_id.clone(), lead_id);
-    inner.app_grants.remove(&session_id);
+    // A retained worker process keeps its token; request_action_grant narrows it.
     inner.scratch.insert(session_id, scratch.clone());
-    Ok(scratch.to_string_lossy().into_owned())
+    Ok(worker_scratch_path(&scratch))
 }
 
 fn create_worker_scratch() -> Result<PathBuf, String> {
@@ -399,16 +514,38 @@ fn create_worker_scratch() -> Result<PathBuf, String> {
 fn configure_worker_scratch(cmd: &mut Command, path: &Path) {
     // Native temp-file helpers and shell mktemp use the same private scope
     // that is named in the worker's assignment prompt.
-    cmd.env("TMPDIR", path).env("TMP", path).env("TEMP", path);
+    let shell_path = worker_scratch_path(path);
+    cmd.env("TMPDIR", &shell_path)
+        .env("TMP", &shell_path)
+        .env("TEMP", &shell_path);
+}
+
+fn worker_scratch_path(path: &Path) -> String {
+    let value = crate::fs::path_to_js(path);
+    // Git Bash cannot use canonicalize's Win32 device prefix as TMPDIR.
+    // Keep the canonical PathBuf for ownership checks; expose a shell path.
+    if cfg!(windows) {
+        if let Some(unc) = value.strip_prefix("//?/UNC/") {
+            return format!("//{unc}");
+        }
+        if let Some(drive) = value.strip_prefix("//?/") {
+            return drive.to_string();
+        }
+    }
+    value
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub fn control_authorize_turn(
     window: WebviewWindow,
     host: State<'_, ControlHost>,
     session_id: String,
     cwd: String,
     app_access: bool,
+    mono_session: Option<bool>,
+    mono_manager_id: Option<String>,
+    mono_member_id: Option<String>,
 ) -> Result<(), String> {
     let cwd = std::fs::canonicalize(crate::fs::expand_home(&cwd)).map_err(|e| e.to_string())?;
     let cwd = comparison_path(&cwd);
@@ -416,25 +553,32 @@ pub fn control_authorize_turn(
         .inner
         .lock()
         .map_err(|_| "Control service unavailable")?;
-    if let Some(lead) = inner
-        .grants
-        .values()
-        .find(|grant| paths_overlap(&grant.cwd, &cwd))
-    {
-        if lead.window != window.label()
-            || (lead.session != session_id && inner.workers.get(&session_id) != Some(&lead.session))
-        {
-            return Err("This checkout is controlled by an orchestrator. Stop that run before starting independent work.".into());
-        }
+    inner.authorize_checkout(&session_id, window.label(), &cwd)?;
+    if mono_session == Some(true) && !inner.workers.contains_key(&session_id) {
+        inner.mono_sessions.insert(session_id.clone());
+    } else {
+        inner.mono_sessions.remove(&session_id);
     }
     let eligible = inner.prepare_app_grant(&session_id, window.label(), &cwd);
+    // Only a Mono's own conversation or its attached Habit can carry Manager
+    // authority. Member workers cannot acquire it from their assignment text.
+    let mono_manager_id = mono_manager_id.filter(|id| {
+        !id.is_empty()
+            && id.len() <= 256
+            && (inner.mono_sessions.contains(&session_id)
+                || inner.habit_grants.contains_key(&session_id))
+    });
     let app_allowed = app_access && eligible;
+    // The renderer supplies identity from the actual assigned task, not CLI input.
+    let org_member = mono_member_id.is_some_and(|id| !id.is_empty() && id.len() <= 256)
+        && inner.attached_worker(&session_id, window.label());
     inner.active.insert(
         session_id,
         ActiveTurn {
             window: window.label().to_string(),
-            cwd,
             app_allowed,
+            mono_manager_id,
+            org_member,
         },
     );
     Ok(())
@@ -455,6 +599,7 @@ pub fn window_closed(app: &AppHandle, label: &str) {
     };
     for id in &ids {
         let _ = crate::harness::harness_kill(app.state(), id.clone());
+        crate::app_cli_inputs::remove(id);
     }
     if let Ok(mut inner) = host.inner.lock() {
         inner.close_window(label);
@@ -470,7 +615,11 @@ pub fn configure_child(app: &AppHandle, session_id: &str, cmd: &mut Command) {
         return;
     };
     if let Ok(inner) = host.inner.lock() {
-        if let Some(grant) = inner.grants.get(session_id) {
+        if let Some(grant) = inner
+            .grants
+            .get(session_id)
+            .or_else(|| inner.habit_grants.get(session_id))
+        {
             cmd.env("MONOCODE_CONTROL_ENDPOINT", &host.endpoint)
                 .env("MONOCODE_CONTROL_TOKEN", &grant.token);
         }
@@ -486,9 +635,7 @@ pub fn configure_child(app: &AppHandle, session_id: &str, cmd: &mut Command) {
 
 #[tauri::command]
 pub fn app_cli_path() -> Result<String, String> {
-    std::env::current_exe()
-        .map(|path| path.to_string_lossy().into_owned())
-        .map_err(|error| error.to_string())
+    crate::control_cli::running_executable()
 }
 
 #[tauri::command]
@@ -642,8 +789,9 @@ mod tests {
             "ordinary".into(),
             ActiveTurn {
                 window: "main".into(),
-                cwd: "/repo".into(),
                 app_allowed: true,
+                mono_manager_id: None,
+                org_member: false,
             },
         );
         assert!(request_grant(&inner, "app", "app-token").is_ok());
@@ -662,8 +810,9 @@ mod tests {
             "ordinary".into(),
             ActiveTurn {
                 window: "main".into(),
-                cwd: "/repo".into(),
                 app_allowed: false,
+                mono_manager_id: None,
+                org_member: false,
             },
         );
         assert!(request_grant(&inner, "app", &token).is_err());
@@ -688,6 +837,205 @@ mod tests {
         assert!(request_grant(&inner, "app", &token).is_ok());
         inner.active.remove("ordinary");
         assert!(request_grant(&inner, "app", &token).is_err());
+    }
+
+    #[test]
+    fn mono_leads_keep_app_actions_and_org_workers_gain_only_artifact_actions() {
+        let mut inner = Inner::default();
+        assert!(inner.prepare_app_grant("lead", "main", "/repo"));
+        let token = inner.app_grants["lead"].token.clone();
+        inner.grants.insert(
+            "lead".into(),
+            Grant {
+                window: "main".into(),
+                session: "lead".into(),
+                cwd: "/repo".into(),
+                token: "control-token".into(),
+            },
+        );
+        inner.active.insert(
+            "lead".into(),
+            ActiveTurn {
+                window: "main".into(),
+                app_allowed: true,
+                mono_manager_id: None,
+                org_member: false,
+            },
+        );
+        assert!(request_action_grant(&inner, "app", &token, "chat.card").is_err());
+        inner.mono_sessions.insert("lead".into());
+        assert!(inner.prepare_app_grant("lead", "main", "/repo"));
+        for action in [
+            "soul.read",
+            "memory.add",
+            "habits.list",
+            "chat.card",
+            "team.answer",
+            "projects.list",
+            "goals.assign",
+        ] {
+            assert!(request_action_grant(&inner, "app", &token, action).is_ok());
+        }
+        assert!(request_action_grant(&inner, "control", &token, "list").is_err());
+        inner.workers.insert("worker".into(), "lead".into());
+        assert!(inner.prepare_app_grant("worker", "main", "/repo-worker"));
+        let worker_token = inner.app_grants["worker"].token.clone();
+        inner.active.insert(
+            "worker".into(),
+            ActiveTurn {
+                window: "main".into(),
+                app_allowed: true,
+                mono_manager_id: None,
+                org_member: false,
+            },
+        );
+        for action in ["reviews.submit", "memory.add"] {
+            assert!(request_action_grant(&inner, "app", &worker_token, action).is_ok());
+        }
+        for action in [
+            "artifacts.list",
+            "artifacts.read",
+            "artifacts.write",
+            "sessions.start",
+            "team.answer",
+            "team.message",
+            "projects.status",
+            "models.list",
+            "goals.assign",
+            "soul.update",
+            "memory.read",
+            "chat.card",
+            "",
+        ] {
+            assert!(request_action_grant(&inner, "app", &worker_token, action).is_err());
+        }
+        inner.active.get_mut("worker").unwrap().org_member = true;
+        for action in [
+            "artifacts.list",
+            "artifacts.read",
+            "artifacts.write",
+            "reviews.submit",
+            "memory.add",
+            "team.message",
+            "projects.status",
+            "models.list",
+        ] {
+            assert!(request_action_grant(&inner, "app", &worker_token, action).is_ok());
+        }
+        for action in [
+            "sessions.stop",
+            "sessions.delete",
+            "goals.assign",
+            "team.hire",
+            "delegate",
+            "artifacts.delete",
+        ] {
+            assert!(request_action_grant(&inner, "app", &worker_token, action).is_err());
+        }
+        assert!(request_action_grant(&inner, "control", &worker_token, "delegate").is_err());
+        inner.active.get_mut("worker").unwrap().app_allowed = false;
+        assert!(request_action_grant(&inner, "app", &worker_token, "artifacts.write").is_err());
+        inner.active.get_mut("worker").unwrap().app_allowed = true;
+        let parent = inner.grants.remove("lead").unwrap();
+        assert!(request_action_grant(&inner, "app", &worker_token, "artifacts.write").is_err());
+        inner.grants.insert("lead".into(), parent);
+        inner.workers.remove("worker");
+        assert!(request_action_grant(&inner, "app", &worker_token, "artifacts.write").is_err());
+        assert!(request_action_grant(&inner, "app", &worker_token, "team.message").is_err());
+        inner.workers.insert("worker".into(), "lead".into());
+        inner.grants.get_mut("lead").unwrap().window = "other".into();
+        assert!(request_action_grant(&inner, "app", &worker_token, "artifacts.write").is_err());
+        inner.grants.get_mut("lead").unwrap().window = "main".into();
+        inner.active.remove("worker");
+        assert!(request_action_grant(&inner, "app", &worker_token, "reviews.submit").is_err());
+        assert!(request_action_grant(&inner, "app", &worker_token, "team.message").is_err());
+        assert!(request_action_grant(&inner, "app", &worker_token, "artifacts.write").is_err());
+        inner.active.remove("lead");
+        assert!(request_action_grant(&inner, "app", &token, "memory.add").is_err());
+    }
+
+    #[test]
+    fn native_team_actions_require_manager_authority_and_an_active_own_turn() {
+        let mut inner = Inner::default();
+        for identity in ["ordinary", "orchestrator", "member", "manager"] {
+            assert!(inner.prepare_app_grant(identity, "main", "/repo"));
+            inner.mono_sessions.insert(identity.into());
+            inner.active.insert(
+                identity.into(),
+                ActiveTurn {
+                    window: "main".into(),
+                    app_allowed: true,
+                    mono_manager_id: (identity == "manager").then(|| "manager-id".into()),
+                    org_member: false,
+                },
+            );
+            let token = &inner.app_grants[identity].token;
+            for action in [
+                "team.list",
+                "team.hire",
+                "team.update",
+                "team.memory.add",
+                "team.memory.forget",
+                "team.retire",
+            ] {
+                assert_eq!(
+                    request_action_grant(&inner, "app", token, action).is_ok(),
+                    identity == "manager"
+                );
+            }
+        }
+        let token = inner.app_grants["manager"].token.clone();
+        inner.active.get_mut("manager").unwrap().app_allowed = false;
+        assert!(request_action_grant(&inner, "app", &token, "team.hire").is_err());
+        inner.active.get_mut("manager").unwrap().app_allowed = true;
+        inner.active.get_mut("manager").unwrap().window = "other".into();
+        assert!(request_action_grant(&inner, "app", &token, "team.hire").is_err());
+    }
+
+    #[test]
+    fn manager_habit_has_its_own_active_only_control_identity() {
+        let mut inner = Inner::default();
+        inner.grants.insert(
+            "manager".into(),
+            Grant {
+                session: "manager".into(),
+                window: "main".into(),
+                cwd: "/repo".into(),
+                token: "manager-control".into(),
+            },
+        );
+        inner.workers.insert("habit".into(), "manager".into());
+        inner.habit_grants.insert(
+            "habit".into(),
+            Grant {
+                session: "habit".into(),
+                window: "main".into(),
+                cwd: "/repo".into(),
+                token: "habit-control".into(),
+            },
+        );
+        assert!(request_action_grant(&inner, "control", "habit-control", "delegate").is_err());
+        inner.active.insert(
+            "habit".into(),
+            ActiveTurn {
+                window: "main".into(),
+                app_allowed: true,
+                mono_manager_id: None,
+                org_member: false,
+            },
+        );
+        assert_eq!(
+            request_action_grant(&inner, "control", "habit-control", "delegate")
+                .unwrap()
+                .session,
+            "habit"
+        );
+        assert!(inner.prepare_app_grant("habit", "main", "/repo"));
+        let app = inner.app_grants["habit"].token.clone();
+        assert!(request_action_grant(&inner, "app", &app, "memory.read").is_ok());
+        assert!(request_action_grant(&inner, "control", &app, "delegate").is_err());
+        inner.grants.remove("manager");
+        assert!(request_action_grant(&inner, "control", "habit-control", "delegate").is_err());
     }
     #[cfg(not(windows))]
     #[test]
@@ -715,10 +1063,13 @@ mod tests {
         }
         let mut cmd = Command::new("unused");
         configure_worker_scratch(&mut cmd, &first);
+        let shell_path = worker_scratch_path(&first);
+        assert!(Path::new(&shell_path).is_dir());
+        assert!(!shell_path.starts_with("//?/"));
         for key in ["TMPDIR", "TMP", "TEMP"] {
-            assert!(cmd
-                .get_envs()
-                .any(|(name, value)| name == key && value == Some(first.as_os_str())));
+            assert!(cmd.get_envs().any(
+                |(name, value)| name == key && value == Some(std::ffi::OsStr::new(&shell_path))
+            ));
         }
         let new_file = first.join("new/helper.py");
         assert_eq!(
@@ -762,8 +1113,9 @@ mod tests {
                 id.into(),
                 ActiveTurn {
                     window: window.into(),
-                    cwd: format!("/{id}"),
                     app_allowed: false,
+                    mono_manager_id: None,
+                    org_member: false,
                 },
             );
         }
@@ -836,9 +1188,145 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
-    fn checkout_reservations_include_nested_folders() {
-        assert!(paths_overlap("/repo", "/repo/src"));
-        assert!(paths_overlap("/repo/src", "/repo"));
-        assert!(!paths_overlap("/repo", "/repo2"));
+    fn controlled_checkout_does_not_block_parent_turns() {
+        let checkout = comparison_path(Path::new("C:/Users/Nooro/projects/App"));
+        for (cwd, blocked) in [
+            ("C:/Users/Nooro", false),
+            ("C:/Users/Nooro/projects/App", true),
+            ("C:/Users/Nooro/projects/App/src", true),
+            ("C:/Users/Nooro/projects/App-other", false),
+        ] {
+            assert_eq!(
+                path_within(&comparison_path(Path::new(cwd)), &checkout),
+                blocked
+            );
+        }
+        #[cfg(windows)]
+        assert!(path_within(
+            &comparison_path(Path::new("c:\\users\\nooro\\PROJECTS\\app\\src")),
+            &checkout,
+        ));
+    }
+
+    #[test]
+    fn project_manager_grants_never_reserve_user_checkouts() {
+        let home = comparison_path(Path::new("C:/Users/Nooro"));
+        let checkout = format!("{home}/projects/app");
+        let mut inner = Inner::default();
+        inner.grants.insert(
+            "manager".into(),
+            Grant {
+                window: "main".into(),
+                session: "manager".into(),
+                cwd: checkout.clone(),
+                token: "control-token".into(),
+            },
+        );
+        inner.prepare_app_grant("manager", "main", &checkout);
+        inner.active.insert(
+            "manager".into(),
+            ActiveTurn {
+                window: "main".into(),
+                app_allowed: true,
+                mono_manager_id: Some("dzdistro-manager".into()),
+                org_member: false,
+            },
+        );
+        for cwd in [
+            &home,
+            &checkout,
+            &format!("{checkout}/src"),
+            &format!("{checkout}-other"),
+        ] {
+            assert!(inner.checkout_grant("user", cwd).is_none());
+            for window in ["main", "other"] {
+                assert!(inner.authorize_checkout("user", window, cwd).is_ok());
+            }
+        }
+    }
+
+    #[test]
+    fn worker_reservations_only_exclude_other_writable_workers() {
+        let mut inner = Inner::default();
+        inner.grants.insert(
+            "manager".into(),
+            Grant {
+                window: "main".into(),
+                session: "manager".into(),
+                cwd: "/project".into(),
+                token: "token".into(),
+            },
+        );
+        for session in ["worker", "other-worker", "read-only", "habit"] {
+            inner.workers.insert(session.into(), "manager".into());
+        }
+        inner
+            .habit_grants
+            .insert("habit".into(), inner.grants["manager"].clone());
+        inner.prepare_app_grant("habit", "main", "/project");
+        inner.prepare_app_grant("read-only", "main", "/project");
+        for session in ["habit", "read-only"] {
+            inner.active.insert(
+                session.into(),
+                ActiveTurn {
+                    window: "main".into(),
+                    app_allowed: true,
+                    mono_manager_id: None,
+                    org_member: false,
+                },
+            );
+        }
+        inner.unreserved_workers.insert("read-only".into());
+        assert!(inner
+            .authorize_checkout("worker", "main", "/project")
+            .is_ok());
+        inner.prepare_app_grant("worker", "main", "/project/task");
+        inner.active.insert(
+            "worker".into(),
+            ActiveTurn {
+                window: "main".into(),
+                app_allowed: true,
+                mono_manager_id: None,
+                org_member: true,
+            },
+        );
+        for cwd in ["/project/task", "/project/task/src"] {
+            assert!(inner.authorize_checkout("user", "main", cwd).is_ok());
+            assert!(inner.authorize_checkout("user", "other", cwd).is_ok());
+            assert!(inner.authorize_checkout("manager", "main", cwd).is_ok());
+            assert!(inner.authorize_checkout("habit", "main", cwd).is_ok());
+            assert!(inner.authorize_checkout("worker", "main", cwd).is_ok());
+            assert!(inner.authorize_checkout("read-only", "main", cwd).is_ok());
+            assert!(inner
+                .authorize_checkout("other-worker", "main", cwd)
+                .is_err());
+        }
+        for cwd in ["/project", "/project/task-other"] {
+            assert!(inner
+                .authorize_checkout("other-worker", "main", cwd)
+                .is_ok());
+        }
+        inner.unreserved_workers.insert("worker".into());
+        assert!(inner
+            .authorize_checkout("other-worker", "main", "/project/task")
+            .is_ok());
+        inner.unreserved_workers.remove("worker");
+        inner.active.remove("worker");
+        assert!(inner
+            .authorize_checkout("other-worker", "main", "/project/task")
+            .is_ok());
+        inner.active.insert(
+            "worker".into(),
+            ActiveTurn {
+                window: "main".into(),
+                app_allowed: true,
+                mono_manager_id: None,
+                org_member: true,
+            },
+        );
+        inner.grants.remove("manager");
+        assert!(inner
+            .checkout_grant("other-worker", "/project/task")
+            .is_none());
     }
 }

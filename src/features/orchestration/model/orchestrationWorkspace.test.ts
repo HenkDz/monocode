@@ -40,6 +40,19 @@ const run: OrchestrationRun = {
 };
 
 describe("orchestration workspace", () => {
+  it("keeps project-manager workers as independently selectable chats", () => {
+    for (const managerRun of [
+      { ...run, projectManager: true },
+      { ...run, leadId: "project-manager-root" },
+    ]) {
+      const tabs = [newTab(managerRun.leadId), newTab("worker-a"), newTab("unrelated")];
+      for (const selected of tabs) {
+        const result = consolidateOrchestrationTabs(tabs, selected.id, [managerRun]);
+        expect(result.tabs).toBe(tabs);
+        expect(result.activeTabId).toBe(selected.id);
+      }
+    }
+  });
   it("releases both live and transcript ownership when a lead is deleted", () => {
     const worker = {
       ...newSession("claude", "/repo"),

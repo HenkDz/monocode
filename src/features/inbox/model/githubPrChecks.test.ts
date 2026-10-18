@@ -8,6 +8,8 @@ import {
   isHttpUrl,
   sortChecks,
   summarizePrChecks,
+  latestPrChecks,
+  groupPrChecks,
   type GithubPrCheck,
 } from "./githubPrChecks";
 
@@ -74,18 +76,51 @@ describe("sortChecks", () => {
   });
 });
 
+describe("latest attempts", () => {
+  it("orders suites before attempts and timestamps; retains quiet history", () => {
+    const failed = check({ state: "fail", suiteId: 1, runAttempt: 4, startedAt: "2026-10-08T14:00:00Z" });
+    const passed = check({ suiteId: 2, runAttempt: 1, startedAt: "2026-10-08T13:00:00Z" });
+    const pending = check({ state: "pending", suiteId: 2, runAttempt: 2 });
+    for (const checks of [[failed, passed, pending], [pending, passed, failed]]) {
+      expect(latestPrChecks(checks).map(check => check.state)).toEqual(["pending"]);
+      expect(groupPrChecks(checks)[0].earlier.map(check => check.state)).toEqual(["pass", "fail"]);
+      expect(countChecks(checks).fail).toBe(0);
+      expect(summarizePrChecks({ checks, error: null, loading: false }).kind).toBe("pending");
+    }
+  });
+
+  it("groups reruns by workflow/app/context and keeps matrix jobs distinct", () => {
+    const failed = check({ name: "build (ubuntu)", state: "fail", completedAt: "2026-10-08T13:00:00Z" });
+    const passed = { ...failed, state: "pass" as const, completedAt: "2026-10-08T14:00:00Z" };
+    const checks = [failed, passed, { ...passed, name: "build (windows)" }, { ...failed, workflow: "Other" }, { ...failed, app: "other" }, { ...failed, context: "arm" }, { ...failed, kind: "StatusContext" }];
+    expect(latestPrChecks(checks)).toHaveLength(6);
+    expect(countChecks(checks).fail).toBe(4);
+  });
+
+  it("uses GitHub Actions suite order, preserves unknown chronology blockers and counts steps independently", () => {
+    const checks = [check({ state: "fail", url: "https://github.com/acme/web/actions/runs/1/job/10" }), check({ url: "https://github.com/acme/web/actions/runs/2/job/20" })];
+    expect(countChecks(checks).fail).toBe(0);
+    expect(countChecks([check({ state: "fail" }), check()]).fail).toBe(1);
+    expect(countChecks([{ state: "pass" }, { state: "pass" }]).pass).toBe(2);
+  });
+
+  it("merged/closed PRs have a neutral summary even with historic failures", () => {
+    for (const state of ["merged", "closed"]) expect(summarizePrChecks({ checks: [check({ state: "fail" })], error: null, loading: false, state })).toEqual({ kind: "neutral", description: `PR ${state}` });
+  });
+});
+
 describe("describeCheckCounts", () => {
   it("names every non-zero state so color is not the only signal", () => {
     expect(
       describeCheckCounts(
         countChecks([
-          check({ state: "pass" }),
-          check({ state: "pass" }),
-          check({ state: "fail" }),
-          check({ state: "pending" }),
-          check({ state: "cancel" }),
-          check({ state: "unknown" }),
-          check({ state: "skipping" }),
+          check({ name: "pass1", state: "pass" }),
+          check({ name: "pass2", state: "pass" }),
+          check({ name: "fail", state: "fail" }),
+          check({ name: "pending", state: "pending" }),
+          check({ name: "cancel", state: "cancel" }),
+          check({ name: "unknown", state: "unknown" }),
+          check({ name: "skip", state: "skipping" }),
         ]),
       ),
     ).toBe("1 failed, 1 in progress, 1 cancelled, 1 unknown, 2 passed, 1 skipped");
@@ -128,7 +163,7 @@ describe("summarizePrChecks", () => {
     expect(
       summarizePrChecks({
         ...loading,
-        checks: [check({ state: "pending" }), check({ state: "cancel" })],
+        checks: [check({ name: "pending", state: "pending" }), check({ name: "cancel", state: "cancel" })],
       }).kind,
     ).toBe("pending");
     expect(
@@ -149,7 +184,7 @@ describe("summarizePrChecks", () => {
     const summary = summarizePrChecks({
       loading: false,
       error: null,
-      checks: [check({ state: "fail" }), check({ state: "fail" }), check()],
+      checks: [check({ name: "fail1", state: "fail" }), check({ name: "fail2", state: "fail" }), check()],
     });
     expect(summary).toMatchObject({ kind: "fail", failed: 2 });
     expect(summary.description).toBe("2 failed, 1 passed");
@@ -159,7 +194,7 @@ describe("summarizePrChecks", () => {
     const summary = summarizePrChecks({
       loading: false,
       error: null,
-      checks: [check({ state: "skipping" }), check({ state: "skipping" })],
+      checks: [check({ name: "skip1", state: "skipping" }), check({ name: "skip2", state: "skipping" })],
     });
     expect(summary.kind).toBe("neutral");
     expect(summary.description).toBe("2 skipped");

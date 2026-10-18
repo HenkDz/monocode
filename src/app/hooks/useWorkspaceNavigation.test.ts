@@ -176,6 +176,38 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
+it("keeps the Manager standalone across repeated worker and root selections", async () => {
+  const manager = chat("project-manager-root");
+  const worker = chat("worker", project, treeA.path, true);
+  await mount([manager, worker]);
+  expect(pins.has("tab-project-manager-root")).toBe(false);
+  await select(treeA);
+  expect(screen().activeTab).toBe("tab-worker");
+  await act(async () => directOpen(manager.id));
+  expect(screen().activeTab).toBe("tab-project-manager-root");
+  expect(worktreeFocus(project)?.path).toBe(treeA.path);
+  expect(pins.has("tab-project-manager-root")).toBe(false);
+  await select();
+  expect(screen().activeTab).toBe("tab-created");
+  expect(move).not.toHaveBeenCalled();
+  expect(sessionWorkCwd(view.sessions.find(s => s.id === manager.id)!)).toBe(project);
+  for (let i = 0; i < 3; i++) {
+    await act(async () => directOpen(manager.id));
+    await select(treeA);
+    expect(screen().activeTab).toBe("tab-worker");
+  }
+  expect(view.tabs).toHaveLength(3);
+});
+
+it("never uses a Manager as a project's fallback workspace tab", async () => {
+  const manager = chat("project-manager-root");
+  await mount([manager]);
+  await act(async () => openProject(project, "tab-project-manager-root"));
+  expect(screen().activeTab).toBe("tab-created");
+  expect(move).not.toHaveBeenCalled();
+  expect(pins.has("tab-project-manager-root")).toBe(false);
+});
+
 it("serializes A then B and never publishes A after B was requested", async () => {
   const first = deferred(),
     second = deferred();

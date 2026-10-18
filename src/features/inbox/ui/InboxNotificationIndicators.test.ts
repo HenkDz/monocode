@@ -45,6 +45,45 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+it("shows a manager escalation without an external Inbox connection and opens its conversation", async () => {
+  listInboxItems.mockResolvedValue({ items: [], errors: {} });
+  const open = vi.fn();
+  await act(async () => root.render(createElement(InboxView, {
+    cwd: "/tmp/app", recents: [], onAsk: async () => "", onAskRestart: async () => "",
+    onAskMount: () => {}, onOpenIntegrations: () => {}, onOpenSession: open,
+    managerQuestions: [{ id: "project-manager-test", project: "/tmp/app", question: "Which API contract should we preserve?" },
+      { id: "project-manager-test", key: "pr", project: "/tmp/app", question: "Docs PR", kind: "ready" },
+      { id: "project-manager-test", key: "reply", project: "/tmp/app", question: "New reply from Manager", kind: "reply" }],
+  })));
+  const section = container.querySelector('[aria-label="Manager questions"]')!;
+  expect(section.textContent).toContain("Which API contract should we preserve?");
+  expect(section.textContent).toContain("Ready to merge");
+  expect(section.textContent).toContain("New replies");
+  act(() => section.querySelector("button")!.click());
+  expect(open).toHaveBeenCalledExactlyOnceWith("project-manager-test");
+});
+
+it("opens a ready PR in the shared Pull requests view", async () => {
+  listInboxItems.mockResolvedValue({ items: [], errors: {} });
+  const open = vi.fn();
+  const request = vi.fn();
+  const urls = ["https://github.com/acme/app/pull/23"];
+  window.addEventListener("monocode:open-pull-requests", request);
+  try {
+    await act(async () => root.render(createElement(InboxView, {
+      cwd: "/tmp/app", recents: [], onAsk: async () => "", onAskRestart: async () => "",
+      onAskMount: () => {}, onOpenIntegrations: () => {}, onOpenSession: open,
+      managerQuestions: [{ id: "manager", project: "/tmp/app", question: "PR #23: Fix", kind: "ready", urls }],
+    })));
+    act(() => container.querySelector<HTMLButtonElement>('[aria-label="Manager questions"] button')!.click());
+    expect(request).toHaveBeenCalledOnce();
+    expect((request.mock.calls[0][0] as CustomEvent).detail).toEqual({ urls });
+    expect(open).not.toHaveBeenCalled();
+  } finally {
+    window.removeEventListener("monocode:open-pull-requests", request);
+  }
+});
+
 it("reports a failed mark-all write in Inbox and clears the error after retry", async () => {
   const item: InboxItem = {
     provider: "github", kind: "issue", repo: "acme/app", number: 42,

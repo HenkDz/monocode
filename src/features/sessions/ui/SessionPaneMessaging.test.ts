@@ -6,11 +6,18 @@ import { SessionPane, type SessionPaneProps } from "./SessionPane";
 import { clearComposerDraft, setComposerDraft } from "../model/draftCache";
 
 const probes = vi.hoisted(() => ({
+  mono: true,
+  member: false,
   pick: vi.fn(),
   transcript: vi.fn(),
+  composer: vi.fn(),
+  checkoutNotice: vi.fn(),
   runs: [],
 }));
-vi.mock("./Composer", () => ({ Composer: () => null }));
+vi.mock("./Composer", () => ({ Composer: (props: { disabled?: boolean; onSubmit: (text: string, attachments: []) => void }) => {
+  probes.composer(props);
+  return createElement("button", { disabled: props.disabled, onClick: () => props.onSubmit("Continue my work", []) }, "Send user message");
+} }));
 vi.mock("../hooks/useFileDrop", () => ({ useFileDrop: () => false }));
 vi.mock("../model/attachments", async (original) => ({
   ...(await original<typeof import("../model/attachments")>()),
@@ -34,22 +41,29 @@ vi.mock("../../orchestration/model/orchestration", async (original) => ({
     subscribe: () => () => {},
     snapshot: () => probes.runs,
     hydrate: async () => {},
+    checkoutNotice: probes.checkoutNotice,
   },
 }));
 vi.mock("../../monos/model/mono", async (original) => ({
   ...(await original<typeof import("../../monos/model/mono")>()),
-  monoForSession: () => ({
-    id: "mono",
-    sessionId: "chat",
-    name: "Captain",
-    mascot: "cat",
-    color: "#6ba",
-    projects: [],
-  }),
+  monoForSession: () =>
+    probes.mono
+      ? {
+          id: "mono",
+          role: probes.member ? "member" : undefined,
+          sessionId: "chat",
+          name: "Captain",
+          mascot: "cat",
+          color: "#6ba",
+          projects: [],
+        }
+      : undefined,
 }));
 let container: HTMLDivElement;
 let root: Root;
 beforeEach(() => {
+  probes.mono = true;
+  probes.member = false;
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal(
     "ResizeObserver",
@@ -66,6 +80,8 @@ beforeEach(() => {
   vi.stubGlobal("cancelAnimationFrame", vi.fn());
   localStorage.clear();
   probes.transcript.mockClear();
+  probes.composer.mockClear();
+  probes.checkoutNotice.mockReset().mockReturnValue(null);
   clearComposerDraft("chat");
   probes.pick.mockReset().mockResolvedValue([
     {
@@ -146,6 +162,45 @@ function field() {
   )!;
 }
 
+it("shows the member work log without a full-height greeting hiding it below the fold", () => {
+  probes.member = true;
+  const pane = props();
+  pane.session.blocks = [];
+  render(pane);
+  expect(
+    container.querySelector('[aria-label="Member work log"]')?.textContent,
+  ).toContain("No assignments yet.");
+  expect(
+    container.querySelector("header")?.classList.contains("min-h-full"),
+  ).toBe(false);
+  expect(field()).not.toBeNull();
+});
+
+it("updates the member header from live session and roster state", () => {
+  probes.member = true;
+  const pane = props();
+  pane.session.blocks = [];
+  pane.session.busy = true;
+  render(pane);
+  expect(
+    container.querySelector('header [data-mono-status="working"]')?.textContent,
+  ).toContain("Working");
+
+  render({
+    ...pane,
+    monoState: { status: "needs-you", activity: "Review decision" },
+  });
+  expect(
+    container.querySelector('header [data-mono-status="needs-you"]')
+      ?.textContent,
+  ).toContain("Review decision");
+
+  render({ ...pane, session: { ...pane.session, busy: false } });
+  expect(
+    container.querySelector('header [data-mono-status="idle"]')?.textContent,
+  ).toContain("Idle");
+});
+
 it("keeps the same input, current draft and attachments when a question appears and closes", async () => {
   setComposerDraft("chat", "Initial draft");
   const pane = props();
@@ -209,10 +264,16 @@ it("shows usage recovery above the Mono input and routes the reset option", () =
   pane.session.usageLimit = { resetsAt: Date.now() + 3600_000 };
   pane.onUsageLimitResumeAtReset = vi.fn();
   render(pane);
-  expect(container.querySelector("[data-usage-limit]")?.textContent).toContain("usage limit reached");
-  expect(container.querySelector('[aria-label="Choose another model"]')).not.toBeNull();
+  expect(container.querySelector("[data-usage-limit]")?.textContent).toContain(
+    "usage limit reached",
+  );
+  expect(
+    container.querySelector('[aria-label="Choose another model"]'),
+  ).not.toBeNull();
   expect(field().value).toBe("Keep my draft");
-  const reset = [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.trim() === "Resume at reset")!;
+  const reset = [
+    ...container.querySelectorAll<HTMLButtonElement>("button"),
+  ].find((button) => button.textContent?.trim() === "Resume at reset")!;
   act(() => reset.click());
   expect(pane.onUsageLimitResumeAtReset).toHaveBeenCalledWith("chat", true);
   render({ ...pane, session: { ...pane.session, usageLimit: undefined } });
@@ -251,12 +312,47 @@ it("shows pending messages in the conversation and routes retry from the bubble"
   expect(field()).not.toBeNull();
 });
 
-it("keeps a completion notification queued beside the Mono's composer", () => {
+it("shows a worker checkout notice while keeping the user's composer send enabled", () => {
+  probes.mono = false;
+  probes.checkoutNotice.mockReturnValue("Native Core is working here; your changes may conflict");
+  const pane = props();
+  pane.session.worktreeCwd = "/worktrees/native-core";
+  pane.onSubmit = vi.fn();
+  render(pane);
+  expect(container.querySelector('[role="status"]')?.textContent).toContain(
+    "Native Core is working here; your changes may conflict",
+  );
+  expect(probes.checkoutNotice).toHaveBeenCalledWith("chat", pane.session);
+  const send = [...container.querySelectorAll<HTMLButtonElement>("button")]
+    .find(button => button.textContent === "Send user message")!;
+  expect(send.disabled).toBe(false);
+  act(() => send.click());
+  expect(pane.onSubmit).toHaveBeenCalledWith("chat", "Continue my work", [], undefined);
+});
+
+it("routes a previously blocked user's failed-send Retry through the existing queue", () => {
+  probes.mono = false;
+  const pane = props();
+  pane.onResumeQueue = vi.fn();
+  pane.session.queueStatus = "paused";
+  pane.session.queuedMessages = [{
+    id: "blocked", text: "Continue my work", attachments: [],
+    error: "This checkout has an active orchestrator. Stop that run before starting independent work.",
+  }];
+  render(pane);
+  const transcript = probes.transcript.mock.calls.at(-1)![0];
+  expect(transcript.messageDeliveries.get("blocked").status).toBe("failed");
+  act(() => transcript.onRetryMessage("blocked"));
+  expect(pane.onResumeQueue).toHaveBeenCalledWith("chat");
+  expect(probes.composer.mock.calls.at(-1)![0].disabled).toBe(false);
+});
+
+it("keeps internal notifications out of the Mono's composer and user outbox", () => {
   const pane = props();
   pane.session = {
     ...pane.session,
     busy: true,
-    queuedMessages: [
+    pendingMonoEvents: [
       {
         id: "notification",
         text: "Hidden completion review prompt",
@@ -270,10 +366,11 @@ it("keeps a completion notification queued beside the Mono's composer", () => {
     ],
   };
   render(pane);
-  const queue = container.querySelector("[data-message-queue]")!;
-  expect(queue.textContent).toContain("Session completed: API fix");
-  expect(queue.textContent).not.toContain("Hidden completion review prompt");
-  expect(queue.textContent).not.toContain("Steer");
+  expect(container.querySelector("[data-message-queue]")).toBeNull();
+  expect(container.textContent).not.toContain(
+    "Hidden completion review prompt",
+  );
+  expect(container.textContent).not.toContain("Session completed: API fix");
   expect(field()).not.toBeNull();
 });
 
@@ -302,3 +399,33 @@ it("keeps rapid sends out of the queue and steer interface", () => {
   ).toBeNull();
   expect(container.textContent).not.toContain("Steer");
 });
+
+it.each([true, false])(
+  "wires a rejected turn's retry notice for Mono and normal sessions (Mono: %s)",
+  (mono) => {
+    probes.mono = mono;
+    const pane = props();
+    pane.onResumeQueue = vi.fn();
+    pane.session = {
+      ...pane.session,
+      queueStatus: "paused",
+      queuedMessages: [
+        {
+          id: "user",
+          blockId: "user",
+          text: "Hello",
+          attachments: [],
+          error: "Checkout controlled",
+        },
+      ],
+    };
+    render(pane);
+    const transcript = probes.transcript.mock.calls.at(-1)![0];
+    expect(transcript.messageDeliveries.get("user")).toEqual({
+      status: "failed",
+      error: "Checkout controlled",
+    });
+    act(() => transcript.onRetryMessage("user"));
+    expect(pane.onResumeQueue).toHaveBeenCalledWith("chat");
+  },
+);

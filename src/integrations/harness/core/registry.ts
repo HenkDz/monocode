@@ -1,10 +1,13 @@
 import type {
   Block,
   HarnessId,
+  RuntimeMode,
   TaskListMeta,
   TurnIntent,
 } from "../../../features/sessions/model/session";
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { findMono, monoRuntimeMode } from "../../../features/monos/model/mono";
+import { appCliInvocation, appCliApprovalReason, isDirectAppCliCommand, type AppCliApprovalPolicy } from "./appCliApproval";
 import type { GeneratedSessionTitle } from "../../../features/sessions/model/sessionTitle";
 import type { PrContent } from "../../../features/source-control/model/gitText";
 import { hasLiveCatalog } from "../../../features/sessions/model/models";
@@ -68,6 +71,8 @@ export type HarnessAdapter = {
     requestId: number,
     decision: ApprovalDecision,
   ): void;
+  /** Change a running turn's permission policy without waiting for it to end. */
+  updateRuntimeMode?(sessionId: string, runtimeMode: RuntimeMode): void | Promise<void>;
   respondQuestion?(
     sessionId: string,
     requestId: number,
@@ -93,7 +98,11 @@ export type HarnessAdapter = {
   /** Optional LLM tab title for the first turn. */
   generateTitle?(input: TitleInput): Promise<GeneratedSessionTitle | null>;
   /** Optional LLM commit message from staged changes. */
-  generateCommitMessage?(cwd: string, signal?: AbortSignal, paths?: readonly string[]): Promise<string>;
+  generateCommitMessage?(
+    cwd: string,
+    signal?: AbortSignal,
+    paths?: readonly string[],
+  ): Promise<string>;
   /** Optional LLM pull request title/body from branch diff context. */
   generatePrContent?(
     cwd: string,
@@ -114,8 +123,30 @@ const adapters = new Map<HarnessId, HarnessAdapter>();
  * After a turn settles, keep the child warm for follow-ups, then park it.
  * Resume state stays, so the next prompt respawns instead of starting over.
  */
-export const HARNESS_IDLE_PARK_MS = 5 * 60_000;
-const idleParkTimers = new Map<string, ReturnType<typeof setTimeout>>();
+export const HARNESS_IDLE_PARK_MS = 3 * 60_000;
+
+/**
+ * Each warm child is a CLI process of a few hundred MB, plus its MCP servers.
+ * Past `limit` idle ones, the least recently settled is parked early, never
+ * one `keep` claims (the conversation on screen) unless the limit is zero.
+ * Running turns are not idle, so they never count.
+ */
+export type HarnessIdleParkPolicy = {
+  limit: () => number;
+  keep: (sessionId: string) => boolean;
+};
+
+let idleParkPolicy: HarnessIdleParkPolicy = {
+  limit: () => Number.POSITIVE_INFINITY,
+  keep: () => false,
+};
+let idleLimitCheck: ReturnType<typeof setTimeout> | undefined;
+
+/** Map order is settle order: the first entry has been idle longest. */
+const idleParkTimers = new Map<
+  string,
+  { harness: HarnessId; timer: ReturnType<typeof setTimeout> }
+>();
 const sessionOperationTails = new Map<string, Promise<void>>();
 const sessionSteerTails = new Map<string, Promise<void>>();
 const activeTurnSessions = new Set<string>();
@@ -167,26 +198,56 @@ function queueSteerOperation<T>(
 }
 
 function cancelIdlePark(sessionId: string): void {
-  const timer = idleParkTimers.get(sessionId);
-  if (timer) clearTimeout(timer);
+  const idle = idleParkTimers.get(sessionId);
+  if (idle) clearTimeout(idle.timer);
   idleParkTimers.delete(sessionId);
 }
 
 function scheduleIdlePark(harness: HarnessId, sessionId: string): void {
   cancelIdlePark(sessionId);
-  idleParkTimers.set(
-    sessionId,
-    setTimeout(() => {
+  idleParkTimers.set(sessionId, {
+    harness,
+    timer: setTimeout(() => {
       idleParkTimers.delete(sessionId);
       void stopHarnessSession(harness, sessionId);
     }, HARNESS_IDLE_PARK_MS),
-  );
+  });
+  // Checked once the settling operation has left the queue, so a session
+  // with a follow-up already queued is told apart from the one finishing.
+  if (idleLimitCheck === undefined) {
+    idleLimitCheck = setTimeout(enforceHarnessIdleLimit, 0);
+  }
+}
+
+export function configureHarnessIdlePark(policy: HarnessIdleParkPolicy) {
+  idleParkPolicy = policy;
+}
+
+/** Park the longest-idle children past the limit; also run when it drops. */
+export function enforceHarnessIdleLimit(): void {
+  clearTimeout(idleLimitCheck);
+  idleLimitCheck = undefined;
+  const limit = Math.max(0, idleParkPolicy.limit());
+  let excess = idleParkTimers.size - limit;
+  for (const [sessionId, { harness }] of [...idleParkTimers]) {
+    if (excess <= 0) return;
+    if (sessionOperationTails.has(sessionId)) continue;
+    if (limit > 0 && idleParkPolicy.keep(sessionId)) continue;
+    excess -= 1;
+    void stopHarnessSession(harness, sessionId);
+  }
 }
 
 /** Test seam. */
 export function resetHarnessIdlePark(): void {
-  for (const timer of idleParkTimers.values()) clearTimeout(timer);
+  for (const { timer } of idleParkTimers.values()) clearTimeout(timer);
   idleParkTimers.clear();
+  clearTimeout(idleLimitCheck);
+  idleLimitCheck = undefined;
+  idleParkPolicy = {
+    limit: () => Number.POSITIVE_INFINITY,
+    keep: () => false,
+  };
 }
 
 export function registerHarness(adapter: HarnessAdapter): void {
@@ -213,30 +274,100 @@ export function listHarnesses(): HarnessAdapter[] {
   return [...adapters.values()];
 }
 
+export async function updateHarnessRuntimeMode(harness: HarnessId, sessionId: string, runtimeMode: RuntimeMode): Promise<void> {
+  // A turn may be waiting for approval: queuing behind it would deadlock.
+  await getHarness(harness)?.updateRuntimeMode?.(sessionId, runtimeMode);
+}
+
+/** A local send rejection, before the provider has received the turn. */
+export class TurnAuthorizationError extends Error {}
+
 export function sendHarnessTurn(input: SendTurnInput & { harness: HarnessId }) {
   return queueSessionOperation(input.sessionId, async () => {
+    const owner = input.orgMonoId ? findMono(input.orgMonoId) : undefined;
+    if (input.orgMonoId && !owner) throw new TurnAuthorizationError("Agent identity is unavailable");
+    input = { ...input, runtimeMode: monoRuntimeMode(owner, input.runtimeMode) };
     const adapter = requireHarness(input.harness);
     if (!adapter.live) {
       throw new Error(`${input.harness} is not connected yet`);
     }
     cancelIdlePark(input.sessionId);
     const controlled = typeof isTauri === "function" && isTauri();
-    if (controlled)
-      await invoke("control_authorize_turn", {
-        sessionId: input.sessionId,
-        cwd: input.cwd,
-        appAccess: input.appAccess === true,
-      });
+    if (controlled) {
+      try {
+        await invoke("control_authorize_turn", {
+          sessionId: input.sessionId,
+          cwd: input.cwd,
+          appAccess: input.appAccess === true,
+          monoSession: input.monoSession === true,
+          ...(owner?.role === "manager" && !owner.archivedAt ? { monoManagerId: owner.id } : {}),
+          ...(owner?.role === "member" && !owner.archivedAt && input.appAccess === true && input.monoSession !== true
+            ? { monoMemberId: owner.id } : {}),
+        });
+      } catch (error) {
+        throw new TurnAuthorizationError(
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    }
+    const appCli = controlled && input.orgMono
+      ? await invoke<AppCliApprovalPolicy>("app_cli_approval_policy", { cwd: input.cwd, sessionId: input.sessionId }).catch(() => undefined)
+      : undefined;
+    const automaticApprovals = new Set<number>();
     activeTurnSessions.add(input.sessionId);
     try {
       await adapter.sendTurn({
         ...input,
+        ...(appCli ? { text: `${input.text}\n\n<monocode_cli_input>The current running MonoCode executable is ${appCli.executable}. Use this exact executable for app CLI calls; it overrides executable paths from earlier turns. ${appCli.tempDir ? `If you choose --input, the only auto-approved input location is this session's private folder: ${appCli.tempDir}.` : "Private input scoping is unavailable; --input will not be auto-approved."} Temporary input files are optional, not required. Never use another session's folder.</monocode_cli_input>` } : {}),
+        onEvent: (event) => {
+          const invocation = event.type === "approval.requested" ? appCliInvocation(event.command, appCli) : undefined;
+          const candidate = invocation?.tokens;
+          if (event.type === "approval.requested" && appCli && candidate &&
+              /^(?:[A-Za-z]:[/\\]|\/)/.test(candidate[0] ?? "") &&
+              isDirectAppCliCommand(event.command, candidate[0], appCli)) {
+            if (!automaticApprovals.has(event.requestId)) {
+              automaticApprovals.add(event.requestId);
+              // Some adapters install their pending resolver immediately after emitting.
+              queueMicrotask(async () => {
+                const tokens = candidate;
+                const inputFlag = tokens.indexOf("--input", 3);
+                const identity = isDirectAppCliCommand(event.command, appCli.executable, appCli) ||
+                  await invoke<boolean>("app_cli_executable_matches", { path: tokens[0] }).catch(() => false);
+                const shellTrusted = !invocation?.powerShell || await invoke<boolean>("app_cli_powershell_is_trusted", {
+                  path: invocation.powerShell, cwd: event.cwd ?? input.cwd,
+                }).catch(() => false);
+                const allowed = shellTrusted && identity && (inputFlag < 0 || await invoke<boolean>("app_cli_input_is_temp", {
+                  path: tokens[inputFlag + 1],
+                  sessionId: input.sessionId,
+                }).catch(() => false));
+                if (!automaticApprovals.has(event.requestId)) return;
+                  if (allowed) {
+                    try { adapter.respondApproval(input.sessionId, event.requestId, "allow"); }
+                    catch {
+                      if (automaticApprovals.delete(event.requestId)) input.onEvent({ ...event,
+                        autoApprovalReason: "Automatic approval could not be delivered. Retry the decision manually." });
+                    }
+                  }
+                else if (automaticApprovals.delete(event.requestId)) input.onEvent({ ...event,
+                  autoApprovalReason: !shellTrusted ? "Not auto-approved: PowerShell is untrusted or shadowed in the command's working directory." : identity ? "Not auto-approved: input file is outside this session's private input folder." : "Not auto-approved: executable does not resolve to the running MonoCode app." });
+              });
+            }
+            return;
+          }
+          if (event.type === "approval.resolved" && automaticApprovals.delete(event.requestId)) return;
+          if (event.type === "approval.requested" && input.orgMono) {
+            input.onEvent({ ...event, autoApprovalReason: appCli ? appCliApprovalReason(event.command, appCli.trustedRtk) : "Not auto-approved: the running app's CLI policy is unavailable." });
+            return;
+          }
+          input.onEvent(event);
+        },
         onAccepted: () => {
           input.onEvent({ type: "turn.ready" });
           input.onAccepted?.();
         },
       });
     } finally {
+      automaticApprovals.clear();
       activeTurnSessions.delete(input.sessionId);
       if (controlled)
         await invoke("control_turn_finished", { sessionId: input.sessionId });

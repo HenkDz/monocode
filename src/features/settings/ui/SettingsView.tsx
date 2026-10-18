@@ -44,6 +44,7 @@ import { JiraSettings } from "./JiraSettings";
 import { GradientBlurBackground } from "./GradientBlurBackground";
 import { McpSettings } from "./McpSettings";
 import { InboxProviderMark } from "../../inbox/ui/InboxProviderMark";
+import { GithubBudgetUsage } from "../../inbox/ui/GithubBudgetNotice";
 import { RemoveProjectDialog } from "../../projects/ui/RemoveProjectDialog";
 import { WindowControls } from "../../../app/shell/WindowControls";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
@@ -168,7 +169,10 @@ import {
   MINIMUM_OPENCODE_VERSION,
   parseOpenCodeVersion,
 } from "../../../integrations/harness/providers/opencode/opencodeProtocol";
-import { refreshHarnessCatalogs } from "../../../integrations/harness/core/registry";
+import {
+  enforceHarnessIdleLimit,
+  refreshHarnessCatalogs,
+} from "../../../integrations/harness/core/registry";
 import { loginHarness } from "../../../integrations/harness/core/auth";
 import {
   defaultModelId,
@@ -192,7 +196,13 @@ import {
   projectName,
 } from "../../../shared/lib/paths";
 import { revealPath } from "../../../platform/tauri/fs";
-import { IS_LINUX, IS_MAC, IS_WIN } from "../../../platform/tauri/platform";
+import {
+  IS_LINUX,
+  IS_MAC,
+  IS_WIN,
+  MOD,
+  SHIFT,
+} from "../../../platform/tauri/platform";
 import {
   loadArchivedProjects,
   looksLikeProject,
@@ -315,8 +325,13 @@ import {
   filterKeybindings,
   currentKeybindings,
   loadClaudeHooks,
+  loadIdleAgentLimit,
   loadCloseToTray,
   loadCollapsedProjectRailMode,
+  loadWorkspacePanelSide,
+  saveWorkspacePanelSide,
+  subscribeWorkspacePanelSide,
+  type WorkspacePanelSide,
   loadComposerRunner,
   loadDiffViewer,
   loadFileTabMode,
@@ -335,6 +350,9 @@ import {
   loadQuickComposerShortcut,
   loadTabAnimationsEnabled,
   saveClaudeHooks,
+  saveIdleAgentLimit,
+  IDLE_AGENT_LIMITS,
+  type IdleAgentLimit,
   saveCloseToTray,
   saveCollapsedProjectRailMode,
   saveComposerRunner,
@@ -396,6 +414,7 @@ import {
 
 import { SkillsPage } from "../../skills/ui/SkillsPage";
 import { ProjectNotificationSettings } from "../../notifications/ui/ProjectNotificationSettings";
+import { NtfySettings } from "../../notifications/ui/NtfySettings";
 import { WorktreesPage } from "../../source-control/ui/WorktreesPage";
 import {
   removeWorktree,
@@ -427,6 +446,7 @@ type Props = {
   sessions: SessionSummary[];
   liveSessions?: Session[];
   onRemoveWorktree?: RemoveWorktree;
+  onOpenWorktreeChanges?: (project: string, path: string) => void;
   onCheckWorktreeRemoval?: RemoveWorktree;
   onDeleteWorktreeSessions?: (
     sessionIds: readonly string[],
@@ -455,6 +475,7 @@ export function SettingsView({
   sessions,
   liveSessions,
   onRemoveWorktree = removeWorktree,
+  onOpenWorktreeChanges,
   onCheckWorktreeRemoval,
   onDeleteWorktreeSessions,
   besideRail = false,
@@ -598,6 +619,10 @@ export function SettingsView({
                   recents={recents}
                   liveSessions={liveSessions}
                   onRemove={onRemoveWorktree}
+                  onOpenChanges={onOpenWorktreeChanges && ((project, path) => {
+                    onOpenWorktreeChanges(project, path);
+                    onClose();
+                  })}
                   onCheckRemove={onCheckWorktreeRemoval}
                   onDeleteSessions={onDeleteWorktreeSessions}
                 />
@@ -1199,6 +1224,7 @@ function InboxPage({
         id={settingDomId("project-notifications")}
         data-setting-id="project-notifications"
       >
+        <NtfySettings />
         <ProjectNotificationSettings
           cwd={cwd}
           recents={recents}
@@ -1217,7 +1243,7 @@ function InboxPage({
         }
         description="Pull requests, reviews, and issues, read through the GitHub CLI."
       >
-        <GithubSettings />
+        <GithubSettings cwd={cwd} />
       </Group>
 
       <Group
@@ -1278,7 +1304,7 @@ function InboxPage({
   );
 }
 
-function GithubSettings() {
+function GithubSettings({ cwd }: { cwd: string }) {
   const [status, setStatus] = useState<GithubStatus | null>(null);
   const [checking, setChecking] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -1322,6 +1348,7 @@ function GithubSettings() {
 
   return (
     <>
+      <GithubBudgetUsage cwd={cwd} />
       <Row label="Connection" description={description}>
         <span className="text-[12px] text-content/50">{label}</span>
         {!checking && !status?.installed ? (
@@ -2284,6 +2311,7 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
             onChange={appearance.onCollapsedProjectRailMode}
           />
         </Row>
+        <WorkspacePanelSideRow />
         <Row
           id="interface-scale"
           label="Interface scale"
@@ -3168,6 +3196,8 @@ function ProvidersPage({
   const [choice, setChoice] = useState(loadLastModelChoice);
   const [defaultModels, setDefaultModels] = useState(loadDefaultModels);
   const [claudeHooks, setClaudeHooks] = useState(loadClaudeHooks);
+  const [idleAgentLimit, setIdleAgentLimit] =
+    useState<IdleAgentLimit>(loadIdleAgentLimit);
   const [scope, setScope] = useState<string>(GLOBAL_PROVIDER_SCOPE);
   const [hiddenGlobally, setHiddenGlobally] = useState(
     loadHiddenPickerProviders,
@@ -3225,6 +3255,14 @@ function ProvidersPage({
   const onClaudeHooks = (next: boolean) => {
     saveClaudeHooks(next);
     setClaudeHooks(next);
+  };
+
+  const onIdleAgentLimit = (next: string) => {
+    const limit = Number(next) as IdleAgentLimit;
+    saveIdleAgentLimit(limit);
+    setIdleAgentLimit(limit);
+    // A lower limit takes effect now, not at the next finished turn.
+    enforceHarnessIdleLimit();
   };
 
   const onModelChange = (harness: HarnessId, model: string) => {
@@ -3328,6 +3366,21 @@ function ProvidersPage({
       </Group>
 
       <Group title="Advanced">
+        <Row
+          id="idle-agents"
+          label="Keep idle agents ready"
+          description="A finished conversation keeps its agent CLI running for a few minutes, so a follow-up starts instantly. Each one can hold a few hundred MB of memory. Past this many, the one idle longest stops early; it resumes on your next message after a short restart. Choose None on a machine short on memory."
+        >
+          <Segmented
+            label="Keep idle agents ready"
+            value={String(idleAgentLimit)}
+            options={IDLE_AGENT_LIMITS.map((limit) => ({
+              value: String(limit),
+              label: limit === 0 ? "None" : String(limit),
+            }))}
+            onChange={onIdleAgentLimit}
+          />
+        </Row>
         <Row
           id="claude-hooks"
           label="Claude Code hooks"
@@ -4614,5 +4667,30 @@ function Select({
         </Popover>
       ) : null}
     </div>
+  );
+}
+
+function WorkspacePanelSideRow() {
+  const side = useSyncExternalStore(
+    subscribeWorkspacePanelSide,
+    loadWorkspacePanelSide,
+    loadWorkspacePanelSide,
+  );
+  return (
+    <Row
+      id="workspace-panel-side"
+      label="Workspace panel"
+      description={`Dock Explorer and Changes beside the project rail or on the right edge. Hide it with ${MOD}${SHIFT}B.`}
+    >
+      <Segmented
+        label="Workspace panel"
+        value={side}
+        options={[
+          { value: "left", label: "Left" },
+          { value: "right", label: "Right" },
+        ]}
+        onChange={(next: WorkspacePanelSide) => saveWorkspacePanelSide(next)}
+      />
+    </Row>
   );
 }

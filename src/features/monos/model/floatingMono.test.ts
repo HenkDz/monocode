@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
 import { newSession } from "../../sessions/model/session";
+import * as monoModel from "./mono";
 import {
   deliverFloatingMonoRequest,
   floatingMonoSession,
+  floatingMonoRoster,
   type FloatingMonoHost,
 } from "./floatingMono";
 
@@ -22,6 +25,44 @@ function host(): FloatingMonoHost {
 }
 
 describe("floating Mono delivery", () => {
+  it("keeps org roles alongside live rail status and forwarded org activity", () => {
+    const roster = vi.spyOn(monoModel, "listMonos").mockReturnValue([
+      { id: "manager", role: "manager", sessionId: session.id, projects: ["/tmp"], mascot: "cat", color: "#abc" },
+      { id: "member", role: "member", reportsTo: "manager", projects: ["/tmp"], mascot: "cat", color: "#abc" },
+    ]);
+    try {
+      expect(floatingMonoRoster(true, [{ ...session, busy: true }])).toEqual([
+        expect.objectContaining({ id: "manager", role: "manager", status: "working", sessionId: session.id }),
+        expect.objectContaining({ id: "member", role: "member", status: "idle", sessionId: null }),
+      ]);
+      expect(floatingMonoRoster(false, [session])).toEqual([]);
+      const state = { status: "needs-you" as const, activity: "Review team" };
+      expect(floatingMonoSession(session, state).monoLiveState).toEqual(state);
+    } finally {
+      roster.mockRestore();
+    }
+  });
+  it("allows permission actions through the native floating chat bridge", () => {
+    const native = readFileSync("src-tauri/src/mono_chat.rs", "utf8");
+    const action = native.slice(native.indexOf("pub async fn mono_chat_action("));
+    const allowlist = action.match(/matches!\(\s*kind,([\s\S]*?)\)/)?.[1];
+    expect(allowlist).toContain('"runtimeMode"');
+  });
+  it("applies permissions to the owner session after accepting the request", async () => {
+    const runtime = host();
+    runtime.runtimeMode = vi.fn();
+    const request = { id: 1, monoId: "mono", action: { kind: "runtimeMode" as const, mode: "full-access" as const } };
+    await deliverFloatingMonoRequest(request, runtime, async () => false);
+    expect(runtime.runtimeMode).not.toHaveBeenCalled();
+    await deliverFloatingMonoRequest(request, runtime, async () => true);
+    expect(runtime.runtimeMode).toHaveBeenCalledWith(session.id, "full-access");
+    await expect(deliverFloatingMonoRequest(
+      { ...request, action: { kind: "runtimeMode", mode: "invalid" as never } },
+      runtime,
+      async () => true,
+    )).rejects.toThrow("permissions are unavailable");
+    expect(runtime.runtimeMode).toHaveBeenCalledTimes(1);
+  });
   it("asks the workspace to add a Mono for the chat that requested it", async () => {
     const runtime = host();
     runtime.create = vi.fn().mockResolvedValue(undefined);

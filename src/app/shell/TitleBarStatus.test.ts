@@ -24,7 +24,10 @@ function tab(id: string, overrides: Partial<Tab> = {}): Tab {
   };
 }
 
-function render(tabs: Tab[]) {
+function render(
+  tabs: Tab[],
+  extra: Partial<Parameters<typeof TitleBar>[0]> = {},
+) {
   act(() =>
     root.render(
       createElement(TitleBar, {
@@ -36,6 +39,7 @@ function render(tabs: Tab[]) {
         onClose: vi.fn(),
         onCloseMany: vi.fn(),
         onReorder: vi.fn(),
+        ...extra,
       }),
     ),
   );
@@ -94,6 +98,72 @@ describe("title tab response status", () => {
     ).not.toBeNull();
   });
 });
+
+it("sizes tabs to content and lets only the trailing region grow", () => {
+  render([tab("active"), tab("other")], { onNew: vi.fn() });
+  const strip = container.querySelector("[data-title-tab-strip]")!;
+  expect(strip.parentElement!.classList.contains("flex-[0_1_auto]")).toBe(true);
+  expect(strip.parentElement!.classList.contains("flex-1")).toBe(false);
+  expect(strip.parentElement!.classList.contains("overflow-hidden")).toBe(true);
+  const plus = container.querySelector('[aria-label^="New session"]')!;
+  expect(plus.parentElement!.classList.contains("shrink-0")).toBe(true);
+  expect(
+    plus.parentElement!.nextElementSibling!.classList.contains("flex-1"),
+  ).toBe(true);
+});
+
+it("opens Details from the mascot/name independently of the panel toggle", () => {
+  const onShowMonoDetails = vi.fn();
+  const onToggleMonoPanel = vi.fn();
+  const mono = {
+    look: { name: "Captain", mascot: "cat", color: "#6ba", projects: [] },
+    state: { status: "idle" as const, activity: "Idle" },
+  };
+  render([], {
+    mono,
+    onShowMonoDetails,
+    onToggleMonoPanel,
+    monoPanelOpen: true,
+  });
+  const name = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Open details for Captain"]',
+  )!;
+  expect(name.tagName).toBe("BUTTON");
+  expect(name.textContent).toContain("Captain");
+  expect(name.className).toContain("hover:bg-content/6");
+  act(() => name.click());
+  act(() => name.click());
+  expect(onShowMonoDetails).toHaveBeenCalledTimes(2);
+  expect(onToggleMonoPanel).not.toHaveBeenCalled();
+  expect(
+    container.querySelector('[aria-label="Hide Mono panel"]'),
+  ).not.toBeNull();
+});
+
+it.each(["working", "idle"] as const)(
+  "shows a live panel indicator only while working and closed: %s",
+  (status) => {
+    const mono = {
+      look: { name: "Captain", mascot: "cat", color: "#6ba", projects: [] },
+      state: { status, activity: status },
+    };
+    const onToggleMonoPanel = vi.fn();
+    render([], { mono, onToggleMonoPanel });
+    expect(!!container.querySelector("[data-mono-activity-indicator]")).toBe(
+      status === "working",
+    );
+    act(() =>
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Show Mono panel"]')!
+        .click(),
+    );
+    expect(onToggleMonoPanel).toHaveBeenCalledOnce();
+    render([], { mono, onToggleMonoPanel, monoPanelOpen: true });
+    expect(
+      container.querySelector("[data-mono-activity-indicator]"),
+    ).toBeNull();
+  },
+);
 
 it.each([true, false])(
   "offers a separate session sidebar toggle when the project rail is %s",

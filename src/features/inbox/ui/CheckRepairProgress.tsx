@@ -1,7 +1,8 @@
-import { useId, useState, useSyncExternalStore } from "react";
+import { useEffect, useId, useState, useSyncExternalStore } from "react";
 import {
   getCiRepairs,
   subscribeCiRepairs,
+  stopCiRepairs,
   type TrackedCiRepair,
 } from "../model/ciRepairTracking";
 import { sameProjectPath } from "../../projects/model/recents";
@@ -21,7 +22,11 @@ import type {
   GithubPrChecks,
   GithubPrCheckState,
 } from "../model/githubPrChecks";
-import { githubActionsJobId } from "../model/githubPrChecks";
+import {
+  githubActionsJobId,
+  githubCheckIdentity,
+  latestPrChecks,
+} from "../model/githubPrChecks";
 
 type RepairState =
   | GithubPrCheckState
@@ -31,6 +36,8 @@ type RepairState =
   | "refreshing"
   | "stopped"
   | "interrupted"
+  | "not-needed-merged"
+  | "not-needed-closed"
   | "agent-error";
 type RepairItem = {
   attempt: TrackedCiRepair;
@@ -39,6 +46,17 @@ type RepairItem = {
 };
 export type RepairGroup = { sessionId: string; items: RepairItem[] };
 
+function repairCheckMatches(
+  tracked: RepairItem["check"],
+  current: GithubPrCheck,
+): boolean {
+  // App metadata may first arrive with a rerun; callers require a unique match.
+  return (
+    githubCheckIdentity(tracked) ===
+    githubCheckIdentity({ ...current, app: tracked.app ? current.app : "" })
+  );
+}
+
 export function findCheckRepair(
   groups: RepairGroup[],
   check: GithubPrCheck,
@@ -46,24 +64,16 @@ export function findCheckRepair(
 ): RepairItem | undefined {
   const candidates = groups
     .flatMap((group) => group.items)
-    .filter(
-      (item) =>
-        item.check.name === check.name &&
-        item.check.workflow === check.workflow,
-    );
+    .filter((item) => repairCheckMatches(item.check, check));
   const exact = candidates.find(
     (item) =>
       item.attempt.headOid === current.headOid && item.check.url === check.url,
   );
   if (exact) return exact;
-  // A new commit changes job URLs. Match by name only when both sides are unique.
-  if (
-    candidates.length !== 1 ||
-    candidates[0].attempt.headOid === current.headOid
-  )
-    return undefined;
-  return current.checks.filter(
-    (item) => item.name === check.name && item.workflow === check.workflow,
+  // A rerun or commit changes job URLs. Match by name only when both sides are unique.
+  if (candidates.length !== 1) return undefined;
+  return latestPrChecks(current.checks).filter((item) =>
+    repairCheckMatches(candidates[0].check, item),
   ).length === 1
     ? candidates[0]
     : undefined;
@@ -74,7 +84,15 @@ function repairState(
   check: RepairItem["check"],
   view: GithubPrChecksView,
   ambiguous: boolean,
+  state?: string,
 ): RepairState {
+  const terminal = state?.toLowerCase();
+  if (terminal === "merged" || terminal === "closed")
+    return `not-needed-${terminal}`;
+  if (attempt.phase === "not-needed")
+    return attempt.notNeeded === "merged"
+      ? "not-needed-merged"
+      : "not-needed-closed";
   if (attempt.phase === "running") return "repairing";
   if (attempt.phase === "failed") return "agent-error";
   if (attempt.phase === "cancelled") return "stopped";
@@ -82,13 +100,12 @@ function repairState(
   if (view.stale || view.error) return "stale";
   if (view.loading || view.refreshing) return "refreshing";
   const current = view.checks;
-  if (!current || current.headOid === attempt.headOid || ambiguous)
-    return "waiting";
-  const matches = current.checks.filter(
-    (item) => item.name === check.name && item.workflow === check.workflow,
+  if (!current || ambiguous) return "waiting";
+  const matches = latestPrChecks(current.checks).filter((item) =>
+    repairCheckMatches(check, item),
   );
   const originals = attempt.checks.filter(
-    (item) => item.name === check.name && item.workflow === check.workflow,
+    (item) => githubCheckIdentity(item) === githubCheckIdentity(check),
   );
   if (matches.length !== 1 || originals.length !== 1) return "waiting";
   const latest = matches[0];
@@ -108,6 +125,7 @@ export function useCheckRepairs(
   repo: string,
   number: number | undefined,
   view: GithubPrChecksView,
+  state?: string,
 ): RepairGroup[] {
   const attempts = useSyncExternalStore(
     subscribeCiRepairs,
@@ -125,7 +143,7 @@ export function useCheckRepairs(
     )
       continue;
     for (const check of attempt.checks) {
-      const key = JSON.stringify([check.workflow, check.name]);
+      const key = githubCheckIdentity(check);
       const previous = seen.get(key);
       if (
         previous &&
@@ -150,12 +168,15 @@ export function useCheckRepairs(
   }
   for (const group of groups.values()) {
     for (const item of group.items) {
-      const key = JSON.stringify([item.check.workflow, item.check.name]);
+      const key = githubCheckIdentity(item.check);
       item.state = repairState(
         item.attempt,
         item.check,
         view,
         (counts.get(key) ?? 0) > 1,
+        state === "merged" || state === "closed"
+          ? state
+          : (view.checks?.state ?? state),
       );
     }
   }
@@ -236,6 +257,18 @@ const states: Record<
     Icon: CircleDashed,
     color: neutral,
   },
+  "not-needed-merged": {
+    label: "Not needed",
+    summary: "Not needed: PR merged",
+    Icon: CircleDashed,
+    color: neutral,
+  },
+  "not-needed-closed": {
+    label: "Not needed",
+    summary: "Not needed: PR closed",
+    Icon: CircleDashed,
+    color: neutral,
+  },
   interrupted: {
     label: "Interrupted",
     summary: "Tracking interrupted",
@@ -292,6 +325,8 @@ function RepairCard({
   for (const item of group.items)
     counts.set(item.state, (counts.get(item.state) ?? 0) + 1);
   const priority: RepairState[] = [
+    "not-needed-merged",
+    "not-needed-closed",
     "repairing",
     "agent-error",
     "fail",
@@ -312,10 +347,9 @@ function RepairCard({
   const canShowCheck =
     single?.state === "pass" &&
     onShowCheck &&
-    view.checks?.checks.filter(
-      (check) =>
-        check.name === single.check.name &&
-        check.workflow === single.check.workflow,
+    view.checks &&
+    latestPrChecks(view.checks.checks).filter((check) =>
+      repairCheckMatches(single.check, check),
     ).length === 1;
   return (
     <div className="overflow-hidden rounded-lg border border-stroke bg-content/[0.02]">
@@ -432,10 +466,41 @@ export function CheckRepairProgress({
   view: GithubPrChecksView;
   onShowCheck?: (check: RepairItem["check"]) => void;
 }) {
-  const groups = useCheckRepairs(cwd, repo, repair.number, view);
+  const groups = useCheckRepairs(cwd, repo, repair.number, view, repair.state);
+  const state = (
+    repair.state === "merged" || repair.state === "closed"
+      ? repair.state
+      : (view.checks?.state ?? repair.state)
+  )?.toLowerCase();
+  const pendingAttempts = groups
+    .flatMap((group) => group.items)
+    .filter(({ attempt }) => attempt.phase !== "not-needed")
+    .map(({ attempt }) => attempt.id)
+    .join(",");
+  const [stopError, setStopError] = useState<string | null>(null);
+  useEffect(() => {
+    if ((state !== "merged" && state !== "closed") || !repair.onNotNeeded)
+      return;
+    let active = true;
+    setStopError(null);
+    void stopCiRepairs(cwd, repo, repair.number, state, (attempt) =>
+      repair.onNotNeeded!(attempt, state),
+    ).catch((reason: unknown) => {
+      if (active)
+        setStopError(reason instanceof Error ? reason.message : String(reason));
+    });
+    return () => {
+      active = false;
+    };
+  }, [cwd, repo, repair.number, state, repair.onNotNeeded, pendingAttempts]);
   if (!groups.length) return null;
   return (
     <div className="space-y-2" aria-label="Repair progress">
+      {stopError ? (
+        <p role="alert" className="text-[12px] text-rose-400">
+          Could not stop this repair: {stopError}
+        </p>
+      ) : null}
       {groups.map((group) => (
         <RepairCard
           key={group.sessionId}

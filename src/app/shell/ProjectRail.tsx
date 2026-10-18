@@ -5,7 +5,9 @@ import {
   FolderPlus,
   Internet,
   Inbox,
+  GitPullRequest,
   MoreHorizontal,
+  ListFilter,
   Pin,
   PinOff,
   File,
@@ -14,10 +16,21 @@ import {
   Settings,
   Zap,
 } from "../../shared/ui/icons";
-import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type MouseEvent,
+  type ReactNode,
+} from "react";
 import { useDragResize } from "../../shared/hooks/useDragResize";
 import { useLockOverscroll } from "../../shared/hooks/useLockOverscroll";
 import { useProjectDiffStats } from "../../features/source-control/hooks/useProjectDiffStats";
+import { useActiveWorktrees } from "../../features/source-control/hooks/useActiveWorktrees";
 import { useAnimatedReorder } from "../../shared/hooks/useAnimatedReorder";
 import { useTabGroupLogos } from "../../features/projects/hooks/useTabGroupLogos";
 import {
@@ -27,10 +40,7 @@ import {
   PROJECT_RAIL_WIDTH_MIN,
   saveProjectRailWidth,
 } from "../../features/settings/model/appearance";
-import {
-  basename,
-  type GitDiffStats,
-} from "../../platform/tauri/fs";
+import { basename, type GitDiffStats } from "../../platform/tauri/fs";
 import { IS_MAC, MOD } from "../../platform/tauri/platform";
 import { formatInteger } from "../../shared/lib/numbers";
 import { pathKey, projectKey, projectName } from "../../shared/lib/paths";
@@ -90,8 +100,15 @@ import {
 import { remoteProjectFor } from "../../features/connections/model/remoteProjects";
 import { useProjectMenu } from "./useProjectMenu";
 import { MonoRailSection, type MonoRailProps } from "./MonoRailSection";
+import { buildPullRequestRows, pullRequestGroup, openPullRequests, type PullRequestContext } from "../../features/pullRequests/model/pullRequestView";
+import { usePullRequests } from "../../features/source-control/model/pullRequests";
+import { orchestrator } from "../../features/orchestration/model/orchestration";
+import { cardSessionsSnapshot, subscribeCardSessions } from "../../features/monos/model/monoCards";
+import { listMonos, subscribeMonos } from "../../features/monos/model/mono";
+import { useProjectExpansion } from "../../features/projects/hooks/useProjectExpansion";
 
 type Props = {
+  sessions?: PullRequestContext["sessions"];
   visible?: boolean;
   cwd: string;
   recents: RecentProject[];
@@ -105,6 +122,7 @@ type Props = {
   searchActive?: boolean;
   onOpenInbox?: () => void;
   inboxActive?: boolean;
+  pullRequestsActive?: boolean;
   notesEnabled?: boolean;
   onOpenNotes?: () => void;
   notesActive?: boolean;
@@ -112,6 +130,8 @@ type Props = {
   automationsActive?: boolean;
   onTogglePanel?: () => void;
   onSelectProject: (path: string) => void;
+  onNewWorktree?: (project: string) => void;
+  renderProjectWorktrees?: (path: string, enabled: boolean) => ReactNode;
   onOpenProject: () => void;
   onRemoveProject?: (path: string, options: { purgeData: boolean }) => void;
   liveAgents?: LiveAgent[];
@@ -131,6 +151,7 @@ type Props = {
 };
 
 export function ProjectRail({
+  sessions,
   visible = true,
   cwd,
   recents,
@@ -144,6 +165,7 @@ export function ProjectRail({
   searchActive = false,
   onOpenInbox,
   inboxActive = false,
+  pullRequestsActive = false,
   notesEnabled = true,
   onOpenNotes,
   notesActive = false,
@@ -151,6 +173,8 @@ export function ProjectRail({
   automationsActive = false,
   onTogglePanel,
   onSelectProject,
+  renderProjectWorktrees,
+  onNewWorktree,
   onOpenProject,
   onRemoveProject,
   liveAgents = [],
@@ -167,6 +191,19 @@ export function ProjectRail({
   onDismissUpdate,
   monos,
 }: Props) {
+  const prs = usePullRequests();
+  const runs = useSyncExternalStore(orchestrator.subscribe, orchestrator.snapshot, orchestrator.snapshot);
+  const cardSessions = useSyncExternalStore(subscribeCardSessions, cardSessionsSnapshot, cardSessionsSnapshot);
+  const [roster, setRoster] = useState(listMonos);
+  useEffect(() => subscribeMonos(() => setRoster(listMonos())), []);
+  const attention = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const row of buildPullRequestRows(prs, { sessions, runs, cardSessions, roster })) {
+      const group = pullRequestGroup(row);
+      if (group === "Needs you" || group === "Ready to merge") counts.set(pathKey(row.project), (counts.get(pathKey(row.project)) ?? 0) + 1);
+    }
+    return counts;
+  }, [prs, sessions, runs, cardSessions, roster]);
   const resize = useDragResize({
     min: PROJECT_RAIL_WIDTH_MIN,
     max: () =>
@@ -333,14 +370,20 @@ export function ProjectRail({
   const otherViewActive =
     searchActive ||
     inboxActive ||
+    pullRequestsActive ||
     notesActive ||
     automationsActive ||
     !!monos?.activeId;
   const pinnedIds = sections.pinned.map((item) => item.path);
   const projectIds = groupedProjectSections.ungrouped.map((item) => item.path);
   const pinnedSortable = useAnimatedReorder(pinnedIds, onReorderPinned, "y");
-  const projectSortable = useAnimatedReorder(projectIds, onReorderProjects, "y");
+  const projectSortable = useAnimatedReorder(
+    projectIds,
+    onReorderProjects,
+    "y",
+  );
   return (
+    <ProjectPrAttention.Provider value={attention}>
     <nav
       ref={resize.setPaneRef}
       aria-label="Projects"
@@ -396,6 +439,7 @@ export function ProjectRail({
               dot={inboxUnseen}
               ariaLabel={inboxUnseen ? "Inbox, new items" : "Inbox"}
             />
+            <RailAction label="Pull requests" icon={GitPullRequest} active={pullRequestsActive} onClick={() => openPullRequests()} ariaLabel="Pull requests" />
             {notesEnabled ? (
               <RailAction
                 label="Notes"
@@ -440,6 +484,8 @@ export function ProjectRail({
                 pinned
                 searchActive={otherViewActive}
                 onSelect={onSelectProject}
+                renderProjectWorktrees={renderProjectWorktrees}
+                onNewWorktree={onNewWorktree}
                 onTogglePin={toggleProjectPin}
                 onContextMenu={onProjectContextMenu}
                 onOpenMenu={projectMenu.open}
@@ -469,6 +515,8 @@ export function ProjectRail({
                       statsEnabled={visible}
                       searchActive={otherViewActive}
                       onSelect={onSelectProject}
+                      renderProjectWorktrees={renderProjectWorktrees}
+                      onNewWorktree={onNewWorktree}
                       onTogglePin={toggleProjectPin}
                       onContextMenu={onProjectContextMenu}
                       onOpenMenu={projectMenu.open}
@@ -510,6 +558,8 @@ export function ProjectRail({
               pinned={false}
               searchActive={otherViewActive}
               onSelect={onSelectProject}
+              renderProjectWorktrees={renderProjectWorktrees}
+              onNewWorktree={onNewWorktree}
               onTogglePin={toggleProjectPin}
               onContextMenu={onProjectContextMenu}
               onOpenMenu={projectMenu.open}
@@ -572,10 +622,12 @@ export function ProjectRail({
         onDoubleClick={resize.onDoubleClick}
       />
     </nav>
+    </ProjectPrAttention.Provider>
   );
 }
 
 type SortableHandle = ReturnType<typeof useAnimatedReorder>;
+const ProjectPrAttention = createContext<ReadonlyMap<string, number>>(new Map());
 
 function ProjectSection({
   label,
@@ -590,6 +642,8 @@ function ProjectSection({
   pinned,
   searchActive,
   onSelect,
+  renderProjectWorktrees,
+  onNewWorktree,
   onTogglePin,
   onContextMenu,
   onOpenMenu,
@@ -611,6 +665,8 @@ function ProjectSection({
   pinned: boolean;
   searchActive: boolean;
   onSelect: (path: string) => void;
+  onNewWorktree?: (project: string) => void;
+  renderProjectWorktrees?: Props["renderProjectWorktrees"];
   onTogglePin: (path: string) => void;
   onContextMenu: (path: string, event: MouseEvent<HTMLElement>) => void;
   onOpenMenu: (path: string, x: number, y: number) => void;
@@ -640,6 +696,8 @@ function ProjectSection({
             pinned={pinned}
             sortable={sortable}
             onSelect={onSelect}
+            renderProjectWorktrees={renderProjectWorktrees}
+            onNewWorktree={onNewWorktree}
             onTogglePin={onTogglePin}
             onContextMenu={onContextMenu}
             onOpenMenu={onOpenMenu}
@@ -690,6 +748,8 @@ function ProjectSectionHeader({
 }
 
 function ProjectGroupSection({
+  renderProjectWorktrees,
+  onNewWorktree,
   group,
   items,
   muteStatuses,
@@ -710,6 +770,8 @@ function ProjectGroupSection({
   groupLogos,
   groupMascots,
 }: {
+  onNewWorktree?: (project: string) => void;
+  renderProjectWorktrees?: Props["renderProjectWorktrees"];
   group: ProjectGroup;
   items: RecentProject[];
   muteStatuses: ReadonlyMap<string, string | null>;
@@ -755,7 +817,9 @@ function ProjectGroupSection({
         className="project-reorder-item group relative flex h-8 items-stretch rounded-md px-2 opacity-65 cursor-default"
         onContextMenu={(event) => {
           event.preventDefault();
-          event.currentTarget.querySelector<HTMLButtonElement>("button")?.focus();
+          event.currentTarget
+            .querySelector<HTMLButtonElement>("button")
+            ?.focus();
           openMenu(event.currentTarget, event.clientX, event.clientY);
         }}
       >
@@ -808,7 +872,7 @@ function ProjectGroupSection({
             event.stopPropagation();
             openMenu(event.currentTarget);
           }}
-          className="absolute right-1 top-1/2 hidden size-6 -translate-y-1/2 place-items-center rounded-md text-content/55 hover:bg-content/8 hover:text-content group-hover:grid group-has-[:focus-visible]:grid"
+          className="absolute right-1 top-1/2 grid size-6 -translate-y-1/2 place-items-center rounded-md text-content/55 pointer-events-none opacity-0 transition-opacity duration-150 motion-reduce:transition-none hover:bg-content/8 hover:text-content group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100"
         >
           <MoreHorizontal className="size-4" strokeWidth={1.75} />
         </button>
@@ -826,6 +890,8 @@ function ProjectGroupSection({
               pinned={false}
               sortable={sortable}
               onSelect={onSelect}
+              renderProjectWorktrees={renderProjectWorktrees}
+              onNewWorktree={onNewWorktree}
               onTogglePin={onTogglePin}
               onContextMenu={onContextMenu}
               onOpenMenu={onOpenMenu}
@@ -854,6 +920,8 @@ function ProjectCard({
   pinned,
   sortable,
   onSelect,
+  renderProjectWorktrees,
+  onNewWorktree,
   onTogglePin,
   onContextMenu,
   onOpenMenu,
@@ -871,6 +939,8 @@ function ProjectCard({
   pinned: boolean;
   sortable: SortableHandle;
   onSelect: (path: string) => void;
+  onNewWorktree?: (project: string) => void;
+  renderProjectWorktrees?: Props["renderProjectWorktrees"];
   onTogglePin: (path: string) => void;
   onContextMenu: (path: string, event: MouseEvent<HTMLElement>) => void;
   onOpenMenu: (path: string, x: number, y: number) => void;
@@ -880,6 +950,13 @@ function ProjectCard({
   groupLogos: ReturnType<typeof useTabGroupLogos>;
   groupMascots: Record<string, string>;
 }) {
+  const [expanded, setExpanded] = useProjectExpansion(item.path, "project", selected);
+  const wasSelected = useRef(selected);
+  useEffect(() => {
+    if (selected && !wasSelected.current) setExpanded(true);
+    wasSelected.current = selected;
+  }, [selected]);
+  const actionablePrs = useContext(ProjectPrAttention).get(pathKey(item.path)) ?? 0;
   const fallbackName = basename(item.path);
   const key = projectKey(item.path);
   const seed = projectName(item.path);
@@ -888,10 +965,7 @@ function ProjectCard({
   const color = resolveTabGroupColor(key, groupColors, groupCustomColors, seed);
   const diffEnabled = statsEnabled && Boolean(item.path) && item.path !== "~";
   const stats = useProjectDiffStats(item.path, diffEnabled);
-  const files = stats?.files ?? 0;
-  const additions = stats?.additions ?? 0;
-  const deletions = stats?.deletions ?? 0;
-  const hasChanges = files > 0 || additions > 0 || deletions > 0;
+  const [activeOnly, setActiveOnly] = useActiveWorktrees(item.path);
   const remote = remoteProjectFor(item.path);
   const { machines } = useRemoteMachines(!!remote);
   const machine = remote
@@ -924,146 +998,206 @@ function ProjectCard({
     ? "min-w-0 max-w-[75%] shrink-0 truncate text-sm font-medium leading-tight"
     : nameClassName;
 
+  const hasWorktrees = !remote && !!renderProjectWorktrees;
   return (
     <div
       ref={(el) => sortable.setItemRef(item.path, el)}
-      data-selected={selected || undefined}
-      className={`reorder-item project-reorder-item group relative flex touch-none items-stretch rounded-md px-2 h-8 ${
-        selected
-          ? "bg-selection-strong text-content"
-          : "opacity-65"
-      } cursor-default`}
-      onPointerDown={(event) => {
-        if (event.button !== 0) return;
-        if ((event.target as HTMLElement | null)?.closest("[data-no-drag]")) {
-          return;
-        }
-        sortable.onItemPointerDown(item.path, event);
-      }}
-      onClick={(event) => {
-        if ((event.target as HTMLElement | null)?.closest("[data-no-drag]")) {
-          return;
-        }
-        if (sortable.consumeClick()) return;
-        onSelect(item.path);
-      }}
-      onContextMenu={(event) => onContextMenu(item.path, event)}
-      onKeyDown={(event) => {
-        if (
-          event.key !== "ContextMenu" &&
-          !(event.shiftKey && event.key === "F10")
-        ) return;
-        event.preventDefault();
-        event.stopPropagation();
-        const rect = event.currentTarget.getBoundingClientRect();
-        onOpenMenu(item.path, rect.left, rect.bottom);
-      }}
+      className="reorder-item"
     >
-      <button
-        type="button"
-        title={muteStatus ? `${cardTitle}\n${muteStatus}` : cardTitle}
-        aria-label={muteStatus ? `${cardAriaLabel}, ${muteStatus}` : cardAriaLabel}
-        aria-current={selected ? "true" : undefined}
-        className="flex min-w-0 flex-1 cursor-default items-center gap-2 text-left transition-[padding] duration-150 motion-reduce:transition-none group-hover:pr-6 group-has-[:focus-visible]:pr-6"
-      >
-        <div className="project-card-logo grid size-4 shrink-0 place-items-center transition-opacity group-hover:opacity-0">
-          {logoPath && !busy ? (
-            <ProjectLogoIcon
-              path={logoPath}
-              className="size-4 rounded-sm"
-              imageClassName="size-4"
-            />
-          ) : (
-            <ProjectMascot
-              project={seed}
-              color={color}
-              name={resolveTabGroupMascot(key, groupMascots)}
-              className="size-3"
-              active={busy}
-            />
-          )}
-        </div>
-        {busy ? (
-          <Shimmer as="span" duration={1.4} className={labelClassName}>
-            {name}
-          </Shimmer>
-        ) : (
-          <span className={labelClassName}>{name}</span>
-        )}
-        {machine ? (
-          <span className="min-w-0 flex-1 truncate text-[11px] leading-tight text-content/45">
-            {machine.name}
-          </span>
-        ) : null}
-        {hasChanges ? (
-          <span className="project-card-stats shrink-0 group-hover:hidden group-has-[:focus-visible]:hidden">
-            <ProjectDiffStat additions={additions} deletions={deletions} />
-          </span>
-        ) : null}
-        {remote ? (
-          <span
-            role="img"
-            aria-label={connection}
-            className="relative grid size-4 shrink-0 place-items-center text-content/45"
-          >
-            <Internet className="size-3" strokeWidth={1.75} aria-hidden="true" />
-            <span
-              aria-hidden="true"
-              className={`absolute right-0 bottom-0 size-1.5 rounded-full ring-1 ring-background-base ${
-                online ? "bg-emerald-400" : "bg-content/35"
-              }`}
-            />
-          </span>
-        ) : null}
-        {muteStatus ? (
-          <span
-            role="img"
-            aria-label={muteStatus}
-            title={muteStatus}
-            className="grid size-4 shrink-0 place-items-center text-amber-400"
-          >
-            <BellOff className="size-3.5" strokeWidth={1.75} aria-hidden="true" />
-          </span>
-        ) : null}
-      </button>
-      <button
-        type="button"
-        data-no-drag
-        title="Project options"
-        aria-label="Project options"
-        aria-haspopup="menu"
-        onPointerDown={(event) => event.stopPropagation()}
+      <div
+        data-selected={selected || undefined}
+        className={`project-reorder-item group relative flex touch-none items-stretch rounded-md px-2 h-8 ${
+          selected ? "text-content" : "text-content/65"
+        } cursor-default`}
+        onPointerDown={(event) => {
+          if (event.button !== 0) return;
+          if ((event.target as HTMLElement | null)?.closest("[data-no-drag]")) {
+            return;
+          }
+          sortable.onItemPointerDown(item.path, event);
+        }}
         onClick={(event) => {
+          if ((event.target as HTMLElement | null)?.closest("[data-no-drag]")) {
+            return;
+          }
+          if (sortable.consumeClick()) return;
+          onSelect(item.path);
+        }}
+        onContextMenu={(event) => onContextMenu(item.path, event)}
+        onKeyDown={(event) => {
+          if (
+            event.key !== "ContextMenu" &&
+            !(event.shiftKey && event.key === "F10")
+          )
+            return;
+          event.preventDefault();
           event.stopPropagation();
           const rect = event.currentTarget.getBoundingClientRect();
-          onOpenMenu(
-            item.path,
-            event.detail === 0 ? rect.left : event.clientX,
-            event.detail === 0 ? rect.bottom : event.clientY,
-          );
+          onOpenMenu(item.path, rect.left, rect.bottom);
         }}
-        className="absolute right-1 top-1/2 hidden size-6 -translate-y-1/2 place-items-center rounded-md text-content/55 hover:bg-content/8 hover:text-content group-hover:grid group-has-[:focus-visible]:grid"
       >
-        <MoreHorizontal className="size-4" strokeWidth={1.75} />
-      </button>
-      <button
-        type="button"
-        data-no-drag
-        title={pinned ? "Unpin project" : "Pin project"}
-        aria-label={pinned ? "Unpin project" : "Pin project"}
-        onPointerDown={(event) => event.stopPropagation()}
-        onClick={(event) => {
-          event.stopPropagation();
-          onTogglePin(item.path);
-        }}
-        className="absolute left-2 top-1/2 grid size-4 -translate-y-1/2 place-items-center rounded-sm text-content/55 opacity-0 pointer-events-none transition-opacity hover:text-content group-hover:pointer-events-auto group-hover:opacity-100"
-      >
-        {pinned ? (
-          <PinOff className="size-3.5" strokeWidth={1.75} />
-        ) : (
-          <Pin className="size-3.5" strokeWidth={1.75} />
+        {hasWorktrees ? (
+          <button
+            type="button"
+            data-no-drag
+            aria-label={`${expanded ? "Collapse" : "Expand"} worktrees in ${name}`}
+            aria-expanded={expanded}
+            onClick={() => setExpanded(!expanded)}
+            className="mr-1 grid w-4 shrink-0 place-items-center rounded-md text-content/60 hover:text-content"
+          >
+            {expanded ? (
+              <ChevronDown className="size-3" />
+            ) : (
+              <ChevronRight className="size-3" />
+            )}
+          </button>
+        ) : null}
+        <button
+          type="button"
+          title={muteStatus ? `${cardTitle}\n${muteStatus}` : cardTitle}
+          aria-label={
+            muteStatus ? `${cardAriaLabel}, ${muteStatus}` : cardAriaLabel
+          }
+          aria-current={selected ? "true" : undefined}
+          className={`flex min-w-0 flex-1 cursor-default items-center gap-2 text-left transition-[padding] duration-150 motion-reduce:transition-none ${hasWorktrees ? `group-hover:pr-20 group-focus-within:pr-20 [@media(hover:none)]:pr-20 ${activeOnly ? "pr-6" : ""}` : "group-hover:pr-12 group-focus-within:pr-12 [@media(hover:none)]:pr-12"}`}
+        >
+          <div className="project-card-logo grid size-4 shrink-0 place-items-center transition-opacity group-hover:opacity-0">
+            {logoPath && !busy ? (
+              <ProjectLogoIcon
+                path={logoPath}
+                className="size-4 rounded-sm"
+                imageClassName="size-4"
+              />
+            ) : (
+              <ProjectMascot
+                project={seed}
+                color={color}
+                name={resolveTabGroupMascot(key, groupMascots)}
+                className="size-3"
+                active={busy}
+              />
+            )}
+          </div>
+          {busy ? (
+            <Shimmer as="span" duration={1.4} className={labelClassName}>
+              {name}
+            </Shimmer>
+          ) : (
+            <span className={labelClassName}>{name}</span>
+          )}
+          {actionablePrs > 0 && <span aria-label={`${actionablePrs} pull requests need attention`} title={`${actionablePrs} PRs need you or are ready to merge`} className="rounded bg-accent/10 px-1 text-[10px] text-accent">{actionablePrs}</span>}
+          {machine ? (
+            <span className="min-w-0 flex-1 truncate text-[11px] leading-tight text-content/45">
+              {machine.name}
+            </span>
+          ) : null}
+          {remote ? (
+            <span
+              role="img"
+              aria-label={connection}
+              className="relative grid size-4 shrink-0 place-items-center text-content/45"
+            >
+              <Internet
+                className="size-3"
+                strokeWidth={1.75}
+                aria-hidden="true"
+              />
+              <span
+                aria-hidden="true"
+                className={`absolute right-0 bottom-0 size-1.5 rounded-full ring-1 ring-background-base ${
+                  online ? "bg-emerald-400" : "bg-content/35"
+                }`}
+              />
+            </span>
+          ) : null}
+          {muteStatus ? (
+            <span
+              role="img"
+              aria-label={muteStatus}
+              title={muteStatus}
+              className="grid size-4 shrink-0 place-items-center text-amber-400"
+            >
+              <BellOff
+                className="size-3.5"
+                strokeWidth={1.75}
+                aria-hidden="true"
+              />
+            </span>
+          ) : null}
+        </button>
+        {hasWorktrees && (
+          <button
+            type="button"
+            data-no-drag
+            aria-label="Show active only"
+            aria-pressed={activeOnly}
+            title={activeOnly ? "Filtered: showing active worktrees only" : "Show active worktrees only"}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => { event.stopPropagation(); setActiveOnly(!activeOnly); }}
+            className={`absolute right-1 ${onNewWorktree ? "group-hover:right-14 group-focus-within:right-14 [@media(hover:none)]:right-14" : "group-hover:right-7 group-focus-within:right-7 [@media(hover:none)]:right-7"} top-1/2 grid size-6 -translate-y-1/2 place-items-center rounded-md transition-opacity hover:bg-content/8 focus-visible:outline-accent ${activeOnly ? "text-accent opacity-100" : "text-content/55 pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100"}`}
+          >
+            <ListFilter className="size-3.5" />
+          </button>
         )}
-      </button>
+        <button
+          type="button"
+          data-no-drag
+          title="Project options"
+          aria-label="Project options"
+          aria-haspopup="menu"
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.stopPropagation();
+            const rect = event.currentTarget.getBoundingClientRect();
+            onOpenMenu(
+              item.path,
+              event.detail === 0 ? rect.left : event.clientX,
+              event.detail === 0 ? rect.bottom : event.clientY,
+            );
+          }}
+          className={`absolute ${hasWorktrees && onNewWorktree ? "right-7" : "right-1"} top-1/2 grid size-6 -translate-y-1/2 place-items-center rounded-md text-content/55 pointer-events-none opacity-0 transition-opacity duration-150 motion-reduce:transition-none hover:bg-content/8 hover:text-content group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100`}
+        >
+          <MoreHorizontal className="size-4" strokeWidth={1.75} />
+        </button>
+        <button
+          type="button"
+          data-no-drag
+          title={pinned ? "Unpin project" : "Pin project"}
+          aria-label={pinned ? "Unpin project" : "Pin project"}
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.stopPropagation();
+            onTogglePin(item.path);
+          }}
+          className={`absolute ${hasWorktrees ? "left-7" : "left-2"} top-1/2 grid size-4 -translate-y-1/2 place-items-center rounded-sm text-content/55 opacity-0 pointer-events-none transition-opacity hover:text-content group-hover:pointer-events-auto group-hover:opacity-100`}
+        >
+          {pinned ? (
+            <PinOff className="size-3.5" strokeWidth={1.75} />
+          ) : (
+            <Pin className="size-3.5" strokeWidth={1.75} />
+          )}
+        </button>
+        {hasWorktrees && onNewWorktree ? (
+          <button
+            type="button"
+            data-no-drag
+            title="Create new worktree"
+            aria-label={`Create new worktree in ${name}`}
+            onClick={(event) => {
+              event.stopPropagation();
+              onNewWorktree(item.path);
+            }}
+            className="absolute right-1 top-1/2 grid size-6 -translate-y-1/2 place-items-center rounded-md text-content/55 pointer-events-none opacity-0 transition-opacity duration-150 motion-reduce:transition-none hover:bg-content/8 hover:text-content group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100"
+          >
+            <Plus className="size-3.5" />
+          </button>
+        ) : null}
+      </div>
+      {hasWorktrees && expanded ? (
+        <div className="mt-0.5">
+          {renderProjectWorktrees(item.path, statsEnabled)}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1073,37 +1207,6 @@ function isBusyPath(path: string, busy: Set<string>): boolean {
     if (sameProjectPath(path, other)) return true;
   }
   return false;
-}
-
-function ProjectDiffStat({
-  additions,
-  deletions,
-}: {
-  additions: number;
-  deletions: number;
-}) {
-  if (additions <= 0 && deletions <= 0) return null;
-
-  const label = [
-    additions > 0 ? `+${formatInteger(additions)}` : "",
-    deletions > 0 ? `-${formatInteger(deletions)}` : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
-
-  return (
-    <span
-      title={`${label} uncommitted`}
-      className="flex shrink-0 items-center gap-1 font-sans text-[11px] font-semibold tabular-nums"
-    >
-      {additions > 0 ? (
-        <span className="text-diff-add-fg">+{formatInteger(additions)}</span>
-      ) : null}
-      {deletions > 0 ? (
-        <span className="text-diff-del-fg">-{formatInteger(deletions)}</span>
-      ) : null}
-    </span>
-  );
 }
 
 function projectCardTitle(

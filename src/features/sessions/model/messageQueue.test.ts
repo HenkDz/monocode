@@ -43,6 +43,14 @@ describe("isEditingQueuedHead", () => {
 });
 
 describe("canDispatchQueuedHead", () => {
+  it("holds storage-blocked new turns and steering without consuming the queued prompt", () => {
+    const session = chat({ codexStorageError: "Codex storage needs repair: AGENTS.md" });
+    expect(canDispatchQueuedHead(session)).toBe(false);
+    expect(canSteerQueuedHead({ ...session, busy: true, turnReady: true })).toBe(false);
+    expect(queuedHead(session)?.text).toBe("first");
+    expect(canDispatchQueuedHead(chat({ codexStoragePreparing: true }))).toBe(false);
+    expect(canSteerQueuedHead(chat({ codexStoragePreparing: true, busy: true, turnReady: true }))).toBe(false);
+  });
   it("dispatches an idle session with a queued head", () => {
     expect(canDispatchQueuedHead(chat())).toBe(true);
   });

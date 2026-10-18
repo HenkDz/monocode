@@ -125,13 +125,14 @@ export function HabitRow({
         </span>
         <span className="flex min-w-0 flex-1 flex-col">
           <span
+            title={habit.name}
             className={`truncate text-[12px] leading-5 ${
               habit.enabled || running ? "text-content/85" : "text-content/45"
             }`}
           >
             {habit.name}
           </span>
-          <span className="truncate text-[11px] leading-4 text-content/40">
+          <span title={habitScheduleLabel(habit.schedule)} className="truncate text-[11px] leading-4 text-content/40">
             {running ? (
               <>
                 Running now · <RunningFor since={runningSince} />

@@ -71,23 +71,23 @@ it("refreshes CI while viewing Checks and stops after returning to Summary", asy
       }),
     ),
   );
-  expect(checkRequests()).toHaveLength(1);
+  expect(checkRequests()).toHaveLength(0);
   await act(async () => vi.advanceTimersByTimeAsync(2 * 60_000));
-  expect(checkRequests()).toHaveLength(1);
+  expect(checkRequests()).toHaveLength(0);
 
   await act(async () =>
     container
       .querySelector<HTMLButtonElement>('[role="tab"][aria-label^="Checks:"]')!
       .click(),
   );
-  expect(checkRequests()).toHaveLength(2);
+  expect(checkRequests()).toHaveLength(1);
   await act(async () => vi.advanceTimersByTimeAsync(30_000));
-  expect(checkRequests()).toHaveLength(3);
+  expect(checkRequests()).toHaveLength(2);
 
   const summary = [
     ...container.querySelectorAll<HTMLButtonElement>('[role="tab"]'),
   ].find((button) => button.textContent === "Summary")!;
   await act(async () => summary.click());
   await act(async () => vi.advanceTimersByTimeAsync(2 * 60_000));
-  expect(checkRequests()).toHaveLength(3);
+  expect(checkRequests()).toHaveLength(2);
 });

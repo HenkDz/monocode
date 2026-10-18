@@ -1,0 +1,415 @@
+.orbit-map {
+  --color-content-secondary: color-mix(
+    in srgb,
+    var(--color-content) 70%,
+    transparent
+  );
+}
+.orbit-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 24px 16px 32px;
+  background-image: radial-gradient(
+    color-mix(in srgb, var(--color-content) 8%, transparent) 0.8px,
+    transparent 0.8px
+  );
+  background-size: 24px 24px;
+}
+.orbit-stage {
+  position: relative;
+  margin: 0 auto;
+}
+.orbit-ring {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  border: 1px dashed color-mix(in srgb, var(--color-content) 16%, transparent);
+  border-radius: 50%;
+  pointer-events: none;
+}
+.orbit-spokes,
+.orbit-slot {
+  position: absolute;
+  width: 0;
+  height: 0;
+}
+.orbit-spokes,
+.orbit-slot,
+.orbit-upright {
+  transition: transform 300ms cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+.orbit-spoke {
+  position: absolute;
+  left: -10px;
+  top: 0;
+  transform-origin: 10px 0;
+  overflow: visible;
+}
+.orbit-spoke-line {
+  fill: none;
+  stroke: color-mix(in srgb, var(--color-content) 16%, transparent);
+  stroke-width: 1;
+}
+.orbit-spoke .team-map-pulse {
+  pointer-events: none;
+}
+.orbit-spoke[data-dimmed="true"] {
+  opacity: 0.35;
+}
+.orbit-upright {
+  width: 0;
+  height: 0;
+}
+.orbit-capsule,
+.orbit-center {
+  position: absolute;
+  width: 220px;
+  height: 112px;
+  margin-left: -110px;
+  margin-top: -56px;
+  border: 1px solid var(--color-stroke);
+  border-radius: 16px;
+  background: var(--color-background-base);
+  box-shadow: 0 4px 6px color-mix(in srgb, var(--color-content) 6%, transparent);
+  transition:
+    opacity 160ms,
+    border-color 160ms,
+    box-shadow 160ms;
+}
+.orbit-capsule[data-focused="true"] {
+  border-color: var(--color-accent);
+  box-shadow: 0 4px 16px
+    color-mix(in srgb, var(--color-accent) 16%, transparent);
+}
+.orbit-capsule[data-active="true"] .team-map-ring {
+  animation: orbit-arrival 1.5s ease-in-out 3;
+}
+.orbit-capsule[data-dimmed="true"],
+.orbit-member-row[data-dimmed="true"] {
+  opacity: 0.35;
+}
+.orbit-capsule[data-highlighted="true"],
+.orbit-center[data-highlighted="true"],
+.orbit-member-row[data-highlighted="true"] {
+  outline: 2px solid var(--color-accent);
+}
+.orbit-capsule-focus {
+  width: 100%;
+  height: 100%;
+  text-align: left;
+  padding: 12px;
+  border-radius: inherit;
+}
+.orbit-capsule-focus:hover,
+.orbit-member-row > button:first-child:hover {
+  background: color-mix(in srgb, var(--color-content) 4%, transparent);
+}
+.orbit-capsule-heading {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.orbit-capsule-heading > span:last-child {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.orbit-capsule-heading strong {
+  font-size: 14px;
+  font-weight: 600;
+}
+.orbit-capsule-heading > span > span {
+  font-size: 12px;
+  color: var(--color-content-secondary);
+}
+.orbit-capsule-heading strong,
+.orbit-capsule-heading > span > span,
+.orbit-attention {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.orbit-counts {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 10px;
+  white-space: nowrap;
+}
+.orbit-counts > span {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.orbit-counts i {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--status-color);
+}
+.orbit-crew {
+  display: flex;
+  gap: 4px;
+  margin-top: 8px;
+  max-width: 170px;
+  overflow: hidden;
+}
+.orbit-tiny-mascot {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  border-bottom: 2px solid var(--status-color);
+}
+.orbit-crew > span:not(.orbit-tiny-mascot) {
+  color: var(--color-content-secondary);
+  font-size: 12px;
+}
+.orbit-chat {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  padding: 4px;
+  border-radius: 4px;
+  color: var(--color-accent);
+}
+.orbit-chat:hover {
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+}
+.orbit-center {
+  width: 240px;
+  height: 128px;
+  margin-left: -120px;
+  margin-top: -64px;
+  z-index: 2;
+  border-radius: 16px;
+}
+.orbit-center > button:first-child {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  height: 100%;
+  padding: 12px;
+  border-radius: inherit;
+}
+.orbit-center strong {
+  font-size: 14px;
+  font-weight: 600;
+}
+.orbit-center > button > span:not(.team-map-ring) {
+  font-size: 12px;
+}
+.orbit-attention {
+  color: var(--color-content-secondary);
+  max-width: 196px;
+}
+.orbit-team {
+  position: relative;
+  max-width: 800px;
+  margin: 12px auto 0;
+}
+.orbit-team::before {
+  content: "";
+  position: absolute;
+  top: -24px;
+  left: 50%;
+  height: 24px;
+  width: 1px;
+  background: var(--color-stroke);
+}
+.orbit-team > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 8px;
+}
+.orbit-team h2 {
+  font-size: 14px;
+  font-weight: 600;
+}
+.orbit-team header span {
+  color: var(--color-content-secondary);
+  font-size: 12px;
+}
+.orbit-team header button {
+  border: 1px solid var(--color-stroke);
+  border-radius: 6px;
+  padding: 4px 8px;
+  background: var(--color-background-base);
+}
+.orbit-team-rows {
+  position: relative;
+  animation: orbit-unfold 300ms ease both;
+}
+.orbit-member-row {
+  position: relative;
+  height: 64px;
+  border-top: 1px solid var(--color-stroke);
+  transition: opacity 160ms;
+  background: var(--color-background-base);
+}
+.orbit-member-row > button:first-child {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  height: 100%;
+  text-align: left;
+  padding: 8px 40px 8px 24px;
+}
+.orbit-member-name {
+  display: flex;
+  flex-direction: column;
+  width: 144px;
+  flex-shrink: 0;
+  min-width: 0;
+}
+.orbit-member-name strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+.orbit-member-name > span {
+  color: var(--color-content-secondary);
+  font-size: 12px;
+}
+.orbit-member-name > span,
+.orbit-member-name strong,
+.orbit-member-task {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.orbit-member-task {
+  flex: 1;
+  color: var(--color-content-secondary);
+}
+.orbit-member-row .team-map-model {
+  max-width: 144px;
+  flex-shrink: 0;
+  font-size: 12px;
+}
+.orbit-member-status {
+  width: 64px;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.orbit-member-row[data-status="idle"] {
+  height: 48px;
+}
+.orbit-member-row[data-status="idle"] .orbit-member-task,
+.orbit-member-row[data-status="idle"] .team-map-model {
+  display: none;
+}
+.orbit-member-row[data-status="idle"] .orbit-member-status {
+  margin-left: auto;
+}
+.orbit-member-row .orbit-chat {
+  top: 50%;
+  bottom: auto;
+  transform: translateY(-50%);
+}
+.orbit-member-row[data-active="true"] {
+  animation: orbit-arrival 1.5s ease-in-out 3;
+}
+.orbit-drops {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  overflow: visible;
+  pointer-events: none;
+}
+.orbit-no-members {
+  padding: 16px 8px;
+  color: var(--color-content-secondary);
+}
+.orbit-pages {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 16px;
+  margin-top: 8px;
+}
+.orbit-pages button {
+  border: 1px solid var(--color-stroke);
+  border-radius: 6px;
+  padding: 8px 12px;
+  background: var(--color-background-base);
+}
+.orbit-pages button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+@keyframes orbit-arrival {
+  50% {
+    box-shadow: 0 0 0 4px
+      color-mix(in srgb, var(--color-accent) 20%, transparent);
+  }
+}
+@keyframes orbit-unfold {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.orbit-map[data-reduced-motion="true"] .orbit-spokes,
+.orbit-map[data-reduced-motion="true"] .orbit-slot,
+.orbit-map[data-reduced-motion="true"] .orbit-upright {
+  transition: none;
+}
+@keyframes orbit-crossfade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.orbit-map[data-reduced-motion="true"] .orbit-team-rows {
+  animation: orbit-crossfade 160ms ease both;
+}
+.orbit-map[data-reduced-motion="true"] .orbit-member-row,
+.orbit-map[data-reduced-motion="true"] .team-map-ring {
+  animation: none;
+}
+@media (max-width: 680px) {
+  .orbit-map .team-map-toolbar {
+    flex-wrap: wrap;
+    padding: 12px;
+  }
+  .orbit-map .team-map-filters {
+    flex-wrap: wrap;
+  }
+  .orbit-map .team-map-legend {
+    padding-left: 12px;
+    gap: 8px;
+  }
+  .orbit-scroll {
+    padding: 16px 8px 24px;
+  }
+  .orbit-member-row > button:first-child {
+    gap: 8px;
+    padding-left: 16px;
+  }
+  .orbit-member-name {
+    width: 96px;
+  }
+  .orbit-member-row .team-map-model {
+    display: none;
+  }
+  .orbit-member-status {
+    width: auto;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .orbit-map .orbit-capsule,
+  .orbit-map .team-map-ring,
+  .orbit-map .orbit-member-row {
+    animation: none;
+  }
+}

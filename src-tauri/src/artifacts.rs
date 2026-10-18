@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, State};
 
-use crate::notes::{save_content, Note, NoteUpsert};
+use crate::notes::{upsert_content, validate_content, NoteUpsert};
 use crate::session_store::{validate_id, SessionStore};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -22,6 +22,28 @@ impl ArtifactKind {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum OrgArtifactPurpose {
+    TeamPlan,
+    Review,
+    PrSummary,
+    Report,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OrgArtifactScope {
+    pub project_id: String,
+    pub manager_id: String,
+    pub owner_mono_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dispatch_id: Option<String>,
+    pub purpose: OrgArtifactPurpose,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Artifact {
@@ -33,6 +55,8 @@ pub struct Artifact {
     pub source_session_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_cwd: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<OrgArtifactScope>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -48,21 +72,8 @@ pub struct ArtifactUpsert {
     pub source_session_id: Option<String>,
     #[serde(default)]
     pub source_cwd: Option<String>,
-}
-
-impl Artifact {
-    fn from_saved(note: Note, kind: ArtifactKind) -> Self {
-        Self {
-            id: note.id,
-            kind,
-            title: note.title,
-            body: note.body,
-            source_session_id: note.source_session_id,
-            source_cwd: note.source_cwd,
-            created_at: note.created_at,
-            updated_at: note.updated_at,
-        }
-    }
+    #[serde(default)]
+    pub scope: Option<OrgArtifactScope>,
 }
 
 #[tauri::command(async)]
@@ -171,7 +182,29 @@ pub fn artifacts_upsert(
     store: State<'_, SessionStore>,
     artifact: ArtifactUpsert,
 ) -> Result<Artifact, String> {
+    let conn = store.lock_conn()?;
+    upsert_artifact(&conn, artifact)
+}
+
+fn upsert_artifact(conn: &Connection, artifact: ArtifactUpsert) -> Result<Artifact, String> {
     let kind = artifact.kind;
+    let scope = artifact.scope;
+    if let Some(scope) = &scope {
+        if scope.project_id.trim().is_empty() || scope.project_id.len() > 4096 {
+            return Err("Invalid artifact project".into());
+        }
+        validate_id(&scope.manager_id, "manager")?;
+        validate_id(&scope.owner_mono_id, "owner")?;
+        if let Some(id) = &scope.task_id {
+            validate_id(id, "task")?;
+        }
+        if let Some(id) = &scope.dispatch_id {
+            validate_id(id, "dispatch")?;
+        }
+        if (scope.purpose == OrgArtifactPurpose::TeamPlan) != scope.task_id.is_none() {
+            return Err("Task artifacts require task provenance".into());
+        }
+    }
     // Reuse the content store while keeping the public artifact contract free
     // of note-specific tags and slugs. The category cannot be reclassified.
     let note = NoteUpsert {
@@ -183,14 +216,39 @@ pub fn artifacts_upsert(
         source_cwd: artifact.source_cwd,
         finalize_slug: false,
     };
-    save_content(store, note, "artifact", Some(kind.as_str()))
-        .map(|saved| Artifact::from_saved(saved, kind))
+    validate_content(&note, "artifact")?;
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let existing = get_artifact(&tx, &note.id).map_err(|e| e.to_string())?;
+    if existing
+        .as_ref()
+        .and_then(|a| a.scope.as_ref())
+        .is_some_and(|current| scope.as_ref().is_some_and(|next| current != next))
+    {
+        return Err("An artifact's scope cannot be changed".into());
+    }
+    if existing.as_ref().is_some_and(|a| a.scope.is_none()) && scope.is_some() {
+        return Err("An existing artifact cannot be reclassified as org evidence".into());
+    }
+    upsert_content(&tx, &note, "artifact", Some(kind.as_str())).map_err(|e| e.to_string())?;
+    if let Some(scope) = scope {
+        let json = serde_json::to_string(&scope).map_err(|e| e.to_string())?;
+        tx.execute(
+            "UPDATE notes SET artifact_scope_json = ?1 WHERE id = ?2",
+            params![json, note.id],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    let saved = get_artifact(&tx, &note.id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Saved artifact is unavailable")?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(saved)
 }
 
 fn list_artifacts(conn: &Connection) -> rusqlite::Result<Vec<Artifact>> {
     let mut stmt = conn.prepare(
         "SELECT id, artifact_kind, title, body, source_session_id, source_cwd,
-                created_at, updated_at
+                created_at, updated_at, artifact_scope_json
          FROM notes WHERE content_kind = 'artifact'
          ORDER BY updated_at DESC, id ASC",
     )?;
@@ -201,7 +259,7 @@ fn list_artifacts(conn: &Connection) -> rusqlite::Result<Vec<Artifact>> {
 fn get_artifact(conn: &Connection, id: &str) -> rusqlite::Result<Option<Artifact>> {
     conn.query_row(
         "SELECT id, artifact_kind, title, body, source_session_id, source_cwd,
-                created_at, updated_at
+                created_at, updated_at, artifact_scope_json
          FROM notes WHERE id = ?1 AND content_kind = 'artifact'",
         params![id],
         read_artifact,
@@ -219,6 +277,18 @@ fn read_artifact(row: &rusqlite::Row<'_>) -> rusqlite::Result<Artifact> {
             ));
         }
     };
+    let scope = row
+        .get::<_, Option<String>>(8)?
+        .map(|raw| {
+            serde_json::from_str(&raw).map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    8,
+                    rusqlite::types::Type::Text,
+                    Box::new(error),
+                )
+            })
+        })
+        .transpose()?;
     Ok(Artifact {
         id: row.get(0)?,
         kind,
@@ -226,6 +296,7 @@ fn read_artifact(row: &rusqlite::Row<'_>) -> rusqlite::Result<Artifact> {
         body: row.get(3)?,
         source_session_id: row.get(4)?,
         source_cwd: row.get(5)?,
+        scope,
         created_at: row.get(6)?,
         updated_at: row.get(7)?,
     })
@@ -235,6 +306,36 @@ fn read_artifact(row: &rusqlite::Row<'_>) -> rusqlite::Result<Artifact> {
 mod tests {
     use super::*;
     use crate::notes::upsert_content;
+
+    #[test]
+    fn scoped_artifacts_keep_provenance_on_edits_and_reject_reclassification() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let conn = store.lock_conn().unwrap();
+        let input = serde_json::json!({
+            "id":"review-doc", "kind":"document", "title":"Review: Task", "body":"Approve; tests pass",
+            "sourceSessionId":"review-worker", "sourceCwd":"/repo",
+            "scope": { "projectId":"/repo", "managerId":"manager", "ownerMonoId":"reviewer",
+                "taskId":"review-task", "dispatchId":"dispatch", "purpose":"review" }
+        });
+        let saved = upsert_artifact(&conn, serde_json::from_value(input.clone()).unwrap()).unwrap();
+        assert_eq!(
+            saved.scope.as_ref().unwrap().purpose,
+            OrgArtifactPurpose::Review
+        );
+        let edited = upsert_artifact(&conn, serde_json::from_value(serde_json::json!({
+            "id":"review-doc", "kind":"document", "title":"Review: Task", "body":"Updated evidence"
+        })).unwrap()).unwrap();
+        assert_eq!(edited.scope, saved.scope);
+        assert_eq!(edited.source_session_id, saved.source_session_id);
+        let mut conflicting = input;
+        conflicting["scope"]["taskId"] = serde_json::json!("another-task");
+        assert!(upsert_artifact(&conn, serde_json::from_value(conflicting).unwrap()).is_err());
+        assert_eq!(
+            get_artifact(&conn, "review-doc").unwrap().unwrap().body,
+            "Updated evidence"
+        );
+        assert_eq!(list_artifacts(&conn).unwrap()[0].scope, saved.scope);
+    }
 
     #[test]
     fn artifact_contract_preserves_kind_and_excludes_note_fields() {

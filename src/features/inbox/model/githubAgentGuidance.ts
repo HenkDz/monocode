@@ -1,0 +1,1 @@
+export const GITHUB_AGENT_GUIDANCE = "Conserve the shared GitHub API budget: prefer gh pr view --json with only the fields needed, avoid polling loops, and check at most every 60 seconds (including gh run watch). Stop GitHub polling when MonoCode reports a low or exhausted budget; use last-known app data until the reset.";

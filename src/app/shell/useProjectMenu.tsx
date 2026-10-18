@@ -57,6 +57,7 @@ import {
 import { useTabGroupLogos } from "../../features/projects/hooks/useTabGroupLogos";
 import { ProjectBackgroundDialog } from "../../features/projects/ui/ProjectBackgroundDialog";
 import { RemoveProjectDialog } from "../../features/projects/ui/RemoveProjectDialog";
+import { projectMonoTeam } from "../../features/monos/model/monoArchive";
 import {
   TabGroupMenu,
   type TabGroupMenuExtraItem,
@@ -562,6 +563,7 @@ export function useProjectMenu({
         <RemoveProjectDialog
           name={removing.name}
           path={removing.path}
+          archiveTeam={projectMonoTeam(removing.path).length > 0}
           onConfirm={() => {
             setProjectGroupAssignment(removing.path, null);
             onRemoveProject?.(removing.path, { purgeData: true });

@@ -397,6 +397,7 @@ export function resolveModel(harness: HarnessId, id?: string): AgentModel {
       if (same) return same;
       if (
         harness !== "claude" &&
+        harness !== "codex" &&
         hits.length === 1 &&
         !/\d/.test(
           comparableNativeId(
@@ -417,6 +418,10 @@ export function resolveModel(harness: HarnessId, id?: string): AgentModel {
     // A saved concrete Claude version may be absent from both catalogs.
     // Keep the requested id so a new session does not silently switch models.
     const requested = id.trim();
+    if (harness === "codex" && available.length > 0 && /^codex:gpt-[\d.]+(?:-[a-z0-9]+)*$/.test(requested)) {
+      const nativeId = nativeIdFrom(requested);
+      return { id: requested, harness, name: nativeId.replace(/^gpt/i, "GPT"), nativeId };
+    }
     if (harness === "claude" && /^claude:[a-z][a-z0-9-]*-\d/.test(requested)) {
       const nativeId = nativeIdForUnknownKey(requested);
       return { id: requested, harness, name: nativeId, nativeId };
@@ -816,18 +821,14 @@ export function firstEnabledHarness(
   return HARNESSES.find(enabled) ?? preferred;
 }
 
-/** Provider + model new conversations should start with. */
+/** Stable new-chat defaults; project overrides are deliberate, last use is not. */
 export function defaultSessionChoice(cwd?: string): LastModelChoice {
   const project = loadProjectProviderSettings(cwd);
-  const last = loadLastModelChoice();
-  const harness = firstEnabledHarness(
-    cwd,
-    project.defaultHarness ?? last?.harness ?? "cursor",
-  );
+  const harness = project.defaultHarness ?? "codex";
   const model =
     project.models?.[harness] ??
     (project.defaultHarness === harness ? project.defaultModel : undefined) ??
-    preferredModelId(harness);
+    (harness === "codex" ? "codex:gpt-6.1-sol" : defaultModelId(harness));
   return { harness, model };
 }
 

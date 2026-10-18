@@ -1,5 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { newSession, removeSessionDraft } from "./session";
+import { newSession, removeSessionDraft, sendDraftOnce, type Session } from "./session";
+
+it.each([false, true])("consumes an agent-sent draft once, including stale Send clicks (busy=%s)", busy => {
+  const draft = { id: "draft-1", role: "user" as const, text: "Run acceptance", draft: true };
+  let session: Session = { ...newSession("claude", "/repo"), busy, blocks: [draft] };
+  session = sendDraftOnce(session, draft.text, [], undefined, "app-send")!;
+  expect(session.blocks).toEqual([]);
+  expect(session.queuedMessages).toHaveLength(1);
+  expect(session.queuedMessages?.[0]).toMatchObject({ text: draft.text, appRequestId: "app-send" });
+  session = sendDraftOnce({ ...session, blocks: [draft] }, draft.text, [], draft.id)!;
+  expect(session.blocks).toEqual([]);
+  expect(session.queuedMessages).toHaveLength(1);
+  session = sendDraftOnce({ ...session, queuedMessages: [], blocks: [draft] }, draft.text, [], draft.id)!;
+  expect(session.blocks).toEqual([]);
+  expect(session.queuedMessages).toEqual([]);
+});
 
 describe("removeSessionDraft", () => {
   it("removes a follow-up draft without changing earlier conversation history", () => {

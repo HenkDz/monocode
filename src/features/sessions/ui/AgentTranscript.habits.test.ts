@@ -73,6 +73,27 @@ function render(blocks: Block[], busy = false) {
   );
 }
 
+it("three blocker reports update one escalation without another turn or user outbox entry", () => {
+  const event = monoSessionCompletionMessage({ requestId: "r1", sessionId: "manager", project: "/app", prompt: "Decide", outcome: { status: "completed", text: "Needs authority" } });
+  event.monoSessionCompletion!.blocker = { key: "manager:permission", requests: ["r1"] };
+  let session = enqueueMonoSessionCompletion(newSession("claude", "/app"), event);
+  session = { ...session, pendingMonoEvents: [], blocks: [
+    { id: "receipt", role: "user", text: event.text, internal: true, appRequestId: event.id, monoSessionCompletion: event.monoSessionCompletion },
+    { id: "reply", role: "assistant", text: "Please approve the requested access." },
+  ] };
+  for (const id of ["r2", "r3"]) session = enqueueMonoSessionCompletion(session, { ...event, id,
+    monoSessionCompletion: { ...event.monoSessionCompletion!, blocker: { key: "manager:permission", requests: [id] } } });
+  expect(session.pendingMonoEvents).toHaveLength(0);
+  expect(session.queuedMessages).toBeUndefined();
+  expect(enqueueMonoSessionCompletion(session, event)).toBe(session);
+  render(session.blocks);
+  expect(container.querySelectorAll("[data-transcript-turn]")).toHaveLength(1);
+  expect(container.querySelectorAll("[data-blocker-notice]")).toHaveLength(1);
+  expect(container.querySelector("[data-blocker-notice]")?.textContent).toContain("3 requests");
+  expect(container.textContent?.match(/Please approve the requested access\./g)).toHaveLength(1);
+  expect(sanitizeSessionForPersist(session).blocks[0].monoSessionCompletion?.blocker?.requests).toHaveLength(3);
+});
+
 it("gives a standalone habit report its mascot, name, posting time and response actions", async () => {
   render([report]);
   const turn = container.querySelector('[data-transcript-turn="report"]')!;

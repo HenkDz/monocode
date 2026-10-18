@@ -124,6 +124,19 @@ function fixture() {
 }
 
 describe("agent app commands", () => {
+  it("routes org goal and decision actions through their authority handlers", async () => {
+    const { source, host } = fixture();
+    host.monoOf = () => ({ id: "manager", projects: [source.cwd] });
+    host.managerAction = vi.fn(async () => ({ assigned: true }));
+    host.answerTeam = vi.fn(async () => ({ answered: true }));
+    const goal = { projectId: source.cwd, goal: "Fix the API" };
+    await expect(handleAgentApp(source, "goal", "goals.assign", goal, host)).resolves.toEqual({ assigned: true });
+    expect(host.managerAction).toHaveBeenCalledWith(source, "goal", "goals.assign", goal);
+    const answer = { monoId: "member", requestId: "question", skip: true };
+    await expect(handleAgentApp(source, "answer", "team.answer", answer, host)).resolves.toEqual({ answered: true });
+    expect(host.answerTeam).toHaveBeenCalledWith(source, answer);
+  });
+
   it.each([undefined, true, false])(
     "uses the Mono's sidebar preference for both submitted and draft sessions: %s",
     async (showStartedSessionsInSidebar) => {
@@ -1289,6 +1302,21 @@ describe("agent app commands", () => {
       ),
     ).rejects.toThrow("Artifact was not found");
     expect(host.saveNote).not.toHaveBeenCalled();
+  });
+
+  it("denies plain CLI edits or retry collisions with org evidence without team authority", async () => {
+    const { source, host } = fixture();
+    host.isMono = () => true;
+    host.artifact = vi.fn(async id => ({ ...artifact, id, scope: {
+      projectId: "/repo", managerId: "manager", ownerMonoId: "reviewer", taskId: "review",
+      dispatchId: "dispatch", purpose: "review",
+    } }));
+    host.saveArtifact = vi.fn(async input => ({ ...artifact, ...input }));
+    host.postArtifact = vi.fn();
+    for (const input of [{ id: "review-doc", body: "Self approved" }, { body: "Retry collision" }])
+      await expect(handleAgentApp(source, "edit", "artifacts.write", input, host)).rejects.toThrow("team's authority");
+    expect(host.saveArtifact).not.toHaveBeenCalled();
+    expect(host.postArtifact).not.toHaveBeenCalled();
   });
 
   it("allows habit artifacts and recovers an attachment failure without saving twice", async () => {

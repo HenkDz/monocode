@@ -8,6 +8,12 @@ import type {
 const RESULT_MAX_CHARS = 12_000;
 const BATCH_RESULT_MAX_CHARS = 48_000;
 
+/** A specific pending decision owns the escalation, not its generic goal update. */
+export function coveredGoalDecision(state: string, source: Session | undefined): boolean {
+  return (state === "needs-you" || state === "blocked") && !!source &&
+    (!!source.pendingQuestion || source.blocks.some(block => block.approval && !block.approval.decided));
+}
+
 /** Freeze this turn's result before either conversation starts another turn. */
 type CompletionOptions = {
   requestId: string;
@@ -72,8 +78,8 @@ export function monoSessionCompletionMessage(
   ]);
 }
 
-/** One app turn containing the group's monitored outcomes. */
-function completionMessage(
+/** One app turn containing the full group's outcomes, including failed launches. */
+export function completionMessage(
   id: string,
   results: MonoSessionCompletionResult[],
 ): QueuedMessage {
@@ -310,7 +316,12 @@ export function dismissQueuedMonoSessionCompletion(
     if (remaining !== message) changed = true;
     return remaining ? [remaining] : [];
   });
-  return changed ? { ...mono, queuedMessages } : mono;
+  const pendingMonoEvents = mono.pendingMonoEvents?.flatMap((message) => {
+    const remaining = withoutSessionReport(message, sessionId);
+    if (remaining !== message) changed = true;
+    return remaining ? [remaining] : [];
+  });
+  return changed ? { ...mono, queuedMessages, pendingMonoEvents } : mono;
 }
 
 /** Receipt IDs deduplicate both waiting notifications and already delivered ones. */
@@ -318,14 +329,30 @@ export function enqueueMonoSessionCompletion(
   mono: Session,
   message: QueuedMessage,
 ): Session {
+  const blocker = message.monoSessionCompletion?.blocker;
+  if (blocker) {
+    const pending = mono.pendingMonoEvents?.find(entry => entry.monoSessionCompletion?.blocker?.key === blocker.key);
+    const receipt = mono.blocks.find(block => block.monoSessionCompletion?.blocker?.key === blocker.key);
+    const previous = (receipt ?? pending)?.monoSessionCompletion;
+    if (previous?.blocker) {
+      const requests = [...new Set([...previous.blocker.requests, ...blocker.requests])];
+      if (requests.length === previous.blocker.requests.length) return mono;
+      const completion = { ...previous, blocker: { key: blocker.key, requests } };
+      return { ...mono,
+        blocks: receipt ? mono.blocks.map(block => block === receipt ? { ...block, monoSessionCompletion: completion } : block) : mono.blocks,
+        pendingMonoEvents: pending ? mono.pendingMonoEvents?.map(entry => entry === pending ? { ...entry, monoSessionCompletion: completion } : entry) : mono.pendingMonoEvents,
+      };
+    }
+  }
   if (
     mono.queuedMessages?.some((entry) => entry.id === message.id) ||
-    mono.blocks.some((block) => block.appRequestId === message.id)
+    mono.pendingMonoEvents?.some((entry) => entry.id === message.id || entry.text === message.text) ||
+    mono.blocks.some((block) => block.appRequestId === message.id || (block.internal && block.text === message.text))
   )
     return mono;
   return {
     ...mono,
-    queuedMessages: [...(mono.queuedMessages ?? []), message],
+    pendingMonoEvents: [...(mono.pendingMonoEvents ?? []), message],
     queueStatus: mono.queueStatus === "paused" ? "paused" : "active",
   };
 }

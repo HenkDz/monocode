@@ -1,4 +1,5 @@
 import { execFile, spawn } from "node:child_process";
+import { githubGateway } from "./github-gateway";
 import { promisify } from "node:util";
 import {
   lstat,
@@ -544,6 +545,7 @@ export async function hostGitIndex(root: string): Promise<GitDiffIndex> {
       deletions: 0,
       remote: null,
       upstream: null,
+      remoteBranch: null,
       defaultBranch: null,
       ahead: 0,
       behind: 0,
@@ -610,9 +612,15 @@ export async function hostGitIndex(root: string): Promise<GitDiffIndex> {
       }
     }
   }
-  if (!upstreamText.trim() && defaultBranch) {
+  const remoteBranchName = remoteText.trim() && branchText.trim()
+    ? `origin/${branchText.trim()}` : null;
+  const remoteBranch = remoteBranchName && await git(root, [
+    "show-ref", "--verify", "--quiet", `refs/remotes/${remoteBranchName}`,
+  ]).then(() => true, () => false) ? remoteBranchName : null;
+  const comparison = remoteBranch ?? (defaultBranch ? `origin/${defaultBranch}` : null);
+  if (!upstreamText.trim() && comparison) {
     const fallback = await git(root, [
-      "rev-list", "--left-right", "--count", `origin/${defaultBranch}...HEAD`,
+      "rev-list", "--left-right", "--count", `${comparison}...HEAD`,
     ]).catch(() => "");
     [behind, ahead] = fallback.trim().split(/\s+/).map(Number);
   }
@@ -680,6 +688,7 @@ export async function hostGitIndex(root: string): Promise<GitDiffIndex> {
     deletions: files.reduce((sum, file) => sum + file.deletions, 0),
     remote: remoteText.trim() ? "origin" : null,
     upstream: upstreamText.trim() || null,
+    remoteBranch,
     defaultBranch: defaultBranch || null,
     ahead: ahead || 0,
     behind: behind || 0,
@@ -821,21 +830,13 @@ export async function hostGitAction(
       await git(root, ["commit", "-m", message], 1024 * 1024);
       return;
     }
-    case "push":
-      await git(root, ["push", "-u", "origin", "HEAD"]);
+    case "push": {
+      const upstream = await git(root, ["rev-parse", "--abbrev-ref", "@{upstream}"]).catch(() => "");
+      await git(root, upstream.trim() ? ["push"] : ["push", "-u", "origin", "HEAD"]);
       return;
+    }
     case "createPr": {
-      const output = await exec("gh", ["pr", "create", "--fill"], {
-        cwd: root,
-        timeout: 30_000,
-        maxBuffer: 1024 * 1024,
-        env: {
-          ...process.env,
-          GH_PROMPT_DISABLED: "1",
-          GIT_TERMINAL_PROMPT: "0",
-        },
-      });
-      return output.stdout.trim();
+      return githubGateway.run(root, ["pr", "create", "--fill"], true);
     }
     default:
       throw new Error("Unsupported Git action");

@@ -1,4 +1,5 @@
 import { isHarnessAvailable } from "../../../integrations/harness/core/availability";
+import { MANAGER_ACTIONS } from "../../monos/model/monoManagerGoals";
 import { looksLikeProject } from "../../projects/model/recents";
 import {
   mergeModelSettings,
@@ -40,7 +41,10 @@ import type { Worktree, Worktrees } from "../../source-control/model/worktrees";
 import { pathKey, projectName } from "../../../shared/lib/paths";
 import type { SplitDir } from "../../workspace/model/layout";
 import { consumeOperatorCommand } from "../../sessions/model/operatorCommand";
-import { sessionConversationPage, type SessionReadOptions } from "./sessionConversation";
+import {
+  sessionConversationPage,
+  type SessionReadOptions,
+} from "./sessionConversation";
 import {
   CARD_FIELDS,
   parseCard,
@@ -91,6 +95,16 @@ export type AppSessionPlacement = {
 };
 
 export type AgentAppHost = {
+  answerTeam?(
+    source: Session,
+    input: Record<string, unknown>,
+  ): Promise<unknown>;
+  managerAction?(
+    source: Session,
+    requestId: string,
+    action: string,
+    input: Record<string, unknown>,
+  ): Promise<unknown>;
   start(
     launch: QuickLaunch,
     id: string,
@@ -99,7 +113,10 @@ export type AgentAppHost = {
   ): Promise<void>;
   sessions(cwd: string): Promise<AppSessionListing[]>;
   session(id: string): Promise<Session | null>;
-  readConversation?(session: Session, options: SessionReadOptions): Promise<ReturnType<typeof sessionConversationPage>>;
+  readConversation?(
+    session: Session,
+    options: SessionReadOptions,
+  ): Promise<ReturnType<typeof sessionConversationPage>>;
   send(
     id: string,
     prompt: string,
@@ -126,6 +143,7 @@ export type AgentAppHost = {
   artifacts?(): Promise<Artifact[]>;
   artifact?(id: string): Promise<Artifact | null>;
   saveArtifact?(artifact: ArtifactUpsert): Promise<Artifact>;
+  authorizeArtifactWrite?(artifact: Artifact | null): void | Promise<void>;
   postArtifact?(sourceSessionId: string, card: ArtifactCard): void | Promise<void>;
   /** Whether the session is a Mono's own conversation, which owns memory. */
   isMono(sessionId: string): boolean;
@@ -143,7 +161,7 @@ export type AgentAppHost = {
   /** A hidden run of one of a Mono's habits: it may remember, not schedule. */
   isHabitRun?(sessionId: string): boolean;
   /** Puts a card in the Mono's chat, or holds it for a habit run's report. */
-  postCard?(sourceSessionId: string, card: MonoCard): void;
+  postCard?(sourceSessionId: string, card: MonoCard): void | Promise<void>;
   habits?: {
     load(monoId: string): Promise<Habit[]>;
     update<T>(
@@ -168,6 +186,13 @@ export type AgentAppHost = {
 };
 
 const FIELDS = new Map<string, readonly string[]>([
+  ["team.answer", ["monoId", "requestId", "answers", "skip", "decision"]],
+  ["projects.list", []],
+  ["projects.status", ["projectId", "before"]],
+  ["goals.assign", ["projectId", "goal"]],
+  ["goals.message", ["goalId", "text"]],
+  ["goals.cancel", ["goalId"]],
+  ["prs.ready", []],
   ["models.list", []],
   ["sessions.list", ["project"]],
   ["sessions.read", ["sessionId", "before", "limit", "maxChars", "project"]],
@@ -317,11 +342,10 @@ function requireProject(
     const byPath = mono.projects.find(
       (path) => pathKey(path) === pathKey(named),
     );
-    const byName = mono.projects.filter(
-      (path) => projectName(path) === named,
-    );
+    const byName = mono.projects.filter((path) => projectName(path) === named);
     const match = byPath ?? (byName.length === 1 ? byName[0] : undefined);
-    if (!match) throw new Error(`Not one of your projects. Yours: ${choices()}`);
+    if (!match)
+      throw new Error(`Not one of your projects. Yours: ${choices()}`);
     return match;
   }
   const own = mono.projects.find(
@@ -537,7 +561,7 @@ async function handleSoul(
  * from the top when the user saved the same file in between.
  */
 async function editAgentFile<T>(
-  host: AgentAppHost,
+  host: Pick<AgentAppHost, "readAgentFile" | "writeAgentFile">,
   monoId: string,
   path: AgentFilePath,
   edit: (text: string) => { text: string; result: T },
@@ -554,8 +578,7 @@ async function editAgentFile<T>(
         await host.writeAgentFile(monoId, path, next.text, current.hash);
       return next.result;
     } catch (error) {
-      if (!(error instanceof MonoFileConflict) || attempt >= 2)
-        throw error;
+      if (!(error instanceof MonoFileConflict) || attempt >= 2) throw error;
     }
   }
 }
@@ -566,7 +589,7 @@ async function editAgentFile<T>(
  * saved MEMORY.md in between, the trim waits for the next write.
  */
 async function keepMemoryInBudget(
-  host: AgentAppHost,
+  host: Pick<AgentAppHost, "readAgentFile" | "writeAgentFile">,
   monoId: string,
   keep: string,
   date: string,
@@ -587,11 +610,14 @@ async function keepMemoryInBudget(
   return fitted.moved;
 }
 
-async function handleMemory(
+export async function handleMemory(
   source: Session,
   action: string,
   input: Record<string, unknown>,
-  host: AgentAppHost,
+  host: Pick<
+    AgentAppHost,
+    "monoOf" | "agentFiles" | "readAgentFile" | "writeAgentFile" | "now"
+  >,
 ): Promise<unknown> {
   const monoId = host.monoOf?.(source.id)?.id;
   if (!monoId) throw new Error("Memory belongs to the Mono's conversation");
@@ -642,7 +668,10 @@ async function handleMemory(
       const hits = searchMemory(texts, query, { since });
       return hits.length
         ? { hits }
-        : { hits, note: "Nothing in memory matches. It may never have been saved." };
+        : {
+            hits,
+            note: "Nothing in memory matches. It may never have been saved.",
+          };
     }
     case "memory.read": {
       if (path !== "MEMORY.md") {
@@ -661,7 +690,11 @@ async function handleMemory(
       };
     }
     case "memory.add": {
-      const entry = memoryEntry(requiredString(input.fact, "fact"), date, until);
+      const entry = memoryEntry(
+        requiredString(input.fact, "fact"),
+        date,
+        until,
+      );
       const added = await editAgentFile(host, monoId, path, (text) => {
         const next = addMemoryEntry(text, entry);
         return { text: next.text, result: next.added };
@@ -672,7 +705,11 @@ async function handleMemory(
     }
     case "memory.replace": {
       const find = requiredString(input.find, "find", 2000);
-      const entry = memoryEntry(requiredString(input.fact, "fact"), date, until);
+      const entry = memoryEntry(
+        requiredString(input.fact, "fact"),
+        date,
+        until,
+      );
       await editAgentFile(host, monoId, path, (text) => ({
         text: supersedeMemoryEntry(text, find, entry, date),
         result: undefined,
@@ -735,7 +772,11 @@ async function handleHabits(
       return { habits: (await habits.load(monoId)).map(habitView) };
     case "habits.add": {
       const name = requiredString(input.name, "name", 80);
-      const instructions = requiredString(input.instructions, "instructions", 4_000);
+      const instructions = requiredString(
+        input.instructions,
+        "instructions",
+        4_000,
+      );
       const schedule = habitSchedule(input.schedule);
       const habit = await habits.update(monoId, (list) => {
         if (list.length >= HABITS_MAX)
@@ -825,13 +866,14 @@ function artifactKind(value: unknown): ArtifactKind {
   throw new Error('Unsupported artifact kind; only "document" is supported');
 }
 
-async function handleArtifacts(
+export async function handleArtifacts(
   source: Session,
   requestId: string,
   action: string,
   input: Record<string, unknown>,
-  host: AgentAppHost,
+  host: Pick<AgentAppHost, "isMono" | "isHabitRun" | "artifacts" | "artifact" | "saveArtifact" | "postArtifact" | "authorizeArtifactWrite">,
 ): Promise<unknown> {
+  fields(action, input);
   if (!(host.isMono(source.id) || host.isHabitRun?.(source.id)))
     throw new Error("Only a Mono can create or read artifacts");
   if (!host.artifact) throw new Error("Artifacts are unavailable");
@@ -891,6 +933,8 @@ async function handleArtifacts(
       throw new Error("Supply title or body to update an artifact");
     const current = await host.artifact(id);
     if (!current) throw new Error("Artifact was not found");
+    if (host.authorizeArtifactWrite) await host.authorizeArtifactWrite(current);
+    else if (current.scope) throw new Error("Org artifacts require their team's authority");
     if (current.kind !== kind)
       throw new Error("An artifact's kind cannot be changed");
     artifact = await host.saveArtifact({
@@ -906,6 +950,8 @@ async function handleArtifacts(
       throw new Error("Invalid request ID");
     const createdId = `artifact-${source.id}-${requestId}`;
     const existing = await host.artifact(createdId);
+    if (host.authorizeArtifactWrite) await host.authorizeArtifactWrite(existing);
+    else if (existing?.scope) throw new Error("Org artifacts require their team's authority");
     if (
       existing &&
       (existing.kind !== kind ||
@@ -934,40 +980,8 @@ async function handleArtifacts(
   return { ...card, saved: true, attached: true };
 }
 
-export async function handleAgentApp(
-  source: Session,
-  requestId: string,
-  action: string,
-  input: Record<string, unknown>,
-  host: AgentAppHost,
-): Promise<unknown> {
-  fields(action, input);
-  if (action.startsWith("artifacts."))
-    return handleArtifacts(source, requestId, action, input, host);
-  if (action.startsWith("soul."))
-    return handleSoul(source, action, input, host);
-  if (action.startsWith("memory."))
-    return handleMemory(source, action, input, host);
-  if (action.startsWith("habits."))
-    return handleHabits(source, action, input, host);
-  if (action === "chat.card") {
-    if (
-      !host.postCard ||
-      !(host.isMono(source.id) || host.isHabitRun?.(source.id))
-    )
-      throw new Error("Only a Mono can put cards in its chat");
-    const card = parseCard(input);
-    host.postCard(source.id, card);
-    return {
-      posted: card.type,
-      note: host.isMono(source.id)
-        ? "It shows in the chat where you are in your reply."
-        : "It goes out with your report, after its text; if you stay quiet, it is dropped.",
-    };
-  }
-  switch (action) {
-    case "models.list":
-      return {
+export function agentModelsListing() {
+  return {
         runtimeModes: RUNTIME_MODES.map((id) => ({
           id,
           label: RUNTIME_MODE_LABEL[id],
@@ -983,20 +997,70 @@ export async function handleAgentApp(
           })),
         })),
       };
+}
+
+export async function handleAgentApp(
+  source: Session,
+  requestId: string,
+  action: string,
+  input: Record<string, unknown>,
+  host: AgentAppHost,
+): Promise<unknown> {
+  fields(action, input);
+  if (action === "team.answer") {
+    if (!host.monoOf?.(source.id) || !host.answerTeam)
+      throw new Error("Only a direct boss may answer this question");
+    return host.answerTeam(source, input);
+  }
+  if ((MANAGER_ACTIONS as readonly string[]).includes(action)) {
+    if (!host.monoOf?.(source.id) || !host.managerAction)
+      throw new Error("Only a Mono or its approved habit may manage goals");
+    return host.managerAction(source, requestId, action, input);
+  }
+  if (action.startsWith("artifacts."))
+    return handleArtifacts(source, requestId, action, input, host);
+  if (action.startsWith("soul."))
+    return handleSoul(source, action, input, host);
+  if (action.startsWith("memory."))
+    return handleMemory(source, action, input, host);
+  if (action.startsWith("habits."))
+    return handleHabits(source, action, input, host);
+  if (action === "chat.card") {
+    if (
+      !host.postCard ||
+      !(host.isMono(source.id) || host.isHabitRun?.(source.id))
+    )
+      throw new Error("Only a Mono can put cards in its chat");
+    const card = parseCard(input);
+    await host.postCard(source.id, card);
+    return {
+      posted: card.type,
+      note: host.isMono(source.id)
+        ? "It shows in the chat where you are in your reply."
+        : "It goes out with your report, after its text; if you stay quiet, it is dropped.",
+    };
+  }
+  switch (action) {
+    case "models.list":
+      return agentModelsListing();
     case "sessions.list": {
       const cwd = requireProject(source, input, host);
       return { cwd, sessions: await host.sessions(cwd) };
     }
     case "sessions.read": {
       const id = requiredString(input.sessionId, "sessionId", 256);
-      const target = id === source.id && host.isMono?.(id)
-        ? source : await projectSession(source, id, input, host);
+      const target =
+        id === source.id && host.isMono?.(id)
+          ? source
+          : await projectSession(source, id, input, host);
       const options = {
         before: optionalString(input.before, "before", 256),
         limit: input.limit as number | undefined,
         maxChars: input.maxChars as number | undefined,
       };
-      return host.readConversation ? host.readConversation(target, options) : sessionConversationPage(target, options);
+      return host.readConversation
+        ? host.readConversation(target, options)
+        : sessionConversationPage(target, options);
     }
     case "sessions.send": {
       const id = requiredString(input.sessionId, "sessionId", 256);
@@ -1103,7 +1167,8 @@ export async function handleAgentApp(
           { direction: placement as SplitDir, besideSessionId },
           ...(notifyMonoId ? [notifyMonoId] : []),
         );
-      else if (notifyMonoId) await host.start(launch, id, undefined, notifyMonoId);
+      else if (notifyMonoId)
+        await host.start(launch, id, undefined, notifyMonoId);
       else await host.start(launch, id);
       const folder = host.monoOf?.(source.id)?.folder;
       if (folder && !launch.sidebarHidden)

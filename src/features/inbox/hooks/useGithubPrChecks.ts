@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchGithubPrChecks, type GithubPrChecks } from "../model/githubPrChecks";
+import { noteGithubError, githubLimited, githubPollingAllowed, refreshGithubBudget } from "../model/githubBudget";
 
 const POLL_MS = 30_000;
 
@@ -64,6 +65,11 @@ export function useGithubPrChecks(params: {
 
   const run = useCallback((mode?: "auto") => {
     const automatic = mode === "auto";
+    if (githubLimited() || automatic && !githubPollingAllowed()) {
+      setLoading(false);
+      setRefreshing(false);
+      return;
+    }
     // One request per PR revision; a trigger landing while it runs coalesces
     // into a single follow-up instead of being dropped or overlapped. A manual
     // load always outranks a queued poll tick.
@@ -91,10 +97,11 @@ export function useGithubPrChecks(params: {
       })
       .catch((reason: unknown) => {
         if (!mountedRef.current || ticket.epoch !== epochRef.current) return;
-        setError(reason instanceof Error ? reason.message : String(reason));
+        setError(noteGithubError(reason, cwd));
         if (hasDataRef.current) setStale(true);
       })
       .finally(() => {
+        void refreshGithubBudget();
         if (flightRef.current !== ticket) return;
         flightRef.current = null;
         if (!mountedRef.current || ticket.epoch !== epochRef.current) return;
@@ -148,7 +155,7 @@ export function useGithubPrChecks(params: {
     const resumed = poll && !previousPollRef.current;
     previousPollRef.current = poll;
     if (!enabled || !open || !poll) return;
-    if (resumed && !document.hidden) runRef.current("auto");
+    if (resumed && hasDataRef.current && !document.hidden) runRef.current("auto");
     const timer = window.setInterval(() => {
       if (document.hidden) return;
       runRef.current("auto");

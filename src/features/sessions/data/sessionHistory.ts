@@ -2,6 +2,7 @@ import type { OrchestrationRun } from "../../orchestration/model/orchestration";
 import { summarizeOrchestration } from "../../orchestration/model/orchestrationSummary";
 import { fuzzyMatch } from "../../../shared/lib/fuzzy";
 import { projectName } from "../../../shared/lib/paths";
+import { plainEqual } from "../../../shared/hooks/useStableValue";
 import { sameProjectPath } from "../../projects/model/recents";
 import {
   sessionDisplayTitle,
@@ -10,6 +11,7 @@ import {
   type Session,
 } from "../model/session";
 import { shouldPersistSession, type SessionSummary } from "./sessionStore";
+import { isLegacyManagerSession } from "../../monos/model/legacyManagerSessions";
 
 export type SessionGitHint = {
   repo?: string;
@@ -106,6 +108,7 @@ export function summaryFromSession(
 ): SessionSummary {
   return {
     id: session.id,
+    archived: isLegacyManagerSession(session) || undefined,
     orchestrationLeadId: session.orchestrationLeadId,
     sidebarHidden: session.sidebarHidden,
     cwd: session.cwd,
@@ -128,6 +131,28 @@ export function summaryFromSession(
     createdAt: 0,
     updatedAt: Date.now(),
   };
+}
+
+/** Live summaries restamp `updatedAt` on every build; within this window a
+ * row counts as unchanged, matching the sidebar's 30s relative-time tick. */
+const LIVE_SUMMARY_STALE_MS = 30_000;
+
+/** Same rows in the same order, ignoring a live row's restamped clock. */
+export function sameSessionSummaries(
+  previous: readonly SessionSummary[],
+  next: readonly SessionSummary[],
+): boolean {
+  if (previous.length !== next.length) return false;
+  return previous.every((row, i) => {
+    const other = next[i];
+    if (row === other) return true;
+    if (
+      !other ||
+      Math.abs(row.updatedAt - other.updatedAt) >= LIVE_SUMMARY_STALE_MS
+    )
+      return false;
+    return plainEqual({ ...row, updatedAt: 0 }, { ...other, updatedAt: 0 });
+  });
 }
 
 /** Prefer the project's persisted origin name, then the overlay / folder name. */

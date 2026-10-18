@@ -97,6 +97,7 @@ type ApprovalOutcome = ApprovalDecision | "cancelled";
 type PendingApproval = {
   requestId: string;
   input: Record<string, unknown>;
+  canAcceptEdit: boolean;
   resolve: (decision: ApprovalOutcome) => void;
 };
 
@@ -305,6 +306,19 @@ export function respondClaudeApproval(
   const pending = live?.approvals.get(requestId);
   if (!pending) return;
   pending.resolve(decision);
+}
+
+export async function updateClaudeRuntimeMode(sessionId: string, runtimeMode: RuntimeMode): Promise<void> {
+  const live = liveByThread.get(sessionId);
+  if (!live) return;
+  live.runtimeMode = runtimeMode;
+  if (live.planning || live.cancelled || live.muteUpdates) return;
+  for (const pending of live.approvals.values()) {
+    if (runtimeMode === "full-access" || (runtimeMode === "auto-accept-edits" && pending.canAcceptEdit)) pending.resolve("allow");
+  }
+  await writeJson(sessionId, buildControlRequest(nextControlId(live), {
+    subtype: "set_permission_mode", mode: runtimeModeToPermission(runtimeMode),
+  }));
 }
 
 export function respondClaudeQuestion(
@@ -1088,7 +1102,11 @@ async function handleControlRequest(
     return;
   }
 
-  if (live.runtimeMode === "full-access") {
+  const kind = toolKindFromName(toolName);
+  // Display kinds use substring heuristics; only these native RPC tool names
+  // carry edit authority. An MCP tool named "write" may perform any action.
+  const canAcceptEdit = ["Edit", "Write", "MultiEdit", "NotebookEdit"].includes(toolName);
+  if (live.runtimeMode === "full-access" || (live.runtimeMode === "auto-accept-edits" && canAcceptEdit)) {
     await writeJson(
       sessionId,
       buildControlResponse(
@@ -1100,12 +1118,13 @@ async function handleControlRequest(
   }
 
   const uiId = live.nextApprovalUiId++;
-  const pending = waitApproval(live, uiId, control.requestId, input);
+  const pending = waitApproval(live, uiId, control.requestId, input, canAcceptEdit);
   live.onEvent({
     type: "approval.requested",
+    command: toolName.toLowerCase() === "bash" && typeof input.command === "string" ? input.command : undefined,
     requestId: uiId,
     title: toolTitle(toolName, input),
-    kind: toolKindFromName(toolName),
+    kind,
     callId: control.toolUseId,
     preview: previewFromTool(toolName, input),
   });
@@ -1148,9 +1167,10 @@ function waitApproval(
   uiId: number,
   requestId: string,
   input: Record<string, unknown>,
+  canAcceptEdit: boolean,
 ): Promise<ApprovalOutcome> {
   return new Promise<ApprovalOutcome>((resolve) => {
-    live.approvals.set(uiId, { requestId, input, resolve });
+    live.approvals.set(uiId, { requestId, input, canAcceptEdit, resolve });
   }).finally(() => {
     live.approvals.delete(uiId);
   });

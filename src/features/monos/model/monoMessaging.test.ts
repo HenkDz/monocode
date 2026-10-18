@@ -10,6 +10,7 @@ import {
   enqueueMonoMessage,
   monoMessageDeliveries,
   monoPendingTranscriptBlocks,
+  rejectMessageSend,
 } from "./monoMessaging";
 
 function message(id: string): QueuedMessage {
@@ -17,6 +18,73 @@ function message(id: string): QueuedMessage {
 }
 
 describe("optimistic Mono messages", () => {
+  it("preserves teammate event provenance across busy delivery and retry", () => {
+    const event = { ...message("teammate"), appRequestId: "worker:question" };
+    const queued = enqueueMonoMessage({ ...newSession("codex", "/tmp"), busy: true }, event);
+    expect(queued.queuedMessages![0].appRequestId).toBe("worker:question");
+    const failed = rejectMessageSend(queued, queued.queuedMessages![0], "not ready");
+    expect(failed.queuedMessages![0].appRequestId).toBe("worker:question");
+  });
+  it("keeps rejected internal events out of the user outbox and transcript", () => {
+    const session = newSession("claude", "/tmp");
+    const event = { ...message("event"), blockId: "receipt", monoSessionCompletion: {
+      sessionId: "manager", title: "Manager", status: "completed" as const,
+    } };
+    const rejected = rejectMessageSend({ ...session, blocks: [{ id: "receipt", role: "user", text: event.text,
+      internal: true, appRequestId: event.id }] }, event, "Checkout controlled");
+    expect(rejected.queuedMessages).toBeUndefined();
+    expect(rejected.blocks).toEqual([]);
+    expect(rejected.pendingMonoEvents).toHaveLength(1);
+    expect(monoMessageDeliveries(rejected).size).toBe(0);
+  });
+  it("retains a rejected turn's original attachments and reuses its bubble on retry", () => {
+    const attachments = [
+      {
+        id: "photo",
+        name: "Paste.png",
+        mimeType: "image/png",
+        kind: "image" as const,
+        size: 12,
+        data: "original-bytes",
+      },
+    ];
+    const submitted = appendUser(
+      newSession("codex", "/tmp"),
+      "Hello",
+      attachments,
+    );
+    const blockId = submitted.blocks[0].id;
+    const rejected = stopStreaming(
+      rejectMessageSend(
+        submitted,
+        {
+          id: blockId,
+          blockId,
+          text: "Hello",
+          attachments,
+        },
+        "Checkout controlled",
+      ),
+    );
+    expect(rejected.blocks).toHaveLength(1);
+    expect(rejected.blocks[0]).toMatchObject({ role: "user", text: "Hello" });
+    expect(rejected.blocks[0].durationMs).toBeUndefined();
+    expect(rejected.queueStatus).toBe("paused");
+    expect(rejected.queuedMessages![0].attachments).toBe(attachments);
+    expect(monoMessageDeliveries(rejected).get(blockId)).toEqual({
+      status: "failed",
+      error: "Checkout controlled",
+    });
+    const retry = acknowledgeMonoMessage(
+      rejected,
+      rejected.queuedMessages![0],
+      { mode: "new-turn" },
+    );
+    expect(retry.blocks).toHaveLength(1);
+    expect(retry.blocks[0].id).toBe(blockId);
+    expect(retry.queuedMessages).toBeUndefined();
+  });
+
   it("shows older saved outboxes as stable bubbles and recovers pending image previews", () => {
     const session = {
       ...newSession("codex", "/tmp"),

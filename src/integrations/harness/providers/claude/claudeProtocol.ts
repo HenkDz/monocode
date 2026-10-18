@@ -117,7 +117,9 @@ export function runtimeModeToPermission(
 ): ClaudePermissionMode {
   switch (mode) {
     case "auto-accept-edits":
-      return "acceptEdits";
+      // Native acceptEdits also grants Bash filesystem commands. MonoCode
+      // accepts only edit-tool requests in its stdio permission handler.
+      return "default";
     case "auto":
       return "auto";
     case "full-access":
@@ -285,7 +287,9 @@ export function buildClaudeSpawnArgs(input: {
   if (input.permissionMode) {
     args.push("--permission-mode", input.permissionMode);
   }
-  if (input.permissionMode === "bypassPermissions") {
+  // Capability only: the selected permission-mode still controls access.
+  // Interactive sessions can switch to Full access without a process restart.
+  if (!input.isolated || input.permissionMode === "bypassPermissions") {
     args.push("--allow-dangerously-skip-permissions");
   }
   if (input.resume) args.push("--resume", input.resume);

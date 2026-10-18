@@ -340,6 +340,12 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     keywords: "sidebar compact icons hidden navigation layout",
   },
   {
+    id: "workspace-panel-side",
+    section: "appearance",
+    label: "Workspace panel",
+    keywords: "sidebar explorer changes right left dock position layout hide",
+  },
+  {
     id: "show-excluded-files",
     section: "appearance",
     label: "Show excluded files",
@@ -437,6 +443,12 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     section: "providers",
     label: "Claude Code hooks",
     keywords: "pretooluse settings.json block command notification",
+  },
+  {
+    id: "idle-agents",
+    section: "providers",
+    label: "Keep idle agents ready",
+    keywords: "memory ram cpu performance process warm park background",
   },
   {
     id: "project-notifications",
@@ -657,6 +669,43 @@ export function loadTabAnimationsEnabled(): boolean {
 
 export function saveTabAnimationsEnabled(value: boolean) {
   writeFlag(TAB_ANIMATIONS_ENABLED_KEY, value);
+}
+
+const WORKSPACE_PANEL_SIDE_KEY = "monocode.workspacePanelSide";
+
+/** Which edge the workspace panel (Explorer, Changes) docks to. */
+export type WorkspacePanelSide = "left" | "right";
+
+export const WORKSPACE_PANEL_SIDE_DEFAULT: WorkspacePanelSide = "left";
+
+const WORKSPACE_PANEL_SIDE_CHANGE_EVENT = "monocode:workspace-panel-side-change";
+
+export function loadWorkspacePanelSide(): WorkspacePanelSide {
+  try {
+    const raw = localStorage.getItem(WORKSPACE_PANEL_SIDE_KEY);
+    return raw === "left" || raw === "right"
+      ? raw
+      : WORKSPACE_PANEL_SIDE_DEFAULT;
+  } catch {
+    return WORKSPACE_PANEL_SIDE_DEFAULT;
+  }
+}
+
+export function saveWorkspacePanelSide(value: WorkspacePanelSide) {
+  try {
+    localStorage.setItem(WORKSPACE_PANEL_SIDE_KEY, value);
+  } catch {
+    // private mode / quota
+  }
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new Event(WORKSPACE_PANEL_SIDE_CHANGE_EVENT));
+}
+
+export function subscribeWorkspacePanelSide(onStoreChange: () => void) {
+  if (typeof window === "undefined") return () => {};
+  window.addEventListener(WORKSPACE_PANEL_SIDE_CHANGE_EVENT, onStoreChange);
+  return () =>
+    window.removeEventListener(WORKSPACE_PANEL_SIDE_CHANGE_EVENT, onStoreChange);
 }
 
 export type CollapsedProjectRailMode = "compact" | "hidden";
@@ -1044,6 +1093,33 @@ export function loadClaudeHooks(): boolean {
 
 export function saveClaudeHooks(value: boolean) {
   writeFlag(CLAUDE_HOOKS_KEY, value);
+}
+
+const IDLE_AGENT_LIMIT_KEY = "monocode.idleAgentLimit";
+
+/** How many finished conversations keep their agent CLI warm. */
+export const IDLE_AGENT_LIMITS = [0, 1, 2, 3, 5] as const;
+export type IdleAgentLimit = (typeof IDLE_AGENT_LIMITS)[number];
+export const IDLE_AGENT_LIMIT_DEFAULT: IdleAgentLimit = 3;
+
+export function loadIdleAgentLimit(): IdleAgentLimit {
+  try {
+    const raw = Number(localStorage.getItem(IDLE_AGENT_LIMIT_KEY) ?? NaN);
+    return (
+      IDLE_AGENT_LIMITS.find((limit) => limit === raw) ??
+      IDLE_AGENT_LIMIT_DEFAULT
+    );
+  } catch {
+    return IDLE_AGENT_LIMIT_DEFAULT;
+  }
+}
+
+export function saveIdleAgentLimit(value: IdleAgentLimit) {
+  try {
+    localStorage.setItem(IDLE_AGENT_LIMIT_KEY, String(value));
+  } catch {
+    // private mode / quota
+  }
 }
 
 const CTRL = IS_MAC ? "⌃" : "Ctrl+";

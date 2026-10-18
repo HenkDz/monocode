@@ -1,0 +1,121 @@
+.tree-map .team-map-toolbar { padding: 20px 24px 16px; }
+.tree-map { position: relative; }
+.tree-map .team-map-toolbar h1 { font-size: 18px; }
+.tree-map .team-map-toolbar p { font-size: 12px; }
+.tree-map .team-map-legend { align-items: center; padding: 0 24px 12px; font-size: 12px; }
+.tree-map .team-map-viewport {
+  overflow: auto;
+  touch-action: pan-x pan-y;
+  background-image: radial-gradient(color-mix(in srgb, var(--color-content) 6%, transparent) 0.8px, transparent 0.8px);
+  background-size: 32px 32px;
+}
+.tree-map-stage { position: relative; }
+.tree-map .team-map-zoom { position: static; padding: 2px; }
+.tree-map .team-map-zoom button { padding: 4px 8px; }
+.tree-project {
+  position: absolute;
+  border: 1px solid var(--color-stroke);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--color-content) 2%, var(--color-background-base));
+  pointer-events: none;
+  z-index: 0;
+  transition: left 280ms ease;
+}
+.tree-project[data-drop-target="true"] {
+  border-left: 4px solid var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 8%, var(--color-background-base));
+}
+.tree-project-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 40px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--color-stroke);
+  text-align: left;
+  font-size: 12px;
+  pointer-events: auto;
+  cursor: grab !important;
+}
+.tree-project-header:active { cursor: grabbing !important; }
+.tree-project-header strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tree-project-header > span:last-child { margin-left: auto; white-space: nowrap; color: color-mix(in srgb, var(--color-content) 60%, transparent); }
+.tree-project-grip { color: color-mix(in srgb, var(--color-content) 40%, transparent); font-size: 16px; }
+.tree-project-mark { display: grid; place-items: center; flex-shrink: 0; width: 24px; height: 24px; border: 1px solid var(--color-stroke); border-radius: 4px; background: color-mix(in srgb, var(--color-content) 4%, transparent); font-size: 12px; color: color-mix(in srgb, var(--color-content) 70%, transparent); }
+.tree-map .team-map-edges { z-index: 1; }
+.tree-map .team-map-node { z-index: 2; border: 1px solid var(--color-stroke); border-radius: 8px; }
+.tree-map .team-map-node[data-selected="true"] { outline: 2px solid color-mix(in srgb, var(--color-content) 80%, transparent); outline-offset: 2px; background: color-mix(in srgb, var(--color-content) 4%, var(--color-background-base)); }
+.tree-map .team-map-ring { border: 1px solid var(--color-stroke); animation: none; }
+.tree-map .team-map-ring img { filter: saturate(0.3); }
+.tree-map [data-status="working"] { --status-color: #7291a3; }
+.tree-map [data-status="pr-ready"] { --status-color: #7fa48a; }
+.tree-map .team-map-node-open { padding: 12px 16px; gap: 8px; }
+.tree-map .team-map-node-heading { gap: 8px; }
+.tree-map .team-map-identity strong { font-size: 14px; }
+.tree-map .team-map-identity > span { font-size: 12px; opacity: 1; }
+.tree-agent-status { display: flex; align-items: center; gap: 6px; color: color-mix(in srgb, var(--color-content) 60%, transparent); }
+.tree-agent-status i { width: 6px; height: 6px; flex-shrink: 0; border-radius: 50%; background: var(--status-color); }
+.tree-agent-status > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tree-map .team-map-node[data-status="needs-you"] .tree-agent-status { color: var(--status-color); }
+.tree-map .team-map-node-meta { margin-top: 0; font-size: 12px; color: var(--status-color); }
+.tree-map .team-map-task {
+  margin-top: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.tree-map .team-map-chat { display: none; }
+.tree-map .team-map-collapse { top: 8px; right: 8px; }
+.tree-map .team-map-node[data-role="manager"] .team-map-node-heading { padding-right: 20px; }
+.tree-map .team-map-node[data-role="manager"] .team-map-task { padding-right: 0; }
+.tree-map .team-map-tooltip { width: 320px; padding: 16px; }
+.tree-map .team-map-node:has(.team-map-tooltip) { z-index: 4; }
+.tree-map .team-map-edge .team-map-edge-route {
+  stroke: color-mix(in srgb, var(--color-content) 18%, transparent);
+  stroke-width: 1.5;
+  stroke-dasharray: none;
+  animation: none;
+}
+.tree-map .team-map-edge .team-map-edge-flow { stroke: color-mix(in srgb, var(--color-content) 45%, transparent); stroke-width: 1.5; }
+.tree-map .team-map-edge[data-highlighted="true"] .team-map-edge-route,
+.tree-map .team-map-edge[data-highlighted="true"] .team-map-edge-flow {
+  stroke: var(--color-accent);
+  stroke-width: 2.5;
+}
+.tree-map .team-map-canvas[data-compact="true"] .team-map-status-chip { font-size: 14px; }
+.tree-reorder-toast { gap: 12px; color: var(--color-content); }
+.tree-reorder-toast button { color: var(--color-accent); font-weight: 600; }
+/* Chosen in TeamMap from the available width, so it also applies beside an open panel. */
+.tree-map[data-layout="list"] .team-map-viewport { overflow-y: auto; overflow-x: hidden; touch-action: pan-y; padding: 24px 16px; }
+.tree-map[data-layout="list"] .tree-project,
+.tree-map[data-layout="list"] .team-map-edges { display: none; }
+.tree-map[data-layout="list"] .tree-map-stage { width: 100% !important; height: auto !important; }
+.tree-map[data-layout="list"] .team-map-canvas {
+  position: relative;
+  width: 100% !important;
+  height: auto !important;
+  transform: none !important;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.tree-map[data-layout="list"] .team-map-node {
+  position: relative;
+  left: auto !important;
+  top: auto !important;
+  margin-left: calc(var(--node-depth) * 16px);
+  width: calc(100% - var(--node-depth) * 16px);
+  height: 104px;
+  border-left: 1px solid var(--color-stroke);
+}
+.tree-map[data-layout="list"] .team-map-node[data-role="manager"] { margin-top: 12px; }
+@media (max-width: 680px) {
+  .tree-map .team-map-toolbar { padding: 16px; }
+  .tree-map .team-map-legend { padding: 0 16px 12px; }
+  .tree-map .team-map-filters { flex-wrap: wrap; }
+  .tree-map .team-map-filters label { flex: 1; }
+}

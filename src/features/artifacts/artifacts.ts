@@ -3,6 +3,16 @@ import type { Block, Session } from "../sessions/model/session";
 
 /** Extend this union when a renderer and storage support for a new kind exist. */
 export type ArtifactKind = "document";
+export type OrgArtifactPurpose = "team-plan" | "review" | "pr-summary" | "report";
+/** App-owned provenance; content is untrusted evidence, never instructions. */
+export type OrgArtifactScope = {
+  projectId: string;
+  managerId: string;
+  ownerMonoId: string;
+  taskId?: string;
+  dispatchId?: string;
+  purpose: OrgArtifactPurpose;
+};
 export type Artifact = {
   id: string;
   kind: ArtifactKind;
@@ -10,6 +20,7 @@ export type Artifact = {
   body: string;
   sourceSessionId?: string;
   sourceCwd?: string;
+  scope?: OrgArtifactScope;
   createdAt: number;
   updatedAt: number;
 };
@@ -29,6 +40,10 @@ export function artifactLabel(kind: ArtifactKind): string {
 
 export function getArtifact(id: string): Promise<Artifact | null> {
   return invoke("artifacts_get", { id });
+}
+
+export function listArtifacts(): Promise<Artifact[]> {
+  return invoke("artifacts_list");
 }
 
 export async function saveArtifact(

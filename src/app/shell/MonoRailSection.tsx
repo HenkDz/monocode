@@ -22,7 +22,9 @@ import {
   dismissMonoIntro,
   findMono,
   listMonos,
-  MONO_STATUS_LABEL,
+  railMonos,
+  monoStatusLabel,
+  monoTeamWorkingLabel,
   monoIntroDismissed,
   nextMonoLook,
   monoLook,
@@ -41,8 +43,8 @@ export type MonoRailProps = {
   activeId?: string;
   /** What each Mono is doing, by Mono id; missing reads as idle. */
   states: ReadonlyMap<string, MonoState>;
-  /** Monos that finished something the user has not looked at yet. */
-  unseenIds?: ReadonlySet<string>;
+  /** Replies each Mono has that the user has not looked at yet, by Mono id. */
+  unseenCounts?: ReadonlyMap<string, number>;
   onOpen: (monoId: string) => void;
   onCreate: () => void;
   onDelete: (monoId: string) => void;
@@ -52,6 +54,15 @@ export type MonoRailProps = {
 
 const IDLE: MonoState = { status: "idle" };
 
+/** A Mono's unread count as its badge shows it. */
+export function unreadBadge(count: number): string {
+  return count > 99 ? "99+" : String(count);
+}
+
+export function unreadLabel(count: number): string {
+  return count === 1 ? "1 new reply" : `${count} new replies`;
+}
+
 /**
  * The user's Monos, above the projects. Each opens like a project does, but
  * into its conversation; none belongs to a project, so they get a section of
@@ -60,18 +71,18 @@ const IDLE: MonoState = { status: "idle" };
 export function MonoRailSection({
   activeId,
   states,
-  unseenIds,
+  unseenCounts,
   onOpen,
   onCreate,
   onDelete,
   introAvailable = false,
 }: MonoRailProps) {
   const snapshot = useSyncExternalStore(subscribeMonos, monosSnapshot);
-  const monos = useMemo(() => listMonos(), [snapshot]);
+  const monos = useMemo(() => railMonos(), [snapshot]);
   const [addButton, setAddButton] = useState<HTMLButtonElement | null>(null);
   // Shown once ever, and only the user's choice puts it away.
   const showIntro =
-    introAvailable && monos.length === 0 && !monoIntroDismissed();
+    introAvailable && listMonos().length === 0 && !monoIntroDismissed();
   const ids = monos.map((mono) => mono.id);
   const sortable = useAnimatedReorder(ids, reorderMonos, "y");
   const [menu, setMenu] = useState<{ id: string; anchor: PopoverAnchor }>();
@@ -126,14 +137,14 @@ export function MonoRailSection({
           const look = monoLook(mono);
           const state = states.get(mono.id) ?? IDLE;
           const selected = mono.id === activeId;
-          const unseen = !selected && !!unseenIds?.has(mono.id);
+          const unseen = selected ? 0 : (unseenCounts?.get(mono.id) ?? 0);
           const projects = look.projects.length
             ? monoProjectsPhrase(look.projects)
             : "No projects yet";
           const status =
             state.status === "idle"
               ? undefined
-              : (state.activity ?? MONO_STATUS_LABEL[state.status]);
+              : (state.activity ?? monoStatusLabel(state));
           return (
             <div
               key={mono.id}
@@ -173,8 +184,15 @@ export function MonoRailSection({
             >
               <button
                 type="button"
-                title={[look.name, projects, status].filter(Boolean).join("\n")}
-                aria-label={[look.name, status ?? "idle", projects].join(", ")}
+                title={[look.name, projects, monoStatusLabel(state), status, monoTeamWorkingLabel(state), unseen ? unreadLabel(unseen) : undefined].filter(Boolean).join("\n")}
+                aria-label={[
+                  look.name,
+                  monoStatusLabel(state),
+                  monoTeamWorkingLabel(state),
+                  unseen ? unreadLabel(unseen) : undefined,
+                ]
+                  .filter(Boolean)
+                  .join(", ")}
                 aria-current={selected ? "true" : undefined}
                 className="flex min-w-0 flex-1 cursor-default items-center gap-2 text-left transition-[padding] duration-150 motion-reduce:transition-none group-hover:pr-6 group-has-[:focus-visible]:pr-6"
               >
@@ -196,11 +214,19 @@ export function MonoRailSection({
                     {look.name}
                   </span>
                 )}
+                {state.status === "needs-you" || state.teamWorking ? (
+                  <span className={`min-w-0 truncate text-[10px] ${state.status === "needs-you" ? "text-accent" : "text-content/50"}`}>
+                    {[state.status === "needs-you" ? monoStatusLabel(state) : undefined, monoTeamWorkingLabel(state)].filter(Boolean).join(" · ")}
+                  </span>
+                ) : null}
                 {unseen ? (
                   <span
                     aria-hidden
-                    className="size-1.5 shrink-0 rounded-full bg-content/60 group-hover:hidden group-has-[:focus-visible]:hidden"
-                  />
+                    data-mono-unread={unseen}
+                    className="grid h-4 min-w-4 shrink-0 place-items-center rounded-full bg-content/15 px-1 text-[10px] font-medium tabular-nums leading-none text-content/80 group-hover:hidden group-has-[:focus-visible]:hidden"
+                  >
+                    {unreadBadge(unseen)}
+                  </span>
                 ) : null}
               </button>
               <button

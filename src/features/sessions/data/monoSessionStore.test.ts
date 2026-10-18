@@ -5,6 +5,7 @@ import {
   getMonoTranscriptPage,
   upsertSession,
   persistFingerprint,
+  shouldPersistSession,
 } from "./sessionStore";
 import type { Session } from "../model/session";
 import {
@@ -52,6 +53,29 @@ function saved(session: Session) {
 }
 
 describe("Mono database pagination and writes", () => {
+  it("saves a configured empty Mono header and restores its chosen provider, model and permissions", async () => {
+    const blank = { ...record(), harness: "claude", model: "claude:sonnet-4-6",
+      modelSettings: { effort: "high" }, runtimeMode: "supervised", blocks: [] } as unknown as Session;
+    delete blank.monoTranscript;
+    expect(shouldPersistSession(blank)).toBe(true);
+    call.mockResolvedValueOnce(saved(blank));
+    await upsertSession(blank);
+    const [command, args] = call.mock.calls.at(-1)!;
+    expect(command).toBe("mono_session_upsert");
+    const payload = (args as { session: Session }).session;
+    expect(payload).toMatchObject({ harness: "claude", model: "claude:sonnet-4-6", runtimeMode: "supervised",
+      modelSettings: blank.modelSettings, blocks: [] });
+    call.mockResolvedValueOnce(saved(payload));
+    const restored = await getSession(blank.id);
+    expect(restored).toMatchObject({ harness: "claude", model: "claude:sonnet-4-6", runtimeMode: "supervised", modelSettings: blank.modelSettings });
+    const ordinary = { ...blank, id: `normal-empty-${++id}` };
+    expect(shouldPersistSession(ordinary)).toBe(false);
+    const writes = call.mock.calls.length;
+    await expect(upsertSession(ordinary)).resolves.toBeNull();
+    expect(call.mock.calls).toHaveLength(writes);
+    expect(shouldPersistSession({ ...ordinary, monoTranscript: { before: null, firstBlockId: null } })).toBe(true);
+  });
+
   it("keeps document references on the source turn after saving and reopening", async () => {
     let session = await load();
     const card = {
@@ -74,7 +98,7 @@ describe("Mono database pagination and writes", () => {
   it("preserves all results and the session count in a combined report across queue and transcript saves", async () => {
     const session = await load();
     const batches = new MonoSessionCompletionBatches((_, message) => {
-      session.queuedMessages = [message];
+      session.pendingMonoEvents = [message];
     });
     for (const id of ["first", "second"]) {
       batches.watch(
@@ -91,7 +115,7 @@ describe("Mono database pagination and writes", () => {
       );
     }
     batches.closeInactive(() => false);
-    const notification = session.queuedMessages![0];
+    const notification = session.pendingMonoEvents![0];
     call.mockResolvedValueOnce(saved(session));
     await upsertSession(session);
     const payload = (call.mock.calls.at(-1)![1] as { session: Session })
@@ -100,10 +124,11 @@ describe("Mono database pagination and writes", () => {
     call.mockResolvedValueOnce({ ...payload, createdAt: 1, updatedAt: 2 });
     const restored = (await getSession(session.id))!;
     expect(
-      restored.queuedMessages?.[0].monoSessionCompletion?.sessionCount,
+      restored.pendingMonoEvents?.[0].monoSessionCompletion?.sessionCount,
     ).toBe(2);
-    expect(restored.queuedMessages?.[0].text).toContain("Finished first");
-    expect(restored.queuedMessages?.[0].text).toContain("Finished second");
+    expect(restored.queuedMessages).toBeUndefined();
+    expect(restored.pendingMonoEvents?.[0].text).toContain("Finished first");
+    expect(restored.pendingMonoEvents?.[0].text).toContain("Finished second");
     restored.blocks.push({
       id: "delivery",
       role: "user",
@@ -129,7 +154,7 @@ describe("Mono database pagination and writes", () => {
       prompt: "Review",
       outcome: { status: "completed", text: "Review done" },
     });
-    session.queuedMessages = [notification];
+    session.pendingMonoEvents = [notification];
     session.queueStatus = "active";
     call.mockResolvedValueOnce(saved(session));
     await upsertSession(session);
@@ -144,7 +169,8 @@ describe("Mono database pagination and writes", () => {
       updatedAt: 2,
     });
     const restored = (await getSession(session.id))!;
-    expect(restored.queuedMessages?.[0]).toEqual(notification);
+    expect(restored.pendingMonoEvents?.[0]).toEqual(notification);
+    expect(restored.queuedMessages).toBeUndefined();
     expect(
       canSteerQueuedHead({
         ...restored,

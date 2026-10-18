@@ -5,7 +5,7 @@ import { expect, it, vi } from "vitest";
 import { monoSessionCompletionMessage } from "../../monos/model/monoSessionCompletion";
 import { MessageQueue } from "./MessageQueue";
 
-it("labels a pending completion and offers removal without editing or steering it", () => {
+it("never exposes internal notifications in the user's outbox", () => {
   const message = monoSessionCompletionMessage({
     sessionId: "worker",
     requestId: "app-mono-monitor",
@@ -24,7 +24,7 @@ it("labels a pending completion and offers removal without editing or steering i
       variant: "messages",
     }),
   );
-  expect(container.textContent).toContain("Session completed: Agent session");
+  expect(container.textContent).toBe("");
   expect(container.textContent).not.toContain(
     "MonoCode completion notification",
   );
@@ -33,13 +33,13 @@ it("labels a pending completion and offers removal without editing or steering i
     container.querySelector<HTMLButtonElement>(
       '[aria-label="Edit queued message"]',
     )?.disabled,
-  ).toBe(true);
+  ).toBeUndefined();
   expect(
     container.querySelector('[aria-label="Remove queued message"]'),
-  ).not.toBeNull();
+  ).toBeNull();
 });
 
-it("labels a combined report without exposing the app prompt", () => {
+it("keeps combined internal reports out of the user's outbox", () => {
   const message = monoSessionCompletionMessage({
     sessionId: "worker",
     requestId: "request",
@@ -51,6 +51,6 @@ it("labels a combined report without exposing the app prompt", () => {
   const markup = renderToStaticMarkup(
     createElement(MessageQueue, { messages: [message] }),
   );
-  expect(markup).toContain("3 sessions finished");
+  expect(markup).toBe("");
   expect(markup).not.toContain("MonoCode completion notification");
 });

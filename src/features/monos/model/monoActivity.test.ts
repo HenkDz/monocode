@@ -65,7 +65,32 @@ it("retains an archived turn without borrowing another turn or Mono's activity",
     resolveMonoActivity(selection, { id: "another-mono", blocks }),
   ).toBeNull();
   expect(resolveMonoActivity(selection, undefined)).toBeNull();
-  expect(resolveMonoActivity(null, { id: "mono", blocks })).toBeNull();
+  expect(resolveMonoActivity(null, { id: "mono", blocks: [] })).toBeNull();
+});
+
+it("defaults to the latest turn and retains its activity when idle", () => {
+  const latest: Block[] = [
+    { id: "latest", role: "user", text: "Next request" },
+    {
+      id: "last-command",
+      role: "tool",
+      text: "Check changes",
+      tool: { status: "completed" },
+    },
+  ];
+  for (const busy of [true, false]) {
+    expect(
+      resolveMonoActivity(null, {
+        id: "mono",
+        blocks: [...blocks, ...latest],
+        busy,
+      }),
+    ).toEqual({
+      turnId: "latest",
+      blocks: latest,
+      live: busy,
+    });
+  }
 });
 
 it("keeps completion activity separate from the previous reply before any output arrives", () => {

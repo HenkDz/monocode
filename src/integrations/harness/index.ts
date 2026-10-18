@@ -1,4 +1,5 @@
 export { startHarnessBridge, killAllChildren } from "./core/child";
+export { updateHarnessRuntimeMode } from "./core/registry";
 export {
   harnessLoginArgs,
   isHarnessAuthError,
@@ -183,6 +184,8 @@ export {
   respondHarnessQuestion,
   keepHarnessQuestionOpen,
   stopHarnessSession,
+  configureHarnessIdlePark,
+  enforceHarnessIdleLimit,
   forgetHarnessSession,
   bindHarnessSession,
   refreshHarnessCatalogs,

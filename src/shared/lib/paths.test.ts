@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   displayPath,
   isEqualOrInside,
@@ -220,6 +220,99 @@ describe("parentPath and joinPath", () => {
 });
 
 describe("path relations", () => {
+  it.each([
+    "/",
+    "/repo",
+    "/repo/",
+    "/repo/src/a.ts",
+    "/tmp/a\\b.txt",
+  ])("includes the absolute Unix path %s inside /", (path) => {
+    expect(isEqualOrInside(path, "/")).toBe(true);
+  });
+
+  it.each([
+    "",
+    "repo",
+    "repo/src/a.ts",
+    "./repo",
+    "../repo",
+    "\\repo",
+    "C:repo",
+    "C:/repo",
+    "C:\\repo",
+    "C:/",
+    "D:\\",
+    "//server/share/src",
+    "\\\\server\\share\\src",
+    "/\\server\\share\\src",
+    "/\\server/share/src",
+  ])("excludes relative and Windows paths from /: %s", (path) => {
+    expect(isEqualOrInside(path, "/")).toBe(false);
+  });
+
+  it.each(["Win32", "Linux x86_64"])(
+    "checks Unix-root containment using actual source on %s",
+    async (platform) => {
+      vi.stubGlobal("navigator", { platform });
+      vi.resetModules();
+      try {
+        const { IS_WIN } = await import("../../platform/tauri/platform");
+        const { isEqualOrInside: contains } = await import("./paths");
+        expect(IS_WIN).toBe(platform === "Win32");
+        for (const [path, root, inside] of [
+          ["/\\server\\share\\src", "/", false],
+          ["/\\server/share/src", "/", false],
+          ["/", "/", true],
+          ["/repo/src", "/", true],
+          ["/tmp/a\\b.txt", "/", true],
+          ["repo/src", "/", false],
+          ["C:\\repo", "/", false],
+          ["//server/share/src", "/", false],
+          ["\\\\server\\share\\src", "/", false],
+          ["", "", true],
+          ["/repo", "", false],
+          ["//server/share", "", true],
+          ["/\\server\\share\\src", "", false],
+          ["/repo/a\\b.txt", "/repo", true],
+          ["c:\\REPO\\src", "C:/repo", true],
+          ["/repository", "/repo", false],
+        ] as const) {
+          expect(contains(path, root), JSON.stringify({ path, root })).toBe(inside);
+        }
+      } finally {
+        vi.unstubAllGlobals();
+        vi.resetModules();
+      }
+    },
+  );
+
+  it.each([
+    ["", true],
+    ["/", true],
+    ["/repo", false],
+    ["repo", false],
+    ["C:/repo", false],
+    ["//server/share", true],
+  ] as const)("preserves empty-root containment of %s: %s", (path, inside) => {
+    expect(isEqualOrInside(path, "")).toBe(inside);
+  });
+
+  it.each([
+    ["/repo/", "/repo", true],
+    ["/repo/src", "/repo/", true],
+    ["/repository", "/repo", false],
+    ["/Repo/src", "/repo", false],
+    ["repo/src", "/repo", false],
+    ["c:\\", "C:/", true],
+    ["C:/repository", "c:/repo", false],
+    ["D:/repo", "C:/", false],
+    ["\\\\SERVER\\Share\\src", "//server/share/", true],
+    ["//server/share-other", "//server/share", false],
+    ["//other/share/src", "//server/share", false],
+  ] as const)("preserves containment of %s in %s: %s", (path, root, inside) => {
+    expect(isEqualOrInside(path, root)).toBe(inside);
+  });
+
   it("treats backslash and slash as the same path", () => {
     expect(isEqualOrInside("C:\\Users\\me\\app\\src", "C:/Users/me/app")).toBe(
       true,

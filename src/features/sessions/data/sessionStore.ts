@@ -1,5 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
+import { forgetSessionPullRequests } from "../../source-control/model/pullRequests";
+import { parseCard } from "../../monos/model/monoCards";
 import { isMonoSession } from "../../monos/model/mono";
+import { archiveLegacyManagerSessions, isLegacyManagerSession } from "../../monos/model/legacyManagerSessions";
 import { sanitizeMonoSpawnedSessions } from "../../monos/model/monoSpawnedSessions";
 import {
   isWeakToolTitle,
@@ -50,6 +53,10 @@ import { HARNESSES, RUNTIME_MODES } from "../model/session";
 import { restoreOrchestrationProposal } from "../../orchestration/model/orchestrationPlan";
 
 import type { OrchestrationSummary } from "../../orchestration/model/orchestrationSummary";
+
+// Keep managed permissions in the existing durable settings JSON; providers
+// never see this storage marker after hydration.
+const READ_ONLY_SETTING = "__monocodeReadOnly";
 
 export type SessionSummary = {
   sidebarHidden?: boolean;
@@ -127,7 +134,7 @@ type SessionUpsertPayload = {
   automationId?: string;
 };
 
-/** Only real chats belong in project history — blank tabs stay ephemeral. */
+/** Mono headers own saved model/permissions even before a chat; ordinary blank tabs stay ephemeral. */
 export function shouldPersistSession(session: Session): boolean {
   return (
     !session.ephemeral &&
@@ -135,8 +142,7 @@ export function shouldPersistSession(session: Session): boolean {
     !isRemoteProjectPath(session.cwd) &&
     session.cwd !== "~" &&
     (session.blocks.some((block) => block.role === "user") ||
-      (isMonoSession(session.id) &&
-        (session.blocks.length > 0 || !!session.monoTranscript)))
+      isMonoSession(session.id) || !!session.monoTranscript)
   );
 }
 
@@ -151,14 +157,17 @@ function persistableMeta(
 ): Omit<SessionUpsertPayload, "blocks"> {
   const linkedWorkItem = sanitizeLinkedWorkItem(session.linkedWorkItem);
   const queuedMessages = includeQueue
-    ? sanitizeQueuedMessages(session.queuedMessages)
+    // Keep the existing durable queue format; split app events out on hydration.
+    ? sanitizeQueuedMessages([...(session.queuedMessages ?? []), ...(session.pendingMonoEvents ?? [])])
     : [];
   return {
     id: session.id,
     cwd: normalizeProjectPath(session.cwd),
     harness: session.harness,
     model: session.model,
-    modelSettings: session.modelSettings,
+    modelSettings: session.readOnly
+      ? { ...session.modelSettings, [READ_ONLY_SETTING]: "true" }
+      : session.modelSettings,
     runtimeMode: session.runtimeMode,
     title: session.title,
     ...(session.sidebarHidden === true ? { sidebarHidden: true } : {}),
@@ -204,6 +213,8 @@ function sanitizeMonoSessionCompletion(
     sessionId: completion.sessionId,
     title: completion.title,
     status: completion.status,
+    ...(completion.blocker && typeof completion.blocker.key === "string" && Array.isArray(completion.blocker.requests) && completion.blocker.requests.every(id => typeof id === "string")
+      ? { blocker: { key: completion.blocker.key, requests: [...new Set(completion.blocker.requests)] } } : {}),
     ...(typeof completion.sessionCount === "number" &&
     Number.isInteger(completion.sessionCount) &&
     completion.sessionCount > 1
@@ -213,6 +224,11 @@ function sanitizeMonoSessionCompletion(
 }
 
 /** Pending images need their bytes until delivery; object URLs never survive reloads. */
+function sanitizeMonoSource(value: QueuedMessage["monoSource"]): QueuedMessage["monoSource"] {
+  if (!value || [value.id, value.name, value.mascot, value.color, value.goalId].some(field => typeof field !== "string" || !field || field.length > 256)) return undefined;
+  return { id: value.id, name: value.name, mascot: value.mascot, color: value.color, goalId: value.goalId };
+}
+
 function sanitizeQueuedMessages(value: unknown): QueuedMessage[] {
   if (!Array.isArray(value)) return [];
   const seen = new Set<string>();
@@ -283,6 +299,7 @@ function sanitizeQueuedMessages(value: unknown): QueuedMessage[] {
           ? { blockId: message.blockId }
           : {}),
         text: message.text,
+        ...(sanitizeMonoSource(message.monoSource) ? { monoSource: sanitizeMonoSource(message.monoSource) } : {}),
         attachments,
         ...(noteCard ? { noteCard } : {}),
         ...(handoffCard ? { handoffCard } : {}),
@@ -467,7 +484,7 @@ function blockToken(block: Block): number {
 export function persistFingerprint(session: Session): string {
   // Pasted image bytes can be megabytes. Like transcript blocks, queue rows
   // are immutable, so their identity detects edits without serializing bytes.
-  const queue = (session.queuedMessages ?? []).map((message) => {
+  const queue = [...(session.queuedMessages ?? []), ...(session.pendingMonoEvents ?? [])].map((message) => {
     let token = queuedMessageTokens.get(message);
     if (token === undefined) {
       token = ++lastQueuedMessageToken;
@@ -487,7 +504,7 @@ export async function listSessionsByProject(
   const rows = await invoke<SessionSummary[]>("session_list_by_project", {
     cwd: normalizeProjectPath(cwd),
   });
-  return rows.map(normalizeSummary);
+  return (await archiveLegacyManagerSessions(rows, id => setSessionArchived(id, true))).map(normalizeSummary);
 }
 
 export function rebaseProjectSessions(
@@ -502,7 +519,15 @@ export function rebaseProjectSessions(
 
 export async function listLinkedSessions(): Promise<SessionSummary[]> {
   const rows = await invoke<SessionSummary[]>("session_list_linked");
-  return rows.map(normalizeSummary);
+  return (await archiveLegacyManagerSessions(rows, id => setSessionArchived(id, true))).map(normalizeSummary);
+}
+
+export async function migrateLegacyManagerConversations(folders: readonly string[], home?: string): Promise<SessionSummary[]> {
+  const migrated = await Promise.all([...new Set(["~", ...(home ? [home] : []), ...folders])].map(async cwd => {
+    const rows = await invoke<SessionSummary[]>("session_list_by_project", { cwd });
+    return archiveLegacyManagerSessions(rows, id => setSessionArchived(id, true), home);
+  }));
+  return migrated.flat().filter(session => isLegacyManagerSession(session, undefined, home)).map(normalizeSummary);
 }
 
 export type SessionSearchHit = {
@@ -756,6 +781,7 @@ export async function deleteSession(
     await enqueueSessionWrite(sessionId, () =>
       invoke<void>("session_delete", { sessionId, imagePaths }),
     );
+    forgetSessionPullRequests(sessionId);
     monoSavedBlocks.delete(sessionId);
     const tombstone = setTimeout(
       () => deletedSessionIds.delete(sessionId),
@@ -939,6 +965,19 @@ function sanitizeBlock(
   // the user's own after a reload.
   if (block.role === "user" && block.internal) next.internal = true;
   const completion = sanitizeMonoSessionCompletion(block.monoSessionCompletion);
+  const monoSource = sanitizeMonoSource(block.monoSource);
+  if (monoSource) next.monoSource = monoSource;
+  const team = block.monoTeamMessage;
+  if (block.role === "user" && team && [team.id, team.name, team.mascot, team.color].every(value => typeof value === "string" && value.length > 0 && value.length <= 256) && typeof team.topic === "string" && team.topic.length <= 120 && typeof team.text === "string" && team.text.length <= 8000)
+    next.monoTeamMessage = { id: team.id, name: team.name, mascot: team.mascot, color: team.color, topic: team.topic, text: team.text };
+  if (block.role === "assistant" && block.monoTeamChange && typeof block.monoTeamChange === "object") {
+    const { managerId, changeId, changeIds } = block.monoTeamChange;
+    if (typeof managerId === "string" && managerId.length <= 256 && isPersistableId(managerId) && typeof changeId === "string" && changeId.length <= 256 && isPersistableId(changeId))
+      next.monoTeamChange = { managerId, changeId, ...(Array.isArray(changeIds) && changeIds.length <= 24 && changeIds.every(id => typeof id === "string" && id.length <= 256 && isPersistableId(id)) ? { changeIds: [...new Set(changeIds)] } : {}) };
+  }
+  if (block.monoCard && typeof block.monoCardOwner === "string" && block.monoCardOwner.length <= 256) {
+    try { next.monoCard = parseCard(block.monoCard); next.monoCardOwner = block.monoCardOwner; } catch { /* Ignore malformed saved cards. */ }
+  }
   if (block.role === "user" && block.internal && completion)
     next.monoSessionCompletion = completion;
   const spawned = sanitizeMonoSpawnedSessions(block.monoSpawnedSessions);
@@ -1392,7 +1431,7 @@ function normalizeSummary(summary: SessionSummary): SessionSummary {
     ...(summary.repo ? { repo: summary.repo } : {}),
     additions: summary.additions ?? 0,
     deletions: summary.deletions ?? 0,
-    archived: summary.archived || undefined,
+    archived: summary.archived || isLegacyManagerSession(summary) || undefined,
     pinned: summary.pinned || undefined,
     draft: summary.draft || undefined,
     sidebarHidden: summary.sidebarHidden === true || undefined,
@@ -1405,26 +1444,31 @@ function normalizeSummary(summary: SessionSummary): SessionSummary {
 }
 
 function recordToSession(record: SessionRecord): Session {
+  const { [READ_ONLY_SETTING]: readOnly, ...modelSettings } =
+    record.modelSettings && typeof record.modelSettings === "object" ? record.modelSettings : {};
   const blocks = Array.isArray(record.blocks)
     ? record.blocks
         .map((block) => sanitizeBlock(block, { hydrate: true }))
         .filter((block): block is Block => block != null)
     : [];
   const linkedWorkItem = sanitizeLinkedWorkItem(record.linkedWorkItem);
-  const queuedMessages = sanitizeQueuedMessages(record.queuedMessages);
+  const waiting = sanitizeQueuedMessages(record.queuedMessages);
+  const queuedMessages = waiting.filter(message => !message.monoSessionCompletion);
+  const pendingMonoEvents = waiting.filter((message, index) => message.monoSessionCompletion &&
+    waiting.findIndex(entry => entry.id === message.id || (entry.monoSessionCompletion && entry.text === message.text)) === index &&
+    !blocks.some(block => block.appRequestId === message.id || (block.internal && block.text === message.text)));
   return {
     id: record.id,
     sidebarHidden: record.sidebarHidden === true || undefined,
     cwd: record.cwd,
     harness: asHarness(record.harness),
     model: record.model,
-    modelSettings:
-      record.modelSettings && typeof record.modelSettings === "object"
-        ? record.modelSettings
-        : {},
+    modelSettings,
+    ...(readOnly === "true" ? { readOnly: true } : {}),
     runtimeMode: asRuntimeMode(record.runtimeMode),
     title: record.title,
     blocks,
+    ...(pendingMonoEvents.length ? { pendingMonoEvents } : {}),
     // A restart interrupted the active turn. Let the user resume pending work.
     ...(queuedMessages.length
       ? { queuedMessages, queueStatus: "paused" as const }

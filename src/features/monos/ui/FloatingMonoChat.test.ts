@@ -116,6 +116,16 @@ afterEach(() => {
   container.remove();
   vi.unstubAllGlobals();
 });
+
+it("renders the owner's shared availability as it starts and finishes elsewhere", async () => {
+  const view = snapshot(0);
+  native.invoke.mockImplementation(async command => command === "mono_chat_state" ? { ...view, session: { ...view.session, monoLiveState: { status: "working" } } } : undefined);
+  await act(async () => root.render(createElement(FloatingMonoChat, { onShown: vi.fn() })));
+  expect(container.textContent).toContain("Working");
+  await act(async () => receive({ payload: { ...view, session: { ...view.session!, monoLiveState: { status: "idle" } } } }));
+  expect(container.textContent).toContain("Idle");
+  expect(container.textContent).not.toContain("Working");
+});
 async function render() {
   await act(async () =>
     root.render(createElement(FloatingMonoChat, { onShown: () => {} })),
@@ -135,6 +145,24 @@ it("shows this window's Mono with its status beneath the name", async () => {
   expect(
     container.querySelector('[aria-label="Message Captain"]'),
   ).not.toBeNull();
+});
+
+it("shows an org role and sends permission changes to its owner", async () => {
+  const view = snapshot(0);
+  native.invoke.mockImplementation(async (command) => command === "mono_chat_state" ? {
+    ...view,
+    monos: view.monos.map((mono) => ({ ...mono, role: "manager" })),
+    session: { ...view.session!, runtimeMode: "full-access" },
+  } : undefined);
+  await render();
+  expect(container.querySelector("header h1")?.textContent).toContain("manager");
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Full access"]')!.click());
+  const supervised = [...document.querySelectorAll<HTMLButtonElement>('[role="option"]')]
+    .find((option) => option.textContent?.includes("Supervised"))!;
+  await act(async () => supervised.click());
+  expect(native.invoke).toHaveBeenCalledWith("mono_chat_action", {
+    monoId: "first", action: { kind: "runtimeMode", mode: "supervised" },
+  });
 });
 
 it("lists every Mono beside the chat and switches or adds from there", async () => {
@@ -308,12 +336,27 @@ it("reads a Mono's document in a sheet over the chat and slides it away", async 
       };
   });
   await render();
+  const trigger = container.querySelector<HTMLButtonElement>("[data-open-doc]")!;
+  trigger.focus();
   await act(async () =>
-    container.querySelector<HTMLButtonElement>("[data-open-doc]")!.click(),
+    trigger.click(),
   );
   const sheet = container.querySelector('[data-artifact-sheet="doc-1"]');
   expect(sheet?.textContent).toContain("Menu plan");
   expect(sheet?.textContent).toContain("Soup first.");
+  const close = sheet!.querySelector<HTMLButtonElement>('[aria-label="Close document"]')!;
+  expect(document.activeElement).toBe(close);
+  expect(trigger.closest("[inert]")).not.toBeNull();
+  expect(container.querySelector("[data-floating-mono-rail]")?.hasAttribute("inert")).toBe(true);
+  const controls = sheet!.querySelectorAll<HTMLButtonElement>("button");
+  await act(async () => close.dispatchEvent(new KeyboardEvent("keydown", {
+    key: "Tab", bubbles: true, cancelable: true,
+  })));
+  expect(document.activeElement).toBe(controls[0]);
+  await act(async () => controls[0].dispatchEvent(new KeyboardEvent("keydown", {
+    key: "Tab", shiftKey: true, bubbles: true, cancelable: true,
+  })));
+  expect(document.activeElement).toBe(close);
   // Reading in place never asks the main window to take over.
   expect(native.invoke).not.toHaveBeenCalledWith(
     "mono_chat_action",
@@ -325,5 +368,7 @@ it("reads a Mono's document in a sheet over the chat and slides it away", async 
   expect(container.querySelector("[data-artifact-sheet]")).not.toBeNull();
   act(() => vi.runAllTimers());
   expect(container.querySelector("[data-artifact-sheet]")).toBeNull();
+  expect(document.activeElement).toBe(trigger);
+  expect(trigger.closest("[inert]")).toBeNull();
   vi.useRealTimers();
 });

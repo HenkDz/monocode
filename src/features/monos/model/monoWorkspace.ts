@@ -1,4 +1,6 @@
-import { newSession, type Session } from "../../sessions/model/session";
+import { newSession, hasPendingApproval, type Session } from "../../sessions/model/session";
+import type { OrchestrationRun } from "../../orchestration/model/orchestrationState";
+import { habitRunMono } from "./monoHabits";
 import {
   closeLeaf,
   leafIds,
@@ -11,12 +13,29 @@ import {
   findMono,
   isMonoSession,
   monoForSession,
+  monoRuntimeMode,
+  monoDefaultRuntimeMode,
+  legacyMonoRuntimeMode,
+  finishMonoPermissionsMigration,
   saveMonoSessionId,
 } from "./mono";
 import { forgetAgentContext } from "./monoFiles";
 import { forgetMonoRotation } from "./monoRotation";
 
 const openingMonos = new Map<string, Promise<Session | undefined>>();
+
+/** A member's choice also applies to its active work, never another member's. */
+export function monoPermissionSessionIds(monoId: string | undefined, sessionId: string, sessions: readonly Session[], runs: readonly Pick<OrchestrationRun, "tasks">[]): string[] {
+  const owned = new Set([sessionId]);
+  if (monoId) {
+    for (const run of runs)
+      for (const task of run.tasks)
+        if (task.memberId === monoId && !task.readOnly) owned.add(task.sessionId);
+    for (const session of sessions)
+      if (habitRunMono(session.id) === monoId) owned.add(session.id);
+  }
+  return sessions.filter(session => owned.has(session.id) && !session.readOnly && (session.id === sessionId || session.busy || hasPendingApproval(session.blocks))).map(session => session.id);
+}
 
 /**
  * Load the Mono's conversation without opening or replacing a workspace tab.
@@ -30,6 +49,8 @@ export function ensureMonoSession(
     load(id: string): Promise<Session | null | undefined>;
     create(cwd: string): Session;
     add(session: Session): void;
+    /** Save legacy permissions before forgetting their migration input. */
+    save?(session: Session): Promise<unknown>;
   },
 ): Promise<Session | undefined> {
   const pending = openingMonos.get(monoId);
@@ -49,15 +70,35 @@ async function loadMonoSession(
   if (!mono) return undefined;
   if (mono.sessionId) {
     const existing = await host.load(mono.sessionId);
-    if (existing) return existing;
+    if (existing) {
+      const current = findMono(monoId);
+      if (!current) return undefined;
+      const runtimeMode = monoRuntimeMode(current, existing.runtimeMode);
+      const session = runtimeMode === existing.runtimeMode ? existing : { ...existing, runtimeMode };
+      await migratePermissions(current.id, session, host);
+      return session;
+    }
   }
   const home = await host.home();
   // Removed while the home folder was looked up.
-  if (!findMono(monoId)) return undefined;
-  const session: Session = { ...host.create(home), runtimeMode: "auto" };
+  const current = findMono(monoId);
+  if (!current) return undefined;
+  const defaults = host.create(home);
+  const profile = current.workerProfile;
+  // All first-open paths, including a goal arriving before the chat is opened,
+  // must use the Mono's profile. Existing chats above keep the user's choice.
+  const runtimeMode = monoDefaultRuntimeMode(current);
+  const session = profile ? { ...newSession(profile.harness, home, profile.model, runtimeMode, profile.modelSettings), id: defaults.id } : { ...defaults, runtimeMode };
+  await migratePermissions(current.id, session, host);
   saveMonoSessionId(monoId, session.id);
   host.add(session);
   return session;
+}
+
+async function migratePermissions(monoId: string, session: Session, host: Parameters<typeof ensureMonoSession>[1]): Promise<void> {
+  if (!host.save || !legacyMonoRuntimeMode(monoId)) return;
+  if (await host.save(session) === null) return;
+  finishMonoPermissionsMigration(monoId);
 }
 
 /** Reset only the Mono's chat, keeping its identity, habits and memory. */

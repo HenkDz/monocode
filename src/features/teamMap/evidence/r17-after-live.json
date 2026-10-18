@@ -1,0 +1,271 @@
+{
+  "identifier": "com.monocode.r17.layout-evidence",
+  "previewFolder": "C:/Users/nooro/AppData/Local/Temp/monocode-r17-layout-evidence",
+  "previewOutsideGit": true,
+  "syntheticRoster": true,
+  "nativeDesktop": false,
+  "realProviderTurns": false,
+  "sourceHashes": {
+    "model.ts": "52dc994192d65c74cd676c7d3e6732780a10569099b47cb9f6081a553ecf85f6",
+    "camera.ts": "22e0939e1ee6767df34ec3104dbac756e35938d2c7120539575a29dc7ec5353a",
+    "TeamMap.tsx": "fbaa087709f5eac3e6699d206215776ccbe5bc9d852344130b758eb09ec50f79",
+    "teamMap.css": "517fed52218abdac1b29c17d2ba66c0dc1e6162cced3150b491b9d5f9ab90f47"
+  },
+  "checks": [
+    {
+      "scenario": "user-org",
+      "theme": "dark",
+      "viewport": {
+        "width": 1100,
+        "height": 1250
+      },
+      "zoom": "100%",
+      "orientation": "left-to-right",
+      "compact": "false",
+      "nodes": 12,
+      "overlaps": [],
+      "clippedTasks": [],
+      "taskFont": "11px",
+      "transform": "translate(146px, 225px) scale(1)"
+    },
+    {
+      "scenario": "user-org",
+      "theme": "light",
+      "viewport": {
+        "width": 1100,
+        "height": 1250
+      },
+      "zoom": "100%",
+      "orientation": "left-to-right",
+      "compact": "false",
+      "nodes": 12,
+      "overlaps": [],
+      "clippedTasks": [],
+      "taskFont": "11px",
+      "transform": "translate(146px, 225px) scale(1)"
+    },
+    {
+      "scenario": "wide",
+      "viewport": {
+        "width": 1600,
+        "height": 800
+      },
+      "zoom": "100%",
+      "orientation": "left-to-right",
+      "compact": "false",
+      "nodes": 12,
+      "overlaps": [],
+      "clippedTasks": [],
+      "taskFont": "11px",
+      "transform": "translate(298px, 108px) scale(1)"
+    },
+    {
+      "scenario": "10-members",
+      "viewport": {
+        "width": 1100,
+        "height": 1250
+      },
+      "zoom": "100%",
+      "orientation": "top-down",
+      "compact": "false",
+      "nodes": 18,
+      "overlaps": [],
+      "clippedTasks": [],
+      "taskFont": "11px",
+      "transform": "translate(152px, 173px) scale(1)"
+    },
+    {
+      "scenario": "5x6",
+      "viewport": {
+        "width": 1100,
+        "height": 1250
+      },
+      "zoom": "92%",
+      "orientation": "left-to-right",
+      "compact": "false",
+      "nodes": 36,
+      "overlaps": [],
+      "clippedTasks": [],
+      "taskFont": "11px",
+      "transform": "translate(90.0884px, 24px) scale(0.916159)"
+    },
+    {
+      "scenario": "focus-manager",
+      "wholeZoom": "100%",
+      "focusedZoom": "150%",
+      "wholeOrgVisible": true,
+      "mapOpen": true
+    },
+    {
+      "scenario": "escape-unfocus",
+      "viewport": {
+        "width": 1100,
+        "height": 1250
+      },
+      "zoom": "100%",
+      "orientation": "left-to-right",
+      "compact": "false",
+      "nodes": 12,
+      "overlaps": [],
+      "clippedTasks": [],
+      "taskFont": "11px",
+      "transform": "translate(146px, 225px) scale(1)",
+      "mapOpen": true
+    },
+    {
+      "scenario": "semantic-zoom",
+      "viewport": {
+        "width": 1100,
+        "height": 1250
+      },
+      "zoom": "69%",
+      "orientation": "left-to-right",
+      "compact": "true",
+      "nodes": 12,
+      "overlaps": [],
+      "clippedTasks": [],
+      "taskFont": "11px",
+      "transform": "translate(269.444px, 347.222px) scale(0.694444)",
+      "visibleTaskLines": 0,
+      "visibleStatusChips": 12
+    },
+    {
+      "scenario": "scoped-focus",
+      "viewport": {
+        "width": 1100,
+        "height": 1250
+      },
+      "zoom": "150%",
+      "orientation": "top-down",
+      "compact": "false",
+      "nodes": 5,
+      "overlaps": [],
+      "clippedTasks": [],
+      "taskFont": "11px",
+      "transform": "translate(247px, 364px) scale(1.5)",
+      "wholeOrgVisible": true
+    },
+    {
+      "scenario": "idle-summary",
+      "viewport": {
+        "width": 1100,
+        "height": 1250
+      },
+      "zoom": "100%",
+      "orientation": "top-down",
+      "compact": "false",
+      "nodes": 8,
+      "overlaps": [],
+      "clippedTasks": [],
+      "taskFont": "11px",
+      "transform": "translate(250px, 275px) scale(1)",
+      "summary": "dzdistro4\ndzdistro4 Manager\nManager\nDefault model\nIdle\n4 teammates · all idle\n+"
+    },
+    {
+      "scenario": "expand-summary",
+      "viewport": {
+        "width": 1100,
+        "height": 1250
+      },
+      "zoom": "100%",
+      "orientation": "left-to-right",
+      "compact": "false",
+      "nodes": 12,
+      "overlaps": [],
+      "clippedTasks": [],
+      "taskFont": "11px",
+      "transform": "translate(146px, 225px) scale(1)"
+    },
+    {
+      "scenario": "reduced-motion",
+      "transition": "0s",
+      "nodeTransition": "0s",
+      "animateMotion": 0
+    },
+    {
+      "scenario": "manager-chat",
+      "closed": true
+    },
+    {
+      "scenario": "grid-keyboard",
+      "nextLabel": "QA, QA, Idle. Open chat"
+    },
+    {
+      "scenario": "member-chat",
+      "closed": true
+    },
+    {
+      "scenario": "needs-you",
+      "dimmedNodes": 12,
+      "dimmedEdges": 11
+    },
+    {
+      "scenario": "project-filter",
+      "viewport": {
+        "width": 1100,
+        "height": 1250
+      },
+      "zoom": "100%",
+      "orientation": "top-down",
+      "compact": "false",
+      "nodes": 6,
+      "overlaps": [],
+      "clippedTasks": [],
+      "taskFont": "11px",
+      "transform": "translate(344px, 387px) scale(1)"
+    },
+    {
+      "scenario": "synthetic-event-routing",
+      "pulseCount": 1,
+      "motionPaths": [
+        "M 508 448 L 508 464 L 230 464 L 230 474 L 696 474 L 696 480"
+      ],
+      "feed": "Crew feed\nDispatch\ndzdistro4 Manager → Researcher · assigned · Assignment: Inspect the synthetic researcher task"
+    },
+    {
+      "scenario": "crew-feed-focus",
+      "hover": {
+        "highlightedNodes": 2,
+        "highlightedEdges": 1
+      },
+      "focusedNode": "Researcher, Researcher, Idle. Open chat"
+    },
+    {
+      "scenario": "resize-recompute",
+      "before": {
+        "width": 1100,
+        "height": 1250
+      },
+      "after": {
+        "viewport": {
+          "width": 1600,
+          "height": 756
+        },
+        "zoom": "100%",
+        "orientation": "top-down",
+        "compact": "false",
+        "nodes": 12,
+        "overlaps": [],
+        "clippedTasks": [],
+        "taskFont": "11px",
+        "transform": "translate(116px, 86px) scale(1)"
+      }
+    },
+    {
+      "scenario": "narrow-list",
+      "viewport": {
+        "width": 600,
+        "height": 800
+      },
+      "zoom": "91%",
+      "orientation": "top-down",
+      "compact": "false",
+      "nodes": 12,
+      "overlaps": [],
+      "clippedTasks": [],
+      "taskFont": "11px",
+      "transform": "translate(24px, 35.0263px) scale(0.907895)"
+    }
+  ],
+  "errors": []
+}

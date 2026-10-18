@@ -22,6 +22,7 @@ import {
   type Session,
 } from "../model/session";
 import { createNote, noteTitle } from "../../notes";
+import { isRemoteProjectPath } from "../../projects/model/recents";
 import {
   loadNotesEnabled,
   subscribeNotesEnabled,
@@ -127,6 +128,7 @@ export function AgentTabView({
     <div data-agent-tab className="flex h-full min-h-0 flex-col">
       <div className="relative min-h-0 flex-1">
         <AgentTranscript
+          sessionId={isRemoteProjectPath(session.cwd) ? undefined : session.id}
           blocks={session.blocks}
           busy={session.busy}
           cwd={sessionWorkCwd(session)}

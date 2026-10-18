@@ -6,6 +6,41 @@ import { invoke } from "@tauri-apps/api/core";
 import { newSession } from "../model/session";
 import { AgentTabView } from "./AgentTabView";
 import { AgentTranscript } from "./AgentTranscript";
+import { loadToolDetail } from "../data/sessionStore";
+import { openSubagentOutput, openTranscriptWork } from "./transcriptTestActions";
+
+vi.mock("../data/sessionStore", async original => ({
+  ...(await original<typeof import("../data/sessionStore")>()),
+  loadToolDetail: vi.fn(),
+}));
+
+it("loads a saved worker's nested output using that worker's exact run and step", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  localStorage.clear();
+  vi.mocked(loadToolDetail).mockReset().mockResolvedValue("Saved worker step output");
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  const session = { ...newSession("codex", "/project"), id: "saved-worker", blocks: [
+    { id: "prompt", role: "user" as const, text: "Inspect worker" },
+    { id: "worker-run", role: "tool" as const, text: "Reviewer", tool: { kind: "agent" as const, status: "completed" as const }, agentRun: {
+      name: "Reviewer", steps: [{ id: "saved-step", kind: "tool" as const, text: "Read output", toolKind: "shell" as const, status: "completed" as const, detailOmitted: true }],
+    } },
+    { id: "reply", role: "assistant" as const, text: "Done", durationMs: 1000 },
+  ] };
+  try {
+    act(() => root.render(createElement(AgentTabView, { title: "Worker", session, visible: true })));
+    expect(loadToolDetail).not.toHaveBeenCalled();
+    openTranscriptWork(container);
+    const reader = openSubagentOutput(container);
+    const output = reader.querySelector<HTMLButtonElement>('[aria-label="View full output"]')!;
+    expect(output).not.toBeNull();
+    await act(async () => output.click());
+    expect(loadToolDetail).toHaveBeenCalledWith("saved-worker", "worker-run", "saved-step");
+    expect(document.body.textContent).toContain("Saved worker step output");
+  } finally {
+    act(() => root.unmount()); container.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals();
+  }
+});
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async (_command, args) => args?.note),

@@ -19,6 +19,7 @@ afterEach(() => {
 });
 
 it("batches background-only work while allowing it to progress", () => {
+  expect(BACKGROUND_FLUSH_MS).toBe(100);
   const flush = vi.fn();
   const handle = scheduleHarnessFlush(flush, false);
   expect(handle.kind).toBe("timeout");
@@ -83,7 +84,7 @@ describe("harness event queue", () => {
     ).toHaveLength(10);
     expect(
       apply.mock.calls.filter(([batch]) => batch.has("back1")),
-    ).toHaveLength(1);
+    ).toHaveLength(2);
     for (const [batch] of apply.mock.calls) {
       if (batch.has("front")) expect([...batch.keys()]).toEqual(["front"]);
       else expect([...batch.keys()]).toEqual(["back1", "back2"]);

@@ -713,7 +713,7 @@ export function monosSnapshot(): string {
   try {
     return `${localStorage.getItem(ROSTER_KEY) ?? ""}|${JSON.stringify(
       loadTabGroupLabels(),
-    )}`;
+    )}|${monoIntroDismissed()}`;
   } catch {
     return "";
   }

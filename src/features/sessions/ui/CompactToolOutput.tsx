@@ -26,7 +26,7 @@ export function CompactToolOutput({
   const heading = useId();
   const detail = useToolDetail(block ?? NO_TOOL, open && !command);
   const omitted = !command && !!block?.tool?.detailOmitted;
-  const outputText = command ? output : detail.detail ?? output;
+  const outputText = !command && detail.omitted ? detail.detail ?? output : output;
   // Commands are shown verbatim: presentation filtering must never alter what a user approves.
   const text = command ? output : presentationText(outputText).trim();
   if (!text && !omitted) return null;

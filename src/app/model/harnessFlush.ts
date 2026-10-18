@@ -9,7 +9,7 @@ export type ScheduledFlush = { kind: "raf" | "timeout"; id: number };
  * Just under two 60Hz frames, so frame jitter can't halve the rate.
  */
 export const FOREGROUND_FLUSH_MS = 30;
-export const BACKGROUND_FLUSH_MS = 250;
+export const BACKGROUND_FLUSH_MS = 100;
 
 export function cancelScheduledFlush(handle: ScheduledFlush | null) {
   if (!handle) return;

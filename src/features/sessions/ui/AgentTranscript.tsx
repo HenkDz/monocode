@@ -1346,7 +1346,7 @@ function AgentTranscriptComponent({
             const next = items[index + 1];
             return (
               inlineWork &&
-              item.type === "block" &&
+              item?.type === "block" &&
               item.block.role === "user" &&
               (next
                 ? next.type === "block" && next.block.role === "user"

@@ -93,7 +93,7 @@ it("keeps burst tools folded then readable in order without losing row identity"
 
 });
 
-it("does not replay or play in tool calls when their tab comes back", () => {
+it("keeps folded tool rows stable when hidden output lands and the tab returns", () => {
   const head: Block[] = [
     { id: "user", role: "user", text: "Review the diff" },
     { id: "intro", role: "assistant", text: "Checking the repo first." },
@@ -102,27 +102,20 @@ it("does not replay or play in tool calls when their tab comes back", () => {
   const burst = [...head, tool("second"), tool("third")];
   render(head);
   render(burst);
-  expect(stages()).toEqual(["settled", "entering", "waiting"]);
-
-  // Leaving cuts the entrances short; they must not start over on return.
+  openTranscriptWork(container);
+  const first = container.querySelector('[data-compact-tool-call="first"]');
+  const rows = () => [...container.querySelectorAll<HTMLElement>("[data-compact-tool-call]")];
+  expect(rows().map(row => row.dataset.compactToolCall)).toEqual(["first", "second", "third"]);
   render(burst, true, false);
-  expect(stages()).toEqual(["settled", "settled", "settled"]);
-
-  // Steps that ran while the tab was hidden land just after it returns.
-  render(burst);
+  render([...burst, tool("fourth"), tool("fifth")], true, false);
   render([...burst, tool("fourth"), tool("fifth")]);
-  expect(stages()).toEqual([
-    "settled",
-    "settled",
-    "settled",
-    "settled",
-    "settled",
-  ]);
-
-  // Once caught up, a step you watch arrive still enters.
+  expect(container.querySelector('[data-compact-tool-call="first"]')).toBe(first);
+  expect(rows().map(row => row.dataset.compactToolCall)).toEqual(["first", "second", "third", "fourth", "fifth"]);
   act(() => vi.advanceTimersByTime(1_000));
   render([...burst, tool("fourth"), tool("fifth"), tool("sixth")]);
-  expect(stages().at(-1)).toBe("entering");
+  expect(rows().map(row => row.dataset.compactToolCall)).toEqual(["first", "second", "third", "fourth", "fifth", "sixth"]);
+  expect(rows().some(row => row.hasAttribute("data-waiting") || row.hasAttribute("data-entering"))).toBe(false);
+  expect(container.querySelector('[data-compact-tool-call="first"]')).toBe(first);
 });
 
 const reply =

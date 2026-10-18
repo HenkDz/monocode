@@ -887,6 +887,10 @@ function ProjectGroupSection({
     >
       <div
         className="project-reorder-item group relative flex h-8 items-stretch rounded-md px-2 text-content/75 cursor-default"
+        onPointerDown={(event) => {
+          if ((event.target as Element).closest('[aria-label$="group options"]')) return;
+          groupSortable.onItemPointerDown(group.id, event);
+        }}
         onContextMenu={(event) => {
           event.preventDefault();
           event.currentTarget

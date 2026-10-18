@@ -5486,7 +5486,7 @@ function Workspace({
   useEffect(() => {
     if (reopenedMono.current) return;
     reopenedMono.current = true;
-    if (windowTransfer || !monosEnabled) return;
+    if (windowTransfer || monoViewIdRef.current || !monosEnabled) return;
     const monoId = loadOpenMono();
     if (monoId && findMono(monoId)) void onOpenMono(monoId);
     else if (monoId) saveOpenMono(undefined);
@@ -5512,7 +5512,7 @@ function Workspace({
     if (insetLayout) setMonoSettingsFor(monoId);
     else { setMonoPanelTab("details"); setMonoDetailsOpen(true); }
     void onOpenMono(monoId);
-  }, [onOpenMono]);
+  }, [insetLayout, onOpenMono]);
 
   useEffect(() => {
     const open = (event: Event) => {

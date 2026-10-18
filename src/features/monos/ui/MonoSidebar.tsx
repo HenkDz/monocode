@@ -4,7 +4,7 @@ import { useDragResize } from "../../../shared/hooks/useDragResize";
 import { PanelRightToggle } from "../../../shared/ui/icons";
 
 const MIN_WIDTH = 340;
-const DEFAULT_WIDTH = 400;
+const DEFAULT_WIDTH = MIN_WIDTH;
 let rememberedWidth = DEFAULT_WIDTH;
 let rememberedArtifactWidth = 560;
 

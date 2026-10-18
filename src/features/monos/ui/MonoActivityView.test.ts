@@ -74,7 +74,7 @@ it("shows the meaningful chronological trail with messages and output available 
     Array.from(container.querySelectorAll("[data-mono-activity-block]")).map(
       (el) => el.getAttribute("data-mono-activity-block"),
     ),
-  ).toEqual(["thinking", "intro", "read", "progress", "write", "reply"]);
+  ).toEqual(["user", "thinking", "intro", "read", "progress", "write", "reply"]);
 });
 
 it("updates a live trail and keeps approval controls actionable", () => {

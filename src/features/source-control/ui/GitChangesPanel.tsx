@@ -244,15 +244,12 @@ export function GitChangesPanel({
               <Popover
                 anchor={branchMenuRef}
                 align="end"
-                onDismiss={() => setBranchMenuOpen(false)}
+                onDismiss={(reason) => {
+                  setBranchMenuOpen(false);
+                  if (reason === "escape") branchMenuRef.current?.focus();
+                }}
                 role="menu"
                 aria-label="Branch actions"
-                onKeyDown={(event) => {
-                  if (event.key === "Escape") {
-                    setBranchMenuOpen(false);
-                    branchMenuRef.current?.querySelector("button")?.focus();
-                  }
-                }}
                 className="min-w-36 p-1"
               >
                 <div className="border-b border-content/10 px-3 py-2 text-[11px] break-words text-content/60">

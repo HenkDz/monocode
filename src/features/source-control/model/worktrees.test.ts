@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("../../../platform/tauri/fs", async (original) => ({
   ...(await original<typeof import("../../../platform/tauri/fs")>()),
   notifyGitChanged: vi.fn(),
@@ -21,8 +20,8 @@ import {
 
 const dirs = vi.hoisted(() => new Set<string>());
 vi.mock("@tauri-apps/api/core", () => ({
-  invoke: async (_command: string, args: { path: string }) =>
-    dirs.has(args.path) ? { path: args.path, identity: "dir" } : null,
+  invoke: vi.fn(async (_command: string, args: { path: string }) =>
+    dirs.has(args.path) ? { path: args.path, identity: "dir" } : null),
 }));
 
 const tree: Worktree = {
@@ -59,7 +58,7 @@ describe("worktree naming", () => {
     expect(normalizeWorktreeBranch(expected)).toBe(expected);
   });
   it("normalizes all new-branch callers, but preserves existing Git refs", async () => {
-    vi.mocked(invoke).mockResolvedValue(tree);
+    vi.mocked(invoke).mockResolvedValueOnce(tree);
     await createWorktree("/repo", "Sidebar worktree", "HEAD", false);
     expect(invoke).toHaveBeenLastCalledWith("git_worktree_create", {
       cwd: "/repo",
@@ -67,6 +66,7 @@ describe("worktree naming", () => {
       base: "HEAD",
       existing: false,
     });
+    vi.mocked(invoke).mockResolvedValueOnce(tree);
     await createWorktree("/repo", "Feature/Case", "HEAD", true);
     expect(invoke).toHaveBeenLastCalledWith("git_worktree_create", {
       cwd: "/repo",

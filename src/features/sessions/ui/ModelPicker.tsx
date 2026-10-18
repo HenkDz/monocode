@@ -1362,7 +1362,7 @@ function SelectPill({
         onClick={() => (open ? dismiss(true) : openPicker())}
         className={controlClass(variant, open)}
       >
-        {isEffortSetting(setting) ? (
+        {variant === "text" ? null : isEffortSetting(setting) ? (
           <Gauge className="size-3.5 shrink-0" strokeWidth={1.75} />
         ) : setting.id === "serviceTier" ? (
           <Zap className="size-3.5 shrink-0" strokeWidth={1.75} />

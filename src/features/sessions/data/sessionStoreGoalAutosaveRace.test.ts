@@ -1,3 +1,4 @@
+import { SessionStateStore } from "../model/sessionStateStore";
 import { beforeEach, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { pathKey } from "../../../shared/lib/paths";
@@ -74,7 +75,7 @@ function fixture(originPosition: "old" | "tail" | "absent", card = true) {
   return { session, disk: () => disk, writes, hold: () => { gateNext = true; }, release };
 }
 
-function exactUpdate(sessionsRef: { current: Session[] }, history?: Block[]) {
+function exactUpdate(sessionsRef: { current: Session[] }, history?: Block[], setSessions: SessionStateStore["setState"] = () => {}) {
   const app = readFileSync("src/app/App.tsx", "utf8");
   const start = app.indexOf("    const update = async (change: (session: Session) => Session) => {");
   expect(start).toBeGreaterThan(0);
@@ -84,7 +85,7 @@ function exactUpdate(sessionsRef: { current: Session[] }, history?: Block[]) {
   }).outputText;
   return new Function("sessionsRef", "setSessions", "sessionId", "writeSession",
     "history", "getMonoGoalRecoveryBlocks", "mergeMonoGoalRecoverySession", "monoGoalRecoveryLiveSession", code)(
-    sessionsRef, () => {}, sessionsRef.current[0].id, writeSession,
+    sessionsRef, setSessions, sessionsRef.current[0].id, writeSession,
     history, getMonoGoalRecoveryBlocks, mergeMonoGoalRecoverySession, monoGoalRecoveryLiveSession,
   ) as (change: (session: Session) => Session) => Promise<void>;
 }
@@ -127,28 +128,35 @@ function exactSessionWrite(sessionsRef: { current: Session[] }) {
   ) as (session: Session, change?: (current: Session) => Session) => Promise<unknown>;
 }
 
-function exactDeferredPersist(sessionsRef: { current: Session[] }, original: Session) {
+function exactDeferredPersist(sessionsRef: { current: Session[] }, original: Session, sessionState: SessionStateStore, hidden = false) {
   const app = readFileSync("src/app/App.tsx", "utf8");
-  const start = app.indexOf("  useEffect(() => {\n    const liveIds = new Set(sessions.map");
-  expect(start).toBeGreaterThan(0);
-  const end = app.indexOf("  }, [persistSession, sessions]);", start) + "  }, [persistSession, sessions]);".length;
-  const code = ts.transpileModule(app.slice(start, end), {
+  const source = ts.createSourceFile("App.tsx", app, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  let scheduling: ts.CallExpression | undefined;
+  const visit = (node: ts.Node) => {
+    if (ts.isCallExpression(node) && node.expression.getText(source) === "useEffect" &&
+      node.arguments[0]?.getText(source).includes("const sessions = sessionState.snapshot()")) scheduling = node;
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  expect(scheduling).toBeDefined();
+  const code = ts.transpileModule(scheduling!.getText(source), {
     compilerOptions: { target: ts.ScriptTarget.ES2022 },
   }).outputText;
   let timer!: () => void;
+  let cleanup: (() => void) | undefined;
   const session = sessionsRef.current[0];
   const lastUserId = (entry: Session) => [...entry.blocks].reverse().find(block => block.role === "user")?.id;
   new Function("useEffect", "sessions", "tabsRef", "openSessionIds", "removingSessionIds", "switchingWorktrees",
     "observedSessions", "lastBoundProvider", "lastUserBlockId", "lastPersistedUserBlock", "shouldPersistSession",
-    "persistSession", "pendingPersist", "lastPersisted", "window", code)(
-    (effect: () => void) => effect(), [session], { current: [] }, () => new Set([session.id]),
+    "persistSession", "pendingPersist", "lastPersisted", "window", "sessionState", code)(
+    (effect: () => (() => void)) => { cleanup = effect(); }, [session], { current: [] }, () => new Set(hidden ? [] : [session.id]),
     { current: new Set() }, { current: new Set() }, { current: new Map([[session.id, original]]) },
     { current: new Map() }, lastUserId, { current: new Map([[session.id, lastUserId(original)]]) }, shouldPersistSession,
     exactOrdinaryPersist(sessionsRef, original), { current: new Map() }, { current: new Map([[session.id, persistFingerprint(original)]]) },
-    { setTimeout: (callback: () => void, delay: number) => { expect(delay).toBe(650); timer = callback; }, clearTimeout: () => {} },
+    { setTimeout: (callback: () => void, delay: number) => { expect(delay).toBe(650); timer = callback; }, clearTimeout: () => {} }, sessionState,
   );
   expect(timer).toBeTypeOf("function");
-  return () => timer();
+  return () => { timer(); cleanup?.(); };
 }
 
 it.each([true, false])("preserves card repair against concurrent ordinary save; prior pending card=%s", async card => {
@@ -175,12 +183,13 @@ it.each([true, false])("preserves card repair against concurrent ordinary save; 
 
 it.each(["queue", "new turn", "deferred autosave"])("preserves a saved origin against concurrent %s persistence", async writer => {
   const f = fixture("absent");
-  const ref = { current: [(await getSession(f.session.id))!] };
+  const store = new SessionStateStore([(await getSession(f.session.id))!]);
+  const ref = store.ref;
   const original = ref.current[0];
-  if (writer === "deferred autosave") ref.current = [{ ...original, blocks: original.blocks.map((block, index) =>
-    index === original.blocks.length - 1 ? { ...block, text: "Observed ordinary answer update" } : block) }];
-  const update = exactUpdate(ref);
-  const persistOrdinary = writer === "deferred autosave" ? exactDeferredPersist(ref, original) : exactOrdinaryPersist(ref, original);
+  if (writer === "deferred autosave") store.setState([{ ...original, blocks: original.blocks.map((block, index) =>
+    index === original.blocks.length - 1 ? { ...block, text: "Observed ordinary answer update" } : block) }]);
+  const update = exactUpdate(ref, undefined, store.setState);
+  const persistOrdinary = writer === "deferred autosave" ? exactDeferredPersist(ref, original, store) : exactOrdinaryPersist(ref, original);
   f.hold();
   const writing = update(session => appendMonoGoalOrigin(session, submission, goal.title));
   await vi.waitFor(() => expect(f.writes).toHaveLength(1));
@@ -190,7 +199,7 @@ it.each(["queue", "new turn", "deferred autosave"])("preserves a saved origin ag
     : writer === "queue" ? { ...ref.current[0], queueStatus: "paused" as const,
       queuedMessages: [{ id: "ordinary-queued-message", text: "Ordinary queued chat", attachments: [] }] }
     : ref.current[0];
-  ref.current = [ordinary];
+  store.setState([ordinary]);
   persistOrdinary(ordinary);
   f.release();
   await Promise.all([writing, flushSessionWrites()]);
@@ -353,4 +362,27 @@ it("the App archive callback preserves an acknowledged goal delivered while canc
   }
   expect(ref.current[0]).toMatchObject({ busy: false, turnReady: false });
   expect(ledger.goals("grand")[0].state).toBe("queued");
+});
+
+it.each([false, true])("actual store observer autosave preserves acknowledged goal origin and answer bytes; hidden busy=%s", async hidden => {
+  const f = fixture("absent");
+  const original = (await getSession(f.session.id))!;
+  const store = new SessionStateStore([original]);
+  const latestText = "Observed ordinary answer update [] ;";
+  store.setState(sessions => sessions.map(session => ({ ...session, busy: hidden,
+    blocks: session.blocks.map(block => block.id === "chat-answer-9" ? { ...block, text: latestText } : block) })), true);
+  const deferred = exactDeferredPersist(store.ref, original, store, hidden);
+  f.hold();
+  const savingOrigin = exactUpdate(store.ref, undefined, store.setState)(session => appendMonoGoalOrigin(session, submission, goal.title));
+  await vi.waitFor(() => expect(f.writes).toHaveLength(1));
+  deferred();
+  const savingOrdinary = flushSessionWrites();
+  f.release();
+  await Promise.all([savingOrigin, savingOrdinary]);
+  await flushSessionWrites();
+  expect(f.disk().filter(block => block.id === submission.userMessageId)).toHaveLength(1);
+  expect(f.disk().find(block => block.id === "chat-answer-9")?.text).toBe(latestText);
+  expect(store.session(original.id)?.blocks.filter(block => block.id === submission.userMessageId)).toHaveLength(1);
+  expect(store.session(original.id)?.blocks.find(block => block.id === "chat-answer-9")?.text).toBe(latestText);
+  expect(store.ref.current).toBe(store.snapshot());
 });

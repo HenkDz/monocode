@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isTauri } from "@tauri-apps/api/core";
-import { registerHarness, resetHarnessIdlePark, sendHarnessTurn } from "../../core/registry";
 vi.mock("@tauri-apps/api/core", async original => ({
   ...(await original<typeof import("@tauri-apps/api/core")>()),
   isTauri: vi.fn(() => false),
@@ -45,6 +44,7 @@ vi.mock("../../core/child", () => ({
   writeChild,
 }));
 
+const { registerHarness, resetHarnessIdlePark, sendHarnessTurn } = await import("../../core/registry");
 const {
   bindClaudeSession,
   cancelClaudeTurn,

@@ -735,9 +735,10 @@ export function retargetSessionToProject(
     ...(harness === session.harness
       ? {}
       : { providerSessionId: undefined, providerAccountId: undefined }),
-    // The account was chosen for the old project. The new project reads its
-    // own stored choice, so a stamp carried over would show the wrong account.
-    ...(cwd === session.cwd ? {} : { providerAccountId: undefined }),
+    // Only a blank shell adopts the new project's account; a conversation
+    // retains its existing account binding.
+    ...(cwd === session.cwd || session.blocks.some((block) => block.role === "user")
+      ? {} : { providerAccountId: undefined }),
     ...(resolved.id === session.model && harness === session.harness && cwd === session.cwd
       ? {}
       : { context: dropContextWindow(session.context) }),

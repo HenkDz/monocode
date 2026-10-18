@@ -394,6 +394,7 @@ it("lets a long-running habit finish and post after thirty minutes", async () =>
       "Skull",
       [],
       [],
+      [],
     );
     expect(stored[0].lastOutcome).toBe("posted");
     expect(host.remove).toHaveBeenCalledTimes(1);

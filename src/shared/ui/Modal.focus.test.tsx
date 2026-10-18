@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
-import { act } from "react";
+import { act, useRef, useState } from "react";
+import { Popover } from "./Popover";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
 import { Modal } from "./Modal";
@@ -98,6 +99,14 @@ it("lets the topmost dialog and its popovers own Escape", async () => {
     childClose = vi.fn();
   document.body.append(host);
   const root = createRoot(host);
+  function Child() {
+    const [open, setOpen] = useState(true);
+    const anchor = useRef<HTMLButtonElement>(null);
+    return <Modal title="Child" onClose={childClose}>
+      <button ref={anchor}>Model</button>
+      {open && <Popover anchor={anchor} onDismiss={() => setOpen(false)}><button>Choice</button></Popover>}
+    </Modal>;
+  }
   try {
     await act(async () =>
       root.render(
@@ -105,11 +114,7 @@ it("lets the topmost dialog and its popovers own Escape", async () => {
           <Modal title="Parent" onClose={parentClose}>
             Parent work
           </Modal>
-          <Modal title="Child" onClose={childClose}>
-            <div data-dialog-popover>
-              <button>Model</button>
-            </div>
-          </Modal>
+          <Child />
         </>,
       ),
     );
@@ -127,6 +132,7 @@ it("lets the topmost dialog and its popovers own Escape", async () => {
     );
     expect(parentClose).not.toHaveBeenCalled();
     expect(childClose).not.toHaveBeenCalled();
+    expect(document.querySelector("[data-dialog-popover]")).toBeNull();
     const close = document.querySelectorAll<HTMLButtonElement>(
       '[aria-label="Close"]',
     )[1];

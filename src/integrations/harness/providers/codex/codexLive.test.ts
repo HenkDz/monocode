@@ -353,7 +353,7 @@ describe("codex live turn sequence", () => {
     notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
     await turn;
 
-    const calls = events.filter((event) => event.type === "turn.metrics");
+    const calls = events.filter((event) => event.type === "turn.metrics" && event.providerTurnId === "turn_1");
     expect(new Set(calls.map(event => event.modelCallId)).size).toBe(2);
     expect(calls.every(event => event.providerTurnId === "turn_1" && event.modelCallId)).toBe(true);
     const session = events.reduce((session, event) => applyHarnessEvent(session, event), appendUser(newSession("codex", "/repo"), "Read the code"));

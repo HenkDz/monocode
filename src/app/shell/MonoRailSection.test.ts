@@ -3,6 +3,7 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createMono, monoLook, monoState } from "../../features/monos/model/mono";
+import { loadMonosEnabled } from "../../features/settings/model/settings";
 import { MonoRailSection } from "./MonoRailSection";
 
 let root: Root;
@@ -102,11 +103,24 @@ it("stops meeting the user once they pass on it", () => {
   expect(container.querySelector("[data-mono-add]")).not.toBeNull();
 });
 
+it("offers the upstream intro card when explicitly requested", () => {
+  const onCreate = render({ introCard: true });
+  expect(intro()).not.toBeNull();
+  expect(container.querySelector('[aria-label="New mono"]')).toBeNull();
+  act(() => button("Create mono").click());
+  expect(onCreate).toHaveBeenCalledOnce();
+});
+
+it("turns monos off from the optional intro card", () => {
+  render({ introCard: true });
+  act(() => container.querySelector<HTMLElement>('[role="switch"]')!.click());
+  expect(loadMonosEnabled()).toBe(false);
+});
+
 it("lists monos once there are some, with the plus in the header", () => {
   createMono();
-  render({ introAvailable: true });
+  render();
   expect(intro()).toBeNull();
-  expect(container.querySelector("[data-mono-add]")).toBeNull();
   expect(container.querySelectorAll('[aria-label="New mono"]')).toHaveLength(1);
 });
 

@@ -30,12 +30,15 @@ export function ContextMeter({
   compactDisabled = false,
   rotationScheduled = false,
   rotationDeferredReason,
+  empty = false,
 }: {
   usage?: ContextUsage;
   onCompact?: () => void;
   compactDisabled?: boolean;
   rotationScheduled?: boolean;
   rotationDeferredReason?: string;
+  /** The conversation has no messages yet. */
+  empty?: boolean;
 }) {
   const [hovered, setHovered] = useState(false);
   const [open, setOpen] = useState(false);
@@ -43,7 +46,13 @@ export function ContextMeter({
   const reading =
     usage && Number.isFinite(usage.used) && usage.used >= 0 ? usage : undefined;
   const ratio = contextRatio(reading);
-  if (!reading && !rotationScheduled && !rotationDeferredReason) return null;
+  if (!reading && !rotationScheduled && !rotationDeferredReason) {
+    return empty ? (
+      <span title="No context used yet" className="grid shrink-0">
+        <MeterRing ratio={0} label="No context used yet" />
+      </span>
+    ) : null;
+  }
 
   const { headline, detail } = reading
     ? contextTooltip(reading)
@@ -165,18 +174,21 @@ function MeterRing({ ratio, label }: { ratio: number; label?: string }) {
         strokeWidth={STROKE}
         className="opacity-25"
       />
-      <circle
-        cx={SIZE / 2}
-        cy={SIZE / 2}
-        r={RADIUS}
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={STROKE}
-        strokeLinecap="round"
-        strokeDasharray={CIRCUMFERENCE}
-        strokeDashoffset={CIRCUMFERENCE * (1 - ratio)}
-        transform={`rotate(-90 ${SIZE / 2} ${SIZE / 2})`}
-      />
+      {/* A round cap would leave a dot on an empty ring. */}
+      {ratio > 0 ? (
+        <circle
+          cx={SIZE / 2}
+          cy={SIZE / 2}
+          r={RADIUS}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={STROKE}
+          strokeLinecap="round"
+          strokeDasharray={CIRCUMFERENCE}
+          strokeDashoffset={CIRCUMFERENCE * (1 - ratio)}
+          transform={`rotate(-90 ${SIZE / 2} ${SIZE / 2})`}
+        />
+      ) : null}
     </svg>
   );
 }

@@ -678,6 +678,62 @@ function mapTokenUsage(rec: Record<string, unknown>): MappedCodexNotification {
   };
 }
 
+/** What the current Codex turn has spent, summed request by request. */
+export type CodexTurnUsage = {
+  /** `total.totalTokens` of the last reading, to spot a repeated one. */
+  threadTotal?: number;
+  turn: Record<string, number>;
+};
+
+const CODEX_USAGE_KEYS = [
+  "inputTokens",
+  "cachedInputTokens",
+  "cacheWriteInputTokens",
+  "outputTokens",
+] as const;
+
+/**
+ * `last` in `thread/tokenUsage/updated` covers a single model request, and a
+ * turn with tool calls makes several. Codex also re-sends an unchanged reading
+ * with no new request behind it (after compaction, on a usage limit), so `last`
+ * is only added when the thread's `total` has moved.
+ */
+export function addCodexTurnUsage(
+  spent: CodexTurnUsage,
+  params: unknown,
+): TurnMetrics | null {
+  const usage = asRecord(asRecord(params)?.tokenUsage);
+  const last = asRecord(usage?.last);
+  if (!last) return null;
+  const threadTotal = numberField(asRecord(usage?.total), "totalTokens");
+  if (threadTotal > 0 && threadTotal === spent.threadTotal) return null;
+  spent.threadTotal = threadTotal;
+  for (const key of CODEX_USAGE_KEYS) {
+    if (key in last) {
+      spent.turn[key] = (spent.turn[key] ?? 0) + numberField(last, key);
+    }
+  }
+  const inputTokens = numberField(spent.turn, "inputTokens");
+  const cacheReadTokens = numberField(spent.turn, "cachedInputTokens");
+  const cacheWriteTokens = numberField(spent.turn, "cacheWriteInputTokens");
+  const outputTokens = numberField(spent.turn, "outputTokens");
+  const cacheReported =
+    "cachedInputTokens" in spent.turn || "cacheWriteInputTokens" in spent.turn;
+  const metrics: TurnMetrics = {
+    ...(inputTokens ? { inputTokens } : {}),
+    ...(outputTokens ? { outputTokens } : {}),
+    ...(cacheReadTokens ? { cacheReadTokens } : {}),
+    ...(cacheWriteTokens ? { cacheWriteTokens } : {}),
+    ...(cacheReported && inputTokens > 0
+      ? {
+          cacheHitPercent:
+            (cacheReadTokens / (inputTokens + cacheWriteTokens)) * 100,
+        }
+      : {}),
+  };
+  return Object.keys(metrics).length > 0 ? metrics : null;
+}
+
 function mapTurnTerminal(
   method: string,
   rec: Record<string, unknown>,

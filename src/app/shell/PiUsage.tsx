@@ -12,11 +12,17 @@ import {
   RATE_LIMIT_MIN_REFETCH_MS,
   RATE_LIMIT_POLL_MS,
 } from "../../features/providers/model/rateLimits";
-import { UsageProviderChip } from "./UsageProviderChip";
+import { UsageProviderChip, type UsageChipVariant } from "./UsageProviderChip";
 
-export function PiUsage({ model, now, onOpenUsage }: {
+export function PiUsage({
+  model,
+  now,
+  variant = "footer",
+  onOpenUsage,
+}: {
   model?: string;
   now: number;
+  variant?: UsageChipVariant;
   onOpenUsage?: () => void;
 }) {
   const provider = piUsageProvider(model);
@@ -35,16 +41,26 @@ export function PiUsage({ model, now, onOpenUsage }: {
       </span>
     );
   }
-  return <PiProviderUsage key={provider} provider={provider} now={now} onOpenUsage={onOpenUsage} />;
+  return (
+    <PiProviderUsage
+      key={provider}
+      provider={provider}
+      now={now}
+      variant={variant}
+      onOpenUsage={onOpenUsage}
+    />
+  );
 }
 
 function PiProviderUsage({
   provider,
   now,
+  variant,
   onOpenUsage,
 }: {
   provider: PiUsageProvider;
   now: number;
+  variant: UsageChipVariant;
   onOpenUsage?: () => void;
 }) {
   const [limits, setLimits] = useState(() =>
@@ -97,6 +113,7 @@ function PiProviderUsage({
         limits={limits}
         onOpenUsage={onOpenUsage}
         now={now}
+        variant={variant}
         presentation={{
           sourceLabel: "Pi's saved OAuth account",
           harness: "pi",
@@ -110,7 +127,7 @@ function PiProviderUsage({
         title="Refresh Pi usage"
         disabled={fetching}
         onClick={() => refreshRef.current(true)}
-        className="grid size-6 shrink-0 place-items-center rounded text-content/40 hover:bg-content/10 hover:text-content disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-accent"
+        className={`grid size-6 shrink-0 place-items-center ${variant === "inset" ? "rounded-full" : "rounded-md"} text-content/40 hover:bg-content/10 hover:text-content disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-accent`}
       >
         <RefreshCw
           className={`size-2.5 ${fetching ? "motion-safe:animate-spin" : ""}`}

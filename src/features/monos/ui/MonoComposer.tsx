@@ -87,6 +87,8 @@ type Props = {
    */
   controls?: ReactNode;
   actionControls?: ReactNode;
+  /** Sits beside attach and emoji, on the left under the input. */
+  tools?: ReactNode;
 };
 
 /**
@@ -111,6 +113,7 @@ export function MonoComposer({
   onFocus,
   controls,
   actionControls,
+  tools,
 }: Props) {
   const [text, setText] = useState(() => getComposerDraft(sessionId) ?? "");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -561,10 +564,10 @@ export function MonoComposer({
         )}
       </div>
       {inline ? null : (
-        <div
-          data-mono-composer-toolbar
-          className="flex min-w-0 items-center gap-0.5 px-1 pt-1"
-        >
+        // The right inset matches the box's border and padding, so the last
+        // control lines up under send. A container, so the tools and controls
+        // passed in can compact themselves when the chat is narrow.
+        <div data-mono-composer-toolbar className="@container flex min-w-0 items-center gap-0.5 pt-1 pl-1 pr-1.5">
           {attachButton(TOOL_BUTTON, true)}
           <button
             ref={emojiButton}
@@ -590,6 +593,7 @@ export function MonoComposer({
               />
             </Suspense>
           ) : null}
+          {tools}
           {permissions ? (
             <div className="flex min-w-0 items-center [&>div]:min-w-0 [&_button]:max-w-full">
               <AccessPicker

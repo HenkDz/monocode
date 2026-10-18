@@ -49,7 +49,6 @@ import {
   Zap,
   type IconComponent,
 } from "../../shared/ui/icons";
-import { createPortal } from "react-dom";
 import {
   Fragment,
   memo,

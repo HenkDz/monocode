@@ -206,7 +206,6 @@ const INITIAL_TURNS = 20;
  */
 const FIRST_PAINT_TURNS = 3;
 const TURN_PAGE_SIZE = 20;
-const LOADING_OUTPUT = "Loading output…";
 /**
  * How long the reader stays back at the end before the history they paged in
  * above unmounts. Each turn retains its DOM, fibers and markdown output.

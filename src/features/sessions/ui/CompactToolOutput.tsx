@@ -5,7 +5,7 @@ import { presentationText } from "../model/transcriptPresentation";
 import type { Block } from "../model/session";
 import { useToolDetail } from "./useToolDetail";
 
-const NO_TOOL: Block = { id: "", role: "tool" };
+const NO_TOOL: Block = { id: "", role: "tool", text: "" };
 
 export function CompactToolOutput({
   output,

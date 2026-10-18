@@ -585,6 +585,26 @@ export function saveOpenMono(monoId: string | undefined): void {
   }
 }
 
+const INTRO_DISMISSED_KEY = "monocode:mono-intro-dismissed";
+
+/** Whether the user passed on the intro that meets them before any Mono. */
+export function monoIntroDismissed(): boolean {
+  try {
+    return localStorage.getItem(INTRO_DISMISSED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function dismissMonoIntro(): void {
+  try {
+    localStorage.setItem(INTRO_DISMISSED_KEY, "1");
+  } catch {
+    // It shows again next launch; harmless.
+  }
+  window.dispatchEvent(new CustomEvent(MONOS_CHANGED));
+}
+
 function uniqueProjects(paths: readonly string[]): string[] {
   const seen = new Set<string>();
   return paths.filter((path) => {

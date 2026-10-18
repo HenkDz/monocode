@@ -1332,6 +1332,12 @@ function Workspace({
   const [activeTabId, setActiveTabIdState] = useState(
     () => windowTransfer?.activeTabId ?? resumed?.activeTabId ?? seed.tab.id,
   );
+  const insetLayout = useSyncExternalStore(
+    subscribeInsetLayout,
+    loadInsetLayout,
+    () => INSET_LAYOUT_DEFAULT,
+  );
+
   // A Mono opens with its overview beside the chat until it is hidden.
   const [monoOverviewOpen, setMonoOverviewOpen] = useState(true);
   const [monoOverviewTab, setMonoOverviewTab] =
@@ -1383,7 +1389,7 @@ function Workspace({
   }, []);
   // What the overview's Changes tab was last asked to show.
   const [monoChangesRequest, setMonoChangesRequest] =
-    useState<MonoChangesRequest>({});
+    useState<MonoChangesRequest>({ tab: "changes" });
   useEffect(() => {
     const listening = listen<string>(
       ARTIFACT_DELETED_EVENT,
@@ -1572,11 +1578,6 @@ function Workspace({
     useState<HTMLDivElement | null>(null);
   const [collapsedProjectRailMode, setCollapsedProjectRailMode] =
     useState<CollapsedProjectRailMode>(loadCollapsedProjectRailMode);
-  const insetLayout = useSyncExternalStore(
-    subscribeInsetLayout,
-    loadInsetLayout,
-    () => INSET_LAYOUT_DEFAULT,
-  );
   const [insetRailHost, setInsetRailHost] = useState<HTMLDivElement | null>(
     null,
   );
@@ -3259,9 +3260,9 @@ function Workspace({
           current.modelSettings,
         ),
         providerAccountId: accountId,
-        runtimeModeSource: active.runtimeModeSource,
-        windowsSandbox: active.windowsSandbox,
-        ...(active.effortSource || monoForSession(active.id)?.role ? { modelSettings: { ...active.modelSettings }, effortSource: active.effortSource } : {}),
+        runtimeModeSource: current.runtimeModeSource,
+        windowsSandbox: current.windowsSandbox,
+        ...(current.effortSource || monoForSession(current.id)?.role ? { modelSettings: { ...current.modelSettings }, effortSource: current.effortSource } : {}),
       };
       const tab = newTab(session.id);
       updateSessionState(sessionsRef, setSessions, (sessions) => [
@@ -4849,16 +4850,20 @@ function Workspace({
 
   // A Mono view covers the workspace, so its session changes open on the
   // overview's Changes tab instead of in a project tab hidden behind it.
-  const openMonoChanges = useCallback((request: MonoChangesRequest) => {
+  const openMonoChanges = useCallback((session: { sessionId: string; cwd: string }, request: MonoChangesRequest) => {
+    if (!insetLayout || monoForSession(session.sessionId)?.role) {
+      monoChangesOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      setMonoDetailsOpen(false); setMonoActivity(null); setMonoSessions(null); setMonoArtifact(null);
+      setMonoChanges({ ...session, request }); return;
+    }
     setMonoShownSession(null);
     setMonoOverviewDocument(null);
     setMonoChangesRequest(request);
     setMonoOverviewTab("changes");
     setMonoOverviewOpen(true);
-  }, []);
+  }, [insetLayout]);
   const onOpenMonoDiff = useCallback(
     (path?: string, session?: { sessionId: string; cwd: string }) => {
-      if (session && insetLayout && !monoForSession(session.sessionId)?.role) { openMonoChanges({ path }); return; }
       if (!session) {
         onOpenDiff(path);
         return;
@@ -14698,9 +14703,6 @@ function Workspace({
         // works on; it keeps its place for when the project comes back.
         if (!mono || !monoWorksOn(mono, sidebarCwd)) return [];
         const look = monoLook(mono);
-        const session = mono.sessionId
-          ? sessions.find((entry) => entry.id === mono.sessionId)
-          : undefined;
         return [
           {
             id: monoTabId(monoId),
@@ -16524,7 +16526,6 @@ function Workspace({
       <MonoActivityPanel
         key={`${monoViewMono.id}:${selectedMonoActivity.turnId}`}
         agent={monoLook(monoViewMono)}
-        open={!!monoActivity}
         onClose={() => setMonoActivity(null)}
         blocks={selectedMonoActivity.blocks}
         live={selectedMonoActivity.live}
@@ -17594,44 +17595,62 @@ function Workspace({
                                     }
                                   >
                                     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
-                                    <TeamMapHeaderAction monoId={monoForSession(session.id)?.id} onOpen={onOpenTeamMap} />
-                                    <SessionPane
-                                      {...sessionPaneProps}
-                                      session={session}
-                                      monoGoalRouting={goalRoutingForMono(monoForSession(session.id)?.id ?? "")}
-                                      visible={visible}
-                                      focused={
-                                        visible &&
-                                        !projectTerminalFocused &&
-                                        !monoShownSessionActive
-                                      }
-                                      inSplit={false}
-                                      addToChatTarget={visible}
-                                      composerFocused={
-                                        visible &&
-                                        composerFocused &&
-                                        !projectTerminalFocused &&
-                                        !monoShownSessionActive
-                                      }
-                                      composerFocusToken={composerFocusToken}
-                                      onShowMonoActivity={onShowMonoActivity}
-                                      monoState={monoRail.states.get(
-                                        monoForSession(session.id)?.id ?? "",
-                                      )}
-                                      onOpenArtifact={onOpenMonoArtifact}
-                                      onOpenDiff={onOpenMonoDiff}
-                                      onCommitChanges={onCommitMonoChanges}
-                                      monoActivityTurnId={
-                                        monoSidebarOpen && (!monoViewMono?.role || monoPanelTab === "activity") ? selectedMonoActivity?.turnId : undefined
-                                      }
-                                      onOpenMonoSession={onOpenMonoSession}
-                                      monoLaunchedSessions={
-                                        visible
-                                          ? monoLaunchedSessions
-                                          : undefined
-                                      }
-                                      openMonoSessionId={shownMonoSessionId}
-                                    />
+<PaneTree
+                                        {...sessionPaneProps}
+                                        visible={
+                                          tab.id === activeTabId &&
+                                          !inboxViewOpen &&
+                                          !monoCovers
+                                        }
+                                        layout={tab.layout}
+                                        sessions={sessions}
+                                        editorPanes={[
+                                          ...tab.editorPanes,
+                                          ...(tab.terminalPanes ?? []),
+                                        ]}
+                                        dirtyFileIds={dirtyFiles}
+                                        fileErrorCounts={fileErrorCounts}
+                                        focusedId={
+                                          tab.id === activeTabId &&
+                                          !monoViewId &&
+                                          !inboxViewOpen &&
+                                          !tab.diffFocused &&
+                                          !projectTerminalFocused
+                                            ? tab.focusedId
+                                            : ""
+                                        }
+                                        addToChatSessionId={
+                                          tab.id === activeTabId
+                                            ? active?.id
+                                            : undefined
+                                        }
+                                        composerFocused={
+                                          composerFocused &&
+                                          !projectTerminalFocused &&
+                                          !monoViewId
+                                        }
+                                        composerFocusToken={composerFocusToken}
+                                        onSelectFile={onSelectFileSurface}
+                                        onCloseFile={onCloseFile}
+                                        onCloseOtherFiles={onCloseOtherFiles}
+                                        onPinFile={onPinFile}
+                                        onReorderFiles={onReorderFiles}
+                                        onFileDirtyChange={onFileDirtyChange}
+                                        onFileErrorCountChange={
+                                          onFileErrorCountChange
+                                        }
+                                        transcriptPool={transcriptPool}
+                                        onRatio={(splitId, index, ratio) =>
+                                          onRatio(tab.id, splitId, index, ratio)
+                                        }
+                                        editorNavigation={editorNavigation}
+                                        onUpdatePlan={onUpdatePlan}
+                                        onMovePane={onMovePane}
+                                        onDetachPane={onDetachPane}
+                                        onTerminalMetaChange={
+                                          onTerminalMetaChange
+                                        }
+                                      />
                                     </div>
                                   </div>
                                 ))}
@@ -17669,7 +17688,8 @@ function Workspace({
                                             className="absolute right-2.5 top-0 z-10 h-10"
                                           />
                                         ) : null}
-                                        <SessionPane
+                                        <TeamMapHeaderAction monoId={monoForSession(session.id)?.id} onOpen={onOpenTeamMap} />
+                                         <SessionPane
                                           {...sessionPaneProps}
                                           session={session}
                                           monoGoalRouting={goalRoutingForMono(monoForSession(session.id)?.id ?? "")}

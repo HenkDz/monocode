@@ -6,6 +6,7 @@ import { PanelRightToggle } from "../../../shared/ui/icons";
 const MIN_WIDTH = 340;
 const DEFAULT_WIDTH = 400;
 let rememberedWidth = DEFAULT_WIDTH;
+let rememberedArtifactWidth = 560;
 
 /** The shared frame for a Mono's details and turn sidebars. */
 export function MonoSidebar({

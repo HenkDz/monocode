@@ -308,6 +308,46 @@ export function useSessionChangeTotals(
   return settled.current.totals;
 }
 
+export function SessionChangesButton({
+  sessionId,
+  cwd,
+  enabled = true,
+  busy = false,
+  editedPaths,
+  onOpenDiff,
+}: Pick<
+  Props,
+  "sessionId" | "cwd" | "enabled" | "busy" | "editedPaths" | "onOpenDiff"
+>) {
+  const { files } = useSessionReviewFiles(
+    sessionId,
+    cwd,
+    enabled,
+    busy,
+    editedPaths,
+  );
+  if (busy || files.length === 0) return null;
+  const totals = sumChanges(files);
+  const label = `Changed ${files.length} ${files.length === 1 ? "file" : "files"}`;
+  return (
+    <button
+      type="button"
+      title={`${label}. Review changes`}
+      aria-label={`${label}, ${totals.additions} additions, ${totals.deletions} deletions. Review changes`}
+      onClick={() => onOpenDiff(undefined, { sessionId, cwd })}
+      className="flex items-center gap-1 rounded-md p-1 font-sans text-[11px] font-semibold leading-none tabular-nums outline-none hover:bg-content/8 focus-visible:ring-1 focus-visible:ring-accent"
+      data-session-changes
+    >
+      <span className="text-diff-add-fg">
+        +{formatInteger(totals.additions)}
+      </span>
+      <span className="text-diff-del-fg">
+        -{formatInteger(totals.deletions)}
+      </span>
+    </button>
+  );
+}
+
 function sumChanges(files: CheckpointFile[]) {
   return files.reduce(
     (sum, file) => ({

@@ -1,4 +1,3 @@
-import { hasReadableText } from "../../../../features/sessions/model/transcriptActivity";
 import type { HarnessEvent } from "../../core/types";
 import {
   asRecord,
@@ -114,11 +113,8 @@ export function piSubagentEvents(
       records(message.content).forEach((part, partIndex) => {
         const stepId = `${rowId}:message:${messageIndex}:${partIndex}`;
         if (part.type === "text" || part.type === "thinking") {
-          const text = stringField(
-            part,
-            part.type === "text" ? "text" : "thinking",
-          );
-          if (text && (part.type === "thinking" || hasReadableText(text)))
+          const text = part[part.type === "text" ? "text" : "thinking"];
+          if (typeof text === "string" && text)
             emit({
               stepId,
               kind: part.type === "text" ? "message" : "reasoning",

@@ -72,7 +72,7 @@ describe("Pi subagent snapshots", () => {
     ]);
   });
 
-  it("leaves out punctuation-only prose between a subagent's tool calls", () => {
+  it("retains literal punctuation prose between a subagent's tool calls", () => {
     const result = {
       details: {
         results: [
@@ -118,7 +118,9 @@ describe("Pi subagent snapshots", () => {
     expect(
       session.blocks[0].agentRun?.steps.map((step) => [step.kind, step.text]),
     ).toEqual([
+      ["message", "."],
       ["tool", "Read README.md"],
+      ["message", " … "],
       ["tool", "Read index.ts"],
       ["message", "Both files read."],
     ]);

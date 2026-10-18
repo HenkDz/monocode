@@ -2700,7 +2700,7 @@ fn restore_agent_edges(home: &Path, thread_id: &str) -> Result<(), String> {
     let edges: Vec<AgentEdge> = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
     let path = state_db(home)?.ok_or("Codex has not initialized the private Mono index")?;
     apply_agent_edges(&path, edges)?;
-    std::fs::remove_file(snapshot).map_err(|e| e.to_string())?;
+    record.ok_or("Agent state snapshot disappeared before restoration")?.cleanup(&snapshot)?;
     Ok(())
 }
 
@@ -2717,7 +2717,6 @@ pub(crate) fn apply_agent_edges(path: &Path, edges: Vec<AgentEdge>) -> Result<()
         tx.execute("INSERT INTO thread_spawn_edges(parent_thread_id, child_thread_id, status) VALUES (?1, ?2, ?3) ON CONFLICT(child_thread_id) DO UPDATE SET status=excluded.status WHERE parent_thread_id=excluded.parent_thread_id", rusqlite::params![edge.parent, edge.child, edge.status]).map_err(|e| e.to_string())?;
     }
     tx.commit().map_err(|e| storage_io::context("commit private agent edge restore", &path, e.to_string()))?;
-    record.ok_or("Agent state snapshot disappeared before restoration")?.cleanup(&snapshot)?;
     Ok(())
 }
 
@@ -4608,6 +4607,30 @@ mod tests {
             &auth("one", "2026-10-08T12:00:00Z"),
             &None
         ));
+    }
+
+    #[test]
+    fn committed_agent_edges_do_not_authorize_deleting_a_replaced_snapshot() {
+        let fixture = Fixture::new();
+        prepare_files(&fixture.source(), &fixture.home()).unwrap();
+        let database = fixture.home().join("state_5.sqlite");
+        let db = rusqlite::Connection::open(&database).unwrap();
+        db.execute_batch("CREATE TABLE thread_spawn_edges(parent_thread_id TEXT NOT NULL, child_thread_id TEXT PRIMARY KEY, status TEXT NOT NULL);").unwrap();
+        let snapshot = edge_snapshot_path(&fixture.home(), "root");
+        std::fs::create_dir_all(snapshot.parent().unwrap()).unwrap();
+        let original = serde_json::to_vec(&vec![AgentEdge { parent: "root".into(), child: "child".into(), status: "closed".into() }]).unwrap();
+        std::fs::write(&snapshot, &original).unwrap();
+        let record = transactions::RecordedEntry::new(&snapshot).unwrap();
+        let edges = serde_json::from_slice(&std::fs::read(&snapshot).unwrap()).unwrap();
+        apply_agent_edges(&database, edges).unwrap();
+        let retained = snapshot.with_extension("retained");
+        std::fs::rename(&snapshot, &retained).unwrap();
+        std::fs::write(&snapshot, b"[]").unwrap();
+        assert!(record.cleanup(&snapshot).is_err());
+        assert_eq!(std::fs::read(&snapshot).unwrap(), b"[]");
+        assert_eq!(std::fs::read(&retained).unwrap(), original);
+        let status: String = db.query_row("SELECT status FROM thread_spawn_edges WHERE child_thread_id='child'", [], |row| row.get(0)).unwrap();
+        assert_eq!(status, "closed");
     }
 
     #[test]

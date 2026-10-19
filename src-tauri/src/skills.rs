@@ -20,6 +20,8 @@ pub struct ProjectSkillFile {
 #[serde(rename_all = "camelCase")]
 pub struct ProjectSkillInspection {
     name: String,
+    declared_name: String,
+    description: String,
     project: String,
     project_identity: String,
     source: String,
@@ -101,6 +103,14 @@ mod project_install {
         Ok(file)
     }
 
+    fn readonly_directory(path: &Path) -> Result<File, String> {
+        let file = OpenOptions::new().read(true).share_mode(FILE_SHARE_READ)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS).open(path).map_err(|e| e.to_string())?;
+        let metadata = file.metadata().map_err(|e| e.to_string())?;
+        if !metadata.is_dir() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 { return Err("Skill directory changed or is linked".into()); }
+        Ok(file)
+    }
+
     fn pin_path(path: &Path, pins: &mut Vec<File>) -> Result<PathBuf, String> {
         if !path.is_absolute() { return Err("Use an absolute local project or source directory".into()); }
         let mut current = PathBuf::new();
@@ -114,6 +124,7 @@ mod project_install {
             }
             if current.is_absolute() && !matches!(part, Component::Prefix(_)) { pins.push(pin(&current, true)?); }
         }
+        pins.push(readonly_directory(&current)?);
         std::fs::canonicalize(&current).map_err(|e| e.to_string())
     }
 
@@ -134,7 +145,10 @@ mod project_install {
             let child = relative.join(name);
             let metadata = std::fs::symlink_metadata(entry.path()).map_err(|e| e.to_string())?;
             let directory = metadata.is_dir();
-            let mut file = pin(&entry.path(), directory)?;
+            if !directory && crate::mcp::project_secret_filename(&child.to_string_lossy().replace('\\', "/")) {
+                return Err(format!("Skill package contains a protected secret filename: {}", child.display()));
+            }
+            let mut file = if directory { readonly_directory(&entry.path())? } else { pin(&entry.path(), false)? };
             if directory {
                 pins.push(file);
                 read_package(root, &child, depth + 1, files, total, pins)?;
@@ -163,11 +177,17 @@ mod project_install {
         files.sort_by(|a, b| a.0.cmp(&b.0));
         let skill = files.iter().find(|(path, _)| path == "SKILL.md").ok_or("A local skill requires SKILL.md")?;
         let text = std::str::from_utf8(&skill.1).map_err(|_| "SKILL.md must be UTF-8")?;
-        let (parsed_name, description) = parse_frontmatter(text, "");
+        let prefix = utf8_prefix(skill.1[..skill.1.len().min(MAX_FRONTMATTER_BYTES)].to_vec()).ok_or("SKILL.md frontmatter must be UTF-8")?;
+        if !text.trim_start_matches('\u{feff}').starts_with("---\n") && !text.trim_start_matches('\u{feff}').starts_with("---\r\n") ||
+            !prefix.lines().skip(1).any(|line| line == "---") {
+            return Err("Skill frontmatter must close within 16 KiB".into());
+        }
+        let (parsed_name, description) = parse_frontmatter(&prefix, "");
         if parsed_name.is_empty() || description.is_empty() { return Err("SKILL.md requires a valid name and description".into()); }
+        if !parsed_name.trim().eq_ignore_ascii_case(name) { return Err("The declared skill name must match the approved install name".into()); }
         let mut hash = Sha256::new();
         for (path, bytes) in &files { hash.update((path.len() as u64).to_le_bytes()); hash.update(path.as_bytes()); hash.update((bytes.len() as u64).to_le_bytes()); hash.update(bytes); }
-        let inspection = ProjectSkillInspection { name: name.into(), project: crate::fs::path_to_js(&project), project_identity,
+        let inspection = ProjectSkillInspection { name: name.into(), declared_name: parsed_name, description, project: crate::fs::path_to_js(&project), project_identity,
             source: crate::fs::path_to_js(&source), fingerprint: format!("{:x}", hash.finalize()),
             files: files.iter().map(|(path, bytes)| ProjectSkillFile { path: path.clone(), bytes: bytes.len() as u64 }).collect(), total_bytes: total };
         Ok(Snapshot { inspection, source_identity, files, _pins: pins })
@@ -180,7 +200,7 @@ mod project_install {
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => (),
             Err(e) => return Err(e.to_string()),
         }
-        pins.push(pin(&path, true)?);
+        pins.push(readonly_directory(&path)?);
         Ok(path)
     }
 
@@ -191,6 +211,23 @@ mod project_install {
             return Err("Skill stage must remain an ordinary directory".into());
         }
         Ok(file)
+    }
+
+    fn stage_matches(stage: &Path, expected: &[(String, Vec<u8>)]) -> Result<(), String> {
+        let mut files = Vec::new(); let mut bytes = 0; let mut pins = Vec::new();
+        read_package(stage, Path::new(""), 0, &mut files, &mut bytes, &mut pins)?;
+        files.sort_by(|a, b| a.0.cmp(&b.0));
+        if files != expected { return Err("Skill stage differs from the approved file set or bytes; preserved for inspection".into()); }
+        Ok(())
+    }
+
+    fn handle_path(file: &File) -> Result<PathBuf, String> {
+        use std::os::windows::{ffi::OsStringExt, io::AsRawHandle};
+        use windows_sys::Win32::Storage::FileSystem::GetFinalPathNameByHandleW;
+        let mut path = vec![0u16; 32_768];
+        let length = unsafe { GetFinalPathNameByHandleW(file.as_raw_handle() as _, path.as_mut_ptr(), path.len() as u32, 0) } as usize;
+        if length == 0 || length >= path.len() { return Err("Cannot resolve the pinned skill stage path".into()); }
+        Ok(PathBuf::from(std::ffi::OsString::from_wide(&path[..length])))
     }
 
     pub(super) fn install(project: &Path, source: &Path, name: &str, expected_identity: &str, expected_fingerprint: &str) -> Result<ProjectSkillInspection, String> {
@@ -206,7 +243,6 @@ mod project_install {
         let stage = skills.join(format!(".{name}.monocode-stage-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&stage).map_err(|e| e.to_string())?;
         let stage_pin = claim_stage(&stage)?;
-        let stage_identity = file_identity(&stage_pin)?;
         let result = (|| {
             for (relative, bytes) in &snapshot.files {
                 let dest = stage.join(relative);
@@ -219,7 +255,12 @@ mod project_install {
                 file.write_all(bytes).map_err(|e| e.to_string())?;
                 file.sync_all().map_err(|e| e.to_string())?;
             }
-            if file_identity(&stage_pin)? != stage_identity { return Err("Skill stage identity changed".into()); }
+            for pinned in &snapshot._pins {
+                if pinned.metadata().map_err(|e| e.to_string())?.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 { return Err("A pinned skill path became linked".into()); }
+            }
+            let pinned_stage = handle_path(&stage_pin)?;
+            if pinned_stage.parent() != Some(std::fs::canonicalize(&skills).map_err(|e| e.to_string())?.as_path()) { return Err("Skill stage left the pinned destination".into()); }
+            stage_matches(&pinned_stage, &snapshot.files)?;
             rename_handle(&stage_pin, &target, false)?;
             Ok(snapshot.inspection.clone())
         })();
@@ -256,6 +297,24 @@ mod project_install {
     #[cfg(test)]
     mod stage_tests {
         use super::*;
+
+        #[test]
+        fn skill_stage_validation_refuses_extra_files_or_changed_bytes() {
+            let root = std::env::temp_dir().join(format!("monocode-skill-stage-content-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir(&root).unwrap();
+            std::fs::write(root.join("SKILL.md"), b"synthetic").unwrap();
+            let stage = claim_stage(&root).unwrap();
+            assert_eq!(handle_path(&stage).unwrap(), std::fs::canonicalize(&root).unwrap());
+            let expected = vec![("SKILL.md".to_string(), b"synthetic".to_vec())];
+            stage_matches(&root, &expected).unwrap();
+            std::fs::write(root.join("extra.txt"), b"unapproved").unwrap();
+            assert!(stage_matches(&root, &expected).is_err());
+            std::fs::remove_file(root.join("extra.txt")).unwrap();
+            std::fs::write(root.join("SKILL.md"), b"changed").unwrap();
+            assert!(stage_matches(&root, &expected).is_err());
+            drop(stage);
+            std::fs::remove_dir_all(root).unwrap();
+        }
 
         #[test]
         fn skill_stage_claim_refuses_reparse_or_file_substitution() {
@@ -918,6 +977,8 @@ mod tests {
         local_package(&source.0);
         let inspected = inspect_project_skill(project.0.to_string_lossy().into(), source.0.to_string_lossy().into(), "fixture".into()).unwrap();
         assert_eq!(inspected.files.len(), 2);
+        assert_eq!(inspected.declared_name, "fixture");
+        assert_eq!(inspected.description, "Synthetic fixture");
         let installed = install_project_skill(project.0.to_string_lossy().into(), source.0.to_string_lossy().into(), "fixture".into(), inspected.project_identity.clone(), inspected.fingerprint.clone()).unwrap();
         assert_eq!(installed, inspected);
         let target = project.0.join(".agents/skills/fixture");
@@ -929,6 +990,33 @@ mod tests {
         assert_eq!(std::fs::read(Path::new(&archived).join("SKILL.md")).unwrap(), std::fs::read(source.0.join("SKILL.md")).unwrap());
         assert_eq!(std::fs::read(Path::new(&archived).join("scripts/check.ps1")).unwrap(), b"throw 'must never execute'\r\n");
         assert!(source.0.join("SKILL.md").is_file());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn project_skill_inspection_refuses_mismatched_frontmatter_name() {
+        let project = tmp("declared-name-project"); let source = tmp("declared-name-source"); local_package(&source.0);
+        std::fs::write(source.0.join("SKILL.md"), "---\nname: commit\ndescription: Synthetic unapproved name\n---\n").unwrap();
+        let error = inspect_project_skill(project.0.to_string_lossy().into(), source.0.to_string_lossy().into(), "fixture".into()).expect_err("An unapproved frontmatter name must be refused");
+        assert!(error.contains("declared skill name"), "{error}");
+        assert!(!project.0.join(".agents").exists());
+        let incomplete = format!("---\nname: commit\ndescription: Synthetic incomplete header\n{}\nname: fixture\n", "x".repeat(MAX_FRONTMATTER_BYTES));
+        std::fs::write(source.0.join("SKILL.md"), incomplete).unwrap();
+        assert!(inspect_project_skill(project.0.to_string_lossy().into(), source.0.to_string_lossy().into(), "fixture".into()).unwrap_err().contains("16 KiB"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn project_skill_inspection_refuses_secret_named_files_without_copying() {
+        let project = tmp("secret-file-project"); let source = tmp("secret-file-source"); local_package(&source.0);
+        for name in [".npmrc", "id_rsa", "secret.pem", "service-credentials.json", "id_ecdsa", "key.ppk", "state.tfstate", ".env.example"] {
+            std::fs::write(source.0.join(name), b"synthetic secret fixture").unwrap();
+            let error = inspect_project_skill(project.0.to_string_lossy().into(), source.0.to_string_lossy().into(), "fixture".into()).unwrap_err();
+            assert!(error.contains("protected secret filename"), "{name}: {error}");
+            assert!(!project.0.join(".agents").exists());
+            assert_eq!(std::fs::read(source.0.join(name)).unwrap(), b"synthetic secret fixture");
+            std::fs::remove_file(source.0.join(name)).unwrap();
+        }
     }
 
     #[cfg(windows)]

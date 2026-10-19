@@ -4,7 +4,7 @@ import { invalidateProjectFiles } from "../../files/model/fileIndex";
 import { validateLocalToolCall, type LocalToolCall } from "./localToolPolicy";
 
 export type ProjectMcpPin = { projectIdentity: string; executionIdentity: string; schemaHash: string };
-export type ProjectSkillInspection = { name: string; project: string; projectIdentity: string; source: string; fingerprint: string;
+export type ProjectSkillInspection = { name: string; declaredName: string; description: string; project: string; projectIdentity: string; source: string; fingerprint: string;
   files: { path: string; bytes: number }[]; totalBytes: number };
 
 /** Explicit UI inspection only; mounting an integration page never scans profiles. */

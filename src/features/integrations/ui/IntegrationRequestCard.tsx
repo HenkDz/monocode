@@ -44,7 +44,9 @@ export function IntegrationRequestCard({ item, onAction }: { item: IntegrationRe
       <span>Until {new Date(item.request.deadline).toLocaleString()} or goal ends</span></div>
     <p className="integration-note"><span className="integration-provider">{item.provider}</span> {LOCAL_RESULT_NOTICE}</p>
     {merge && <p className="integration-note">Merge still requires the existing exact-head review and your explicit confirmation.</p>}
-    {install && item.inspection && <p className="integration-note">{item.inspection.files.length} inspected files · copied verbatim · nothing runs during install</p>}
+    {install && item.inspection && <><p>Declared skill: <strong>{item.inspection.declaredName}</strong></p><p>{item.inspection.description}</p>
+      <p className="integration-note">{item.inspection.files.length} inspected files · copied verbatim · nothing runs during install</p></>}
+    {install && <p className="integration-note">Inspection refuses secret-named files; the package is copied only if every file is accepted.</p>}
     {!available && pending && <p className="integration-note">{item.unavailableReason ?? (existingCli
       ? "Existing local CLI access · account not pinned. Governed GitHub connection is unavailable."
       : install

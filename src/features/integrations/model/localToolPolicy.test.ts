@@ -70,7 +70,8 @@ describe("trusted local tool policy", () => {
     call.args.path = "readme.txt"; (call.args.pin as { projectIdentity: string }).projectIdentity = "other";
     expect(evaluateLocalToolCall(call, context, grant, 1000).action).toBe("deny");
   });
-  it.each(["secret.pem", "SECRET.PEM", "client.key", "STORE.P12", "vault.pfx", "id_rsa.pub", "id_ed25519_backup", "serviceCredentials.JSON", "vault.keystore", ".npmrc", ".pypirc", ".netrc"])("returns protected-file refusal for %s", path => {
+  it.each(["secret.pem", "SECRET.PEM", "client.key", "STORE.P12", "vault.pfx", "id_rsa.pub", "id_ed25519_backup", "serviceCredentials.JSON", "vault.keystore", ".npmrc", ".pypirc", ".netrc",
+    "id_ecdsa.pub", "ID_DSA_BACKUP", "server.ppk", "store.JKS", "key.p8", "vault.kdbx", "terraform.tfstate.backup", "terraform.tfvars.json", ".env.production", "local.env", ".git-credentials", "hosts.yml", "service-account-demo.json", "project-sa.json", "secrets.yaml"])("returns protected-file refusal for %s", path => {
     const { call, context, grant } = integrationFixture(); call.tool = "local-mcp.project.read"; call.args = { path };
     expect(evaluateLocalToolCall(call, context, grant, 1000)).toMatchObject({ action: "deny", code: "protected-file" });
   });

@@ -25,12 +25,18 @@ fn project_mcp_tool() -> Value {
         "inputSchema":project_mcp_schema(),"_meta":{"monocodeSchemaHash":project_mcp_schema_hash()}})
 }
 
-fn project_mcp_path(path: &str) -> Result<(), String> {
+pub(crate) fn project_secret_filename(path: &str) -> bool {
     let filename = path.rsplit('/').next().unwrap_or("").to_ascii_lowercase();
-    if [".pem", ".key", ".p12", ".pfx", ".keystore"].iter().any(|suffix| filename.ends_with(suffix)) ||
-        filename.starts_with("id_rsa") || filename.starts_with("id_ed25519") ||
+    [".pem", ".key", ".p12", ".pfx", ".keystore", ".ppk", ".jks", ".p8", ".kdbx", ".env"].iter().any(|suffix| filename.ends_with(suffix)) ||
+        ["id_rsa", "id_ed25519", "id_ecdsa", "id_dsa", ".env", "secrets."].iter().any(|prefix| filename.starts_with(prefix)) ||
         filename.contains("credentials") && filename.ends_with(".json") ||
-        [".npmrc", ".pypirc", ".netrc"].contains(&filename.as_str()) {
+        filename.contains(".tfstate") || filename.contains(".tfvars") ||
+        filename.starts_with("service-account") && filename.ends_with(".json") || filename.ends_with("-sa.json") ||
+        [".npmrc", ".pypirc", ".netrc", ".git-credentials", "hosts.yml"].contains(&filename.as_str())
+}
+
+fn project_mcp_path(path: &str) -> Result<(), String> {
+    if project_secret_filename(path) {
         return Err(serde_json::json!({"action":"deny","code":"protected-file","reason":"Project read refuses known credential and token filenames. Choose a non-secret project file."}).to_string());
     }
     if path.is_empty() || path.len() > 512 || path.split('/').any(|part| part.is_empty() || part.starts_with('.') ||
@@ -1104,7 +1110,8 @@ mod tests {
 
     #[test]
     fn pinned_project_mcp_refuses_secret_names_case_and_malformed_paths() {
-        for path in ["secret.pem", "SECRET.PEM", "a/client.key", "a/STORE.P12", "a/store.pfx", "id_rsa.pub", "id_ed25519_backup", "serviceCredentials.JSON", "vault.keystore", ".npmrc", ".pypirc", ".netrc"] {
+        for path in ["secret.pem", "SECRET.PEM", "a/client.key", "a/STORE.P12", "a/store.pfx", "id_rsa.pub", "id_ed25519_backup", "serviceCredentials.JSON", "vault.keystore", ".npmrc", ".pypirc", ".netrc",
+            "id_ecdsa.pub", "ID_DSA_BACKUP", "server.ppk", "store.JKS", "key.p8", "vault.kdbx", "terraform.tfstate.backup", "terraform.tfvars.json", ".env.production", "local.env", ".git-credentials", "hosts.yml", "service-account-demo.json", "project-sa.json", "secrets.yaml"] {
             let reason: Value = serde_json::from_str(&project_mcp_path(path).unwrap_err()).unwrap();
             assert_eq!(reason["code"], "protected-file", "{path}");
         }

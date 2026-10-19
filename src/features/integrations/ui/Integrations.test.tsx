@@ -60,13 +60,27 @@ it("requires inspection before install and shows its exact files, bytes and fing
   const onAction = vi.fn(async () => {});
   await act(async () => root.render(<IntegrationRequestCard item={item} onAction={onAction} />));
   expect(button("Install").disabled).toBe(true);
-  item.inspection = { name: "fixture", project: "C:/synthetic/project", projectIdentity: "windows:1:2", source: "C:/synthetic/skill", fingerprint: "a".repeat(64), totalBytes: 12,
+  item.inspection = { name: "fixture", declaredName: "fixture", description: "Synthetic declared skill description", project: "C:/synthetic/project", projectIdentity: "windows:1:2", source: "C:/synthetic/skill", fingerprint: "a".repeat(64), totalBytes: 12,
     files: [{ path: "SKILL.md", bytes: 8 }, { path: "scripts/helper.ps1", bytes: 4 }] };
   await act(async () => root.render(<IntegrationRequestCard item={item} onAction={onAction} />));
   expect(button("Install").disabled).toBe(false);
+  expect(container.textContent).toContain("Declared skill: fixture");
+  expect(container.textContent).toContain("Synthetic declared skill description");
   await act(async () => button("See files & tools").click());
   expect(container.textContent).toContain("scripts/helper.ps1"); expect(container.textContent).toContain("12 bytes"); expect(container.textContent).toContain("a".repeat(64));
   expect(onAction).not.toHaveBeenCalled();
+});
+it("keeps Remove unavailable until the host prepares an exact inspected operation", async () => {
+  const item = { id: "skill", name: "Fixture", provider: "skill" as const, scope: "project", monos: [], available: true, removeRequestId: undefined as string | undefined };
+  const onRevoke = vi.fn(async () => {});
+  await act(async () => root.render(<Integrations connected={[item]} requests={[]} onRequest={vi.fn()} onRevoke={onRevoke} />));
+  expect(button("Remove").disabled).toBe(true);
+  item.removeRequestId = "remove-operation";
+  await act(async () => root.render(<Integrations connected={[item]} requests={[]} onRequest={vi.fn()} onRevoke={onRevoke} />));
+  expect(button("Remove").dataset.integrationExecute).toBe("remove-operation");
+  const event = new MouseEvent("click", { bubbles: true });
+  await act(async () => button("Remove").dispatchEvent(event));
+  expect(onRevoke).toHaveBeenCalledExactlyOnceWith(event, item);
 });
 it("requests inspection through its own native event without granting execution", async () => {
   const item = request(); item.provider = "skill"; item.request = { ...item.request, kind: "install", service: "skill", source: "C:/synthetic/skill" };

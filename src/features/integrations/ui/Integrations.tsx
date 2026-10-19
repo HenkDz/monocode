@@ -9,6 +9,8 @@ export type ConnectedIntegration = {
   scope: string; monos: string[]; deadline?: number; callCount?: number; lastUsedAt?: number;
   available: boolean; unavailableReason?: string;
   skillDelivery?: "discovered" | "scoped-path" | "unverified";
+  /** Prepared by the host after fresh installed-package inspection and exact operation binding. */
+  removeRequestId?: string;
 };
 type Props = {
   connected: readonly ConnectedIntegration[];
@@ -21,8 +23,9 @@ type Props = {
 function IntegrationRow({ item, onRevoke }: { item: ConnectedIntegration; onRevoke: Props["onRevoke"] }) {
   const [busy, setBusy] = useState(false), [error, setError] = useState("");
   const running = useRef(false);
+  const removalReady = item.provider !== "skill" || !!item.removeRequestId && /^[A-Za-z0-9_-]{1,128}$/.test(item.removeRequestId);
   async function revoke(event: Event) {
-    if (running.current || !item.available) return;
+    if (running.current || !item.available || !removalReady) return;
     running.current = true; setBusy(true); setError("");
     try { await onRevoke(event, item); }
     catch (reason) { setError(reason instanceof Error ? reason.message : "Could not revoke this access."); }
@@ -37,10 +40,13 @@ function IntegrationRow({ item, onRevoke }: { item: ConnectedIntegration; onRevo
       {item.provider === "gh CLI" && <p>Existing local CLI access · account not pinned. Agents' own terminals may use gh directly.</p>}
       {item.provider === "skill" && <p>{item.skillDelivery === "discovered" ? "Available in the requesting Mono's skill selection" : item.skillDelivery === "scoped-path"
         ? "Delivered as a scoped readable skill path" : "Installed · delivery unverified"}</p>}
+      {item.provider === "skill" && !removalReady && <p>Review the current installed files before removing this skill.</p>}
       {error && <p className="integration-error" role="alert">{error}</p>}</div>
     <div className="integration-row-actions"><span className="integration-note">{item.callCount === undefined ? "Call count unavailable" : `${item.callCount.toLocaleString()} calls`}
       {item.lastUsedAt !== undefined ? ` · last used ${new Date(item.lastUsedAt).toLocaleString()}` : ""}</span>
-      {item.provider !== "gh CLI" && <SecondaryButton disabled={busy || !item.available} onClick={event => void revoke(event.nativeEvent)}>{busy ? "Saving…" : item.provider === "skill" ? "Remove" : "Revoke"}</SecondaryButton>}</div>
+      {item.provider !== "gh CLI" && <SecondaryButton disabled={busy || !item.available || !removalReady}
+        data-integration-execute={item.provider === "skill" ? item.removeRequestId : undefined}
+        onClick={event => void revoke(event.nativeEvent)}>{busy ? "Saving…" : item.provider === "skill" ? "Remove" : "Revoke"}</SecondaryButton>}</div>
   </li>;
 }
 
@@ -59,7 +65,7 @@ export function Integrations({ connected, requests, loading = false, error, onRe
       {requests.map(item => <IntegrationRequestCard key={item.id} item={item} onAction={onRequest} />)}
       {!requests.length && !loading && !error && <p className="integration-note">Your Manager will request tools when the goal needs them.</p>}
       <h3 className="integration-section-label">Rules</h3>
-      <dl className="integration-rules"><div><dt>Approved exact tools and targets</dt><dd>Read & routine writes</dd></div>
+      <dl className="integration-rules"><div><dt>Approved exact tools and targets</dt><dd>Scoped project reads</dd></div>
         <div><dt>Always ask me</dt><dd>Merge · spend · delete · message people · system settings</dd></div>
         <div><dt>Install & connect</dt><dd>Your explicit action</dd></div>
         <div><dt>Provider</dt><dd>Existing CLI & local MCP</dd></div></dl>

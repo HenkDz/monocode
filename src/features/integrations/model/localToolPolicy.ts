@@ -38,9 +38,11 @@ export type LocalToolId = typeof LOCAL_TOOLS[number]["id"];
 
 export function isProtectedProjectFile(path: string): boolean {
   const name = path.split("/").at(-1)?.toLowerCase() ?? "";
-  return [".pem", ".key", ".p12", ".pfx", ".keystore"].some(suffix => name.endsWith(suffix)) ||
-    name.startsWith("id_rsa") || name.startsWith("id_ed25519") || name.includes("credentials") && name.endsWith(".json") ||
-    [".npmrc", ".pypirc", ".netrc"].includes(name);
+  return [".pem", ".key", ".p12", ".pfx", ".keystore", ".ppk", ".jks", ".p8", ".kdbx", ".env"].some(suffix => name.endsWith(suffix)) ||
+    ["id_rsa", "id_ed25519", "id_ecdsa", "id_dsa", ".env", "secrets."].some(prefix => name.startsWith(prefix)) ||
+    name.includes("credentials") && name.endsWith(".json") || name.includes(".tfstate") || name.includes(".tfvars") ||
+    name.startsWith("service-account") && name.endsWith(".json") || name.endsWith("-sa.json") ||
+    [".npmrc", ".pypirc", ".netrc", ".git-credentials", "hosts.yml"].includes(name);
 }
 
 export function validateProjectReadPath(path: unknown): asserts path is string {

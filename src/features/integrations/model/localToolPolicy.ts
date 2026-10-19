@@ -37,7 +37,7 @@ export const LOCAL_TOOLS = [
 export type LocalToolId = typeof LOCAL_TOOLS[number]["id"];
 
 export function isProtectedProjectFile(path: string): boolean {
-  const name = path.split("/").at(-1)?.toLowerCase() ?? "";
+  const name = path.slice(path.lastIndexOf("/") + 1).toLowerCase();
   return [".pem", ".key", ".p12", ".pfx", ".keystore", ".ppk", ".jks", ".p8", ".kdbx", ".env"].some(suffix => name.endsWith(suffix)) ||
     ["id_rsa", "id_ed25519", "id_ecdsa", "id_dsa", ".env", "secrets."].some(prefix => name.startsWith(prefix)) ||
     name.includes("credentials") && name.endsWith(".json") || name.includes(".tfstate") || name.includes(".tfvars") ||

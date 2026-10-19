@@ -68,6 +68,16 @@ it("requires inspection before install and shows its exact files, bytes and fing
   expect(container.textContent).toContain("scripts/helper.ps1"); expect(container.textContent).toContain("12 bytes"); expect(container.textContent).toContain("a".repeat(64));
   expect(onAction).not.toHaveBeenCalled();
 });
+it("requests inspection through its own native event without granting execution", async () => {
+  const item = request(); item.provider = "skill"; item.request = { ...item.request, kind: "install", service: "skill", source: "C:/synthetic/skill" };
+  const onAction = vi.fn(async () => {});
+  await act(async () => root.render(<IntegrationRequestCard item={item} onAction={onAction} />));
+  const event = new MouseEvent("click", { bubbles: true });
+  expect(button("Inspect files").dataset.integrationExecute).toBeUndefined();
+  await act(async () => button("Inspect files").dispatchEvent(event));
+  expect(onAction).toHaveBeenCalledExactlyOnceWith(event, item, "inspect");
+  expect(button("Install").disabled).toBe(true);
+});
 it("retains failures visibly and does not invent a completion", async () => {
   await act(async () => root.render(<IntegrationRequestCard item={request()} onAction={async () => { throw Error("receipt uncertain"); }} />));
   await act(async () => button("Connect").click());

@@ -14,7 +14,8 @@ export type IntegrationRequestView = {
   /** Exact inspected arguments; display data confers no execution authority. */
   arguments?: Record<string, unknown>;
 };
-export type IntegrationRequestAction = (event: Event, item: IntegrationRequestView, action: "execute" | "later") => Promise<void>;
+/** Inspect returns native metadata only; it never authorizes install or sends file contents to a model. */
+export type IntegrationRequestAction = (event: Event, item: IntegrationRequestView, action: "inspect" | "execute" | "later") => Promise<void>;
 
 export function IntegrationRequestCard({ item, onAction }: { item: IntegrationRequestView; onAction: IntegrationRequestAction }) {
   const title = useId(), toolsId = useId();
@@ -25,8 +26,9 @@ export function IntegrationRequestCard({ item, onAction }: { item: IntegrationRe
   const verb = install ? "Install" : merge ? "Review merge" : existingCli ? "Review" : "Connect";
   const pending = item.status === "pending";
   const available = item.available && !existingCli && (!install || !!item.inspection);
-  async function act(event: Event, action: "execute" | "later") {
+  async function act(event: Event, action: "inspect" | "execute" | "later") {
     if (running.current || !pending || action === "execute" && !available) return;
+    if (action === "inspect" && (!install || !item.available || !!item.inspection)) return;
     running.current = true; setBusy(true); setError("");
     try { await onAction(event, item, action); }
     catch (reason) { setError(reason instanceof Error ? reason.message : "Could not save this action. Inspect the receipt before retrying."); }
@@ -50,7 +52,9 @@ export function IntegrationRequestCard({ item, onAction }: { item: IntegrationRe
       : "Connection unavailable: an approved local adapter is required.")}</p>}
     {!pending && <p role="status" className="integration-note">{item.status === "completed" ? "Completed · recorded receipt" : item.status === "declined" ? "Not now · the team can plan without this access" : "Outcome uncertain · inspect the receipt before requesting another operation"}</p>}
     <div className="integration-actions">
-      {pending && <><button type="button" className="integration-primary" disabled={busy || !available}
+      {pending && <>{install && !item.inspection && <SecondaryButton disabled={busy || !item.available}
+        data-integration-inspect={item.id} onClick={event => void act(event.nativeEvent, "inspect")}>Inspect files</SecondaryButton>}
+        <button type="button" className="integration-primary" disabled={busy || !available}
         data-integration-execute={item.id} onClick={event => void act(event.nativeEvent, "execute")}>{busy ? "Saving…" : verb}</button>
         <SecondaryButton disabled={busy} onClick={event => void act(event.nativeEvent, "later")}>Not now</SecondaryButton></>}
       <SecondaryButton aria-expanded={showTools} aria-controls={toolsId} onClick={() => setShowTools(value => !value)}>{showTools ? "Hide tools" : install ? "See files & tools" : "See tools"}</SecondaryButton>

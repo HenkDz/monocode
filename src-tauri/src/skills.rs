@@ -124,7 +124,8 @@ mod project_install {
 
     fn read_package(root: &Path, relative: &Path, depth: usize, files: &mut Vec<(String, Vec<u8>)>, total: &mut u64, pins: &mut Vec<File>) -> Result<(), String> {
         if depth > 8 { return Err("Skill package exceeds eight directory levels".into()); }
-        let mut entries = std::fs::read_dir(root.join(relative)).map_err(|e| e.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
+        let mut entries = std::fs::read_dir(root.join(relative)).map_err(|e| e.to_string())?.take(257).collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
+        if entries.len() + pins.len() > 256 { return Err("Skill package exceeds the directory and file entry limit".into()); }
         entries.sort_by_key(|entry| entry.file_name());
         for entry in entries {
             if pins.len() >= 256 { return Err("Skill package exceeds the directory and file entry limit".into()); }
@@ -971,6 +972,10 @@ mod tests {
         std::fs::remove_file(source.0.join("alias.md")).unwrap();
         std::fs::write(source.0.join("large.bin"), vec![0; 1024 * 1024 + 1]).unwrap();
         assert!(inspect_project_skill(project.0.to_string_lossy().into(), source.0.to_string_lossy().into(), "fixture".into()).is_err());
+        std::fs::remove_file(source.0.join("large.bin")).unwrap();
+        for index in 0..257 { std::fs::create_dir(source.0.join(format!("part-{index}"))).unwrap(); }
+        assert!(inspect_project_skill(project.0.to_string_lossy().into(), source.0.to_string_lossy().into(), "fixture".into()).unwrap_err().contains("directory and file entry limit"));
+        assert!(!project.0.join(".agents").exists());
     }
 
     #[test]

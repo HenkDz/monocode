@@ -1275,7 +1275,8 @@ export class Orchestrator {
   resumeDecisionManager(id: string, gesture: ManagerContinuationGesture, originSessionId: string,
     verifyOrigin: (started?: boolean) => Promise<void> = async () => {}): Promise<void> {
     const validateGesture = takeManagerContinuationGesture(gesture, originSessionId, id);
-    const operation = this.actions.catch(() => undefined).then(async () => {
+    if (this.decisionActivating.has(id) || this.starting.has(id) || this.decisionStarting.has(id)) throw Error("This Manager is already preparing Continue");
+    return (async () => {
       const initial = this.run(id);
       if (!initial?.projectManager || initial.status !== "paused") throw Error("This Manager is no longer paused");
       const ownerSessionId = initial.ownerSessionId ?? id;
@@ -1307,61 +1308,68 @@ export class Orchestrator {
         if (preparedAuthority === undefined || originalAuthority !== undefined && preparedAuthority !== originalAuthority)
           throw Error("The original goal or request changed before Continue");
         originalAuthority = preparedAuthority; authorityBound = true;
-        await this.host?.verifyDecisionAuthority?.(id); validate();
-        await verifyOrigin(); validate();
-        const beforeStage = await this.store.load(id); validate();
-        if (!beforeStage || beforeStage.leadId !== id || beforeStage.ownerMonoId !== initial.ownerMonoId || beforeStage.ownerSessionId !== initial.ownerSessionId ||
-            orchestrationCheckoutCwd(beforeStage) !== orchestrationCheckoutCwd(initial) ||
-            JSON.stringify(beforeStage.wakeState?.receipt) !== JSON.stringify(this.run(id)!.wakeState?.receipt))
-          throw Error("The saved original Manager context changed before Continue");
-        const requestId = `decision-continue-${gesture.id}`;
-        const signature = JSON.stringify([id, originSessionId, ownerBinding, originBinding, stoppedAt, originalAuthority]);
-        const prior = this.run(id)!.requests[requestId];
-        if (prior && (prior.signature !== signature || !Number.isSafeInteger(prior.result) || (prior.result as number) <= stoppedAt))
-          throw Error("This continuation gesture belongs to an earlier Stop or different request");
-        epoch = prior ? prior.result as number : Math.max(Date.now(), stoppedAt + 1, (initial.decisionContinuedAt ?? 0) + 1, (initial.decisionContinuePendingAt ?? 0) + 1);
-        const sourceReceipt = JSON.stringify(this.run(id)!.wakeState?.receipt);
-        await this.commit({ ...this.run(id)!, status: "paused", recovering: undefined, decisionContinuePendingAt: epoch,
-          error: "Continue is being verified. Retry Continue if preparation was interrupted.",
-          requests: { ...this.run(id)!.requests, [requestId]: { signature, result: epoch } } }); validate();
-        const staged = await this.store.load(id); validate();
-        if (staged?.status !== "paused" || staged.leadId !== id || staged.ownerMonoId !== initial.ownerMonoId || staged.ownerSessionId !== initial.ownerSessionId ||
-            orchestrationCheckoutCwd(staged) !== orchestrationCheckoutCwd(initial) || staged.decisionContinuePendingAt !== epoch || staged.requests[requestId]?.signature !== signature ||
-            JSON.stringify(staged.wakeState?.receipt) !== sourceReceipt)
-          throw Error("Continue staging could not be verified");
-        await this.host?.verifyDecisionAuthority?.(id); validate();
-        await this.host?.probeProviders?.(); validate();
-        await this.host?.verifyDecisionAuthority?.(id); validate();
-        await verifyOrigin(); validate();
-        const prepared = await this.store.load(id); validate();
-        if (prepared?.status !== "paused" || prepared.ownerMonoId !== initial.ownerMonoId || prepared.ownerSessionId !== initial.ownerSessionId ||
-            prepared.leadId !== id || orchestrationCheckoutCwd(prepared) !== orchestrationCheckoutCwd(initial) || prepared.decisionContinuePendingAt !== epoch ||
-            prepared.requests[requestId]?.signature !== signature || JSON.stringify(prepared.wakeState?.receipt) !== sourceReceipt)
-          throw Error("The saved continuation source changed during preparation");
-        await this.commit({ ...this.run(id)!, status: "paused", recovering: undefined, decisionContinuedAt: epoch, decisionContinuePendingAt: undefined }); validate();
-        const active = await this.store.load(id); validate();
-        if (active?.status !== "paused" || active.leadId !== id || active.ownerMonoId !== initial.ownerMonoId || active.ownerSessionId !== initial.ownerSessionId ||
-            orchestrationCheckoutCwd(active) !== orchestrationCheckoutCwd(initial) || active.decisionContinuedAt !== epoch || active.decisionContinuePendingAt !== undefined || active.requests[requestId]?.signature !== signature ||
-            JSON.stringify(active.wakeState?.receipt) !== sourceReceipt)
-          throw Error("Continue activation could not be verified");
-        await this.host?.verifyDecisionAuthority?.(id); validate();
-        await verifyOrigin(); validate();
-        this.decisionActivating.delete(id);
-        this.decisionStarting.add(id);
-        try { await this.start(id, this.host!.choices().map(choice => choice.harness), initial.maxWorkers, undefined, true); }
-        finally { this.decisionStarting.delete(id); }
-        this.assertDecisionContinuation(id, epoch);
-        const startedGeneration = this.host?.decisionGeneration?.(ownerSessionId);
-        await this.host?.verifyDecisionAuthority?.(id); this.assertDecisionContinuation(id, epoch);
-        if (this.host?.decisionGeneration?.(ownerSessionId) !== startedGeneration) throw Error("The started Manager turn changed");
-        await verifyOrigin(true); this.assertDecisionContinuation(id, epoch);
-        if (!managerRequestBindingCurrent(this.host?.session(ownerSessionId), ownerBinding) ||
-            this.host?.decisionGeneration?.(ownerSessionId) !== startedGeneration ||
-            !managerRequestBindingCurrent(this.host?.session(originSessionId), originBinding) || this.host?.decisionAuthority?.(id) !== originalAuthority)
-          throw Error("The original request changed before continuation publication");
+        // Ledger delivery may wait for run actions; finish scoped hydration before claiming that chain.
+        const operation = this.actions.catch(() => undefined).then(async () => {
+          validate();
+          await this.host?.verifyDecisionAuthority?.(id); validate();
+          await verifyOrigin(); validate();
+          const beforeStage = await this.store.load(id); validate();
+          if (!beforeStage || beforeStage.leadId !== id || beforeStage.ownerMonoId !== initial.ownerMonoId || beforeStage.ownerSessionId !== initial.ownerSessionId ||
+              orchestrationCheckoutCwd(beforeStage) !== orchestrationCheckoutCwd(initial) ||
+              JSON.stringify(beforeStage.wakeState?.receipt) !== JSON.stringify(this.run(id)!.wakeState?.receipt))
+            throw Error("The saved original Manager context changed before Continue");
+          const requestId = `decision-continue-${gesture.id}`;
+          const signature = JSON.stringify([id, originSessionId, ownerBinding, originBinding, stoppedAt, originalAuthority]);
+          const prior = this.run(id)!.requests[requestId];
+          if (prior && (prior.signature !== signature || !Number.isSafeInteger(prior.result) || (prior.result as number) <= stoppedAt))
+            throw Error("This continuation gesture belongs to an earlier Stop or different request");
+          epoch = prior ? prior.result as number : Math.max(Date.now(), stoppedAt + 1, (initial.decisionContinuedAt ?? 0) + 1, (initial.decisionContinuePendingAt ?? 0) + 1);
+          const sourceReceipt = JSON.stringify(this.run(id)!.wakeState?.receipt);
+          await this.commit({ ...this.run(id)!, status: "paused", recovering: undefined, decisionContinuePendingAt: epoch,
+            error: "Continue is being verified. Retry Continue if preparation was interrupted.",
+            requests: { ...this.run(id)!.requests, [requestId]: { signature, result: epoch } } }); validate();
+          const staged = await this.store.load(id); validate();
+          if (staged?.status !== "paused" || staged.leadId !== id || staged.ownerMonoId !== initial.ownerMonoId || staged.ownerSessionId !== initial.ownerSessionId ||
+              orchestrationCheckoutCwd(staged) !== orchestrationCheckoutCwd(initial) || staged.decisionContinuePendingAt !== epoch || staged.requests[requestId]?.signature !== signature ||
+              JSON.stringify(staged.wakeState?.receipt) !== sourceReceipt)
+            throw Error("Continue staging could not be verified");
+          await this.host?.verifyDecisionAuthority?.(id); validate();
+          await this.host?.probeProviders?.(); validate();
+          await this.host?.verifyDecisionAuthority?.(id); validate();
+          await verifyOrigin(); validate();
+          const prepared = await this.store.load(id); validate();
+          if (prepared?.status !== "paused" || prepared.ownerMonoId !== initial.ownerMonoId || prepared.ownerSessionId !== initial.ownerSessionId ||
+              prepared.leadId !== id || orchestrationCheckoutCwd(prepared) !== orchestrationCheckoutCwd(initial) || prepared.decisionContinuePendingAt !== epoch ||
+              prepared.requests[requestId]?.signature !== signature || JSON.stringify(prepared.wakeState?.receipt) !== sourceReceipt)
+            throw Error("The saved continuation source changed during preparation");
+          await this.commit({ ...this.run(id)!, status: "paused", recovering: undefined, decisionContinuedAt: epoch, decisionContinuePendingAt: undefined }); validate();
+          const active = await this.store.load(id); validate();
+          if (active?.status !== "paused" || active.leadId !== id || active.ownerMonoId !== initial.ownerMonoId || active.ownerSessionId !== initial.ownerSessionId ||
+              orchestrationCheckoutCwd(active) !== orchestrationCheckoutCwd(initial) || active.decisionContinuedAt !== epoch || active.decisionContinuePendingAt !== undefined || active.requests[requestId]?.signature !== signature ||
+              JSON.stringify(active.wakeState?.receipt) !== sourceReceipt)
+            throw Error("Continue activation could not be verified");
+          await this.host?.verifyDecisionAuthority?.(id); validate();
+          await verifyOrigin(); validate();
+          this.decisionActivating.delete(id);
+          this.decisionStarting.add(id);
+          try { await this.start(id, this.host!.choices().map(choice => choice.harness), initial.maxWorkers, undefined, true); }
+          finally { this.decisionStarting.delete(id); }
+          this.assertDecisionContinuation(id, epoch);
+          const startedGeneration = this.host?.decisionGeneration?.(ownerSessionId);
+          await this.host?.verifyDecisionAuthority?.(id); this.assertDecisionContinuation(id, epoch);
+          if (this.host?.decisionGeneration?.(ownerSessionId) !== startedGeneration) throw Error("The started Manager turn changed");
+          await verifyOrigin(true); this.assertDecisionContinuation(id, epoch);
+          if (!managerRequestBindingCurrent(this.host?.session(ownerSessionId), ownerBinding) ||
+              this.host?.decisionGeneration?.(ownerSessionId) !== startedGeneration ||
+              !managerRequestBindingCurrent(this.host?.session(originSessionId), originBinding) || this.host?.decisionAuthority?.(id) !== originalAuthority)
+            throw Error("The original request changed before continuation publication");
+        });
+        this.actions = operation.catch(() => undefined);
+        await operation;
       } catch (error) {
         const current = this.run(id);
-        if (current) {
+        if (current && current.ownerMonoId === initial.ownerMonoId && current.ownerSessionId === initial.ownerSessionId &&
+            (current.status === "paused" || epoch !== undefined && current.decisionContinuedAt === epoch)) {
           const failed = { ...current, status: "paused" as const, recovering: undefined,
             decisionContinuePendingAt: cutoff() > stoppedAt ? undefined : epoch ?? current.decisionContinuePendingAt, error: messageOf(error) };
           if (current.status === "active") await this.pause(id, messageOf(error), () => failed).catch(console.error);
@@ -1369,9 +1377,7 @@ export class Orchestrator {
         }
         throw error;
       } finally { this.decisionActivating.delete(id); }
-    });
-    this.actions = operation.catch(() => undefined);
-    return operation;
+    })();
   }
   assertDecisionContinuation(id: string, epoch: number): void {
     const run = this.run(id);

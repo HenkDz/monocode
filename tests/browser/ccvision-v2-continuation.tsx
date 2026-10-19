@@ -30,7 +30,8 @@ const disk: Record<string, unknown> = JSON.parse(localStorage.getItem(key) ?? "{
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value));
 const persist = () => localStorage.setItem(key, JSON.stringify(disk));
 let mode = "normal", releaseProbe: (() => void) | undefined, releaseRead: (() => void) | undefined;
-let stageSaves = 0, activeSaves = 0, reads = 0;
+let stageSaves = 0, activeSaves = 0, reads = 0, continuationHydrations = 0;
+let lastContinuation: Promise<void> | undefined, releaseCycle: (() => void) | undefined, cycleReply: Promise<unknown> | undefined;
 const publications: { id: string; text: string }[] = [];
 mockIPC(async (command, raw) => {
   const args = raw as Record<string, unknown>;
@@ -100,7 +101,7 @@ const stop = evaluate<(id: string, managed?: boolean, preserve?: boolean) => Pro
 engine.bind({
   session: id => state.session(id), sessions: () => state.ref.current, choices: () => [{ harness: "claude", models: [] }],
   stop: async (id, reason) => { await stop(id, true, reason === "refresh"); },
-  beforeContinue: evaluate(source.beforeContinue, scope),
+  beforeContinue: async id => { continuationHydrations++; await evaluate<(id: string) => Promise<void>>(source.beforeContinue, scope)(id); },
   decisionStopAt: id => decisions.decisionStopAt(decisionRuntime.current.sessions().find(session => session.id === id) ?? { blocks: [] }),
   decisionGeneration: id => turnGen.current.get(id) ?? 0,
   decisionAuthority: evaluate(source.continuationAuthority, scope),
@@ -111,6 +112,8 @@ engine.bind({
   cleanupWorker: async () => true, steer: async () => {}, respondApproval: () => {}, answerQuestion: () => {},
 } satisfies OrchestrationHost);
 engine.registerMonoEngine("engine", "manager-continuation", "manager", "C:/Project");
+const realContinue = engine.continueManager.bind(engine);
+engine.continueManager = (id, event) => { lastContinuation = realContinue(id, event); return lastContinuation; };
 if (!disk.engine) {
   const manager = { ...appendUser(state.session("manager-continuation")!, "Implement the bounded parser change", []), busy: false };
   state.setState(sessions => sessions.map(session => session.id === manager.id ? manager : session)); await upsertSession(manager);
@@ -152,6 +155,29 @@ async function send(text: string, event?: Event) {
   });
   return submit("manager-continuation", text, [], { composerEvent: event, monoWorkingDirectoryPrepared: true });
 }
+async function beginLedgerCycle() {
+  const old = ledger.decisions("manager")[0];
+  if (!old || engine.run("engine")?.status !== "active") throw Error("Cycle proof requires a live original Manager question");
+  const queue = engine.queueManagerMessage.bind(engine);
+  let entered!: () => void;
+  const waiting = new Promise<void>(resolve => { entered = resolve; });
+  engine.queueManagerMessage = async (id, event) => {
+    if (decisions.isMonoDecisionEventId(event.id) && event.kind === "decision") {
+      engine.queueManagerMessage = queue;
+      entered(); await new Promise<void>(resolve => { releaseCycle = resolve; });
+    }
+    return queue(id, event);
+  };
+  state.setState(sessions => sessions.map(session => session.id === "boss-continuation" ? { ...session, busy: true }
+    : session.id === "manager-continuation" ? { ...session, busy: false } : session));
+  const current = state.session("boss-continuation")!;
+  cycleReply = evaluate<Promise<unknown>>(`return (async () => { ${source.team} })();`, { ...scope, source: current,
+    payload: { sessionId: current.id, requestId: "cycle-answer", action: "team.message", input: { memberId: "manager", kind: "decision", text: JSON.stringify({ version: 1, type: "decision-action", action: "resolve", decisionId: old.id, expectedVersion: old.resolutionVersion, optionId: "one" }) } },
+    workerMember: undefined, peerRecipient: undefined, goalProgress: undefined, memberRun: engine.run("engine"), teamMessageKind, teamMessageRequiresReply, teamMessageRoute, crewMessages: () => [],
+  }).catch(error => String(error));
+  await waiting;
+  await engine.stopForSession("manager-continuation");
+}
 function Fixture() {
   useSyncExternalStore(engine.subscribe, engine.snapshot, engine.snapshot);
   useSyncExternalStore(ledger.subscribe, ledger.snapshot, ledger.snapshot);
@@ -166,6 +192,18 @@ function Fixture() {
     raise, stop: () => stop("manager-continuation"), replay: () => authority.captureManagerContinuationGesture(lastEvent, "manager-continuation"),
     forged: () => engine.continueManager("engine", new MouseEvent("click")), programmatic: () => engine.continueManager("engine"),
     peerSend: () => send("Peer user-role bubble"),
+    beginLedgerCycle,
+    get continuationHydrations() { return continuationHydrations; },
+    finishLedgerCycle: async () => {
+      releaseCycle?.(); releaseCycle = undefined;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([Promise.all([lastContinuation, cycleReply]), new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => reject(Error("Actual continuation/ledger/run writer cycle exceeded the unchanged 1000ms bound")), 1000);
+        })]);
+        return { status: engine.run("engine")!.status, publications: publications.length };
+      } finally { clearTimeout(timer); }
+    },
     mutate: (kind: string) => {
       if (kind === "generation") turnGen.current.set("manager-continuation", (turnGen.current.get("manager-continuation") ?? 0) + 1);
       else if (["account", "home", "original"].includes(kind)) state.setState(sessions => sessions.map(session => session.id !== "manager-continuation" ? session : kind === "original"

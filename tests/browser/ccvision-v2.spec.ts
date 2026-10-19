@@ -215,3 +215,17 @@ test("actual trusted gesture expires while a continuation is still preparing", a
   await expect(page.getByRole("alert")).toContainText("expired");
   expect(await page.evaluate(() => (window as any).continuationProof.publications)).toEqual([]);
 });
+
+test("actual trusted Continue releases ledger preparation before claiming the run action chain within1000ms", async ({ page }) => {
+  await page.goto("/tests/browser/ccvision-v2-continuation.html");
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).continuationProof.run.status)).toBe("active");
+  await page.getByRole("button", { name: "Receive current Manager question", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).continuationProof.decisions.length)).toBe(1);
+  await page.evaluate(() => (window as any).continuationProof.beginLedgerCycle());
+  const hydrated = await page.evaluate(() => (window as any).continuationProof.continuationHydrations);
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).continuationProof.continuationHydrations)).toBe(hydrated + 1);
+  const result = await page.evaluate(() => (window as any).continuationProof.finishLedgerCycle());
+  expect(result).toEqual({ status: "active", publications: 2 });
+});

@@ -20,7 +20,7 @@ const query = new URLSearchParams(location.search);
 document.documentElement.classList.toggle("theme-light", query.get("theme") === "light");
 document.body.style.margin = "0";
 localStorage.clear();
-localStorage.setItem("monocode:mono-roster", JSON.stringify(roster));
+localStorage.setItem("monocode:mono-roster", JSON.stringify(roster.map(mono => mono.role === "member" ? { ...mono, specialty: "API implementation" } : mono)));
 const store = new Map<string, string>([["mono-goals:manager", JSON.stringify({ version: 1, goals: [], receipts: {}, decisions: [ask, protectedAsk] })]]);
 let releaseLoad: (() => void) | undefined;
 const loading = query.get("load") === "hold" ? new Promise<void>(resolve => { releaseLoad = resolve; }) : Promise.resolve();

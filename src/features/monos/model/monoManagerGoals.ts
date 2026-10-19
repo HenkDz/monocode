@@ -269,6 +269,28 @@ export class MonoManagerGoals {
       }
     });
   }
+  retireDecisionSession(sessionId: string) {
+    return this.serial(async () => {
+      for (const [id, ledger] of this.ledgers) {
+        const retired = new Set((ledger.decisions ?? []).filter(decision => decision.deliveryState === "current" &&
+          [decision.identity.requestSessionId, decision.identity.requesterSessionId].includes(sessionId)).map(decision => decision.id));
+        if (!retired.size) continue;
+        await this.save(id, { ...ledger, decisions: ledger.decisions!.map(decision => retired.has(decision.id) ? { ...decision, deliveryState: "stale" } : decision),
+          receipts: Object.fromEntries(Object.entries(ledger.receipts).map(([key, receipt]) => [key, receipt.decision && retired.has(receipt.decision.decisionId)
+            ? { ...receipt, decision: { ...receipt.decision, remaining: [] } } : receipt])) });
+      }
+    });
+  }
+  retireDecisionEvidence(id: string, decisionId: string, expectedVersion: number) {
+    return this.serial(async () => {
+      const ledger = await this.load(id);
+      const decision = ledger.decisions?.find(entry => entry.id === decisionId);
+      if (!decision || decision.resolutionVersion !== expectedVersion || decision.deliveryState === "stale") return;
+      await this.save(id, { ...ledger, decisions: ledger.decisions!.map(entry => entry.id === decisionId ? { ...entry, deliveryState: "stale" } : entry),
+        receipts: Object.fromEntries(Object.entries(ledger.receipts).map(([key, receipt]) => [key,
+          receipt.decision?.decisionId === decisionId ? { ...receipt, decision: { ...receipt.decision, remaining: [] } } : receipt])) });
+    });
+  }
   anchorManagerRequest(manager: Mono, project: ManagerProject, block: Block) {
     return this.serial(async () => {
       assertManagerRequest(manager, project, block);

@@ -97,6 +97,29 @@ it("routes a Manager question directly to its actual Boss even when the Boss has
   expect(f.inboxes.get("boss")!.events).toHaveLength(1);
 });
 
+it("delivers the exact retained options and version for team action replies with a truthful bounded context preview", async () => {
+  const f = fixture({ context: "x".repeat(600) }); await f.ingest();
+  const event = f.inboxes.get("manager")!.events[0];
+  expect(JSON.parse(event.text)).toMatchObject({ decisionId: f.message.id, expectedVersion: 0, options: payload.options,
+    operation: "work", context: "x".repeat(400), contextTruncated: true });
+  expect(event.text.length).toBeLessThanOrEqual(4000);
+  await f.act("manager", "resolve", { optionId: "reuse" });
+  expect(JSON.parse(f.inboxes.get("worker")!.events[0].text)).toMatchObject({ expectedVersion: 1, optionId: "reuse" });
+});
+
+it("keeps absent-protocol legacy records and their original delivery bytes through reload and resolution", async () => {
+  const f = fixture(); await f.ingest();
+  delete f.saved.get("manager")!.decisions![0].eventProtocol;
+  const receipt = structuredClone(f.saved.get("manager")!.receipts.ingest);
+  await f.reload();
+  expect(f.ledger.decisionQuarantine("manager")).toEqual([]);
+  await f.act("manager", "resolve", { optionId: "reuse" });
+  const decision = f.ledger.decisions("manager")[0];
+  expect(f.inboxes.get("worker")!.events[0].text).toBe(JSON.stringify({ type: "decision", decisionId: decision.id,
+    question: decision.question, optionId: "reuse", senderId: "manager", recipientId: "worker", identity: decision.identity }));
+  expect(f.saved.get("manager")!.receipts.ingest).toEqual(receipt);
+});
+
 it.each(["status", "decidedBy", "deciderLevel", "answer", "delegatedByUser", "identity"])("rejects a worker's forged answer field %s", async field => {
   const f = fixture();
   f.message.text = JSON.stringify({ ...payload, [field]: "user" });

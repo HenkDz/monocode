@@ -36,6 +36,7 @@ export type ManagerWakeReceipt = {
   body: string;
   moreEvents?: boolean;
   acknowledgedAt?: number;
+  retiredEventIds?: string[];
 };
 export type ManagerWakeState = {
   waves: ManagerWakeWave[];
@@ -62,14 +63,16 @@ export function reconcileManagerWake(run: OrchestrationRun, previous: Orchestrat
   let state = run.wakeState ?? previous?.wakeState;
   if (state && previous?.wakeState && state !== previous.wakeState) {
     const latest = previous.wakeState;
-    const receipt = latest.receipt && (state.receipt?.id === latest.receipt.id && latest.receipt.acknowledgedAt != null && state.receipt.acknowledgedAt == null ||
+    const retiring = state.receipt?.id === latest.receipt?.id && !!state.receipt?.retiredEventIds?.length;
+    const retiringEventIds = retiring ? state.receipt!.eventIds : [];
+    const receipt = !retiring && latest.receipt && (state.receipt?.id === latest.receipt.id && latest.receipt.acknowledgedAt != null && state.receipt.acknowledgedAt == null ||
       latest.receipt.acknowledgedAt == null && state.receipt?.id !== latest.receipt.id) ? latest.receipt : state.receipt ?? latest.receipt;
     const delivery = receipt?.acknowledgedAt != null ? undefined : receipt?.id !== state.receipt?.id ? latest.delivery :
       receipt?.id === latest.receipt?.id && (latest.delivery?.retryAt ?? 0) > (state.delivery?.retryAt ?? 0) ? latest.delivery : state.delivery;
     // An async engine operation may hold a snapshot from before a team update arrived.
     state = { ...state, events: [...state.events.map(event => {
       const prior = latest.events.find(entry => entry.id === event.id);
-      return prior && (prior.acknowledgedAt != null && event.acknowledgedAt == null ||
+      return prior && (prior.acknowledgedAt != null && event.acknowledgedAt == null && !retiringEventIds.includes(event.id) ||
         prior.kind === "decision" && event.kind === "report") ? prior : event;
     }), ...latest.events.filter(event => !state!.events.some(entry => entry.id === event.id))],
       waves: [...state.waves.map(wave => {

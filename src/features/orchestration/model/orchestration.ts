@@ -443,6 +443,21 @@ export class Orchestrator {
     this.actions = result.catch(() => undefined);
     return result;
   }
+  retireDecisionDigest(leadId: string, receiptId: string, retiredEventIds: readonly string[]): Promise<void> {
+    const result = this.actions.catch(() => undefined).then(async () => {
+      const run = this.run(leadId), receipt = run?.wakeState?.receipt;
+      if (!run?.wakeState || !receipt || receipt.id !== receiptId) throw Error("The retained Manager digest changed");
+      if (!retiredEventIds.length || retiredEventIds.some(id => !id.startsWith("decision:") || !receipt.eventIds.includes(id)))
+        throw Error("Only retained stale decision events may retire a Manager digest");
+      await this.commit({ ...run, wakeState: { ...run.wakeState, delivery: undefined,
+        receipt: { ...receipt, retiredEventIds: [...retiredEventIds], moreEvents: receipt.eventIds.some(id => !retiredEventIds.includes(id)), acknowledgedAt: receipt.acknowledgedAt ?? Date.now() },
+        events: run.wakeState.events.map(event => !receipt.eventIds.includes(event.id) ? event : retiredEventIds.includes(event.id)
+          ? { ...event, acknowledgedAt: event.acknowledgedAt ?? Date.now() } : { ...event, acknowledgedAt: undefined }) } });
+      this.sync();
+    });
+    this.actions = result.catch(() => undefined);
+    return result;
+  }
   assertCanDeleteOwner(id: string) {
     if (this.runs.some((run) => run.ownerSessionId === id && run.tasks.length))
       throw new Error(

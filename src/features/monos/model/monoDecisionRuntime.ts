@@ -87,6 +87,7 @@ export async function executeDecisionUi(event: Event, managerId: string, request
 
 /** Structured text carries a question/command, never actor or original request identity. */
 export async function handleDecisionTeamMessage(sourceSessionId: string, requestId: string, message: CrewMessage, host: DecisionRuntimeHost): Promise<unknown | undefined> {
+  message = structuredClone(message);
   let raw: unknown;
   try { raw = JSON.parse(message.text); } catch { return undefined; }
   if (!raw || typeof raw !== "object" || !("type" in raw) || !["decision", "decision-action"].includes(String(raw.type))) return undefined;
@@ -118,6 +119,7 @@ export async function handleDecisionTeamMessage(sourceSessionId: string, request
       .map(goal => ({ run, goal })));
     if (candidates.length !== 1 || !candidates[0].run.ownerMonoId) throw Error("Decision needs one unambiguous original goal context");
     const { run, goal } = candidates[0];
+    message.at = host.ledger.decisions(run.ownerMonoId!).find(decision => decision.id === message.id)?.source.at ?? message.at;
     return host.ledger.handleDecision(run.ownerMonoId!, requestId, { action: "ingest", goalId: goal.id, message },
       runtimeDecisionHost(run.ownerMonoId!, { kind: "mono", id: actor.id }, actor.id, goal.id, host, validateActor));
   }
@@ -128,6 +130,8 @@ export async function handleDecisionTeamMessage(sourceSessionId: string, request
   const { managerId, decision } = retained[0];
   if (message.managerId !== managerId || !decision.escalationChain.some(entry => entry.id === actor.id) ||
       !decision.escalationChain.some(entry => entry.id === message.recipientId)) throw Error("Decision action is outside its actual chain");
+  await host.ledger.recoverDecisions(managerId, runtimeDecisionHost(managerId, { kind: "mono", id: actor.id }, decision.requestingMonoId, decision.identity.goalId, host, validateActor));
+  validateActor();
   return host.ledger.handleDecision(managerId, requestId, command,
     runtimeDecisionHost(managerId, { kind: "mono", id: actor.id }, decision.requestingMonoId, decision.identity.goalId, host, validateActor));
 }

@@ -56,10 +56,11 @@ export function DecisionCard({ item, roster, actions, disabled = false }: { item
 
 function DecisionHistory({ decision, roster }: { decision: MonoDecision; roster: readonly Mono[] }) {
   const selected = decision.options.find(option => option.id === decision.selectedOptionId);
+  const at = decision.decidedAt ?? decision.updatedAt;
   return <li className="decision-log-item"><span className="decision-log-dot" aria-hidden="true" /><div><p>{decision.question}</p>
-    <strong>{selected?.label}</strong><small>{decisionActorName(roster, decision.decidedBy!)} · {decision.deciderLevel === "user" ? "your call" : `decided by ${decision.deciderLevel === "boss" ? "Boss" : "Manager"}`}
+    <strong>{selected?.label ?? "No answer recorded"}</strong><small>{decision.decidedBy && <>{decisionActorName(roster, decision.decidedBy)} · {decision.deciderLevel === "user" ? "your call" : `decided by ${decision.deciderLevel === "boss" ? "Boss" : "Manager"}`}</>}
       {decision.deliveryState === "stale" && " · recorded only, original work context changed"}</small></div>
-    <time dateTime={new Date(decision.decidedAt!).toISOString()}>{new Date(decision.decidedAt!).toLocaleString()}</time></li>;
+    <time dateTime={new Date(at).toISOString()}>{new Date(at).toLocaleString()}</time></li>;
 }
 
 export function DecisionQuarantineNotice({ quarantine, actions, disabled = false }: { quarantine: DecisionView["quarantine"]; actions: DecisionUiActions; disabled?: boolean }) {
@@ -100,7 +101,7 @@ export function Decisions({ view, roster, actions, unavailable = false, presenta
         {!view.pending.length && !unavailable && !view.loading.length && <div className="decision-empty"><h2>Nothing needs your decision</h2><p>The team keeps working toward the goals.</p></div>}
         {!!view.teamPending && <p className="decision-note">{view.teamPending} {view.teamPending === 1 ? "decision is" : "decisions are"} with Managers &amp; the Boss.</p>}</>
         : view.log.length ? <ol className="decision-log">{view.log.map(({ managerId, decision }) => <DecisionHistory key={`${managerId}:${decision.id}`} decision={decision} roster={roster} />)}</ol>
-        : <p className="decision-empty">No recorded decisions yet.</p>}
+        : view.autonomyChanges.length ? null : <p className="decision-empty">No recorded decisions yet.</p>}
       {tab === "log" && !!view.autonomyChanges.length && <ul className="decision-log" aria-label="Autonomy setting changes">{view.autonomyChanges.map(({ managerId, change }, index) =>
         <li className="decision-log-item" key={`${managerId}:${change.at}:${index}`}><div><p>{projectName(change.projectId)} · Autonomy copies consolidated</p>
           <strong>{[...new Set(change.replaced.map(copy => copy.value))].join(" / ")} → {change.value}</strong><small>You · explicit project setting</small></div>

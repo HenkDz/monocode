@@ -69,6 +69,10 @@ const pendingSwitch = find(node => ts.isIfStatement(node) && node.expression.get
 function evaluate(source: string, scope: Record<string, unknown>) {
   return new Function(...Object.keys(scope), ts.transpile(source, { target: ts.ScriptTarget.ES2022 }))(...Object.values(scope));
 }
+const decisionSetup = find(node => ts.isVariableDeclaration(node) && node.name.getText(app) === "afterDecisionSetup") as ts.VariableDeclaration;
+const afterDecisionSetup = evaluate(`return ${decisionSetup.initializer!.getText(app)};`, {
+  options: undefined, validateManagerDelivery: () => { throw Error("Non-decision fixture unexpectedly acquired decision authority"); },
+});
 
 const id = "authority-consumer";
 const key = "monocode:mono-rotations";
@@ -148,7 +152,7 @@ function handoff() {
     pendingSwitch: { from: "opencode", fromModel: "opencode:synthetic/m1", fromSettings: sessionsRef.current[0].modelSettings }, current: sessionsRef.current[0],
     assertMonoRotationCurrent, rotationReceipt: receipt, shouldAskOutgoingAgent: () => true,
     isLiveHarness: registry.isLiveHarness, requestOutgoingHandoff, sessionId: id, workCwd: "/synthetic", text: guidance,
-    turnGen, gen: 1, TurnNotReadyError, sessionsRef, chooseHandoffBrief, forgetHarnessSession: forget, complete,
+    turnGen, gen: 1, TurnNotReadyError, sessionsRef, chooseHandoffBrief, forgetHarnessSession: forget, complete, afterDecisionSetup,
   }) as Promise<void>;
   return { result, forget, complete };
 }

@@ -45,6 +45,8 @@ import { workspaceTeam } from "./WorkspaceTeam";
 import { pathKey } from "../../shared/lib/paths";
 import { worktreeTaskSessions } from "../../features/source-control/model/worktreeSessions";
 import { workbenchSessionTask } from "../../features/monos/model/monoNavigation";
+import { ProjectAutonomyControl, DecisionCard, type DecisionUiActions } from "../../features/commandCenter/ui/Decisions";
+import { selectDecisionView } from "../../features/commandCenter/model/decisionView";
 
 const button =
   "rounded-lg border border-stroke px-2.5 py-1.5 text-[11px] text-content/75 hover:bg-content/5 disabled:opacity-40";
@@ -232,11 +234,15 @@ export function WorkspaceGoals({
   sessions,
   usage,
   onOpenMono,
+  decisionActions,
+  decisionUnavailable = false,
 }: {
   project: string;
   sessions: readonly Session[];
   usage?: UsageDashboardSnapshot;
   onOpenMono: (id: string) => void;
+  decisionActions?: DecisionUiActions;
+  decisionUnavailable?: boolean;
 }) {
   useSyncExternalStore(subscribeMonos, monosSnapshot);
   useSyncExternalStore(monoManagerGoals.subscribe, monoManagerGoals.snapshot);
@@ -247,6 +253,7 @@ export function WorkspaceGoals({
   const roster = listMonos();
   const team = workspaceTeam(roster, project);
   const manager = team.manager;
+  const decisionView = selectDecisionView(monoManagerGoals, roster, Date.now(), project);
   const projectRuns = runs.filter((run) =>
     sameProjectPath(run.workspace?.projectCwd ?? run.cwd, project),
   );
@@ -339,14 +346,18 @@ export function WorkspaceGoals({
         <p className={empty}>No recorded tasks yet.</p>
       )}
       <h2 className={heading}>This project decides</h2>
+      {manager && decisionActions && <div className="px-4 py-2"><ProjectAutonomyControl managerId={manager.id} projectId={project}
+        value={monoManagerGoals.autonomy(manager.id, project)} actions={decisionActions} disabled={decisionUnavailable || !!decisionView.loading.length} />
+        {!!decisionView.autonomyConflicts.length && <p className="text-[11px] text-content/60">Autonomy setting had conflicting copies; using the stricter one.</p>}
+      </div>}
       <dl className="space-y-2 px-4 py-2 text-[11px] text-content/60">
-        <div className="flex justify-between gap-3">
+        {!decisionActions && <div className="flex justify-between gap-3">
           <dt>Ask me for</dt>
           <dd>Not configured</dd>
-        </div>
+        </div>}
         <div className="flex justify-between gap-3">
           <dt>Decided by team today</dt>
-          <dd>Not recorded</dd>
+          <dd>{!decisionActions ? "Not recorded" : decisionUnavailable ? "Unavailable" : decisionView.loading.length ? "Loading" : decisionView.handledToday}</dd>
         </div>
         <div className="flex justify-between gap-3">
           <dt>Skills chosen by Manager</dt>
@@ -357,6 +368,7 @@ export function WorkspaceGoals({
           </dd>
         </div>
       </dl>
+      {decisionActions && decisionView.pending.map(item => <div className="mx-4" key={`${item.managerId}:${item.decision.id}`}><DecisionCard item={item} roster={roster} actions={decisionActions} disabled={decisionUnavailable} /></div>)}
       <h2 className={heading}>Usage</h2>
       <WorkspaceUsage snapshot={usage} monoIds={ids} />
     </section>

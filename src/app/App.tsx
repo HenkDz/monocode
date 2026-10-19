@@ -17,6 +17,11 @@ import { archiveMonoConversation, archiveProjectMonos, offerProjectMonoRestore, 
 import { loadMonoView, saveMonoView, monoForView, monoViewProject, memberDetailsView, selectedOrgMono, monoLiveState } from "../features/monos/model/monoNavigation";
 import { MonoTeamActivity } from "../features/monos/ui/MonoTeamActivity";
 import { WorkspaceContextTabs, WorkspaceGoals, WorkspaceWorktree, WorkspaceWorktrees, WorkspaceUsage, type WorkspaceContextTab } from "./shell/WorkspaceContext";
+import { Decisions, type DecisionUiActions } from "../features/commandCenter/ui/Decisions";
+import { selectDecisionView } from "../features/commandCenter/model/decisionView";
+import { executeDecisionUi, handleDecisionTeamMessage, reraiseUnreadableDecision, runtimeDecisionHost, type DecisionRuntimeHost } from "../features/monos/model/monoDecisionRuntime";
+import { assertDecisionQueueConsumer, assertDecisionDigestConsumer, queueDecisionEvidence, decisionQueueId, decisionEvidenceText } from "../features/monos/model/monoDecisionDelivery";
+import { retainedDecisionDelivery, assertDecisionCurrent, StaleDecision } from "../features/monos/model/monoDecisions";
 import { workspaceTeam } from "./shell/WorkspaceTeam";
 import { TeamMap } from "../features/teamMap/TeamMap";
 // CC7C integration: Mission control uses the existing full-view navigation.
@@ -1068,6 +1073,9 @@ type SubmitOptions = ComposerTurnOptions & {
   appRequestId?: string;
   monoSessionCompletion?: Block["monoSessionCompletion"];
   monoSource?: Block["monoSource"];
+  monoDecision?: Block["monoDecision"];
+  validateDecisionDelivery?: () => void;
+  decisionTurn?: { generation: number | undefined };
   monoHabitAuthorized?: boolean;
   onSettled?: (outcome: ControlOutcome) => void;
   /** Generate a fresh title even when this is not the session's first turn. */
@@ -2026,6 +2034,11 @@ function Workspace({
     canForward: false,
   });
   const turnGen = useRef(new Map<string, number>());
+  const decisionRuntime = useRef<DecisionRuntimeHost>(null!);
+  const decisionRevision = useSyncExternalStore(monoManagerGoals.subscribe, monoManagerGoals.snapshot);
+  const [decisionUnavailable, setDecisionUnavailable] = useState(false);
+  const [decisionAttentionOpen, setDecisionAttentionOpen] = useState(false);
+  const decisionOriginalBlocks = useRef(new Map<string, Block[]>());
   const editedResends = useRef(createEditedResendCoordinator()).current;
   const lastPersisted = useRef(new Map<string, string>());
   const lastBoundProvider = useRef(new Map<string, string>());
@@ -7848,8 +7861,13 @@ function Workspace({
       const remote = sessionsRef.current.find(
         (session) => session.id === sessionId,
       );
-      const validateManagerDelivery = () => assertManagerDelivery(options?.monoSource, options?.appRequestId,
-        sessionsRef.current.find(session => session.id === sessionId), monoForSession(sessionId), monoManagerGoals);
+      const validateManagerDelivery = () => {
+        options?.validateDecisionDelivery?.();
+        assertManagerDelivery(options?.monoSource, options?.appRequestId,
+          sessionsRef.current.find(session => session.id === sessionId), monoForSession(sessionId), monoManagerGoals);
+      };
+      const afterDecisionSetup = <T,>(pending: Promise<T>): Promise<T> => options?.validateDecisionDelivery
+        ? pending.then(value => { validateManagerDelivery(); return value; }) : pending;
       try { validateManagerDelivery(); } catch (error) {
         enqueueHarnessEvent(sessionId, { type: "session.error", message: String(error) });
         flushHarnessEvents();
@@ -7919,8 +7937,8 @@ function Workspace({
         return codexStorageRecovery.current.prepare(sessionId,
           async () => {
             const generation = turnGen.current.get(sessionId);
-            const prepared = await prepareMonoCodexStore(providerAccountId, remote.providerSessionId, { ...monoSkillsForSession(sessionId), projectPath: sessionWorkCwd(remote), expectedMonoHome: remote.codexStorageHome, providerSessionIdByHome: remote.providerSessionIdByHome ?? {} });
-            await adoptCodexStorageHome(remote, prepared, generation);
+            const prepared = await afterDecisionSetup(prepareMonoCodexStore(providerAccountId, remote.providerSessionId, { ...monoSkillsForSession(sessionId), projectPath: sessionWorkCwd(remote), expectedMonoHome: remote.codexStorageHome, providerSessionIdByHome: remote.providerSessionIdByHome ?? {} }));
+            await afterDecisionSetup(adoptCodexStorageHome(remote, prepared, generation));
           },
           () => submitSessionRef.current(sessionId, text, attachments, { ...options, codexStoragePrepared: true }),
           error => {
@@ -7959,10 +7977,10 @@ function Workspace({
       if (isHabitRun(sessionId) && !options?.managerTurnPrepared) {
         const owner = findMono(habitRunMono(sessionId) ?? "");
         if (owner?.role === "manager") return (async () => {
-          const id = await monoEngineId(owner, owner.projects[0]);
-          await orchestrator.hydrate(id);
+          const id = await afterDecisionSetup(monoEngineId(owner, owner.projects[0]));
+          await afterDecisionSetup(orchestrator.hydrate(id));
           if (orchestrator.run(id)?.status !== "active") throw new Error("Manager needs Continue before its Habit can run");
-          await invoke("control_attach_worker", { leadId: id, sessionId, monoHabit: true });
+          await afterDecisionSetup(invoke("control_attach_worker", { leadId: id, sessionId, monoHabit: true }));
           return submitSessionRef.current(sessionId, text, attachments, { ...options, managerTurnPrepared: true });
         })();
       }
@@ -7994,14 +8012,14 @@ function Workspace({
             if (!priorMono) void onOpenMono(mono.id);
             for (const project of mono.projects) {
               if (remoteProjectFor(project)) continue;
-              const folder = await invoke<string>("project_root", { project });
+              const folder = await afterDecisionSetup(invoke<string>("project_root", { project }));
               validateManagerDelivery();
-              const id = await monoEngineId(mono, folder);
+              const id = await afterDecisionSetup(monoEngineId(mono, folder));
               validateManagerDelivery();
               const ownerSessionId = mono.sessionId ?? sessionId;
               if (
                 ownerSessionId !== sessionId &&
-                !(await ensureOpenSession(ownerSessionId))
+                !(await afterDecisionSetup(ensureOpenSession(ownerSessionId)))
               )
                 throw new Error("Habit owner conversation is unavailable");
               validateManagerDelivery();
@@ -8022,28 +8040,28 @@ function Workspace({
                     ...new Set([...(latest.workerProjects ?? []), folder]),
                   ],
                 }));
-              await orchestrator.hydrate(id);
+              await afterDecisionSetup(orchestrator.hydrate(id));
               validateManagerDelivery();
               if (orchestrator.run(id)?.status !== "active") {
                 if (options?.managed || options?.monoSessionCompletion)
                   throw new Error(
                     "Manager needs Continue before processing queued reports.",
                   );
-                await probeHarnessAvailability();
+                await afterDecisionSetup(probeHarnessAvailability());
                 validateManagerDelivery();
-                await orchestrator.start(
+                await afterDecisionSetup(orchestrator.start(
                   id,
                   HARNESSES.filter(isHarnessAvailable),
                   4,
                   undefined,
                   true,
-                );
+                ));
                 validateManagerDelivery();
               }
-              turnId = await orchestrator.beginManagerTurn(
+              turnId = await afterDecisionSetup(orchestrator.beginManagerTurn(
                 id,
                 !options?.managed && !options?.monoSessionCompletion,
-              );
+              ));
               validateManagerDelivery();
               prepared.push({ id, turnId });
             }
@@ -8365,14 +8383,14 @@ function Workspace({
             const latest = sessionsRef.current.find(
               (session) => session.id === sessionId,
             );
-            if (latest) await upsertSession(latest);
+            if (latest) await afterDecisionSetup(upsertSession(latest));
             return {
-              attachments: await prepareAttachments(attachments),
-              text: await preparePrompt(harnessText, {
+              attachments: await afterDecisionSetup(prepareAttachments(attachments)),
+              text: await afterDecisionSetup(preparePrompt(harnessText, {
                 harness: current.harness,
                 sessionId,
                 cwd: initialWorkCwd,
-              }),
+              })),
             };
           },
           steer: (prepared) => {
@@ -8518,12 +8536,12 @@ function Workspace({
         const gen = turnGen.current.get(sessionId);
         void (async () => {
           try {
-            const prepared = await prepareAttachments(attachments);
-            const prompt = await preparePrompt(harnessText, {
+            const prepared = await afterDecisionSetup(prepareAttachments(attachments));
+            const prompt = await afterDecisionSetup(preparePrompt(harnessText, {
               harness: current.harness,
               sessionId,
               cwd: initialWorkCwd,
-            });
+            }));
             assertMonoRotationCurrent(sessionId, savedRotation);
             await steerHarnessTurn({
               harness: current.harness,
@@ -8635,6 +8653,7 @@ function Workspace({
       }
       const gen = (turnGen.current.get(sessionId) ?? 0) + 1;
       turnGen.current.set(sessionId, gen);
+      if (options?.decisionTurn) options.decisionTurn.generation = gen;
       if (monoForSession(sessionId) || isHabitRun(sessionId)) {
         monoGoalOrigins.set(sessionId, {
           kind: options?.monoHabitAuthorized
@@ -8708,7 +8727,8 @@ function Workspace({
           : {}),
         ...(options?.monoSource ? { monoSource: options.monoSource } : {}),
         // The orchestrator writes these turns, not the user; hide them.
-        ...(options?.managed || options?.monoSessionCompletion
+        ...(options?.monoDecision ? { monoDecision: options.monoDecision } : {}),
+        ...(options?.managed || options?.monoSessionCompletion || options?.monoDecision
           ? { internal: true }
           : {}),
         ...(options?.monoSessionCompletion
@@ -8891,11 +8911,11 @@ function Workspace({
             ) {
               return;
             }
-            const linkedWorkItem = await resolveLinkedWorkItem(
+            const linkedWorkItem = await afterDecisionSetup(resolveLinkedWorkItem(
               titleMessage,
               workCwd,
               generated?.workItem ?? null,
-            );
+            ));
             if (!generated && !linkedWorkItem) return;
             setSessions((prev) =>
               prev.map((s) => {
@@ -8970,12 +8990,12 @@ function Workspace({
       void (async () => {
         let workCwd = initialWorkCwd;
         if (createDraftWorktree) {
-          const tree = await createWorktree(
+          const tree = await afterDecisionSetup(createWorktree(
             current.cwd,
             temporaryWorktreeBranchName(),
             current.worktreeBase || "HEAD",
             false,
-          );
+          ));
           workCwd = tree.path;
           workspacePins.current.set(sessionId, currentWorkspace(current.cwd));
           if (proposalDraft)
@@ -9006,11 +9026,11 @@ function Workspace({
             .then(async (fragment) => {
               const branch = fragment ? namedWorktreeBranch(fragment) : null;
               if (!branch) return;
-              const renamed = await renameWorktreeBranch(
+              const renamed = await afterDecisionSetup(renameWorktreeBranch(
                 current.cwd,
                 tree.path,
                 branch,
-              );
+              ));
               setSessions((prev) =>
                 prev.map((session) =>
                   session.id === sessionId &&
@@ -9025,7 +9045,7 @@ function Workspace({
         launchTitleGeneration(workCwd);
         if (turnGen.current.get(sessionId) !== gen) return;
         if (proposalDraft && proposalId) {
-          const settings = await discoverOrchestrationSettings();
+          const settings = await afterDecisionSetup(discoverOrchestrationSettings());
           if (turnGen.current.get(sessionId) !== gen) return;
           proposalDraft = { ...proposalDraft, settings };
           const discovering = proposalDraft;
@@ -9052,7 +9072,7 @@ function Workspace({
             isLiveHarness(pendingSwitch.from)
           ) {
             try {
-              agentText = await requestOutgoingHandoff({
+              agentText = await afterDecisionSetup(requestOutgoingHandoff({
                 harness: pendingSwitch.from,
                 sessionId,
                 cwd: workCwd,
@@ -9064,7 +9084,7 @@ function Workspace({
                   if (turnGen.current.get(sessionId) !== gen) throw new TurnNotReadyError("The turn was stopped before its prompt could be sent.");
                   assertMonoRotationCurrent(sessionId, rotationReceipt);
                 },
-              });
+              }));
             } catch {
               agentText = "";
             }
@@ -9073,7 +9093,7 @@ function Workspace({
           const latest = sessionsRef.current.find((s) => s.id === sessionId);
           const brief = chooseHandoffBrief(agentText, latest ?? current, text);
           assertMonoRotationCurrent(sessionId, rotationReceipt);
-          await forgetHarnessSession(pendingSwitch.from, sessionId);
+          await afterDecisionSetup(forgetHarnessSession(pendingSwitch.from, sessionId));
           if (turnGen.current.get(sessionId) !== gen) return;
           wrap = { from: pendingSwitch.from, to: current.harness, text: brief };
         }
@@ -9182,11 +9202,11 @@ function Workspace({
 
         const checkpointTurnId =
           !current.inboxAsk && !orchestrator.forSession(sessionId)
-            ? await beginSessionTurn(
+            ? await afterDecisionSetup(beginSessionTurn(
                 sessionId,
                 workCwd,
                 sessionEditPaths(current.blocks),
-              )
+              ))
             : undefined;
         if (turnGen.current.get(sessionId) !== gen) {
           if (checkpointTurnId) {
@@ -9198,15 +9218,15 @@ function Workspace({
         }
         let buildSucceeded = false;
         try {
-          const prepared = await prepareAttachments(attachments);
+          const prepared = await afterDecisionSetup(prepareAttachments(attachments));
           const prompt =
             intent === "build" && approvedPlan
               ? buildPlanPrompt(approvedPlan.text)
-              : await preparePrompt(harnessText, {
+              : await afterDecisionSetup(preparePrompt(harnessText, {
                   harness: current.harness,
                   sessionId,
                   cwd: workCwd,
-                });
+                }));
           const turnPrompt = proposalDraft
             ? options?.orchestrationRetry?.response
               ? orchestrationRepairPrompt({
@@ -9228,7 +9248,7 @@ function Workspace({
           assertMonoRotationCurrent(sessionId, rotationReceipt);
           if (editedResend && canRewindHarnessLastTurn(current.harness)) {
             try {
-              await rewindHarnessLastTurn({
+              await afterDecisionSetup(rewindHarnessLastTurn({
                 harness: current.harness,
                 sessionId,
                 cwd: workCwd,
@@ -9250,7 +9270,7 @@ function Workspace({
                   if (turnGen.current.get(sessionId) !== gen) return;
                   enqueueHarnessEvent(sessionId, bindContextProfile(event));
                 },
-              });
+              }));
             } catch (error) {
               flushHarnessEvents();
               editedResend.reject();
@@ -9268,7 +9288,7 @@ function Workspace({
                 (!latest.busy &&
                   latest.providerSessionId === current.providerSessionId)
               ) {
-                await forgetHarnessSession(current.harness, sessionId);
+                await afterDecisionSetup(forgetHarnessSession(current.harness, sessionId));
                 if (latest) {
                   setSessions((prev) =>
                     prev.map((session) =>
@@ -9289,7 +9309,7 @@ function Workspace({
           let prepareContext: ((text: string, provider?: string) => Promise<string>) | undefined;
           const sendTurn = async (text: string, turnAttachments = prepared) => {
             contextProvider = undefined;
-            const fallbackText = prepareContext ? await prepareContext(text) : text;
+            const fallbackText = prepareContext ? await afterDecisionSetup(prepareContext(text)) : text;
             assertMonoRotationCurrent(sessionId, rotationReceipt);
             return sendHarnessTurn({
               harness: current.harness,
@@ -9334,14 +9354,14 @@ function Workspace({
               prepareText: async provider => {
                 contextProvider = provider;
                 if (provider && monoWorkingDirectoryMigrationPending(sessionId)) {
-                  const saved = await upsertSession(current, session => {
+                  const saved = await afterDecisionSetup(upsertSession(current, session => {
                     if (session.harness !== current.harness || !sameProviderAccountId(session.providerAccountId, current.providerAccountId))
                       throw new Error("The conversation's provider changed before its relocated context could be saved. Retry the turn.");
                     return { ...session, providerSessionId: provider };
-                  });
+                  }));
                   if (!saved) throw new Error("The relocated conversation could not be saved. Retry before sending a turn.");
                 }
-                const preparedText = prepareContext ? await prepareContext(text, provider) : text;
+                const preparedText = prepareContext ? await afterDecisionSetup(prepareContext(text, provider)) : text;
                 assertMonoRotationCurrent(sessionId, rotationReceipt);
                 return preparedText;
               },
@@ -9391,17 +9411,17 @@ function Workspace({
             }, monoRotation.expected)) throw new Error("The context refresh brief could not be saved. Retry when storage is available to include its latest constraints.");
             rotationReceipt = { ...monoRotation.rotation, pendingBrief: monoRotation.rotation.pendingBrief ?? monoRotation.brief(sessionId) };
             if (mono && current.harness === "codex" && current.providerSessionId) {
-              await migrateMonoCodexSession({
+              await afterDecisionSetup(migrateMonoCodexSession({
                 sessionId,
                 threadId: current.providerSessionId,
                 expectedMonoHome: current.codexStorageHome,
                 cwd: workCwd,
                 providerAccountId,
                 ...monoSkillsForSession(sessionId),
-              });
+              }));
             }
             if (turnGen.current.get(sessionId) !== gen) return;
-            current = await rotateProviderContext(current, () => forgetHarnessSession(current.harness, sessionId));
+            current = await afterDecisionSetup(rotateProviderContext(current, () => forgetHarnessSession(current.harness, sessionId)));
             if (turnGen.current.get(sessionId) !== gen) return;
             const fresh = (session: Session) =>
               session.id === sessionId
@@ -9420,7 +9440,7 @@ function Workspace({
           const monoRecord = mono ? monoForSession(sessionId) : undefined;
           const agentLook = monoRecord ? monoLook(monoRecord) : undefined;
           const agentFiles = monoRecord
-            ? await loadMonoFiles(monoRecord.id).catch(() => undefined)
+            ? await afterDecisionSetup(loadMonoFiles(monoRecord.id).catch(() => undefined))
             : undefined;
           // Who it is counts as part of its soul: a rename or a change to its
           // projects is handed over too, and so is a change to the fixed rules.
@@ -9448,10 +9468,10 @@ function Workspace({
             if (mono || orgOwner) appContext.push(monoAuthorityCore(orgOwner));
             const orgContext =
               orgOwner && orgTurnContext(listMonos(), orgOwner.id);
-            const orgPlan = orgContext ? await planOrgContext(
+            const orgPlan = orgContext ? await afterDecisionSetup(planOrgContext(
               sessionId, provider,
               `${current.harness}:${current.model}:${providerAccountId ?? ""}`, orgContext,
-            ) : undefined;
+            )) : undefined;
             if (orgPlan?.text) appContext.push(orgPlan.text);
             if (monoRotation) {
               appContext.push(monoRotation.brief(sessionId));
@@ -9471,7 +9491,7 @@ function Workspace({
               appContext.push(monoContext(agentLook, agentFiles, agentPlan, orgOwner?.role));
             }
             if (operatorCommand.matched || handAgent) {
-              const cli = `${shellPath(await invoke<string>("app_cli_path"))} app`;
+              const cli = `${shellPath(await afterDecisionSetup(invoke<string>("app_cli_path")))} app`;
               appContext.push(
                 monoAppContext(cli, handAgent || !!orgOwner),
               );
@@ -9491,7 +9511,7 @@ function Workspace({
                 member.reportsTo !== memberRun?.ownerMonoId
               )
                 throw new Error("This worker's team membership changed");
-              const files = await loadMonoFiles(member.id);
+              const files = await afterDecisionSetup(loadMonoFiles(member.id));
               const review =
                 memberTask.reviewOf &&
                 memberRun?.tasks.find(
@@ -9753,10 +9773,16 @@ function Workspace({
     (...args: Parameters<Submit>): boolean => {
       // Reject before async preparation can make the composer clear its draft.
       if (workspaceNavigation.isSwitching(args[0])) return false;
+      const accepted = (sent: boolean) => {
+        if (sent && !args[3]?.managed && !args[3]?.appRequestId && !args[3]?.queuedMessageId && !args[3]?.followUpBehavior)
+          setSessions(previous => previous.map(session => session.id === args[0] && session.queueStatus === "paused" && !queuedHead(session)
+            ? { ...session, queueStatus: "active" } : session));
+        return sent;
+      };
       const result = submitSession(...args);
-      if (typeof result === "boolean") return result;
+      if (typeof result === "boolean") return accepted(result);
       // Deferred errors have already been displayed by submitAfterProjectSync.
-      void result.catch(() => undefined);
+      void result.then(accepted).catch(() => undefined);
       return true;
     },
     [submitSession],
@@ -10421,6 +10447,62 @@ function Workspace({
               ),
             );
           try {
+            let validateDecisionDelivery: (() => void) | undefined;
+            const decisionTurn = { generation: turnGen.current.get(session.id) };
+            if (head.monoDecision || head.managerWake) {
+              await decisionRuntime.current.hydrate();
+              const binding = managerRequestBinding(latest);
+              let validate: () => void;
+              if (head.managerWake) {
+                const readRun = () => orchestrator.run(head.managerWake!.leadId) ?? orchestrator.snapshot().find(run => run.ownerSessionId === session.id && run.wakeState?.receipt?.id === head.managerWake!.receiptId);
+                const run = readRun();
+                if (!run?.ownerMonoId) throw Error("Manager digest owner is unavailable");
+                validate = assertDecisionDigestConsumer(head, readRun,
+                  () => monoManagerGoals.decisions(run.ownerMonoId!), runtimeDecisionHost(run.ownerMonoId,
+                    { kind: "mono", id: run.ownerMonoId }, "", undefined, decisionRuntime.current));
+              } else {
+              const reference = head.monoDecision;
+              if (!reference) throw Error("Decision reference is unavailable");
+              const recipient = listMonos().find(mono => mono.id === reference.recipientId && mono.archivedAt == null);
+              const run = orchestrator.snapshot().find(run => run.tasks.some(task => task.memberId === recipient?.id && task.sessionId === session.id));
+              if (!recipient || !(recipient.sessionId === session.id || run?.tasks.some(task => task.memberId === recipient.id && task.sessionId === session.id)))
+                throw Error("Decision recipient changed; evidence retained without delivery");
+              const currentDecision = () => monoManagerGoals.decisions(reference.managerId).find(decision => decision.id === reference.decisionId);
+              validate = await assertDecisionQueueConsumer(head, recipient.id, currentDecision,
+                runtimeDecisionHost(reference.managerId, { kind: "mono", id: recipient.id }, "", undefined, decisionRuntime.current));
+              }
+              validateDecisionDelivery = () => {
+                validate();
+                const current = sessionsRef.current.find(entry => entry.id === session.id);
+                const retained = current?.queuedMessages?.find(message => message.id === head.id) ?? current?.blocks.find(block => block.internal && block.appRequestId === head.appRequestId);
+                if (!retained || retained.text !== head.text || turnGen.current.get(session.id) !== decisionTurn.generation || !managerRequestBindingCurrent(current, binding))
+                  throw Error("Decision recipient turn or binding changed; evidence retained");
+              };
+              validateDecisionDelivery();
+              const persisted = await readPersistedSession(session.id);
+              validateDecisionDelivery();
+              let consumed = persisted?.blocks.find(block => block.internal && block.appRequestId === head.appRequestId);
+              if (!consumed && isMonoSession(session.id) && await invoke<boolean>("mono_session_event_delivered", { sessionId: session.id, eventId: head.appRequestId, text: head.text })) {
+                validateDecisionDelivery();
+                consumed = (await getMonoGoalRecoveryBlocks(session.id)).find(block => block.internal && block.appRequestId === head.appRequestId);
+                validateDecisionDelivery();
+              }
+              if (consumed) {
+                if (consumed.text !== head.text || JSON.stringify(consumed.monoDecision) !== JSON.stringify(head.monoDecision)) throw Error("Consumed decision receipt does not match queued evidence");
+                const validateConsumed = validateDecisionDelivery;
+                await writeSession(session.id, async save => {
+                  validateConsumed();
+                  const current = sessionsRef.current.find(entry => entry.id === session.id)!;
+                  if (!await save(dequeueQueuedMessage(current, head.id))) throw Error("Consumed decision queue could not be saved");
+                  validateConsumed();
+                  if ((await readPersistedSession(session.id))?.queuedMessages?.some(message => message.id === head.id)) throw Error("Consumed decision queue removal could not be verified");
+                  validateConsumed();
+                  setSessions(previous => previous.map(entry => entry.id === session.id ? dequeueQueuedMessage(entry, head.id) : entry));
+                });
+                setQueueDispatchVersion(value => value + 1);
+                return;
+              }
+            }
             // Duplicate receipts can be outside the loaded transcript window.
             if (head.monoSessionCompletion && latest.monoTranscript?.before != null &&
                 await invoke<boolean>("mono_session_event_delivered", {
@@ -10452,7 +10534,8 @@ function Workspace({
                       appRequestId: head.id,
                     }
                   : {}),
-                ...(head.managerWake ? { managed: true } : {}),
+                ...(head.managerWake ? { managed: true, validateDecisionDelivery, decisionTurn } : {}),
+                ...(head.monoDecision ? { monoDecision: head.monoDecision, managed: true, validateDecisionDelivery, decisionTurn } : {}),
               },
             );
             // A preflight rejection must not repeatedly retry or hide the message.
@@ -10494,6 +10577,49 @@ function Workspace({
             if (accepted || steering)
               setQueueDispatchVersion((value) => value + 1);
           } catch (error) {
+            if ((head.monoDecision || head.managerWake) && error instanceof StaleDecision) {
+              try {
+                const retireCurrent = async (managerId: string, decisionId: string, version: number) => {
+                  const decision = monoManagerGoals.decisions(managerId).find(entry => entry.id === decisionId);
+                  if (!decision || decision.resolutionVersion !== version) return;
+                  try { assertDecisionCurrent(decision, runtimeDecisionHost(managerId, { kind: "mono", id: managerId }, "", undefined, decisionRuntime.current)); }
+                  catch (changed) {
+                    if (!(changed instanceof StaleDecision)) throw changed;
+                    await monoManagerGoals.retireDecisionEvidence(managerId, decision.id, version);
+                  }
+                };
+                if (head.monoDecision) await retireCurrent(head.monoDecision.managerId, head.monoDecision.decisionId, head.monoDecision.resolutionVersion);
+                const run = head.managerWake && (orchestrator.run(head.managerWake.leadId) ?? orchestrator.snapshot().find(run => run.ownerSessionId === session.id && run.wakeState?.receipt?.id === head.managerWake!.receiptId));
+                const retired = run?.wakeState?.receipt?.eventIds.filter(id => {
+                  if (!id.startsWith("decision:")) return false;
+                  const decision = monoManagerGoals.decisions(run.ownerMonoId!).find(decision => id.startsWith(`decision:${decision.id}:`));
+                  if (!decision || !retainedDecisionDelivery(decision, id) || decision.deliveryState === "stale") return true;
+                  try { assertDecisionCurrent(decision, runtimeDecisionHost(run.ownerMonoId!, { kind: "mono", id: run.ownerMonoId! }, "", undefined, decisionRuntime.current)); return false; }
+                  catch (changed) { if (changed instanceof StaleDecision) return true; throw changed; }
+                });
+                for (const id of retired ?? []) {
+                  const decision = monoManagerGoals.decisions(run!.ownerMonoId!).find(decision => retainedDecisionDelivery(decision, id));
+                  if (decision) await retireCurrent(run!.ownerMonoId!, decision.id, decision.resolutionVersion);
+                }
+                if (run && retired?.length) await orchestrator.retireDecisionDigest(run.leadId, head.managerWake!.receiptId, retired);
+                await writeSession(session.id, async save => {
+                  const current = sessionsRef.current.find(entry => entry.id === session.id);
+                  if (!current) throw Error("Retired decision recipient is unavailable");
+                  const id = `retired-${head.id}`;
+                  const retirementBlock = { id, role: "system" as const, text: "Retired outdated decision evidence. No work was resumed.", notice: "interrupt" as const };
+                  const next = { ...dequeueQueuedMessage(current, head.id), blocks: current.blocks.some(block => block.id === id) ? current.blocks : [...current.blocks,
+                    retirementBlock] };
+                  if (!await save(next)) throw Error("Retired decision evidence could not be saved");
+                  const persisted = await readPersistedSession(session.id);
+                  if (!persisted?.blocks.some(block => block.id === id) || persisted.queuedMessages?.some(message => message.id === head.id))
+                    throw Error("Retired decision receipt could not be verified");
+                  sessionsRef.current = sessionsRef.current.map(entry => entry.id === session.id ? { ...dequeueQueuedMessage(entry, head.id), blocks: entry.blocks.some(block => block.id === id) ? entry.blocks : [...entry.blocks, retirementBlock] } : entry);
+                  setSessions(sessionsRef.current);
+                });
+                setQueueDispatchVersion(value => value + 1);
+                return;
+              } catch (retirementError) { error = retirementError; }
+            }
             setSessions((prev) =>
               prev.map((entry) =>
                 entry.id === session.id
@@ -10621,9 +10747,12 @@ function Workspace({
       if (
         !session ||
         (session.busy && !monoForSession(sessionId)) ||
-        session.queueStatus !== "paused" ||
-        !queuedHead(session)
+        session.queueStatus !== "paused"
       ) {
+        return;
+      }
+      if (!queuedHead(session)) {
+        setSessions(previous => previous.map(entry => entry.id === sessionId ? { ...entry, queueStatus: "active" } : entry));
         return;
       }
       if (monoForSession(sessionId) || queuedHead(session)?.error) {
@@ -12071,11 +12200,12 @@ function Workspace({
       const ownedRuns = orchestrator.snapshot().filter(run => run.ownerSessionId === sessionId || run.leadId === sessionId);
       const retireRequests = manager?.role === "manager" && (!managed || ownedRuns.some(run => run.status === "stopped")) && !preserveQueue;
       if (retireRequests) monoGoalOrigins.delete(sessionId);
-      const retired = retireRequests ? Promise.all([
+      const retiredRequests = retireRequests ? Promise.all([
         ...ownedRuns.map(run => monoManagerGoals.retireManagerRequests(run.leadId)),
         ...(remote ? [upsertSession(remote, current => ({ ...current, blocks: current.blocks.map(block => block.managerRequestRecovery?.state === "pending"
           ? { ...block, managerRequestRecovery: { ...block.managerRequestRecovery, state: "cancelled" as const } } : block) }))] : []),
       ]) : Promise.resolve();
+      const retired = Promise.all([retiredRequests, ...(!preserveQueue ? [monoManagerGoals.retireDecisionSession(sessionId)] : [])]);
       if (!managed) {
         const stopping = orchestrator.stopForSession(sessionId);
         if (stopping) {
@@ -12109,7 +12239,7 @@ function Workspace({
             ? completeHandoff(stopped, buildDeterministicHandoff(stopped))
             : stopped;
           const ready = { ...completed, worktreePreparing: undefined };
-          return ready.queuedMessages?.length && !preserveQueue
+          return !preserveQueue
             ? { ...ready, queueStatus: "paused" }
             : ready;
         }),
@@ -12695,20 +12825,38 @@ function Workspace({
         onResumeQueue(id);
         return session.queueStatus === "paused" || session.queueStatus === "active";
       },
-      acceptManagerDigest: (id, receipt) => writeSession(id, save => acceptManagerWakeQueue(receipt, id, {
+      acceptManagerDigest: (id, receipt) => writeSession(id, save => {
+        const readRun = () => orchestrator.snapshot().find(run => (run.ownerSessionId ?? run.leadId) === id && run.wakeState?.receipt?.id === receipt.id);
+        const run = readRun();
+        const session = sessionsRef.current.find(session => session.id === id);
+        const binding = session && managerRequestBinding(session), generation = turnGen.current.get(id);
+        const decisionGuard = run?.wakeState?.events.some(event => receipt.eventIds.includes(event.id) && event.id.startsWith("decision:")) && run.ownerMonoId
+          ? assertDecisionDigestConsumer({ id: receipt.id, appRequestId: receipt.id, text: receipt.body, attachments: [], managerWake: { leadId: run.leadId, receiptId: receipt.id } },
+              readRun, () => monoManagerGoals.decisions(run.ownerMonoId!), runtimeDecisionHost(run.ownerMonoId, { kind: "mono", id: run.ownerMonoId }, "", undefined, decisionRuntime.current)) : () => {};
+        const validate = () => {
+          decisionGuard();
+          if (run?.wakeState?.events.some(event => receipt.eventIds.includes(event.id) && event.id.startsWith("decision:")) &&
+              (turnGen.current.get(id) !== generation || !managerRequestBindingCurrent(sessionsRef.current.find(session => session.id === id), binding) || readRun()?.managerTurnId !== run.managerTurnId))
+            throw Error("Manager decision digest turn or binding changed before publication");
+        };
+        return acceptManagerWakeQueue(receipt, run?.leadId ?? id, {
         session: () => sessionsRef.current.find(session => session.id === id),
-        delivered: () => invoke<boolean>("mono_session_event_delivered", { sessionId: id, eventId: receipt.id, text: receipt.body }),
+        delivered: async () => { validate(); const found = await invoke<boolean>("mono_session_event_delivered", { sessionId: id, eventId: receipt.id, text: receipt.body }); validate(); return found; },
         save: async session => {
+          validate();
           const saved = await save(session);
+          validate();
           if (!saved) throw new Error("Manager digest could not be saved");
           return saved;
         },
-        load: () => readPersistedSession(id),
+        load: async () => { validate(); const saved = await readPersistedSession(id); validate(); return saved; },
         publish: session => {
+          validate();
           sessionsRef.current = sessionsRef.current.map(entry => entry.id === id ? session : entry);
           flushSync(() => setSessions(sessionsRef.current));
         },
-      })),
+      });
+      }),
       submit: (id, text, done) => {
         void submitWithSettlement({
           submit: (onSettled) => {
@@ -13471,6 +13619,139 @@ function Workspace({
     });
   };
 
+  decisionRuntime.current = {
+    ledger: monoManagerGoals, roster: listMonos, runs: () => orchestrator.snapshot(),
+    sessions: () => sessionsRef.current.map(session => {
+      const originals = decisionOriginalBlocks.current.get(session.id) ?? [];
+      const ids = new Set(session.blocks.map(block => block.id));
+      return originals.some(block => !ids.has(block.id)) ? { ...session, blocks: [...originals.filter(block => !ids.has(block.id)), ...session.blocks] } : session;
+    }),
+    generation: id => turnGen.current.get(id) ?? 0,
+    eventOwner: habitRunMono,
+    hydrate: async () => {
+      try {
+        for (const mono of listMonos().filter(mono => mono.role === "manager" || mono.role === "orchestrator")) {
+          await monoManagerGoals.hydrate(mono.id);
+        }
+        const ids = new Set([
+          ...listMonos().flatMap(mono => mono.sessionId ? [mono.sessionId] : []),
+          ...orchestrator.snapshot().flatMap(run => run.tasks.map(task => task.sessionId)),
+        ]);
+        for (const id of ids) if (!sessionsRef.current.some(session => session.id === id)) {
+          const stored = await readPersistedSession(id);
+          if (stored && !sessionsRef.current.some(session => session.id === id)) {
+            sessionsRef.current = [...sessionsRef.current, stored];
+            setSessions(sessionsRef.current);
+          }
+        }
+        for (const mono of listMonos()) {
+          const session = sessionsRef.current.find(session => session.id === mono.sessionId);
+          const goals = monoManagerGoals.goals(mono.id);
+          if (session && goals.some(goal => !session.blocks.some(block => block.id === goal.userMessageId))) {
+            const history = await getMonoGoalRecoveryBlocks(session.id);
+            decisionOriginalBlocks.current.set(session.id, history.filter(block => goals.some(goal => goal.userMessageId === block.id)));
+          }
+        }
+        setDecisionUnavailable(false);
+      } catch (error) { setDecisionUnavailable(true); throw error; }
+    },
+    queue: async (message, decision, validate) => {
+      validate();
+      const recipient = findMono(message.recipientId);
+      const run = orchestrator.snapshot().find(run => run.tasks.some(task => task.memberId === recipient?.id && task.id === decision.identity.taskId));
+      const sessionId = recipient?.role === "member"
+        ? run?.tasks.find(task => task.memberId === recipient.id && task.id === decision.identity.taskId)?.sessionId : recipient?.sessionId;
+      if (!recipient || !sessionId) throw Error("Decision recipient is unavailable");
+      const managerRun = recipient.role === "manager" ? orchestrator.run(decision.identity.managerId) : undefined;
+      if (managerRun) {
+        await orchestrator.queueManagerMessage(managerRun.leadId, message.event);
+        validate();
+        const raw = await invoke<string | null>("control_load", { leadId: managerRun.leadId });
+        validate();
+        const savedRun = raw ? JSON.parse(raw) as typeof managerRun : undefined;
+        const event = savedRun?.wakeState?.events.find(event => event.id === message.event.id);
+        const receipt = savedRun?.wakeState?.receipt;
+        if (!event || event.text !== message.event.text || event.signature !== message.event.signature || !receipt?.eventIds.includes(event.id))
+          throw Error("Decision is retained while the Manager digest waits for its existing queue");
+        const persisted = await writeSession(sessionId, () => readPersistedSession(sessionId));
+        validate();
+        const queued = persisted?.queuedMessages?.some(item => item.id === receipt.id && item.appRequestId === receipt.id && item.text === receipt.body && item.managerWake?.leadId === managerRun.leadId);
+        const delivered = !queued && await invoke<boolean>("mono_session_event_delivered", { sessionId, eventId: receipt.id, text: receipt.body });
+        validate();
+        if (!queued && !delivered) throw Error("Decision Manager digest save is not yet verified; retry retained delivery");
+        return;
+      }
+      const queueId = await decisionQueueId(message.event.id);
+      validate();
+      const persisted = await writeSession(sessionId, () => readPersistedSession(sessionId));
+      validate();
+      let consumed = persisted?.blocks.find(block => block.appRequestId === queueId);
+      if (!consumed && isMonoSession(sessionId) && await invoke<boolean>("mono_session_event_delivered", { sessionId, eventId: queueId, text: decisionEvidenceText(message) })) {
+        validate();
+        consumed = (await getMonoGoalRecoveryBlocks(sessionId)).find(block => block.appRequestId === queueId);
+        validate();
+        if (!consumed) throw Error("Saved decision receipt could not be read back");
+      }
+      if (consumed) {
+        const reference = { managerId: decision.escalationChain.find(entry => entry.level === "manager")!.id, decisionId: decision.id,
+          resolutionVersion: decision.resolutionVersion, eventId: message.event.id, recipientId: message.recipientId };
+        if (!consumed.internal || consumed.text !== decisionEvidenceText(message) || JSON.stringify(consumed.monoDecision) !== JSON.stringify(reference))
+          throw Error("Saved decision event has different evidence");
+        return;
+      }
+      await queueDecisionEvidence(decision.escalationChain.find(entry => entry.level === "manager")!.id, message, decision, validate, {
+        recipient: () => sessionsRef.current.find(session => session.id === sessionId),
+        update: (id, change) => writeSession(id, async save => {
+          for (;;) {
+            const current = sessionsRef.current.find(session => session.id === id);
+            if (!current) throw Error("Decision recipient conversation is unavailable");
+            const next = change(current);
+            if (next === current) return;
+            if (!await save(next)) throw Error("Decision evidence could not be saved");
+            const persisted = await readPersistedSession(id);
+            if (!persisted || change(persisted) !== persisted) throw Error("Decision queue read-back failed");
+            if (sessionsRef.current.find(session => session.id === id) !== current) continue;
+            sessionsRef.current = sessionsRef.current.map(session => session.id === id ? next : session);
+            setSessions(sessionsRef.current);
+            return;
+          }
+        }),
+        read: async id => (await writeSession(id, () => readPersistedSession(id))) ?? undefined,
+      });
+    },
+    notifyUser: async (eventId, decision, validate) => {
+      validate();
+      if (retainedDecisionDelivery(decision, eventId)?.recipientId !== "user") throw Error("Decision user notification is unavailable");
+      // The saved ledger subscription is the notification projection and exact event-ID receipt.
+    },
+    askManager: async (managerId, requestId, text) => {
+      const run = orchestrator.snapshot().find(run => run.ownerMonoId === managerId && ["active", "paused"].includes(run.status));
+      if (!run) throw Error("Open the Manager's existing work before asking it to re-raise");
+      const event = { id: `decision-reraise:${requestId}`, kind: "info" as const, requestId, at: Date.now(), text, signature: JSON.stringify([managerId, requestId, text]) };
+      await orchestrator.queueManagerMessage(run.leadId, event);
+      const raw = await invoke<string | null>("control_load", { leadId: run.leadId });
+      const retained = raw ? (JSON.parse(raw) as typeof run).wakeState?.events.find(item => item.id === event.id) : undefined;
+      if (retained?.signature !== event.signature || retained.text !== text) throw Error("Manager re-raise request could not be verified; retry its receipt");
+    },
+  };
+
+  useEffect(() => {
+    void decisionRuntime.current.hydrate().catch(() => undefined);
+  }, [monosSnap]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      for (const manager of listMonos().filter(mono => mono.role === "manager" && mono.archivedAt == null)) {
+        if (cancelled) return;
+        // Replay saved delivery receipts only; this cannot issue a new decision command or start work.
+        await monoManagerGoals.recoverDecisions(manager.id, runtimeDecisionHost(manager.id, { kind: "mono", id: manager.id }, "", undefined, decisionRuntime.current))
+          .catch(() => undefined);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [decisionRevision, orchestrationRuns]);
+
   useEffect(() => {
     const stopCards = registerTeamCards(async (managerId, changeId) => {
       const target = sessionsRef.current.find(session => session.id === findMono(managerId)?.sessionId);
@@ -13661,6 +13942,12 @@ function Workspace({
           if (prior && (prior.text !== input.text || prior.recipientId !== input.memberId || prior.topic !== topic || prior.kind !== kind || (prior.requiresReply !== false) !== requiresReply)) throw new Error("Request ID was already used with different input");
           const exchanges = events.filter(event => event.topic === topic && ((event.senderId === actor.id && event.recipientId === input.memberId) || (event.recipientId === actor.id && event.senderId === input.memberId))).length;
           const route = teamMessageRoute(listMonos(), actor.id, input.memberId, exchanges);
+          const decisionResult = await handleDecisionTeamMessage(source.id, payload.requestId, {
+            id: eventId, senderId: actor.id, recipientId: input.memberId,
+            managerId: actor.role === "manager" ? actor.id : actor.role === "member" ? actor.reportsTo! : route.managerId ?? route.target.id,
+            text: messageText, topic, at: prior?.at ?? Date.now(), requiresReply, kind,
+          }, decisionRuntime.current);
+          if (decisionResult !== undefined) return decisionResult;
           if (route.target.role === "manager") {
             const target = await ensureMonoSession(route.target.id, {
               home: homeDir, load: ensureOpenSession, save: saveMonoPermissions,
@@ -16832,14 +17119,28 @@ function Workspace({
     // The roster is read through its snapshot.
   }, [monosSnap, sessions, monoReplies.counts, orchestrationRuns]);
   const monoRail = useStableValue(monoRailState);
+  const decisionView = selectDecisionView(monoManagerGoals, listMonos(), Date.now());
+  const decisionActions: DecisionUiActions = {
+    command: (event, managerId, requestId, command) => executeDecisionUi(event, managerId, requestId, command, decisionRuntime.current),
+    reraise: (event, managerId, requestId, oldDecisionId) => reraiseUnreadableDecision(event, managerId, requestId, oldDecisionId, decisionRuntime.current),
+    openProject: project => { teamMap.close(); void onSelectProject(project); },
+  };
+  const decisionNotifications = decisionView.pending.flatMap(({ decision }) => {
+    const id = `decision:${decision.id}:${decision.resolutionVersion}:escalation:${decision.currentLevel}`;
+    return retainedDecisionDelivery(decision, id)?.recipientId === "user" ? [{ id, question: decision.question }] : [];
+  });
   const workspaceDecisionCounts = useMemo(() => {
     const counts = new Map<string, number>();
     for (const decision of teamDecisions(listMonos(), sessions, orchestrationRuns).filter(decision => !decision.approval)) {
       const key = pathKey(decision.project);
       counts.set(key, (counts.get(key) ?? 0) + 1);
     }
+    for (const { decision } of selectDecisionView(monoManagerGoals, listMonos(), Date.now()).pending) {
+      const key = pathKey(decision.projectId);
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
     return counts;
-  }, [monosSnap, sessions, orchestrationRuns]);
+  }, [monosSnap, sessions, orchestrationRuns, decisionRevision]);
   const workspaceRoster = workspaceTeam(listMonos(), sidebarCwd);
   const workspaceMonoIds = new Set([...(workspaceRoster.manager ? [workspaceRoster.manager.id] : []), ...workspaceRoster.members.map(mono => mono.id)]);
   const workspaceWorking = [...workspaceMonoIds].filter(id => monoRail.states.get(id)?.status === "working").length;
@@ -17473,7 +17774,12 @@ function Workspace({
                   close: teamMap.close, request: onOpenApprovalSession, mono: onOpenMono, session: onOpenMonoLaunchedSession,
                 })} />
               {/* CC7D shell hook: existing sources and execution callbacks only. */}
-              <AttentionQueue sessions={sessions} runs={orchestrationRuns} open={teamMap.open && teamMap.scope === ATTENTION_QUEUE_SCOPE}
+              {teamMap.open && teamMap.scope === ATTENTION_QUEUE_SCOPE && <div className="flex min-h-0 flex-1 flex-col" data-app-decisions>
+                <div className="flex flex-wrap gap-4 px-6 pt-3 text-xs"><button type="button" onClick={teamMap.close}>Back to conversation</button>
+                  <button type="button" aria-pressed={decisionAttentionOpen} onClick={() => setDecisionAttentionOpen(value => !value)}>{decisionAttentionOpen ? "Decision cards" : "Approvals & other requests"}</button></div>
+                {!decisionAttentionOpen && <Decisions view={decisionView} roster={listMonos()} actions={decisionActions} unavailable={decisionUnavailable} />}
+              </div>}
+              <AttentionQueue sessions={sessions} runs={orchestrationRuns} open={teamMap.open && teamMap.scope === ATTENTION_QUEUE_SCOPE && decisionAttentionOpen}
                 readSessions={() => sessionsRef.current} readRuns={() => orchestrator.snapshot()}
                 selectedAccount={session => selectedProviderAccountId("codex", session.cwd)}
                 isLocalSession={session => !remoteProjectFor(session.cwd)}
@@ -17998,7 +18304,7 @@ function Workspace({
                     }
                   >
                     <WorkspaceContextTabs tab={workspaceContextTab} onChange={setWorkspaceContextTab} onClose={onToggleRightPanel}>
-                      {workspaceContextTab === "goal" ? <WorkspaceGoals project={sidebarCwd} sessions={sessions} usage={usage.snapshot} onOpenMono={onOpenRailMono} /> : null}
+                      {workspaceContextTab === "goal" ? <WorkspaceGoals project={sidebarCwd} sessions={sessions} usage={usage.snapshot} onOpenMono={onOpenRailMono} decisionActions={decisionActions} decisionUnavailable={decisionUnavailable} /> : null}
                       {workspaceContextTab === "worktree" ? <WorkspaceWorktree project={sidebarCwd} path={contextWorktree && sameProjectPath(contextWorktree.project, sidebarCwd) ? contextWorktree.path : undefined} sessions={sessions} onOpen={tree => onSelectProjectWorktree(sidebarCwd, tree)} onChanges={path => onOpenWorktreeChanges(sidebarCwd, path)} onRemove={onRemoveWorktree} /> : null}
                     <div
                       ref={setRightPanelHost}
@@ -18098,6 +18404,10 @@ function Workspace({
             onFocusSession={onOpenApprovalSession}
             onApproval={onApproval}
           />
+          {!!decisionNotifications.length && !(teamMap.open && teamMap.scope === ATTENTION_QUEUE_SCOPE) && <aside aria-label="Decision notifications" className="fixed bottom-4 right-4 z-40 max-w-sm rounded-xl border border-stroke bg-background-base p-3 text-xs shadow-lg">
+            {decisionNotifications.map(notice => <p role="status" key={notice.id} data-decision-notification={notice.id}>{notice.question}</p>)}
+            <button type="button" className="mt-2 text-accent" onClick={() => { setDecisionAttentionOpen(false); onOpenTeamMap(ATTENTION_QUEUE_SCOPE); }}>Review decisions</button>
+          </aside>}
           <ReminderNotices
             reminders={sessionReminders.due}
             error={sessionReminders.error}

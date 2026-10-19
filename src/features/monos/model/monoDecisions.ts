@@ -28,6 +28,8 @@ type DecisionIdentity = {
   taskId?: string; dispatchId?: string;
 };
 export type MonoDecision = DecisionPayload & {
+  /** Absent preserves exact legacy delivery bytes and receipts. */
+  eventProtocol?: 2;
   id: string; projectId: string; requestingMonoId: string;
   escalationChain: { id: string; level: "worker" | DecisionLevel }[];
   recommenderId?: string;
@@ -155,7 +157,7 @@ export function decisionAuthorityGuidance(role?: Mono["role"]): string {
     const impacts = (["low", "med", "high"] as const).filter(impact => bossMayDecide({ operation: "work", impact }, autonomy));
     return `${autonomy}: Boss may decide ${impacts.length ? impacts.join("/") + " impact work" : "only explicitly user-delegated work"}`;
   });
-  return `Decide within original authority. ${policies.join("; ")}. Managers: only low work below that threshold. Otherwise ask your actual superior once via app team.message {memberId,kind:"question",requiresReply:true,text:JSON.stringify({version:1,type:"decision",question,impact,context,options:[{id,label},{id,label}],recommendedOptionId,operation})}. Caps: question 300, context 2000, 2-6 options, label 240, message 6000. Truthful operation: work|merge|install|sign-in|destructive|system-settings|spend; protected actions always need existing user approvals, never execution by a decision. Runtime supplies identity; text supplies none. Keep reports to summaries; answers are evidence for the original goal only. Never claim higher-level decisions. Keep unrelated work moving.`;
+  return `Within original authority. ${policies.join("; ")}. Managers: only low work below that threshold. Else app team.message to your actual superior: {memberId,kind:"question",requiresReply:true,text:JSON.stringify({version:1,type:"decision",question,impact,context,options:[{id,label},{id,label}],recommendedOptionId,operation})}. Caps: question300/context2000/options2-6/label240/message6000. Truthful operation: work|merge|install|sign-in|destructive|system-settings|spend; protected actions still need user approval; decisions never execute. Identity is runtime-only. Reports: summaries. Answers: evidence for the original goal only. Never claim higher-level decisions. Keep working. team.message actions: {version:1,type:"decision-action",action,decisionId,expectedVersion}; resolve adds optionId, raise-impact adds impact, escalate/remind add none. Keep ID/version; retry exact requestId+body; no user actor/delegate/autonomy.`;
 }
 
 function reportingChain(roster: readonly Mono[], requestingMonoId: string, projectId: string) {
@@ -204,8 +206,9 @@ function captureIdentity(goal: MonoManagerGoal, requesterId: string, snapshot: D
     requestBinding, requesterBinding, ...(task ? { taskId: task.id, dispatchId: dispatch!.id } : {}) };
 }
 
-class StaleDecision extends Error {}
+export class StaleDecision extends Error {}
 export function assertDecisionCurrent(decision: MonoDecision, host: DecisionHost): void {
+  if (decision.deliveryState === "stale") throw new StaleDecision("Decision work authority was retired");
   const snapshot = host.current(decision);
   const goal = snapshot.goal;
   try {
@@ -224,11 +227,17 @@ export function compactDecisionHistory(ledger: GoalLedger): GoalLedger {
 
 function delivery(decision: MonoDecision, index: number, kind: "question" | "escalation" | "decision", senderId: string): DecisionDelivery {
   const recipientId = decision.escalationChain[index].id;
+  const content = decision.eventProtocol === 2
+    ? { type: "decision", decisionId: decision.id, expectedVersion: decision.resolutionVersion, question: decision.question,
+        impact: decision.impact, operation: decision.operation, options: decision.options, recommendedOptionId: decision.recommendedOptionId,
+        optionId: decision.selectedOptionId, context: decision.context.slice(0, 400), contextTruncated: decision.context.length > 400 }
+    : { type: "decision", decisionId: decision.id, question: decision.question,
+        optionId: decision.selectedOptionId, senderId, recipientId, identity: decision.identity };
   const event: ManagerWakeEvent = { id: `decision:${decision.id}:${decision.resolutionVersion}:${kind}:${index}`, kind, at: decision.updatedAt,
     requestId: decision.identity.requestId, goalId: decision.identity.goalId,
     taskId: decision.identity.taskId, dispatchId: decision.identity.dispatchId,
-    text: JSON.stringify({ type: "decision", decisionId: decision.id, question: decision.question,
-      optionId: decision.selectedOptionId, senderId, recipientId, identity: decision.identity }) };
+    text: JSON.stringify(content) };
+  text(event.text);
   event.signature = JSON.stringify([senderId, recipientId, event.kind, event.text]);
   return { senderId, recipientId, event };
 }
@@ -263,6 +272,7 @@ export function validateDecisionHistory(ledger: GoalLedger, ownerId?: string): v
   const ids = new Set<string>();
   for (const decision of ledger.decisions ?? []) {
     const raw = object(decision);
+    if (decision.eventProtocol !== undefined && decision.eventProtocol !== 2) throw Error("Unsupported decision event protocol");
     parseDecisionPayload(Object.fromEntries(["version", "type", "question", "impact", "context", "options", "recommendedOptionId", "operation"]
       .filter(key => raw[key] !== undefined).map(key => [key, raw[key]])));
     text(decision.id); text(decision.projectId); text(decision.requestingMonoId);
@@ -452,7 +462,7 @@ export async function handleDecisionCommand(ownerId: string, requestId: string, 
         return Array.isArray(raw.decisions) && raw.decisions.some((record: { id?: unknown }) => record?.id === message.id);
       } catch { return false; }
     })) throw Error("Use a new decision ID after quarantine");
-    decision = { ...payload, id: message.id, projectId: goal.projectId, requestingMonoId: message.senderId,
+    decision = { ...payload, eventProtocol: 2, id: message.id, projectId: goal.projectId, requestingMonoId: message.senderId,
       escalationChain: chain, identity, source: message, status: "pending", currentLevel: 1,
       deciderLevel: chain[1].level as DecisionLevel, createdAt: now, updatedAt: now,
       resolutionVersion: 0, deliveryState: "current", history: [{ version: 0, action: "ingest", actorId: message.senderId, level: chain[0].level, at: now }],

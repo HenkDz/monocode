@@ -16,6 +16,7 @@ import { normalizeOrchestrationRun } from "./orchestrationState";
 import { previewFromToolPart } from "../../../integrations/harness/providers/opencode/opencodeProtocol";
 import type { Artifact, OrgArtifactPurpose } from "../../artifacts/artifacts";
 import type { OrchestrationTask } from "./orchestrationState";
+import { addManagerWakeEvent, prepareManagerWake } from "./managerWake";
 
 it("includes GitHub quota guidance in every worker assignment", () => {
   const prompt = workerTurnPrompt("Inspect the PR", ["src"]);
@@ -134,6 +135,28 @@ async function saveTaskDocument(f: ReturnType<typeof setup>, task: Orchestration
   await f.manager.recordOrgArtifact(artifact);
   return artifact;
 }
+
+it("retires only stale decision membership and durably reopens unrelated coalesced reports", async () => {
+  const f = setup(); await f.start();
+  let run = { ...f.manager.run("lead")!, projectManager: true };
+  run = { ...run, wakeState: addManagerWakeEvent(run.wakeState, { id: "decision:old:0:manager", requestId: "old", kind: "question", at: 1, text: "Old question" }) };
+  run = { ...run, wakeState: addManagerWakeEvent(run.wakeState, { id: "ordinary-report", requestId: "report", kind: "info", at: 2, text: "Keep this report" }) };
+  run = { ...run, wakeState: prepareManagerWake(run, Date.now() + 1000) };
+  const receipt = run.wakeState!.receipt!;
+  f.saved.set("lead", run);
+  const restored = new Orchestrator(f.store); await restored.hydrate("lead");
+  await expect(restored.retireDecisionDigest("lead", receipt.id, ["ordinary-report"])).rejects.toThrow("Only retained stale decision");
+  await restored.retireDecisionDigest("lead", receipt.id, ["decision:old:0:manager"]);
+  const saved = f.saved.get("lead")!;
+  expect(saved.wakeState!.receipt).toMatchObject({ id: receipt.id, retiredEventIds: ["decision:old:0:manager"] });
+  expect(saved.wakeState!.events.find(event => event.id === "decision:old:0:manager")!.acknowledgedAt).toBeTypeOf("number");
+  expect(saved.wakeState!.events.find(event => event.id === "ordinary-report")).toMatchObject({ text: "Keep this report", acknowledgedAt: undefined });
+  const reloaded = new Orchestrator(f.store); await reloaded.hydrate("lead");
+  expect(reloaded.run("lead")!.wakeState).toEqual(saved.wakeState);
+  const next = prepareManagerWake(saved, Date.now() + 1000)!.receipt!;
+  expect(next.eventIds).toEqual(["ordinary-report"]);
+  expect(f.host.submit).not.toHaveBeenCalled();
+});
 
 it("persists worker effort and permissions snapshots through retry and hydration", async () => {
   const f = setup();

@@ -27,7 +27,7 @@ export function selectDecisionView(ledger: MonoManagerGoals, roster: readonly Mo
     .sort((a, b) => a.decision.createdAt - b.decision.createdAt);
   return {
     pending,
-    log: all.filter(({ decision }) => decision.status === "decided").sort((a, b) => b.decision.decidedAt! - a.decision.decidedAt!),
+    log: all.filter(({ decision }) => decision.status === "decided" || decision.deliveryState === "stale").sort((a, b) => (b.decision.decidedAt ?? b.decision.updatedAt) - (a.decision.decidedAt ?? a.decision.updatedAt)),
     teamPending: all.filter(({ decision }) => decision.status !== "decided" && decision.deciderLevel !== "user" && decision.deliveryState === "current").length,
     handledToday: all.filter(({ decision }) => decision.status === "decided" && decision.deciderLevel !== "user" &&
       decision.deliveryState === "current" && decision.decidedAt! >= today.getTime() && decision.decidedAt! <= now).length,

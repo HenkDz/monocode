@@ -18,7 +18,7 @@ export function DecisionCard({ item, roster, actions, sentInitially = false }: {
   const pending = useRef(false);
   const target = decisionActorName(roster, decision.requestingMonoId);
   const acceptedInitially = sentInitially || !!actions.wasAccepted?.(managerId, decision.id);
-  const [busy, setBusy] = useState(false), [sent, setSent] = useState(acceptedInitially), [notice, setNotice] = useState(acceptedInitially ? "Answer sent" : "");
+  const [busy, setBusy] = useState(false), [sent, setSent] = useState(acceptedInitially), [notice, setNotice] = useState(sentInitially ? `Sent to ${target}` : acceptedInitially ? "Answer sent" : "");
   const choose = (event: Event, optionId?: string) => {
     if (pending.current || sent) return;
     pending.current = true; setBusy(true); setNotice("");

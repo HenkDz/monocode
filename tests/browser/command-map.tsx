@@ -27,7 +27,7 @@ const sessions = roster.filter(mono => mono.sessionId).map((mono, index) => ({ .
 const selectorCase = new URLSearchParams(location.search).get("selector");
 if (selectorCase === "question") {
   sessions[0].pendingQuestion = { requestId: 1, title: "Choose the API contract", questions: [] };
-  runs[0].tasks[0] = { ...runs[0].tasks[0], status: "failed", error: "Worker failed" };
+  runs[0].tasks[0] = { ...runs[0].tasks[0], sessionId: "failed-worker", status: "failed", error: "Worker failed" };
 }
 if (selectorCase === "progress") {
   runs[0].tasks = [{ ...runs[0].tasks[0], status: "queued", accepted: false }];

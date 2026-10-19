@@ -30,8 +30,8 @@ import { createMonoUsageFailoverController } from "../features/monos/model/monoU
 import { MissionCommandBar } from "../features/commandCenter/ui/MissionCommandBar";
 import { AttentionQueue, ATTENTION_QUEUE_SCOPE } from "../features/commandCenter/ui/AttentionQueue";
 import { Decisions, DECISIONS_SCOPE, type DecisionUiActions } from "../features/commandCenter/ui/Decisions";
-import { selectDecisionView } from "../features/commandCenter/model/decisionView";
-import { decisionAsk } from "../features/monos/model/monoDecisions";
+import { selectDecisionView, endedDecisionSources, decisionCountsByProject } from "../features/commandCenter/model/decisionView";
+import { prepareDecisionMessage } from "../features/monos/model/monoDecisions";
 import { sendDecisionFromClick } from "../features/monos/model/monoDecisionUi";
 import { openGoalTarget } from "../features/commandCenter/model/goalView";
 import { TeamMapHeaderAction, useTeamMap } from "../features/teamMap/navigation";
@@ -10208,6 +10208,7 @@ function Workspace({
     answer: (event, managerId, decisionId, optionId) => sendDecisionFromClick(event, `${managerId}:${decisionId}`, optionId, {
       read: () => monoManagerGoals.decisions(managerId).find(row => row.id === decisionId),
       open: async id => !!await ensureOpenSession(id),
+      askerName: id => findMono(id)?.name ?? "the asker",
       bossSession: async id => {
         const boss = findMono(id);
         if (boss?.role !== "orchestrator" || boss.archivedAt != null) return;
@@ -10223,6 +10224,7 @@ function Workspace({
         }
       }, pending: decisionPending.current, accepted: decisionAccepted.current,
     }),
+    wasAccepted: (managerId, decisionId) => decisionAccepted.current.has(`${managerId}:${decisionId}`),
     autonomy: (event, managerId, projectId, value) => {
       const manager = findMono(managerId);
       if (manager?.role !== "manager" || manager.archivedAt != null || !manager.projects.some(project => sameProjectPath(project, projectId))) return Promise.reject(Error("Project is unavailable"));
@@ -13164,10 +13166,7 @@ function Workspace({
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const ended = new Set([
-        ...monoManagerGoals.goals().filter(goal => goal.state === "done" || goal.state === "cancelled").map(goal => goal.id),
-        ...orchestrationRuns.flatMap(run => run.tasks.filter(task => task.status === "completed" || task.status === "cancelled").map(task => task.id)),
-      ]);
+      const ended = endedDecisionSources(monoManagerGoals.goals(), orchestrationRuns);
       const missing = new Set<string>();
       for (const manager of listMonos().filter(mono => mono.role === "manager")) {
         for (const row of monoManagerGoals.decisions(manager.id).filter(row => row.readOnly && row.status === "waiting" && row.noLongerNeededAt == null))
@@ -13706,7 +13705,7 @@ function Workspace({
           const actor = workerMember ?? monoForSession(source.id) ?? findMono(habitRunMono(source.id) ?? "");
           const input: Record<string, unknown> = goalProgress?.input ?? (peerRecipient ? { memberId: peerRecipient.id, text: payload.input.prompt, topic: "general" } : payload.input);
           if (!actor?.role || !source.busy) throw new Error("Team messages require an active team turn");
-          if (Object.keys(input).some(field => !["memberId", "text", "topic", "requiresReply", "kind"].includes(field)) || typeof input.memberId !== "string" || typeof input.text !== "string" || !input.text.trim() || input.text.length > (goalProgress ? 8000 : 6000) || (input.topic != null && (typeof input.topic !== "string" || input.topic.length > (input.topic.startsWith("decision:") ? 265 : 120)))) throw new Error("Choose a memberId, nonempty text under 6000 characters and an optional short topic");
+          if (Object.keys(input).some(field => !["memberId", "text", "topic", "requiresReply", "kind", ...(actor.role === "orchestrator" && input.memberId === "user" ? ["projectId"] : [])].includes(field)) || input.projectId !== undefined && (typeof input.projectId !== "string" || !input.projectId.trim() || input.projectId.length > 4000) || typeof input.memberId !== "string" || typeof input.text !== "string" || !input.text.trim() || input.text.length > (goalProgress ? 8000 : 6000) || (input.topic != null && (typeof input.topic !== "string" || input.topic.length > (input.topic.startsWith("decision:") ? 265 : 120)))) throw new Error("Choose a memberId, nonempty text under 6000 characters and an optional short topic");
           const kind = teamMessageKind(input.kind);
           const requiresReply = teamMessageRequiresReply(input.requiresReply, kind);
           const messageText = input.text;
@@ -13715,25 +13714,27 @@ function Workspace({
           const events = crewMessages();
           const prior = events.find(event => event.id === eventId);
           if (prior && (prior.text !== input.text || prior.recipientId !== input.memberId || prior.topic !== topic || prior.kind !== kind || (prior.requiresReply !== false) !== requiresReply)) throw new Error("Request ID was already used with different input");
+          if (prior && typeof input.projectId === "string" && !findMono(prior.managerId)?.projects.some(project => sameProjectPath(project, input.projectId as string))) throw Error("Request ID was already used for another project");
           const roster = listMonos();
-          const recipient = roster.find(mono => mono.id === input.memberId);
-          const projectId = memberRun?.workspace?.projectCwd ?? memberRun?.cwd ?? (actor.role === "orchestrator" ? source.cwd : actor.projects[0]) ?? source.cwd;
-          const decisionManager = actor.role === "manager" ? actor : roster.find(mono => mono.role === "manager" && mono.archivedAt == null &&
-            (mono.id === actor.reportsTo || mono.id === recipient?.reportsTo || mono.id === recipient?.id || mono.reportsTo === actor.id && mono.projects.some(project => sameProjectPath(project, projectId))));
-          const teamMessage = { id: eventId, managerId: decisionManager?.id ?? actor.id, senderId: actor.id, recipientId: input.memberId, topic, text: messageText, at: prior?.at ?? Date.now(), requiresReply, kind };
-          if (decisionManager) await monoManagerGoals.hydrate(decisionManager.id);
-          const forwarded = decisionManager && monoManagerGoals.decisions(decisionManager.id).some(row => topic === `decision:${row.id}`);
+          const projectId = (typeof input.projectId === "string" ? input.projectId : undefined) ?? memberRun?.workspace?.projectCwd ?? memberRun?.cwd ?? actor.projects[0] ?? source.cwd;
+          const teamMessage = { id: eventId, managerId: actor.role === "member" ? actor.reportsTo! : actor.id, senderId: actor.id, recipientId: input.memberId, topic, text: messageText, at: prior?.at ?? Date.now(), requiresReply, kind };
           const task = memberRun?.tasks.find(task => task.sessionId === source.id);
           const latestUser = [...source.blocks].reverse().find(block => block.role === "user" && !block.draft);
           const goalId = task?.monoGoalId ?? latestUser?.monoSource?.goalId ?? monoManagerGoals.goals().find(goal => goal.userMessageId === latestUser?.id && sameProjectPath(goal.projectId, projectId))?.id;
-          const ask = !forwarded && decisionManager ? decisionAsk(teamMessage, source.id, projectId, roster, monoManagerGoals.autonomy(decisionManager.id, projectId), { taskId: task?.id, goalId }) : undefined;
+          let decisionContext: Awaited<ReturnType<typeof prepareDecisionMessage>>;
+          let decisionLogFailed = false;
+          try { decisionContext = await prepareDecisionMessage(teamMessage, source.id, projectId, roster, monoManagerGoals, { taskId: task?.id, goalId }); }
+          catch { decisionLogFailed = true; }
+          if (decisionContext) teamMessage.managerId = decisionContext.manager.id;
+          const ask = decisionContext?.ask;
+          const deliveryTopic = ask ? `decision:${ask.id}` : topic;
           const retainDecision = async () => {
-            if (!decisionManager) return;
-            if (ask) await monoManagerGoals.recordDecision(decisionManager.id, ask);
-            else await monoManagerGoals.recordDecisionReply(decisionManager.id, teamMessage);
+            if (!decisionContext) return;
+            if (ask) await monoManagerGoals.recordDecision(decisionContext.manager.id, ask);
+            else await monoManagerGoals.recordDecisionReply(decisionContext.manager.id, teamMessage);
           };
           if (input.memberId === "user") {
-            if (actor.role !== "orchestrator" || !ask && !forwarded) throw Error("Ask your actual superior with a structured question");
+            if (actor.role !== "orchestrator" || !ask && !decisionContext?.row || decisionLogFailed) throw Error("Use a structured question with an assigned projectId, or the original decision topic");
             await retainDecision(); recordCrewMessage(teamMessage);
             return { sent: true, routedTo: "user", ...(ask ? { decisionTopic: `decision:${ask.id}` } : {}) };
           }
@@ -13756,11 +13757,11 @@ function Workspace({
               kind: requiresReply ? kind ?? "question" : "info", requestId: payload.requestId,
               signature: JSON.stringify([actor.id, input.memberId, kind, requiresReply, topic, messageText]),
               taskId: workerMember ? memberRun?.tasks.find(task => task.sessionId === source.id)?.id : undefined,
-              text: teamMessageEnvelope(actor, route.target, topic, messageText, route.hint) });
+              text: teamMessageEnvelope(actor, route.target, deliveryTopic, messageText, route.hint) });
             recordCrewMessage({ id: eventId, managerId: route.target.id, senderId: actor.id, recipientId: input.memberId, topic, text: messageText, at: prior?.at ?? Date.now(), requiresReply, kind });
           } else if (!prior) {
             await deliverCrewMessage({ id: eventId, managerId: route.managerId ?? route.target.id, senderId: actor.id, recipientId: input.memberId, topic, text: input.text, at: Date.now(), requiresReply, kind }, async () => {
-              const text = teamMessageEnvelope(actor, route.target, topic, messageText, route.hint);
+              const text = teamMessageEnvelope(actor, route.target, deliveryTopic, messageText, route.hint);
               const worker = route.target.role === "member" && teamMessageWorker(orchestrator.snapshot(), route.target.id);
               if (worker) {
                 await orchestrator.handle(worker.leadId, eventId, "steer", { taskId: worker.taskId, text });
@@ -13776,8 +13777,9 @@ function Workspace({
             }
             });
           }
-          await retainDecision();
-          return { sent: true, routedTo: route.target.id, ...(ask ? { decisionTopic: `decision:${ask.id}` } : {}), ...(goalProgress || route.hint || peerRecipient ? { hint: goalProgress?.hint ?? route.hint ?? "Sent as a teammate question; use team.message for team conversations." } : {}) };
+          try { await retainDecision(); } catch { decisionLogFailed = true; }
+          if (decisionLogFailed) setDecisionError("Message sent; couldn't update the decision log");
+          return { sent: true, routedTo: route.target.id, ...(ask && !decisionLogFailed ? { decisionTopic: deliveryTopic } : {}), ...(decisionLogFailed ? { hint: "Message sent; decision log unavailable" } : goalProgress || route.hint || peerRecipient ? { hint: goalProgress?.hint ?? route.hint ?? "Sent as a teammate question; use team.message for team conversations." } : {}) };
         }
         if (source && workerMember) {
           assertDirectReport(
@@ -16912,13 +16914,8 @@ function Workspace({
   }, [monosSnap, sessions, monoReplies.counts, orchestrationRuns]);
   const monoRail = useStableValue(monoRailState);
   const workspaceDecisionCounts = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const decision of teamDecisions(listMonos(), sessions, orchestrationRuns).filter(decision => !decision.approval)) {
-      const key = pathKey(decision.project);
-      counts.set(key, (counts.get(key) ?? 0) + 1);
-    }
-    return counts;
-  }, [monosSnap, sessions, orchestrationRuns]);
+    return decisionCountsByProject(listMonos(), sessions, orchestrationRuns, selectDecisionView(monoManagerGoals, listMonos(), Date.now()));
+  }, [monosSnap, sessions, orchestrationRuns, decisionRevision]);
   const workspaceRoster = workspaceTeam(listMonos(), sidebarCwd);
   const workspaceMonoIds = new Set([...(workspaceRoster.manager ? [workspaceRoster.manager.id] : []), ...workspaceRoster.members.map(mono => mono.id)]);
   const workspaceWorking = [...workspaceMonoIds].filter(id => monoRail.states.get(id)?.status === "working").length;
@@ -17554,7 +17551,16 @@ function Workspace({
               {/* CC7D shell hook: existing sources and execution callbacks only. */}
               {teamMap.open && teamMap.scope === DECISIONS_SCOPE && <>
                 <div className="flex gap-5 px-6 pt-4 text-xs text-content/65"><button type="button" onClick={teamMap.close}>Back to conversation</button><button type="button" onClick={() => onOpenTeamMap(ATTENTION_QUEUE_SCOPE)}>Approvals &amp; blockers</button></div>
-                <Decisions view={selectDecisionView(monoManagerGoals, listMonos(), Date.now())} roster={listMonos()} actions={decisionActions} error={decisionError} />
+                <Decisions view={selectDecisionView(monoManagerGoals, listMonos(), Date.now())} roster={listMonos()} actions={decisionActions} error={decisionError}
+                  attentionCount={teamDecisions(listMonos(), sessions, orchestrationRuns).length}
+                  attention={<AttentionQueue sessions={sessions} runs={orchestrationRuns} open presentation="panel"
+                    readSessions={() => sessionsRef.current} readRuns={() => orchestrator.snapshot()}
+                    selectedAccount={session => selectedProviderAccountId("codex", session.cwd)}
+                    isLocalSession={session => !remoteProjectFor(session.cwd)} onClose={teamMap.close}
+                    callbacks={{ approval: onApproval, question: onQuestionReply, questionInteraction: onQuestionInteraction,
+                      repair: onCodexStorageRepair, compare: onCodexStorageCompare, reveal: onCodexStorageReveal,
+                      resume: onUsageLimitResume, resumeAtReset: onUsageLimitResumeAtReset, retryDelivery: onResumeQueue,
+                      continueManager: id => orchestrator.continueManager(id), continueRequest: continueAttentionRequest, inspect: id => { teamMap.close(); return onOpenApprovalSession(id); }, inspectAutomation: () => onOpenAutomations() }} />} />
               </>}
               <AttentionQueue sessions={sessions} runs={orchestrationRuns} open={teamMap.open && teamMap.scope === ATTENTION_QUEUE_SCOPE}
                 readSessions={() => sessionsRef.current} readRuns={() => orchestrator.snapshot()}

@@ -1,12 +1,16 @@
 import { expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { MonoManagerGoals, type GoalLedger } from "./monoManagerGoals";
-import { bossMayDecide, decisionAsk, decisionAnswerer, decisionAuthorityGuidance, normalizeDecisionHistory, parseDecisionPayload, type DecisionPayload } from "./monoDecisions";
+import { MonoManagerGoals, type GoalLedger, type MonoManagerGoal } from "./monoManagerGoals";
+import { bossMayDecide, decisionAsk, decisionAnswerer, decisionAuthorityGuidance, normalizeDecisionHistory, parseDecisionPayload, prepareDecisionMessage, type DecisionPayload } from "./monoDecisions";
 import { decisionUserText } from "./monoDecisionUi";
 import type { Mono } from "./mono";
 import type { CrewMessage } from "./monoCrewEvents";
-import { selectDecisionView } from "../../commandCenter/model/decisionView";
+import { deliverCrewMessage } from "./monoCrewEvents";
+import { teamMessageEnvelope } from "./monoOrg";
+import type { OrchestrationRun, OrchestrationTask } from "../../orchestration/model/orchestrationState";
+import { newSession } from "../../sessions/model/session";
+import { selectDecisionView, endedDecisionSources, decisionCountsByProject } from "../../commandCenter/model/decisionView";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 const roster: Mono[] = [
@@ -38,18 +42,76 @@ it.each(["merge", "install", "sign-in", "destructive", "system-settings", "spend
   expect(decisionAnswerer(row, "high-impact-only")).toBe("user");
   expect(bossMayDecide({ ...row, delegatedByUser: true }, "everything")).toBe(false);
 });
-it("records only the authenticated current answerer's ordinary reply and persists without decision receipts", async () => {
+it("records only the authenticated current answerer's explicit reply and persists without decision receipts", async () => {
   const f = fixture();
   await f.ledger.recordDecision("manager", ask());
   await f.ledger.delegateDecision("manager", message.id);
-  const reply = { ...message, id: "boss-chat:reply", recipientId: "worker", topic: `decision:${message.id}`, text: "Use the helper", kind: "decision" as const, at: Date.now() };
+  const reply = { ...message, id: "boss-chat:reply", recipientId: "worker", topic: "implementation", text: "Use the helper", kind: "decision" as const, at: Date.now() };
   await f.ledger.recordDecisionReply("manager", { ...reply, senderId: "manager" });
   expect(f.ledger.decisions("manager")[0].status).toBe("waiting");
+  await f.ledger.recordDecisionReply("manager", { ...reply, senderId: "boss", topic: "decision:unknown" });
+  expect(f.ledger.decisions("manager")[0].status).toBe("waiting");
   await f.ledger.recordDecisionReply("manager", { ...reply, senderId: "boss" });
+  expect(f.ledger.decisions("manager")[0].status).toBe("waiting");
+  await f.ledger.recordDecisionReply("manager", { ...reply, senderId: "boss", topic: `decision:${message.id}` });
   const reload = new MonoManagerGoals(f.storage); await reload.hydrate("manager");
-  expect(reload.decisions("manager")[0]).toMatchObject({ status: "answered", answer: "Use the helper", answeredBy: "boss" });
+  expect(reload.decisions("manager")[0]).toMatchObject({ status: "answered", answer: "Use the helper", answeredBy: "boss", delegatedByUser: true });
   expect(f.saved().receipts).toEqual({ existing: { signature: "retain", result: true, pending: { goalId: "old", text: "Retained goal delivery" } } });
   expect(selectDecisionView(reload, roster, Date.now()).handledToday).toBe(1);
+});
+it("leaves unrelated ordinary replies unlogged even for one candidate, and accepts the named ask topic", async () => {
+  const f = fixture();
+  await f.ledger.recordDecision("manager", { ...ask(), answererId: "boss" });
+  const reply = { ...message, senderId: "boss", recipientId: "worker", text: "Use the helper" };
+  await f.ledger.recordDecisionReply("manager", reply);
+  expect(f.ledger.decisions("manager").every(row => row.status === "waiting")).toBe(true);
+  await f.ledger.recordDecision("manager", { ...ask(), id: "second-ask", answererId: "boss" });
+  await f.ledger.recordDecisionReply("manager", { ...reply, topic: "decision:second-ask" });
+  expect(f.ledger.decisions("manager").map(row => row.status)).toEqual(["waiting", "answered"]);
+});
+it("keeps worker asks after settlement/restart/Resume and closes only cancelled tasks or ended goals", async () => {
+  const f = fixture(); await f.ledger.recordDecision("manager", ask());
+  for (const status of ["completed", "failed", "interrupted", "queued", "running"] as const) {
+    const run = { tasks: [{ id: "task", status }] } as OrchestrationRun;
+    await f.ledger.finishDecisionAsks(endedDecisionSources([], [run]), new Set());
+    expect(selectDecisionView(f.ledger, roster, Date.now()).pending).toHaveLength(1);
+  }
+  await f.ledger.finishDecisionAsks(endedDecisionSources([], [{ tasks: [{ id: "task", status: "cancelled" }] } as OrchestrationRun]), new Set());
+  expect(selectDecisionView(f.ledger, roster, Date.now()).pending).toHaveLength(0);
+  expect(endedDecisionSources([...["done", "cancelled", "running"].map(state => ({ id: state, state } as MonoManagerGoal))], [])).toEqual(new Set(["done", "cancelled"]));
+});
+it("routes Boss asks by assigned project and forwarded topic independently of the Boss home folder", async () => {
+  const f = fixture(); await f.ledger.recordDecision("manager", ask());
+  const bossAsk = { ...message, id: "boss:ask", senderId: "boss", recipientId: "user" };
+  const direct = await prepareDecisionMessage(bossAsk, "boss-chat", "/project", roster, f.ledger);
+  expect(direct).toMatchObject({ manager: { id: "manager" }, projectId: "/project", ask: { requestingMonoId: "boss", answererId: "user" } });
+  expect(await prepareDecisionMessage(bossAsk, "boss-chat", "/monos/boss", roster, f.ledger)).toBeUndefined();
+  const forwarded = await prepareDecisionMessage({ ...bossAsk, topic: `decision:${message.id}` }, "boss-chat", "/monos/boss", roster, f.ledger);
+  expect(forwarded).toMatchObject({ manager: { id: "manager" }, projectId: "/project", row: { id: message.id } });
+  expect(await prepareDecisionMessage(bossAsk, "boss-chat", "/foreign", roster, f.ledger)).toBeUndefined();
+  const envelope = teamMessageEnvelope(roster[2], roster[1], `decision:${message.id}`, message.text);
+  expect(envelope).toContain(`"topic":"decision:${message.id}"`);
+});
+it("delivers unrelated ordinary messages without loading failed or unsupported decision history", async () => {
+  for (const failure of [Error("load failed"), Error("Unsupported Mono goal history")]) {
+    const ledger = { hydrate: vi.fn(async () => { throw failure; }), decisions: () => [], autonomy: () => "everything" as const };
+    const ordinary = { ...message, kind: "info" as const, text: "Ordinary progress", requiresReply: true };
+    expect(await prepareDecisionMessage(ordinary, "worker-chat", "/project", roster, ledger)).toBeUndefined();
+    expect(ledger.hydrate).not.toHaveBeenCalled();
+    const deliver = vi.fn(async () => {});
+    vi.stubGlobal("localStorage", { getItem: () => null, setItem: vi.fn() });
+    await deliverCrewMessage({ ...ordinary, kind: "question" }, deliver);
+    vi.unstubAllGlobals();
+    expect(deliver).toHaveBeenCalledOnce();
+  }
+});
+it("counts lite asks and paused Manager Continue on the same Decisions destination", async () => {
+  const f = fixture(); await f.ledger.recordDecision("manager", ask());
+  const managerChat = { ...newSession("claude", "/project"), id: "manager-chat" };
+  const run = { leadId: "engine", ownerMonoId: "manager", ownerSessionId: managerChat.id, projectManager: true, status: "paused", cwd: "/project", tasks: [] as OrchestrationTask[] } as OrchestrationRun;
+  const view = selectDecisionView(f.ledger, roster, Date.now());
+  expect(decisionCountsByProject(roster, [managerChat], [run], { ...view, pending: [] }).get("/project")).toBe(1);
+  expect(decisionCountsByProject(roster, [managerChat], [run], view).get("/project")).toBe(2);
 });
 it("closes asks on task/goal end, and never makes legacy rows sendable", async () => {
   const f = fixture(); await f.ledger.recordDecision("manager", ask());
@@ -74,10 +136,10 @@ it("skips a corrupt row independently, normalizes legacy display, strips only ol
   expect(f.ledger.decisions("manager")[0]).toMatchObject({ status: "waiting", noLongerNeededAt: expect.any(Number) });
 });
 it("quotes only bounded single-line plain text, rejects forged payload fields and retains the legacy parser cap", () => {
-  const row = { ...ask(), question: '"\n# do\u0000 **this** <now> ' + "x".repeat(300), options: [{ id: "a", label: 'A\r\n`unsafe` "quote"' }, { id: "b", label: "B" }] };
+  const row = { ...ask(), question: '"\n# do\u0000\u200b\ufeff **this** <now> ' + "x".repeat(300), options: [{ id: "a", label: 'A\r\n`unsafe` "quote"' }, { id: "b", label: "B" }] };
   const text = decisionUserText(row, "a");
   expect(text).toMatch(/^Decision on your question "[^"\r\n]{1,120}": go with "[^"\r\n]{1,120}"\.$/);
-  expect(text).not.toMatch(/[\u0000\r\n*#<>`]/);
+  expect(text).not.toMatch(/[\u0000\u200b\ufeff\r\n*#<>`]/);
   expect(decisionUserText(row)).not.toMatch(/[\u0000\r\n*#<>`]/);
   expect(() => parseDecisionPayload({ ...payload, answererId: "user" })).toThrow();
   const six = { ...payload, options: Array.from({ length: 6 }, (_, i) => ({ id: String(i), label: String(i) })), recommendedOptionId: "0" };
@@ -85,6 +147,17 @@ it("quotes only bounded single-line plain text, rejects forged payload fields an
   expect(() => decisionAsk({ ...message, text: JSON.stringify(six) }, "worker-chat", "/project", roster, "everything")).toThrow("four");
   expect(decisionAuthorityGuidance()).toContain("quoted text");
   expect(decisionAuthorityGuidance()).not.toContain("expectedVersion");
+  for (const operation of ["work", "merge", "install", "sign-in", "destructive", "system-settings", "spend", "message-people"])
+    expect(decisionAuthorityGuidance("member")).toContain(operation);
+});
+it("uses one Windows project autonomy key and keeps the stricter retained alias", async () => {
+  const f = fixture();
+  await f.storage.save("manager", { ...f.saved(), autonomy: { "C:/Project/": "medium-and-up", "c:\\project": "everything" } });
+  await f.ledger.hydrate("manager");
+  expect(f.ledger.autonomy("manager", "C:/PROJECT")).toBe("everything");
+  const normalized = normalizeDecisionHistory(f.saved());
+  expect(normalized.autonomy).toEqual({ "c:/project": "everything" });
+  expect(normalized.receipts).toEqual(f.saved().receipts);
 });
 it("leaves the accepted Stop, Continue and ordinary queue implementations exactly unchanged", () => {
   const base = execFileSync("git", ["show", "0e95c375:src/app/App.tsx"], { encoding: "utf8", maxBuffer: 2_000_000 }).replace(/\r\n/g, "\n");
@@ -96,4 +169,11 @@ it("leaves the accepted Stop, Continue and ordinary queue implementations exactl
   for (const path of ["src/features/sessions/model/messageQueue.ts", "src/features/monos/model/monoMessaging.ts"])
     expect(readFileSync(path, "utf8").replace(/\r\n/g, "\n")).toBe(execFileSync("git", ["show", `0e95c375:${path}`], { encoding: "utf8" }).replace(/\r\n/g, "\n"));
   expect(current).toContain("submitSessionRef.current(targetSessionId, plainText, attachments)");
+  expect(current).toContain("endedDecisionSources(monoManagerGoals.goals(), orchestrationRuns)");
+  expect(current).toContain("decisionCountsByProject(listMonos(), sessions, orchestrationRuns");
+  expect(current).toContain("attention={<AttentionQueue");
+  expect(current).toContain("prepareDecisionMessage(teamMessage, source.id, projectId, roster, monoManagerGoals");
+  expect(current).toContain("typeof input.projectId === \"string\" ? input.projectId : undefined");
+  expect(current).toContain("teamMessageEnvelope(actor, route.target, deliveryTopic, messageText");
+  expect(current).not.toContain("if (decisionManager) await monoManagerGoals.hydrate");
 });

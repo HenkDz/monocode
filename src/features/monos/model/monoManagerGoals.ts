@@ -220,7 +220,7 @@ export class MonoManagerGoals {
     return this.ledgers.get(id)?.decisionsSkipped ?? 0;
   }
   autonomy(id: string, projectId: string): ProjectAutonomy {
-    return projectAutonomy(this.ledgers.get(id)?.autonomy?.[projectId]);
+    return projectAutonomy(this.ledgers.get(id)?.autonomy?.[pathKey(projectId)]);
   }
   recordDecision(id: string, decision: MonoDecision) {
     return this.serial(async () => {
@@ -240,7 +240,9 @@ export class MonoManagerGoals {
   }
   recordDecisionReply(id: string, message: CrewMessage) {
     try { parseDecisionPayload(JSON.parse(message.text)); return; } catch { /* Ordinary text replies need no special protocol. */ }
-    const row = this.decisions(id).find(row => message.topic === `decision:${row.id}` && message.recipientId === row.requestingMonoId);
+    const candidates = this.decisions(id).filter(row => !row.readOnly && row.status === "waiting" && row.noLongerNeededAt == null &&
+      row.answererId === message.senderId && row.escalationChain.some(entry => entry.id === message.senderId) && message.recipientId === row.requestingMonoId);
+    const row = candidates.find(row => message.topic === `decision:${row.id}`);
     if (row) return this.recordDecisionAnswer(id, row.id, message.senderId, message.text, message.at);
   }
   delegateDecision(id: string, decisionId: string) {
@@ -249,16 +251,17 @@ export class MonoManagerGoals {
       const row = ledger.decisions?.find(row => row.id === decisionId);
       const boss = row?.escalationChain.find(entry => entry.level === "boss");
       if (!row || !boss || row.readOnly || row.operation !== "work" || row.answererId !== "user" || row.status !== "waiting" || row.noLongerNeededAt != null) return;
-      await this.save(id, { ...ledger, decisions: ledger.decisions!.map(entry => entry.id === decisionId ? { ...entry, answererId: boss.id } : entry) });
+      await this.save(id, { ...ledger, decisions: ledger.decisions!.map(entry => entry.id === decisionId ? { ...entry, answererId: boss.id, delegatedByUser: true } : entry) });
     });
   }
   setAutonomy(event: Event, id: string, projectId: string, value: ProjectAutonomy) {
     assertDecisionUiGesture(event);
     projectAutonomy(value);
+    const projectKey = pathKey(projectId);
     return this.serial(async () => {
       const ledger = await this.load(id);
-      await this.save(id, { ...ledger, autonomy: { ...ledger.autonomy, [projectId]: value },
-        decisions: ledger.decisions?.map(row => !row.readOnly && row.projectId === projectId && row.status === "waiting" && row.answererId === decisionAnswerer(row, projectAutonomy(ledger.autonomy?.[projectId]))
+      await this.save(id, { ...ledger, autonomy: { ...ledger.autonomy, [projectKey]: value },
+        decisions: ledger.decisions?.map(row => !row.readOnly && !row.delegatedByUser && pathKey(row.projectId) === projectKey && row.status === "waiting" && row.answererId === decisionAnswerer(row, projectAutonomy(ledger.autonomy?.[projectKey]))
           ? { ...row, answererId: decisionAnswerer(row, value) } : row) });
     });
   }

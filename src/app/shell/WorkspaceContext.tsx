@@ -42,6 +42,9 @@ import {
 } from "../../features/providers/model/rateLimits";
 import { GitBranch, Plus, X } from "../../shared/ui/icons";
 import { workspaceTeam } from "./WorkspaceTeam";
+import { pathKey } from "../../shared/lib/paths";
+import { worktreeTaskSessions } from "../../features/source-control/model/worktreeSessions";
+import { workbenchSessionTask } from "../../features/monos/model/monoNavigation";
 
 const button =
   "rounded-lg border border-stroke px-2.5 py-1.5 text-[11px] text-content/75 hover:bg-content/5 disabled:opacity-40";
@@ -247,7 +250,8 @@ export function WorkspaceGoals({
   const projectRuns = runs.filter((run) =>
     sameProjectPath(run.workspace?.projectCwd ?? run.cwd, project),
   );
-  const tasks = projectRuns.flatMap((run) => run.tasks);
+  const assignments = projectRuns.flatMap((run) => run.tasks.map((task) => ({ run, task })));
+  const tasks = assignments.map(({ task }) => task);
   const goals = monoManagerGoals
     .goals()
     .filter(
@@ -301,10 +305,10 @@ export function WorkspaceGoals({
       )}
       <h2 className={heading}>Tasks</h2>
       {tasks.length ? (
-        tasks.map((task) => {
+        assignments.map(({ run, task }) => {
           const state = selectAgentLiveState(
             sessions.find((session) => session.id === task.sessionId),
-            { task, tasks },
+            { task, tasks: run.tasks, runStatus: run.status, pauseReason: run.lastPauseReason },
           );
           const owner = roster.find((mono) => mono.id === task.memberId);
           return (
@@ -395,6 +399,7 @@ export function WorkspaceWorktrees({
       {data?.worktrees.map((tree) => (
         <WorkspaceWorktreeRow
           key={tree.path}
+          project={project}
           tree={tree}
           sessions={sessions}
           selected={!!selectedPath && sameProjectPath(tree.path, selectedPath)}
@@ -416,12 +421,23 @@ export function WorkspaceWorktrees({
   );
 }
 
+function useWorktreeAssignment(project: string, tree: Worktree) {
+  const runs = useSyncExternalStore(orchestrator.subscribe, orchestrator.snapshot);
+  const worker = worktreeTaskSessions(project, [tree], runs).get(pathKey(tree.path))?.[0];
+  const run = worker && runs.find(run => run.tasks.includes(worker.task));
+  const task = worker && (workbenchSessionTask(run ? [run] : [], worker.sessionId)
+    ?? (worker.sessionId === worker.task.sessionId ? worker.task : undefined));
+  return { run, task, sessionId: worker?.sessionId };
+}
+
 function WorkspaceWorktreeRow({
+  project,
   tree,
   sessions,
   selected,
   onSelect,
 }: {
+  project: string;
   tree: Worktree;
   sessions: readonly Session[];
   selected: boolean;
@@ -440,28 +456,17 @@ function WorkspaceWorktreeRow({
         sameProjectPath(entry.cwd, tree.path) && entry.pr.url === pr.url,
     );
   const label = entry ? pullRequestLabel(entry) : pr?.state;
-  const runs = useSyncExternalStore(
-    orchestrator.subscribe,
-    orchestrator.snapshot,
-  );
-  const assignment = runs
-    .flatMap((run) => run.tasks.map((task) => ({ run, task })))
-    .find(({ task }) =>
-      sameProjectPath(
-        task.workspace?.checkoutCwd ?? task.checkout ?? "",
-        tree.path,
-      ),
-    );
+  const assignment = useWorktreeAssignment(project, tree);
   const session =
-    sessions.find((session) => session.id === assignment?.task.sessionId) ??
+    sessions.find((session) => session.id === assignment.sessionId) ??
     sessions.find((session) => tree.sessionIds.includes(session.id));
   const state =
-    assignment || session
+    assignment.task || session
       ? selectAgentLiveState(session, {
-          task: assignment?.task,
-          tasks: assignment?.run.tasks,
-          runStatus: assignment?.run.status,
-          pauseReason: assignment?.run.lastPauseReason,
+          task: assignment.task,
+          tasks: assignment.run?.tasks,
+          runStatus: assignment.run?.status,
+          pauseReason: assignment.run?.lastPauseReason,
         })
       : undefined;
   return (
@@ -587,18 +592,7 @@ function WorktreeDetails({
       (entry) =>
         sameProjectPath(entry.cwd, tree.path) && entry.pr.url === pr.url,
     );
-  const runs = useSyncExternalStore(
-    orchestrator.subscribe,
-    orchestrator.snapshot,
-  );
-  const task = runs
-    .flatMap((run) => run.tasks)
-    .find((task) =>
-      sameProjectPath(
-        task.workspace?.checkoutCwd ?? task.checkout ?? "",
-        tree.path,
-      ),
-    );
+  const { task } = useWorktreeAssignment(project, tree);
   const owner = task?.memberId
     ? listMonos().find((mono) => mono.id === task.memberId)
     : undefined;

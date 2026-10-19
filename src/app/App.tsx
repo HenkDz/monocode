@@ -16984,7 +16984,7 @@ function Workspace({
   const showRightPanelToggle =
     insetLayout && !settingsOpen && looksLikeProject(sidebarCwd);
   rightPanelToggleRef.current =
-    showRightPanelToggle && !(monoCovers && monoViewMono) && !activeAppView
+    showRightPanelToggle && !activeAppView
       ? onToggleRightPanel
       : null;
   const rightPanelChanges = useProjectDiffStats(

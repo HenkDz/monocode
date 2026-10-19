@@ -311,3 +311,57 @@ it("moves context tabs by keyboard with focus and a separate close control", () 
   );
   expect(close).toHaveBeenCalledOnce();
 });
+
+it("retains each task's parent pause and dependency context", async () => {
+  const { selectAgentLiveState, agentLiveStateTooltip } = await import("../../features/agents/model/agentLiveState");
+  const paused = { cwd: "C:/repo", status: "paused", lastPauseReason: "Owner paused this run", tasks: [{ id: "queued", title: "Paused assignment", status: "queued" }] } as OrchestrationRun;
+  const dependency = { cwd: "C:/repo", status: "active", tasks: [{ id: "dependency", title: "Separate run dependency", status: "queued", dependsOn: ["queued"] }] } as OrchestrationRun;
+  mocks.runs = [paused, dependency];
+  await act(async () => root.render(createElement(WorkspaceGoals, { project: "C:/repo", sessions: [], onOpenMono: vi.fn() })));
+  const expected = selectAgentLiveState(undefined, { task: paused.tasks[0], tasks: paused.tasks, runStatus: paused.status, pauseReason: paused.lastPauseReason });
+  expect(expected.reason).toBe("paused");
+  expect(host.querySelector('[data-agent-state="queued"]')?.getAttribute("title")).toBe(agentLiveStateTooltip(expected));
+  expect(host.textContent).toContain("Paused assignment");
+  expect(host.querySelectorAll('[data-agent-state="queued"]')[1]?.getAttribute("title")).toContain("Waiting for task queued");
+});
+
+it("uses canonical newest checkout assignments and excludes another project", async () => {
+  const workspace = { projectCwd: "C:/repo", checkoutCwd: "C:/repo/feature", kind: "worktree" };
+  const oldTask = { id: "old", sessionId: "old-session", memberId: "old", memberName: "Old owner", status: "completed", accepted: true, workspace };
+  const currentTask = { id: "current", sessionId: "current-session", memberId: "current", memberName: "Current owner", status: "running", workspace };
+  const foreignTask = { ...currentTask, id: "foreign", sessionId: "foreign-session", memberName: "Foreign owner" };
+  const run = (cwd: string, task: unknown, startedAt: number) => ({ cwd, projectManager: true, status: "active", tasks: [task], dispatches: [{ taskId: (task as any).id, sessionId: (task as any).sessionId, startedAt, workspace }] });
+  mocks.runs = [run("C:/repo", oldTask, 10), run("C:/other", foreignTask, 100), run("C:/repo", currentTask, 30)] as OrchestrationRun[];
+  const { worktreeTaskSessions } = await import("../../features/source-control/model/worktreeSessions");
+  const { pathKey } = await import("../../shared/lib/paths");
+  expect(worktreeTaskSessions("C:/repo", mocks.trees, mocks.runs).get(pathKey(workspace.checkoutCwd))?.[0].task).toBe(currentTask);
+  await act(async () => root.render(createElement(WorkspaceWorktrees, { project: "C:/repo", onSelect: vi.fn() })));
+  expect(host.querySelector('[data-agent-state="thinking"]')).not.toBeNull();
+  expect(host.querySelector('[data-agent-state="done"]')).toBeNull();
+  await renderTree();
+  expect(host.textContent).toContain("Current owner");
+  expect(host.textContent).not.toContain("Old owner");
+  expect(host.textContent).not.toContain("Foreign owner");
+});
+
+it("retains historical dispatch checkout state when its task retries elsewhere", async () => {
+  const workspace = { projectCwd: "C:/repo", checkoutCwd: "C:/repo/feature", kind: "worktree" };
+  const retryWorkspace = { ...workspace, checkoutCwd: "C:/repo/retry" };
+  const task = { id: "retry", sessionId: "new-worker", memberId: "member", memberName: "Assigned member", status: "running", workspace: retryWorkspace, accepted: false };
+  mocks.trees.push(tree(retryWorkspace.checkoutCwd));
+  mocks.runs = [{ cwd: "C:/repo", projectManager: true, status: "active", tasks: [task], dispatches: [
+    { id: "old", taskId: task.id, sessionId: "old-worker", state: "completed", stage: "settled", startedAt: 10, workspace },
+    { id: "new", taskId: task.id, sessionId: task.sessionId, state: "running", stage: "turn_submitted", startedAt: 20, workspace: retryWorkspace },
+  ] }] as OrchestrationRun[];
+  const { workbenchSessionTask } = await import("../../features/monos/model/monoNavigation");
+  const { selectAgentLiveState, agentLiveStateTooltip } = await import("../../features/agents/model/agentLiveState");
+  const historical = workbenchSessionTask(mocks.runs, "old-worker")!;
+  expect(historical.historical).toBe(true);
+  expect(historical.workspace?.checkoutCwd).toBe(workspace.checkoutCwd);
+  const state = selectAgentLiveState(undefined, { task: historical, tasks: mocks.runs[0].tasks, runStatus: mocks.runs[0].status });
+  await act(async () => root.render(createElement(WorkspaceWorktrees, { project: "C:/repo", onSelect: vi.fn() })));
+  const rows = host.querySelectorAll('[data-sidebar-row]');
+  expect(rows[0].querySelector('[data-agent-state]')?.getAttribute("title")).toBe(agentLiveStateTooltip(state));
+  expect(rows[0].querySelector('[data-agent-state="thinking"]')).toBeNull();
+  expect(rows[1].querySelector('[data-agent-state="thinking"]')).not.toBeNull();
+});

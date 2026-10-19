@@ -26,6 +26,7 @@ for (const width of [1440, 860, 390])
       );
       await page.setViewportSize({ width, height: 950 });
       await page.goto(`/tests/browser/ccvision-workspace.html?theme=${theme}`);
+      await page.getByRole("button", { name: /^Toggle right sidebar/ }).click();
       await expect(
         page.getByRole("tabpanel", { name: "Goal & tasks" }),
       ).toContainText("Profile routing");
@@ -130,7 +131,7 @@ for (const width of [1440, 860, 390])
       );
       await expect(page.locator('[data-workspace-mono="Boss"]')).toBeVisible();
       await page
-        .getByRole("button", { name: "Goal & tasks", exact: true })
+        .getByRole("button", { name: /^Toggle right sidebar/ })
         .click();
       await page
         .getByRole("tab", { name: "Goal & tasks", exact: true })
@@ -146,3 +147,48 @@ for (const width of [1440, 860, 390])
       expect(errors).toEqual([]);
     });
   }
+
+for (const name of ["Boss", "Manager", "Iris"]) {
+  test(`production App context close/reopen and Ctrl-Shift-B beside ${name}`, async ({ page }) => {
+    await page.goto("/tests/browser/ccvision-workspace.html");
+    await page.locator(`[data-workspace-mono="${name}"]`).click();
+    await expect(page.locator("[data-active-session]")).toHaveAttribute("data-active-session", `${name}-chat`);
+    const context = page.locator("[data-workspace-context]");
+    const toggle = page.getByRole("button", { name: /^Toggle right sidebar/ });
+    await expect(context).toHaveCount(0);
+    await expect(toggle).toHaveAttribute("aria-disabled", "false");
+    await toggle.click();
+    await expect(context).toBeVisible();
+    await page.getByRole("button", { name: "Close project context" }).click();
+    await expect(context).toHaveCount(0);
+    await toggle.click();
+    await expect(context).toBeVisible();
+    await page.keyboard.press("Control+Shift+B");
+    await expect(context).toHaveCount(0);
+    await page.keyboard.press("Control+Shift+B");
+    await expect(context).toBeVisible();
+    await expect(page.getByRole("button", { name: "Minimize window" })).toBeVisible();
+    await page.getByRole("button", { name: "Minimize window" }).click();
+    expect(await page.evaluate(() => (window as any).visionFixture.events.some((event: any) => event.action === "plugin:window|minimize"))).toBe(true);
+  });
+}
+test("Goal tasks preserve their parent run's pause reason", async ({ page }) => {
+  await page.goto("/tests/browser/ccvision-workspace.html?paused");
+  await page.getByRole("button", { name: /^Toggle right sidebar/ }).click();
+  await expect(page.getByRole("tabpanel", { name: "Goal & tasks" }).locator('[data-agent-state="queued"]')).toHaveAttribute("title", /Owner paused this run/);
+});
+
+test("production Ctrl-K opens Search and disables project context until returning to a Mono", async ({ page }) => {
+  await page.goto("/tests/browser/ccvision-workspace.html");
+  const toggle = page.getByRole("button", { name: /^Toggle right sidebar/ });
+  await toggle.click();
+  await expect(page.locator("[data-workspace-context]")).toBeVisible();
+  await page.keyboard.press("Control+k");
+  await expect(page.locator("[data-app-view]")).toHaveAttribute("data-app-view", "search");
+  await expect(page.locator("[data-workspace-context]")).toHaveCount(0);
+  await expect(toggle).toHaveAttribute("aria-disabled", "true");
+  await page.locator('[data-workspace-mono="Manager"]').click();
+  await expect(page.locator("[data-active-session]")).toHaveAttribute("data-active-session", "Manager-chat");
+  await expect(page.locator("[data-app-view]")).toHaveAttribute("data-app-view", "conversation");
+  await expect(page.locator("[data-workspace-context]")).toBeVisible();
+});

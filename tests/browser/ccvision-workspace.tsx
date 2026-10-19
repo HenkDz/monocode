@@ -1,4 +1,9 @@
-import { useState } from "react";
+import { startTransition, useEffect, useState } from "react";
+// @ts-expect-error supplied by the source-bound fixture Vite plugin
+import { bindVisionApp } from "virtual:ccvision-app";
+import { TitleBar } from "../../src/app/shell/TitleBar";
+import { resolveAppShortcut } from "../../src/features/settings/model/appShortcuts";
+import { loadRightPanelOpen, saveRightPanelOpen } from "../../src/features/settings/model/appearance";
 import { createRoot } from "react-dom/client";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { Sidebar } from "../../src/app/shell/Sidebar";
@@ -11,7 +16,7 @@ import {
   type WorkspaceContextTab,
 } from "../../src/app/shell/WorkspaceContext";
 import { monoLiveState } from "../../src/features/monos/model/monoNavigation";
-import { listMonos, type Mono } from "../../src/features/monos/model/mono";
+import { findMono, monoLook, monoState, listMonos, type Mono } from "../../src/features/monos/model/mono";
 import {
   monoManagerGoals,
   type MonoManagerGoal,
@@ -221,7 +226,8 @@ const runs = (
           ownerMonoId: "Manager",
           projectManager: true,
           cwd: project,
-          status: "active",
+          status: params.has("paused") ? "paused" : "active",
+          lastPauseReason: params.has("paused") ? "Owner paused this run" : undefined,
           tasks,
           dispatches: [],
         },
@@ -260,6 +266,8 @@ const pr = {
 mockWindows("main");
 mockIPC(
   (command, args) => {
+    if (command === "plugin:window|is_maximized") return false;
+    if (["plugin:window|minimize", "plugin:window|toggle_maximize", "plugin:window|close"].includes(command)) { events.push({ action: command }); return null; }
     if (command === "control_load")
       return JSON.stringify({
         version: 1,
@@ -387,12 +395,65 @@ function Fixture() {
   const [cwd, setCwd] = useState(project);
   const [selected, setSelected] = useState<string>();
   const [context, setContext] = useState<WorkspaceContextTab>("goal");
-  const [contextOpen, setContextOpen] = useState(true);
+  const [, refresh] = useState(0);
+  const [app] = useState(() => {
+    const host: any = {
+      insetLayout: true, insetLayoutRef: { current: true }, settingsOpen: false, activeAppView: undefined,
+      sidebarCwd: project, looksLikeProject: (path: string) => path.startsWith("C:/synthetic/"),
+      rightPanelOpen: loadRightPanelOpen(), rightPanelClosing: false,
+      rightPanelOpenRef: { current: loadRightPanelOpen() }, rightPanelToggleRef: { current: null },
+      saveRightPanelOpen, onToggleSessionSidebar: noop,
+      setRightPanelOpenState(value: boolean) { host.rightPanelOpen = value; refresh(n => n + 1); },
+      setRightPanelClosing(value: boolean) { host.rightPanelClosing = value; refresh(n => n + 1); },
+      actions: { current: {} }, resolveAppShortcut, run: (_name: string, callback: () => void) => callback(),
+      monoLook, monoState, monoCovers: true, monoViewMono: undefined, monoViewSession: undefined,
+      monoRail: { states: new Map() }, teamMap: { open: false, close: noop },
+      monoSidebarOpen: false, monoDetailsPanel: null, monoOverviewOpen: false, monoOverviewPanel: null,
+      monoViewId: managerSession.id, monoViewIdRef: { current: managerSession.id },
+      monoViewRequest: { current: 0 }, workspaceSessionRequest: { current: 0 }, lastMonoIdRef: { current: "Manager" },
+      workspaceNavigation: { cancel: noop }, sessionsRef: { current: sessions }, homeDir: "C:/synthetic",
+      findMono, updateMono: noop, saveMonoPermissions: noop, saveOpenMono: noop,
+      ensureOpenSession: async (id: string) => sessions.find(session => session.id === id),
+      ensureMonoSession: async (id: string) => sessions.find(session => session.id === findMono(id)?.sessionId),
+      newDefaultSession: () => { throw Error("Fixture cannot create sessions"); },
+      setMonoTeamRequest: noop, setMonoActivity: noop, setSettingsOpen: noop,
+      setMonoShownSession: noop, setMonoShownSessionFocused: noop, setMonoOverviewDocument: noop,
+      startTransition, rememberAppView: noop, setFilePickerOpen: noop, setSearchViewFocusToken: noop,
+      closeMonoView() { host.monoViewId = null; host.monoViewIdRef.current = null; refresh(n => n + 1); },
+      setSearchViewOpen(open: boolean) { host.activeAppView = open ? "search" : undefined; refresh(n => n + 1); },
+      setInboxViewOpen: noop, setNotesViewOpen: noop, setAutomationsViewOpen: noop,
+      setProjectTerminalFocused: noop, setComposerFocused: noop, setComposerFocusToken: noop,
+      setOpenMonoTabs: noop, setSessions: noop,
+      setMonoViewId(id: string) {
+        host.monoViewId = id;
+        setDestination(roster.find(mono => mono.sessionId === id)?.id ?? id);
+        refresh(n => n + 1);
+      },
+    };
+    return bindVisionApp(host);
+  });
+  app.sidebarCwd = cwd;
+  app.monoViewSession = sessions.find(session => session.id === app.monoViewId);
+  app.monoViewMono = roster.find(mono => mono.sessionId === app.monoViewId);
+  const production = app.contextState();
+  const contextOpen = production.shown;
+  const setContextOpen = (open: boolean) => { if (app.rightPanelOpen !== open) app.onToggleRightPanel(); };
+  useEffect(() => {
+    window.addEventListener("keydown", app.keydown, true);
+    return () => window.removeEventListener("keydown", app.keydown, true);
+  }, [app]);
+  useEffect(() => {
+    if (!app.rightPanelClosing) return;
+    // The synthetic shell finishes the real callback's close transition on the next frame.
+    const frame = requestAnimationFrame(() => app.setRightPanelClosing(false));
+    return () => cancelAnimationFrame(frame);
+  });
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [destination, setDestination] = useState("Manager");
   const route = (action: string, value?: unknown) => {
     events.push({ action, value });
-    setDestination(String(value ?? action));
+    if (action === "mono") void app.onOpenMono(String(value));
+    else setDestination(String(value ?? action));
   };
   const states = new Map(
     listMonos().map((mono) => [
@@ -401,7 +462,7 @@ function Fixture() {
     ]),
   );
   const pane: SessionPaneProps = {
-    session: managerSession,
+    session: app.monoViewSession ?? managerSession,
     visible: true,
     focused: true,
     inSplit: false,
@@ -442,15 +503,8 @@ function Fixture() {
   };
   return (
     <div className="vision-shell">
-      <header className="vision-title">
-        <button onClick={() => setSidebarOpen(!sidebarOpen)}>
-          Toggle sidebar
-        </button>
-        <span>browser-link-4 · synthetic workspace</span>
-        <button onClick={() => setContextOpen(!contextOpen)}>
-          Goal & tasks
-        </button>
-      </header>
+      <TitleBar {...production.title} tabs={[]} activeId={app.monoViewId} cwd={cwd}
+        onToggleSidebar={() => setSidebarOpen(!sidebarOpen)} onSelect={noop} onClose={noop} onCloseMany={noop} onReorder={noop} />
       <div className="vision-body">
         <Sidebar
           cwd={cwd}
@@ -481,7 +535,7 @@ function Fixture() {
             route("project", path);
           }}
           onOpenProject={() => route("open-project")}
-          onSearch={() => route("search")}
+          onSearch={app.onOpenSearch}
           onOpenTeamMap={() => route("command-map")}
           onOpenAttentionQueue={() => route("decisions")}
           onOpenInbox={() => route("inbox")}
@@ -523,12 +577,10 @@ function Fixture() {
             />
           }
         />
-        <main className="vision-main">
+        <main className="vision-main" data-app-view={app.activeAppView ?? "conversation"}>
           <div className="vision-manager">
             {destination}
-            <small>
-              Existing chat and Workbench destinations · callbacks only
-            </small>
+            <small data-active-session={pane.session.id}>Production App Mono callback · synthetic sessions</small>
           </div>
           <SessionPane {...pane} />
         </main>

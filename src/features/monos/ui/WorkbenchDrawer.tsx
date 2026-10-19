@@ -12,7 +12,7 @@ export function WorkbenchDrawer({
 }) {
   return (
     <Modal title={title} onClose={onClose} fitViewport className="cc7u-drawer">
-      <div className="p-5 text-xs leading-relaxed">{children}</div>
+      <div className="min-w-0 p-5 text-xs leading-relaxed">{children}</div>
     </Modal>
   );
 }

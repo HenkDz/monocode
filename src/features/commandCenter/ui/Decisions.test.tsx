@@ -13,7 +13,7 @@ const roster: Mono[] = [{ id: "worker", name: "Builder", role: "member", project
   { id: "boss", name: "Boss", role: "orchestrator", projects: [], mascot: "b", color: "blue" }];
 const empty = (): DecisionView => ({ pending: [], log: [], teamPending: 0, handledToday: 0, pruned: 0, loading: [], quarantine: [], autonomyConflicts: [], autonomyChanges: [] });
 const decision = (): MonoDecision => ({ id: "worker-session:question", projectId: "/project", question: "<img src=x onerror=alert(1)> Which option?", impact: "med", context: "<script>untrusted</script>",
-  options: [{ id: "reuse", label: "Reuse" }, { id: "change", label: "Change" }], recommendedOptionId: "reuse", recommenderId: "worker", operation: "work", status: "pending", deciderLevel: "user", currentLevel: 3,
+  options: [{ id: "reuse", label: "Reuse" }, { id: "change", label: "Change" }], identity: { ownerMonoId: "manager" }, recommendedOptionId: "reuse", recommenderId: "worker", operation: "work", status: "pending", deciderLevel: "user", currentLevel: 3,
   resolutionVersion: 2, deliveryState: "current", createdAt: 1, updatedAt: 1, history: [], escalationChain: [{ id: "worker", level: "worker" }, { id: "manager", level: "manager" }, { id: "boss", level: "boss" }, { id: "user", level: "user" }] } as unknown as MonoDecision);
 const actions = (): DecisionUiActions => ({ command: vi.fn(async () => {}), reraise: vi.fn(async () => {}), openProject: vi.fn() });
 beforeEach(() => { vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true); host = document.createElement("div"); document.body.append(host); root = createRoot(host); });
@@ -46,6 +46,14 @@ it("renders untrusted text, real recommendation attribution and versioned direct
   await act(async () => release());
   await act(async () => button("Open project").click());
   expect(handlers.openProject).toHaveBeenCalledWith("/project");
+});
+
+it("keeps unaffected Manager actions usable while another Manager's history is unavailable", async () => {
+  await act(async () => root.render(<Decisions unavailable={["broken"]} view={{ ...empty(), pending: [{ managerId: "manager", decision: decision() }] }} roster={roster} actions={actions()} />));
+  expect(host.textContent).toContain("Some history unavailable");
+  expect(button("Reuse").disabled).toBe(false);
+  await act(async () => root.render(<Decisions unavailable={["manager"]} view={{ ...empty(), pending: [{ managerId: "manager", decision: decision() }] }} roster={roster} actions={actions()} />));
+  expect(button("Reuse").disabled).toBe(true);
 });
 
 it("keeps protected-operation delegation absent and shows the actual resolved log", async () => {

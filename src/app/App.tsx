@@ -19,9 +19,9 @@ import { MonoTeamActivity } from "../features/monos/ui/MonoTeamActivity";
 import { WorkspaceContextTabs, WorkspaceGoals, WorkspaceWorktree, WorkspaceWorktrees, WorkspaceUsage, type WorkspaceContextTab } from "./shell/WorkspaceContext";
 import { Decisions, type DecisionUiActions } from "../features/commandCenter/ui/Decisions";
 import { selectDecisionView } from "../features/commandCenter/model/decisionView";
-import { executeDecisionUi, handleDecisionTeamMessage, reraiseUnreadableDecision, runtimeDecisionHost, type DecisionRuntimeHost } from "../features/monos/model/monoDecisionRuntime";
-import { assertDecisionQueueConsumer, assertDecisionDigestConsumer, staleDecisionDigestEvents, queueDecisionEvidence, decisionQueueId, decisionEvidenceText } from "../features/monos/model/monoDecisionDelivery";
-import { retainedDecisionDelivery, assertDecisionCurrent, StaleDecision, isMonoDecisionEventId, decisionStopAt, isDecisionStopMarker, DecisionDeliveryPending } from "../features/monos/model/monoDecisions";
+import { executeDecisionUi, handleDecisionTeamMessage, reraiseUnreadableDecision, runtimeDecisionHost, decisionManagerIds, type DecisionRuntimeHost } from "../features/monos/model/monoDecisionRuntime";
+import { assertDecisionQueueConsumer, assertDecisionDigestConsumer, staleDecisionDigestEvents, retireDecisionDigestWithRecovery, queueDecisionEvidence, decisionQueueId, decisionEvidenceText } from "../features/monos/model/monoDecisionDelivery";
+import { retainedDecisionDelivery, assertDecisionCurrent, StaleDecision, isMonoDecisionEventId, decisionStopAt, isDecisionStopMarker, appendDecisionStopMarker, DecisionDeliveryPending } from "../features/monos/model/monoDecisions";
 import { workspaceTeam } from "./shell/WorkspaceTeam";
 import { TeamMap } from "../features/teamMap/TeamMap";
 // CC7C integration: Mission control uses the existing full-view navigation.
@@ -40,7 +40,7 @@ import { recordCrewDecision } from "../features/monos/model/monoCrewEvents";
 import { teamDecisions } from "../features/monos/model/monoTeamActivity";
 import { crewMessages, deliverCrewMessage, recordCrewMessage, teamMessageKind, teamMessageRequiresReply } from "../features/monos/model/monoCrewEvents";
 import { acceptManagerWakeQueue } from "../features/orchestration/model/managerWake";
-import { appendManagerRecovery, assertManagerContinuation, assertManagerDelivery, continueManagerRequest, managerDelegateGoal, managerRecoveryRequest, managerRequestBinding, managerRequestBindingCurrent, registerManagerRequestContinuation, resumeManagerRequest } from "../features/monos/model/managerAuthorizedWork";
+import { appendManagerRecovery, assertManagerContinuation, assertManagerDelivery, continueManagerRequest, managerDelegateGoal, managerRecoveryRequest, managerRequestBinding, managerRequestBindingCurrent, registerManagerRequestContinuation, resumeManagerRequest, isManagerUserRequest, captureManagerContinuationGesture, type ManagerContinuationGesture } from "../features/monos/model/managerAuthorizedWork";
 import { requestMemberWork } from "../features/monos/model/memberWorkRequest";
 import {
   assertDirectReport,
@@ -63,6 +63,7 @@ import {
   validManagerProjects,
   monoGoalOrigins,
   type ManagerGoalHost,
+  type GoalLedger,
 } from "../features/monos/model/monoManagerGoals";
 import {
   appendMonoGoalCard,
@@ -1069,6 +1070,9 @@ type SubmitOptions = ComposerTurnOptions & {
   buildTarget?: PlanBuildTarget;
   managed?: boolean;
   managerTurnPrepared?: boolean;
+  continuationGesture?: ManagerContinuationGesture;
+  decisionUserMessageId?: string;
+  validateManagerContinuation?: () => void;
   orchestrationRetry?: OrchestrationProposal;
   appRequestId?: string;
   monoSessionCompletion?: Block["monoSessionCompletion"];
@@ -2036,7 +2040,7 @@ function Workspace({
   const turnGen = useRef(new Map<string, number>());
   const decisionRuntime = useRef<DecisionRuntimeHost>(null!);
   const decisionRevision = useSyncExternalStore(monoManagerGoals.subscribe, monoManagerGoals.snapshot);
-  const [decisionUnavailable, setDecisionUnavailable] = useState(false);
+  const [decisionUnavailable, setDecisionUnavailable] = useState<string[]>([]);
   const [decisionAttentionOpen, setDecisionAttentionOpen] = useState(false);
   const decisionOriginalBlocks = useRef(new Map<string, Block[]>());
   const editedResends = useRef(createEditedResendCoordinator()).current;
@@ -7843,8 +7847,27 @@ function Workspace({
       attachments: Attachment[] = [],
       options?: SubmitOptions,
     ): SubmissionAcceptance => {
-      if (monoManagerGoals.isDecisionSessionRetiring(sessionId))
-        return decisionRuntime.current.hydrate().then(() => submitSession(sessionId, text, attachments, options));
+      if (options?.composerEvent) {
+        try {
+          options = { ...options, composerEvent: undefined,
+            continuationGesture: captureManagerContinuationGesture(options.composerEvent, sessionId, undefined, monoForSession(sessionId)?.id) };
+        } catch (error) {
+          enqueueHarnessEvent(sessionId, { type: "status", text: String(error) }); flushHarnessEvents();
+          options.onSettled?.({ status: "failed", text: "", error: String(error) });
+          return false;
+        }
+      }
+      if (monoManagerGoals.isDecisionSessionRetiring(sessionId)) {
+        const message = "Stopped decision work is still being saved. Retry Chat after recovery finishes.";
+        enqueueHarnessEvent(sessionId, { type: "status", text: message });
+        flushHarnessEvents();
+        void decisionRuntime.current.hydrate(sessionId).catch(error => {
+          enqueueHarnessEvent(sessionId, { type: "status", text: String(error) });
+          flushHarnessEvents();
+        });
+        options?.onSettled?.({ status: "failed", text: "", error: message });
+        return false;
+      }
       if (sessionWriteNeedsReconciliation(sessionId)) {
         const message = "Checking previous send… Retry Chat after reconciliation finishes.";
         enqueueHarnessEvent(sessionId, { type: "status", text: message });
@@ -7864,11 +7887,12 @@ function Workspace({
         (session) => session.id === sessionId,
       );
       const validateManagerDelivery = () => {
+        options?.validateManagerContinuation?.();
         options?.validateDecisionDelivery?.();
         assertManagerDelivery(options?.monoSource, options?.appRequestId,
           sessionsRef.current.find(session => session.id === sessionId), monoForSession(sessionId), monoManagerGoals);
       };
-      const afterDecisionSetup = <T,>(pending: Promise<T>): Promise<T> => options?.validateDecisionDelivery
+      const afterDecisionSetup = <T,>(pending: Promise<T>): Promise<T> => options?.validateDecisionDelivery || options?.validateManagerContinuation
         ? pending.then(value => { validateManagerDelivery(); return value; }) : pending;
       try { validateManagerDelivery(); } catch (error) {
         enqueueHarnessEvent(sessionId, { type: "session.error", message: String(error) });
@@ -7997,6 +8021,8 @@ function Workspace({
         return (async () => {
           let turnId: string | undefined;
           const prepared: { id: string; turnId?: string }[] = [];
+          let decisionUserMessageId = options?.decisionUserMessageId;
+          let validateManagerContinuation = options?.validateManagerContinuation;
           try {
             const current = sessionsRef.current.find(
               (session) => session.id === sessionId,
@@ -8049,6 +8075,51 @@ function Workspace({
                   throw new Error(
                     "Manager needs Continue before processing queued reports.",
                   );
+                if (orchestrator.run(id)?.status === "paused") {
+                  if (!options?.continuationGesture || options.managed || options.appRequestId || options.monoSessionCompletion ||
+                      options.monoHabitAuthorized || automationSessionReservations.current.has(sessionId) || isHabitRun(sessionId) || ownerSessionId !== sessionId)
+                    throw Error("Send from this Manager's composer or choose Continue to resume stopped work");
+                  const binding = managerRequestBinding(sessionsRef.current.find(session => session.id === sessionId)!);
+                  const generation = turnGen.current.get(sessionId);
+                  const validate = (checkTurn = true) => {
+                    if (checkTurn && turnGen.current.get(sessionId) !== generation || !managerRequestBindingCurrent(sessionsRef.current.find(session => session.id === sessionId), binding) ||
+                        monoForSession(sessionId)?.id !== mono.id) throw Error("The original user Send context changed");
+                  };
+                  await decisionRuntime.current.hydrate(sessionId); validate();
+                  await writeSession(sessionId, async save => {
+                    for (;;) {
+                      validate();
+                      const live = sessionsRef.current.find(session => session.id === sessionId)!;
+                      const appended = decisionUserMessageId ? live : appendUser(live, text, displayAttachments(attachments));
+                      const next = { ...appended, busy: false };
+                      const block = decisionUserMessageId ? next.blocks.find(block => block.id === decisionUserMessageId)! : next.blocks[next.blocks.length - 1];
+                      if (!block || !isManagerUserRequest(block) || block.text !== text) throw Error("The submitted user request is unavailable");
+                      decisionUserMessageId = block.id;
+                      if (!await save(next)) throw Error("The submitted user request could not be saved");
+                      validate();
+                      const saved = await readPersistedSession(sessionId); validate();
+                      if (!managerRequestBindingCurrent(saved, binding) || !saved?.blocks.some(entry => entry.id === block.id && isManagerUserRequest(entry) && entry.text === text)) throw Error("The submitted user request could not be verified");
+                      if (sessionsRef.current.find(session => session.id === sessionId) !== live) continue;
+                      sessionsRef.current = sessionsRef.current.map(session => session.id === sessionId ? next : session); setSessions(sessionsRef.current);
+                      monoGoalOrigins.set(sessionId, { kind: "user", messageId: block.id });
+                      break;
+                    }
+                  });
+                  await orchestrator.resumeDecisionManager(id, options.continuationGesture, sessionId, async started => {
+                    validate(!started);
+                    const saved = await readPersistedSession(sessionId); validate(!started);
+                    if (monoGoalOrigins.get(sessionId)?.kind !== "user" || monoGoalOrigins.get(sessionId)?.messageId !== decisionUserMessageId ||
+                        !managerRequestBindingCurrent(saved, binding) || !saved?.blocks.some(block => block.id === decisionUserMessageId && isManagerUserRequest(block) && block.text === text))
+                      throw Error("The committed user Send no longer authorizes this Manager");
+                  });
+                  const epoch = orchestrator.run(id)!.decisionContinuedAt!;
+                  validateManagerContinuation = () => {
+                    orchestrator.assertDecisionContinuation(id, epoch);
+                    if (!managerRequestBindingCurrent(sessionsRef.current.find(session => session.id === sessionId), binding) ||
+                        !sessionsRef.current.find(session => session.id === sessionId)?.blocks.some(block => block.id === decisionUserMessageId && isManagerUserRequest(block) && block.text === text))
+                      throw Error("The committed user Send changed before provider publication");
+                  };
+                } else {
                 await afterDecisionSetup(probeHarnessAvailability());
                 validateManagerDelivery();
                 await afterDecisionSetup(orchestrator.start(
@@ -8058,6 +8129,7 @@ function Workspace({
                   undefined,
                   true,
                 ));
+                }
                 validateManagerDelivery();
               }
               turnId = await afterDecisionSetup(orchestrator.beginManagerTurn(
@@ -8074,6 +8146,8 @@ function Workspace({
               {
                 ...options,
                 managerTurnPrepared: true,
+                decisionUserMessageId,
+                validateManagerContinuation,
                 onSettled: (outcome) => {
                   for (const entry of prepared)
                     void orchestrator
@@ -8108,6 +8182,7 @@ function Workspace({
               text: String(error),
             });
             flushHarnessEvents();
+            options?.onSettled?.({ status: "failed", text: "", error: String(error) });
             return false;
           }
         })();
@@ -8786,6 +8861,10 @@ function Workspace({
                 rawCommand || options?.ciRepair ? s.handoffCard : undefined,
             };
             if (options?.codexStorageRetryBlockId) return { ...next, busy: true, turnReady: false };
+            if (options?.decisionUserMessageId) {
+              if (!next.blocks.some(block => block.id === options.decisionUserMessageId && isManagerUserRequest(block) && block.text === text)) throw Error("The committed user Send changed before publication");
+              return { ...next, title: titled, busy: true, turnReady: false };
+            }
             if (editedResend) {
               next = editedResend.replace(next);
             }
@@ -9770,6 +9849,7 @@ function Workspace({
   const submitMonoGoalRef = useRef<(
     sessionId: string, text: string, attachments: Attachment[], submission: MonoGoalSubmission,
     recovery?: boolean,
+    event?: Event,
   ) => Promise<boolean>>(null!);
   const onSubmit = useCallback(
     (...args: Parameters<Submit>): boolean => {
@@ -10440,6 +10520,7 @@ function Workspace({
             return;
           }
           const steering = latest.busy;
+          const retirementBinding = managerRequestBinding(latest), retirementGeneration = turnGen.current.get(session.id);
           if (steering)
             setSessions((prev) =>
               prev.map((entry) =>
@@ -10487,7 +10568,7 @@ function Workspace({
             if (head.managerWake && (!digestReceipt || digestReceipt.id !== head.managerWake.receiptId || head.id !== digestReceipt.id || head.appRequestId !== digestReceipt.id || head.text !== digestReceipt.body))
               throw Error("Manager digest identity changed; evidence retained");
             if (head.monoDecision || digestRun?.wakeState?.receipt?.eventIds.some(isMonoDecisionEventId)) {
-              await decisionRuntime.current.hydrate();
+              await decisionRuntime.current.hydrate(session.id);
               const binding = managerRequestBinding(latest);
               let validate: () => void;
               if (head.managerWake) {
@@ -10496,7 +10577,7 @@ function Workspace({
                 if (!run?.ownerMonoId) throw Error("Manager digest owner is unavailable");
                 validate = assertDecisionDigestConsumer(head, readRun,
                   () => monoManagerGoals.decisions(run.ownerMonoId!), runtimeDecisionHost(run.ownerMonoId,
-                    { kind: "mono", id: run.ownerMonoId }, "", undefined, decisionRuntime.current));
+                    { kind: "mono", id: run.ownerMonoId }, "", undefined, decisionRuntime.current), id => monoManagerGoals.isQuarantinedDecisionEvent(run.ownerMonoId!, id));
               } else {
               const reference = head.monoDecision;
               if (!reference) throw Error("Decision reference is unavailable");
@@ -10605,13 +10686,24 @@ function Workspace({
                 if (head.monoDecision) await retireCurrent(head.monoDecision.managerId, head.monoDecision.decisionId, head.monoDecision.resolutionVersion);
                 const run = head.managerWake && (orchestrator.run(head.managerWake.leadId) ?? orchestrator.snapshot().find(run => run.ownerSessionId === session.id && run.wakeState?.receipt?.id === head.managerWake!.receiptId));
                 const retired = run?.wakeState?.receipt && run.ownerMonoId ? staleDecisionDigestEvents(run, run.wakeState.receipt,
-                  () => monoManagerGoals.decisions(run.ownerMonoId!), runtimeDecisionHost(run.ownerMonoId, { kind: "mono", id: run.ownerMonoId }, "", undefined, decisionRuntime.current)) : [];
+                  () => monoManagerGoals.decisions(run.ownerMonoId!), runtimeDecisionHost(run.ownerMonoId, { kind: "mono", id: run.ownerMonoId }, "", undefined, decisionRuntime.current), id => monoManagerGoals.isQuarantinedDecisionEvent(run.ownerMonoId!, id)) : [];
                 if (head.managerWake && !retired.length) throw Error("Manager digest could not retire any exact stale source event; evidence retained");
                 for (const id of retired ?? []) {
                   const decision = monoManagerGoals.decisions(run!.ownerMonoId!).find(decision => retainedDecisionDelivery(decision, id));
                   if (decision) await retireCurrent(run!.ownerMonoId!, decision.id, decision.resolutionVersion);
                 }
-                if (run && retired?.length) await orchestrator.retireDecisionDigest(run.leadId, head.managerWake!.receiptId, retired);
+                if (run && retired?.length) await retireDecisionDigestWithRecovery(run, run.wakeState!.receipt!, retired, {
+                  quarantine: () => monoManagerGoals.decisionQuarantine(run.ownerMonoId!),
+                  quarantined: id => monoManagerGoals.isQuarantinedDecisionEvent(run.ownerMonoId!, id),
+                  validate: () => {
+                    const current = sessionsRef.current.find(entry => entry.id === session.id);
+                    const currentRun = orchestrator.run(run.leadId);
+                    if (turnGen.current.get(session.id) !== retirementGeneration || !managerRequestBindingCurrent(current, retirementBinding) ||
+                        queuedHead(current!)?.id !== head.id || currentRun?.ownerMonoId !== run.ownerMonoId || currentRun.wakeState?.receipt?.id !== head.managerWake!.receiptId ||
+                        currentRun.wakeState.receipt.body !== head.text) throw Error("Quarantined decision recipient or receipt changed");
+                  },
+                  retire: (leadId, receiptId, ids, recovery, validate) => orchestrator.retireDecisionDigest(leadId, receiptId, ids, recovery, validate),
+                });
                 await writeSession(session.id, async save => {
                   const current = sessionsRef.current.find(entry => entry.id === session.id);
                   if (!current) throw Error("Retired decision recipient is unavailable");
@@ -12208,34 +12300,62 @@ function Workspace({
       }
       const manager = monoForSession(sessionId);
       const stopAt = Date.now();
-      const stopMarker = { id: `decision-stop-${stopAt}`, role: "system" as const, text: "Stopped. Earlier decision evidence cannot resume this work." };
+      const stoppedSession = sessionsRef.current.find(session => session.id === sessionId);
+      const stopAfterBlockId = stoppedSession?.blocks[stoppedSession.blocks.length - 1]?.id;
+      const decisionOwners = !preserveQueue && !(managed && monoManagerGoals.isDecisionSessionRetiring(sessionId)) && stoppedSession && shouldPersistSession(stoppedSession)
+        ? decisionManagerIds(sessionId, decisionRuntime.current) : [];
       const stopFailure = (error: unknown) => {
-        monoManagerGoals.holdDecisionSessionRetirement(sessionId, stopAt);
+        monoManagerGoals.holdDecisionSessionRetirement(sessionId, stopAt, stopAfterBlockId);
         setSessions(previous => previous.map(session => session.id === sessionId ? { ...session,
           blocks: [...session.blocks, { id: crypto.randomUUID(), role: "system" as const, notice: "error" as const,
             text: `Stopped, but decision retirement still needs saving. Continue will retry before work can resume. ${String(error)}` }] } : session));
       };
       const ownedRuns = orchestrator.snapshot().filter(run => run.ownerSessionId === sessionId || run.leadId === sessionId);
-      const retireRequests = manager?.role === "manager" && (!managed || ownedRuns.some(run => run.status === "stopped")) && !preserveQueue;
+      const retireRequests = manager?.role === "manager" && ownedRuns.some(run => run.status === "stopped") && !preserveQueue;
       if (retireRequests) monoGoalOrigins.delete(sessionId);
       const retiredRequests = retireRequests ? Promise.all([
         ...ownedRuns.map(run => monoManagerGoals.retireManagerRequests(run.leadId)),
         ...(remote ? [upsertSession(remote, current => ({ ...current, blocks: current.blocks.map(block => block.managerRequestRecovery?.state === "pending"
           ? { ...block, managerRequestRecovery: { ...block.managerRequestRecovery, state: "cancelled" as const } } : block) }))] : []),
       ]) : Promise.resolve();
-      const stopSaved = !preserveQueue ? writeSession(sessionId, async save => {
-          const current = sessionsRef.current.find(session => session.id === sessionId);
-          if (!current) throw Error("Stopped conversation is unavailable");
-          const next = current.blocks.some(block => block.id === stopMarker.id) ? current : { ...current, blocks: [...current.blocks, stopMarker] };
-          if (!await save(next)) throw Error("Stop evidence could not be saved");
-          if (!(await readPersistedSession(sessionId))?.blocks.some(block => block.id === stopMarker.id && isDecisionStopMarker(block)))
-            throw Error("Stop evidence could not be verified");
-        }) : Promise.resolve();
-      const retired = Promise.allSettled([retiredRequests, stopSaved, ...(!preserveQueue ? [
-        monoManagerGoals.retireDecisionSession(sessionId, listMonos().filter(mono => mono.role === "manager").map(mono => mono.id), stopAt),
-      ] : [])]).then(results => {
+      const stopSaved = decisionOwners.length ? monoManagerGoals.prepareDecisionStop(sessionId, decisionOwners, stopAt, stopAfterBlockId).then(async owners => {
+        if (!owners.length) return;
+        const outcomes = await Promise.allSettled([
+          writeSession(sessionId, async save => {
+            for (;;) {
+              const current = sessionsRef.current.find(session => session.id === sessionId);
+              if (!current) throw Error("Stopped conversation is unavailable");
+              const history = current.monoTranscript?.before != null ? await getMonoGoalRecoveryBlocks(sessionId) : undefined;
+              if (sessionsRef.current.find(session => session.id === sessionId) !== current) continue;
+              const next = appendDecisionStopMarker(history ? mergeMonoGoalRecoverySession(current, history) : current, stopAt, stopAfterBlockId);
+              const liveNext = history ? monoGoalRecoveryLiveSession(current, next, history) : next;
+              if (!history) resetMonoSessionWriteBaseline(sessionId);
+              if (!await save(next, history ? { monoBaseline: history, monoLiveBlocks: liveNext.blocks } : undefined)) throw Error("Stop evidence could not be saved");
+              const persisted = await readPersistedSession(sessionId);
+              const blocks = persisted?.monoTranscript?.before != null ? await getMonoGoalRecoveryBlocks(sessionId) : persisted?.blocks;
+              if (!persisted || !blocks || decisionStopAt({ ...persisted, blocks }) < stopAt) throw Error("Stop evidence could not be verified");
+              if (sessionsRef.current.find(session => session.id === sessionId) !== current) continue;
+              sessionsRef.current = sessionsRef.current.map(session => session.id === sessionId ? liveNext : session);
+              setSessions(sessionsRef.current);
+              return;
+            }
+          }),
+          monoManagerGoals.retireDecisionSession(sessionId, owners, stopAt, false),
+        ]);
+        const failed = outcomes.find(result => result.status === "rejected");
+        if (failed?.status === "rejected") throw failed.reason;
+      }) : Promise.resolve();
+      const continuationStopped = !preserveQueue && decisionOwners.length ? orchestrator.retireDecisionContinuation(sessionId, stopAt) : Promise.resolve();
+      const retired = Promise.allSettled([retiredRequests, Promise.allSettled([stopSaved, continuationStopped]).then(results => {
         const failed = results.find(result => result.status === "rejected");
-        if (failed?.status === "rejected") stopFailure(failed.reason);
+        if (failed?.status === "rejected") throw failed.reason;
+      })]).then(results => {
+        const decisionFailure = results[1];
+        if (decisionFailure.status === "rejected") stopFailure(decisionFailure.reason);
+        const requestFailure = results[0];
+        if (requestFailure.status === "rejected") setSessions(previous => previous.map(session => session.id === sessionId ? { ...session,
+          blocks: [...session.blocks, { id: crypto.randomUUID(), role: "system" as const, notice: "error" as const,
+            text: `Stopped, but original request cancellation still needs saving. ${String(requestFailure.reason)}` }] } : session));
       });
       if (!managed) {
         const stopping = orchestrator.stopForSession(sessionId);
@@ -12269,8 +12389,7 @@ function Workspace({
           const completed = isPreparingHandoff(stopped)
             ? completeHandoff(stopped, buildDeterministicHandoff(stopped))
             : stopped;
-          const ready = { ...completed, worktreePreparing: undefined,
-            blocks: !preserveQueue && !completed.blocks.some(block => block.id === stopMarker.id) ? [...completed.blocks, stopMarker] : completed.blocks };
+          const ready = { ...completed, worktreePreparing: undefined };
           return !preserveQueue && queuedHead(ready)
             ? { ...ready, queueStatus: "paused" }
             : ready;
@@ -12286,7 +12405,7 @@ function Workspace({
         notifyReviewChanged(sessionId);
       }
       // Goal cancellation can hold the ledger while awaiting a managed Stop.
-      return Promise.all([cancelling, checkpointFinished, managed ? stopSaved.catch(() => undefined) : retired]);
+      return Promise.all([cancelling, checkpointFinished, ...(managed ? [] : [retired])]);
     },
     [flushHarnessEvents],
   );
@@ -12858,7 +12977,43 @@ function Workspace({
         onResumeQueue(id);
         return session.queueStatus === "paused" || session.queueStatus === "active";
       },
-      beforeContinue: async () => { await decisionRuntime.current.hydrate(); },
+      beforeContinue: async id => { await decisionRuntime.current.hydrate(id); },
+      decisionStopAt: id => Math.max(decisionStopAt(decisionRuntime.current.sessions().find(session => session.id === id) ?? { blocks: [] }), monoManagerGoals.decisionRetirementThrough(id) ?? 0),
+      decisionGeneration: id => turnGen.current.get(id) ?? 0,
+      decisionAuthority: id => {
+        const run = orchestrator.run(id), manager = findMono(run?.ownerMonoId ?? "");
+        if (!run || !manager || monoManagerGoals.decisionHistoryState(manager.id) !== "ready") return;
+        const goals = monoManagerGoals.goals().filter(goal => goal.managerId === id);
+        if (goals.some(goal => monoManagerGoals.decisionHistoryState(goal.monoId) !== "ready")) return;
+        return JSON.stringify([manager.id, manager.role, manager.reportsTo, manager.projects, manager.sessionId,
+          run.wakeState?.receipt && [run.wakeState.receipt.id, run.wakeState.receipt.body, run.wakeState.receipt.eventIds],
+          goals.map(goal => {
+            const owner = findMono(goal.monoId), session = decisionRuntime.current.sessions().find(session => session.id === owner?.sessionId);
+            const block = session?.blocks.find(block => block.id === goal.userMessageId);
+            return [goal.id, goal.monoId, goal.managerId, goal.projectId, goal.requestId, goal.userMessageId, goal.state, goal.createdAt, goal.title, goal.route,
+              monoManagerGoals.isCancelling(goal.id), owner?.id, owner?.role, owner?.sessionId, owner?.reportsTo,
+              session && managerRequestBinding(session), block?.text, block && isManagerUserRequest(block), session && decisionStopAt(session)];
+          })]);
+      },
+      verifyDecisionAuthority: async id => {
+        const run = orchestrator.run(id);
+        if (!run?.ownerMonoId) throw Error("The original Manager is unavailable");
+        const goals = monoManagerGoals.goals().filter(goal => goal.managerId === id);
+        await Promise.all([...new Set([run.ownerMonoId, ...goals.map(goal => goal.monoId)])].map(async ownerId => {
+          const owner = findMono(ownerId), live = decisionRuntime.current.sessions().find(session => session.id === owner?.sessionId);
+          if (!live || !owner) throw Error("The original request owner is unavailable");
+          const saved = await readPersistedSession(live.id);
+          if (!saved || !managerRequestBindingCurrent(saved, managerRequestBinding(live))) throw Error("The saved original request binding changed");
+          const blocks = saved.monoTranscript?.before != null ? await getMonoGoalRecoveryBlocks(saved.id) : saved.blocks;
+          const raw = await invoke<string | null>("control_load", { leadId: `mono-goals:${ownerId}` });
+          const retained = raw ? JSON.parse(raw) as GoalLedger : undefined;
+          for (const goal of goals.filter(goal => goal.monoId === ownerId)) {
+            const block = live.blocks.find(block => block.id === goal.userMessageId), persisted = blocks.find(block => block.id === goal.userMessageId);
+            if (!block || !persisted || !isManagerUserRequest(persisted) || persisted.text !== block.text ||
+                !retained?.goals.some(saved => JSON.stringify(saved) === JSON.stringify(goal))) throw Error("The saved original goal or request changed");
+          }
+        }));
+      },
       acceptManagerDigest: async (id, receipt) => {
         const readRun = () => orchestrator.snapshot().find(run => (run.ownerSessionId ?? run.leadId) === id && run.wakeState?.receipt?.id === receipt.id);
         const run = readRun();
@@ -12878,7 +13033,7 @@ function Workspace({
           validateReceipt();
           const current = readRun()!, ownerId = current.ownerMonoId!;
           return staleDecisionDigestEvents(current, receipt, () => monoManagerGoals.decisions(ownerId),
-            runtimeDecisionHost(ownerId, { kind: "mono", id: ownerId }, "", undefined, decisionRuntime.current));
+            runtimeDecisionHost(ownerId, { kind: "mono", id: ownerId }, "", undefined, decisionRuntime.current), id => monoManagerGoals.isQuarantinedDecisionEvent(ownerId, id));
         };
         let hydrated = false;
         for (;;) {
@@ -12907,7 +13062,7 @@ function Workspace({
             }
             const decisionGuard = run?.wakeState?.events.some(event => receipt.eventIds.includes(event.id) && isMonoDecisionEventId(event.id)) && run.ownerMonoId
               ? assertDecisionDigestConsumer({ id: receipt.id, appRequestId: receipt.id, text: receipt.body, attachments: [], managerWake: { leadId: run.leadId, receiptId: receipt.id } },
-                  readRun, () => monoManagerGoals.decisions(run.ownerMonoId!), runtimeDecisionHost(run.ownerMonoId, { kind: "mono", id: run.ownerMonoId }, "", undefined, decisionRuntime.current)) : () => {};
+                  readRun, () => monoManagerGoals.decisions(run.ownerMonoId!), runtimeDecisionHost(run.ownerMonoId, { kind: "mono", id: run.ownerMonoId }, "", undefined, decisionRuntime.current), id => monoManagerGoals.isQuarantinedDecisionEvent(run.ownerMonoId!, id)) : () => {};
             const validate = () => {
               decisionGuard();
               if (run?.wakeState?.events.some(event => receipt.eventIds.includes(event.id) && isMonoDecisionEventId(event.id)) &&
@@ -12941,12 +13096,17 @@ function Workspace({
             }
             const stillStale = staleEvents();
             if (accepted.retired.some(id => !stillStale.includes(id))) throw Error("Manager digest stale source changed; evidence retained");
-            await orchestrator.retireDecisionDigest(accepted.leadId, receipt.id, accepted.retired);
+            await retireDecisionDigestWithRecovery(readRun()!, receipt, accepted.retired, {
+              quarantine: () => monoManagerGoals.decisionQuarantine(accepted.ownerId),
+              quarantined: id => monoManagerGoals.isQuarantinedDecisionEvent(accepted.ownerId, id),
+              validate: validateReceipt,
+              retire: (leadId, receiptId, ids, recovery, validate) => orchestrator.retireDecisionDigest(leadId, receiptId, ids, recovery, validate),
+            });
             staleEvents();
             return false;
           }
           // Stop recovery may save this same session; never hydrate while holding its writer.
-          await decisionRuntime.current.hydrate();
+          await decisionRuntime.current.hydrate(id);
           staleEvents();
           hydrated = true;
         }
@@ -13645,10 +13805,12 @@ function Workspace({
       projects.filter(project => remoteProjectFor(project.path) ||
         !recents.some(recent => projectKey(recent.path) === projectKey(project.path))).map(project => project.path));
   };
-  submitMonoGoalRef.current = async (sessionId, text, attachments, submission, recovery) => {
+  submitMonoGoalRef.current = async (sessionId, text, attachments, submission, recovery, event) => {
     const mono = monoForSession(sessionId);
     if (!mono || mono.id !== submission.ownerId || mono.role !== "orchestrator")
       throw Error("That Grand Orchestrator is no longer available");
+    const gesture = recovery ? undefined : captureManagerContinuationGesture(event, sessionId, undefined, mono.id);
+    const binding = managerRequestBinding(sessionsRef.current.find(session => session.id === sessionId)!);
     let history = recovery ? await getMonoGoalRecoveryBlocks(sessionId) : undefined;
     const update = async (change: (session: Session) => Session) => {
       return writeSession(sessionId, async save => {
@@ -13708,8 +13870,20 @@ function Workspace({
         return true;
       }),
       persistPending: (origin, error) => update(session => appendMonoGoalPendingCard(session, origin, error)),
-      persistCard: (origin, goal) => update(session => appendMonoGoalCard(session, origin, goal)),
-      grand: () => submitSession(sessionId, text, attachments),
+      persistCard: async (origin, goal) => {
+        await update(session => appendMonoGoalCard(session, origin, goal));
+        if (gesture && orchestrator.run(goal.managerId)?.status === "paused") await orchestrator.resumeDecisionManager(goal.managerId, gesture, sessionId, async () => {
+          if (!managerRequestBindingCurrent(sessionsRef.current.find(session => session.id === sessionId), binding) || monoForSession(sessionId)?.id !== submission.ownerId ||
+              !monoManagerGoals.goals(submission.ownerId).some(current => current.id === goal.id && current.managerId === goal.managerId &&
+                current.userMessageId === origin.userMessageId && current.requestId === submission.requestId && !["cancelled", "done"].includes(current.state)))
+            throw Error("The original routed goal changed during Continue");
+          const saved = await readPersistedSession(sessionId);
+          if (!managerRequestBindingCurrent(sessionsRef.current.find(session => session.id === sessionId), binding) || !managerRequestBindingCurrent(saved, binding) ||
+              !saved?.blocks.some(block => block.id === origin.userMessageId && isManagerUserRequest(block) && block.text === text &&
+                JSON.stringify(block.monoGoalSubmission) === JSON.stringify(origin))) throw Error("The routed user goal could not be verified");
+        });
+      },
+      grand: () => submitSession(sessionId, text, attachments, { continuationGesture: gesture }),
     });
   };
 
@@ -13722,45 +13896,81 @@ function Workspace({
     }),
     generation: id => turnGen.current.get(id) ?? 0,
     eventOwner: habitRunMono,
-    hydrate: async () => {
-      try {
-        for (const mono of listMonos().filter(mono => mono.role === "manager" || mono.role === "orchestrator")) {
-          await monoManagerGoals.hydrate(mono.id);
-        }
-        const ids = new Set([
-          ...listMonos().flatMap(mono => mono.sessionId ? [mono.sessionId] : []),
-          ...orchestrator.snapshot().flatMap(run => run.tasks.map(task => task.sessionId)),
-          ...listMonos().filter(mono => mono.role === "manager").flatMap(mono => monoManagerGoals.decisions(mono.id).flatMap(decision => [decision.identity.requestSessionId, decision.identity.requesterSessionId])),
-        ]);
-        for (const id of ids) if (!sessionsRef.current.some(session => session.id === id)) {
-          const stored = await readPersistedSession(id);
-          if (stored && !sessionsRef.current.some(session => session.id === id)) {
-            sessionsRef.current = [...sessionsRef.current, stored];
-            setSessions(sessionsRef.current);
+    hydrate: async scope => {
+      const roster = listMonos();
+      const ownerIds = scope ? decisionManagerIds(scope, decisionRuntime.current) : roster.filter(mono => mono.role === "manager" && mono.archivedAt == null).map(mono => mono.id);
+      if (scope && !ownerIds.length) return;
+      const failed = new Map<string, unknown>();
+      const supporting = roster.filter(mono => mono.role === "orchestrator" && mono.archivedAt == null).map(mono => mono.id);
+      for (const id of supporting) {
+        try { await monoManagerGoals.hydrate(id); } catch (error) { failed.set(id, error); }
+      }
+      for (const ownerId of ownerIds) {
+        try {
+          await monoManagerGoals.hydrate(ownerId);
+          const retained = monoManagerGoals.decisions(ownerId);
+          const unavailable = retained.find(decision => failed.has(decision.identity.ownerMonoId));
+          if (unavailable) throw failed.get(unavailable.identity.ownerMonoId);
+          const runs = orchestrator.snapshot().filter(run => run.ownerMonoId === ownerId);
+          const goals = monoManagerGoals.goals().filter(goal => runs.some(run => run.leadId === goal.managerId));
+          const ids = new Set([
+            ...roster.filter(mono => mono.id === ownerId && mono.sessionId).map(mono => mono.sessionId!),
+            ...runs.flatMap(run => run.tasks.map(task => task.sessionId)),
+            ...retained.flatMap(decision => [decision.identity.requestSessionId, decision.identity.requesterSessionId]),
+            ...goals.flatMap(goal => roster.find(mono => mono.id === goal.monoId)?.sessionId ?? []),
+          ]);
+          for (const id of ids) if (!sessionsRef.current.some(session => session.id === id)) {
+            const stored = await readPersistedSession(id);
+            if (stored) {
+              resetMonoSessionWriteBaseline(id);
+              sessionsRef.current = [...sessionsRef.current, stored];
+              setSessions(sessionsRef.current);
+            }
           }
-        }
-        for (const session of sessionsRef.current.filter(session => ids.has(session.id))) {
-          const mono = listMonos().find(mono => mono.sessionId === session.id);
-          const goals = mono ? monoManagerGoals.goals(mono.id) : [];
-          if (session.monoTranscript?.before != null || goals.some(goal => !session.blocks.some(block => block.id === goal.userMessageId))) {
-            const history = await getMonoGoalRecoveryBlocks(session.id);
-            decisionOriginalBlocks.current.set(session.id, history.filter(block => isDecisionStopMarker(block) || goals.some(goal => goal.userMessageId === block.id)));
+          for (const session of sessionsRef.current.filter(session => ids.has(session.id))) {
+            if (session.monoTranscript?.before != null || goals.some(goal => roster.find(mono => mono.id === goal.monoId)?.sessionId === session.id && !session.blocks.some(block => block.id === goal.userMessageId))) {
+              const history = await getMonoGoalRecoveryBlocks(session.id);
+              decisionOriginalBlocks.current.set(session.id, history.filter(block => isDecisionStopMarker(block) || monoManagerGoals.goals().some(goal => goal.userMessageId === block.id)));
+            }
+            const blocks = [...(decisionOriginalBlocks.current.get(session.id) ?? []), ...session.blocks];
+            const through = Math.max(decisionStopAt({ ...session, blocks }), monoManagerGoals.decisionRetirementThrough(session.id) ?? 0);
+            if (through && orchestrator.snapshot().some(run => (run.ownerSessionId === session.id || run.tasks.some(task => task.sessionId === session.id)) &&
+                run.decisionContinuePendingAt !== undefined && run.decisionContinuePendingAt <= through)) await orchestrator.retireDecisionContinuation(session.id, through);
+            if (!through || !monoManagerGoals.needsDecisionRetirement(session.id, through) && !monoManagerGoals.isDecisionSessionRetiring(session.id)) continue;
+            if (monoManagerGoals.needsDecisionRetirement(session.id, through) || monoManagerGoals.isDecisionSessionRetiring(session.id)) {
+              await writeSession(session.id, async save => {
+                const persisted = await readPersistedSession(session.id);
+                const savedBlocks = persisted?.monoTranscript?.before != null ? await getMonoGoalRecoveryBlocks(session.id) : persisted?.blocks;
+                if (persisted && savedBlocks && decisionStopAt({ ...persisted, blocks: savedBlocks }) >= through) return;
+                for (;;) {
+                  const current = sessionsRef.current.find(entry => entry.id === session.id);
+                  if (!current) throw Error("Stopped conversation is unavailable; evidence remains held");
+                  const history = current.monoTranscript?.before != null ? await getMonoGoalRecoveryBlocks(session.id) : undefined;
+                  if (sessionsRef.current.find(entry => entry.id === session.id) !== current) continue;
+                  const next = appendDecisionStopMarker(history ? mergeMonoGoalRecoverySession(current, history) : current, through, monoManagerGoals.decisionRetirementAnchor(session.id));
+                  const liveNext = history ? monoGoalRecoveryLiveSession(current, next, history) : next;
+                  if (!history) resetMonoSessionWriteBaseline(session.id);
+                  if (!await save(next, history ? { monoBaseline: history, monoLiveBlocks: liveNext.blocks } : undefined)) throw Error("Stop evidence still needs saving");
+                  const readback = await readPersistedSession(session.id);
+                  const verifiedBlocks = readback?.monoTranscript?.before != null ? await getMonoGoalRecoveryBlocks(session.id) : readback?.blocks;
+                  if (!readback || !verifiedBlocks || decisionStopAt({ ...readback, blocks: verifiedBlocks }) < through) throw Error("Stop evidence could not be verified");
+                  if (sessionsRef.current.find(entry => entry.id === session.id) !== current) continue;
+                  sessionsRef.current = sessionsRef.current.map(entry => entry.id === session.id ? liveNext : entry);
+                  setSessions(sessionsRef.current);
+                  break;
+                }
+              });
+            }
+            await monoManagerGoals.retireDecisionSession(session.id, [ownerId], through, false);
           }
-          const blocks = [...(decisionOriginalBlocks.current.get(session.id) ?? []), ...session.blocks];
-          const through = decisionStopAt({ ...session, blocks });
-          if (through) {
-            if (monoManagerGoals.isDecisionSessionRetiring(session.id)) await writeSession(session.id, async save => {
-              const current = sessionsRef.current.find(entry => entry.id === session.id);
-              if (!current || !await save(current)) throw Error("Stop evidence still needs saving");
-              const persisted = await readPersistedSession(session.id);
-              const savedBlocks = persisted?.monoTranscript?.before != null ? await getMonoGoalRecoveryBlocks(session.id) : persisted?.blocks;
-              if (!persisted || !savedBlocks || decisionStopAt({ ...persisted, blocks: savedBlocks }) < through) throw Error("Stop evidence could not be verified");
-            });
-            await monoManagerGoals.retireDecisionSession(session.id, listMonos().filter(mono => mono.role === "manager").map(mono => mono.id), through);
-          }
-        }
-        setDecisionUnavailable(false);
-      } catch (error) { setDecisionUnavailable(true); throw error; }
+        } catch (error) { failed.set(ownerId, error); }
+      }
+      const touched = new Set([...ownerIds, ...supporting]);
+      setDecisionUnavailable(previous => [...previous.filter(id => !touched.has(id)), ...failed.keys()]);
+      if (scope) {
+        const blocked = ownerIds.find(id => failed.has(id));
+        if (blocked) throw failed.get(blocked);
+      } else if (failed.size) throw failed.values().next().value;
     },
     queue: async (message, decision, validate) => {
       validate();
@@ -16795,8 +17005,8 @@ function Workspace({
     onSaveDraft,
     onRemoveDraft,
     onSubmit,
-    onSubmitGoal: (sessionId: string, text: string, attachments: Attachment[], submission: MonoGoalSubmission) =>
-      submitMonoGoalRef.current(sessionId, text, attachments, submission),
+    onSubmitGoal: (sessionId: string, text: string, attachments: Attachment[], submission: MonoGoalSubmission, event?: Event) =>
+      submitMonoGoalRef.current(sessionId, text, attachments, submission, false, event),
     onStop,
     onCompactContext,
     onDiscardRotationPendingInput,
@@ -17860,7 +18070,7 @@ function Workspace({
                 isLocalSession={session => !remoteProjectFor(session.cwd)}
                 command={<MissionCommandBar open={teamMap.open && teamMap.scope === MISSION_CONTROL_SCOPE}
                   goalRouting={goalRoutingForMono(listMonos().find(mono => mono.role === "orchestrator")?.id ?? "")}
-                  onSubmit={async (text, submission) => {
+                  onSubmit={async (text, submission, event) => {
                     const grand = submission ? findMono(submission.ownerId) : listMonos().find(mono => mono.role === "orchestrator");
                     if (!grand || grand.role !== "orchestrator" || grand.archivedAt != null)
                       throw Error("That Grand Orchestrator is no longer available");
@@ -17869,7 +18079,7 @@ function Workspace({
                       add: created => { sessionsRef.current = [...sessionsRef.current, created]; setSessions(sessionsRef.current); },
                     });
                     if (!session) return false;
-                    return submission ? submitMonoGoalRef.current(session.id, text, [], submission) : submitSession(session.id, text, []);
+                    return submission ? submitMonoGoalRef.current(session.id, text, [], submission, false, event) : submitSession(session.id, text, [], { composerEvent: event });
                   }} />}
                 renderAttention={onClose => <AttentionQueue sessions={sessions} runs={orchestrationRuns} open presentation="panel"
                   readSessions={() => sessionsRef.current} readRuns={() => orchestrator.snapshot()}
@@ -17878,7 +18088,7 @@ function Workspace({
                   callbacks={{ approval: onApproval, question: onQuestionReply, questionInteraction: onQuestionInteraction,
                     repair: onCodexStorageRepair, compare: onCodexStorageCompare, reveal: onCodexStorageReveal,
                     resume: onUsageLimitResume, resumeAtReset: onUsageLimitResumeAtReset, retryDelivery: onResumeQueue,
-                    continueManager: id => orchestrator.continueManager(id), continueRequest: continueAttentionRequest, inspect: id => { teamMap.close(); return onOpenApprovalSession(id); }, inspectAutomation: () => onOpenAutomations() }} />}
+                    continueManager: (id, event) => orchestrator.continueManager(id, event), continueRequest: continueAttentionRequest, inspect: id => { teamMap.close(); return onOpenApprovalSession(id); }, inspectAutomation: () => onOpenAutomations() }} />}
                 onClose={teamMap.close} onOpenTarget={target => openGoalTarget(target, {
                   close: teamMap.close, request: onOpenApprovalSession, mono: onOpenMono, session: onOpenMonoLaunchedSession,
                 })} />
@@ -17896,7 +18106,7 @@ function Workspace({
                 callbacks={{ approval: onApproval, question: onQuestionReply, questionInteraction: onQuestionInteraction,
                   repair: onCodexStorageRepair, compare: onCodexStorageCompare, reveal: onCodexStorageReveal,
                   resume: onUsageLimitResume, resumeAtReset: onUsageLimitResumeAtReset, retryDelivery: onResumeQueue,
-                  continueManager: id => orchestrator.continueManager(id), continueRequest: continueAttentionRequest, inspect: id => { teamMap.close(); return onOpenApprovalSession(id); }, inspectAutomation: () => onOpenAutomations() }} />
+                  continueManager: (id, event) => orchestrator.continueManager(id, event), continueRequest: continueAttentionRequest, inspect: id => { teamMap.close(); return onOpenApprovalSession(id); }, inspectAutomation: () => onOpenAutomations() }} />
               {teamMap.open && teamMap.scope === USAGE_DASHBOARD_SCOPE && <div ref={usageSurface} className="flex min-h-0 flex-1 flex-col overflow-y-auto" onKeyDown={event => {
                 if (event.key === "Escape" && !event.defaultPrevented && !document.querySelector('[role="dialog"][aria-modal="true"], [role="menu"]')) { event.preventDefault(); teamMap.close(); }
               }}>

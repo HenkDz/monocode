@@ -185,14 +185,16 @@ function captureIdentity(goal: MonoManagerGoal, requesterId: string, snapshot: D
   const task = requester?.role === "member" ? run.tasks.find(task => task.memberId === requesterId && task.sessionId === requesterSession.id) : undefined;
   const dispatch = run.dispatches?.find(dispatch => dispatch.id === task?.activeDispatchId && dispatch.taskId === task.id && dispatch.sessionId === task.sessionId);
   const requestIndex = requestSession.blocks.findIndex(block => block.id === goal.userMessageId);
+  const requestStop = decisionStopAt(requestSession);
   const requesterStop = decisionStopAt(requesterSession);
   if (!owner || owner.sessionId !== requestSession.id || !requester || snapshot.cancelling || goal.state === "cancelled" || goal.state === "done" ||
-      requestSession.blocks.some((block, index) => index > requestIndex && isDecisionStopMarker(block)) ||
+      requestSession.blocks.some((block, index) => index > requestIndex && isDecisionStopMarker(block)) &&
+        (requester.role === "member" ? generation <= requestStop : (run.decisionContinuedAt ?? 0) <= requestStop) ||
       requesterSession.id !== requestSession.id && requesterStop > 0 && requesterStop >= generation ||
       !requestSession.blocks.some(block => block.id === goal.userMessageId && isManagerUserRequest(block)) ||
       !manager || !manager.projects.some(project => pathKey(project) === pathKey(goal.projectId)) ||
       !(owner.role === "manager" && owner.id === manager.id || owner.role === "orchestrator" && owner.id === manager.reportsTo) ||
-      goal.managerId !== run.leadId || !["active"].includes(run.status) || run.recovering ||
+      goal.managerId !== run.leadId || !["active"].includes(run.status) || run.recovering || run.decisionContinuePendingAt !== undefined ||
       pathKey(run.workspace?.projectCwd ?? run.cwd) !== pathKey(goal.projectId) ||
       !Number.isSafeInteger(generation) || generation < 0 ||
       requester.role === "member" && (!task || task.monoGoalId !== goal.id || task.status !== "running" ||
@@ -238,8 +240,15 @@ export function isMonoDecisionEventId(id: string): boolean {
 export function isDecisionStopMarker(block: Session["blocks"][number]): boolean {
   return block.role === "system" && /^decision-stop-\d+$/.test(block.id) && block.text === "Stopped. Earlier decision evidence cannot resume this work.";
 }
+export function appendDecisionStopMarker(session: Session, through: number, afterBlockId?: string): Session {
+  const marker = { id: `decision-stop-${through}`, role: "system" as const, text: "Stopped. Earlier decision evidence cannot resume this work." };
+  if (session.blocks.some(block => block.id === marker.id && isDecisionStopMarker(block))) return session;
+  const after = afterBlockId ? session.blocks.findIndex(block => block.id === afterBlockId) : session.blocks.length - 1;
+  if (afterBlockId && after < 0) throw Error("The original Stop boundary is unavailable; evidence remains held");
+  return { ...session, blocks: [...session.blocks.slice(0, after + 1), marker, ...session.blocks.slice(after + 1)] };
+}
 /** Existing system transcript evidence survives a failed ledger retirement and reload. */
-export function decisionStopAt(session: Session): number {
+export function decisionStopAt(session: Pick<Session, "blocks">): number {
   return session.blocks.reduce((at, block) => isDecisionStopMarker(block) ? Math.max(at, Number(block.id.slice("decision-stop-".length))) : at, 0);
 }
 
@@ -368,8 +377,13 @@ export function quarantineDecisionHistory(ledger: GoalLedger, ownerId?: string):
     delete retained[key];
   }
   if (raw.autonomy && typeof raw.autonomy === "object" && !Array.isArray(raw.autonomy)) {
-    const valid = Object.entries(raw.autonomy).filter(([project, value]) => {
-      try { text(project); projectAutonomy(value); return true; } catch { return false; }
+    const entries = Object.entries(raw.autonomy);
+    const valid = entries.flatMap(([project, value]) => {
+      try { text(project); } catch { return []; }
+      try { return [[project, projectAutonomy(value)]]; } catch {
+        return entries.some(([alias, policy]) => alias !== project && pathKey(alias) === pathKey(project) &&
+          ["everything", "medium-and-up", "high-impact-only"].includes(String(policy))) ? [[project, "everything"]] : [];
+      }
     });
     if (valid.length) retained.autonomy = Object.fromEntries(valid) as GoalLedger["autonomy"];
   }

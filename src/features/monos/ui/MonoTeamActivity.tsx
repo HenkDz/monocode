@@ -104,11 +104,12 @@ export function MonoTeamActivity({
           <p className="mb-2 break-words">{item.resume.reason}</p>
           <button
             disabled={!!continuing}
-            onClick={() => {
+            data-manager-continue data-run-id={item.resume.leadId}
+            onClick={event => {
               setContinuing(item.key);
               setContinueError(undefined);
               void orchestrator
-                .continueManager(item.resume!.leadId)
+                .continueManager(item.resume!.leadId, ...(event.nativeEvent.isTrusted ? [event.nativeEvent] : []))
                 .catch((error) => setContinueError(String(error)))
                 .finally(() => setContinuing(undefined));
             }}

@@ -19,10 +19,15 @@ export function decisionAppSource() {
   const consumer = find(node => ts.isArrowFunction(node) && ts.isBlock(node.body) && node.body.statements[0]?.getText(ast) === "scheduled.delete(session.id);");
   const accept = find(node => ts.isPropertyAssignment(node) && node.name.getText(ast) === "acceptManagerDigest");
   const beforeContinue = find(node => ts.isPropertyAssignment(node) && node.name.getText(ast) === "beforeContinue") as ts.PropertyAssignment;
+  const continuationAuthority = find(node => ts.isPropertyAssignment(node) && node.name.getText(ast) === "decisionAuthority") as ts.PropertyAssignment;
+  const verifyContinuationAuthority = find(node => ts.isPropertyAssignment(node) && node.name.getText(ast) === "verifyDecisionAuthority") as ts.PropertyAssignment;
   const goalForward = find(node => ts.isPropertyAssignment(node) && node.name.getText(ast) === "onSubmitGoal") as ts.PropertyAssignment;
-  const mission = find(node => ts.isArrowFunction(node) && node.body.getText(ast).includes("return submission ? submitMonoGoalRef.current(session.id, text, [], submission)"));
+  const mission = find(node => ts.isArrowFunction(node) && node.body.getText(ast).includes("return submission ? submitMonoGoalRef.current(session.id, text, [], submission"));
   const stop = find(node => ts.isVariableDeclaration(node) && node.name.getText(ast) === "onStop") as ts.VariableDeclaration;
   const send = find(node => ts.isVariableDeclaration(node) && node.name.getText(ast) === "onSubmit") as ts.VariableDeclaration;
+  const submit = find(node => ts.isVariableDeclaration(node) && node.name.getText(ast) === "submitSession") as ts.VariableDeclaration;
+  const commit = find(node => ts.isVariableDeclaration(node) && node.name.getText(ast) === "commitSubmittedTurn") as ts.VariableDeclaration;
+  const managerPrepare = find(node => ts.isIfStatement(node) && node.expression.getText(ast).startsWith("!isHabitRun(sessionId) &&"));
   const resume = find(node => ts.isVariableDeclaration(node) && node.name.getText(ast) === "onResumeQueue") as ts.VariableDeclaration;
   const guard = find(node => ts.isVariableDeclaration(node) && node.name.getText(ast) === "validateManagerDelivery");
   const setup = find(node => ts.isVariableDeclaration(node) && node.name.getText(ast) === "afterDecisionSetup");
@@ -35,10 +40,15 @@ export function decisionAppSource() {
     consumer: compile(`return ${consumer.getText(ast)};`),
     accept: compile(`return ${(accept as ts.PropertyAssignment).initializer.getText(ast)};`),
     beforeContinue: compile(`return ${beforeContinue.initializer.getText(ast)};`),
+    continuationAuthority: compile(`return ${continuationAuthority.initializer.getText(ast)};`),
+    verifyContinuationAuthority: compile(`return ${verifyContinuationAuthority.initializer.getText(ast)};`),
     goalForward: compile(`return ${goalForward.initializer.getText(ast)};`),
     mission: compile(`return ${mission.getText(ast)};`),
     stop: compile(`return ${(stop.initializer as ts.CallExpression).arguments[0].getText(ast)};`),
     send: compile(`return ${(send.initializer as ts.CallExpression).arguments[0].getText(ast)};`),
+    submit: compile(`return ${(submit.initializer as ts.CallExpression).arguments[0].getText(ast)};`),
+    commit: compile(`return ${commit.initializer!.getText(ast)};`),
+    managerPrepare: compile(`${managerPrepare.getText(ast)}`),
     resume: compile(`return ${(resume.initializer as ts.CallExpression).arguments[0].getText(ast)};`),
     guards: compile(`const ${guard.getText(ast)}; const ${setup.getText(ast)}; return { validateManagerDelivery, afterDecisionSetup };`),
     actions: compile(`return ${actions.initializer!.getText(ast)};`),

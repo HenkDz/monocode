@@ -260,6 +260,7 @@ export type SessionPaneProps = {
     text: string,
     attachments: Attachment[],
     submission: MonoGoalSubmission,
+    event?: Event,
   ) => Promise<boolean>;
   onSaveDraft: (
     sessionId: string,
@@ -2087,19 +2088,21 @@ const LocalSessionPane = memo(function LocalSessionPane({
                         }
                         onFocus={() => onFocus(session.id)}
                         actionControls={deliveryMode}
-                        onSubmit={(text, attachments, monoGoal) =>
+                        onSubmit={(text, attachments, monoGoal, event) =>
                           monoGoal
                             ? (onSubmitGoal?.(
                                 session.id,
                                 text,
                                 attachments,
                                 monoGoal,
+                                event,
                               ) ?? false)
                             : workbench && canSteer
                               ? onSubmit(session.id, text, attachments, {
                                   followUpBehavior: steering ? "steer" : "queue",
+                                  composerEvent: event,
                                 })
-                              : onSubmit(session.id, text, attachments)
+                              : onSubmit(session.id, text, attachments, { composerEvent: event })
                         }
                         tools={
                           monoComposerUsage ? (

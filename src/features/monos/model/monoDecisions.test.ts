@@ -382,6 +382,22 @@ it("fails strict for uncertain quarantined policy until an explicit user choice 
   expect(f.ledger.decisionQuarantine("manager")).toEqual(raw);
 });
 
+it("keeps a corrupt stricter Windows alias strict until a canonical explicit user choice", async () => {
+  const f = fixture(); await f.ingest();
+  f.saved.get("manager")!.autonomy = { "C:/Project": "high-impact-only", "c:\\PROJECT\\": "corrupt" as never };
+  f.state.roster[1].projects = ["C:/Project"];
+  await f.reload();
+  const raw = f.ledger.decisionQuarantine("manager");
+  expect(f.ledger.autonomy("manager", "c:/project/")).toBe("everything");
+  expect(f.ledger.autonomyConflicts("manager")).toEqual(["c:/project"]);
+  f.host.actor = { kind: "user" };
+  await f.ledger.handleDecision("manager", "canonical-choice", { action: "autonomy", projectId: "c:/PROJECT/", value: "medium-and-up" }, f.host);
+  await f.reload();
+  expect(f.ledger.autonomy("manager", "C:/Project")).toBe("medium-and-up");
+  expect(f.saved.get("manager")!.autonomy).toEqual({ "c:/project": "medium-and-up" });
+  expect(f.ledger.decisionQuarantine("manager")).toEqual(raw);
+});
+
 it("changes autonomy from a live Manager roster with no goal, run or sessions", async () => {
   const f = fixture();
   f.saved.get("manager")!.goals = [];

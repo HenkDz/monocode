@@ -5,7 +5,7 @@ import { expect, it, vi } from "vitest";
 function adapter() {
   const source = readFileSync(new URL("../../../app/App.tsx", import.meta.url), "utf8");
   const marker = source.indexOf("CC7N shell hook");
-  const start = source.indexOf("onSubmit={async (text, submission) => {", marker) + "onSubmit={".length;
+  const start = source.indexOf("onSubmit={async (text, submission, event) => {", marker) + "onSubmit={".length;
   const end = source.indexOf("}} />}", start) + 1;
   expect(marker).toBeGreaterThan(0);
   expect(end).toBeGreaterThan(start);
@@ -29,7 +29,7 @@ it("opens the existing Grand session and sends Chat through its normal submit ad
   const f = adapter();
   expect(await f.submit("What is happening?")).toBe(true);
   expect(f.dependencies.ensureMonoSession).toHaveBeenCalledWith("grand", expect.objectContaining({ home: "synthetic-home" }));
-  expect(f.dependencies.submitSession).toHaveBeenCalledWith("grand-session", "What is happening?", []);
+  expect(f.dependencies.submitSession).toHaveBeenCalledWith("grand-session", "What is happening?", [], { composerEvent: undefined });
   expect(f.dependencies.submitMonoGoalRef.current).not.toHaveBeenCalled();
 });
 
@@ -37,7 +37,7 @@ it("passes the unchanged goal envelope to CC5-C and adds sessions to the existin
   const f = adapter();
   const submission = { ownerId: "grand", requestId: "stable-request", userMessageId: "stable-origin" };
   expect(await f.submit("Fix Atlas", submission)).toBe(true);
-  expect(f.dependencies.submitMonoGoalRef.current).toHaveBeenCalledWith("grand-session", "Fix Atlas", [], submission);
+  expect(f.dependencies.submitMonoGoalRef.current).toHaveBeenCalledWith("grand-session", "Fix Atlas", [], submission, false, undefined);
   expect(f.dependencies.submitSession).not.toHaveBeenCalled();
   const options = f.dependencies.ensureMonoSession.mock.calls[0][1];
   options.add({ id: "created" });

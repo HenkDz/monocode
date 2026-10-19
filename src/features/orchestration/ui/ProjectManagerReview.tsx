@@ -248,11 +248,12 @@ export function ProjectManagerReview({
             type="button"
             disabled={continuing}
             className="mt-2 rounded px-2 py-1 text-amber-600 hover:bg-amber-500/10 focus-visible:outline-accent disabled:opacity-50"
-            onClick={() => {
+            data-manager-continue data-run-id={run.leadId}
+            onClick={event => {
               setContinuing(true);
               setContinueError(undefined);
               void orchestrator
-                .continueManager(run.leadId)
+                .continueManager(run.leadId, ...(event.nativeEvent.isTrusted ? [event.nativeEvent] : []))
                 .catch((error) => setContinueError(String(error)))
                 .finally(() => setContinuing(false));
             }}

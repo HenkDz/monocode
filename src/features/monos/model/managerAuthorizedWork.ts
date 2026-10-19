@@ -8,6 +8,37 @@ import { sameProviderAccountId } from "../../providers/model/providerAccounts";
 import { codexStorageAccountId } from "./monoCodexStorageIssues";
 
 export const MANAGER_CONFIRMATION = "This request needs your one-click confirmation. Choose Continue this request on the original request; do not repeat it or reassign projects.";
+export type ManagerContinuationGesture = { readonly id: string };
+const usedContinuationEvents = new WeakSet<Event>();
+const continuationGestures = new WeakMap<ManagerContinuationGesture, { sessionId: string; runId?: string; at: number }>();
+
+/** Only live composer/Continue controls can create this transient, one-use grant. */
+export function captureManagerContinuationGesture(event: Event | undefined, sessionId: string, runId?: string, monoId?: string): ManagerContinuationGesture | undefined {
+  if (!event) return;
+  const age = performance.now() - event.timeStamp;
+  const target = typeof Element !== "undefined" && event.target instanceof Element ? event.target : undefined;
+  const control = runId ? target?.closest("[data-manager-continue]") : target?.closest("[data-manager-composer]");
+  if (!(event instanceof Event) || !event.isTrusted || usedContinuationEvents.has(event) || age < 0 || age > 5000 ||
+      !(event.type === "click" || !runId && event instanceof KeyboardEvent && event.type === "keydown" && event.key === "Enter" && !event.shiftKey) ||
+      !control || (runId ? control.getAttribute("data-run-id") !== runId : control.getAttribute("data-session-id") !== sessionId && (!monoId || control.getAttribute("data-mono-id") !== monoId)))
+    throw Error("Continue requires a recent direct gesture on this conversation's control");
+  usedContinuationEvents.add(event);
+  const grant = { id: crypto.randomUUID() };
+  continuationGestures.set(grant, { sessionId, runId, at: Date.now() });
+  return grant;
+}
+
+export function takeManagerContinuationGesture(grant: ManagerContinuationGesture, sessionId: string, runId: string): () => void {
+  const retained = continuationGestures.get(grant);
+  // The same gesture may retry its exact run receipt; the native Event cannot mint another token.
+  if (retained && !retained.runId) retained.runId = runId;
+  const validate = () => {
+    if (!retained || retained.sessionId !== sessionId || retained.runId && retained.runId !== runId || Date.now() - retained.at > 5000)
+      throw Error("The continuation gesture is unavailable, expired or already used");
+  };
+  validate();
+  return validate;
+}
 export type ManagerRequestRecovery = {
   monoId: string;
   sessionId: string;

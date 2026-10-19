@@ -8,17 +8,18 @@ import { Decisions, ProjectAutonomyControl, type DecisionUiActions } from "../..
 import { selectDecisionView } from "../../src/features/commandCenter/model/decisionView";
 import { MonoManagerGoals } from "../../src/features/monos/model/monoManagerGoals";
 import { type Mono, listMonos, findMono, monoForSession, isMonoSession } from "../../src/features/monos/model/mono";
-import { type DecisionRuntimeHost, handleDecisionTeamMessage, runtimeDecisionHost, executeDecisionUi, reraiseUnreadableDecision } from "../../src/features/monos/model/monoDecisionRuntime";
-import { retainedDecisionDelivery, StaleDecision, assertDecisionCurrent, isMonoDecisionEventId, decisionStopAt, isDecisionStopMarker, DecisionDeliveryPending } from "../../src/features/monos/model/monoDecisions";
+import { type DecisionRuntimeHost, handleDecisionTeamMessage, runtimeDecisionHost, executeDecisionUi, reraiseUnreadableDecision, decisionManagerIds } from "../../src/features/monos/model/monoDecisionRuntime";
+import { retainedDecisionDelivery, StaleDecision, assertDecisionCurrent, isMonoDecisionEventId, decisionStopAt, isDecisionStopMarker, appendDecisionStopMarker, DecisionDeliveryPending } from "../../src/features/monos/model/monoDecisions";
 import { managerRequestBinding, managerRequestBindingCurrent } from "../../src/features/monos/model/managerAuthorizedWork";
-import { assertDecisionDigestConsumer, staleDecisionDigestEvents, assertDecisionQueueConsumer, queueDecisionEvidence, decisionQueueId, decisionEvidenceText } from "../../src/features/monos/model/monoDecisionDelivery";
+import { assertDecisionDigestConsumer, staleDecisionDigestEvents, retireDecisionDigestWithRecovery, assertDecisionQueueConsumer, queueDecisionEvidence, decisionQueueId, decisionEvidenceText } from "../../src/features/monos/model/monoDecisionDelivery";
 import { teamMessageKind, teamMessageRequiresReply } from "../../src/features/monos/model/monoCrewEvents";
 import { teamMessageRoute } from "../../src/features/monos/model/monoOrg";
 import { acceptManagerWakeQueue, acknowledgeManagerWake, addManagerWakeEvent, prepareManagerWake } from "../../src/features/orchestration/model/managerWake";
 import type { OrchestrationRun } from "../../src/features/orchestration/model/orchestrationState";
 import { SessionStateStore } from "../../src/features/sessions/model/sessionStateStore";
 import { newSession, type Session } from "../../src/features/sessions/model/session";
-import { writeSession, readPersistedSession, upsertSession } from "../../src/features/sessions/data/sessionStore";
+import { writeSession, readPersistedSession, upsertSession, resetMonoSessionWriteBaseline, shouldPersistSession } from "../../src/features/sessions/data/sessionStore";
+import { mergeMonoGoalRecoverySession, monoGoalRecoveryLiveSession } from "../../src/features/sessions/data/monoGoalRecovery";
 import { canDispatchQueuedHead, canSteerQueuedHead, queuedHead, dequeueQueuedMessage } from "../../src/features/sessions/model/messageQueue";
 import { appendUser } from "../../src/integrations/harness/core/apply";
 import "../../src/styles/index.css";
@@ -75,9 +76,9 @@ const decisionRuntime = { current: null! as DecisionRuntimeHost };
 const evaluate = <T,>(code: string, scope: Record<string, unknown>): T => new Function(...Object.keys(scope), code)(...Object.values(scope));
 const scope = { decisionRuntime, monoManagerGoals: ledger, listMonos, findMono, sessionsRef: state.ref, setSessions: state.setState,
   turnGen, decisionOriginalBlocks: { current: new Map() }, setDecisionUnavailable: () => {}, habitRunMono: () => undefined,
-  orchestrator: engine, invoke, writeSession, readPersistedSession, managerRequestBinding, managerRequestBindingCurrent,
+  orchestrator: engine, invoke, writeSession, readPersistedSession, resetMonoSessionWriteBaseline, shouldPersistSession, mergeMonoGoalRecoverySession, monoGoalRecoveryLiveSession, managerRequestBinding, managerRequestBindingCurrent,
   queueDecisionEvidence, retainedDecisionDelivery, decisionQueueId, decisionEvidenceText, isMonoSession,
-  runtimeDecisionHost, assertDecisionDigestConsumer, staleDecisionDigestEvents, assertDecisionQueueConsumer, StaleDecision, assertDecisionCurrent, isMonoDecisionEventId, decisionStopAt, isDecisionStopMarker, DecisionDeliveryPending, dequeueQueuedMessage, queuedHead,
+  runtimeDecisionHost, decisionManagerIds, assertDecisionDigestConsumer, staleDecisionDigestEvents, retireDecisionDigestWithRecovery, assertDecisionQueueConsumer, StaleDecision, assertDecisionCurrent, isMonoDecisionEventId, decisionStopAt, isDecisionStopMarker, appendDecisionStopMarker, DecisionDeliveryPending, dequeueQueuedMessage, queuedHead,
   getMonoGoalRecoveryBlocks: async (id: string) => (disk[id] as Session | undefined)?.blocks ?? [],
   acceptManagerWakeQueue, flushSync: (fn: () => void) => fn(),
 };

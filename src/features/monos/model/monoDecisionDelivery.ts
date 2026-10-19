@@ -83,14 +83,17 @@ export async function assertDecisionQueueConsumer(message: QueuedMessage, recipi
 
 /** Coalesced Manager receipts retain their exact source events; never turn a digest into a new grant. */
 export function staleDecisionDigestEvents(run: OrchestrationRun, receipt: ManagerWakeReceipt,
-  readDecisions: () => MonoDecision[], host: DecisionHost): string[] {
+  readDecisions: () => MonoDecision[], host: DecisionHost, quarantined: (eventId: string) => boolean = () => false): string[] {
   const retired: string[] = [];
   for (const id of receipt.eventIds.filter(isMonoDecisionEventId)) {
     const event = run.wakeState?.events.find(event => event.id === id);
     if (!event) throw Error("Manager digest source decision event is unavailable");
     const decision = readDecisions().find(decision => id.startsWith(`decision:${decision.id}:`));
     const expected = decision && retainedDecisionDelivery(decision, id);
-    if (!decision || !expected) { retired.push(id); continue; }
+    if (!decision || !expected) {
+      if (quarantined(id)) { retired.push(id); continue; }
+      retired.push(id); continue;
+    }
     if (expected.recipientId !== run.ownerMonoId) throw Error("Manager digest source recipient changed");
     const { acknowledgedAt: _acknowledgedAt, ...source } = event;
     if (JSON.stringify(source) !== JSON.stringify(expected.event)) throw Error("Manager digest source decision payload changed");
@@ -100,14 +103,34 @@ export function staleDecisionDigestEvents(run: OrchestrationRun, receipt: Manage
   return retired;
 }
 
+/** Bind the same immutable quarantine and recipient around the existing atomic run writer. */
+export async function retireDecisionDigestWithRecovery(run: OrchestrationRun, receipt: ManagerWakeReceipt, retired: readonly string[], host: {
+  quarantine(): unknown;
+  quarantined(id: string): boolean;
+  validate(): void;
+  retire(leadId: string, receiptId: string, ids: readonly string[], recovery?: { eventIds: string[]; ownerMonoId: string; quarantineHash: string; validate(): void }, validate?: () => void): Promise<void>;
+}): Promise<void> {
+  host.validate();
+  if (!retired.some(id => host.quarantined(id))) { await host.retire(run.leadId, receipt.id, retired, undefined, host.validate); host.validate(); return; }
+  const raw = JSON.stringify(host.quarantine());
+  const quarantineHash = (await decisionQueueId(raw)).slice("decision-".length);
+  const validate = () => {
+    host.validate();
+    if (JSON.stringify(host.quarantine()) !== raw) throw Error("Quarantine evidence changed; digest remains held");
+  };
+  validate();
+  await host.retire(run.leadId, receipt.id, retired, { eventIds: [...receipt.eventIds], ownerMonoId: run.ownerMonoId!, quarantineHash, validate }, validate);
+  validate();
+}
+
 export function assertDecisionDigestConsumer(message: QueuedMessage, readRun: () => OrchestrationRun | undefined,
-  readDecisions: () => MonoDecision[], host: DecisionHost): () => void {
+  readDecisions: () => MonoDecision[], host: DecisionHost, quarantined: (eventId: string) => boolean = () => false): () => void {
   const validate = () => {
     const run = readRun(), receipt = run?.wakeState?.receipt;
     if (!run || run.status !== "active" || !message.managerWake || ![run.leadId, run.ownerSessionId].includes(message.managerWake.leadId) ||
         !receipt || receipt.id !== message.managerWake.receiptId || message.id !== receipt.id || message.appRequestId !== receipt.id || message.text !== receipt.body)
       throw Error("Manager digest identity changed; evidence retained");
-    if (staleDecisionDigestEvents(run, receipt, readDecisions, host).length)
+    if (staleDecisionDigestEvents(run, receipt, readDecisions, host, quarantined).length)
       throw new StaleDecision("Manager digest decision evidence is stale or unavailable");
   };
   validate();

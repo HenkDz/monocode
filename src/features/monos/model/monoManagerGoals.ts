@@ -157,7 +157,7 @@ export class MonoManagerGoals {
   private tail: Promise<unknown> = Promise.resolve();
   private listeners = new Set<() => void>();
   private revision = 0;
-  private retiringDecisionSessions = new Map<string, number>();
+  private retiringDecisionSessions = new Map<string, { through: number; afterBlockId?: string }>();
   constructor(private storage: Store = store) {}
   snapshot = () => this.revision;
   subscribe = (fn: () => void) => {
@@ -224,6 +224,15 @@ export class MonoManagerGoals {
   decisionQuarantine(id: string): DecisionQuarantine[] {
     return structuredClone(this.ledgers.get(id)?.decisionQuarantine ?? []);
   }
+  isQuarantinedDecisionEvent(id: string, eventId: string): boolean {
+    return this.decisionQuarantine(id).some(entry => {
+      try {
+        const raw = JSON.parse(entry.raw);
+        return Array.isArray(raw.decisions) && raw.decisions.some((decision: { id?: unknown }) =>
+          typeof decision?.id === "string" && eventId.startsWith(`decision:${decision.id}:`));
+      } catch { return false; }
+    });
+  }
   decisionsPruned(id: string): number {
     return this.ledgers.get(id)?.decisionsPruned ?? 0;
   }
@@ -280,10 +289,32 @@ export class MonoManagerGoals {
       return failures;
     });
   }
-  isDecisionSessionRetiring(sessionId: string): boolean { return this.retiringDecisionSessions.has(sessionId); }
-  holdDecisionSessionRetirement(sessionId: string, through: number): void { this.retiringDecisionSessions.set(sessionId, through); }
-  retireDecisionSession(sessionId: string, ownerIds: readonly string[] = [], through = Date.now()) {
-    this.retiringDecisionSessions.set(sessionId, through);
+  isDecisionSessionRetiring(sessionId: string, createdAt?: number): boolean {
+    const through = this.retiringDecisionSessions.get(sessionId)?.through;
+    return through !== undefined && (createdAt === undefined || createdAt <= through);
+  }
+  decisionRetirementThrough(sessionId: string): number | undefined { return this.retiringDecisionSessions.get(sessionId)?.through; }
+  decisionRetirementAnchor(sessionId: string): string | undefined { return this.retiringDecisionSessions.get(sessionId)?.afterBlockId; }
+  needsDecisionRetirement(sessionId: string, through: number): boolean {
+    return [...this.ledgers.values()].some(ledger => ledger.decisions?.some(decision => decision.deliveryState === "current" &&
+      decision.createdAt <= through && [decision.identity.requestSessionId, decision.identity.requesterSessionId].includes(sessionId)));
+  }
+  prepareDecisionStop(sessionId: string, ownerIds: readonly string[], through: number, afterBlockId?: string) {
+    this.holdDecisionSessionRetirement(sessionId, through, afterBlockId);
+    return this.serial(async () => {
+      for (const id of ownerIds) await this.load(id);
+      const owners = ownerIds.filter(id => this.ledgers.get(id)?.goals.length || this.ledgers.get(id)?.decisions?.some(decision => decision.deliveryState === "current" &&
+        decision.createdAt <= through && [decision.identity.requestSessionId, decision.identity.requesterSessionId].includes(sessionId)));
+      if (!owners.length && this.retiringDecisionSessions.get(sessionId)?.through === through) this.retiringDecisionSessions.delete(sessionId);
+      return owners;
+    });
+  }
+  holdDecisionSessionRetirement(sessionId: string, through: number, afterBlockId?: string): void {
+    if ((this.retiringDecisionSessions.get(sessionId)?.through ?? -1) > through) return;
+    this.retiringDecisionSessions.set(sessionId, { through, afterBlockId: afterBlockId ?? this.retiringDecisionSessions.get(sessionId)?.afterBlockId });
+  }
+  retireDecisionSession(sessionId: string, ownerIds: readonly string[] = [], through = Date.now(), hold = true) {
+    if (hold) this.holdDecisionSessionRetirement(sessionId, through);
     return this.serial(async () => {
       for (const id of ownerIds) await this.load(id);
       for (const [id, ledger] of this.ledgers) {
@@ -294,7 +325,7 @@ export class MonoManagerGoals {
           receipts: Object.fromEntries(Object.entries(ledger.receipts).map(([key, receipt]) => [key, receipt.decision && retired.has(receipt.decision.decisionId)
             ? { ...receipt, decision: { ...receipt.decision, remaining: [] } } : receipt])) });
       }
-      if (this.retiringDecisionSessions.get(sessionId) === through) this.retiringDecisionSessions.delete(sessionId);
+      if ((this.retiringDecisionSessions.get(sessionId)?.through ?? Infinity) <= through) this.retiringDecisionSessions.delete(sessionId);
     });
   }
   retireDecisionEvidence(id: string, decisionId: string, expectedVersion: number) {

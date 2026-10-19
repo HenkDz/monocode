@@ -63,7 +63,7 @@ function DecisionHistory({ decision, roster }: { decision: MonoDecision; roster:
     <time dateTime={new Date(at).toISOString()}>{new Date(at).toLocaleString()}</time></li>;
 }
 
-export function DecisionQuarantineNotice({ quarantine, actions, disabled = false }: { quarantine: DecisionView["quarantine"]; actions: DecisionUiActions; disabled?: boolean }) {
+export function DecisionQuarantineNotice({ quarantine, actions, disabled = false, unavailableIds = [] }: { quarantine: DecisionView["quarantine"]; actions: DecisionUiActions; disabled?: boolean; unavailableIds?: readonly string[] }) {
   const [open, setOpen] = useState(false);
   const { busy, notice, run } = useDecisionAction();
   const contentId = useId();
@@ -74,7 +74,7 @@ export function DecisionQuarantineNotice({ quarantine, actions, disabled = false
     {open && <div id={contentId}>{quarantine.flatMap(({ managerId, entries }) => entries.map((entry, index) =>
       <section key={`${managerId}:${index}`}><p>Preserved {new Date(entry.at).toLocaleString()}</p>
         {unreadableDecisionPreview(entry).map(item => <div className="decision-reraise" key={item.id}><p>{item.question}</p>
-          <button type="button" disabled={disabled || busy} onClick={event => run(`${managerId}:${index}:${item.id}:reraise`,
+          <button type="button" disabled={disabled || busy || unavailableIds.includes(managerId)} onClick={event => run(`${managerId}:${index}:${item.id}:reraise`,
             requestId => actions.reraise(event.nativeEvent, managerId, requestId, item.id))}>Ask the Manager to re-raise</button></div>)}
         <pre aria-label="Read-only preserved decision evidence">{entry.raw.slice(0, 16000)}</pre>
         {entry.raw.length > 16000 && <p>Preview limited to 16,000 characters. Full evidence remains preserved in the ledger.</p>}</section>))}</div>}
@@ -83,22 +83,27 @@ export function DecisionQuarantineNotice({ quarantine, actions, disabled = false
 }
 
 export function Decisions({ view, roster, actions, unavailable = false, presentation = "page" }: {
-  view: DecisionView; roster: readonly Mono[]; actions: DecisionUiActions; unavailable?: boolean; presentation?: "page" | "rail";
+  view: DecisionView; roster: readonly Mono[]; actions: DecisionUiActions; unavailable?: boolean | readonly string[]; presentation?: "page" | "rail";
 }) {
   const [tab, setTab] = useState<"pending" | "log">("pending");
   const titleId = useId();
+  const unavailableIds = typeof unavailable === "boolean" ? [] : unavailable;
+  const allUnavailable = unavailable === true;
+  const anyUnavailable = allUnavailable || unavailableIds.length > 0;
   return <section className="decisions" data-decision-ui data-presentation={presentation} aria-labelledby={titleId}>
     <header className="decisions-heading"><div><span className="decisions-eyebrow">Your calls</span><h1 id={titleId}>Decisions</h1></div>
-      <span>{unavailable ? "Unavailable" : view.loading.length ? "History loading" : view.pending.length ? `${view.pending.length} need you` : "All clear"}</span></header>
+      <span>{anyUnavailable ? allUnavailable ? "Unavailable" : "Some history unavailable" : view.loading.length ? "History loading" : view.pending.length ? `${view.pending.length} need you` : "All clear"}</span></header>
     <div className="decisions-tabs" role="group" aria-label="Decision view"><button type="button" aria-pressed={tab === "pending"} onClick={() => setTab("pending")}>Needs you <span>{view.pending.length}</span></button>
       <button type="button" aria-pressed={tab === "log"} onClick={() => setTab("log")}>Decision log</button></div>
     <div className="decisions-scroll">
-      {unavailable && <p role="alert">Decision history is unavailable. Actions will return when it can be loaded.</p>}
+      {anyUnavailable && <p role="alert">{allUnavailable ? "Decision history is unavailable. Actions will return when it can be loaded." :
+        `Decision history is unavailable for ${unavailableIds.map(id => decisionActorName(roster, id)).join(", ")}. Affected actions will return when it can be loaded.`}</p>}
       {!!view.loading.length && <p role="status">Loading decision history for {view.loading.length} {view.loading.length === 1 ? "Manager" : "Managers"}…</p>}
       {!!view.autonomyConflicts.length && <p className="decision-note">Autonomy setting had conflicting copies; using the stricter one.</p>}
-      <DecisionQuarantineNotice quarantine={view.quarantine} actions={actions} disabled={unavailable} />
-      {tab === "pending" ? <>{view.pending.map(item => <DecisionCard key={`${item.managerId}:${item.decision.id}`} item={item} roster={roster} actions={actions} disabled={unavailable} />)}
-        {!view.pending.length && !unavailable && !view.loading.length && <div className="decision-empty"><h2>Nothing needs your decision</h2><p>The team keeps working toward the goals.</p></div>}
+      <DecisionQuarantineNotice quarantine={view.quarantine} actions={actions} disabled={allUnavailable} unavailableIds={unavailableIds} />
+      {tab === "pending" ? <>{view.pending.map(item => <DecisionCard key={`${item.managerId}:${item.decision.id}`} item={item} roster={roster} actions={actions}
+        disabled={allUnavailable || unavailableIds.includes(item.managerId) || unavailableIds.includes(item.decision.identity.ownerMonoId)} />)}
+        {!view.pending.length && !anyUnavailable && !view.loading.length && <div className="decision-empty"><h2>Nothing needs your decision</h2><p>The team keeps working toward the goals.</p></div>}
         {!!view.teamPending && <p className="decision-note">{view.teamPending} {view.teamPending === 1 ? "decision is" : "decisions are"} with Managers &amp; the Boss.</p>}</>
         : view.log.length ? <ol className="decision-log">{view.log.map(({ managerId, decision }) => <DecisionHistory key={`${managerId}:${decision.id}`} decision={decision} roster={roster} />)}</ol>
         : view.autonomyChanges.length ? null : <p className="decision-empty">No recorded decisions yet.</p>}
@@ -106,7 +111,7 @@ export function Decisions({ view, roster, actions, unavailable = false, presenta
         <li className="decision-log-item" key={`${managerId}:${change.at}:${index}`}><div><p>{projectName(change.projectId)} · Autonomy copies consolidated</p>
           <strong>{[...new Set(change.replaced.map(copy => copy.value))].join(" / ")} → {change.value}</strong><small>You · explicit project setting</small></div>
           <time dateTime={new Date(change.at).toISOString()}>{new Date(change.at).toLocaleString()}</time></li>)}</ul>}
-      {!unavailable && !view.loading.length && <footer className="decisions-handled"><span aria-hidden="true">✓</span><p><strong>{view.handledToday}</strong> recorded decisions handled by Managers &amp; the Boss today</p>
+      {!allUnavailable && !view.loading.length && <footer className="decisions-handled"><span aria-hidden="true">✓</span><p><strong>{view.handledToday}</strong> recorded decisions handled by Managers &amp; the Boss today</p>
         <button type="button" onClick={() => setTab("log")}>View log</button></footer>}
       {!!view.pruned && <p className="decision-note">{view.pruned} older records archived. Counts reflect retained, readable history.</p>}
     </div>

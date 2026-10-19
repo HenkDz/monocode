@@ -10,15 +10,16 @@ import { managerRequestBinding, managerRequestBindingCurrent, assertManagerDeliv
 import { type Mono, listMonos, findMono, monoForSession, isMonoSession } from "../features/monos/model/mono";
 import { teamMessageKind, teamMessageRequiresReply } from "../features/monos/model/monoCrewEvents";
 import { teamMessageRoute } from "../features/monos/model/monoOrg";
-import { handleDecisionTeamMessage, runtimeDecisionHost, executeDecisionUi, reraiseUnreadableDecision, type DecisionRuntimeHost } from "../features/monos/model/monoDecisionRuntime";
-import { assertDecisionQueueConsumer, assertDecisionDigestConsumer, staleDecisionDigestEvents, queueDecisionEvidence, decisionQueueId, decisionEvidenceText } from "../features/monos/model/monoDecisionDelivery";
-import { retainedDecisionDelivery, StaleDecision, assertDecisionCurrent, isMonoDecisionEventId, decisionStopAt, isDecisionStopMarker, DecisionDeliveryPending } from "../features/monos/model/monoDecisions";
+import { handleDecisionTeamMessage, runtimeDecisionHost, executeDecisionUi, reraiseUnreadableDecision, decisionManagerIds, type DecisionRuntimeHost } from "../features/monos/model/monoDecisionRuntime";
+import { assertDecisionQueueConsumer, assertDecisionDigestConsumer, staleDecisionDigestEvents, retireDecisionDigestWithRecovery, queueDecisionEvidence, decisionQueueId, decisionEvidenceText } from "../features/monos/model/monoDecisionDelivery";
+import { retainedDecisionDelivery, StaleDecision, assertDecisionCurrent, isMonoDecisionEventId, decisionStopAt, isDecisionStopMarker, appendDecisionStopMarker, DecisionDeliveryPending } from "../features/monos/model/monoDecisions";
 import { acceptManagerWakeQueue, addManagerWakeEvent, prepareManagerWake, reconcileManagerWake, acknowledgeManagerWake, ManagerWakeScheduler } from "../features/orchestration/model/managerWake";
 import { Orchestrator } from "../features/orchestration/model/orchestration";
 import type { OrchestrationRun } from "../features/orchestration/model/orchestrationState";
 import { canDispatchQueuedHead, canSteerQueuedHead, queuedHead, dequeueQueuedMessage } from "../features/sessions/model/messageQueue";
 import { selectDecisionView } from "../features/commandCenter/model/decisionView";
-import { writeSession, readPersistedSession, upsertSession } from "../features/sessions/data/sessionStore";
+import { writeSession, readPersistedSession, upsertSession, resetMonoSessionWriteBaseline, shouldPersistSession } from "../features/sessions/data/sessionStore";
+import { mergeMonoGoalRecoverySession, monoGoalRecoveryLiveSession } from "../features/sessions/data/monoGoalRecovery";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 const source = decisionAppSource();
@@ -86,17 +87,21 @@ async function fixture() {
   const engine = { snapshot: () => [run], run: (id: string) => id === "engine" ? run : undefined,
     actions: Promise.resolve(), sync: vi.fn(),
     commit: async (next: OrchestrationRun) => { run = { ...next, wakeState: reconcileManagerWake(next, run, Date.now()) }; disks.set("engine", clone(run)); },
-    retireDecisionDigest: (id: string, receiptId: string, eventIds: readonly string[]) => Orchestrator.prototype.retireDecisionDigest.call(engine as unknown as Orchestrator, id, receiptId, eventIds),
+    decisionRecoveringDigests: new Set<string>(), store: { load: async (id: string) => {
+      const raw = await invoke<string | null>("control_load", { leadId: id }); return raw ? JSON.parse(raw) as OrchestrationRun : null;
+    } },
+    retireDecisionDigest: (id: string, receiptId: string, eventIds: readonly string[], recovery?: Parameters<Orchestrator["retireDecisionDigest"]>[3], validate?: () => void) => Orchestrator.prototype.retireDecisionDigest.call(engine as unknown as Orchestrator, id, receiptId, eventIds, recovery, validate),
     replace: (next: OrchestrationRun) => { run = next; disks.set("engine", clone(run)); },
     stopForSession: () => undefined,
+    retireDecisionContinuation: async () => {},
     queueManagerMessage: vi.fn(async (_id, event) => { run = { ...run, wakeState: addManagerWakeEvent(run.wakeState, event) }; disks.set("engine", clone(run)); }) };
   const turnGen = { current: new Map([[manager.id, 1], [worker.id, 1], [boss.id, 1]]) };
   const decisionRuntime = { current: null! as DecisionRuntimeHost };
   const scope: Record<string, unknown> = { decisionRuntime, monoManagerGoals: ledger, listMonos, findMono, sessionsRef: state.ref,
     setSessions: state.setState, turnGen, decisionOriginalBlocks: { current: new Map() }, setDecisionUnavailable: vi.fn(),
-    habitRunMono: () => undefined, orchestrator: engine, invoke, writeSession, readPersistedSession, upsertSession,
+    habitRunMono: () => undefined, orchestrator: engine, invoke, writeSession, readPersistedSession, upsertSession, resetMonoSessionWriteBaseline, shouldPersistSession, mergeMonoGoalRecoverySession, monoGoalRecoveryLiveSession,
     managerRequestBinding, managerRequestBindingCurrent, queueDecisionEvidence, retainedDecisionDelivery, decisionQueueId, decisionEvidenceText, isMonoSession,
-    runtimeDecisionHost, assertDecisionDigestConsumer, staleDecisionDigestEvents, assertDecisionQueueConsumer, StaleDecision, assertDecisionCurrent, isMonoDecisionEventId, decisionStopAt, isDecisionStopMarker, DecisionDeliveryPending, dequeueQueuedMessage, queuedHead,
+    runtimeDecisionHost, decisionManagerIds, assertDecisionDigestConsumer, staleDecisionDigestEvents, retireDecisionDigestWithRecovery, assertDecisionQueueConsumer, StaleDecision, assertDecisionCurrent, isMonoDecisionEventId, decisionStopAt, isDecisionStopMarker, appendDecisionStopMarker, DecisionDeliveryPending, dequeueQueuedMessage, queuedHead,
     getMonoGoalRecoveryBlocks: async () => { throw Error("Test unexpectedly bypassed its committed original user block"); },
     acceptManagerWakeQueue, flushSync: (fn: () => void) => fn(),
   };
@@ -160,6 +165,188 @@ async function settleWithinSecond<T>(pending: Promise<T>): Promise<T> {
   } finally { clearTimeout(timer); }
 }
 
+it.each(["plain", "inbox", "home", "ephemeral"])("actual Stop leaves %s untracked work without decision holds or transcript noise", async kind => {
+  const f = await fixture();
+  const session = { ...newSession("claude", kind === "home" ? "~" : "C:/Untracked"), id: kind === "ephemeral" ? f.manager.id : `untracked-${kind}`,
+    ...(kind === "inbox" ? { inboxAsk: { title: "Ask" } } : {}), ...(kind === "ephemeral" ? { ephemeral: true } : {}) } as Session;
+  f.state.setState(sessions => [...sessions.filter(entry => entry.id !== session.id), session]);
+  const save = vi.spyOn(f.ledger, "prepareDecisionStop");
+  await settleWithinSecond(stopPort(f)(session.id, true));
+  expect(save).not.toHaveBeenCalled();
+  expect(f.ledger.isDecisionSessionRetiring(session.id)).toBe(false);
+  expect(f.state.session(session.id)!.blocks).toEqual(session.blocks);
+  expect(disks.has(session.id)).toBe(kind === "ephemeral");
+});
+
+it("actual failed submit retirement preflight settles once and makes one bounded recovery attempt", async () => {
+  const f = await fixture();
+  f.ledger.holdDecisionSessionRetirement(f.manager.id, 42);
+  const hydrate = vi.fn(async () => { throw Error("affected history unavailable"); });
+  f.decisionRuntime.current.hydrate = hydrate;
+  const events = vi.fn(), settled = vi.fn(), retry = vi.fn();
+  const submit = evaluateDecisionApp<(id: string, text: string, attachments: unknown[], options: { onSettled: typeof settled }) => boolean>(source.submit,
+    { ...f.scope, enqueueHarnessEvent: events, flushHarnessEvents: vi.fn(), submitSessionRef: { current: retry } });
+  expect(submit(f.manager.id, "Retained draft", [], { onSettled: settled })).toBe(false);
+  await Promise.resolve(); await Promise.resolve();
+  expect(hydrate).toHaveBeenCalledExactlyOnceWith(f.manager.id);
+  expect(settled).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ status: "failed" }));
+  expect(events.mock.calls.map(call => call[1].text).join(" ")).toContain("affected history unavailable");
+  expect(retry).not.toHaveBeenCalled();
+});
+
+it("actual scoped hydration isolates a corrupt Manager and settles unaffected and untracked callers", async () => {
+  const f = await fixture();
+  const broken: Mono = { ...f.roster[1], id: "broken", sessionId: "broken-session", projects: ["C:/Broken"] };
+  localStorage.setItem("monocode:mono-roster", JSON.stringify([...f.roster, broken]));
+  disks.set("mono-goals:broken", { version: 999, goals: "unreadable" });
+  await expect(f.decisionRuntime.current.hydrate()).rejects.toThrow();
+  await expect(settleWithinSecond(f.decisionRuntime.current.hydrate(f.manager.id))).resolves.toBeUndefined();
+  await expect(settleWithinSecond(f.decisionRuntime.current.hydrate("untracked"))).resolves.toBeUndefined();
+  await expect(settleWithinSecond(f.decisionRuntime.current.hydrate("broken-session"))).rejects.toThrow();
+  expect(f.ledger.decisionHistoryState("manager")).toBe("ready");
+});
+
+it.each(["goal", "run", "session"])("actual digest retires a known missing %s source instead of retrying forever", async missing => {
+  const f = await fixture(); await f.ingest();
+  if (missing === "goal") {
+    const raw = disks.get("mono-goals:manager") as GoalLedger;
+    disks.set("mono-goals:manager", { ...raw, goals: [] });
+    const restored = new MonoManagerGoals(); await restored.hydrate("manager");
+    evaluateDecisionApp(source.host, { ...f.scope, monoManagerGoals: restored });
+    const accept = evaluateDecisionApp<(id: string, receipt: NonNullable<NonNullable<OrchestrationRun["wakeState"]>["receipt"]>) => Promise<boolean>>(source.accept, { ...f.scope, monoManagerGoals: restored });
+    const receipt = prepareManagerWake(f.run(), Date.now() + 1000).receipt!;
+    f.engine.replace({ ...f.run(), wakeState: { ...f.run().wakeState!, receipt } });
+    await expect(accept(f.manager.id, receipt)).resolves.toBe(false);
+  } else {
+    if (missing === "run") f.engine.replace({ ...f.run(), tasks: [] });
+    else { disks.delete(f.worker.id); f.state.setState(sessions => sessions.filter(session => session.id !== f.worker.id)); }
+    await expect(f.digest()).resolves.toBe(false);
+  }
+  expect(f.run().wakeState!.receipt!.retiredEventIds).toHaveLength(1);
+});
+
+async function quarantinedDigest(queued = false) {
+  const f = await fixture(); await f.ingest();
+  await f.engine.queueManagerMessage("engine", { id: "report:unrelated-one", kind: "report", at: Date.now(), text: "First unrelated retained report" });
+  await f.engine.queueManagerMessage("engine", { id: "report:unrelated-two", kind: "report", at: Date.now(), text: "Second unrelated retained report" });
+  if (queued) await f.digest();
+  const raw = clone(disks.get("mono-goals:manager") as GoalLedger);
+  raw.decisions![0].impact = "unreadable" as never; disks.set("mono-goals:manager", raw);
+  const restored = new MonoManagerGoals(); await restored.hydrate("manager");
+  f.ledger = restored; f.scope.monoManagerGoals = restored; evaluateDecisionApp(source.host, f.scope);
+  f.engine.replace({ ...f.run(), wakeState: prepareManagerWake(f.run(), Date.now() + 1000) });
+  f.state.setState(sessions => sessions.map(session => session.id === f.manager.id ? { ...session, busy: false } : session));
+  const receipt = clone(f.run().wakeState!.receipt!);
+  const accept = evaluateDecisionApp<(id: string, item: typeof receipt) => Promise<boolean>>(source.accept, f.scope);
+  return { ...f, receipt, accept, raw: JSON.stringify(restored.decisionQuarantine("manager")) };
+}
+
+it("actual App atomically retains a host-only quarantine notice and exact retirement, then consumes both unrelated reports once", async () => {
+  const f = await quarantinedDigest();
+  const commit = vi.spyOn(f.engine, "commit");
+  await expect(settleWithinSecond(f.accept(f.manager.id, f.receipt))).resolves.toBe(false);
+  const saved = disks.get("engine") as OrchestrationRun;
+  const notice = saved.wakeState!.events.find(event => event.id.startsWith("recovery:"))!;
+  expect(notice.id).toMatch(/^recovery:manager-digest-.+:[a-f0-9]{64}$/);
+  expect(notice.kind).toBe("info"); expect(isMonoDecisionEventId(notice.id)).toBe(false);
+  expect(notice.text).toContain("See Decisions"); expect(notice.text).toContain("NEW decision ID");
+  expect(notice.text).not.toContain("Which parser approach?"); expect(notice.text).not.toContain("Reuse");
+  expect(saved.wakeState!.receipt!.retiredEventIds).toEqual(f.receipt.eventIds.filter(isMonoDecisionEventId));
+  expect(saved.wakeState!.receipt!.moreEvents).toBe(true);
+  expect(commit).toHaveBeenCalledOnce();
+  commit.mockClear();
+  await expect(f.accept(f.manager.id, f.receipt)).resolves.toBe(false);
+  expect(commit).not.toHaveBeenCalled();
+  expect(f.run().wakeState!.events.filter(event => event.id.startsWith("recovery:"))).toHaveLength(1);
+  f.engine.replace({ ...f.run(), wakeState: prepareManagerWake(f.run(), Date.now() + 1000) });
+  const next = f.run().wakeState!.receipt!;
+  expect(next.eventIds).toEqual(expect.arrayContaining([notice.id, "report:unrelated-one", "report:unrelated-two"]));
+  expect(next.eventIds).toHaveLength(3); expect(next.body).not.toContain("Which parser approach?");
+  await expect(f.accept(f.manager.id, next)).resolves.toBe(true);
+  f.engine.replace({ ...f.run(), wakeState: acknowledgeManagerWake(f.run().wakeState!, next.id, Date.now()) });
+  expect((await consumePort(f, f.manager.id)).submit).toHaveBeenCalledOnce();
+  expect((await readPersistedSession(f.manager.id))!.blocks.filter(block => block.internal && block.appRequestId === next.id)).toHaveLength(1);
+  expect(JSON.stringify(f.ledger.decisionQuarantine("manager"))).toBe(f.raw);
+  const reloaded = new MonoManagerGoals(); await reloaded.hydrate("manager");
+  expect(JSON.stringify(reloaded.decisionQuarantine("manager"))).toBe(f.raw);
+  expect(reloaded.decisions("manager")).toEqual([]);
+});
+
+it.each(["receipt", "eventIds", "owner", "generation", "account", "home", "quarantine"])("actual quarantine retirement refuses %s changes while reacquiring the run action chain", async changed => {
+  const f = await quarantinedDigest();
+  let release!: () => void;
+  f.engine.actions = new Promise<void>(resolve => { release = resolve; });
+  const retirement = vi.spyOn(f.engine, "retireDecisionDigest");
+  const pending = f.accept(f.manager.id, f.receipt);
+  const checked = expect(pending).rejects.toThrow();
+  await vi.waitFor(() => expect(retirement).toHaveBeenCalledOnce(), { timeout: 1000 });
+  if (changed === "receipt") f.engine.replace({ ...f.run(), wakeState: { ...f.run().wakeState!, receipt: { ...f.receipt, id: "replacement" } } });
+  else if (changed === "eventIds") f.engine.replace({ ...f.run(), wakeState: { ...f.run().wakeState!, receipt: { ...f.receipt, eventIds: [...f.receipt.eventIds, "report:replacement"] } } });
+  else if (changed === "owner") f.engine.replace({ ...f.run(), ownerMonoId: "replacement" });
+  else if (changed === "generation") f.turnGen.current.set(f.manager.id, 99);
+  else if (changed === "quarantine") vi.spyOn(f.ledger, "decisionQuarantine").mockReturnValue([{ at: 2, reason: "unreadable-decision-history", raw: "Changed preserved evidence" }]);
+  else f.state.setState(sessions => sessions.map(session => session.id === f.manager.id ? { ...session, ...(changed === "account" ? { providerAccountId: "replacement" } : { codexStorageHome: "C:/replacement-home" }) } : session));
+  release(); await settleWithinSecond(checked);
+  expect(f.run().wakeState!.events.some(event => event.id.startsWith("recovery:"))).toBe(false);
+  expect(f.run().wakeState!.receipt!.retiredEventIds).toBeUndefined();
+});
+
+it("actual quarantine recovery refuses a conflicting notice without copying corrupt text or losing raw evidence", async () => {
+  const f = await quarantinedDigest(); await f.accept(f.manager.id, f.receipt);
+  f.engine.replace({ ...f.run(), wakeState: { ...f.run().wakeState!, events: f.run().wakeState!.events.map(event => event.id.startsWith("recovery:") ? { ...event, text: "Conflicting retained body" } : event) } });
+  await expect(f.accept(f.manager.id, f.receipt)).rejects.toThrow("conflicts");
+  expect(f.run().status).toBe("paused");
+  expect(JSON.stringify(f.ledger.decisionQuarantine("manager"))).toBe(f.raw);
+});
+
+it("actual queued consumer retires unreadable source only with the verified ordinary recovery notice", async () => {
+  const f = await quarantinedDigest(true);
+  expect(queuedHead(f.state.session(f.manager.id)!)!.id).toBe(f.receipt.id);
+  const consumed = await consumePort(f, f.manager.id);
+  expect(consumed.submit).not.toHaveBeenCalled();
+  expect(queuedHead(f.state.session(f.manager.id)!)).toBeUndefined();
+  expect(f.run().wakeState!.receipt!.retiredEventIds).toEqual(f.receipt.eventIds.filter(isMonoDecisionEventId));
+  expect(f.run().wakeState!.events.filter(event => event.id.startsWith("recovery:"))).toHaveLength(1);
+  expect((await readPersistedSession(f.manager.id))!.blocks.some(block => block.id === `retired-${f.receipt.id}` && block.role === "system")).toBe(true);
+  expect(JSON.stringify(f.ledger.decisionQuarantine("manager"))).toBe(f.raw);
+  f.engine.replace({ ...f.run(), wakeState: prepareManagerWake(f.run(), Date.now() + 1000) });
+  expect(f.run().wakeState!.receipt!.eventIds).toHaveLength(3);
+  await expect(f.accept(f.manager.id, f.run().wakeState!.receipt!)).resolves.toBe(true);
+  expect((await consumePort(f, f.manager.id)).submit).toHaveBeenCalledOnce();
+});
+
+it("actual paged Stop appends its marker without overwriting retained earlier history", async () => {
+  const f = await fixture(); await f.ingest();
+  const full = { ...f.state.session(f.manager.id)!, blocks: [...f.manager.blocks, { id: "saved-page-tail", role: "assistant" as const, text: "Retained earlier work" }] };
+  await upsertSession(full); paged.add(f.manager.id);
+  const partial = (await readPersistedSession(f.manager.id))!;
+  f.state.setState(sessions => sessions.map(session => session.id === f.manager.id ? partial : session));
+  f.scope.getMonoGoalRecoveryBlocks = async (id: string) => clone((disks.get(id) as Session).blocks);
+  await settleWithinSecond(stopPort(f)(f.manager.id));
+  const stored = disks.get(f.manager.id) as Session;
+  expect(stored.blocks.slice(0, full.blocks.length)).toEqual(full.blocks);
+  expect(stored.blocks.filter(isDecisionStopMarker)).toHaveLength(1);
+  expect(f.state.session(f.manager.id)!.monoTranscript?.before).toBe(1);
+});
+
+it("historical Stop hydration does not re-arm holds or discard a newer current answer", async () => {
+  const f = await fixture();
+  const cutoff = Date.now();
+  const stopped = appendDecisionStopMarker(f.state.session(f.manager.id)!, cutoff);
+  await upsertSession(stopped); f.state.setState(sessions => sessions.map(session => session.id === stopped.id ? stopped : session));
+  f.engine.replace({ ...f.run(), decisionContinuedAt: cutoff + 1 });
+  const clock = vi.spyOn(Date, "now").mockReturnValue(cutoff + 2);
+  try {
+    await f.route("manager", "fresh-after-continue", JSON.stringify({ version: 1, type: "decision", question: "Fresh resumed question", context: "Same original goal", impact: "med", operation: "work", options: [{ id: "one", label: "One" }, { id: "two", label: "Two" }] }));
+    const fresh = f.ledger.decisions("manager")[0];
+    await f.decisionRuntime.current.hydrate(f.manager.id);
+    expect(f.ledger.isDecisionSessionRetiring(f.manager.id)).toBe(false);
+    expect(f.ledger.decisions("manager")[0].deliveryState).toBe("current");
+    await expect(f.route("boss", "answer-fresh", JSON.stringify({ version: 1, type: "decision-action", action: "resolve", decisionId: fresh.id, expectedVersion: fresh.resolutionVersion, optionId: "one" }))).rejects.toThrow(DecisionDeliveryPending);
+    expect(f.ledger.decisions("manager")[0].status).toBe("decided");
+  } finally { clock.mockRestore(); }
+});
+
 it("executes actual authenticated App ingress, CC5D coalescence/save-readback, answer queue and restart", async () => {
   const f = await fixture();
   await expect(f.ingest()).resolves.toMatchObject({ delivery: "pending" });
@@ -219,10 +406,12 @@ it.each(["completed", "stopped"])("actual App retires an unaccepted stale digest
     expect(f.state.session(f.manager.id)!.queueStatus).not.toBe("paused");
     const submit = vi.fn();
     const continueEngine = Object.assign(f.engine, { host: {
-      choices: () => [{ harness: "claude" }], beforeContinue: evaluateDecisionApp(source.beforeContinue, f.scope), submit,
+      choices: () => [{ harness: "claude" }], session: (id: string) => f.state.session(id), beforeContinue: evaluateDecisionApp(source.beforeContinue, f.scope), submit,
     }, start: async () => { f.engine.replace({ ...f.run(), status: "active" }); } });
-    await Orchestrator.prototype.continueManager.call(continueEngine as unknown as Orchestrator, "engine");
-    expect(submit).toHaveBeenCalledOnce();
+    await expect(Orchestrator.prototype.continueManager.call(continueEngine as unknown as Orchestrator, "engine")).rejects.toThrow("direct user gesture");
+    expect(submit).not.toHaveBeenCalled();
+    // The browser proves trusted Continue; this boundary supplies an active recipient for stale-report liveness.
+    f.engine.replace({ ...f.run(), status: "active" });
   }
   await f.engine.commit({ ...f.run(), tasks: f.run().tasks.map(task => ({ ...task, status: "completed", result: "Completed parser evidence", lastDispatchId: "dispatch", activeDispatchId: undefined })),
     dispatches: f.run().dispatches!.map(dispatch => ({ ...dispatch, state: "completed", finishedAt: Date.now() })) });
@@ -264,7 +453,7 @@ it("retries a failed Stop marker outside actual session writer ownership and con
     dispatches: f.run().dispatches!.map(dispatch => ({ ...dispatch, state: "completed", finishedAt: Date.now() })) });
   fail = (command, args) => { if (command === "mono_session_upsert" && (args.session as Session).id === f.manager.id) throw Error("Stop marker save unavailable"); };
   await stopPort(f)(f.manager.id, true);
-  await f.ledger.hydrate("manager");
+  await vi.waitFor(() => expect(f.state.session(f.manager.id)!.blocks.at(-1)!.text).toContain("retirement still needs saving"), { timeout: 1000 });
   expect(f.ledger.isDecisionSessionRetiring(f.manager.id)).toBe(true);
   expect(decisionStopAt((disks.get(f.manager.id) as Session))).toBe(0);
   expect(f.state.session(f.manager.id)!.blocks.at(-1)!.text).toContain("retirement still needs saving");
@@ -347,7 +536,7 @@ it("actual ledger cancellation and Orchestrator task cancellation finish managed
     },
   } as Parameters<MonoManagerGoals["handle"]>[5];
   await settleWithinSecond(f.ledger.handle("manager", { kind: "user", messageId: f.goal.userMessageId }, "cancel-source-goal", "goals.cancel", { goalId: f.goal.id }, host));
-  await f.ledger.hydrate("manager");
+  await vi.waitFor(() => expect(f.ledger.decisions("manager")[0].deliveryState).toBe("stale"), { timeout: 1000 });
   expect(f.run().tasks[0].status).toBe("cancelled");
   expect(f.ledger.goals("manager")[0].state).toBe("cancelled");
   expect(f.ledger.decisions("manager")[0].deliveryState).toBe("stale");
@@ -377,7 +566,7 @@ it.each([false, true])("loads dormant ledgers on managed Stop, surfaces failed r
   const stopping = stopPort(f, { monoManagerGoals: dormant })(f.manager.id, true);
   expect(f.state.session(f.manager.id)!.busy).toBe(false);
   await stopping;
-  await dormant.hydrate("manager");
+  await vi.waitFor(() => expect(f.state.session(f.manager.id)!.blocks.at(-1)!.text).toContain("retirement still needs saving"), { timeout: 1000 });
   expect(dormant.isDecisionSessionRetiring(f.manager.id)).toBe(true);
   expect(f.state.session(f.manager.id)!.blocks.at(-1)!.text).toContain("retirement still needs saving");
   const persisted = (await readPersistedSession(f.manager.id))!;
@@ -413,9 +602,9 @@ it("actual goal-routed and Mission callbacks after Stop leave new Boss escalatio
     submitMonoGoalRef: { current: routed }, submitSession: direct, ensureMonoSession: async () => f.state.session(f.boss.id),
     homeDir: "C:/synthetic", ensureOpenSession: vi.fn(), saveMonoPermissions: vi.fn(), newDefaultSession: vi.fn() });
   await mission("Mission routed goal", submission); await mission("Mission direct goal");
-  expect(routed).toHaveBeenCalledWith(f.boss.id, "New explicit goal", [], submission);
-  expect(routed).toHaveBeenCalledWith(f.boss.id, "Mission routed goal", [], submission);
-  expect(direct).toHaveBeenCalledWith(f.boss.id, "Mission direct goal", []);
+  expect(routed).toHaveBeenCalledWith(f.boss.id, "New explicit goal", [], submission, false, undefined);
+  expect(routed).toHaveBeenCalledWith(f.boss.id, "Mission routed goal", [], submission, false, undefined);
+  expect(direct).toHaveBeenCalledWith(f.boss.id, "Mission direct goal", [], { composerEvent: undefined });
   await f.route("manager", "after-boss-send", JSON.stringify({ version: 1, type: "decision", question: "New Boss escalation", context: "Current Manager goal", impact: "med", operation: "work", options: [{ id: "one", label: "One" }, { id: "two", label: "Two" }] }));
   expect(f.state.session(f.boss.id)!.queueStatus).not.toBe("paused");
   const consumed = await consumePort(f, f.boss.id); expect(consumed.submit).toHaveBeenCalledOnce();
@@ -472,6 +661,7 @@ it("retires original authority durably on Stop so a same-engine replacement cann
     notifyReviewChanged: vi.fn(), nudgeWorkspace: vi.fn(), notifyGitChanged: vi.fn(), nudgeWatchedFiles: vi.fn(),
   });
   await stop(f.worker.id, true);
+  await vi.waitFor(() => expect(f.ledger.decisions("manager")[0].deliveryState).toBe("stale"), { timeout: 1000 });
   expect(f.state.session(f.worker.id)!.queueStatus).not.toBe("paused");
   f.engine.replace({ ...clone(f.run()), requests: { replacement: { signature: "new-run", result: true } } });
   const restored = new MonoManagerGoals(); await restored.hydrate("manager");

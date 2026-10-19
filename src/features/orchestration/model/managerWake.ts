@@ -143,7 +143,7 @@ export function reconcileManagerWake(run: OrchestrationRun, previous: Orchestrat
 
 export function managerWakePlan(run: OrchestrationRun, now: number): { ready: boolean; at?: number; completed: string[]; timeouts: string[] } {
   const state = run.wakeState;
-  if (!state || run.status !== "active") return { ready: false, completed: [], timeouts: [] };
+  if (!state || run.status !== "active" || run.decisionContinuePendingAt !== undefined) return { ready: false, completed: [], timeouts: [] };
   if (state.receipt && state.receipt.acknowledgedAt == null) return { ready: true, completed: [], timeouts: [] };
   const pending = state.events.filter(event => event.acknowledgedAt == null);
   const waves = state.waves.filter(wave => wave.sealedAt != null && wave.retiredAt == null && wave.completedAt == null);
@@ -273,7 +273,7 @@ export class ManagerWakeScheduler {
     const current = this.timers.get(run.leadId);
     const due = plan.ready ? Date.now() : plan.at;
     const at = due == null ? undefined : Math.max(due, run.wakeState?.delivery?.retryAt ?? 0);
-    if (run.status !== "active" || run.managerTurnId || at == null || this.delivering.has(run.leadId) ||
+    if (run.status !== "active" || run.decisionContinuePendingAt !== undefined || run.managerTurnId || at == null || this.delivering.has(run.leadId) ||
         (plan.ready && !canAcceptManagerWake(this.host.session(run.leadId)))) {
       if (current) { clearTimeout(current.timer); this.timers.delete(run.leadId); }
       return;
@@ -295,7 +295,7 @@ export class ManagerWakeScheduler {
         await this.host.save({ ...run, wakeState: prepareManagerWake(run, Date.now()) });
       run = this.host.run(id);
       const receipt = run?.wakeState?.receipt;
-      if (!run || run.status !== "active" || run.managerTurnId || !receipt || !canAcceptManagerWake(this.host.session(id))) return;
+      if (!run || run.status !== "active" || run.decisionContinuePendingAt !== undefined || run.managerTurnId || !receipt || !canAcceptManagerWake(this.host.session(id))) return;
       const accepted = await this.host.accept(id, receipt);
       const latest = this.host.run(id);
       if (!latest?.wakeState) return;

@@ -78,6 +78,7 @@ type Props = {
     text: string,
     attachments: Attachment[],
     goal?: MonoGoalSubmission,
+    event?: Event,
   ) => boolean | void | Promise<boolean | void>;
   onFocus?: () => void;
   /**
@@ -303,7 +304,7 @@ export function MonoComposer({
     read: readDropped,
     onError: setDropError,
   });
-  const send = () => {
+  const send = (event?: Event) => {
     if (!enabled || submittingRef.current || pendingReadsRef.current > 0)
       return;
     const message = textRef.current.trim();
@@ -385,9 +386,9 @@ export function MonoComposer({
       setRetainedGoalRoute(goalRequest.current);
       goal = goalRequest.current.submission;
     }
-    const result = goal
-      ? onSubmit(draft, files, goal)
-      : onSubmit(message, files);
+    const result = event?.isTrusted
+      ? onSubmit(goal ? draft : message, files, goal, event)
+      : goal ? onSubmit(draft, files, goal) : onSubmit(message, files);
     if (result instanceof Promise) {
       submittingRef.current = true;
       setSubmitting(true);
@@ -440,7 +441,7 @@ export function MonoComposer({
           return;
         }
         event.preventDefault();
-        send();
+        send(event.nativeEvent);
       }}
       onPaste={(event) => {
         const files = filesFromClipboard(event.clipboardData);
@@ -453,7 +454,8 @@ export function MonoComposer({
   );
   const sendButton = (className: string) => (
     <button
-      type="submit"
+      type="button"
+      onClick={event => send(event.nativeEvent)}
       aria-label="Send"
       title={pendingReads ? "Reading attachments…" : "Send"}
       disabled={!ready}
@@ -465,6 +467,7 @@ export function MonoComposer({
 
   return (
     <form
+      data-manager-composer data-session-id={sessionId}
       className="mx-auto w-full max-w-4xl shrink-0 p-1.5 pt-0 font-sans"
       onSubmit={(event) => {
         event.preventDefault();

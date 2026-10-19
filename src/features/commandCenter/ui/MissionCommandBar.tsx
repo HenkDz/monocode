@@ -14,7 +14,7 @@ import "./missionCommandBar.css";
 
 export function MissionCommandBar({ goalRouting, onSubmit, open = true }: {
   goalRouting?: MonoGoalRoutingContext;
-  onSubmit: (text: string, submission?: MonoGoalSubmission) => Promise<boolean>;
+  onSubmit: (text: string, submission?: MonoGoalSubmission, event?: Event) => Promise<boolean>;
   open?: boolean;
 }) {
   const [text, setText] = useState("");
@@ -42,7 +42,7 @@ export function MissionCommandBar({ goalRouting, onSubmit, open = true }: {
     return () => window.removeEventListener("keydown", focus);
   }, [open]);
 
-  async function send() {
+  async function send(event?: Event) {
     const message = text.trim();
     if (!goalRouting || !open || pending.current || !message) return;
     pending.current = true;
@@ -71,7 +71,7 @@ export function MissionCommandBar({ goalRouting, onSubmit, open = true }: {
         setRetained(request.current);
         submission = request.current.submission;
       }
-      const accepted = await onSubmit(submission ? text : message, submission);
+      const accepted = await (event?.isTrusted ? onSubmit(submission ? text : message, submission, event) : onSubmit(submission ? text : message, submission));
       if (!accepted) {
         if (request.current) request.current.rejected = true;
         setRetained(undefined);
@@ -90,7 +90,7 @@ export function MissionCommandBar({ goalRouting, onSubmit, open = true }: {
     }
   }
 
-  return <form className="mc-command-bar" aria-label="Mission command" onSubmit={event => { event.preventDefault(); void send(); }}>
+  return <form data-manager-composer data-mono-id={goalRouting?.ownerId} className="mc-command-bar" aria-label="Mission command" onSubmit={event => { event.preventDefault(); void send(); }}>
     <div className="mc-command-entry">
       <Terminal aria-hidden="true" />
       <textarea ref={field} rows={Math.min(4, text.split("\n").length)} aria-label="Ask or assign work" placeholder="Ask a question, or assign a goal…"
@@ -98,7 +98,7 @@ export function MissionCommandBar({ goalRouting, onSubmit, open = true }: {
         onKeyDown={event => {
           if (event.key !== "Enter" || event.shiftKey || isImeComposition(event.nativeEvent)) return;
           event.preventDefault();
-          void send();
+          void send(event.nativeEvent);
         }} />
       <kbd aria-hidden="true">/</kbd>
     </div>
@@ -109,7 +109,7 @@ export function MissionCommandBar({ goalRouting, onSubmit, open = true }: {
           onChange={setChoice} disabled={submitting} />}
         {directProjectRoutingEnabled() && choice.mode === "chat" && <span className="mc-command-chat-route">Send to Grand Orch</span>}
       </div>
-      <button type="submit" className="mc-command-send" disabled={!goalRouting || submitting || !text.trim()}>
+      <button type="button" onClick={event => void send(event.nativeEvent)} className="mc-command-send" disabled={!goalRouting || submitting || !text.trim()}>
         {submitting ? "Sending…" : "Send"} <ChevronRight aria-hidden="true" />
       </button>
     </div>

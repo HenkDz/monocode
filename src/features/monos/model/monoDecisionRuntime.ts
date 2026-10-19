@@ -3,7 +3,7 @@ import type { Session } from "../../sessions/model/session";
 import type { OrchestrationRun } from "../../orchestration/model/orchestrationState";
 import type { Mono } from "./mono";
 import type { MonoManagerGoals } from "./monoManagerGoals";
-import { parseDecisionPayload, parseDecisionAction, DecisionDeliveryPending, type DecisionCommand, type DecisionDelivery, type DecisionHost, type DecisionSnapshot, type MonoDecision } from "./monoDecisions";
+import { parseDecisionPayload, parseDecisionAction, DecisionDeliveryPending, StaleDecision, type DecisionCommand, type DecisionDelivery, type DecisionHost, type DecisionSnapshot, type MonoDecision } from "./monoDecisions";
 import type { CrewMessage } from "./monoCrewEvents";
 import { assertManagerDelivery, isManagerUserRequest, managerReportTasks, managerRequestBinding, managerRequestBindingCurrent } from "./managerAuthorizedWork";
 
@@ -16,7 +16,7 @@ export type DecisionRuntimeHost = {
   /** Runtime-owned habit/automation association, never a caller-supplied actor. */
   eventOwner(sessionId: string): string | undefined;
   /** Await retained original goal/session/run hydration; never construct a user block. */
-  hydrate(): Promise<void>;
+  hydrate(sessionId?: string): Promise<void>;
   /** Existing durable CC5D/session queued event path; MUST NOT steer or create user authority. */
   queue(message: DecisionDelivery, decision: MonoDecision, validate: () => void): Promise<void>;
   /** Upsert an in-app notification by exact event ID; pending rail derives from this same ledger. */
@@ -24,6 +24,15 @@ export type DecisionRuntimeHost = {
   /** Ordinary queued team message, evidence only; Manager must raise a NEW decision ID. */
   askManager(managerId: string, requestId: string, text: string): Promise<void>;
 };
+
+export function decisionManagerIds(sessionId: string, host: Pick<DecisionRuntimeHost, "roster" | "runs" | "ledger">): string[] {
+  const mono = host.roster().find(mono => mono.sessionId === sessionId && mono.archivedAt == null);
+  return host.roster().filter(manager => manager.role === "manager" && manager.archivedAt == null &&
+    (!!mono && (manager.id === mono.id || manager.reportsTo === mono.id) ||
+      host.runs().some(run => run.ownerMonoId === manager.id && (run.ownerSessionId === sessionId || run.tasks.some(task => task.sessionId === sessionId))) ||
+      host.ledger.decisions(manager.id).some(decision => [decision.identity.requestSessionId, decision.identity.requesterSessionId].includes(sessionId))))
+    .map(manager => manager.id);
+}
 
 /** No chat/CLI/habit/automation/deep-link/restored event can manufacture a direct user gesture. */
 export function assertDecisionUiGesture(event: Event): void {
@@ -52,14 +61,14 @@ function originalSnapshot(managerId: string, requesterId: string, goalId: string
   const requesterSessionId = decision?.identity.requesterSessionId ?? (requester?.role === "member"
     ? run?.tasks.find(task => task.memberId === requester.id && task.monoGoalId === goal?.id && task.status === "running")?.sessionId : requester?.sessionId);
   const requesterSession = host.sessions().find(session => session.id === requesterSessionId);
-  if (!goal || !run || !requestSession || !requesterSession) throw Error("Original decision work context is unavailable");
+  if (!goal || !run || !requestSession || !requesterSession) throw new StaleDecision("Original decision work context is unavailable");
   const task = run.tasks.find(task => task.sessionId === requesterSession.id && task.memberId === requester?.id);
   const dispatch = run.dispatches?.find(dispatch => dispatch.id === task?.activeDispatchId && dispatch.taskId === task.id);
   // Retained request/dispatch generations survive reload; provider-turn counters do not.
-  const generation = requester?.role === "member" ? dispatch?.startedAt ?? decision?.identity.generation : goal.createdAt;
+  const generation = requester?.role === "member" ? dispatch?.startedAt ?? decision?.identity.generation : Math.max(goal.createdAt, run.decisionContinuedAt ?? 0);
   if (generation === undefined) throw Error("Original decision generation is unavailable");
   return { roster, goal, run, requestSession, requesterSession, generation, cancelling: host.ledger.isCancelling(goal.id) ||
-    host.ledger.isDecisionSessionRetiring(requestSession.id) || host.ledger.isDecisionSessionRetiring(requesterSession.id) };
+    host.ledger.isDecisionSessionRetiring(requestSession.id, decision?.createdAt) || host.ledger.isDecisionSessionRetiring(requesterSession.id, decision?.createdAt) };
 }
 
 export function runtimeDecisionHost(managerId: string, actor: DecisionHost["actor"], requesterId: string, goalId: string | undefined, host: DecisionRuntimeHost, validateActor = () => {}): DecisionHost {
@@ -82,7 +91,7 @@ export function runtimeDecisionHost(managerId: string, actor: DecisionHost["acto
 export async function executeDecisionUi(event: Event, managerId: string, requestId: string,
   command: Exclude<DecisionCommand, { action: "ingest" }>, host: DecisionRuntimeHost): Promise<unknown> {
   assertDecisionUiGesture(event);
-  await host.hydrate();
+  await host.hydrate(host.roster().find(mono => mono.id === managerId)?.sessionId);
   return host.ledger.handleDecision(managerId, requestId, command, runtimeDecisionHost(managerId, { kind: "user" }, "", undefined, host));
 }
 
@@ -103,17 +112,18 @@ export async function handleDecisionTeamMessage(sourceSessionId: string, request
   validateActor();
   if (message.senderId !== actor.id || message.id !== `${sourceSessionId}:${requestId}` || message.text.length > 6000)
     throw Error("Structured decision sender does not match its authenticated turn");
-  await host.hydrate();
+  await host.hydrate(sourceSessionId);
   validateActor();
   if (raw.type === "decision") {
     parseDecisionPayload(raw);
-    const runs = host.runs().filter(run => run.status === "active" && !run.recovering &&
+    const runs = host.runs().filter(run => run.status === "active" && !run.recovering && run.decisionContinuePendingAt === undefined &&
       (actor.role === "manager" ? run.ownerMonoId === actor.id : run.tasks.some(task => task.memberId === actor.id && task.sessionId === sourceSessionId && task.status === "running")));
     const turn = source.blocks.filter(block => block.role === "user" && !block.draft).slice(-1)[0];
     if (actor.role === "manager") assertManagerDelivery(turn?.monoSource, turn?.appRequestId, source, actor, host.ledger);
     const candidates = runs.flatMap(run => host.ledger.goals().filter(goal => goal.managerId === run.leadId && goal.state !== "cancelled" && goal.state !== "done" &&
       pathKey(goal.projectId) === pathKey(run.workspace?.projectCwd ?? run.cwd) &&
       (actor.role === "manager" ? turn && isManagerUserRequest(turn) && turn.id === goal.userMessageId ||
+        run.decisionContinuedAt !== undefined ||
         turn?.monoSource?.goalId === goal.id || managerReportTasks(source, run).some(task => task.monoGoalId === goal.id) ||
         run.wakeState?.receipt?.eventIds.some(id => source.blocks.some(block => block.appRequestId === run.wakeState!.receipt!.id) &&
           run.wakeState!.events.some(event => event.id === id && event.goalId === goal.id)) : run.tasks.some(task => task.sessionId === sourceSessionId && task.monoGoalId === goal.id)))
@@ -147,7 +157,7 @@ export async function handleDecisionTeamMessage(sourceSessionId: string, request
 
 export async function reraiseUnreadableDecision(event: Event, managerId: string, requestId: string, oldDecisionId: string, host: DecisionRuntimeHost): Promise<void> {
   assertDecisionUiGesture(event);
-  await host.hydrate();
+  await host.hydrate(host.roster().find(mono => mono.id === managerId)?.sessionId);
   const manager = host.roster().find(mono => mono.id === managerId && mono.role === "manager" && mono.archivedAt == null);
   const retained = host.ledger.decisionQuarantine(managerId).some(entry => {
     try {

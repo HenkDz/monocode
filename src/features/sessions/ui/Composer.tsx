@@ -1301,14 +1301,14 @@ export function Composer({
     onRecallLastTurnReady(recallLastTurn);
   }, [editLastTurnSupported, onRecallLastTurnReady, recallLastTurn]);
 
-  const submit = (value: string) => {
+  const submit = (value: string, event?: Event) => {
     if (disabled || worktreeRemoved || submitLockRef.current) return;
     submitLockRef.current = true;
-    void completeSubmit(value).finally(() => {
+    void completeSubmit(value, event).finally(() => {
       submitLockRef.current = false;
     });
   };
-  const completeSubmit = async (submittedValue: string) => {
+  const completeSubmit = async (submittedValue: string, event?: Event) => {
     let pending = pasteFlightRef.current;
     const generation = pasteGenerationRef.current;
     while (pending) {
@@ -1444,6 +1444,7 @@ export function Composer({
       ),
       files,
       {
+        ...(event?.isTrusted ? { composerEvent: event } : {}),
         intent:
           planSelected || command.planning
             ? "plan"
@@ -1507,7 +1508,7 @@ export function Composer({
       consumeBtwCommand(e.currentTarget.value).matched
     ) {
       e.preventDefault();
-      submit(e.currentTarget.value);
+      submit(e.currentTarget.value, e.nativeEvent);
       return;
     }
 
@@ -1572,7 +1573,7 @@ export function Composer({
         isSessionFolderCommand(e.currentTarget.value))
     ) {
       e.preventDefault();
-      submit(e.currentTarget.value);
+      submit(e.currentTarget.value, e.nativeEvent);
       return;
     }
 
@@ -1631,7 +1632,7 @@ export function Composer({
 
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      submit(e.currentTarget.value);
+      submit(e.currentTarget.value, e.nativeEvent);
     }
   };
 
@@ -1846,6 +1847,7 @@ export function Composer({
   return (
     <div
       data-composer
+      data-manager-composer data-session-id={sessionId}
       className={`relative shrink-0 ${shell || compact ? "" : "p-1.5 pt-0"}`}
       onMouseDown={disabled ? undefined : onFocus}
       onKeyDownCapture={disabled ? undefined : onComposerKeyDown}
@@ -2470,7 +2472,7 @@ export function Composer({
                 hasValue={hasValue && !worktreeRemoved}
                 allowBusySubmit={allowBusySubmit}
                 label={draftActive ? "Save draft" : "Send"}
-                onSend={() => submit(ref.current?.value ?? "")}
+                onSend={event => submit(ref.current?.value ?? "", event.nativeEvent)}
                 onStop={() => onStop?.()}
               />
             </div>
@@ -2613,7 +2615,7 @@ export function ComposerAction({
   hasValue: boolean;
   allowBusySubmit?: boolean;
   label?: string;
-  onSend: () => void;
+  onSend: (event: { nativeEvent: Event }) => void;
   onStop: () => void;
 }) {
   if (disabled) {

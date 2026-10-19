@@ -25,6 +25,66 @@ it("includes GitHub quota guidance in every worker assignment", () => {
   expect(prompt).toContain("low or exhausted budget");
 });
 
+it("keeps a paused continuation inert after reload and refuses programmatic or forged starts", async () => {
+  const f = setup(); f.lead.busy = false;
+  await f.manager.start("lead", ["codex"], 1, undefined, true);
+  await f.manager.pause("lead", "Stopped");
+  const paused = { ...f.manager.run("lead")!, decisionContinuedAt: 40, decisionContinuePendingAt: 41 };
+  f.saved.set("lead", paused);
+  const restored = new Orchestrator(f.store); restored.bind(f.host);
+  f.store.enable.mockClear(); f.host.submit = vi.fn();
+  await restored.hydrate("lead");
+  expect(restored.run("lead")).toMatchObject({ status: "paused", decisionContinuedAt: 40, decisionContinuePendingAt: 41 });
+  expect(f.store.enable).not.toHaveBeenCalled(); expect(f.host.submit).not.toHaveBeenCalled();
+  await expect(restored.start("lead", ["codex"], 1, undefined, true)).rejects.toThrow("direct Continue");
+  await expect(restored.continueManager("lead")).rejects.toThrow("direct user gesture");
+  await expect(restored.continueManager("lead", new Event("click"))).rejects.toThrow("recent direct gesture");
+  expect(() => restored.resumeDecisionManager("lead", { id: "forged" }, "lead")).toThrow("unavailable");
+  expect(restored.run("lead")!.decisionContinuedAt).toBe(40);
+});
+
+it("durably clears an interrupted pending continuation on Stop without cancelling its goals", async () => {
+  const f = setup(); f.lead.busy = false;
+  await f.manager.start("lead", ["codex"], 1, undefined, true);
+  await f.manager.pause("lead", "Stopped");
+  const pending = { ...f.manager.run("lead")!, decisionContinuePendingAt: 41 };
+  f.saved.set("lead", pending);
+  const restored = new Orchestrator(f.store); restored.bind(f.host); await restored.hydrate("lead");
+  await restored.retireDecisionContinuation("lead", 42);
+  expect(f.saved.get("lead")).toMatchObject({ status: "paused", decisionContinuePendingAt: undefined });
+  expect(restored.run("lead")!.requests).toEqual(pending.requests);
+});
+
+it("routes Stop from the actual Mono owner conversation through its project engine", async () => {
+  const f = setup(); f.lead.busy = false;
+  f.manager.registerMonoEngine("owned-engine", f.lead.id, "manager", "/repo");
+  await f.manager.start("owned-engine", ["codex"], 1, undefined, true);
+  await expect(f.manager.stopForSession(f.lead.id)).resolves.toBeUndefined();
+  expect(f.manager.run("owned-engine")!.status).toBe("paused");
+  expect(f.host.stop).toHaveBeenLastCalledWith(f.lead.id);
+});
+
+it.each(["save", "readback"])("actual run writer never publishes a half quarantine-recovery state after failed %s", async failure => {
+  const f = setup(); f.lead.busy = false;
+  f.manager.registerMonoEngine("engine", f.lead.id, "manager", "/repo");
+  await f.manager.start("engine", ["codex"], 1, undefined, true); f.lead.busy = true;
+  const id = "decision:original:0:question:1";
+  await f.manager.queueManagerMessage("engine", { id, kind: "question", at: Date.now(), text: "Untrusted question must never become recovery text" });
+  const current = f.manager.run("engine")!;
+  await (f.manager as unknown as { commit(run: OrchestrationRun): Promise<void> }).commit({ ...current, wakeState: prepareManagerWake(current, Date.now() + 1000) });
+  const receipt = f.manager.run("engine")!.wakeState!.receipt!;
+  if (failure === "save") f.store.save.mockImplementationOnce(async () => { throw Error("Synthetic recovery save unavailable"); });
+  else f.store.load.mockImplementationOnce(async () => ({ ...f.saved.get("engine")!, wakeState: { ...f.saved.get("engine")!.wakeState!, receipt: { ...receipt, retiredEventIds: undefined } } }));
+  await expect(f.manager.retireDecisionDigest("engine", receipt.id, [id], { eventIds: [...receipt.eventIds], ownerMonoId: "manager", quarantineHash: "retained-raw-hash", validate: () => {} })).rejects.toThrow();
+  expect(f.manager.run("engine")!.status).toBe("paused"); expect(f.host.submit).not.toHaveBeenCalled();
+  for (const [written] of f.store.save.mock.calls) {
+    const notice = written.wakeState?.events.some(event => event.id.startsWith("recovery:")) ?? false;
+    const retired = written.wakeState?.receipt?.retiredEventIds?.includes(id) ?? false;
+    expect(notice).toBe(retired);
+    if (notice) expect(written.wakeState!.events.find(event => event.id.startsWith("recovery:"))!.text).not.toContain("Untrusted question");
+  }
+});
+
 function setup() {
   const documents = new Map<string, Artifact>();
   const saved = new Map<string, OrchestrationRun>();

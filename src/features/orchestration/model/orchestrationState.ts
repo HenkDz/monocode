@@ -189,6 +189,8 @@ export type OrchestrationRun = {
   recoveryNotice?: string;
   /** Restore is in progress, not a request for human intervention. */
   recovering?: boolean;
+  decisionContinuedAt?: number;
+  decisionContinuePendingAt?: number;
   cli: string;
   tasks: OrchestrationTask[];
   dispatches?: OrchestrationDispatch[];
@@ -227,6 +229,9 @@ export const orchestrationCheckoutCwd = (run: OrchestrationRun) =>
 export function normalizeOrchestrationRun(
   run: OrchestrationRun,
 ): OrchestrationRun {
+  for (const value of [run.decisionContinuedAt, run.decisionContinuePendingAt])
+    if (value !== undefined && (!Number.isSafeInteger(value) || value < 0)) throw Error("Invalid decision continuation epoch");
+  if (run.decisionContinuePendingAt !== undefined) run = { ...run, status: "paused", recovering: undefined };
   const workspace = orchestrationWorkspace(run);
   // Older builds implemented every worker scope violation as a global pause
   // and copied the pause reason onto every running task as a generic failure.

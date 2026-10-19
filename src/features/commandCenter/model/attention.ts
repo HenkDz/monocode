@@ -205,7 +205,7 @@ export type AttentionCallbacks = {
   resume: (sessionId: string) => void | Promise<void>;
   resumeAtReset: (sessionId: string, enabled: boolean) => void | Promise<void>;
   retryDelivery: (sessionId: string) => void | Promise<void>;
-  continueManager: (leadId: string) => Promise<void>;
+  continueManager: (leadId: string, event?: Event) => Promise<void>;
   continueRequest?: (sessionId: string, blockId: string) => Promise<void>;
   inspect: (sessionId: string) => void | Promise<void>;
   inspectAutomation?: (automationId: string) => void | Promise<void>;
@@ -213,7 +213,7 @@ export type AttentionCallbacks = {
 
 /** Recheck the exact source immediately before invoking the existing execution callback. */
 export async function executeAttentionAction(item: AttentionItem, action: AttentionAction, input: AttentionInput, callbacks: AttentionCallbacks,
-  payload?: { reply?: UserQuestionReply; resolution?: CodexStorageResolution; enabled?: boolean }) {
+  payload?: { reply?: UserQuestionReply; resolution?: CodexStorageResolution; enabled?: boolean; event?: Event }) {
   if (action === "inspect") {
     if (item.source === "automation" && callbacks.inspectAutomation) return callbacks.inspectAutomation(item.automationId!);
     if (!item.sessionId) throw Error("Conversation unavailable. Open Automations to inspect the failed run.");
@@ -254,7 +254,7 @@ export async function executeAttentionAction(item: AttentionItem, action: Attent
         return callbacks.continueRequest(item.sessionId, item.messageId!);
       }
       if (item.source !== "continue") throw Error("Manager continuation unavailable");
-      return callbacks.continueManager(item.leadId!);
+      return payload?.event ? callbacks.continueManager(item.leadId!, payload.event) : callbacks.continueManager(item.leadId!);
   }
 }
 

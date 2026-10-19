@@ -377,6 +377,7 @@ it.each([false, true])("loads dormant ledgers on managed Stop, surfaces failed r
   const stopping = stopPort(f, { monoManagerGoals: dormant })(f.manager.id, true);
   expect(f.state.session(f.manager.id)!.busy).toBe(false);
   await stopping;
+  await dormant.hydrate("manager");
   expect(dormant.isDecisionSessionRetiring(f.manager.id)).toBe(true);
   expect(f.state.session(f.manager.id)!.blocks.at(-1)!.text).toContain("retirement still needs saving");
   const persisted = (await readPersistedSession(f.manager.id))!;

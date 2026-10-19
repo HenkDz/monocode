@@ -24,6 +24,17 @@ for (const [index, name] of names.entries()) {
 localStorage.clear();
 localStorage.setItem("monocode:mono-roster", JSON.stringify(roster));
 const sessions = roster.filter(mono => mono.sessionId).map((mono, index) => ({ ...newSession("codex", mono.projects[0]), id: mono.sessionId!, busy: index % 3 === 0, blocks: [{ id: `saved-${index}`, role: "assistant" as const, text: "Saved synthetic work evidence", turnModel: { harness: "codex" as const, id: "saved-model", name: "Saved fixture model" } }] }));
+const selectorCase = new URLSearchParams(location.search).get("selector");
+if (selectorCase === "question") {
+  sessions[0].pendingQuestion = { requestId: 1, title: "Choose the API contract", questions: [] };
+  runs[0].tasks[0] = { ...runs[0].tasks[0], status: "failed", error: "Worker failed" };
+}
+if (selectorCase === "progress") {
+  runs[0].tasks = [{ ...runs[0].tasks[0], status: "queued", accepted: false }];
+  for (const conflict of [{ ownerMonoId: "other-manager" }, { cwd: "C:/Other" }]) {
+    runs.push({ ...runs[0], ...conflict, id: `conflict-${runs.length}`, tasks: [{ ...runs[0].tasks[0], accepted: true, activeDispatchId: "accepted", acceptedDispatchId: "accepted" }] });
+  }
+}
 mockIPC(command => {
   if (command === "control_load") return JSON.stringify({ version: 1, goals, receipts: {} });
   throw Error(`Unexpected fixture native operation: ${command}`);

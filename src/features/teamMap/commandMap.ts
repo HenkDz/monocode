@@ -42,9 +42,11 @@ export function mapOwnState(mono: Mono, runs: readonly OrchestrationRun[], sessi
   });
 }
 
-export function goalProgress(goal: MonoManagerGoal | undefined, runs: readonly OrchestrationRun[]) {
+export function goalProgress(project: OrbitProject, goal: MonoManagerGoal | undefined, runs: readonly OrchestrationRun[]) {
   if (!goal) return undefined;
-  const tasks = runs.filter(run => run.leadId === goal.managerId).flatMap(run => run.tasks.filter(task => task.monoGoalId === goal.id));
+  const tasks = runs.filter(run => run.leadId === goal.managerId && (run.ownerMonoId ? run.ownerMonoId === project.manager.id :
+    !!project.manager.mono.managerEngineId && run.leadId === project.manager.mono.managerEngineId) &&
+    (!run.cwd || projectKey(run.cwd) === projectKey(project.project))).flatMap(run => run.tasks.filter(task => task.monoGoalId === goal.id));
   if (!tasks.length) return undefined;
   // Acceptance is recorded progress; PR readiness and worker completion are not acceptance.
   const accepted = tasks.filter(task => task.accepted && (!(task.activeDispatchId ?? task.lastDispatchId) || task.acceptedDispatchId === (task.activeDispatchId ?? task.lastDispatchId))).length;
@@ -63,7 +65,7 @@ export function projectMemberTask(project: OrbitProject, member: Mono, runs: rea
   const own = sessions.find(entry => entry.id === member.sessionId);
   const workerState = monoState(session, { task, tasks: run?.tasks, runStatus: run?.status, pauseReason: run?.lastPauseReason, wakeStates: run?.wakeState ? [run.wakeState] : [] });
   const ownState = own && monoState({ ...own, codexStorageError: own.codexStorageError ?? session?.codexStorageError });
-  const state = workerState.status === "needs-you" ? workerState : ownState && ownState.liveState?.status !== "idle" ? ownState : workerState;
+  const state = ownState?.status === "needs-you" ? ownState : workerState.status === "needs-you" ? workerState : ownState && ownState.liveState?.status !== "idle" ? ownState : workerState;
   const history = owned.flatMap(run => (run.dispatches ?? []).filter(dispatch => run.tasks.some(task => task.id === dispatch.taskId && task.memberId === member.id))
     .map(dispatch => ({ run, dispatch }))).sort((a, b) => b.dispatch.startedAt - a.dispatch.startedAt);
   return { task, run, dispatch, session, state, tasks, history, owned };

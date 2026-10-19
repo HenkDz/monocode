@@ -39,10 +39,10 @@ it("selects the member's owned run, never a foreign duplicate task or old dispat
 
 it("counts acceptance only for the current dispatch, keeps unknown progress explicit", () => {
   const accepted = { ...task, monoGoalId: "goal", accepted: true, acceptedDispatchId: "old" };
-  expect(goalProgress(goal, [{ ...run, tasks: [accepted] }])).toEqual({ accepted: 0, total: 1, percent: 0 });
-  expect(goalProgress(goal, [{ ...run, tasks: [{ ...accepted, acceptedDispatchId: "new" }] }])?.percent).toBe(100);
-  expect(goalProgress(goal, [])).toBeUndefined();
-  expect(goalProgress(undefined, [run])).toBeUndefined();
+  expect(goalProgress(project, goal, [{ ...run, tasks: [accepted] }])).toEqual({ accepted: 0, total: 1, percent: 0 });
+  expect(goalProgress(project, goal, [{ ...run, tasks: [{ ...accepted, acceptedDispatchId: "new" }] }])?.percent).toBe(100);
+  expect(goalProgress(project, goal, [])).toBeUndefined();
+  expect(goalProgress(project, undefined, [run])).toBeUndefined();
 });
 
 it("keeps exact full goal source and prefers active goals over completed history", () => {

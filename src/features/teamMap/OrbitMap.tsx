@@ -122,7 +122,7 @@ export function OrbitMap({ sessions, runs, statuses, scope, onOpenMono, onClose,
             </button> : <div className="command-map-empty">Set up the Boss to coordinate your projects.</div>}
             {projects.map((project, index) => {
               const goal = projectGoals(project, goals)[0];
-              const progress = goalProgress(goal, runs);
+              const progress = goalProgress(project, goal, runs);
               const data = decisionCount(project);
               const active = project.members.filter(node => node.status === "working").length + Number(project.manager.state.status === "working");
               const look = monoLook(project.manager.mono);

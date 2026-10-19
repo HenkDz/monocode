@@ -79,7 +79,7 @@ export function ProjectDrawer({ project, goals, runs, sessions, decisions, onClo
   const currentGoals = projectGoals(project, goals);
   const [goalId, setGoalId] = useState(currentGoals[0]?.id);
   const goal = currentGoals.find(entry => entry.id === goalId) ?? currentGoals[0];
-  const progress = goalProgress(goal, runs);
+  const progress = goalProgress(project, goal, runs);
   const look = monoLook(project.manager.mono);
   const managerSession = sessions.find(session => session.id === project.manager.mono.sessionId);
   const managerReply = managerSession?.blocks.filter(block => !block.internal && !block.draft && block.role === "assistant" && !block.tool && !block.streaming && block.text.trim()).slice(-1)[0];

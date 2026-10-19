@@ -114,6 +114,7 @@ export function normalizeDecisionHistory(ledger: GoalLedger): GoalLedger {
       const legacy = !["waiting", "answered"].includes(raw.status as string);
       if (legacy && !["pending", "delegated", "decided"].includes(raw.status as string)) throw Error("Invalid decision status");
       const identity = legacy ? object(raw.identity) : raw;
+      if (!legacy && (!escalationChain.some(entry => entry.id === raw.answererId) || payload.operation !== "work" && raw.answererId !== "user")) throw Error("Invalid answerer");
       const requesterSessionId = typeof identity.requesterSessionId === "string" && identity.requesterSessionId.trim() ? text(identity.requesterSessionId, 256) : "";
       if (!requesterSessionId && !legacy && !raw.readOnly) throw Error("Missing asking chat");
       const status = raw.status === "answered" || raw.status === "decided" ? "answered" : "waiting";

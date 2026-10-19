@@ -12,7 +12,7 @@ test("real click sends one ordinary queued user message; synthetic click sends n
   expect(sends).toEqual([{ sessionId: "worker-chat", text: 'Decision on your question "Should we reuse the existing queue?": go with "Reuse the existing queue".', attachments: [] }]);
   const queue = await page.evaluate(() => window.decisionFixture.queue());
   expect(queue?.queuedMessages).toHaveLength(1);
-  expect(queue?.blocks.at(-1)).toMatchObject({ role: "user", text: sends[0].text });
+  expect(queue?.blocks[queue.blocks.length - 1]).toMatchObject({ role: "user", text: sends[0].text });
 });
 test("normal refusal or missing chat leaves a visible retry; moved/stopped chat retains normal queue behavior", async ({ page }) => {
   const option = page.getByRole("button", { name: "Reuse the existing queue Recommended" });

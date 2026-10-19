@@ -13724,7 +13724,9 @@ function Workspace({
           if (decisionManager) await monoManagerGoals.hydrate(decisionManager.id);
           const forwarded = decisionManager && monoManagerGoals.decisions(decisionManager.id).some(row => topic === `decision:${row.id}`);
           const task = memberRun?.tasks.find(task => task.sessionId === source.id);
-          const ask = !forwarded && decisionManager ? decisionAsk(teamMessage, source.id, projectId, roster, monoManagerGoals.autonomy(decisionManager.id, projectId), { taskId: task?.id, goalId: task?.monoGoalId }) : undefined;
+          const latestUser = [...source.blocks].reverse().find(block => block.role === "user" && !block.draft);
+          const goalId = task?.monoGoalId ?? latestUser?.monoSource?.goalId ?? monoManagerGoals.goals().find(goal => goal.userMessageId === latestUser?.id && sameProjectPath(goal.projectId, projectId))?.id;
+          const ask = !forwarded && decisionManager ? decisionAsk(teamMessage, source.id, projectId, roster, monoManagerGoals.autonomy(decisionManager.id, projectId), { taskId: task?.id, goalId }) : undefined;
           const retainDecision = async () => {
             if (!decisionManager) return;
             if (ask) await monoManagerGoals.recordDecision(decisionManager.id, ask);

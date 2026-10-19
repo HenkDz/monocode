@@ -233,7 +233,7 @@ export class MonoManagerGoals {
     return this.serial(async () => {
       const ledger = await this.load(id);
       const row = ledger.decisions?.find(row => row.id === decisionId);
-      if (!row || row.readOnly || row.noLongerNeededAt != null || row.status !== "waiting" || row.answererId !== actorId) return;
+      if (!row || row.readOnly || row.noLongerNeededAt != null || row.status !== "waiting" || row.answererId !== actorId || row.operation !== "work" && actorId !== "user") return;
       await this.save(id, { ...ledger, decisions: ledger.decisions!.map(entry => entry.id === decisionId
         ? { ...entry, status: "answered" as const, answer, answeredBy: actorId, answeredAt: at } : entry) });
     });
@@ -258,7 +258,7 @@ export class MonoManagerGoals {
     return this.serial(async () => {
       const ledger = await this.load(id);
       await this.save(id, { ...ledger, autonomy: { ...ledger.autonomy, [projectId]: value },
-        decisions: ledger.decisions?.map(row => !row.readOnly && row.projectId === projectId && row.status === "waiting"
+        decisions: ledger.decisions?.map(row => !row.readOnly && row.projectId === projectId && row.status === "waiting" && row.answererId === decisionAnswerer(row, projectAutonomy(ledger.autonomy?.[projectId]))
           ? { ...row, answererId: decisionAnswerer(row, value) } : row) });
     });
   }

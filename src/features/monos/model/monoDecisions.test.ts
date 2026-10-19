@@ -42,7 +42,7 @@ it("records only the authenticated current answerer's ordinary reply and persist
   const f = fixture();
   await f.ledger.recordDecision("manager", ask());
   await f.ledger.delegateDecision("manager", message.id);
-  const reply = { ...message, id: "boss-chat:reply", recipientId: "worker", topic: `decision:${message.id}`, text: "Use the helper", kind: "decision" as const };
+  const reply = { ...message, id: "boss-chat:reply", recipientId: "worker", topic: `decision:${message.id}`, text: "Use the helper", kind: "decision" as const, at: Date.now() };
   await f.ledger.recordDecisionReply("manager", { ...reply, senderId: "manager" });
   expect(f.ledger.decisions("manager")[0].status).toBe("waiting");
   await f.ledger.recordDecisionReply("manager", { ...reply, senderId: "boss" });

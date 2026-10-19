@@ -119,8 +119,7 @@ type Props = {
   activeId: string;
   cwd: string;
   /**
-   * The Mono filling the main area. It takes the tabs' place, and nothing
-   * project-scoped belongs beside it.
+   * The Mono filling the main area. It takes the tabs' place in classic mode.
    */
   mono?: { look: MonoLook; state: MonoState };
   onShowMonoDetails?: () => void;
@@ -1062,8 +1061,8 @@ function TitleBarComponent({
     railClosed &&
     Boolean(onOpenInbox || onOpenNotes || onOpenSettings);
   const showRightPanelToggle = inset && Boolean(onToggleRightPanel);
-  // A Mono's own overview holds its changes; app views have none beside them.
-  const rightPanelOff = !!mono || rightPanelUnavailable;
+  // Inset project context also belongs beside Mono chats; app views have none.
+  const rightPanelOff = rightPanelUnavailable;
   const changesDot = rightPanelDot && !rightPanelOff;
   const trailingControls =
     showTrailingActions ||

@@ -56,10 +56,11 @@ export function workbenchSessionTask(runs: readonly OrchestrationRun[], sessionI
 export function memberMonoState(runs: readonly OrchestrationRun[], memberId: string, sessions: readonly Session[], memberSessionId?: string): MonoState {
   const tasks = memberTasks(runs, memberId);
   const task = tasks.find(t => ["queued", "running", "cancelling"].includes(t.status)) ?? tasks[0];
+  const run = task && runs.find(run => run.tasks.includes(task));
   const session = sessions.find(s => s.id === memberSessionId);
   const workerSession = sessions.find(s => s.id === task?.sessionId);
   const own = session && monoState({ ...session, codexStorageError: session.codexStorageError ?? workerSession?.codexStorageError });
-  const worker = monoState(workerSession, { task, tasks });
+  const worker = monoState(workerSession, { task, tasks: run?.tasks ?? tasks, runStatus: run?.status, pauseReason: run?.lastPauseReason });
   if (own?.status === "needs-you" || worker.status === "needs-you") return own?.status === "needs-you" ? own : worker;
   if (own && own.liveState?.status !== "idle") return own;
   return worker;

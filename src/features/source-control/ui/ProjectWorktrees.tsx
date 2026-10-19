@@ -1093,7 +1093,7 @@ ${openPrUrl}`}
   );
 }
 
-function WorktreeCreatePr({
+export function WorktreeCreatePr({
   tree,
   onClose,
 }: {

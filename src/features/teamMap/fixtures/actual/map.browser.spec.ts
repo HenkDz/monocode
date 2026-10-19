@@ -39,6 +39,12 @@ test("actual App answer forwards native gesture and recorded chat, refuses synth
   await option.dblclick();
   expect(await page.evaluate(() => window.actualMapFixture.sends)).toEqual([{ sessionId: "worker-chat", text: 'Decision on your question "Choose the API contract": go with "Reuse the interface".', attachments: [] }]);
   await expect(page.locator(".decision-card[data-sent] button").first()).toBeDisabled();
+  await expect(card).toHaveCount(0);
+  await page.getByRole("article", { name: "Send the project update?" }).getByRole("button", { name: optionName }).click();
+  expect(await page.evaluate(() => window.actualMapFixture.sends)).toEqual([
+    { sessionId: "worker-chat", text: 'Decision on your question "Choose the API contract": go with "Reuse the interface".', attachments: [] },
+    { sessionId: "worker-chat", text: 'Decision on your question "Send the project update?": go with "Reuse the interface".', attachments: [] },
+  ]);
 });
 
 test("actual App full actions preserve accepted state across map drawer remount after log failure", async ({ page }) => {

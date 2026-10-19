@@ -1,4 +1,4 @@
-import type { DecisionPayload } from "../../monos/model/monoDecisions";
+import { parseDecisionPayload, type DecisionPayload } from "../../monos/model/monoDecisions";
 import { LOCAL_TOOLS, exactIntegrationJson } from "./localToolPolicy";
 
 export type CapabilityRequest = {
@@ -7,13 +7,14 @@ export type CapabilityRequest = {
   service: "github" | "local-mcp" | "skill";
   reason: string; tools: string[]; scopes: string[]; deadline: number;
   /** Local source references are evidence for inspection, never permission to copy. */
-  source?: string;
+  name?: string; source?: string;
 };
+export type InstallCapabilityRequest = CapabilityRequest & { kind: "install"; service: "skill"; name: string; source: string };
 
 export function parseCapabilityRequest(value: unknown): CapabilityRequest {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw Error("Invalid capability request");
   const raw = value as Record<string, unknown>;
-  if (Object.keys(raw).some(key => !["version", "type", "kind", "service", "reason", "tools", "scopes", "deadline", "source"].includes(key)) ||
+  if (Object.keys(raw).some(key => !["version", "type", "kind", "service", "reason", "tools", "scopes", "deadline", "name", "source"].includes(key)) ||
       raw.version !== 1 || raw.type !== "capability-request" || !["access", "install", "merge"].includes(String(raw.kind)) ||
       !["github", "local-mcp", "skill"].includes(String(raw.service))) throw Error("Unsupported capability request");
   if (typeof raw.reason !== "string" || !raw.reason.trim() || raw.reason.length > 2000 ||
@@ -26,6 +27,12 @@ export function parseCapabilityRequest(value: unknown): CapabilityRequest {
   }
   if (raw.source !== undefined && (typeof raw.source !== "string" || !raw.source.trim() || raw.source.length > 1000)) throw Error("Invalid local source");
   if (raw.kind === "install" ? raw.service !== "skill" || !raw.source : raw.service === "skill") throw Error("Only local skills can be installed");
+  if (raw.kind === "install") {
+    if (typeof raw.name !== "string" || raw.name.length > 64 || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(raw.name)) throw Error("Choose an explicit skill name");
+    const source = raw.source as string;
+    if (!/^[A-Za-z]:[/\\]/.test(source) || /[\x00-\x1f\x7f]/.test(source) || source.replace(/\\/g, "/").split("/").includes(".."))
+      throw Error("Choose an already-present absolute local skill source");
+  } else if (raw.name !== undefined) throw Error("Only install requests carry a skill name");
   if (raw.kind === "merge" && raw.service !== "github") throw Error("Merge requests require an exact GitHub target");
   exactIntegrationJson(raw);
   return structuredClone(raw) as CapabilityRequest;
@@ -35,10 +42,23 @@ export function parseCapabilityRequest(value: unknown): CapabilityRequest {
 export function capabilityDecisionPayload(request: CapabilityRequest): DecisionPayload {
   const parsed = parseCapabilityRequest(request);
   const install = parsed.kind === "install", merge = parsed.kind === "merge";
-  return { version: 1, type: "decision", question: `${install ? "Install" : merge ? "Review merge access for" : "Connect"} ${parsed.service}?`,
-    impact: "high", context: parsed.reason, operation: install ? "install" : merge ? "merge" : "sign-in",
+  return parseDecisionPayload({ version: 1, type: "decision", question: `${install ? "Install" : merge ? "Review merge access for" : "Connect"} ${install ? parsed.name : parsed.service}?`,
+    impact: "high", context: install ? JSON.stringify(parsed) : parsed.reason, operation: install ? "install" : merge ? "merge" : "sign-in",
     options: [{ id: "review", label: install ? "Review install" : merge ? "Review pull request" : "Review connection" },
-      { id: "later", label: "Not now" }] };
+      { id: "later", label: "Not now" }] });
+}
+
+/** Evidence for an Inspect card only; requester/project identity comes from the authenticated Ask. */
+export function installCapabilityRequest(decision: Pick<DecisionPayload, "operation" | "context">): InstallCapabilityRequest | undefined {
+  if (decision.operation !== "install" || typeof decision.context !== "string" || decision.context.length > 2000) return;
+  try {
+    const request = parseCapabilityRequest(JSON.parse(decision.context));
+    if (request.kind === "install") return request as InstallCapabilityRequest;
+  } catch { /* Legacy prose or malformed metadata never supplies an install target. */ }
+}
+
+export function capabilityDecisionReason(decision: Pick<DecisionPayload, "operation" | "context">): string {
+  return installCapabilityRequest(decision)?.reason ?? decision.context;
 }
 
 export function capabilityToolLabel(id: string): string {

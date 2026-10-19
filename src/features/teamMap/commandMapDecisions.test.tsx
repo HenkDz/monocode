@@ -55,7 +55,7 @@ it("passes each original native event and exact IDs to the supplied lite actions
   const event = new MouseEvent("click", { bubbles: true });
   await act(async () => option.dispatchEvent(event));
   expect(actions.answer).toHaveBeenCalledWith(event, "manager", "ask", "reuse");
-  expect(event.isTrusted).toBe(false); // The host, never the adapter, validates trust.
+  expect(event.isTrusted).toBeFalsy(); // happy-dom leaves trust unset; Chromium checks the host's actual trust gate.
   const autonomy = [...host.querySelectorAll<HTMLButtonElement>(".decision-autonomy button")].find(button => button.textContent === "Everything")!;
   const gesture = new MouseEvent("click", { bubbles: true });
   await act(async () => autonomy.dispatchEvent(gesture));

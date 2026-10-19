@@ -149,6 +149,17 @@ async function consumePort(f: Awaited<ReturnType<typeof fixture>>, sessionId: st
   await consume(); return { submit, head };
 }
 
+async function settleWithinSecond<T>(pending: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const result = await Promise.race([pending.then(value => ({ settled: true as const, value })),
+      new Promise<{ settled: false }>(resolve => { timer = setTimeout(() => resolve({ settled: false }), 1000); })]);
+    expect(result.settled).toBe(true);
+    if (!result.settled) throw Error("Serialized decision operation did not complete within the preserved 1000ms bound");
+    return result.value;
+  } finally { clearTimeout(timer); }
+}
+
 it("executes actual authenticated App ingress, CC5D coalescence/save-readback, answer queue and restart", async () => {
   const f = await fixture();
   await expect(f.ingest()).resolves.toMatchObject({ delivery: "pending" });
@@ -229,17 +240,119 @@ it.each(["completed", "stopped"])("actual App retires an unaccepted stale digest
 
 it("checks an already consumed stale Manager digest first without reopening unrelated reports", async () => {
   const f = await fixture(); await f.ingest(); await f.digest(); await f.ingest();
+  const consumedReceipt = f.run().wakeState!.receipt!;
   const first = await consumePort(f, f.manager.id);
   await f.engine.commit({ ...f.run(), tasks: f.run().tasks.map(task => ({ ...task, status: "completed", result: "Report retained once", lastDispatchId: "dispatch", activeDispatchId: undefined })),
     dispatches: f.run().dispatches!.map(dispatch => ({ ...dispatch, state: "completed", finishedAt: Date.now() })) });
   f.state.setState(sessions => sessions.map(session => session.id === f.manager.id ? { ...session, queuedMessages: [first.head] } : session));
   await upsertSession(f.state.session(f.manager.id)!);
+  const hydrate = vi.spyOn(f.decisionRuntime.current, "hydrate");
+  const accept = evaluateDecisionApp<(id: string, receipt: typeof consumedReceipt) => Promise<boolean>>(source.accept, f.scope);
+  await expect(accept(f.manager.id, consumedReceipt)).resolves.toBe(true);
+  expect(hydrate).not.toHaveBeenCalled();
   const retirement = vi.spyOn(f.engine, "retireDecisionDigest");
   const duplicate = await consumePort(f, f.manager.id);
   expect(duplicate.submit).not.toHaveBeenCalled(); expect(retirement).not.toHaveBeenCalled();
   expect((await readPersistedSession(f.manager.id))!.queuedMessages).toBeUndefined();
   expect(f.run().wakeState!.events.find(event => event.id === "report:dispatch")!.acknowledgedAt).toBeUndefined();
   await expect(f.digest()).resolves.toBe(true);
+});
+
+it("retries a failed Stop marker outside actual session writer ownership and consumes the unrelated report exactly once", async () => {
+  const f = await fixture(); await f.ingest();
+  await f.engine.commit({ ...f.run(), tasks: f.run().tasks.map(task => ({ ...task, status: "completed", result: "Report after stopped question", lastDispatchId: "dispatch", activeDispatchId: undefined })),
+    dispatches: f.run().dispatches!.map(dispatch => ({ ...dispatch, state: "completed", finishedAt: Date.now() })) });
+  fail = (command, args) => { if (command === "mono_session_upsert" && (args.session as Session).id === f.manager.id) throw Error("Stop marker save unavailable"); };
+  await stopPort(f)(f.manager.id, true);
+  await f.ledger.hydrate("manager");
+  expect(f.ledger.isDecisionSessionRetiring(f.manager.id)).toBe(true);
+  expect(decisionStopAt((disks.get(f.manager.id) as Session))).toBe(0);
+  expect(f.state.session(f.manager.id)!.blocks.at(-1)!.text).toContain("retirement still needs saving");
+  fail = undefined;
+  const active = new Set<string>();
+  const serialized: typeof writeSession = (id, operation) => {
+    expect(active.has(id), "Stop retry must not enter an already held session writer").toBe(false);
+    return writeSession(id, async save => {
+      active.add(id);
+      try { return await operation(save); } finally { active.delete(id); }
+    });
+  };
+  f.scope.writeSession = serialized;
+  const retireEvidence = f.ledger.retireDecisionEvidence.bind(f.ledger);
+  vi.spyOn(f.ledger, "retireDecisionEvidence").mockImplementation((...args) => {
+    expect(active.size, "Ledger delivery can wait on this writer, so retirement must run after release").toBe(0);
+    return retireEvidence(...args);
+  });
+  evaluateDecisionApp(source.host, f.scope);
+  f.engine.replace({ ...f.run(), wakeState: prepareManagerWake(f.run(), Date.now() + 1000) });
+  const receipt = f.run().wakeState!.receipt!;
+  const accept = evaluateDecisionApp<(id: string, item: typeof receipt) => Promise<boolean>>(source.accept, f.scope);
+  await expect(settleWithinSecond(accept(f.manager.id, receipt))).resolves.toBe(false);
+  expect(f.ledger.isDecisionSessionRetiring(f.manager.id)).toBe(false);
+  expect((await readPersistedSession(f.manager.id))!.blocks.filter(isDecisionStopMarker)).toHaveLength(1);
+  expect(f.run().wakeState!.receipt!.retiredEventIds).toHaveLength(1);
+  expect(f.run().wakeState!.events.find(event => event.id === "report:dispatch")!.acknowledgedAt).toBeUndefined();
+  await expect(f.digest()).resolves.toBe(true);
+  const report = await consumePort(f, f.manager.id); expect(report.submit).toHaveBeenCalledOnce();
+  f.state.setState(sessions => sessions.map(session => session.id === f.manager.id ? { ...session, queuedMessages: [report.head] } : session));
+  await upsertSession(f.state.session(f.manager.id)!);
+  const duplicate = await consumePort(f, f.manager.id); expect(duplicate.submit).not.toHaveBeenCalled();
+  expect((await readPersistedSession(f.manager.id))!.blocks.filter(block => block.internal && block.appRequestId === report.head.appRequestId)).toHaveLength(1);
+});
+
+it.each([
+  ["generation", "hydrate"], ["account", "hydrate"], ["home", "hydrate"], ["receipt", "hydrate"],
+  ["original", "hydrate"], ["account", "reacquire"], ["receipt", "reacquire"], ["original", "reacquire"],
+])("actual digest rechecks %s across %s before queue publication", async (mutation, phase) => {
+  const f = await fixture(); await f.ingest();
+  f.engine.replace({ ...f.run(), wakeState: prepareManagerWake(f.run(), Date.now() + 1000) });
+  const receipt = f.run().wakeState!.receipt!;
+  const change = () => {
+    if (mutation === "generation") f.turnGen.current.set(f.manager.id, 2);
+    else if (mutation === "account" || mutation === "home") f.state.setState(sessions => sessions.map(session => session.id === f.manager.id
+      ? { ...session, ...(mutation === "account" ? { providerAccountId: "changed-account" } : { codexStorageHome: "synthetic-changed-home" }) } : session));
+    else if (mutation === "receipt") f.engine.replace({ ...f.run(), wakeState: { ...f.run().wakeState!, receipt: { ...receipt, body: receipt.body + "changed" } } });
+    else f.engine.replace({ ...f.run(), tasks: f.run().tasks.map(task => ({ ...task, status: "completed", activeDispatchId: undefined })),
+      dispatches: f.run().dispatches!.map(dispatch => ({ ...dispatch, state: "completed" })) });
+  };
+  const hydrate = f.decisionRuntime.current.hydrate;
+  f.decisionRuntime.current.hydrate = async () => {
+    await hydrate();
+    if (phase === "hydrate") change();
+    else afterRead = () => { afterRead = undefined; change(); };
+  };
+  const accept = evaluateDecisionApp<(id: string, item: typeof receipt) => Promise<boolean>>(source.accept, f.scope);
+  if (mutation === "original") await expect(accept(f.manager.id, receipt)).resolves.toBe(false);
+  else await expect(accept(f.manager.id, receipt)).rejects.toThrow("changed");
+  expect((await readPersistedSession(f.manager.id))!.queuedMessages).toBeUndefined();
+  expect(f.state.session(f.manager.id)!.queuedMessages).toBeUndefined();
+});
+
+it("actual ledger cancellation and Orchestrator task cancellation finish managed App Stop before queued retirement", async () => {
+  const f = await fixture(); await f.ingest();
+  const stop = stopPort(f);
+  const engine = f.engine as unknown as Orchestrator;
+  Object.assign(f.engine, {
+    host: { stop: (id: string) => stop(id, true) }, writeChecks: new Map(),
+    patchTask: (id: string, taskId: string, patch: unknown) =>
+      (Orchestrator.prototype as unknown as { patchTask(id: string, taskId: string, patch: unknown): Promise<void> }).patchTask.call(engine, id, taskId, patch),
+    cleanupUnchangedWorker: async () => {}, pump: async () => {},
+  });
+  const host = {
+    projects: async () => [{ id: f.goal.projectId, folder: "C:/Project", name: "Project", managerId: "engine", managerMonoId: "manager", managerExists: true,
+      running: 1, needsDecision: 0, ready: 0, blocked: [], goals: [f.goal.id] }],
+    deliver: async (_goal: unknown, _text: string, _receipt: string, cancel: boolean) => {
+      expect(cancel).toBe(true);
+      await Orchestrator.prototype.cancelTask.call(engine, "engine", "task");
+    },
+  } as Parameters<MonoManagerGoals["handle"]>[5];
+  await settleWithinSecond(f.ledger.handle("manager", { kind: "user", messageId: f.goal.userMessageId }, "cancel-source-goal", "goals.cancel", { goalId: f.goal.id }, host));
+  await f.ledger.hydrate("manager");
+  expect(f.run().tasks[0].status).toBe("cancelled");
+  expect(f.ledger.goals("manager")[0].state).toBe("cancelled");
+  expect(f.ledger.decisions("manager")[0].deliveryState).toBe("stale");
+  expect(f.ledger.isDecisionSessionRetiring(f.worker.id)).toBe(false);
+  expect((await readPersistedSession(f.worker.id))!.blocks.filter(isDecisionStopMarker)).toHaveLength(1);
 });
 
 it("keeps unrelated pending questions from blocking an actual Manager answer and later receipt recovery", async () => {

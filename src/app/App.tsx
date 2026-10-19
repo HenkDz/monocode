@@ -12223,17 +12223,20 @@ function Workspace({
         ...(remote ? [upsertSession(remote, current => ({ ...current, blocks: current.blocks.map(block => block.managerRequestRecovery?.state === "pending"
           ? { ...block, managerRequestRecovery: { ...block.managerRequestRecovery, state: "cancelled" as const } } : block) }))] : []),
       ]) : Promise.resolve();
-      const retired = Promise.all([retiredRequests, ...(!preserveQueue ? [
-        writeSession(sessionId, async save => {
+      const stopSaved = !preserveQueue ? writeSession(sessionId, async save => {
           const current = sessionsRef.current.find(session => session.id === sessionId);
           if (!current) throw Error("Stopped conversation is unavailable");
           const next = current.blocks.some(block => block.id === stopMarker.id) ? current : { ...current, blocks: [...current.blocks, stopMarker] };
           if (!await save(next)) throw Error("Stop evidence could not be saved");
           if (!(await readPersistedSession(sessionId))?.blocks.some(block => block.id === stopMarker.id && isDecisionStopMarker(block)))
             throw Error("Stop evidence could not be verified");
-        }),
+        }) : Promise.resolve();
+      const retired = Promise.allSettled([retiredRequests, stopSaved, ...(!preserveQueue ? [
         monoManagerGoals.retireDecisionSession(sessionId, listMonos().filter(mono => mono.role === "manager").map(mono => mono.id), stopAt),
-      ] : [])]).catch(stopFailure);
+      ] : [])]).then(results => {
+        const failed = results.find(result => result.status === "rejected");
+        if (failed?.status === "rejected") stopFailure(failed.reason);
+      });
       if (!managed) {
         const stopping = orchestrator.stopForSession(sessionId);
         if (stopping) {
@@ -12282,7 +12285,8 @@ function Workspace({
       } else {
         notifyReviewChanged(sessionId);
       }
-      return Promise.all([cancelling, checkpointFinished, retired]);
+      // Goal cancellation can hold the ledger while awaiting a managed Stop.
+      return Promise.all([cancelling, checkpointFinished, managed ? stopSaved.catch(() => undefined) : retired]);
     },
     [flushHarnessEvents],
   );
@@ -12855,7 +12859,7 @@ function Workspace({
         return session.queueStatus === "paused" || session.queueStatus === "active";
       },
       beforeContinue: async () => { await decisionRuntime.current.hydrate(); },
-      acceptManagerDigest: (id, receipt) => writeSession(id, async save => {
+      acceptManagerDigest: async (id, receipt) => {
         const readRun = () => orchestrator.snapshot().find(run => (run.ownerSessionId ?? run.leadId) === id && run.wakeState?.receipt?.id === receipt.id);
         const run = readRun();
         const session = sessionsRef.current.find(session => session.id === id);
@@ -12864,66 +12868,89 @@ function Workspace({
           if (!session || turnGen.current.get(id) !== generation || !managerRequestBindingCurrent(sessionsRef.current.find(session => session.id === id), binding))
             throw Error("Manager digest recipient changed before acceptance");
         };
-        validateRecipient();
-        const persisted = await readPersistedSession(id);
-        validateRecipient();
-        let consumed = persisted?.blocks.find(block => block.internal && block.appRequestId === receipt.id);
-        if (!consumed && await invoke<boolean>("mono_session_event_delivered", { sessionId: id, eventId: receipt.id, text: receipt.body })) {
+        const validateReceipt = () => {
           validateRecipient();
-          consumed = (await getMonoGoalRecoveryBlocks(id)).find(block => block.internal && block.appRequestId === receipt.id);
-          validateRecipient();
-          if (!consumed) throw Error("Consumed Manager digest receipt is unavailable");
-        }
-        if (consumed) {
-          if (consumed.text !== receipt.body) throw Error("Consumed Manager digest has different evidence");
-          return true;
-        }
-        if (receipt.eventIds.some(isMonoDecisionEventId)) {
-          await decisionRuntime.current.hydrate();
-          validateRecipient();
-          if (!run?.ownerMonoId || readRun()?.wakeState?.receipt?.body !== receipt.body) throw Error("Manager digest owner or receipt changed");
-          const host = runtimeDecisionHost(run.ownerMonoId, { kind: "mono", id: run.ownerMonoId }, "", undefined, decisionRuntime.current);
-          const retired = staleDecisionDigestEvents(run, receipt, () => monoManagerGoals.decisions(run.ownerMonoId!), host);
-          if (retired.length) {
-            for (const eventId of retired) {
-              const decision = monoManagerGoals.decisions(run.ownerMonoId).find(decision => retainedDecisionDelivery(decision, eventId));
-              if (decision) {
-                await monoManagerGoals.retireDecisionEvidence(run.ownerMonoId, decision.id, decision.resolutionVersion);
-                validateRecipient();
-              }
-            }
-            await orchestrator.retireDecisionDigest(run.leadId, receipt.id, retired);
+          const current = readRun();
+          if (!run?.ownerMonoId || current?.ownerMonoId !== run.ownerMonoId || current?.wakeState?.receipt?.body !== receipt.body || current?.managerTurnId !== run.managerTurnId)
+            throw Error("Manager digest owner or receipt changed");
+        };
+        const staleEvents = () => {
+          validateReceipt();
+          const current = readRun()!, ownerId = current.ownerMonoId!;
+          return staleDecisionDigestEvents(current, receipt, () => monoManagerGoals.decisions(ownerId),
+            runtimeDecisionHost(ownerId, { kind: "mono", id: ownerId }, "", undefined, decisionRuntime.current));
+        };
+        let hydrated = false;
+        for (;;) {
+          const accepted = await writeSession(id, async save => {
             validateRecipient();
+            const persisted = await readPersistedSession(id);
+            validateRecipient();
+            let consumed = persisted?.blocks.find(block => block.internal && block.appRequestId === receipt.id);
+            if (!consumed && await invoke<boolean>("mono_session_event_delivered", { sessionId: id, eventId: receipt.id, text: receipt.body })) {
+              validateRecipient();
+              consumed = (await getMonoGoalRecoveryBlocks(id)).find(block => block.internal && block.appRequestId === receipt.id);
+              validateRecipient();
+              if (!consumed) throw Error("Consumed Manager digest receipt is unavailable");
+            }
+            if (consumed) {
+              if (consumed.text !== receipt.body) throw Error("Consumed Manager digest has different evidence");
+              return true;
+            }
+            if (receipt.eventIds.some(isMonoDecisionEventId)) {
+              if (!hydrated) return undefined;
+              validateReceipt();
+              const current = readRun()!;
+              const ownerId = current.ownerMonoId!;
+              const retired = staleEvents();
+              if (retired.length) return { retired, ownerId, leadId: current.leadId };
+            }
+            const decisionGuard = run?.wakeState?.events.some(event => receipt.eventIds.includes(event.id) && isMonoDecisionEventId(event.id)) && run.ownerMonoId
+              ? assertDecisionDigestConsumer({ id: receipt.id, appRequestId: receipt.id, text: receipt.body, attachments: [], managerWake: { leadId: run.leadId, receiptId: receipt.id } },
+                  readRun, () => monoManagerGoals.decisions(run.ownerMonoId!), runtimeDecisionHost(run.ownerMonoId, { kind: "mono", id: run.ownerMonoId }, "", undefined, decisionRuntime.current)) : () => {};
+            const validate = () => {
+              decisionGuard();
+              if (run?.wakeState?.events.some(event => receipt.eventIds.includes(event.id) && isMonoDecisionEventId(event.id)) &&
+                  (turnGen.current.get(id) !== generation || !managerRequestBindingCurrent(sessionsRef.current.find(session => session.id === id), binding) || readRun()?.managerTurnId !== run.managerTurnId))
+                throw Error("Manager decision digest turn or binding changed before publication");
+            };
+            return acceptManagerWakeQueue(receipt, run?.leadId ?? id, {
+              session: () => sessionsRef.current.find(session => session.id === id),
+              delivered: async () => { validate(); const found = await invoke<boolean>("mono_session_event_delivered", { sessionId: id, eventId: receipt.id, text: receipt.body }); validate(); return found; },
+              save: async session => {
+                validate();
+                const saved = await save(session);
+                validate();
+                if (!saved) throw new Error("Manager digest could not be saved");
+                return saved;
+              },
+              load: async () => { validate(); const saved = await readPersistedSession(id); validate(); return saved; },
+              publish: session => {
+                validate();
+                sessionsRef.current = sessionsRef.current.map(entry => entry.id === id ? session : entry);
+                flushSync(() => setSessions(sessionsRef.current));
+              },
+            });
+          });
+          if (typeof accepted === "boolean") return accepted;
+          if (accepted) {
+            for (const eventId of accepted.retired) {
+              const decision = monoManagerGoals.decisions(accepted.ownerId).find(decision => retainedDecisionDelivery(decision, eventId));
+              if (decision) await monoManagerGoals.retireDecisionEvidence(accepted.ownerId, decision.id, decision.resolutionVersion);
+              staleEvents();
+            }
+            const stillStale = staleEvents();
+            if (accepted.retired.some(id => !stillStale.includes(id))) throw Error("Manager digest stale source changed; evidence retained");
+            await orchestrator.retireDecisionDigest(accepted.leadId, receipt.id, accepted.retired);
+            staleEvents();
             return false;
           }
+          // Stop recovery may save this same session; never hydrate while holding its writer.
+          await decisionRuntime.current.hydrate();
+          staleEvents();
+          hydrated = true;
         }
-        const decisionGuard = run?.wakeState?.events.some(event => receipt.eventIds.includes(event.id) && isMonoDecisionEventId(event.id)) && run.ownerMonoId
-          ? assertDecisionDigestConsumer({ id: receipt.id, appRequestId: receipt.id, text: receipt.body, attachments: [], managerWake: { leadId: run.leadId, receiptId: receipt.id } },
-              readRun, () => monoManagerGoals.decisions(run.ownerMonoId!), runtimeDecisionHost(run.ownerMonoId, { kind: "mono", id: run.ownerMonoId }, "", undefined, decisionRuntime.current)) : () => {};
-        const validate = () => {
-          decisionGuard();
-          if (run?.wakeState?.events.some(event => receipt.eventIds.includes(event.id) && isMonoDecisionEventId(event.id)) &&
-              (turnGen.current.get(id) !== generation || !managerRequestBindingCurrent(sessionsRef.current.find(session => session.id === id), binding) || readRun()?.managerTurnId !== run.managerTurnId))
-            throw Error("Manager decision digest turn or binding changed before publication");
-        };
-        return acceptManagerWakeQueue(receipt, run?.leadId ?? id, {
-        session: () => sessionsRef.current.find(session => session.id === id),
-        delivered: async () => { validate(); const found = await invoke<boolean>("mono_session_event_delivered", { sessionId: id, eventId: receipt.id, text: receipt.body }); validate(); return found; },
-        save: async session => {
-          validate();
-          const saved = await save(session);
-          validate();
-          if (!saved) throw new Error("Manager digest could not be saved");
-          return saved;
-        },
-        load: async () => { validate(); const saved = await readPersistedSession(id); validate(); return saved; },
-        publish: session => {
-          validate();
-          sessionsRef.current = sessionsRef.current.map(entry => entry.id === id ? session : entry);
-          flushSync(() => setSessions(sessionsRef.current));
-        },
-      });
-      }),
+      },
       submit: (id, text, done) => {
         void submitWithSettlement({
           submit: (onSettled) => {

@@ -63,3 +63,14 @@ it("passes each original native event and exact IDs to the supplied lite actions
   const protectedCard = [...host.querySelectorAll(".decision-card")].find(card => card.textContent?.includes("Send the project update?"))!;
   expect(protectedCard.textContent).not.toContain("Let the Boss decide");
 });
+
+it("retains the host's accepted lookup when a waiting card remounts after a log failure", async () => {
+  const wasAccepted = vi.fn((manager: string, id: string) => manager === "manager" && id === "ask");
+  const ledger = await fixtureLedger();
+  await act(async () => root.render(commandMapDecisions(ledger, roster, { ...actions, wasAccepted }, Date.now()).project(project, "manager").cards));
+  const card = host.querySelector(".decision-card")!;
+  expect(wasAccepted).toHaveBeenCalledWith("manager", "ask");
+  expect(card.querySelector<HTMLButtonElement>(".decision-options button")!.disabled).toBe(true);
+  expect(card.textContent).toContain("Answer sent");
+  expect(actions.answer).not.toHaveBeenCalled();
+});

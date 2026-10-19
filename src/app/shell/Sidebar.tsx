@@ -1,4 +1,6 @@
 import { createPortal } from "react-dom";
+import { WorkspaceTeam } from "./WorkspaceTeam";
+import { pathKey } from "../../shared/lib/paths";
 import { UsageDashboardNav } from "../../features/providers/ui/UsageDashboard";
 import { TeamMapNav } from "../../features/teamMap/navigation";
 // CC7C entry point stays outside CC7A's ProjectRail.
@@ -234,7 +236,6 @@ import { useRailMonosPinned } from "../../features/settings/model/displayPrefs";
 import type { PickerMonos } from "../../features/projects/ui/SearchableProjectPicker";
 import { isHabitRun } from "../../features/monos/model/monoHabits";
 import {
-  MonoRailSection,
   unreadBadge,
   unreadLabel,
   type MonoRailProps,
@@ -388,6 +389,13 @@ type Props = {
   onOpenMissionControl?: () => void;
   onOpenUsage?: () => void;
   onOpenAttentionQueue?: () => void; // CC7D shell hook
+  workspaceWorktrees?: ReactNode;
+  projectStatus?: string;
+  projectStatuses?: ReadonlyMap<string, string>;
+  decisionCounts?: ReadonlyMap<string, number>;
+  commandMapActive?: boolean;
+  decisionsActive?: boolean;
+  workspaceUsage?: ReactNode;
   onGoToFile?: () => void;
   searchActive?: boolean;
   inboxActive?: boolean;
@@ -509,6 +517,13 @@ function SidebarComponent({
   onOpenMissionControl,
   onOpenUsage,
   onOpenAttentionQueue,
+  workspaceWorktrees,
+  projectStatus,
+  projectStatuses,
+  decisionCounts,
+  commandMapActive,
+  decisionsActive,
+  workspaceUsage,
   onGoToFile,
   searchActive = false,
   inboxActive = false,
@@ -2192,6 +2207,7 @@ function SidebarComponent({
                 anchor={anchor}
                 flyout={{ layer, attributes }}
                 projects={pickerProjects(recents, cwd)}
+                projectStatuses={projectStatuses}
                 currentProject={cwd}
                 onDismiss={onClose}
                 onSelectProject={onSelectProject}
@@ -2379,6 +2395,7 @@ function SidebarComponent({
   useEffect(() => endSpaceSlide, [endSpaceSlide]);
 
   const workspaceHeader = (
+    <>
     <div
       ref={(el) => {
         slideRefs.current[0] = el;
@@ -2417,6 +2434,8 @@ function SidebarComponent({
       />
       {headerProjectMenu.element}
     </div>
+    {inset && projectStatus ? <p className="-mt-0.5 px-4 pb-2 text-[10px] text-content/50" aria-label="Project status">{projectStatus}</p> : null}
+    </>
   );
 
   // The inset list names its loose sessions like the groups above them, and
@@ -2435,7 +2454,7 @@ function SidebarComponent({
   // Stands in for the date labels when no loose session is listed, so the
   // filter stays reachable.
   const sessionsLabel = inset ? (
-    <SidebarSectionLabel label="Sessions">
+    <SidebarSectionLabel label="Chats">
       {sessionsFilterButton}
     </SidebarSectionLabel>
   ) : null;
@@ -2443,9 +2462,11 @@ function SidebarComponent({
   const navList = inset ? (
     <SidebarNavList
       search={
-        onSearch ? { active: searchActive, onClick: onSearch } : undefined
+        onSearch ? { active: searchActive, onClick: onSearch, onAskBoss: railMonos && listMonos().some(mono => mono.role === "orchestrator") ? () => railMonos.onOpen(listMonos().find(mono => mono.role === "orchestrator")!.id) : undefined } : undefined
       }
       items={[
+        onOpenTeamMap && { label: "Command map", icon: Share, active: commandMapActive, onClick: onOpenTeamMap },
+        onOpenAttentionQueue && { label: "Decisions", icon: CircleAlert, active: decisionsActive, badge: [...(decisionCounts?.values() ?? [])].reduce((sum, count) => sum + count, 0), onClick: onOpenAttentionQueue },
         onOpenInbox && {
           label: "Inbox",
           icon: Inbox,
@@ -2466,6 +2487,7 @@ function SidebarComponent({
           active: automationsActive,
           onClick: onOpenAutomations,
         },
+        onOpenUsage && { label: "Usage", icon: CircleDashed, trailing: workspaceUsage, onClick: onOpenUsage },
       ]}
     />
   ) : null;
@@ -2674,9 +2696,8 @@ function SidebarComponent({
         >
           {navList}
           {/* The project's Monos, above its folders. */}
-          {inset && railMonos && inProject ? (
-            <MonoRailSection {...railMonos} project={cwd} />
-          ) : null}
+          {inset && railMonos && inProject ? <WorkspaceTeam {...railMonos} roster={listMonos()} project={cwd} /> : null}
+          {inset ? workspaceWorktrees : null}
           {!cwd || cwd === "~" ? (
             <p className="px-3 py-2 text-[12px] text-content/50">
               No project folder
@@ -3105,6 +3126,7 @@ function SidebarComponent({
             projects={spaceProjects}
             cwd={cwd}
             busyProjectPaths={busyProjectPaths}
+            decisionCounts={decisionCounts}
             onSelectProject={onSelectProject}
           />
         ) : null}
@@ -3980,11 +4002,13 @@ function ProjectSpacesBar({
   projects,
   cwd,
   busyProjectPaths,
+  decisionCounts,
   onSelectProject,
 }: {
   projects: readonly string[];
   cwd: string;
   busyProjectPaths?: Iterable<string>;
+  decisionCounts?: ReadonlyMap<string, number>;
   onSelectProject: (path: string) => void;
 }) {
   const projectTooltip = useRailTooltip("top");
@@ -4078,6 +4102,7 @@ function ProjectSpacesBar({
               path={path}
               active={sameProjectPath(path, cwd)}
               busy={projectPathBusy(busyProjectPaths, path)}
+              decisions={decisionCounts?.get(pathKey(path)) ?? 0}
               shortcuts={shortcuts}
               onSelect={() => onSelectProject(path)}
             />
@@ -4094,12 +4119,14 @@ function ProjectSpaceButton({
   path,
   active,
   busy,
+  decisions,
   shortcuts,
   onSelect,
 }: {
   path: string;
   active: boolean;
   busy: boolean;
+  decisions: number;
   shortcuts: string;
   onSelect: () => void;
 }) {
@@ -4109,7 +4136,7 @@ function ProjectSpaceButton({
       type="button"
       role="tab"
       aria-selected={active}
-      aria-label={busy ? `${label}, working` : label}
+      aria-label={`${label}${busy ? ", working" : ""}${decisions ? `, ${decisions} decisions` : ""}`}
       data-rail-tip={label}
       data-rail-tip-detail={shortcuts || undefined}
       data-tauri-drag-region="false"
@@ -4126,7 +4153,7 @@ function ProjectSpaceButton({
         className="size-3"
         mascotClassName="size-2.5"
       />
-      {busy && !active ? (
+      {decisions > 0 ? <span aria-hidden className="absolute right-1 top-0.5 size-1.5 rounded-full bg-amber-400" /> : busy && !active ? (
         <span
           aria-hidden
           className="absolute right-1 top-0.5 size-1.5 rounded-full bg-accent"
@@ -4299,6 +4326,8 @@ type SidebarNavItem = {
   shortcut?: string;
   active?: boolean;
   dot?: boolean;
+  badge?: number;
+  trailing?: ReactNode;
   onClick: () => void;
 };
 
@@ -4308,7 +4337,7 @@ function SidebarNavList({
   items,
 }: {
   /** The project rail's search field, above the links. */
-  search?: { active: boolean; onClick: () => void };
+  search?: { active: boolean; onClick: () => void; onAskBoss?: () => void };
   items: readonly (SidebarNavItem | false | undefined)[];
 }) {
   const shown = items.filter((item): item is SidebarNavItem => !!item);
@@ -4322,18 +4351,18 @@ function SidebarNavList({
           same. */}
       {search ? (
         <>
-          <RailSearch
-            label="Search"
+          <div className="flex items-center gap-1"><RailSearch
+            label={search.onAskBoss ? "Search or ask the Boss" : "Search"}
             icon={Search}
             onClick={search.onClick}
             active={search.active}
             shortcut={`${MOD}K`}
             ariaLabel={`Search (${MOD}K)`}
-          />
+          />{search.onAskBoss && <button type="button" aria-label="Ask the Boss" title="Ask the Boss" onClick={search.onAskBoss} className="grid size-8 shrink-0 place-items-center rounded-md text-content/50 hover:bg-content/10"><Chatting className="size-3.5" /></button>}</div>
           <div className="mt-0.5" />
         </>
       ) : null}
-      {shown.map(({ label, icon, shortcut, active, dot, onClick }) => (
+      {shown.map(({ label, icon, shortcut, active, dot, badge, trailing, onClick }) => (
         <RailAction
           key={label}
           label={label}
@@ -4341,6 +4370,8 @@ function SidebarNavList({
           shortcut={shortcut}
           active={active}
           dot={dot}
+          badge={badge}
+          trailing={trailing}
           ariaLabel={dot ? `${label}, new items` : undefined}
           onClick={onClick}
         />

@@ -9,6 +9,7 @@ import { useProjectAppearance } from "../hooks/useProjectAppearance";
 import { basename } from "../../../platform/tauri/fs";
 import {
   prettyParent,
+  pathKey,
   projectKey,
   projectName,
 } from "../../../shared/lib/paths";
@@ -258,6 +259,7 @@ type ProjectPickerPopoverProps = Pick<
   onDismiss: () => void;
   label?: string;
   emptyMessage?: string;
+  projectStatuses?: ReadonlyMap<string, string>;
   /** A flyout off another menu opens beside it, and that menu owns outside
    * clicks for both. */
   flyout?: { layer: number; attributes?: Record<`data-${string}`, boolean> };
@@ -276,6 +278,7 @@ export function ProjectPickerPopover({
   monos,
   label = "Project picker",
   emptyMessage = "No projects found",
+  projectStatuses,
   flyout,
 }: ProjectPickerPopoverProps) {
   const [query, setQuery] = useState("");
@@ -519,7 +522,7 @@ export function ProjectPickerPopover({
                   {itemLabel}
                 </span>
                 <span className="min-w-0 max-w-28 flex-1 truncate font-mono text-[11px] text-content/40">
-                  {prettyParent(item.path)}
+                  {projectStatuses?.get(pathKey(item.path)) ?? prettyParent(item.path)}
                 </span>
               </button>
             );

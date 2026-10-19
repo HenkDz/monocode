@@ -254,6 +254,27 @@ it("shows current member availability without historical task outcomes dominatin
   expect(memberMonoState(runs, "backend", []).liveState?.status).toBe("queued");
 });
 
+it("uses the selected member task's own run pause instead of another run with the same task ID", () => {
+  const older = workbenchTask({ status: "queued" });
+  const newer = workbenchTask({ status: "queued" });
+  const unrelated = { ...workbenchRun("older", [older], [workbenchDispatch({ startedAt: 1 })]), status: "active" as const };
+  const paused = { ...workbenchRun("newer", [newer], [workbenchDispatch({ startedAt: 2 })]), status: "paused" as const, lastPauseReason: "Owner explicitly paused for review" };
+  expect(memberMonoState([unrelated, paused], "backend", []).liveState).toEqual(
+    selectAgentLiveState(undefined, { task: newer, tasks: paused.tasks, runStatus: paused.status, pauseReason: paused.lastPauseReason }),
+  );
+  expect(memberMonoState([unrelated, paused], "backend", []).liveState?.detail).toBe(paused.lastPauseReason);
+});
+
+it("resolves a member's dependencies against all tasks in its owning run", () => {
+  const dependency = workbenchTask({ id: "prepare", memberId: "other", status: "completed", accepted: true });
+  const task = workbenchTask({ status: "queued", dependsOn: [dependency.id] });
+  const run = workbenchRun("lead", [dependency, task], []);
+  expect(memberMonoState([run], "backend", []).liveState).toEqual(
+    selectAgentLiveState(undefined, { task, tasks: run.tasks, runStatus: run.status }),
+  );
+  expect(memberMonoState([run], "backend", []).liveState?.reason).not.toBe("dependency");
+});
+
 it("derives a single row from the visible pane, never the hidden workspace session", () => {
   expect(selectedOrgMono("regular-chat", null, runs)).toBeUndefined();
   expect(selectedOrgMono("regular-chat", "manager-chat", runs)).toBe("manager");

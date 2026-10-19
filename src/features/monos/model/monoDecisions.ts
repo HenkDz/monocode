@@ -95,10 +95,10 @@ export const projectAutonomy = (value: unknown = "high-impact-only") =>
   oneOf(value, ["high-impact-only", "medium-and-up", "everything"] as const);
 
 /** Legacy Windows spellings share policy; ask more when retained copies conflict. */
-export function decisionProjectAutonomy(autonomy: GoalLedger["autonomy"], projectId: string): ProjectAutonomy {
+export function decisionProjectAutonomy(autonomy: GoalLedger["autonomy"], projectId: string, uncertain = false): ProjectAutonomy {
   const values = Object.entries(autonomy ?? {}).filter(([project]) => pathKey(project) === pathKey(projectId))
     .map(([, value]) => projectAutonomy(value));
-  return values.includes("everything") ? "everything" : values.includes("medium-and-up") ? "medium-and-up" : "high-impact-only";
+  return values.includes("everything") ? "everything" : values.includes("medium-and-up") ? "medium-and-up" : values.length || !uncertain ? "high-impact-only" : "everything";
 }
 
 export type DecisionAutonomyChange = {
@@ -157,7 +157,7 @@ export function decisionAuthorityGuidance(role?: Mono["role"]): string {
     const impacts = (["low", "med", "high"] as const).filter(impact => bossMayDecide({ operation: "work", impact }, autonomy));
     return `${autonomy}: Boss may decide ${impacts.length ? impacts.join("/") + " impact work" : "only explicitly user-delegated work"}`;
   });
-  return `Within original authority. ${policies.join("; ")}. Managers: only low work below that threshold. Else app team.message to your actual superior: {memberId,kind:"question",requiresReply:true,text:JSON.stringify({version:1,type:"decision",question,impact,context,options:[{id,label},{id,label}],recommendedOptionId,operation})}. Caps: question300/context2000/options2-6/label240/message6000. Truthful operation: work|merge|install|sign-in|destructive|system-settings|spend; protected actions still need user approval; decisions never execute. Identity is runtime-only. Reports: summaries. Answers: evidence for the original goal only. Never claim higher-level decisions. Keep working. team.message actions: {version:1,type:"decision-action",action,decisionId,expectedVersion}; resolve adds optionId, raise-impact adds impact, escalate/remind add none. Keep ID/version; retry exact requestId+body; no user actor/delegate/autonomy.`;
+  return `Within original authority. ${policies.join("; ")}. Managers: only low work below that threshold. Else app team.message to your actual superior: {memberId,kind:"question",requiresReply:true,text:JSON.stringify({version:1,type:"decision",question,impact,context,options:[{id,label},{id,label}],recommendedOptionId,operation})}. Caps: question300/context2000/options2-6/label240/message6000. Truthful operation: work|merge|install|sign-in|destructive|system-settings|spend; protected actions still need user approval; decisions never execute. Identity is runtime-only. Reports: summaries. Answers: evidence for the original goal only. Never claim higher-level decisions. Keep working. team.message actions: {version:1,type:"decision-action",action,decisionId,expectedVersion}; resolve adds optionId, raise-impact adds impact, escalate/remind add none. Keep ID/version; retry exact requestId+body; pending: wait; no user actor/delegate/autonomy.`;
 }
 
 function reportingChain(roster: readonly Mono[], requestingMonoId: string, projectId: string) {
@@ -184,7 +184,11 @@ function captureIdentity(goal: MonoManagerGoal, requesterId: string, snapshot: D
   const manager = roster.find(mono => mono.id === run.ownerMonoId && mono.role === "manager" && mono.archivedAt == null);
   const task = requester?.role === "member" ? run.tasks.find(task => task.memberId === requesterId && task.sessionId === requesterSession.id) : undefined;
   const dispatch = run.dispatches?.find(dispatch => dispatch.id === task?.activeDispatchId && dispatch.taskId === task.id && dispatch.sessionId === task.sessionId);
+  const requestIndex = requestSession.blocks.findIndex(block => block.id === goal.userMessageId);
+  const requesterStop = decisionStopAt(requesterSession);
   if (!owner || owner.sessionId !== requestSession.id || !requester || snapshot.cancelling || goal.state === "cancelled" || goal.state === "done" ||
+      requestSession.blocks.some((block, index) => index > requestIndex && isDecisionStopMarker(block)) ||
+      requesterSession.id !== requestSession.id && requesterStop > 0 && requesterStop >= generation ||
       !requestSession.blocks.some(block => block.id === goal.userMessageId && isManagerUserRequest(block)) ||
       !manager || !manager.projects.some(project => pathKey(project) === pathKey(goal.projectId)) ||
       !(owner.role === "manager" && owner.id === manager.id || owner.role === "orchestrator" && owner.id === manager.reportsTo) ||
@@ -207,6 +211,7 @@ function captureIdentity(goal: MonoManagerGoal, requesterId: string, snapshot: D
 }
 
 export class StaleDecision extends Error {}
+export class DecisionDeliveryPending extends Error {}
 export function assertDecisionCurrent(decision: MonoDecision, host: DecisionHost): void {
   if (decision.deliveryState === "stale") throw new StaleDecision("Decision work authority was retired");
   const snapshot = host.current(decision);
@@ -228,6 +233,14 @@ export function compactDecisionHistory(ledger: GoalLedger): GoalLedger {
 /** CC5D also owns decision:report:* IDs; only the complete V2 shape belongs here. */
 export function isMonoDecisionEventId(id: string): boolean {
   return /^decision:.+:\d+:(?:question|escalation|decision):\d+$/.test(id);
+}
+
+export function isDecisionStopMarker(block: Session["blocks"][number]): boolean {
+  return block.role === "system" && /^decision-stop-\d+$/.test(block.id) && block.text === "Stopped. Earlier decision evidence cannot resume this work.";
+}
+/** Existing system transcript evidence survives a failed ledger retirement and reload. */
+export function decisionStopAt(session: Session): number {
+  return session.blocks.reduce((at, block) => isDecisionStopMarker(block) ? Math.max(at, Number(block.id.slice("decision-stop-".length))) : at, 0);
 }
 
 function delivery(decision: MonoDecision, index: number, kind: "question" | "escalation" | "decision", senderId: string): DecisionDelivery {
@@ -353,6 +366,12 @@ export function quarantineDecisionHistory(ledger: GoalLedger, ownerId?: string):
   for (const key of ["decisions", "autonomy", "decisionsPruned"] as const) {
     if (Object.prototype.hasOwnProperty.call(retained, key)) raw[key] = retained[key];
     delete retained[key];
+  }
+  if (raw.autonomy && typeof raw.autonomy === "object" && !Array.isArray(raw.autonomy)) {
+    const valid = Object.entries(raw.autonomy).filter(([project, value]) => {
+      try { text(project); projectAutonomy(value); return true; } catch { return false; }
+    });
+    if (valid.length) retained.autonomy = Object.fromEntries(valid) as GoalLedger["autonomy"];
   }
   raw.receipts = Object.fromEntries(Object.entries(retained.receipts).flatMap(([id, receipt]) => {
     if (!Object.prototype.hasOwnProperty.call(receipt, "decision")) return [];
@@ -496,7 +515,7 @@ export async function handleDecisionCommand(ownerId: string, requestId: string, 
       actorId: host.actor.kind === "user" ? "user" : host.actor.id, level: reminding ? "boss" : current.level, at: now });
     decision.updatedAt = now;
     if (command.action === "resolve") {
-      const autonomy = decisionProjectAutonomy(ledger.autonomy, decision.projectId);
+      const autonomy = decisionProjectAutonomy(ledger.autonomy, decision.projectId, !!ledger.decisionQuarantine?.length);
       if (current.level !== "user" && (!bossMayDecide(decision, autonomy) || current.level === "manager" && decision.impact !== "low")) throw Error("Escalate this decision to its required authority");
       if (!decision.options.some(option => option.id === command.optionId)) throw Error("Choose a retained decision option");
       decision = { ...decision, status: "decided", selectedOptionId: command.optionId, decidedBy: current.id, decidedAt: now };

@@ -347,6 +347,7 @@ export function WorkspaceGoals({
       )}
       <h2 className={heading}>This project decides</h2>
       {manager && decisionActions && <div className="px-4 py-2"><ProjectAutonomyControl managerId={manager.id} projectId={project}
+        uncertain={monoManagerGoals.autonomyUncertain(manager.id, project)}
         value={monoManagerGoals.autonomy(manager.id, project)} actions={decisionActions} disabled={decisionUnavailable || !!decisionView.loading.length} />
         {!!decisionView.autonomyConflicts.length && <p className="text-[11px] text-content/60">Autonomy setting had conflicting copies; using the stricter one.</p>}
       </div>}

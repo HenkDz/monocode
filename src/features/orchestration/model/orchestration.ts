@@ -122,6 +122,7 @@ export type OrchestrationHost = {
   stop(id: string, reason?: "refresh"): Promise<void>;
   /** Resume retained messages instead of adding a duplicate Continue turn. */
   resumeQueue?(id: string): boolean;
+  beforeContinue?(id: string): Promise<void>;
   /** Redirect a worker mid-turn, without discarding what it has already done. */
   steer(id: string, text: string): Promise<void>;
   /** Answer on a worker's behalf; the lead, not the user, decides. */
@@ -392,7 +393,7 @@ export class Orchestrator {
   private managerWakes = new ManagerWakeScheduler({
     run: id => this.run(id),
     session: id => this.host?.session(id),
-    save: run => this.commit(run),
+    save: run => this.saveManagerWake(run),
     accept: (id, receipt) => this.host?.acceptManagerDigest?.(this.ownerSession(id), receipt) ?? Promise.resolve(false),
     limit: id => this.pause(id, "Manager reached its automatic follow-up limit. Review progress, then Continue or send a new message."),
   });
@@ -424,6 +425,7 @@ export class Orchestrator {
         ),
       stop: (id: string, reason?: "refresh") => reason ? host.stop(this.ownerSession(id), reason) : host.stop(this.ownerSession(id)),
       resumeQueue: (id: string) => host.resumeQueue?.(this.ownerSession(id)) ?? false,
+      beforeContinue: (id: string) => host.beforeContinue?.(this.ownerSession(id)) ?? Promise.resolve(),
       notifyReady: (id: string, task: OrchestrationTask) =>
         host.notifyReady?.(this.ownerSession(id), task),
     });
@@ -444,13 +446,25 @@ export class Orchestrator {
     this.actions = result.catch(() => undefined);
     return result;
   }
+  private saveManagerWake(run: OrchestrationRun): Promise<void> {
+    const result = this.actions.catch(() => undefined).then(async () => {
+      const current = this.run(run.leadId)?.wakeState?.receipt;
+      // A queued scheduler acknowledgement cannot replace an explicit retirement.
+      if (current?.retiredEventIds?.length && run.wakeState?.receipt?.id === current.id && !run.wakeState.receipt.retiredEventIds?.length) return;
+      await this.commit(run);
+    });
+    this.actions = result.catch(() => undefined);
+    return result;
+  }
   retireDecisionDigest(leadId: string, receiptId: string, retiredEventIds: readonly string[]): Promise<void> {
     const result = this.actions.catch(() => undefined).then(async () => {
       const run = this.run(leadId), receipt = run?.wakeState?.receipt;
       if (!run?.wakeState || !receipt || receipt.id !== receiptId) throw Error("The retained Manager digest changed");
       if (!retiredEventIds.length || retiredEventIds.some(id => !isMonoDecisionEventId(id) || !receipt.eventIds.includes(id)))
         throw Error("Only retained stale decision events may retire a Manager digest");
-      await this.commit({ ...run, wakeState: { ...run.wakeState, delivery: undefined,
+      await this.commit({ ...run, tasks: run.tasks.map(task => run.wakeState!.events.some(event => receipt.eventIds.includes(event.id) &&
+        !retiredEventIds.includes(event.id) && event.id.startsWith("report:") && event.taskId === task.id && event.dispatchId === task.lastDispatchId)
+        ? { ...task, delivered: false } : task), wakeState: { ...run.wakeState, delivery: undefined,
         receipt: { ...receipt, retiredEventIds: [...retiredEventIds], moreEvents: receipt.eventIds.some(id => !retiredEventIds.includes(id)), acknowledgedAt: receipt.acknowledgedAt ?? Date.now() },
         events: run.wakeState.events.map(event => !receipt.eventIds.includes(event.id) ? event : retiredEventIds.includes(event.id)
           ? { ...event, acknowledgedAt: event.acknowledgedAt ?? Date.now() } : { ...event, acknowledgedAt: undefined }) } });
@@ -1179,6 +1193,7 @@ export class Orchestrator {
   async continueManager(id: string) {
     const run = this.run(id);
     if (!run?.projectManager || run.status !== "paused") return;
+    await this.host?.beforeContinue?.(id);
     await this.host?.probeProviders?.();
     await this.start(
       id,

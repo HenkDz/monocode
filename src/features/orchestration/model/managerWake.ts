@@ -296,9 +296,11 @@ export class ManagerWakeScheduler {
       run = this.host.run(id);
       const receipt = run?.wakeState?.receipt;
       if (!run || run.status !== "active" || run.managerTurnId || !receipt || !canAcceptManagerWake(this.host.session(id))) return;
-      if (!await this.host.accept(id, receipt)) throw Error("Manager conversation could not accept the digest");
+      const accepted = await this.host.accept(id, receipt);
       const latest = this.host.run(id);
       if (!latest?.wakeState) return;
+      if (latest.wakeState.receipt?.id !== receipt.id || latest.wakeState.receipt.retiredEventIds?.length) return;
+      if (!accepted) throw Error("Manager conversation could not accept the digest");
       await this.host.save({ ...latest, continuations: latest.continuations + 1,
         wakeState: acknowledgeManagerWake(latest.wakeState, receipt.id, Date.now()),
         tasks: latest.tasks.map(task => latest.wakeState!.events.some(event => event.id.startsWith("report:") && event.taskId === task.id &&

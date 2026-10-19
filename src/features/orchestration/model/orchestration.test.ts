@@ -16,7 +16,7 @@ import { normalizeOrchestrationRun } from "./orchestrationState";
 import { previewFromToolPart } from "../../../integrations/harness/providers/opencode/opencodeProtocol";
 import type { Artifact, OrgArtifactPurpose } from "../../artifacts/artifacts";
 import type { OrchestrationTask } from "./orchestrationState";
-import { addManagerWakeEvent, prepareManagerWake } from "./managerWake";
+import { addManagerWakeEvent, prepareManagerWake, acknowledgeManagerWake } from "./managerWake";
 
 it("includes GitHub quota guidance in every worker assignment", () => {
   const prompt = workerTurnPrompt("Inspect the PR", ["src"]);
@@ -155,6 +155,29 @@ it("retires only stale decision membership and durably reopens unrelated coalesc
   expect(reloaded.run("lead")!.wakeState).toEqual(saved.wakeState);
   const next = prepareManagerWake(saved, Date.now() + 1000)!.receipt!;
   expect(next.eventIds).toEqual(["ordinary-report"]);
+  expect(f.host.submit).not.toHaveBeenCalled();
+});
+
+it.each(["retire-first", "ack-first"])("serializes scheduler acknowledgement and digest retirement without losing the unrelated report (%s)", async order => {
+  const f = setup(); await f.start();
+  let run = { ...f.manager.run("lead")!, projectManager: true, tasks: [{ id: "finished-task", sessionId: "finished-worker", title: "Finished", harness: "codex" as const, model: "codex:test",
+    prompt: "Existing task", files: [], scopes: [], dependsOn: [], status: "completed" as const, accepted: true, result: "Preserve report", delivered: false, lastDispatchId: "finished" }] };
+  run = { ...run, wakeState: addManagerWakeEvent(run.wakeState, { id: "decision:stale:0:question:1", kind: "question", at: 1, text: "Stale question" }) };
+  run = { ...run, wakeState: addManagerWakeEvent(run.wakeState, { id: "report:finished", taskId: "finished-task", dispatchId: "finished", kind: "report", at: 2, text: "Unrelated retained report" }) };
+  run = { ...run, wakeState: prepareManagerWake(run, Date.now() + 1000) };
+  const receipt = run.wakeState!.receipt!; f.saved.set("lead", run);
+  const restored = new Orchestrator(f.store); restored.bind(f.host); await restored.hydrate("lead");
+  const staleAck = { ...run, continuations: run.continuations + 1, tasks: run.tasks.map(task => ({ ...task, delivered: true })),
+    wakeState: acknowledgeManagerWake(run.wakeState!, receipt.id, Date.now()) };
+  const retire = () => restored.retireDecisionDigest("lead", receipt.id, ["decision:stale:0:question:1"]);
+  const ack = () => (restored as unknown as { saveManagerWake(run: OrchestrationRun): Promise<void> }).saveManagerWake(staleAck);
+  await Promise.all(order === "retire-first" ? [retire(), ack()] : [ack(), retire()]);
+  const saved = f.saved.get("lead")!;
+  expect(saved.wakeState!.receipt!.retiredEventIds).toEqual(["decision:stale:0:question:1"]);
+  expect(saved.wakeState!.events.find(event => event.id === "report:finished")!.acknowledgedAt).toBeUndefined();
+  expect(saved.tasks[0].delivered).toBe(false);
+  const reloaded = new Orchestrator(f.store); await reloaded.hydrate("lead");
+  expect(prepareManagerWake(reloaded.run("lead")!, Date.now() + 1000).receipt!.eventIds).toEqual(["report:finished"]);
   expect(f.host.submit).not.toHaveBeenCalled();
 });
 

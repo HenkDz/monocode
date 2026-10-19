@@ -323,12 +323,15 @@ it("preserves corrupt present history outside authority and keeps unrelated goal
   expect(f.ledger.goals("manager")).toEqual(raw.goals);
   expect(f.ledger.decisions("manager")).toEqual([]);
   const evidence = f.ledger.decisionQuarantine("manager");
-  expect(f.ledger.autonomy("manager", "/project")).toBe("high-impact-only");
+    expect(f.ledger.autonomy("manager", "/project")).toBe("everything");
+    expect(f.ledger.autonomyUncertain("manager", "/project")).toBe(true);
   await f.ledger.recoverDecisions("manager", f.host);
   await expect(f.ledger.handleDecision("manager", "reuse-corrupt-id", { action: "ingest", goalId: "goal", message: f.message }, f.host)).rejects.toThrow("new decision ID");
   f.message.id = "worker-session:re-raised";
   await f.ledger.handleDecision("manager", "re-raised", { action: "ingest", goalId: "goal", message: f.message }, f.host);
-  await f.act("manager", "resolve", { optionId: "reuse" });
+    await expect(f.act("manager", "resolve", { optionId: "reuse" })).rejects.toThrow("required authority");
+    await f.act("manager", "escalate"); await f.act("boss", "escalate");
+    await f.act("user", "resolve", { optionId: "reuse" });
   expect(f.ledger.decisions("manager")[0]).toMatchObject({ id: "worker-session:re-raised", status: "decided" });
   expect(f.ledger.decisionQuarantine("manager")).toEqual(evidence);
   await f.ledger.retireManagerRequests("engine");
@@ -350,6 +353,33 @@ it("validates pending delivery envelopes on reload", async () => {
   expect(f.ledger.decisionHistoryState("manager")).toBe("ready");
   expect(JSON.parse(f.ledger.decisionQuarantine("manager")[0].raw).receipts).toEqual({ ingest: raw.receipts.ingest.decision });
   expect(f.saved.get("manager")!.receipts.ingest.decision).toBeUndefined();
+});
+
+it.each(["everything", "medium-and-up", "high-impact-only"] as const)("preserves readable %s autonomy when unrelated history is quarantined", async value => {
+  const f = fixture(); await f.ingest();
+  const saved = f.saved.get("manager")!;
+  saved.autonomy = { "/project": value };
+  saved.decisions![0].impact = "corrupt" as never;
+  await f.reload();
+  expect(f.ledger.autonomy("manager", "/project")).toBe(value);
+  expect(f.ledger.autonomyUncertain("manager", "/project")).toBe(false);
+  expect(f.saved.get("manager")!.autonomy).toEqual({ "/project": value });
+});
+
+it("fails strict for uncertain quarantined policy until an explicit user choice survives reload", async () => {
+  const f = fixture(); await f.ingest();
+  f.saved.get("manager")!.autonomy = { "/project": "corrupt" as never, "/other": "medium-and-up" };
+  await f.reload();
+  expect(f.ledger.autonomy("manager", "/project")).toBe("everything");
+  expect(f.ledger.autonomyUncertain("manager", "/project")).toBe(true);
+  expect(f.ledger.autonomy("manager", "/other")).toBe("medium-and-up");
+  const raw = f.ledger.decisionQuarantine("manager");
+  f.host.actor = { kind: "user" };
+  await f.ledger.handleDecision("manager", "choose-policy-again", { action: "autonomy", projectId: "/project", value: "high-impact-only" }, f.host);
+  await f.reload();
+  expect(f.ledger.autonomy("manager", "/project")).toBe("high-impact-only");
+  expect(f.ledger.autonomyUncertain("manager", "/project")).toBe(false);
+  expect(f.ledger.decisionQuarantine("manager")).toEqual(raw);
 });
 
 it("changes autonomy from a live Manager roster with no goal, run or sessions", async () => {

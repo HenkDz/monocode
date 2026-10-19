@@ -3,6 +3,7 @@ import type { MonoDecision, DecisionDelivery, DecisionHost } from "./monoDecisio
 import { assertDecisionCurrent, retainedDecisionDelivery, StaleDecision, isMonoDecisionEventId } from "./monoDecisions";
 import type { QueuedMessage, Session } from "../../sessions/model/session";
 import type { OrchestrationRun } from "../../orchestration/model/orchestrationState";
+import type { ManagerWakeReceipt } from "../../orchestration/model/managerWake";
 
 /** Native session IDs cannot contain the CC5D event ID's colons. */
 export async function decisionQueueId(eventId: string): Promise<string> {
@@ -81,6 +82,24 @@ export async function assertDecisionQueueConsumer(message: QueuedMessage, recipi
 }
 
 /** Coalesced Manager receipts retain their exact source events; never turn a digest into a new grant. */
+export function staleDecisionDigestEvents(run: OrchestrationRun, receipt: ManagerWakeReceipt,
+  readDecisions: () => MonoDecision[], host: DecisionHost): string[] {
+  const retired: string[] = [];
+  for (const id of receipt.eventIds.filter(isMonoDecisionEventId)) {
+    const event = run.wakeState?.events.find(event => event.id === id);
+    if (!event) throw Error("Manager digest source decision event is unavailable");
+    const decision = readDecisions().find(decision => id.startsWith(`decision:${decision.id}:`));
+    const expected = decision && retainedDecisionDelivery(decision, id);
+    if (!decision || !expected) { retired.push(id); continue; }
+    if (expected.recipientId !== run.ownerMonoId) throw Error("Manager digest source recipient changed");
+    const { acknowledgedAt: _acknowledgedAt, ...source } = event;
+    if (JSON.stringify(source) !== JSON.stringify(expected.event)) throw Error("Manager digest source decision payload changed");
+    try { assertDecisionCurrent(decision, host); }
+    catch (error) { if (!(error instanceof StaleDecision)) throw error; retired.push(id); }
+  }
+  return retired;
+}
+
 export function assertDecisionDigestConsumer(message: QueuedMessage, readRun: () => OrchestrationRun | undefined,
   readDecisions: () => MonoDecision[], host: DecisionHost): () => void {
   const validate = () => {
@@ -88,16 +107,8 @@ export function assertDecisionDigestConsumer(message: QueuedMessage, readRun: ()
     if (!run || run.status !== "active" || !message.managerWake || ![run.leadId, run.ownerSessionId].includes(message.managerWake.leadId) ||
         !receipt || receipt.id !== message.managerWake.receiptId || message.id !== receipt.id || message.appRequestId !== receipt.id || message.text !== receipt.body)
       throw Error("Manager digest identity changed; evidence retained");
-    for (const id of receipt.eventIds.filter(isMonoDecisionEventId)) {
-      const decision = readDecisions().find(decision => id.startsWith(`decision:${decision.id}:`));
-      const expected = decision && retainedDecisionDelivery(decision, id);
-      const event = run.wakeState!.events.find(event => event.id === id);
-      if (!decision || !expected || !event || expected.recipientId !== run.ownerMonoId || decision.deliveryState !== "current")
-        throw new StaleDecision("Manager digest decision evidence is stale or unavailable");
-      const { acknowledgedAt: _acknowledgedAt, ...source } = event;
-      if (JSON.stringify(source) !== JSON.stringify(expected.event)) throw Error("Manager digest source decision payload changed");
-      assertDecisionCurrent(decision, host);
-    }
+    if (staleDecisionDigestEvents(run, receipt, readDecisions, host).length)
+      throw new StaleDecision("Manager digest decision evidence is stale or unavailable");
   };
   validate();
   return validate;

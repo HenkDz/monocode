@@ -18,6 +18,9 @@ export function decisionAppSource() {
   const team = find(node => ts.isIfStatement(node) && node.expression.getText(ast).startsWith('source && (payload.action === "team.message"'));
   const consumer = find(node => ts.isArrowFunction(node) && ts.isBlock(node.body) && node.body.statements[0]?.getText(ast) === "scheduled.delete(session.id);");
   const accept = find(node => ts.isPropertyAssignment(node) && node.name.getText(ast) === "acceptManagerDigest");
+  const beforeContinue = find(node => ts.isPropertyAssignment(node) && node.name.getText(ast) === "beforeContinue") as ts.PropertyAssignment;
+  const goalForward = find(node => ts.isPropertyAssignment(node) && node.name.getText(ast) === "onSubmitGoal") as ts.PropertyAssignment;
+  const mission = find(node => ts.isArrowFunction(node) && node.body.getText(ast).includes("return submission ? submitMonoGoalRef.current(session.id, text, [], submission)"));
   const stop = find(node => ts.isVariableDeclaration(node) && node.name.getText(ast) === "onStop") as ts.VariableDeclaration;
   const send = find(node => ts.isVariableDeclaration(node) && node.name.getText(ast) === "onSubmit") as ts.VariableDeclaration;
   const resume = find(node => ts.isVariableDeclaration(node) && node.name.getText(ast) === "onResumeQueue") as ts.VariableDeclaration;
@@ -31,6 +34,9 @@ export function decisionAppSource() {
     host: compile(`${host.getText(ast)};`), team: compile(team.getText(ast)),
     consumer: compile(`return ${consumer.getText(ast)};`),
     accept: compile(`return ${(accept as ts.PropertyAssignment).initializer.getText(ast)};`),
+    beforeContinue: compile(`return ${beforeContinue.initializer.getText(ast)};`),
+    goalForward: compile(`return ${goalForward.initializer.getText(ast)};`),
+    mission: compile(`return ${mission.getText(ast)};`),
     stop: compile(`return ${(stop.initializer as ts.CallExpression).arguments[0].getText(ast)};`),
     send: compile(`return ${(send.initializer as ts.CallExpression).arguments[0].getText(ast)};`),
     resume: compile(`return ${(resume.initializer as ts.CallExpression).arguments[0].getText(ast)};`),

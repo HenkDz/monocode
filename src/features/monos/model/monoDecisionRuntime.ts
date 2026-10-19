@@ -3,7 +3,7 @@ import type { Session } from "../../sessions/model/session";
 import type { OrchestrationRun } from "../../orchestration/model/orchestrationState";
 import type { Mono } from "./mono";
 import type { MonoManagerGoals } from "./monoManagerGoals";
-import { parseDecisionPayload, parseDecisionAction, type DecisionCommand, type DecisionDelivery, type DecisionHost, type DecisionSnapshot, type MonoDecision } from "./monoDecisions";
+import { parseDecisionPayload, parseDecisionAction, DecisionDeliveryPending, type DecisionCommand, type DecisionDelivery, type DecisionHost, type DecisionSnapshot, type MonoDecision } from "./monoDecisions";
 import type { CrewMessage } from "./monoCrewEvents";
 import { assertManagerDelivery, isManagerUserRequest, managerReportTasks, managerRequestBinding, managerRequestBindingCurrent } from "./managerAuthorizedWork";
 
@@ -56,9 +56,10 @@ function originalSnapshot(managerId: string, requesterId: string, goalId: string
   const task = run.tasks.find(task => task.sessionId === requesterSession.id && task.memberId === requester?.id);
   const dispatch = run.dispatches?.find(dispatch => dispatch.id === task?.activeDispatchId && dispatch.taskId === task.id);
   // Retained request/dispatch generations survive reload; provider-turn counters do not.
-  const generation = requester?.role === "member" ? dispatch?.startedAt : goal.createdAt;
+  const generation = requester?.role === "member" ? dispatch?.startedAt ?? decision?.identity.generation : goal.createdAt;
   if (generation === undefined) throw Error("Original decision generation is unavailable");
-  return { roster, goal, run, requestSession, requesterSession, generation, cancelling: host.ledger.isCancelling(goal.id) };
+  return { roster, goal, run, requestSession, requesterSession, generation, cancelling: host.ledger.isCancelling(goal.id) ||
+    host.ledger.isDecisionSessionRetiring(requestSession.id) || host.ledger.isDecisionSessionRetiring(requesterSession.id) };
 }
 
 export function runtimeDecisionHost(managerId: string, actor: DecisionHost["actor"], requesterId: string, goalId: string | undefined, host: DecisionRuntimeHost, validateActor = () => {}): DecisionHost {
@@ -120,8 +121,16 @@ export async function handleDecisionTeamMessage(sourceSessionId: string, request
     if (candidates.length !== 1 || !candidates[0].run.ownerMonoId) throw Error("Decision needs one unambiguous original goal context");
     const { run, goal } = candidates[0];
     message.at = host.ledger.decisions(run.ownerMonoId!).find(decision => decision.id === message.id)?.source.at ?? message.at;
-    return host.ledger.handleDecision(run.ownerMonoId!, requestId, { action: "ingest", goalId: goal.id, message },
-      runtimeDecisionHost(run.ownerMonoId!, { kind: "mono", id: actor.id }, actor.id, goal.id, host, validateActor));
+    try {
+      return await host.ledger.handleDecision(run.ownerMonoId!, requestId, { action: "ingest", goalId: goal.id, message },
+        runtimeDecisionHost(run.ownerMonoId!, { kind: "mono", id: actor.id }, actor.id, goal.id, host, validateActor));
+    } catch (error) {
+      if (!(error instanceof DecisionDeliveryPending)) throw error;
+      validateActor();
+      const decision = host.ledger.decisions(run.ownerMonoId!).find(decision => decision.id === message.id);
+      if (!decision) throw error;
+      return { decisionId: decision.id, resolutionVersion: decision.resolutionVersion, status: decision.status, delivery: "pending" };
+    }
   }
   const command = parseDecisionAction(raw);
   const retained = host.roster().filter(mono => mono.role === "manager").flatMap(manager => host.ledger.decisions(manager.id)
@@ -130,7 +139,7 @@ export async function handleDecisionTeamMessage(sourceSessionId: string, request
   const { managerId, decision } = retained[0];
   if (message.managerId !== managerId || !decision.escalationChain.some(entry => entry.id === actor.id) ||
       !decision.escalationChain.some(entry => entry.id === message.recipientId)) throw Error("Decision action is outside its actual chain");
-  await host.ledger.recoverDecisions(managerId, runtimeDecisionHost(managerId, { kind: "mono", id: actor.id }, decision.requestingMonoId, decision.identity.goalId, host, validateActor));
+  await host.ledger.recoverDecisions(managerId, runtimeDecisionHost(managerId, { kind: "mono", id: actor.id }, decision.requestingMonoId, decision.identity.goalId, host, validateActor), command.decisionId);
   validateActor();
   return host.ledger.handleDecision(managerId, requestId, command,
     runtimeDecisionHost(managerId, { kind: "mono", id: actor.id }, decision.requestingMonoId, decision.identity.goalId, host, validateActor));

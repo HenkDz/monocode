@@ -113,14 +113,15 @@ export function Decisions({ view, roster, actions, unavailable = false, presenta
   </section>;
 }
 
-export function ProjectAutonomyControl({ managerId, projectId, value, actions, disabled = false }: {
-  managerId: string; projectId: string; value: ProjectAutonomy; actions: DecisionUiActions; disabled?: boolean;
+export function ProjectAutonomyControl({ managerId, projectId, value, actions, disabled = false, uncertain = false }: {
+  managerId: string; projectId: string; value: ProjectAutonomy; actions: DecisionUiActions; disabled?: boolean; uncertain?: boolean;
 }) {
   const { busy, notice, run } = useDecisionAction();
   return <div className="decision-autonomy" data-decision-ui><span>Ask me for</span><div role="group" aria-label="Project decision autonomy">
     {([["high-impact-only", "High-impact only"], ["medium-and-up", "Medium & up"], ["everything", "Everything"]] as const).map(([policy, label]) =>
       <button type="button" key={policy} disabled={disabled || busy} aria-pressed={value === policy} onClick={event => run(`${managerId}:${projectId}:${value}:${policy}`,
         requestId => actions.command(event.nativeEvent, managerId, requestId, { action: "autonomy", projectId, value: policy }))}>{label}</button>)}</div>
+    {uncertain && <p>Autonomy setting is uncertain. Asking you for everything until you choose again.</p>}
     <p>Merge, installs, sign-ins and protected operations still need your explicit approval.</p>
     {notice && <p role={notice.error ? "alert" : "status"}>{notice.text}</p>}
   </div>;

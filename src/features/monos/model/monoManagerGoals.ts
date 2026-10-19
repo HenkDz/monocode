@@ -157,6 +157,7 @@ export class MonoManagerGoals {
   private tail: Promise<unknown> = Promise.resolve();
   private listeners = new Set<() => void>();
   private revision = 0;
+  private retiringDecisionSessions = new Map<string, number>();
   constructor(private storage: Store = store) {}
   snapshot = () => this.revision;
   subscribe = (fn: () => void) => {
@@ -227,7 +228,12 @@ export class MonoManagerGoals {
     return this.ledgers.get(id)?.decisionsPruned ?? 0;
   }
   autonomy(id: string, projectId: string): ProjectAutonomy {
-    return decisionProjectAutonomy(this.ledgers.get(id)?.autonomy, projectId);
+    const ledger = this.ledgers.get(id);
+    return decisionProjectAutonomy(ledger?.autonomy, projectId, !!ledger?.decisionQuarantine?.length);
+  }
+  autonomyUncertain(id: string, projectId: string): boolean {
+    const ledger = this.ledgers.get(id);
+    return !!ledger?.decisionQuarantine?.length && !Object.keys(ledger.autonomy ?? {}).some(project => pathKey(project) === pathKey(projectId));
   }
   autonomyConflicts(id: string): string[] {
     const copies = new Map<string, Set<ProjectAutonomy>>();
@@ -259,26 +265,36 @@ export class MonoManagerGoals {
       });
     });
   }
-  recoverDecisions(id: string, host: DecisionHost) {
+  recoverDecisions(id: string, host: DecisionHost, decisionId?: string) {
     return this.serial(async () => {
       const ledger = await this.load(id);
+      const failures: { requestId: string; error: unknown }[] = [];
       for (const [requestId, receipt] of Object.entries(ledger.receipts)) {
-        if (receipt.decision?.remaining.length) await recoverDecisionReceipt(id, requestId, host, {
-          read: () => this.ledgers.get(id)!, save: (owner, value) => this.save(owner, value),
-        });
+        if (receipt.decision?.remaining.length && (!decisionId || receipt.decision.decisionId === decisionId)) {
+          try { await recoverDecisionReceipt(id, requestId, host, {
+            read: () => this.ledgers.get(id)!, save: (owner, value) => this.save(owner, value),
+          }); } catch (error) { failures.push({ requestId, error }); }
+        }
       }
+      if (decisionId && failures.length) throw failures[0].error;
+      return failures;
     });
   }
-  retireDecisionSession(sessionId: string) {
+  isDecisionSessionRetiring(sessionId: string): boolean { return this.retiringDecisionSessions.has(sessionId); }
+  holdDecisionSessionRetirement(sessionId: string, through: number): void { this.retiringDecisionSessions.set(sessionId, through); }
+  retireDecisionSession(sessionId: string, ownerIds: readonly string[] = [], through = Date.now()) {
+    this.retiringDecisionSessions.set(sessionId, through);
     return this.serial(async () => {
+      for (const id of ownerIds) await this.load(id);
       for (const [id, ledger] of this.ledgers) {
-        const retired = new Set((ledger.decisions ?? []).filter(decision => decision.deliveryState === "current" &&
+        const retired = new Set((ledger.decisions ?? []).filter(decision => decision.deliveryState === "current" && decision.createdAt <= through &&
           [decision.identity.requestSessionId, decision.identity.requesterSessionId].includes(sessionId)).map(decision => decision.id));
         if (!retired.size) continue;
         await this.save(id, { ...ledger, decisions: ledger.decisions!.map(decision => retired.has(decision.id) ? { ...decision, deliveryState: "stale" } : decision),
           receipts: Object.fromEntries(Object.entries(ledger.receipts).map(([key, receipt]) => [key, receipt.decision && retired.has(receipt.decision.decisionId)
             ? { ...receipt, decision: { ...receipt.decision, remaining: [] } } : receipt])) });
       }
+      if (this.retiringDecisionSessions.get(sessionId) === through) this.retiringDecisionSessions.delete(sessionId);
     });
   }
   retireDecisionEvidence(id: string, decisionId: string, expectedVersion: number) {

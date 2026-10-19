@@ -9,9 +9,9 @@ import { selectDecisionView } from "../../src/features/commandCenter/model/decis
 import { MonoManagerGoals } from "../../src/features/monos/model/monoManagerGoals";
 import { type Mono, listMonos, findMono, monoForSession, isMonoSession } from "../../src/features/monos/model/mono";
 import { type DecisionRuntimeHost, handleDecisionTeamMessage, runtimeDecisionHost, executeDecisionUi, reraiseUnreadableDecision } from "../../src/features/monos/model/monoDecisionRuntime";
-import { retainedDecisionDelivery, StaleDecision, assertDecisionCurrent, isMonoDecisionEventId } from "../../src/features/monos/model/monoDecisions";
+import { retainedDecisionDelivery, StaleDecision, assertDecisionCurrent, isMonoDecisionEventId, decisionStopAt, isDecisionStopMarker, DecisionDeliveryPending } from "../../src/features/monos/model/monoDecisions";
 import { managerRequestBinding, managerRequestBindingCurrent } from "../../src/features/monos/model/managerAuthorizedWork";
-import { assertDecisionDigestConsumer, assertDecisionQueueConsumer, queueDecisionEvidence, decisionQueueId, decisionEvidenceText } from "../../src/features/monos/model/monoDecisionDelivery";
+import { assertDecisionDigestConsumer, staleDecisionDigestEvents, assertDecisionQueueConsumer, queueDecisionEvidence, decisionQueueId, decisionEvidenceText } from "../../src/features/monos/model/monoDecisionDelivery";
 import { teamMessageKind, teamMessageRequiresReply } from "../../src/features/monos/model/monoCrewEvents";
 import { teamMessageRoute } from "../../src/features/monos/model/monoOrg";
 import { acceptManagerWakeQueue, acknowledgeManagerWake, addManagerWakeEvent, prepareManagerWake } from "../../src/features/orchestration/model/managerWake";
@@ -77,7 +77,7 @@ const scope = { decisionRuntime, monoManagerGoals: ledger, listMonos, findMono, 
   turnGen, decisionOriginalBlocks: { current: new Map() }, setDecisionUnavailable: () => {}, habitRunMono: () => undefined,
   orchestrator: engine, invoke, writeSession, readPersistedSession, managerRequestBinding, managerRequestBindingCurrent,
   queueDecisionEvidence, retainedDecisionDelivery, decisionQueueId, decisionEvidenceText, isMonoSession,
-  runtimeDecisionHost, assertDecisionDigestConsumer, assertDecisionQueueConsumer, StaleDecision, assertDecisionCurrent, isMonoDecisionEventId, dequeueQueuedMessage,
+  runtimeDecisionHost, assertDecisionDigestConsumer, staleDecisionDigestEvents, assertDecisionQueueConsumer, StaleDecision, assertDecisionCurrent, isMonoDecisionEventId, decisionStopAt, isDecisionStopMarker, DecisionDeliveryPending, dequeueQueuedMessage, queuedHead,
   getMonoGoalRecoveryBlocks: async (id: string) => (disk[id] as Session | undefined)?.blocks ?? [],
   acceptManagerWakeQueue, flushSync: (fn: () => void) => fn(),
 };
@@ -161,7 +161,7 @@ function Fixture() {
       evaluate<() => () => void>(source.recovery, scope)();
     })}>Flush retained delivery</button>
     <output role="status">{notice}</output>
-    <ProjectAutonomyControl managerId="manager" projectId="c:/PROJECT/" value={ledger.autonomy("manager", "C:/Project")} actions={actions} />
+    <ProjectAutonomyControl managerId="manager" projectId="c:/PROJECT/" value={ledger.autonomy("manager", "C:/Project")} uncertain={ledger.autonomyUncertain("manager", "C:/Project")} actions={actions} />
     <aside aria-label="Decision notifications">{notifications.map(item => <p key={item.id} data-event-id={item.id}>{item.question}</p>)}</aside>
     <Decisions view={view} roster={roster} actions={actions} />
   </main>;

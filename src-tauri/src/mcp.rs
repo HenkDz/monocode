@@ -224,14 +224,18 @@ pub fn inspect_project_mcp(project: String) -> Result<ProjectMcpPin, String> {
 
 #[cfg(windows)]
 fn project_mcp_inspect(project: &Path) -> Result<(ProjectMcpPin, Vec<std::fs::File>), String> {
+    project_mcp_inspect_executable(project, &std::env::current_exe().map_err(|e| e.to_string())?)
+}
+
+#[cfg(windows)]
+fn project_mcp_inspect_executable(project: &Path, exe: &Path) -> Result<(ProjectMcpPin, Vec<std::fs::File>), String> {
     use std::io::Read;
     use sha2::{Digest, Sha256};
     let mut guards = Vec::new();
     project_mcp_pin_root(project, &mut guards)?;
     let project_identity = project_mcp_file_id(guards.last().ok_or("Missing project pin")?)?;
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     project_mcp_pin_root(exe.parent().ok_or("Missing executable directory")?, &mut guards)?;
-    let mut executable = project_mcp_pin(&exe, false)?;
+    let mut executable = project_mcp_pin(exe, false)?;
     if executable.metadata().map_err(|e| e.to_string())?.len() > 256 * 1024 * 1024 { return Err("Executable exceeds MCP pin bound".into()); }
     let mut hash = Sha256::new();
     let mut buffer = [0u8; 65_536];
@@ -320,6 +324,12 @@ fn project_mcp_exchange(child: &mut std::process::Child,
 
 #[cfg(windows)]
 fn project_mcp_execute(request: ProjectMcpRead, cancel: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Result<Value, String> {
+    project_mcp_execute_executable(request, cancel, &std::env::current_exe().map_err(|e| e.to_string())?, |_| {})
+}
+
+#[cfg(windows)]
+fn project_mcp_execute_executable(request: ProjectMcpRead, cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    executable: &Path, on_spawn: impl FnOnce(&std::process::Child)) -> Result<Value, String> {
     use std::io::{BufReader, Write};
     use std::os::windows::process::CommandExt;
     use std::process::{Command, Stdio};
@@ -327,11 +337,11 @@ fn project_mcp_execute(request: ProjectMcpRead, cancel: std::sync::Arc<std::sync
     project_mcp_path(&request.path)?;
     let now = project_mcp_now()?;
     if request.deadline <= now || request.deadline - now > 30_000 { return Err("MCP deadline must be within thirty seconds".into()); }
-    let (actual_pin, _guards) = project_mcp_inspect(Path::new(&request.project))?;
+    let (actual_pin, _guards) = project_mcp_inspect_executable(Path::new(&request.project), executable)?;
     if request.pin != actual_pin { return Err("MCP executable, schema or project identity changed; approve the new pin".into()); }
     if cancel.load(std::sync::atomic::Ordering::SeqCst) { return Err("MCP operation cancelled before launch".into()); }
     if project_mcp_now()? >= request.deadline { return Err("MCP operation deadline expired before launch".into()); }
-    let mut command = Command::new(std::env::current_exe().map_err(|e| e.to_string())?);
+    let mut command = Command::new(executable);
     command.args(["mcp-project-read", "--project", &request.project, "--identity", &request.pin.project_identity, "--path", &request.path, "--deadline", &request.deadline.to_string()])
         .env_clear().current_dir(&request.project).creation_flags(0x08000000)
         .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
@@ -346,6 +356,7 @@ fn project_mcp_execute(request: ProjectMcpRead, cancel: std::sync::Arc<std::sync
         }
     }
     let mut owned = OwnedChild { child: command.spawn().map_err(|e| e.to_string())?, reader: None, receiver: None };
+    on_spawn(&owned.child);
     let stdout = owned.child.stdout.take().ok_or("MCP child stdout missing")?;
     let (sender, receiver) = std::sync::mpsc::sync_channel(1);
     owned.reader = Some(std::thread::Builder::new().name("monocode-project-mcp-output".into()).spawn(move || {
@@ -1107,6 +1118,45 @@ fn strip_jsonc(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    fn compiled_parent_proof(cancel_after_spawn: bool) {
+        use std::os::windows::io::{AsHandle, AsRawHandle, OwnedHandle};
+        use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
+        let executable = PathBuf::from(std::env::var_os("MONOCODE_PROJECT_MCP_TEST_EXE").expect("Build the current CLI and explicitly set MONOCODE_PROJECT_MCP_TEST_EXE"));
+        let test_executable = std::env::current_exe().unwrap();
+        let expected = test_executable.parent().unwrap().parent().unwrap().join("monocode-cli.exe");
+        assert_eq!(std::fs::canonicalize(&executable).unwrap(), std::fs::canonicalize(expected).unwrap(), "Only this target's compiled CLI is allowed");
+        let root = std::env::temp_dir().join(format!("monocode-project-mcp-parent-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("readme.txt"), b"synthetic parent project read").unwrap();
+        let pin = project_mcp_inspect_executable(&root, &executable).unwrap().0;
+        let cancel = Arc::new(AtomicBool::new(false));
+        let observed: Mutex<Option<OwnedHandle>> = Mutex::new(None);
+        let result = project_mcp_execute_executable(ProjectMcpRead { operation_id: uuid::Uuid::new_v4().to_string(),
+            project: root.to_string_lossy().into(), path: "readme.txt".into(), deadline: project_mcp_now().unwrap() + 30_000, pin }, cancel.clone(), &executable, |child| {
+                *observed.lock().unwrap() = Some(child.as_handle().try_clone_to_owned().unwrap());
+                eprintln!("Owned compiled MCP child {} launched; cancel_after_spawn={cancel_after_spawn}", child.id());
+                if cancel_after_spawn { cancel.store(true, Ordering::SeqCst); }
+            });
+        if cancel_after_spawn { assert!(result.unwrap_err().contains("cancelled")); }
+        else { assert_eq!(result.unwrap()["content"][0]["text"], "synthetic parent project read"); }
+        let handle = observed.lock().unwrap().take().expect("An actual owned child must have started");
+        assert_eq!(unsafe { windows_sys::Win32::System::Threading::WaitForSingleObject(handle.as_raw_handle() as _, 0) }, windows_sys::Win32::Foundation::WAIT_OBJECT_0, "Owned child must be positively exited after native return");
+        eprintln!("Owned compiled MCP child positively exited; native parent returned");
+        drop(handle);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires a separately built current CLI; run the explicit compiled-parent gate"]
+    fn compiled_project_mcp_parent_reads_and_reaps() { compiled_parent_proof(false); }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires a separately built current CLI; run the explicit compiled-parent gate"]
+    fn compiled_project_mcp_parent_cancels_live_child_and_reaps() { compiled_parent_proof(true); }
 
     #[test]
     fn pinned_project_mcp_refuses_secret_names_case_and_malformed_paths() {

@@ -15,8 +15,14 @@ import {
   rejectMessageSend,
 } from "../../monos/model/monoMessaging";
 import { AgentTranscript, MonoActivityTrail } from "./AgentTranscript";
-import { openTranscriptWork } from "./transcriptTestActions";
+import { openSubagentOutput, openTranscriptWork } from "./transcriptTestActions";
 import { PACED_REVEAL_KEY, WORD_FADE_MS } from "./wordFade";
+import { loadToolDetail } from "../data/sessionStore";
+
+vi.mock("../data/sessionStore", async (original) => ({
+  ...(await original<typeof import("../data/sessionStore")>()),
+  loadToolDetail: vi.fn(),
+}));
 
 vi.mock("../../../platform/tauri/clipboard", () => ({
   copyMessage: vi.fn().mockResolvedValue(undefined),
@@ -59,7 +65,7 @@ beforeEach(() => {
   resultStyles = document.createElement("style");
   resultStyles.textContent = [
     ...readFileSync("src/styles/index.css", "utf8").matchAll(
-      /\.transcript-turn(?::has\(\[data-artifact-results\]\)| > :has\(\.word-fading\) ~ \[data-launched-sessions\])[^{]*\{[^}]+\}/g,
+      /\.transcript-turn(?::has\(\[data-artifact-results\]\)|\s*>\s*\[data-history-content\]\s*>\s*:has\(\.word-fading\)\s*~\s*\[data-launched-sessions\])[^{]*\{[^}]+\}/g,
     ),
   ]
     .map((rule) => rule[0])
@@ -107,6 +113,55 @@ function settleTicker() {
   act(() => vi.advanceTimersByTime(850));
   act(() => vi.advanceTimersByTime(340));
 }
+
+it.each(["completed", "failed"])("loads omitted %s output only when its dialog opens", async (status) => {
+  vi.mocked(loadToolDetail).mockResolvedValue("Archived output in full.");
+  render([
+    { id: "user", role: "user", text: "Inspect the archive" },
+    { id: "stored", role: "tool", text: "Inspect stored", tool: { kind: "shell", status, detailOmitted: true } },
+    { id: "reply", role: "assistant", text: "Finished.", durationMs: 1000 },
+  ], { sessionId: "saved-chat" });
+  expect(loadToolDetail).not.toHaveBeenCalled();
+  openTranscriptWork(container);
+  const group = container.querySelector<HTMLButtonElement>("[data-compact-tool-group] > button")!;
+  if (group.getAttribute("aria-expanded") !== "true") act(() => group.click());
+  expect(loadToolDetail).not.toHaveBeenCalled();
+  if (status === "failed") expect(container.querySelector('[role="alert"]')).not.toBeNull();
+  const output = container.querySelector<HTMLButtonElement>('[aria-label="View full output"]')!;
+  expect(output).not.toBeNull();
+  await act(async () => output.click());
+  expect(loadToolDetail).toHaveBeenCalledOnce();
+  expect(loadToolDetail).toHaveBeenCalledWith("saved-chat", "stored", undefined);
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Archived output in full.");
+  const copy = [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find(button => button.textContent === "Copy output")!;
+  await act(async () => copy.click());
+  expect(copyMessage).toHaveBeenCalledWith("Archived output in full.");
+});
+
+it("reads an omitted nested tool using its parent run and step identity", async () => {
+  vi.mocked(loadToolDetail).mockResolvedValue("Nested archived output.");
+  render([
+    { id: "user", role: "user", text: "Review" },
+    {
+      id: "run", role: "tool", text: "Reviewer",
+      tool: { kind: "agent", status: "completed" },
+      agentRun: { name: "Reviewer", model: "saved-review-model", steps: [
+        { id: "step", kind: "tool", text: "Inspect nested", toolKind: "shell", status: "completed", detailOmitted: true },
+      ] },
+    },
+    { id: "reply", role: "assistant", text: "Review complete.", durationMs: 1000 },
+  ], { sessionId: "saved-chat" });
+  openTranscriptWork(container);
+  const reader = openSubagentOutput(container);
+  expect(reader.textContent).toContain("saved-review-model");
+  expect(loadToolDetail).not.toHaveBeenCalled();
+  const output = reader.querySelector<HTMLButtonElement>('[aria-label="View full output"]')!;
+  expect(output).not.toBeNull();
+  await act(async () => output.click());
+  expect(loadToolDetail).toHaveBeenCalledOnce();
+  expect(loadToolDetail).toHaveBeenCalledWith("saved-chat", "run", "step");
+  expect(document.body.textContent).toContain("Nested archived output.");
+});
 
 it("renders incoming team messages inline with sender identity, clamping and no user actions", () => {
   const text = "Long investigation update. ".repeat(30);
@@ -1018,6 +1073,34 @@ it("keeps interrupted Mono messages together above one working indicator", () =>
     props,
   );
   expect(container.querySelectorAll(".transcript-turn")).toHaveLength(2);
+});
+
+it("stacks the next message onto one the Mono only reacted to", () => {
+  const props = {
+    agentName: "Captain",
+    agentMascot: { mascot: "cat" as const, color: "#6ba" },
+  };
+  const blocks: Block[] = [
+    { id: "thanks", role: "user", text: "thanks :)", startedAt: 1000 },
+    { id: "reaction", role: "assistant", text: "<reaction>😊</reaction>" },
+    { id: "next", role: "user", text: "one more thing", startedAt: 2000 },
+  ];
+  render(blocks, props);
+  const stacked = container.querySelectorAll<HTMLElement>(
+    '[data-message-stack="true"]',
+  );
+  expect([...stacked].map((row) => row.dataset.promptAnchor)).toEqual([
+    "thanks",
+  ]);
+  expect(container.querySelector('[data-mono-reaction="😊"]')).not.toBeNull();
+  // It opens a turn, but sits as close as a message sent mid-turn.
+  expect(
+    container
+      .querySelector('[data-prompt-anchor="next"]')!
+      .classList.contains("pt-1"),
+  ).toBe(true);
+  render(blocks.slice(0, 2), props);
+  expect(container.querySelector('[data-message-stack="true"]')).toBeNull();
 });
 
 it("reveals follow-up answers inside work and retains them during later work", () => {

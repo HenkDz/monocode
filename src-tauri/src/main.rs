@@ -7,7 +7,5 @@ fn main() {
     if let Some(code) = monocode_lib::control_cli::maybe_run(std::env::args().skip(1).collect()) {
         std::process::exit(code);
     }
-    #[cfg(all(debug_assertions, target_os = "macos"))]
-    monocode_lib::ensure_macos_dev_bundle();
     monocode_lib::run()
 }

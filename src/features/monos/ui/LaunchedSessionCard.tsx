@@ -44,7 +44,7 @@ export function LaunchedSessionCard({
       title={view && agentLiveStateTooltip(view.state)}
       onClick={onOpen}
       disabled={!onOpen}
-      className={`flex w-fit max-w-sm min-w-0 items-center gap-2.5 rounded-xl border py-1.5 pr-1.5 pl-3 text-left font-sans transition-colors hover:border-content/20 hover:bg-content/5 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent disabled:opacity-60 ${open ? "border-content/20 bg-content/5" : "border-content/10"}`}
+      className={`flex w-fit max-w-[min(24rem,100%)] min-w-0 items-center gap-2.5 rounded-xl border py-1.5 pr-1.5 pl-3 text-left font-sans transition-colors hover:border-content/20 hover:bg-content/5 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent disabled:opacity-60 ${open ? "border-content/20 bg-content/5" : "border-content/10"}`}
     >
       {view ? (
         <AgentStatusLabel state={view.state} className="shrink-0 text-[12px]" />
@@ -55,12 +55,13 @@ export function LaunchedSessionCard({
         />
       )}
       <span className="min-w-0 truncate text-[13px] text-content">{title}</span>
+      {/* Squeezed, the title gives way first and the project after it. */}
       <span
-        className="flex shrink-0 items-center gap-1 rounded-full border border-content/10 bg-content/5 px-2 py-0.5 text-[12px] text-content/65"
+        className="flex min-w-0 max-w-[45%] shrink-0 items-center gap-1 rounded-full border border-content/10 bg-content/5 px-2 py-0.5 text-[12px] text-content/65"
         title={launch.cwd}
       >
-        <HarnessIcon harness={launch.harness} className="size-3.5" />
-        {projectName(launch.cwd)}
+        <HarnessIcon harness={launch.harness} className="size-3.5 shrink-0" />
+        <span className="min-w-0 truncate">{projectName(launch.cwd)}</span>
       </span>
     </button>
   );

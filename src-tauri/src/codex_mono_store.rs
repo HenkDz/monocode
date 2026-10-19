@@ -2404,7 +2404,7 @@ fn newer_same_account(private: &Option<String>, source: &Option<String>) -> bool
         .is_some_and(|(private, source)| private > source)
 }
 
-fn validate_thread_id(id: &str) -> Result<(), String> {
+pub(crate) fn validate_thread_id(id: &str) -> Result<(), String> {
     if id.is_empty()
         || id.len() > 128
         || !id
@@ -2587,11 +2587,44 @@ fn copy_rollouts_with_edges(
     Ok(())
 }
 
+/// Where a rollout lives in another home: `sessions/YYYY/MM/DD/<same name>`.
+pub(crate) fn rollout_dest(home: &Path, path: &Path) -> Result<PathBuf, String> {
+    let name = path
+        .file_name()
+        .ok_or("Missing Codex rollout filename")?
+        .to_string_lossy();
+    if !path.is_file()
+        || !name.starts_with("rollout-")
+        || !(name.ends_with(".jsonl") || name.ends_with(".jsonl.zst"))
+    {
+        return Err("Not a saved Codex rollout file".into());
+    }
+    let date = name
+        .get(8..18)
+        .filter(|date| {
+            date.bytes().enumerate().all(|(i, b)| {
+                if i == 4 || i == 7 {
+                    b == b'-'
+                } else {
+                    b.is_ascii_digit()
+                }
+            })
+        })
+        .ok_or("Missing Codex rollout date")?;
+    let dir = home
+        .join("sessions")
+        .join(&date[..4])
+        .join(&date[5..7])
+        .join(&date[8..10]);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir.join(path.file_name().unwrap()))
+}
+
 // Rollouts reconstruct the graph, but explicit agent closure lives only in
 // SQLite. Apply that small snapshot after private app-server initialization
 // and before it restores agent identities while resuming the root.
 #[derive(Serialize, Deserialize)]
-struct AgentEdge {
+pub(crate) struct AgentEdge {
     parent: String,
     child: String,
     status: String,
@@ -2602,7 +2635,7 @@ fn edge_snapshot_path(home: &Path, thread_id: &str) -> PathBuf {
         .join(format!("{thread_id}.json"))
 }
 
-fn state_db(home: &Path) -> Result<Option<PathBuf>, String> {
+pub(crate) fn state_db(home: &Path) -> Result<Option<PathBuf>, String> {
     let entries = match std::fs::read_dir(home) {
         Ok(entries) => entries,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -2628,7 +2661,7 @@ fn state_db(home: &Path) -> Result<Option<PathBuf>, String> {
         .map(|(_, path)| path))
 }
 
-fn closed_agent_edges(home: &Path, thread_id: &str) -> Result<Vec<AgentEdge>, String> {
+pub(crate) fn closed_agent_edges(home: &Path, thread_id: &str) -> Result<Vec<AgentEdge>, String> {
     validate_thread_id(thread_id)?;
     let Some(path) = state_db(home)? else {
         return Ok(Vec::new());
@@ -2666,6 +2699,12 @@ fn restore_agent_edges(home: &Path, thread_id: &str) -> Result<(), String> {
     };
     let edges: Vec<AgentEdge> = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
     let path = state_db(home)?.ok_or("Codex has not initialized the private Mono index")?;
+    apply_agent_edges(&path, edges)?;
+    record.ok_or("Agent state snapshot disappeared before restoration")?.cleanup(&snapshot)?;
+    Ok(())
+}
+
+pub(crate) fn apply_agent_edges(path: &Path, edges: Vec<AgentEdge>) -> Result<(), String> {
     let mut db =
         rusqlite::Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
             .map_err(|e| storage_io::context("open private Codex agent state database", &path, e.to_string()))?;
@@ -2678,18 +2717,17 @@ fn restore_agent_edges(home: &Path, thread_id: &str) -> Result<(), String> {
         tx.execute("INSERT INTO thread_spawn_edges(parent_thread_id, child_thread_id, status) VALUES (?1, ?2, ?3) ON CONFLICT(child_thread_id) DO UPDATE SET status=excluded.status WHERE parent_thread_id=excluded.parent_thread_id", rusqlite::params![edge.parent, edge.child, edge.status]).map_err(|e| e.to_string())?;
     }
     tx.commit().map_err(|e| storage_io::context("commit private agent edge restore", &path, e.to_string()))?;
-    record.ok_or("Agent state snapshot disappeared before restoration")?.cleanup(&snapshot)?;
     Ok(())
 }
 
-fn rollout_matches(path: &Path, id: &str) -> bool {
+pub(crate) fn rollout_matches(path: &Path, id: &str) -> bool {
     path.file_name().is_some_and(|name| {
         let name = name.to_string_lossy();
         name.ends_with(&format!("-{id}.jsonl")) || name.ends_with(&format!("-{id}.jsonl.zst"))
     })
 }
 
-fn find_thread(dir: &Path, id: &str) -> Result<Option<PathBuf>, String> {
+pub(crate) fn find_thread(dir: &Path, id: &str) -> Result<Option<PathBuf>, String> {
     for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
         let kind = entry.file_type().map_err(|e| e.to_string())?;
@@ -2705,7 +2743,7 @@ fn find_thread(dir: &Path, id: &str) -> Result<Option<PathBuf>, String> {
     Ok(None)
 }
 
-fn history_base(path: &Path) -> Result<Option<String>, String> {
+pub(crate) fn history_base(path: &Path) -> Result<Option<String>, String> {
     use std::io::BufRead;
     let file = storage_io::run("open resumed rollout metadata", path, || std::fs::File::open(path))?;
     let reader: Box<dyn std::io::Read> = if path.extension().is_some_and(|ext| ext == "zst") {
@@ -4569,6 +4607,30 @@ mod tests {
             &auth("one", "2026-10-08T12:00:00Z"),
             &None
         ));
+    }
+
+    #[test]
+    fn committed_agent_edges_do_not_authorize_deleting_a_replaced_snapshot() {
+        let fixture = Fixture::new();
+        prepare_files(&fixture.source(), &fixture.home()).unwrap();
+        let database = fixture.home().join("state_5.sqlite");
+        let db = rusqlite::Connection::open(&database).unwrap();
+        db.execute_batch("CREATE TABLE thread_spawn_edges(parent_thread_id TEXT NOT NULL, child_thread_id TEXT PRIMARY KEY, status TEXT NOT NULL);").unwrap();
+        let snapshot = edge_snapshot_path(&fixture.home(), "root");
+        std::fs::create_dir_all(snapshot.parent().unwrap()).unwrap();
+        let original = serde_json::to_vec(&vec![AgentEdge { parent: "root".into(), child: "child".into(), status: "closed".into() }]).unwrap();
+        std::fs::write(&snapshot, &original).unwrap();
+        let record = transactions::RecordedEntry::new(&snapshot).unwrap();
+        let edges = serde_json::from_slice(&std::fs::read(&snapshot).unwrap()).unwrap();
+        apply_agent_edges(&database, edges).unwrap();
+        let retained = snapshot.with_extension("retained");
+        std::fs::rename(&snapshot, &retained).unwrap();
+        std::fs::write(&snapshot, b"[]").unwrap();
+        assert!(record.cleanup(&snapshot).is_err());
+        assert_eq!(std::fs::read(&snapshot).unwrap(), b"[]");
+        assert_eq!(std::fs::read(&retained).unwrap(), original);
+        let status: String = db.query_row("SELECT status FROM thread_spawn_edges WHERE child_thread_id='child'", [], |row| row.get(0)).unwrap();
+        assert_eq!(status, "closed");
     }
 
     #[test]

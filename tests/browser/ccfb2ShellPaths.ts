@@ -10,7 +10,7 @@ export function ccfb2ShellExpressions() {
   let hideControls = "";
   let workspaceClass = "", workspaceInert = "", chromeOpen = "", footerOpen = "";
   const visit = (node: ts.Node) => {
-    if (ts.isVariableDeclaration(node) && ["compactTitleNavigation", "compactTitleBar", "topTitleBar"].includes(node.name.getText(ast))) {
+    if (ts.isVariableDeclaration(node) && ["compactTitleNavigation", "compactTitleBar", "topTitleBar", "titleBarSpansWindow", "titleBarInBody"].includes(node.name.getText(ast))) {
       declarations.set(node.name.getText(ast), node.initializer!.getText(ast));
     }
     if (ts.isVariableDeclaration(node) && node.name.getText(ast) === "chromeSurfaceOpen") chromeOpen = node.initializer!.getText(ast);
@@ -27,7 +27,7 @@ export function ccfb2ShellExpressions() {
         workspaceInert = inert.expression!.getText(ast);
       }
     }
-    if (ts.isJsxExpression(node) && node.expression && /^(compactTitleBar|topTitleBar) \? (workspaceTitleBar \: null|null \: workspaceTitleBar)$/.test(node.expression.getText(ast))) {
+    if (ts.isJsxExpression(node) && node.expression && /^(compactTitleBar|topTitleBar|titleBarSpansWindow|titleBarInBody) \? (workspaceTitleBar \: null|null \: workspaceTitleBar)$/.test(node.expression.getText(ast))) {
       placements.push(node.expression.getText(ast));
     }
     if (ts.isJsxAttribute(node) && node.name.getText(ast) === "hideWindowControls" && node.initializer && ts.isJsxExpression(node.initializer)) {

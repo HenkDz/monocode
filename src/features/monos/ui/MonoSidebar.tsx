@@ -4,7 +4,8 @@ import { useDragResize } from "../../../shared/hooks/useDragResize";
 import { PanelRightToggle } from "../../../shared/ui/icons";
 
 const MIN_WIDTH = 340;
-let rememberedWidth = MIN_WIDTH;
+const DEFAULT_WIDTH = MIN_WIDTH;
+let rememberedWidth = DEFAULT_WIDTH;
 let rememberedArtifactWidth = 560;
 
 /** The shared frame for a Mono's details and turn sidebars. */
@@ -46,8 +47,7 @@ export function MonoSidebar({
     initial: reader ? rememberedArtifactWidth : rememberedWidth,
     direction: "left",
     onCommit: (width) => {
-      if (reader) rememberedArtifactWidth = width;
-      else rememberedWidth = width;
+      rememberedWidth = width;
     },
   });
   useLayoutEffect(() => {
@@ -75,8 +75,6 @@ export function MonoSidebar({
       data-mono-activity={kind === "activity" ? "" : undefined}
       data-mono-prs={kind === "prs" ? "" : undefined}
       data-mono-sessions={kind === "sessions" ? "" : undefined}
-      data-mono-artifact={kind === "artifact" ? "" : undefined}
-      data-mono-changes={kind === "changes" ? "" : undefined}
       data-open={open}
       onFocusCapture={onInteract}
       onPointerDownCapture={onInteract}

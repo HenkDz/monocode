@@ -7,6 +7,7 @@ import { TranscriptPool, TranscriptPoolOutlet } from "./TranscriptPool";
 import { getMonoTranscriptPage } from "../data/sessionStore";
 import type { OrchestrationRun } from "../../orchestration/model/orchestrationState";
 import { applyHarnessEvent } from "../../../integrations/harness/core/apply";
+import { SessionStateContext, SessionStateStore } from "../model/sessionStateStore";
 
 const probes = vi.hoisted(() => ({
   composer: vi.fn(() => null),
@@ -172,6 +173,28 @@ function props(transcriptPool?: TranscriptPool): SessionPaneProps {
     onNewTerminal: noop,
   };
 }
+
+it("subscribes to its own transcript and catches up after a hidden text update", () => {
+  const pane = props();
+  const sibling = { ...pane.session, id: "sibling" };
+  const store = new SessionStateStore([pane.session, sibling]);
+  const renderPane = (visible: boolean) => act(() => root.render(
+    createElement(SessionStateContext.Provider, { value: store },
+      createElement(SessionPane, { ...pane, visible })),
+  ));
+  const update = (text: string) => ({ ...pane.session, blocks: [pane.session.blocks[0], { id: "reply", role: "assistant" as const, text }] });
+  renderPane(true);
+  act(() => { store.update([update("Visible stream"), sibling], true); });
+  expect(container.textContent).toContain("Visible stream");
+  const renders = probes.composer.mock.calls.length;
+  act(() => { store.update([store.session("chat")!, { ...sibling, title: "Other stream" }], true); });
+  expect(probes.composer).toHaveBeenCalledTimes(renders);
+  renderPane(false);
+  act(() => { store.update([update("Hidden stream"), sibling], true); });
+  expect(container.textContent).not.toContain("Hidden stream");
+  renderPane(true);
+  expect(container.textContent).toContain("Hidden stream");
+});
 
 it("shows an explicit usage storage repair hold, retries through its App callback, and clears after success", async () => {
   probes.member = false;

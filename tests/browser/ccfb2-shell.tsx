@@ -58,7 +58,7 @@ function Fixture() {
     IS_MAC, compactRailActive: params.get("compact") === "true",
     searchViewOpen: false, settingsOpen: false, inboxViewOpen: false, notesViewOpen: false, automationsViewOpen: false,
     monoCovers: params.get("mono") === "true", monoSidebarOpen: true,
-    monoDetailsPanel: {}, teamMap,
+    monoDetailsPanel: {}, teamMap, insetLayout: false, monoOverviewOpen: false, monoOverviewPanel: null, monoViewMono: undefined,
   };
   const chromeSurfaceOpen = evaluate(expressions.chromeOpen, scope);
   const placementScope = { ...scope, chromeSurfaceOpen };

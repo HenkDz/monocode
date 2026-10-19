@@ -1089,6 +1089,7 @@ function upsertTool(
       kind,
       status,
       ...(detail ? { detail } : {}),
+      ...(!detail && prev.tool?.detailOmitted ? { detailOmitted: true } : {}),
       ...(preview ? { preview } : {}),
       ...(paths ? { paths } : {}),
       ...(prev.tool?.background ? { background: true } : {}),
@@ -1165,7 +1166,7 @@ function recordAgentStep(
   );
   if (index < 0) return session;
   const prev = session.blocks[index];
-  const text = capAgentStepText(event.text);
+  const text = capAgentStepText(event.kind === "tool" ? event.text.trim() : event.text);
   // A tool step earns a row on its label alone; prose with nothing in it does
   // not.
   if (!text && event.kind !== "tool") return session;
@@ -1241,9 +1242,8 @@ function sameAgentStep(a: AgentStep, b: AgentStep): boolean {
 }
 
 function capAgentStepText(value: string): string {
-  const text = value.trim();
-  if (text.length <= MAX_AGENT_STEP_CHARS) return text;
-  return `${text.slice(0, MAX_AGENT_STEP_CHARS)}\u2026`;
+  if (value.length <= MAX_AGENT_STEP_CHARS) return value;
+  return `${value.slice(0, MAX_AGENT_STEP_CHARS)}\u2026`;
 }
 
 function findToolIndex(
@@ -1389,9 +1389,7 @@ function finishRole(session: Session, role: Block["role"]): Session {
   return {
     ...session,
     blocks: session.blocks.map((block) =>
-      block.role === role && block.streaming
-        ? { ...block, streaming: false }
-        : block,
+      block.role === role && block.streaming ? { ...block, streaming: false } : block,
     ),
   };
 }

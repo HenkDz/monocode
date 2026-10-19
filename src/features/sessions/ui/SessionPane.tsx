@@ -1,3 +1,6 @@
+import { useSessionSnapshot } from "../model/sessionStateStore";
+import { UsageChips } from "../../../app/shell/UsageFooter";
+import type { RateLimitProvider } from "../../providers/model/rateLimits";
 import { GripVertical, X } from "../../../shared/ui/icons";
 import { isProjectManager } from "../../orchestration/model/projectManager";
 import {
@@ -220,6 +223,8 @@ export type SessionPaneProps = {
   monoLaunchedSessions?: ReadonlyMap<string, LaunchedSessionView>;
   /** The launched session open in the Mono's sidebar. */
   openMonoSessionId?: string;
+  /** Shows plan usage by a Mono composer when the footer is covered. */
+  monoComposerUsage?: boolean;
   recents: RecentProject[];
   hideProjectPicker?: boolean;
   onFocus: (sessionId: string) => void;
@@ -370,7 +375,9 @@ type Props = SessionPaneProps & {
   allowedModelHarnesses?: readonly HarnessId[];
 };
 
-export const SessionPane = memo(function SessionPane(props: SessionPaneProps) {
+export const SessionPane = memo(function SessionPane(input: SessionPaneProps) {
+  const session = useSessionSnapshot(input.session, input.visible);
+  const props = session === input.session ? input : { ...input, session };
   // Sessions in a project on another machine render this same pane, backed by
   // the host instead of this computer's session runtime.
   if (isRemoteProjectPath(props.session.cwd))
@@ -461,6 +468,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
   onOpenMonoSession,
   monoLaunchedSessions,
   openMonoSessionId,
+  monoComposerUsage = true,
   onOpenPlan,
   onBuildPlan,
   onSecondOpinion,
@@ -1170,6 +1178,12 @@ const LocalSessionPane = memo(function LocalSessionPane({
           onUsageLimitResumeAtReset(session.id, enabled)
         }
         onUsageLimitDismiss={() => onUsageLimitDismiss(session.id)}
+        providerAccountId={session.providerAccountId}
+        onUsageLimitAccountChange={
+          onUsageLimitAccountChange
+            ? (accountId) => onUsageLimitAccountChange(session.id, accountId)
+            : undefined
+        }
         onOpenFile={onOpenFile}
         busy={!!session.busy}
         editLastTurnSupported={editLastTurnEnabled}
@@ -1335,6 +1349,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
       ) : null}
       {inSplit ? (
         <div
+          data-split-header=""
           className={`flex h-9 shrink-0 touch-none items-center gap-1.5 border-b border-stroke px-2 select-none ${
             onPaneDragStart ? "cursor-grab active:cursor-grabbing" : ""
           }`}
@@ -1725,6 +1740,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
                       onMouseDown={focusPane}
                     >
                       <AgentTranscript
+                        sessionId={remoteSession ? undefined : session.id}
                         managerProject={
                           !agent && isProjectManager(session.id)
                             ? session.cwd
@@ -2085,6 +2101,19 @@ const LocalSessionPane = memo(function LocalSessionPane({
                                 })
                               : onSubmit(session.id, text, attachments)
                         }
+                        tools={
+                          monoComposerUsage ? (
+                            <div className="flex shrink-0 items-center gap-0.5 text-[11px] text-content/55 @max-md:hidden">
+                              <UsageChips
+                                providers={monoUsageProviders(session.harness)}
+                                session={{ id: session.id, harness: session.harness, model: session.model, providerAccountId: session.providerAccountId }}
+                                project={session.cwd}
+                                accountPicker={false}
+                                variant="composer"
+                              />
+                            </div>
+                          ) : undefined
+                        }
                         controls={
                           <>
                             <ModelPicker
@@ -2123,6 +2152,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
                             <div className="min-w-0 rounded-md px-1.5 py-1 transition-colors hover:bg-content/8">
                               <ContextMeter
                                 usage={session.context}
+                                empty={isEmpty}
                                 rotationScheduled={!!rotationStatus.plan}
                                 rotationDeferredReason={
                                   rotationStatus.deferredReason
@@ -2207,3 +2237,13 @@ const LocalSessionPane = memo(function LocalSessionPane({
     </div>
   );
 });
+
+/** Providers whose plan usage appears by a Mono composer. */
+function monoUsageProviders(harness: HarnessId): RateLimitProvider[] {
+  return harness === "claude" ||
+    harness === "codex" ||
+    harness === "opencode" ||
+    harness === "devin"
+    ? [harness]
+    : [];
+}

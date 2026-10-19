@@ -50,7 +50,7 @@ vi.mock("../../inbox/model/inboxSelfActivity", () => ({
   recordInboxSelfActivity: vi.fn(),
 }));
 
-import { GitChangesPanel } from "./GitChangesPanel";
+import { GitChangesPanel, rememberIndex } from "./GitChangesPanel";
 import {
   gitDiffIndex,
   gitFetch,
@@ -430,13 +430,13 @@ describe("GitChangesPanel remote branch state", () => {
     async (cwd) => {
       vi.mocked(gitDiffIndex).mockResolvedValue(index({ remote: "origin" }));
       await renderPanel(cwd);
-      expect(container.textContent).toContain("Publish Branch");
+      expect(document.body.textContent).toContain("Publish Branch");
       const pull = await openBranchMenu();
       expect(pull.disabled).toBe(true);
-      expect(container.textContent).toContain("not found on origin (cached)");
-      expect(container.textContent).toContain("Upstream: not configured");
+      expect(document.body.textContent).toContain("not found on origin (cached)");
+      expect(document.body.textContent).toContain("Upstream: not configured");
       const fetch = [
-        ...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+        ...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
       ].find((button) => button.textContent === "Fetch")!;
       let finish!: () => void;
       vi.mocked(gitFetch).mockImplementationOnce(
@@ -464,14 +464,14 @@ describe("GitChangesPanel remote branch state", () => {
       expect(gitFetch).toHaveBeenCalledExactlyOnceWith(cwd);
       expect(vi.mocked(gitDiffIndex).mock.calls.length).toBeGreaterThan(reads);
       expect(notifyGitChanged).toHaveBeenCalled();
-      expect(container.textContent).toContain("Fetch complete");
-      expect(container.textContent).toContain("Push & Set Upstream");
-      expect(container.textContent).not.toContain("Publish Branch");
+      expect(document.body.textContent).toContain("Fetch complete");
+      expect(document.body.textContent).toContain("Push & Set Upstream");
+      expect(document.body.textContent).not.toContain("Publish Branch");
       await openBranchMenu();
-      expect(container.textContent).toContain(
+      expect(document.body.textContent).toContain(
         "Remote branch: origin/feature/pull (cached)",
       );
-      expect(container.textContent).toContain("Upstream: not configured");
+      expect(document.body.textContent).toContain("Upstream: not configured");
       const publish = [
         ...container.querySelectorAll<HTMLButtonElement>("button"),
       ].find((button) => button.textContent === "Push & Set Upstream")!;
@@ -490,17 +490,17 @@ describe("GitChangesPanel remote branch state", () => {
     );
     await renderPanel();
     expect((await openBranchMenu()).disabled).toBe(false);
-    expect(container.textContent).toContain("Upstream: origin/feature/pull");
-    expect(container.textContent).not.toContain("Publish Branch");
-    expect(container.textContent).not.toContain("Push & Set Upstream");
+    expect(document.body.textContent).toContain("Upstream: origin/feature/pull");
+    expect(document.body.textContent).not.toContain("Publish Branch");
+    expect(document.body.textContent).not.toContain("Push & Set Upstream");
     await act(async () => {
-      container
+      document
         .querySelector('[role="menu"]')!
         .dispatchEvent(
           new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
         );
     });
-    expect(container.querySelector('[role="menu"]')).toBeNull();
+    expect(document.querySelector('[role="menu"]')).toBeNull();
     expect(document.activeElement).toBe(
       container.querySelector('[aria-label="Branch actions"]'),
     );
@@ -510,10 +510,10 @@ describe("GitChangesPanel remote branch state", () => {
     vi.mocked(gitDiffIndex).mockResolvedValue(index());
     await renderPanel();
     await openBranchMenu();
-    expect(container.textContent).toContain("No remote configured");
+    expect(document.body.textContent).toContain("No remote configured");
     expect(
       [
-        ...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+        ...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
       ].every((button) => button.disabled),
     ).toBe(true);
     vi.mocked(gitDiffIndex).mockResolvedValue(
@@ -522,7 +522,7 @@ describe("GitChangesPanel remote branch state", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2000);
     });
-    expect(container.textContent).toContain(
+    expect(document.body.textContent).toContain(
       "Remote branch: unknown (update host)",
     );
   });
@@ -536,12 +536,12 @@ describe("GitChangesPanel remote branch state", () => {
     await renderPanel();
     await openBranchMenu();
     const fetch = [
-      ...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+      ...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
     ].find((button) => button.textContent === "Fetch")!;
     vi.mocked(notifyGitChanged).mockClear();
     await act(async () => fetch.click());
     expect(alert).toHaveBeenCalledWith("Authentication failed");
-    expect(container.textContent).not.toContain("Fetch complete");
+    expect(document.body.textContent).not.toContain("Fetch complete");
     expect(notifyGitChanged).not.toHaveBeenCalled();
     expect(
       container.querySelector<HTMLButtonElement>(
@@ -635,5 +635,43 @@ describe("GitChangesPanel remote pull request", () => {
       "feature/pull",
     );
     expect(openUrl).toHaveBeenCalledWith("https://example.test/pull/42");
+  });
+});
+
+describe("worktree switching", () => {
+  it("shows cached destination data immediately while refreshing", async () => {
+    const a = index({ branch: "worktree-a" });
+    const b = index({ branch: "worktree-b" });
+    vi.mocked(gitDiffIndex).mockResolvedValueOnce(a);
+    await renderPanel("/switch/a");
+    expect(document.body.textContent).toContain("worktree-a");
+    rememberIndex("/switch/b", b);
+    vi.mocked(gitDiffIndex).mockImplementationOnce(() => new Promise(() => {}));
+    await renderPanel("/switch/b");
+    expect(document.body.textContent).toContain("worktree-b");
+    expect(document.body.textContent).not.toContain("worktree-a");
+  });
+
+  it("never shows previous files in an uncached worktree and ignores late results", async () => {
+    let finish!: (value: GitDiffIndex) => void;
+    vi.mocked(gitDiffIndex).mockResolvedValueOnce(
+      index({ branch: "old-worktree" }),
+    );
+    await renderPanel("/switch/old");
+    vi.mocked(gitDiffIndex).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    await renderPanel("/switch/loading");
+    expect(document.body.textContent).not.toContain("old-worktree");
+    vi.mocked(gitDiffIndex).mockResolvedValueOnce(
+      index({ branch: "chosen-worktree" }),
+    );
+    await renderPanel("/switch/chosen");
+    await act(async () => finish(index({ branch: "late-worktree" })));
+    expect(document.body.textContent).toContain("chosen-worktree");
+    expect(document.body.textContent).not.toContain("late-worktree");
   });
 });

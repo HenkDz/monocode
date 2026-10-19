@@ -10,6 +10,7 @@ import * as queue from "../features/sessions/model/messageQueue";
 import { applyHarnessEvents, stopStreaming } from "../integrations/harness/core/apply";
 import { acknowledgeMonoMessage } from "../features/monos/model/monoMessaging";
 import { HarnessEventQueue } from "./model/harnessFlush";
+import { noteStreamApplied } from "../features/sessions/model/streamingPerformance";
 
 const transport = vi.hoisted(() => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: transport.invoke }));
@@ -70,7 +71,8 @@ async function stateHost(initial: Session[], strict: boolean, layoutDelivery = f
     updateCalls.set(next, (updateCalls.get(next) ?? 0) + 1); return next(previous);
   } : next);
   const syncDockBadge = vi.fn();
-  const scope = { sessionsRef, setSessions, syncDockBadge, applyHarnessEvents };
+  const scope = { sessionsRef, setSessions, syncDockBadge, applyHarnessEvents, noteStreamApplied,
+    harnessEvents: { isForeground: (id: string) => events.isForeground(id) } };
   const events = new HarnessEventQueue(() => layoutDelivery, execute(constructor.arguments![1], scope));
   function Host() {
     const [sessions, setter] = React.useState(initial); sessionsRef.current = sessions; publish = setter;

@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HarnessEvent } from "../../integrations/harness/core/types";
 import {
+  BACKGROUND_FLUSH_MS,
   cancelScheduledFlush,
   HarnessEventQueue,
   scheduleHarnessFlush,
@@ -18,10 +19,11 @@ afterEach(() => {
 });
 
 it("batches background-only work while allowing it to progress", () => {
+  expect(BACKGROUND_FLUSH_MS).toBe(100);
   const flush = vi.fn();
   const handle = scheduleHarnessFlush(flush, false);
   expect(handle.kind).toBe("timeout");
-  vi.advanceTimersByTime(99);
+  vi.advanceTimersByTime(BACKGROUND_FLUSH_MS - 1);
   expect(flush).not.toHaveBeenCalled();
   vi.advanceTimersByTime(1);
   expect(flush).toHaveBeenCalledTimes(1);
@@ -44,7 +46,7 @@ it("does not depend on animation frames while the window is hidden", () => {
   vi.spyOn(document, "hidden", "get").mockReturnValue(true);
   const flush = vi.fn();
   expect(scheduleHarnessFlush(flush, true).kind).toBe("timeout");
-  vi.advanceTimersByTime(100);
+  vi.advanceTimersByTime(BACKGROUND_FLUSH_MS);
   expect(flush).toHaveBeenCalledTimes(1);
 });
 
@@ -87,7 +89,7 @@ describe("harness event queue", () => {
       if (batch.has("front")) expect([...batch.keys()]).toEqual(["front"]);
       else expect([...batch.keys()]).toEqual(["back1", "back2"]);
     }
-    vi.advanceTimersByTime(100);
+    vi.advanceTimersByTime(BACKGROUND_FLUSH_MS);
     paint();
     for (const id of ["front", "back1", "back2"]) {
       const events = apply.mock.calls.flatMap(([batch]) => batch.get(id) ?? []);
@@ -131,7 +133,7 @@ describe("harness event queue", () => {
     queue.flushForeground();
     expect(apply).toHaveBeenCalledOnce();
     expect([...apply.mock.calls[0][0].keys()]).toEqual(["back1"]);
-    vi.advanceTimersByTime(59);
+    vi.advanceTimersByTime(BACKGROUND_FLUSH_MS - 41);
     expect(apply).toHaveBeenCalledOnce();
     vi.advanceTimersByTime(1);
     expect([...apply.mock.calls[1][0].keys()]).toEqual(["back2"]);
@@ -148,7 +150,7 @@ describe("harness event queue", () => {
     expect(frames.size).toBe(0);
     paint();
     expect(apply).not.toHaveBeenCalled();
-    vi.advanceTimersByTime(100);
+    vi.advanceTimersByTime(BACKGROUND_FLUSH_MS);
     expect(apply.mock.calls[0][0].get("front")).toEqual([
       { type: "message.delta", text: "Still queued" },
     ]);
@@ -158,7 +160,12 @@ describe("harness event queue", () => {
     { type: "approval.requested", callId: "tool", requestId: 1, title: "Run" },
     { type: "approval.resolved", requestId: 1, decision: "allow" },
     { type: "question.asked", requestId: 2, questions: [] },
-    { type: "question.resolved", requestId: 2 },
+    { type: "question.resolved", requestId: 2, decision: "answered" },
+    { type: "question.updated", requestId: 2, autoResolveAt: 1000 },
+    { type: "session.ended", code: 0 },
+    { type: "session.error", message: "Failed" },
+    { type: "turn.ready" },
+    { type: "usage.limited" },
   ])(
     "delivers $type immediately after that session's preceding output",
     (event) => {
@@ -172,7 +179,7 @@ describe("harness event queue", () => {
       queue.enqueue("prompt", event);
       expect(apply).toHaveBeenCalledOnce();
       expect([...apply.mock.calls[0][0]]).toEqual([["prompt", [delta, event]]]);
-      vi.advanceTimersByTime(100);
+      vi.advanceTimersByTime(BACKGROUND_FLUSH_MS);
       expect([...apply.mock.calls[1][0].keys()]).toEqual(["other"]);
     },
   );
@@ -184,7 +191,7 @@ describe("harness event queue", () => {
     queue.flush(); // The visibilitychange handler flushes before WebKit suspends.
     queue.enqueue("front", { type: "message.delta", text: "Now hidden" });
     expect(frames.size).toBe(0);
-    vi.advanceTimersByTime(100);
+    vi.advanceTimersByTime(BACKGROUND_FLUSH_MS);
     expect(apply.mock.calls[1][0].get("front")).toEqual([
       { type: "message.delta", text: "Now hidden" },
     ]);

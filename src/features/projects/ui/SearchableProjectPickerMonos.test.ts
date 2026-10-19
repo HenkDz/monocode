@@ -76,7 +76,7 @@ it("keeps blocked and preparing Monos honest in the compact picker trigger", () 
   ] as const) {
     const { trigger } = render("m1", monoState({ blocks: [], queuedMessages: [{ id: "q", text: "review", attachments: [] }], ...patch }));
     expect(trigger.getAttribute("aria-label")).toContain(label);
-    expect(trigger.title).toContain(label);
+    expect(trigger.dataset.railTipDetail).toContain(label);
     expect(trigger.getAttribute("aria-label")).not.toContain("Idle");
   }
 });

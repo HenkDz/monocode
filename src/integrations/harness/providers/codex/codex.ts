@@ -1018,6 +1018,10 @@ function handleNotification(
   if (threadId && threadId !== live.threadId) {
     return handleSubagentNotification(live, threadId, method, params);
   }
+  if (method === "thread/tokenUsage/updated") {
+    const turnId = stringField(rec, "turnId");
+    if (turnId && live.activeTurnId && turnId !== live.activeTurnId) return;
+  }
   // A Codex turn is a sequence of items. Completing an agentMessage does not
   // mean the turn is over — more tools and messages can still arrive. Only
   // turn/completed (and turn/aborted) settle sendCodexTurn, which is what the

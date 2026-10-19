@@ -435,7 +435,9 @@ it("reads a Mono's document in a sheet over the chat and slides it away", async 
     trigger.click(),
   );
   const sheet = container.querySelector('[data-artifact-sheet="doc-1"]');
-  expect(sheet?.textContent).toContain("Menu plan");
+  expect(
+    sheet?.querySelector('[role="dialog"]')?.getAttribute("aria-label"),
+  ).toBe("Menu plan");
   expect(sheet?.textContent).toContain("Soup first.");
   const close = sheet!.querySelector<HTMLButtonElement>('[aria-label="Close document"]')!;
   expect(document.activeElement).toBe(close);

@@ -729,6 +729,69 @@ describe("usage limits", () => {
   });
 });
 
+describe("punctuation-only prose", () => {
+  // Text syntax cannot distinguish provider noise from a requested literal answer.
+  it("keeps literal fragments once the next block starts", () => {
+    let session = appendUser(newSession("omp", "/tmp"), "go");
+    session = applyHarnessEvent(session, { type: "message.delta", text: "." });
+    session = applyHarnessEvent(session, {
+      type: "tool.started",
+      callId: "read-1",
+      title: "Read README.md",
+    });
+    session = applyHarnessEvent(session, { type: "message.delta", text: "…" });
+    session = applyHarnessEvent(session, {
+      type: "tool.started",
+      callId: "read-2",
+      title: "Read index.ts",
+    });
+    expect(session.blocks.map((block) => block.role)).toEqual([
+      "user",
+      "assistant",
+      "tool",
+      "assistant",
+      "tool",
+    ]);
+  });
+
+  it("keeps it when the message completes or the turn stops", () => {
+    let session = appendUser(newSession("omp", "/tmp"), "go");
+    session = applyHarnessEvent(session, { type: "message.delta", text: "." });
+    session = applyHarnessEvent(session, { type: "message.completed" });
+    session = applyHarnessEvent(session, { type: "message.delta", text: " . " });
+    session = stopStreaming(session);
+    expect(session.blocks.map((block) => block.role)).toEqual(["user", "assistant", "assistant"]);
+    expect(session.blocks.slice(1).map(block => block.text)).toEqual([".", " . "]);
+  });
+
+  it.each(["[]", "{}", '""', ";", "..."])("retains exact final %s and its identity through every settlement", text => {
+    for (const boundary of ["completed", "tool", "stop"]) {
+      let session = appendUser(newSession("omp", "/tmp"), "Return the literal answer");
+      session = applyHarnessEvent(session, { type: "message.delta", text });
+      const streamed = session.blocks.at(-1)!;
+      session = boundary === "stop" ? stopStreaming(session)
+        : applyHarnessEvent(session, boundary === "completed" ? { type: "message.completed" } : { type: "tool.started", callId: "next", title: "Next" });
+      expect(session.blocks.find(block => block.id === streamed.id)).toMatchObject({ id: streamed.id, role: "assistant", text, streaming: false });
+      const saved = sanitizeSessionForPersist(session);
+      expect(saved.blocks.find(block => block.id === streamed.id)?.text).toBe(text);
+      expect(stopStreaming(session).blocks.find(block => block.id === streamed.id)?.text).toBe(text);
+    }
+  });
+
+  it("keeps short messages with words, numbers or emoji", () => {
+    let session = appendUser(newSession("omp", "/tmp"), "go");
+    for (const text of ["OK.", "42", "👍"]) {
+      session = applyHarnessEvent(session, { type: "message.delta", text });
+      session = applyHarnessEvent(session, { type: "message.completed" });
+    }
+    expect(
+      session.blocks
+        .filter((block) => block.role === "assistant")
+        .map((block) => block.text),
+    ).toEqual(["OK.", "42", "👍"]);
+  });
+});
+
 describe("status blocks", () => {
   it("keeps one row when the same status repeats", () => {
     let session = appendUser(newSession("claude", "/tmp"), "go");

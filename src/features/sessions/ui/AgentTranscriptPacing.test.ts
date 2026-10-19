@@ -28,7 +28,7 @@ beforeEach(() => {
       disconnect() {}
     },
   );
-  // These cover the opt-in paced reveal unless a test says otherwise.
+  // Explicitly exercise pacing unless a test selects the fallback.
   localStorage.setItem(PACED_REVEAL_KEY, "1");
   container = document.createElement("div");
   document.body.append(container);
@@ -91,6 +91,31 @@ it("keeps burst tools folded then readable in order without losing row identity"
   act(() => vi.advanceTimersByTime(480));
   expect(ids()).toEqual(["first", "second", "third", "fourth"]);
 
+});
+
+it("keeps folded tool rows stable when hidden output lands and the tab returns", () => {
+  const head: Block[] = [
+    { id: "user", role: "user", text: "Review the diff" },
+    { id: "intro", role: "assistant", text: "Checking the repo first." },
+    tool("first"),
+  ];
+  const burst = [...head, tool("second"), tool("third")];
+  render(head);
+  render(burst);
+  openTranscriptWork(container);
+  const first = container.querySelector('[data-compact-tool-call="first"]');
+  const rows = () => [...container.querySelectorAll<HTMLElement>("[data-compact-tool-call]")];
+  expect(rows().map(row => row.dataset.compactToolCall)).toEqual(["first", "second", "third"]);
+  render(burst, true, false);
+  render([...burst, tool("fourth"), tool("fifth")], true, false);
+  render([...burst, tool("fourth"), tool("fifth")]);
+  expect(container.querySelector('[data-compact-tool-call="first"]')).toBe(first);
+  expect(rows().map(row => row.dataset.compactToolCall)).toEqual(["first", "second", "third", "fourth", "fifth"]);
+  act(() => vi.advanceTimersByTime(1_000));
+  render([...burst, tool("fourth"), tool("fifth"), tool("sixth")]);
+  expect(rows().map(row => row.dataset.compactToolCall)).toEqual(["first", "second", "third", "fourth", "fifth", "sixth"]);
+  expect(rows().some(row => row.hasAttribute("data-waiting") || row.hasAttribute("data-entering"))).toBe(false);
+  expect(container.querySelector('[data-compact-tool-call="first"]')).toBe(first);
 });
 
 const reply =
@@ -206,7 +231,7 @@ it("shows output received in a hidden tab immediately when switching to it", () 
 });
 
 it("shows a new reply at once and fades it in without the paced reveal", () => {
-  localStorage.removeItem(PACED_REVEAL_KEY);
+  localStorage.setItem(PACED_REVEAL_KEY, "0");
   render([prompt]);
   render(
     [

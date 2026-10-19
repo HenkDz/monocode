@@ -3,6 +3,7 @@ import { runInNewContext } from "node:vm";
 import ts from "typescript";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { MonoCodexStorageRecovery, isCodexStorageError, parseCodexStorageConflict, parseCodexStorageRecoveryConflict, parseCodexSandboxBlocker, codexSandboxRepairSettings, codexFullAccessRepairAllowed, canAutomaticallyRepairCodexStorage } from "../features/monos/model/monoCodexStorage";
+import { SessionStateStore } from "../features/sessions/model/sessionStateStore";
 import type { Session } from "../features/sessions/model/session";
 import { codexStorageAccountId } from "../features/monos/model/monoCodexStorageIssues";
 import { sessionWriteNeedsReconciliation, shouldPersistSession } from "../features/sessions/data/sessionStore";
@@ -45,9 +46,11 @@ it("bounds actual autosave scheduling across repeated unresolved-map cycles with
     codexStorageError: 'Codex storage needs repair: {"recovery":true,"reason":"Edits are not saved"}',
     blocks: [{ id: "u", role: "user", text: "Unsaved draft" }], title: "Unsaved title" });
   const original = fixture.sessionsRef.current[0];
+  const sessionState = new SessionStateStore(fixture.sessionsRef.current);
+  fixture.sessionsRef = sessionState.ref;
   const save = vi.fn(async (session: Session) => { throw new Error(session.codexStorageError); });
   let transitions = 0, cleanup: (() => void) | undefined;
-  const context: Record<string, unknown> = { ...fixture,
+  const context: Record<string, unknown> = { ...fixture, sessionState,
     window: { setTimeout, clearTimeout }, shouldPersistSession, persistFingerprint: (s: Session) => s.title,
     removingSessionIds: { current: new Set() }, switchingWorktrees: { current: new Set() },
     lastPersisted: { current: new Map() }, observedSessions: { current: new Map() },
@@ -57,8 +60,8 @@ it("bounds actual autosave scheduling across repeated unresolved-map cycles with
     writeSession: async (_id: string, operation: (save: typeof save) => Promise<unknown>) => operation(save),
     setSessions: (update: (sessions: Session[]) => Session[]) => {
       const previous = fixture.sessionsRef.current;
-      fixture.sessionsRef.current = update(previous);
-      if (fixture.sessionsRef.current !== previous) { transitions++; schedule(); }
+      sessionState.setState(update);
+      if (fixture.sessionsRef.current !== previous) transitions++;
     },
   };
   const persist = evaluate(appCallback("persistSession").getText(app), context);

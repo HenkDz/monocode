@@ -2,6 +2,7 @@
 import { readFileSync } from "node:fs";
 import ts from "typescript";
 import { Window } from "happy-dom";
+import { flushSync } from "react-dom";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { newSession, type Session, type Block } from "../features/sessions/model/session";
 import { createMono, saveMonoSessionId, monoForSession, isMonoSession } from "../features/monos/model/mono";
@@ -10,12 +11,17 @@ import { resumeMonoUsageLimit, switchMonoUsageLimitAccount } from "../features/m
 import { canDispatchQueuedHead } from "../features/sessions/model/messageQueue";
 import * as queue from "../features/sessions/model/messageQueue";
 import { consumeHandoff } from "../features/sessions/model/handoff";
-import { USAGE_LIMIT_RESUME_GRACE_MS, usageLimitResumeDue } from "../features/sessions/model/usageLimit";
+import { USAGE_LIMIT_RESUME_GRACE_MS, usageLimitResumeDue, withUsageLimitAccount } from "../features/sessions/model/usageLimit";
 import { identityKey } from "../features/providers/model/providerAccountIdentity";
-import { supportsAccountProfiles, supportsProviderAccounts } from "../features/providers/model/providerAccounts";
+import { supportsAccountProfiles, supportsProviderAccounts, sameProviderAccountId } from "../features/providers/model/providerAccounts";
 import { parseClaudeOAuthUsage } from "../features/providers/model/rateLimits";
 import { applyHarnessEvent, applyHarnessEvents, stopStreaming } from "../integrations/harness/core/apply";
 import { assertManagerDelivery, managerRequestBinding, type ManagerRequestRecovery } from "../features/monos/model/managerAuthorizedWork";
+
+import { SessionStateStore } from "../features/sessions/model/sessionStateStore";
+import { updateSessionState } from "./model/sessionState";
+import { HarnessEventQueue } from "./model/harnessFlush";
+import { noteStreamApplied } from "../features/sessions/model/streamingPerformance";
 
 const transport = vi.hoisted(() => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: transport.invoke }));
@@ -82,18 +88,17 @@ async function fixture(windowed = false) {
   const earlier: Block[] = windowed ? [{ id: "unseen-request", role: "user", text: "Unseen original scope" }, { id: "unseen-answer", role: "assistant", text: "Preserved history" }] : [];
   records.set(original.id, { id: original.id, blocks: [...earlier, ...original.blocks] });
   await upsertSession(original);
-  const sessionsRef = { current: [original] };
+  const store = new SessionStateStore([original]);
+  const sessionsRef = store.ref;
   const turnGen = { current: new Map([[original.id, 1]]) };
   const events = vi.fn();
   const flush = vi.fn();
   let recoveryErrors: Record<string, string> = {};
-  const setSessions = (value: Session[] | ((previous: Session[]) => Session[])) => {
-    sessionsRef.current = typeof value === "function" ? value(sessionsRef.current) : value;
-  };
+  const setSessions = store.setState;
   let runs: { leadId: string; tasks: { sessionId: string; status: string; monoGoalId?: string }[]; status: string }[] = [];
   const goals: { id: string; state: string }[] = [];
   const scope = {
-    sessionsRef, setSessions, turnGen, writeSession, retainSessionWrite, resetMonoSessionWriteBaseline, sessionWriteNeedsReconciliation, isMonoSession,
+    sessionsRef, setSessions, updateSessionState, sameProviderAccountId, usageLimitSwitching: { current: new Set<string>() }, turnGen, writeSession, retainSessionWrite, resetMonoSessionWriteBaseline, sessionWriteNeedsReconciliation, isMonoSession,
     lastPersisted: { current: new Map([[original.id, "unchanged-fingerprint"]]) },
     setUsageRecoveryErrors: (change: (previous: Record<string, string>) => Record<string, string>) => { recoveryErrors = change(recoveryErrors); },
     flushSync: (run: () => void) => run(), enqueueHarnessEvent: events, flushHarnessEvents: flush,
@@ -119,7 +124,7 @@ async function fixture(windowed = false) {
   const stop = callback("onStop", { ...scope, monoGoalOrigins: new Map(), upsertSession,
     sessionChildHarnesses: () => [], finishSessionTurn: async () => {}, stopStreaming,
     isPreparingHandoff: () => false, notifyReviewChanged: () => {}, nudgeWorkspace: () => {}, notifyGitChanged: () => {}, nudgeWatchedFiles: () => {} });
-  return { original, earlier, scope, policy, limits, recover: () => recover(original.id), commit, resume: () => resume(original.id), stop: () => stop(original.id),
+  return { original, earlier, store, scope, policy, limits, recover: () => recover(original.id), commit, resume: () => resume(original.id), stop: () => stop(original.id),
     current: () => sessionsRef.current[0], change: (patch: Partial<Session>) => setSessions([{ ...sessionsRef.current[0], ...patch }]),
     setRuns: (next: typeof runs) => { runs = next; }, retry: () => retry(original.id), recoveryErrors: () => recoveryErrors, events, flush };
 }
@@ -199,7 +204,7 @@ it("an actual manual account choice flushes its state and invalidates a saved sw
   expect(sessionWriteNeedsReconciliation(f.original.id)).toBe(false);
 });
 
-it.each(["edit", "pending deletion", "delete click", "Stop", "manual account", "independent Mono", "repair edit", "manual account with sibling", "reset wait with sibling"])("retains %s through the real React state-publication boundary", async mode => {
+it.each(["edit", "pending deletion", "delete click", "Stop", "manual account", "independent Mono", "repair edit", "manual account with sibling", "reset wait with sibling"])("retains %s through the real session-store React subscription boundary", async mode => {
   const React = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { flushSync } = await import("react-dom");
@@ -210,11 +215,11 @@ it.each(["edit", "pending deletion", "delete click", "Stop", "manual account", "
   const other = await fixture();
   other.change({ queuedMessages: [{ id: "other-queue", text: "Before independent edit", attachments: [] }], queueStatus: "paused" });
   await upsertSession(other.current());
-  f.scope.sessionsRef.current = [f.current(), other.current()];
+  f.store.setState([f.current(), other.current()]);
   let publish!: (next: Session[] | ((previous: Session[]) => Session[])) => void;
   function StateHost() {
-    const [sessions, setSessions] = React.useState(f.scope.sessionsRef.current);
-    f.scope.sessionsRef.current = sessions;
+    React.useSyncExternalStore(f.store.subscribeShell, f.store.snapshot);
+    const setSessions = f.store.setState;
     publish = setSessions;
     return React.createElement("button", { onClick: () => callback("onDeleteQueuedMessage", { ...f.scope, ...queue, setSessions })(f.original.id, "queued-user") }, "Delete queued request");
   }
@@ -283,9 +288,9 @@ it.each(["without recovery", "with recovery", "combined target edit"])("preserve
   f.change({ queuedMessages: [{ id: "target-queue", text: "Before edit", attachments: [] }], queueStatus: "paused" });
   const queuedSibling: Session = { ...sibling.current(), usageLimit: undefined, queueStatus: "active",
     queuedMessages: [{ id: "sibling-request", text: "Keep rejected request paused", attachments: [] }] };
-  f.scope.sessionsRef.current = [f.current(), queuedSibling];
+  f.store.setState([f.current(), queuedSibling]);
   let publish!: (next: Session[] | ((previous: Session[]) => Session[])) => void;
-  function StateHost() { const [sessions, setSessions] = React.useState(f.scope.sessionsRef.current); f.scope.sessionsRef.current = sessions; publish = setSessions; return null; }
+  function StateHost() { React.useSyncExternalStore(f.store.subscribeShell, f.store.snapshot); publish = f.store.setState; return null; }
   const container = document.createElement("div"); document.body.append(container); const root = createRoot(container);
   try {
     await React.act(async () => root.render(React.createElement(StateHost)));
@@ -322,9 +327,9 @@ it.each([false, true])("preserves actual HarnessEventQueue delivery with concurr
   const f = await fixture(), sibling = await fixture();
   const streamed: Session = { ...sibling.current(), usageLimit: undefined, busy: true,
     blocks: [...sibling.current().blocks, { id: "stream-answer", role: "assistant", text: "Before", streaming: true }] };
-  f.scope.sessionsRef.current = [f.current(), streamed];
+  f.store.setState([f.current(), streamed]);
   let publish!: (next: Session[] | ((previous: Session[]) => Session[])) => void;
-  function StateHost() { const [sessions, setSessions] = React.useState(f.scope.sessionsRef.current); f.scope.sessionsRef.current = sessions; publish = setSessions; return null; }
+  function StateHost() { React.useSyncExternalStore(f.store.subscribeShell, f.store.snapshot); publish = f.store.setState; return null; }
   const container = document.createElement("div"); document.body.append(container); const root = createRoot(container);
   try {
     await React.act(async () => root.render(React.createElement(StateHost)));
@@ -332,7 +337,7 @@ it.each([false, true])("preserves actual HarnessEventQueue delivery with concurr
     const retry = callback("retryUsageRecovery", scope), commit = callback("commitUsageFailover", { ...scope, retryUsageRecovery: retry });
     const recover = callback("recoverUsageLimit", { ...scope, commitUsageFailover: commit });
     const queueConstructor = find(node => ts.isNewExpression(node) && node.expression.getText(app) === "HarnessEventQueue") as ts.NewExpression;
-    const deliver = execute(queueConstructor.arguments![1].getText(app), { ...scope, applyHarnessEvents, syncDockBadge: vi.fn() });
+    const deliver = execute(queueConstructor.arguments![1].getText(app), { ...scope, applyHarnessEvents, noteStreamApplied, harnessEvents: { isForeground: () => true }, syncDockBadge: vi.fn() });
     const delta = () => deliver(new Map([[streamed.id, [{ type: "message.delta", text: " + preserved delta" }]]]));
     afterCandidate = delta;
     await React.act(async () => { if (recoverConcurrent) await recover(f.original.id); else delta(); });
@@ -445,4 +450,129 @@ it("the actual reset owner retains the original account through later polls and 
   expect(f.current().usageLimit).toBeUndefined(); expect(f.current().providerAccountId).toBe("default");
   expect(await f.recover()).toEqual({ kind: "manual" });
   cleanup();
+});
+
+
+// Run the independent current-store regressions through portable production seams.
+function setAfterCandidate(value: typeof afterCandidate) { afterCandidate = value; }
+function currentDelivery(scope: Record<string, unknown>) {
+  const node = find(node => ts.isNewExpression(node) && node.expression.getText(app) === "HarnessEventQueue") as ts.NewExpression;
+  return execute(node.arguments![1].getText(app), scope);
+}
+function effect(containing: string, scope: Record<string, unknown>) {
+  const node = find(node => ts.isCallExpression(node) && node.expression.getText(app) === "useEffect" && !!node.arguments[0]?.getText(app).includes(containing)) as ts.CallExpression;
+  return execute(node.arguments[0].getText(app), scope)();
+}
+
+async function liveFixture(windowed = true) {
+  const f = await fixture(windowed);
+  const other = await fixture(false);
+  const sibling = { ...other.current(), usageLimit: undefined, queueStatus: 'paused' as const,
+    queuedMessages: [{ id: 'sibling-queue', text: 'Before sibling edit', attachments: [] }] };
+  const store = new SessionStateStore([f.current(), sibling]);
+  const scope = { ...f.scope, ...queue, sessionsRef: store.ref, setSessions: store.setState, flushSync,
+    updateSessionState, supportsProviderAccounts, sameProviderAccountId, providerAccountExists: () => true,
+    switchMonoUsageLimitAccount, withUsageLimitAccount, usageLimitSwitching: { current: new Set<string>() },
+    onUsageLimitResume: vi.fn(), transferHarnessSessionAccount: vi.fn(() => { throw Error('Unexpected native transfer'); }) };
+  const retry = callback('retryUsageRecovery', scope);
+  const commit = callback('commitUsageFailover', { ...scope, retryUsageRecovery: retry });
+  const recover = callback('recoverUsageLimit', { ...scope, commitUsageFailover: commit });
+  const manual = callback('onUsageLimitAccountChange', scope);
+  const current = () => store.session(f.original.id)!;
+  return { ...f, store, sibling, scope, current, recover: () => recover(f.original.id),
+    manual: () => manual(f.original.id, 'manual'), retry: () => retry(f.original.id) };
+}
+
+it('control: current store accepts one automatic switch only after durable paused acknowledgment', async () => {
+  const f = await liveFixture();
+  setAfterCandidate(() => {
+    expect(f.current()).toBe(f.original);
+    expect(records.get(f.original.id)?.queueStatus).toBe('paused');
+  });
+  expect(await f.recover()).toEqual({ kind: 'switched', accountId: 'work' });
+  expect(f.current().providerAccountId).toBe('work');
+  expect(f.store.ref.current).toBe(f.store.snapshot());
+  const saved = await readPersistedSession(f.original.id);
+  expect(saved?.providerAccountId).toBe('work');
+  expect(saved?.queueStatus).toBe('paused');
+  expect(saved?.blocks.filter(block => block.id === 'usage-failover-request')).toHaveLength(1);
+});
+
+it.each([false, true])('manual account beats the in-flight automatic switch in actual store; sibling=%s', async editSibling => {
+  const f = await liveFixture();
+  setAfterCandidate(async () => {
+    if (editSibling) callback('onEditQueuedMessage', f.scope)(f.sibling.id, 'sibling-queue', 'Latest sibling choice');
+    await f.manual();
+  });
+  expect(await f.recover()).toEqual({ kind: 'pause-and-ask', reason: 'save-rejected' });
+  expect(f.current().providerAccountId).toBe('manual');
+  expect(f.current().providerSessionId).toBeUndefined();
+  expect(f.scope.transferHarnessSessionAccount).not.toHaveBeenCalled();
+  const saved = await readPersistedSession(f.original.id);
+  expect(saved?.providerAccountId).toBe('manual');
+  expect(saved?.providerSessionId).toBeUndefined();
+  expect(saved?.blocks.slice(0, f.earlier.length)).toEqual(f.earlier);
+  expect(saved?.blocks.some(block => block.id.startsWith('usage-failover-') || block.handoff)).toBe(false);
+  expect(saved?.queuedMessages).toEqual(f.current().queuedMessages);
+  expect(sessionWriteNeedsReconciliation(f.original.id)).toBe(false);
+  if (editSibling) expect(f.store.session(f.sibling.id)?.queuedMessages?.[0].text).toBe('Latest sibling choice');
+});
+
+it.each(['same', 'sibling'] as const)('real HarnessEventQueue output survives automatic recovery; stream=%s', async placement => {
+  const f = await liveFixture();
+  const targetId = placement === 'same' ? f.original.id : f.sibling.id;
+  f.store.setState(sessions => sessions.map(session => session.id === targetId
+    ? { ...session, busy: placement === 'sibling', blocks: [...session.blocks, { id: 'stream-answer', role: 'assistant', text: 'Before', streaming: placement === 'sibling' }] }
+    : session));
+  await upsertSession(f.store.session(targetId)!);
+  const syncDockBadge = vi.fn();
+  let events!: HarnessEventQueue;
+  events = new HarnessEventQueue(() => true, currentDelivery({ ...f.scope, applyHarnessEvents, noteStreamApplied, syncDockBadge,
+    harnessEvents: { isForeground: (id: string) => events.isForeground(id) } }));
+  setAfterCandidate(() => {
+    events.enqueue(targetId, { type: 'message.delta', text: ' + preserved delta' });
+    events.flush();
+  });
+  try {
+    const result = await f.recover();
+    expect(result).toEqual(placement === 'same' ? { kind: 'pause-and-ask', reason: 'save-rejected' } : { kind: 'switched', accountId: 'work' });
+    const outputBlocks = f.store.session(targetId)!.blocks;
+    const exactOutput = placement === 'same' ? ' + preserved delta' : 'Before + preserved delta';
+    const output = outputBlocks.find(block => block.text === exactOutput)!;
+    expect(output).toBeDefined();
+    if (placement === 'same') expect(outputBlocks.find(block => block.id === 'stream-answer')?.text).toBe('Before');
+    expect(syncDockBadge).toHaveBeenCalled();
+    await upsertSession(f.store.session(targetId)!);
+    expect((await readPersistedSession(targetId))?.blocks.find(block => block.id === output.id)?.text).toBe(exactOutput);
+    expect(f.store.ref.current).toBe(f.store.snapshot());
+  } finally { events.cancelScheduled(); }
+});
+
+it('actual store keeps a rejected sibling queue paused during target recovery and edit', async () => {
+  const f = await liveFixture();
+  f.store.setState(sessions => sessions.map(session => session.id === f.original.id
+    ? { ...session, queuedMessages: [{ id: 'target-queue', text: 'Before target edit', attachments: [] }] }
+    : session.id === f.sibling.id ? { ...session, queueStatus: 'active' } : session));
+  await upsertSession(f.current());
+  const timers: (() => Promise<void>)[] = [];
+  const submit = vi.fn(async () => false);
+  const cleanup = effect('queueDispatchingRef.current.add', { ...f.scope,
+    sessions: [f.store.session(f.sibling.id)], window: { setTimeout: (run: () => Promise<void>) => timers.push(run), clearTimeout: vi.fn() },
+    queueDispatchingRef: { current: new Set() }, submitSession: submit, setQueueDispatchVersion: vi.fn(),
+    canSteerHarness: () => false, consumeOperatorCommand: () => ({ matched: false }) });
+  expect(timers).toHaveLength(1);
+  setAfterCandidate(async () => {
+    callback('onEditQueuedMessage', f.scope)(f.original.id, 'target-queue', 'Latest target edit');
+    await timers[0]();
+  });
+  try {
+    expect(await f.recover()).toEqual({ kind: 'pause-and-ask', reason: 'save-rejected' });
+    expect(f.current().queuedMessages?.[0].text).toBe('Latest target edit');
+    const sibling = f.store.session(f.sibling.id)!;
+    expect(sibling.queueStatus).toBe('paused');
+    expect(sibling.queuedMessages?.[0].error).toContain('Delivery is unavailable');
+    expect(submit).toHaveBeenCalledOnce();
+    await upsertSession(sibling);
+    expect((await readPersistedSession(sibling.id))?.queuedMessages?.[0].error).toContain('Delivery is unavailable');
+  } finally { cleanup(); }
 });

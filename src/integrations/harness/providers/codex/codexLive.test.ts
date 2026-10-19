@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { webcrypto } from "node:crypto";
 import { planAgentContext, planOrgContext, recordAgentContext, recordOrgContext } from "../../../../features/monos/model/monoFiles";
-import { registerHarness, resetHarnessIdlePark, sendHarnessTurn } from "../../core/registry";
 
 const sent: string[] = [];
 vi.mock("../../../../platform/tauri/platform", async importOriginal => ({
@@ -55,6 +54,7 @@ vi.mock("../../../../platform/tauri/fs", () => ({
   deleteGeneratedImages,
 }));
 
+const { registerHarness, resetHarnessIdlePark, sendHarnessTurn } = await import("../../core/registry");
 const {
   compactCodexContext,
   bindCodexSession,
@@ -76,7 +76,8 @@ import {
   type RuntimeMode,
   type TurnIntent,
 } from "../../../../features/sessions/model/session";
-import { applyHarnessEvent } from "../../core/apply";
+import { appendUser, applyHarnessEvent } from "../../core/apply";
+import { selectAgentMetrics } from "../../../../features/agents/model/agentMetrics";
 import { selectAgentLiveState } from "../../../../features/agents/model/agentLiveState";
 
 function parse() {
@@ -326,6 +327,41 @@ describe("codex live turn sequence", () => {
     expect(onAccepted).toHaveBeenCalledOnce();
     notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
     await turn;
+  });
+
+  it("reports the whole turn's tokens through identified calls and the real consumer", async () => {
+    const { events, turn } = await startTurn("codex-live");
+    const usage = (
+      last: Record<string, number>,
+      totalTokens: number,
+      turnId = "turn_1",
+    ) =>
+      notify("thread/tokenUsage/updated", {
+        threadId: "thr_1",
+        turnId,
+        tokenUsage: { last, total: { totalTokens }, modelContextWindow: null },
+      });
+    // A reading replayed from an earlier turn stays out of this one.
+    usage(
+      { totalTokens: 550, inputTokens: 500, outputTokens: 50 },
+      550,
+      "turn_0",
+    );
+    usage({ totalTokens: 1_100, inputTokens: 1_000, outputTokens: 100 }, 1_100);
+    usage({ totalTokens: 2_200, inputTokens: 2_000, outputTokens: 200 }, 3_300);
+    usage({ totalTokens: 2_200, inputTokens: 2_000, outputTokens: 200 }, 3_300);
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+
+    const calls = events.filter((event) => event.type === "turn.metrics");
+    expect(new Set(calls.map(event => event.modelCallId)).size).toBe(2);
+    expect(calls.every(event => event.providerTurnId === "turn_1" && event.modelCallId)).toBe(true);
+    const session = events.reduce((session, event) => applyHarnessEvent(session, event), appendUser(newSession("codex", "/repo"), "Read the code"));
+    expect(selectAgentMetrics(session)).toMatchObject({
+      inputTokens: 3_000,
+      outputTokens: 300,
+      modelCalls: 2,
+    });
   });
 
   it("keeps ephemeral helper threads out of saved Codex history", async () => {

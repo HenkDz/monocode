@@ -18,7 +18,8 @@ it.each([
   ["Mac compact page over Mono", true, true, true, true, false, false],
 ])("keeps the source-selected chrome ownership for %s", (_name, IS_MAC, open, monoCovers, compactRailActive, top, hide) => {
   const scope = { IS_MAC, monoCovers, compactRailActive, teamMap: { open }, monoSidebarOpen: true, monoDetailsPanel: {},
-    searchViewOpen: false, settingsOpen: false, inboxViewOpen: false, notesViewOpen: false, automationsViewOpen: false };
+    searchViewOpen: false, settingsOpen: false, inboxViewOpen: false, notesViewOpen: false, automationsViewOpen: false,
+    insetLayout: false, monoOverviewOpen: false, monoOverviewPanel: null, monoViewMono: undefined };
   const evaluate = (expression: string, declarations = "") => new Function(...Object.keys(scope), "chromeSurfaceOpen", "workspaceTitleBar", `${declarations}\nreturn ${expression};`)(...Object.values(scope), open, "titlebar");
   expect(evaluate(source.top, source.declarations)).toBe(top ? "titlebar" : null);
   expect(evaluate(source.inner, source.declarations)).toBe(top ? null : "titlebar");
@@ -39,7 +40,7 @@ for (const file of ["search/ui/SearchView", "inbox/ui/InboxView", "pullRequests/
     expect(controls).toHaveLength(1);
     expect(ts.isConditionalExpression(controls[0].parent)).toBe(true);
     const expression = controls[0].parent.getText(ast);
-    const element = new Function("React", "IS_MAC", "WindowControls", ts.transpile(`return ${expression};`, { jsx: ts.JsxEmit.React }))(React, IS_MAC, WindowControls);
+    const element = new Function("React", "IS_MAC", "WindowControls", "tabbed", ts.transpile(`return ${expression};`, { jsx: ts.JsxEmit.React }))(React, IS_MAC, WindowControls, false);
     const markup = renderToStaticMarkup(element);
     expect((markup.match(/aria-label="Minimize window"/g) ?? []).length).toBe(IS_MAC ? 0 : 1);
     expect((markup.match(/aria-label="Close window"/g) ?? []).length).toBe(IS_MAC ? 0 : 1);

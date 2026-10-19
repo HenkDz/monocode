@@ -222,6 +222,8 @@ export type AgentStep = {
   toolKind?: string;
   status?: string;
   detail?: string;
+  /** Large output left in storage on load; see `loadToolDetail`. */
+  detailOmitted?: boolean;
   preview?: ToolPreview;
 };
 
@@ -370,6 +372,8 @@ export type Block = {
     kind?: string;
     status?: string;
     detail?: string;
+    /** Large output left in storage on load; see `loadToolDetail`. */
+    detailOmitted?: boolean;
     preview?: ToolPreview;
     /** Every file in a multi-file edit, retained for checkpoint recovery. */
     paths?: string[];
@@ -731,6 +735,10 @@ export function retargetSessionToProject(
     ...(harness === session.harness
       ? {}
       : { providerSessionId: undefined, providerAccountId: undefined }),
+    // Only a blank shell adopts the new project's account; a conversation
+    // retains its existing account binding.
+    ...(cwd === session.cwd || session.blocks.some((block) => block.role === "user")
+      ? {} : { providerAccountId: undefined }),
     ...(resolved.id === session.model && harness === session.harness && cwd === session.cwd
       ? {}
       : { context: dropContextWindow(session.context) }),

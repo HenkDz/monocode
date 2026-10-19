@@ -22,6 +22,7 @@ import type { PiFlavor } from "./piFlavor";
 import { PiRpc } from "./piClient";
 import { piSubagentEvents } from "./piSubagents";
 import {
+  turnMetricsFromUsage,
   agentEndWillRetry,
   asRecord,
   assistantDeltaFromEvent,
@@ -30,7 +31,6 @@ import {
   buildPiSteer,
   contextFromSessionStats,
   contextFromUsage,
-  turnMetricsFromUsage,
   extensionUiResponse,
   extensionUiTitle,
   forkMessagesFromRpcData,

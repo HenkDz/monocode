@@ -12,6 +12,7 @@ import {
 import { codexCommandPresentation } from "../../../integrations/harness/providers/codex/codexProtocol";
 import { recoverCursorSubagents } from "../../../integrations/harness/providers/cursor/cursorSubagents";
 import { persistableAttachment } from "../model/attachments";
+import { ARTIFACT_KINDS } from "../../artifacts/artifacts";
 import type { ContextUsage } from "../model/contextUsage";
 import {
   isRemoteProjectPath,
@@ -719,6 +720,8 @@ export async function readPersistedSession(sessionId: string): Promise<Session |
   return record ? recordToSession(record) : null;
 }
 
+export const readSession = readPersistedSession;
+
 export function getSession(sessionId: string): Promise<Session | null> {
   return writeSession(sessionId, save => loadSession(sessionId, save));
 }
@@ -727,6 +730,53 @@ async function loadSession(sessionId: string, save: typeof saveSessionSnapshot):
   const session = await readPersistedSession(sessionId);
   if (!session) return null;
   if (session.monoTranscript) monoSavedBlocks.set(sessionId, session.blocks);
+  return repairSession(session, {}, save);
+}
+
+/** Fetched output stays off its block, so saves never ship it back. */
+const TOOL_DETAIL_CACHE_CHARS = 2_000_000;
+const toolDetailCache = new Map<string, string | null>();
+let toolDetailCacheChars = 0;
+
+/**
+ * Output a loaded transcript omitted (`detailOmitted`), read when its row is
+ * expanded. `stepId` names a step inside the block's subagent run.
+ */
+export async function loadToolDetail(
+  sessionId: string,
+  blockId: string,
+  stepId?: string,
+): Promise<string | null> {
+  const key = `${sessionId}\0${blockId}\0${stepId ?? ""}`;
+  const cached = toolDetailCache.get(key);
+  if (cached !== undefined) {
+    toolDetailCache.delete(key);
+    toolDetailCache.set(key, cached);
+    return cached;
+  }
+  const detail = await invoke<string | null>("session_tool_detail", {
+    sessionId,
+    blockId,
+    stepId: stepId ?? null,
+  });
+  toolDetailCache.set(key, detail);
+  toolDetailCacheChars += detail?.length ?? 0;
+  for (const [oldest, value] of toolDetailCache) {
+    if (toolDetailCacheChars <= TOOL_DETAIL_CACHE_CHARS) break;
+    if (oldest === key) break;
+    toolDetailCache.delete(oldest);
+    toolDetailCacheChars -= value?.length ?? 0;
+  }
+  return detail;
+}
+
+/** A progressive caller publishes the repair against current state before persisting. */
+export async function repairSession(
+  source: Session,
+  { persist = true }: { persist?: boolean } = {},
+  save: typeof saveSessionSnapshot = upsertSession,
+): Promise<Session> {
+  const session = { ...source };
   if (session.harness === "claude" && session.providerSessionId) {
     const toolIds = shellPlaceholderIds(session.blocks);
     if (toolIds.length) {
@@ -739,7 +789,7 @@ async function loadSession(sessionId: string, save: typeof saveSessionSnapshot):
         const blocks = backfillClaudeShellCommands(session.blocks, commands);
         if (blocks !== session.blocks) {
           session.blocks = blocks;
-          await save(session);
+          if (persist) await save(session);
         }
       } catch {
         // A missing or unreadable Claude transcript must not block the session.
@@ -755,7 +805,7 @@ async function loadSession(sessionId: string, save: typeof saveSessionSnapshot):
       session.blocks = blocks;
       // A failed write must not cost the reader the session. The repair stays
       // in memory and the next load retries it.
-      await save(session).catch(() => undefined);
+      if (persist) await save(session).catch(() => undefined);
     }
   }
   if (session.harness !== "omp" || !session.providerSessionId) {
@@ -773,13 +823,31 @@ async function loadSession(sessionId: string, save: typeof saveSessionSnapshot):
       // Persist before exposing the restored session to a new live turn.
       // Re-reading the source on later loads allows partial repairs to retry;
       // deterministic IDs ensure already repaired transcripts are not written.
-      await save(session);
+      if (persist) await save(session);
     }
   } catch {
     // Source logs may be absent/unreadable. Even a failed write must not stop
     // restore; the recovered in-memory boundaries can still be displayed.
   }
   return session;
+}
+
+/** Never let a delayed repair replace a newer stream, edit, or provider binding. */
+export function applySessionRepair(
+  current: Session,
+  source: Session,
+  repaired: Session,
+): Session {
+  if (
+    current.id !== source.id ||
+    current.blocks !== source.blocks ||
+    current.harness !== source.harness ||
+    current.providerSessionId !== source.providerSessionId ||
+    current.providerAccountId !== source.providerAccountId ||
+    repaired.blocks === source.blocks
+  )
+    return current;
+  return { ...current, blocks: repaired.blocks };
 }
 
 export function backfillClaudeShellCommands(
@@ -1165,7 +1233,7 @@ function sanitizeBlock(
     const cards = block.artifactCards.flatMap((card) => {
       if (
         !card ||
-        card.kind !== "document" ||
+        !ARTIFACT_KINDS.includes(card.kind) ||
         typeof card.id !== "string" ||
         !isPersistableId(card.id) ||
         typeof card.title !== "string" ||
@@ -1175,7 +1243,7 @@ function sanitizeBlock(
       return [
         {
           id: card.id,
-          kind: "document" as const,
+          kind: card.kind,
           title: card.title.slice(0, 200),
           ...(typeof card.summary === "string" && card.summary.trim()
             ? { summary: card.summary.slice(0, 280) }
@@ -1511,6 +1579,9 @@ function sanitizeAgentRun(value: unknown): AgentRunMeta | null {
         ...(typeof row.toolKind === "string" ? { toolKind: row.toolKind } : {}),
         ...(typeof row.status === "string" ? { status: row.status } : {}),
         ...(typeof row.detail === "string" ? { detail: row.detail } : {}),
+        ...(row.detailOmitted === true && typeof row.detail !== "string"
+          ? { detailOmitted: true }
+          : {}),
         ...(row.preview && typeof row.preview === "object"
           ? { preview: row.preview as AgentStep["preview"] }
           : {}),

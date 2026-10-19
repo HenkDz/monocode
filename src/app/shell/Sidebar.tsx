@@ -6,6 +6,7 @@ import { TeamMapNav } from "../../features/teamMap/navigation";
 // CC7C entry point stays outside CC7A's ProjectRail.
 import { MissionControlNav } from "../../features/commandCenter/ui/MissionControl";
 import { AttentionQueueNav } from "../../features/commandCenter/ui/AttentionQueue";
+import { IntegrationsNav } from "../../features/integrations/ui/IntegrationsNav";
 import { openPullRequests } from "../../features/pullRequests/model/pullRequestView";
 import { NO_BRANCH_LABEL } from "../../features/source-control/model/worktrees";
 import {
@@ -389,6 +390,7 @@ type Props = {
   onOpenMissionControl?: () => void;
   onOpenUsage?: () => void;
   onOpenAttentionQueue?: () => void; // CC7D shell hook
+  onOpenIntegrations?: () => void;
   workspaceWorktrees?: ReactNode;
   projectStatus?: string;
   projectStatuses?: ReadonlyMap<string, string>;
@@ -517,6 +519,7 @@ function SidebarComponent({
   onOpenMissionControl,
   onOpenUsage,
   onOpenAttentionQueue,
+  onOpenIntegrations,
   workspaceWorktrees,
   projectStatus,
   projectStatuses,
@@ -2467,6 +2470,7 @@ function SidebarComponent({
       items={[
         onOpenTeamMap && { label: "Command map", icon: Share, active: commandMapActive, onClick: onOpenTeamMap },
         onOpenAttentionQueue && { label: "Decisions", icon: CircleAlert, active: decisionsActive, badge: [...(decisionCounts?.values() ?? [])].reduce((sum, count) => sum + count, 0), onClick: onOpenAttentionQueue },
+        onOpenIntegrations && { label: "Integrations", icon: FileScript, onClick: onOpenIntegrations },
         onOpenInbox && {
           label: "Inbox",
           icon: Inbox,
@@ -2635,6 +2639,7 @@ function SidebarComponent({
               onOpenMissionControl={onOpenMissionControl}
                 onOpenUsage={onOpenUsage}
                 onOpenAttentionQueue={onOpenAttentionQueue}
+                onOpenIntegrations={onOpenIntegrations}
               searchActive={searchActive}
               inboxActive={inboxActive}
           pullRequestsActive={pullRequestsActive}
@@ -3242,6 +3247,7 @@ function SidebarComponent({
           onOpenMissionControl={onOpenMissionControl}
           onOpenUsage={onOpenUsage}
           onOpenAttentionQueue={onOpenAttentionQueue}
+          onOpenIntegrations={onOpenIntegrations}
           onOpenSettings={onOpenSettings}
           onTogglePanel={onToggleProjectRail}
           onLeaveActive={onGoBack}
@@ -3255,6 +3261,7 @@ function SidebarComponent({
         {onOpenMissionControl && <MissionControlNav onOpen={onOpenMissionControl} />}
         {onOpenUsage && <UsageDashboardNav onOpen={onOpenUsage} />}
         {onOpenAttentionQueue && <AttentionQueueNav onOpen={onOpenAttentionQueue} />}
+        {onOpenIntegrations && <IntegrationsNav onOpen={onOpenIntegrations} />}
         {onOpenTeamMap && <TeamMapNav onOpen={onOpenTeamMap} />}
         <ProjectRail
           sessions={sessions}
@@ -3433,6 +3440,7 @@ function SidebarProjectPicker({
   onOpenMissionControl,
   onOpenUsage,
   onOpenAttentionQueue,
+  onOpenIntegrations,
   searchActive = false,
   inboxActive = false,
   pullRequestsActive = false,
@@ -3456,6 +3464,7 @@ function SidebarProjectPicker({
   onOpenMissionControl?: () => void;
   onOpenUsage?: () => void;
   onOpenAttentionQueue?: () => void;
+  onOpenIntegrations?: () => void;
   searchActive?: boolean;
   inboxActive?: boolean;
   pullRequestsActive?: boolean;
@@ -3530,6 +3539,7 @@ function SidebarProjectPicker({
         {onOpenMissionControl && <MissionControlNav compact onOpen={onOpenMissionControl} />}
         {onOpenUsage && <UsageDashboardNav compact onOpen={onOpenUsage} />}
         {onOpenAttentionQueue && <AttentionQueueNav compact onOpen={onOpenAttentionQueue} />}
+        {onOpenIntegrations && <IntegrationsNav compact onOpen={onOpenIntegrations} />}
         {onOpenTeamMap && <TeamMapNav compact onOpen={onOpenTeamMap} />}
         {onOpenAutomations ? (
           <IconButton
@@ -3586,6 +3596,7 @@ function CompactProjectRail({
   onOpenMissionControl,
   onOpenUsage,
   onOpenAttentionQueue,
+  onOpenIntegrations,
   automationsActive,
   onOpenSettings,
   onTogglePanel,
@@ -3624,6 +3635,7 @@ function CompactProjectRail({
   onOpenMissionControl?: () => void;
   onOpenUsage?: () => void;
   onOpenAttentionQueue?: () => void;
+  onOpenIntegrations?: () => void;
   automationsActive: boolean;
   onOpenSettings?: () => void;
   onTogglePanel?: () => void;
@@ -3823,6 +3835,7 @@ function CompactProjectRail({
         {onOpenMissionControl && <MissionControlNav compact onOpen={onOpenMissionControl} />}
         {onOpenUsage && <UsageDashboardNav compact onOpen={onOpenUsage} />}
         {onOpenAttentionQueue && <AttentionQueueNav compact onOpen={onOpenAttentionQueue} />}
+        {onOpenIntegrations && <IntegrationsNav compact onOpen={onOpenIntegrations} />}
         {onOpenTeamMap && <TeamMapNav compact onOpen={onOpenTeamMap} />}
       </div>
       <div className="min-h-2 flex-1" />

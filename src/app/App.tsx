@@ -20,6 +20,11 @@ import { WorkspaceContextTabs, WorkspaceGoals, WorkspaceWorktree, WorkspaceWorkt
 import { workspaceTeam } from "./shell/WorkspaceTeam";
 import { TeamMap } from "../features/teamMap/TeamMap";
 import { commandMapDecisions } from "../features/teamMap/commandMapDecisions";
+import { ProjectIntegrations } from "../features/integrations/ui/ProjectIntegrations";
+import { IntegrationRequestCard } from "../features/integrations/ui/IntegrationRequestCard";
+import { INTEGRATIONS_SCOPE, projectSkillRequest } from "../features/integrations/model/projectIntegrations";
+import { capabilityDecisionReason } from "../features/integrations/model/integrationCapabilities";
+import type { OwnedDecision } from "../features/commandCenter/model/decisionView";
 // CC7C integration: Mission control uses the existing full-view navigation.
 import { MissionControl, MISSION_CONTROL_SCOPE } from "../features/commandCenter/ui/MissionControl";
 import { useUsageDashboard } from "../features/providers/model/useUsageDashboard";
@@ -1684,6 +1689,7 @@ function Workspace({
   const decisionLoadKey = JSON.stringify([monosSnap, teamMap.open, decisionRefresh]);
   const [, setDecisionNow] = useState(Date.now);
   const decisionPending = useRef(new Set<string>()), decisionAccepted = useRef(new Set<string>());
+  const [integrationRefresh, setIntegrationRefresh] = useState(0);
   useEffect(() => {
     let cancelled = false;
     void Promise.all(listMonos().filter(mono => mono.role === "manager" && mono.archivedAt == null).map(mono => monoManagerGoals.hydrate(mono.id)))
@@ -10224,6 +10230,8 @@ function Workspace({
   const submitSessionRef = useRef(submitSession);
   submitSessionRef.current = submitSession;
   const decisionActions: DecisionUiActions = {
+    context: capabilityDecisionReason,
+    installCard: item => renderIntegrationRequest(item),
     answer: (event, managerId, decisionId, optionId) => sendDecisionFromClick(event, `${managerId}:${decisionId}`, optionId, {
       read: () => monoManagerGoals.decisions(managerId).find(row => row.id === decisionId),
       open: async id => !!await ensureOpenSession(id),
@@ -10253,6 +10261,19 @@ function Workspace({
       const manager = listMonos().find(mono => mono.role === "manager" && mono.archivedAt == null && mono.projects.some(path => sameProjectPath(path, project)));
       if (manager) onOpenTeamMap(manager.id);
     },
+  };
+  const integrationLog = async (project: string, line: string) => {
+    const manager = listMonos().find(mono => mono.role === "manager" && mono.archivedAt == null && mono.projects.some(path => sameProjectPath(path, project)));
+    if (!manager) throw Error("Project Manager is unavailable for the activity log");
+    recordCrewMessage({ id: `integration:${crypto.randomUUID()}`, managerId: manager.id, senderId: "user", recipientId: manager.id,
+      topic: "Integrations", kind: "info", requiresReply: false, text: line, summary: line, at: Date.now() });
+  };
+  const renderIntegrationRequest = (item: OwnedDecision) => {
+    if (remoteProjectFor(item.decision.projectId)) return null;
+    const request = projectSkillRequest(item, listMonos(), sessionsRef.current, orchestrator.snapshot(), monoManagerGoals.goals());
+    return request ? <IntegrationRequestCard item={request}
+      onAction={async event => { await decisionActions.answer(event, item.managerId, item.decision.id, "later"); }}
+      onLog={line => integrationLog(item.decision.projectId, line)} onChanged={() => setIntegrationRefresh(value => value + 1)} /> : null;
   };
   const saveDraftRef = useRef(onSaveDraft);
   saveDraftRef.current = onSaveDraft;
@@ -17399,6 +17420,7 @@ function Workspace({
               onOpenMissionControl={monosEnabled ? () => onOpenTeamMap(MISSION_CONTROL_SCOPE) : undefined}
               onOpenUsage={() => onOpenTeamMap(USAGE_DASHBOARD_SCOPE)}
               onOpenAttentionQueue={monosEnabled ? () => onOpenTeamMap(DECISIONS_SCOPE) : undefined}
+              onOpenIntegrations={monosEnabled ? () => onOpenTeamMap(INTEGRATIONS_SCOPE) : undefined}
       onGoToFile={onGoToFile}
       searchActive={searchViewOpen}
       inboxActive={inboxViewOpen && pullRequestsViewScope === null}
@@ -17575,7 +17597,7 @@ function Workspace({
                 })} />
               {/* CC7D shell hook: existing sources and execution callbacks only. */}
               {teamMap.open && teamMap.scope === DECISIONS_SCOPE && <>
-                <div className="flex gap-5 px-6 pt-4 text-xs text-content/65"><button type="button" onClick={teamMap.close}>Back to conversation</button><button type="button" onClick={() => onOpenTeamMap(ATTENTION_QUEUE_SCOPE)}>Approvals &amp; blockers</button></div>
+                <div className="flex gap-5 px-6 pt-4 text-xs text-content/65"><button type="button" onClick={teamMap.close}>Back to conversation</button><button type="button" onClick={() => onOpenTeamMap(ATTENTION_QUEUE_SCOPE)}>Approvals &amp; blockers</button><button type="button" onClick={() => onOpenTeamMap(INTEGRATIONS_SCOPE)}>Integrations</button></div>
                 <Decisions view={selectDecisionView(monoManagerGoals, listMonos(), Date.now())} roster={listMonos()} actions={decisionActions} error={decisionError}
                   attentionCount={teamDecisions(listMonos(), sessions, orchestrationRuns).length}
                   attention={<AttentionQueue sessions={sessions} runs={orchestrationRuns} open presentation="panel"
@@ -17603,7 +17625,19 @@ function Workspace({
                 {usage.historyWarning && <p role="status" className="px-6 pt-3 text-xs text-content/65">{usage.historyWarning}</p>}
                 <UsageDashboard snapshot={usage.snapshot} history={usage.history} onRefresh={usage.refresh} onOpenSettings={() => openSettings("providers", "provider-accounts")} />
               </div>}
-              {teamMap.open && teamMap.scope !== MISSION_CONTROL_SCOPE && teamMap.scope !== ATTENTION_QUEUE_SCOPE && teamMap.scope !== DECISIONS_SCOPE && teamMap.scope !== USAGE_DASHBOARD_SCOPE && <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+              {teamMap.open && teamMap.scope === INTEGRATIONS_SCOPE && <div className="flex min-h-0 flex-1 flex-col">
+                <div className="flex gap-5 px-6 pt-4 text-xs text-content/65"><button type="button" onClick={teamMap.close}>Back to conversation</button><button type="button" onClick={() => onOpenTeamMap(DECISIONS_SCOPE)}>Decisions</button></div>
+                <ProjectIntegrations key={pathKey(sidebarCwd)} project={sidebarCwd} roster={listMonos()} sessions={sessions} runs={orchestrationRuns} goals={monoManagerGoals.goals()}
+                  decisions={listMonos().filter(mono => mono.role === "manager" && mono.archivedAt == null).flatMap(manager => monoManagerGoals.decisions(manager.id).map(decision => ({ managerId: manager.id, decision })))}
+                  refresh={integrationRefresh} onChanged={() => setIntegrationRefresh(value => value + 1)} onLog={line => integrationLog(sidebarCwd, line)}
+                  onRequest={async (event, request) => {
+                    const manager = listMonos().find(mono => mono.role === "manager" && mono.archivedAt == null && mono.projects.some(project => sameProjectPath(project, request.projectPath)));
+                    const decision = manager && monoManagerGoals.decisions(manager.id).find(row => row.id === request.id);
+                    if (!manager || !decision || !projectSkillRequest({ managerId: manager.id, decision }, listMonos(), sessionsRef.current, orchestrator.snapshot(), monoManagerGoals.goals())) throw Error("This ask is no longer available");
+                    await decisionActions.answer(event, manager.id, request.id, "later");
+                  }} />
+              </div>}
+              {teamMap.open && teamMap.scope !== MISSION_CONTROL_SCOPE && teamMap.scope !== ATTENTION_QUEUE_SCOPE && teamMap.scope !== DECISIONS_SCOPE && teamMap.scope !== USAGE_DASHBOARD_SCOPE && teamMap.scope !== INTEGRATIONS_SCOPE && <div className="flex min-h-0 min-w-0 flex-1 flex-col">
                 {decisionError ? <p role="alert" className="px-6 py-3 text-sm">{decisionError} <button type="button" onClick={() => { setDecisionError(undefined); setDecisionRefresh(value => value + 1); }}>Try again</button></p>
                   : decisionLoaded !== decisionLoadKey && <p role="status" className="px-6 py-3 text-sm">Loading decisions…</p>}
                 <TeamMap key={teamMap.scope ?? "org"} sessions={sessions} runs={orchestrationRuns} statuses={managerPrStatuses} scope={teamMap.scope} onClose={teamMap.close} onOpenMono={id => void onOpenMono(id)}

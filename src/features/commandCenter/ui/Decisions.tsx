@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import type { Mono } from "../../monos/model/mono";
-import type { ProjectAutonomy } from "../../monos/model/monoDecisions";
+import type { MonoDecision, ProjectAutonomy } from "../../monos/model/monoDecisions";
 import { projectName } from "../../../shared/lib/paths";
 import { decisionActorName, type DecisionView, type OwnedDecision } from "../model/decisionView";
 import "./decisions.css";
@@ -11,6 +11,8 @@ export type DecisionUiActions = {
   autonomy(event: Event, managerId: string, projectId: string, value: ProjectAutonomy): Promise<void>;
   openProject(projectId: string): void;
   wasAccepted?(managerId: string, decisionId: string): boolean;
+  context?(decision: MonoDecision): string;
+  installCard?(item: OwnedDecision): ReactNode;
 };
 export function DecisionCard({ item, roster, actions, sentInitially = false, sentToBoss = false }: { item: OwnedDecision; roster: readonly Mono[]; actions: DecisionUiActions; sentInitially?: boolean; sentToBoss?: boolean }) {
   const { decision, managerId } = item;
@@ -31,7 +33,8 @@ export function DecisionCard({ item, roster, actions, sentInitially = false, sen
     <ol className="decision-chain" aria-label="Escalation chain">{decision.escalationChain.map(entry => <li key={entry.id} data-level={entry.level}>{decisionActorName(roster, entry.id)}</li>)}</ol>
     <h2 id={titleId}>{decision.question}</h2>
     <p className="decision-meta"><span className="decision-impact" data-impact={decision.impact}>{decision.impact === "med" ? "Medium" : decision.impact === "high" ? "High" : "Low"} impact</span><span>{projectName(decision.projectId)}</span></p>
-    <p className="decision-context">{decision.context}</p>
+    <p className="decision-context">{actions.context?.(decision) ?? decision.context}</p>
+    {actions.installCard?.(item)}
     <div className="decision-options" aria-label="Decision options">{decision.options.map(option => <button type="button" key={option.id} disabled={busy || sent} data-recommended={option.id === decision.recommendedOptionId}
       onClick={event => choose(event.nativeEvent, option.id)}><span>{option.label}</span>{option.id === decision.recommendedOptionId && <small>Recommended</small>}</button>)}</div>
     <footer><button type="button" onClick={() => actions.openProject(decision.projectId)}>Open project <span aria-hidden="true">→</span></button>

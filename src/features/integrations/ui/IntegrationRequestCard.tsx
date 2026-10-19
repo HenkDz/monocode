@@ -1,4 +1,4 @@
-import { useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { SecondaryButton } from "../../../shared/ui/SecondaryButton";
 import type { CapabilityRequest } from "../model/integrationCapabilities";
 import { inspectLocalProjectSkill, type ProjectSkillInspection } from "../model/localToolAdapters";
@@ -10,6 +10,7 @@ export type IntegrationRequestView = {
   project: string; projectPath: string; mono: string; goal: string;
   provider: "gh CLI" | "local MCP" | "skill";
   available: boolean; unavailableReason?: string;
+  answerable?: boolean; installedPath?: string;
   status: "pending" | "completed" | "declined" | "uncertain";
 };
 /** Dismissing a suggestion only sends an ordinary answer; it never installs. */
@@ -29,9 +30,12 @@ function SkillInstallCard({ item, onAction, onLog, onChanged }: Props) {
   const [inspection, setInspection] = useState<ProjectSkillInspection>();
   const [showDetails, setShowDetails] = useState(false), [busy, setBusy] = useState(false);
   const [installed, setInstalled] = useState(false), [error, setError] = useState("");
+  useEffect(() => {
+    if (item.installedPath) { setInstalled(false); setInspection(undefined); }
+  }, [item.installedPath]);
   const running = useRef(false);
   const operationBusy = useProjectSkillBusy(inspection?.project ?? item.projectPath, item.name);
-  const pending = item.status === "pending" && !installed;
+  const pending = item.status === "pending" && !installed && !item.installedPath;
   const disabled = busy || operationBusy || !item.available || !item.projectPath || !item.request.source;
 
   async function act(event: Event, action: "inspect" | "install" | "later") {
@@ -59,13 +63,13 @@ function SkillInstallCard({ item, onAction, onLog, onChanged }: Props) {
       <ul>{inspection.files.map(file => <li key={file.path}><code>{file.path}</code> · {file.bytes.toLocaleString()} bytes</li>)}</ul>
       <p className="integration-note">Files are copied as inspected. Nothing runs during install.</p></>}
     {!item.available && <p className="integration-note">{item.unavailableReason ?? "Installation is unavailable for this project."}</p>}
-    {installed && <p role="status">Installed in {item.project}</p>}
-    {item.status === "declined" && <p role="status">Not now</p>}
+    {(installed || item.installedPath) && <p role="status">Installed in {item.project}</p>}
+    {item.status === "declined" && !installed && !item.installedPath && <p role="status">Not now</p>}
     <div className="integration-actions">
       {pending && <>{!inspection && <SecondaryButton disabled={disabled} onClick={event => void act(event.nativeEvent, "inspect")}>Inspect files</SecondaryButton>}
         <button type="button" className="integration-primary" disabled={disabled || !inspection}
           data-integration-execute={buttonId} onClick={event => void act(event.nativeEvent, "install")}>{busy ? "Working…" : "Install"}</button>
-        <SecondaryButton disabled={busy || operationBusy} onClick={event => void act(event.nativeEvent, "later")}>Not now</SecondaryButton></>}
+        {item.answerable !== false && <SecondaryButton data-decision-ui disabled={busy || operationBusy} onClick={event => void act(event.nativeEvent, "later")}>Not now</SecondaryButton>}</>}
       <SecondaryButton aria-expanded={showDetails} aria-controls={detailsId} onClick={() => setShowDetails(value => !value)}>Details</SecondaryButton>
     </div>
     {showDetails && <div id={detailsId} className="integration-tools"><p>Mono: {item.mono} · Goal: {item.goal}</p>

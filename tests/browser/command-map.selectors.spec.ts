@@ -7,7 +7,7 @@ test.beforeEach(async ({ page }) => {
 test("durable question survives a failed worker in the map tooltip and drawer", async ({ page }) => {
   await page.goto("/tests/browser/command-map.html?selector=question");
   const project = page.getByRole("button", { name: "Open browser-link-4 project", exact: true });
-  await expect(project.locator('.command-map-team i').first()).toHaveAttribute("title", /Choose the API contract/);
+  await expect(project.locator('.command-map-team i').first()).toHaveAttribute("title", "Atlas · Needs you");
   await project.click();
   const task = page.getByRole("dialog").locator(".command-map-task").first();
   await expect(task).toContainText("Choose the API contract");

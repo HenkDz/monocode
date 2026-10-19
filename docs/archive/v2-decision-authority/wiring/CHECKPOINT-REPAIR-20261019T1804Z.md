@@ -1,0 +1,11 @@
+# Review repair checkpoint — targeted checks stable, candidate not frozen
+
+Historical review pin 438741ca7874407ca72dc9811002d9814bb2bf27 remains FIX-FIRST. Fourteen working-tree paths contain the required repair delta; no native paths changed. Clean historical checkpoints and all raw failures remain preserved. FIX-FIRST-REPAIR-CONTRACT.md describes the exact current repair contract.
+
+P1-A now retires exact stale V2 members before Manager digest acceptance and preserves unrelated reports for the next digest. Actual App tests cover completed/stopped-before-acceptance, then consumed report and a later wave without manual Resume. P1-B restores Stop's existing empty-queue semantics, retains nonempty queue pauses, and tests actual Continue preflight plus goal/Mission callback forwarding and a consumable later escalation.
+
+P2-A isolates receipt recovery and limits action ingress to its target. P2-B preserves every readable autonomy value; unknown policy fails to everything with a visible uncertainty control until explicit choice. P2-C loads all Manager ledgers, persists/readbacks Stop evidence in the existing transcript, surfaces failed retirement, blocks/retries subsequent work, and proves reload cannot reuse old authority. Production page-reader source includes system blocks, so this needs no native delta. P3 tests consumed-first duplicate handling, no empty retirement dequeue, truthful pending ingress, and both real Orchestrator ack/retire orderings with unrelated report delivery after reload.
+
+Affected gate PASS: wired-focused-20261019T175850Z, 521/521 tests, 16/16 files, no skips. Previous 513-pass/6-fail run is retained at wired-focused-20261019T175324Z; each failure was corrected without assertion/deadline/skip weakening. No full wired suite has started.
+
+No active B child remains. The next tsc attempt was refused before Node launch because valid CIM free RAM was 1847255040 bytes (below required 3 GiB); the refusal is preserved by wired-gate.ps1/ram-gates.log. Exact corrected freeze/manifest/review delta follow final source inspection and a successful targeted type check; final full/browser/build and existing Claude plus fresh independent review remain pending. Root owns A reviewer scheduling, integration, release, and all provider/native acceptance boundaries.

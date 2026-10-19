@@ -1,0 +1,7 @@
+# Source frozen; serial final validation pending root resume
+
+HEAD `ce861a1e7d8dd803c4981d705830554ec13e78a2`, tree `26bb5b13006b70ec9aa192a284f196619aaaac4b`; clean checkout. MANIFEST-ce861a1.json: two-path delta from136b8fa, 33 total paths from accepted V1, zero native paths. REVIEW-DELTA-ce861a1.md binds only invalidated App digest acceptance/Stop functions plus connected tests. WRITER-ORDER-INVENTORY.md documents all hydration/writer/goal-ledger callers and the three repaired same-root cycles.
+
+No heavy gate has run on this pin. Git diff --check passes. Expected focused total532; tsc/browser/build/full and both reviews remain unwaived. Root B heavy HOLD continues, jobs0, no source edits during gates. Independent136's real production-writer failure and unchanged1000ms regression are preserved under v2-runtime-review; all own historical raw failures/checkpoints remain. Root plans one validation stream followed by a fresh final independent reviewer after an accepted A checkpoint/release; no worker completion or integration is claimed.
+
+All ten historical wiring items remain mapped by PENDING-STATUS-136b8fa.md, with this exact writer-order repair replacing the136 acceptance/Stop details and item10 still pending. No native/provider turn, app/foreign process action, alternate bus/store, actor override, queue reentrancy, deadline/assertion/skip weakening, launch/push/deploy or SHIP claim is introduced.

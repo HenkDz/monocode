@@ -1,0 +1,11 @@
+# V2 data checkpoint
+
+2026-10-19: isolated implementation on exact accepted base 8232734e. Existing Claude's eight contract clarifications read and incorporated in the API/CONTRACT. Scope: new monoDecisions model/tests plus existing monoManagerGoals optional state/methods; no native/schema/registration/App/UI/prompt changes.
+
+Actual first completed focused gate: 185 passed / 0 failed, six files (54 new decision tests). Initial focused invocation stopped at expected stderr because the PowerShell harness treated native stderr as terminating; raw attempt1 retained. npm install similarly returned harness failure at an allow-scripts warning despite reporting 434 packages installed in 3m. Gate harness corrected to retain stderr and actual exit code; no application tests weakened.
+
+Frozen HEAD `f31f4288ed06c0227629c110e0df1ccf9af71d37`, tree `d5c0d7b993dfd532fb6e9308294cdb05abe85fcc`. Final focused **189/0** (58 decision tests), **tsc exit0**, **build exit0**, **full Vitest exit0: 9346 passed / 0 failed / 13 skipped, 691 passed files / 2 skipped files**, workers1, 1693.37 seconds. All 58 decision tests passed in full. Actual parent/tinypool-fork startup records (696 processes) prove process-local `--no-experimental-webstorage` and absent experimental localStorage; source frozen throughout gates.
+
+Claude final exact-source report read fully: **CLEARED foundation**, with its terminal green-gate condition now satisfied at the exact pin; root directs no churn for two P2s assigned to V2 UI/wiring (autonomy with no active goal; corrupt-history quarantine/repair). P3s: classification cannot bypass actual operation approvals, user reminders map to UI. Root owns separate release preparation/integration.
+
+Terminal full counts and exact skipped names are in `gate-summary.json`/`full.json`; raw logs retained. Final manifest recheck clean and exact; all validation sessions exited; `cleanup.json` reports zero recorded owned Node survivors and no process stopped. **FULL B RELEASED / owned heavy jobs 0**, sent as `msg_d15857f4a9dc`. No native/schema/registration changes, parallel channel, fanout, source drift, app launch, nour mutation or push. Native/provider/profile/browser acceptance is not established by these synthetic data tests. Root alone integrates; ready for the single worker_done.

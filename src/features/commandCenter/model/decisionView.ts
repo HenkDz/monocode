@@ -1,5 +1,5 @@
 import type { Mono } from "../../monos/model/mono";
-import type { MonoDecision, DecisionQuarantine } from "../../monos/model/monoDecisions";
+import type { MonoDecision, DecisionQuarantine, DecisionAutonomyChange } from "../../monos/model/monoDecisions";
 import type { MonoManagerGoals } from "../../monos/model/monoManagerGoals";
 import { pathKey } from "../../../shared/lib/paths";
 
@@ -12,6 +12,8 @@ export type DecisionView = {
   pruned: number;
   loading: string[];
   quarantine: { managerId: string; entries: DecisionQuarantine[] }[];
+  autonomyConflicts: { managerId: string; projectId: string }[];
+  autonomyChanges: { managerId: string; change: DecisionAutonomyChange }[];
 };
 
 /** Shared by the Decisions page, project drawer and command-map rail. */
@@ -32,6 +34,10 @@ export function selectDecisionView(ledger: MonoManagerGoals, roster: readonly Mo
     pruned: managers.reduce((count, manager) => count + ledger.decisionsPruned(manager.id), 0),
     loading: managers.filter(manager => ledger.decisionHistoryState(manager.id) === "loading").map(manager => manager.id),
     quarantine: managers.map(manager => ({ managerId: manager.id, entries: ledger.decisionQuarantine(manager.id) })).filter(item => item.entries.length > 0),
+    autonomyConflicts: managers.flatMap(manager => ledger.autonomyConflicts(manager.id).map(projectId => ({ managerId: manager.id, projectId })))
+      .filter(entry => projectId === undefined || pathKey(entry.projectId) === pathKey(projectId)),
+    autonomyChanges: managers.flatMap(manager => ledger.autonomyChanges(manager.id).map(change => ({ managerId: manager.id, change })))
+      .filter(entry => projectId === undefined || pathKey(entry.change.projectId) === pathKey(projectId)).sort((a, b) => b.change.at - a.change.at),
   };
 }
 

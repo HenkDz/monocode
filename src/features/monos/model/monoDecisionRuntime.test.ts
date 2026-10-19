@@ -30,10 +30,11 @@ async function fixture() {
     dispatches: [{ id: "dispatch", taskId: "task", sessionId: "worker-session", workspace: { id: "checkout", projectCwd: "/project", checkoutCwd: "/project/worker", kind: "worktree" }, state: "running", stage: "turn_submitted", startedAt: 42, updatedAt: 42 }] };
   const notifications = new Map<string, string>();
   const host: DecisionRuntimeHost = { ledger, roster: () => roster, sessions: () => [...sessions.values()], runs: () => [run], generation: () => 1,
+    hydrate: vi.fn(async () => {}),
     eventOwner: id => ["habit-session", "automation-session"].includes(id) ? "boss" : undefined,
     queue: vi.fn(async (message, decision, validate) => {
       const recipientId = message.recipientId === "worker" ? "worker-session" : roster.find(mono => mono.id === message.recipientId)!.sessionId!;
-      await queueDecisionEvidence("manager", message, decision, validate, { recipient: () => sessions.get(recipientId), update: async (id, change) => { sessions.set(id, change(sessions.get(id)!)); } });
+      await queueDecisionEvidence("manager", message, decision, validate, { recipient: () => sessions.get(recipientId), update: async (id, change) => { sessions.set(id, change(sessions.get(id)!)); }, read: async id => structuredClone(sessions.get(id)) });
     }),
     notifyUser: vi.fn(async (id, decision, validate) => { validate(); notifications.set(id, decision.id); }),
     askManager: vi.fn(async () => {}),
@@ -61,7 +62,7 @@ it("routes an authenticated question and answer through the real ledger and exis
   expect(message.monoDecision).toMatchObject({ decisionId: f.question.id, recipientId: "worker", resolutionVersion: 1 });
   expect(message.id).toMatch(/^decision-[a-f0-9]{64}$/);
   expect(queuedMessageForSubmit(worker, message.id, "steer")).toBeUndefined();
-  await assertDecisionQueueConsumer(message, "worker", decision, runtimeDecisionHost("manager", { kind: "mono", id: "manager" }, "", undefined, f.host));
+  await assertDecisionQueueConsumer(message, "worker", () => decision, runtimeDecisionHost("manager", { kind: "mono", id: "manager" }, "", undefined, f.host));
   const restored = new MonoManagerGoals(f.storage); await restored.hydrate("manager");
   expect(restored.decisions("manager")[0]).toMatchObject({ status: "decided", selectedOptionId: "reuse" });
   expect(restored.goals("manager")).toHaveLength(1);
@@ -73,9 +74,9 @@ it("dedupes exact queued events and rejects forged or stale restored evidence", 
   await f.act("manager", "resolve", { optionId: "reuse" });
   const message = f.sessions.get("worker-session")!.queuedMessages![0], decision = f.ledger.decisions("manager")[0];
   const host = runtimeDecisionHost("manager", { kind: "mono", id: "manager" }, "", undefined, f.host);
-  await expect(assertDecisionQueueConsumer({ ...message, text: "forged approval" }, "worker", decision, host)).rejects.toThrow("retained delivery");
+  await expect(assertDecisionQueueConsumer({ ...message, text: "forged approval" }, "worker", () => decision, host)).rejects.toThrow("retained delivery");
   f.run.tasks[0].status = "cancelled";
-  await expect(assertDecisionQueueConsumer(message, "worker", decision, host)).rejects.toThrow();
+  await expect(assertDecisionQueueConsumer(message, "worker", () => decision, host)).rejects.toThrow();
   expect(f.run.tasks[0].status).toBe("cancelled");
 });
 
@@ -90,7 +91,7 @@ it.each(["habit-session", "automation-session"])("refuses user resolve/delegate/
 it("refuses programmatic UI events before actor:user can be created", async () => {
   const f = await fixture();
   expect(() => assertDecisionUiGesture(new Event("click"))).toThrow("direct click");
-  expect(() => executeDecisionUi(new Event("click"), "manager", "policy", { action: "autonomy", projectId: "/project", value: "everything" }, f.host)).toThrow("direct click");
+  await expect(executeDecisionUi(new Event("click"), "manager", "policy", { action: "autonomy", projectId: "/project", value: "everything" }, f.host)).rejects.toThrow("direct click");
   expect(f.ledger.autonomy("manager", "/project")).toBe("high-impact-only");
 });
 
@@ -122,4 +123,69 @@ it("retains failed-save authority and rejects an actor whose turn changed while 
   release(); await prior;
   await expect(action).rejects.toThrow("turn changed");
   expect(f.ledger.decisions("manager")[0].status).toBe("pending");
+});
+
+it("retains the ledger outbox until an exact queue event is read back, then retries once", async () => {
+  const f = await fixture();
+  const queue = f.host.queue;
+  f.host.queue = vi.fn(async (message, decision, validate) => {
+    await queueDecisionEvidence("manager", message, decision, validate, {
+      recipient: () => f.sessions.get("manager-session"),
+      update: async (id, change) => { f.sessions.set(id, change(f.sessions.get(id)!)); },
+      read: async id => ({ ...f.sessions.get(id)!, queuedMessages: [] }),
+    });
+  });
+  await expect(f.ingest()).rejects.toThrow("could not be verified");
+  expect(f.ledger.decisions("manager")).toHaveLength(1);
+  expect(f.sessions.get("manager-session")!.queuedMessages).toHaveLength(1);
+  f.host.queue = queue;
+  await f.ingest();
+  expect(queue).toHaveBeenCalledTimes(1);
+  expect(f.sessions.get("manager-session")!.queuedMessages).toHaveLength(1);
+  await f.ingest();
+  expect(queue).toHaveBeenCalledTimes(1);
+});
+
+it("rejects a stopped sender during a ledger save before publishing any delivery", async () => {
+  const f = await fixture();
+  const save = f.storage.save.getMockImplementation()!;
+  f.storage.save.mockImplementationOnce(async (id, value) => {
+    await save(id, value);
+    f.sessions.set("worker-session", { ...f.sessions.get("worker-session")!, busy: false });
+  });
+  await expect(f.ingest()).rejects.toThrow("active team turn");
+  expect(f.host.queue).not.toHaveBeenCalled();
+  expect(f.sessions.get("manager-session")!.queuedMessages).toBeUndefined();
+  expect(f.ledger.decisions("manager")).toHaveLength(1);
+});
+
+it("rechecks the current retained version after an awaited digest and in its publication guard", async () => {
+  const f = await fixture(); await f.ingest();
+  const message = f.sessions.get("manager-session")!.queuedMessages![0];
+  const host = runtimeDecisionHost("manager", { kind: "mono", id: "manager" }, "", undefined, f.host);
+  const current = () => f.ledger.decisions("manager")[0];
+  const validate = await assertDecisionQueueConsumer(message, "manager", current, host);
+  validate();
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const digest = crypto.subtle.digest.bind(crypto.subtle);
+  const spy = vi.spyOn(crypto.subtle, "digest").mockImplementationOnce(async (...args) => { await held; return digest(...args); });
+  const pending = assertDecisionQueueConsumer(message, "manager", current, host);
+  await f.act("manager", "raise-impact", { impact: "high" });
+  release();
+  await expect(pending).rejects.toThrow("stale");
+  spy.mockRestore();
+  expect(validate).toThrow("stale");
+});
+
+it.each(["generation", "stop", "binding"])("rejects a %s change while awaiting actual context hydration", async change => {
+  const f = await fixture();
+  f.host.hydrate = async () => {
+    if (change === "generation") f.host.generation = () => 2;
+    if (change === "stop") f.sessions.set("worker-session", { ...f.sessions.get("worker-session")!, busy: false });
+    if (change === "binding") f.sessions.set("worker-session", { ...f.sessions.get("worker-session")!, providerAccountId: "new-account" });
+  };
+  await expect(f.ingest()).rejects.toThrow();
+  expect(f.ledger.decisions("manager")).toEqual([]);
+  expect(f.host.queue).not.toHaveBeenCalled();
 });

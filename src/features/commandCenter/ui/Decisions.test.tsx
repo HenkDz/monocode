@@ -11,7 +11,7 @@ let host: HTMLDivElement, root: ReturnType<typeof createRoot>;
 const roster: Mono[] = [{ id: "worker", name: "Builder", role: "member", projects: ["/project"], mascot: "w", color: "blue" },
   { id: "manager", name: "Manager", role: "manager", projects: ["/project"], mascot: "m", color: "blue" },
   { id: "boss", name: "Boss", role: "orchestrator", projects: [], mascot: "b", color: "blue" }];
-const empty = (): DecisionView => ({ pending: [], log: [], teamPending: 0, handledToday: 0, pruned: 0, loading: [], quarantine: [] });
+const empty = (): DecisionView => ({ pending: [], log: [], teamPending: 0, handledToday: 0, pruned: 0, loading: [], quarantine: [], autonomyConflicts: [], autonomyChanges: [] });
 const decision = (): MonoDecision => ({ id: "worker-session:question", projectId: "/project", question: "<img src=x onerror=alert(1)> Which option?", impact: "med", context: "<script>untrusted</script>",
   options: [{ id: "reuse", label: "Reuse" }, { id: "change", label: "Change" }], recommendedOptionId: "reuse", recommenderId: "worker", operation: "work", status: "pending", deciderLevel: "user", currentLevel: 3,
   resolutionVersion: 2, deliveryState: "current", createdAt: 1, updatedAt: 1, history: [], escalationChain: [{ id: "worker", level: "worker" }, { id: "manager", level: "manager" }, { id: "boss", level: "boss" }, { id: "user", level: "user" }] } as unknown as MonoDecision);
@@ -66,4 +66,16 @@ it("shows bounded read-only quarantine evidence and sends only a re-raise reques
   await act(async () => button("Ask the Manager to re-raise").click());
   expect(handlers.reraise).toHaveBeenCalledWith(expect.any(Event), "manager", expect.stringMatching(/^decision-/), "old-id");
   expect(handlers.command).not.toHaveBeenCalled();
+});
+
+it("shows stricter conflict notice and the durable explicit user consolidation in its log", async () => {
+  const view: DecisionView = { ...empty(), autonomyConflicts: [{ managerId: "manager", projectId: "/project" }],
+    autonomyChanges: [{ managerId: "manager", change: { type: "autonomy-change", actorId: "user", projectId: "/project", at: 1000,
+      replaced: [{ projectId: "/project", value: "everything" }, { projectId: "/project/", value: "high-impact-only" }], value: "medium-and-up" } }] };
+  await act(async () => root.render(<Decisions view={view} roster={roster} actions={actions()} />));
+  expect(host.textContent).toContain("using the stricter one");
+  await act(async () => button("Decision log").click());
+  expect(host.textContent).toContain("everything / high-impact-only → medium-and-up");
+  expect(host.textContent).toContain("You · explicit project setting");
+  expect(host.querySelector("time")?.dateTime).toBe(new Date(1000).toISOString());
 });

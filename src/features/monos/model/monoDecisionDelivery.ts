@@ -18,6 +18,8 @@ export async function queueDecisionEvidence(managerId: string, message: Decision
   recipient(): Session | undefined;
   /** Existing session writer: evaluate change against current state inside its serialization. */
   update(sessionId: string, change: (session: Session) => Session): Promise<void>;
+  /** Read the serialized session back from storage, never the published in-memory copy. */
+  read(sessionId: string): Promise<Session | undefined>;
 }): Promise<void> {
   validate();
   const recipient = host.recipient();
@@ -45,19 +47,34 @@ export async function queueDecisionEvidence(managerId: string, message: Decision
     return { ...current, queuedMessages: [...(current.queuedMessages ?? []), queued], queueStatus: current.queueStatus ?? "active" };
   });
   assertRecipient();
+  const persisted = await host.read(recipient.id);
+  assertRecipient();
+  const saved = persisted?.queuedMessages?.find(entry => entry.id === id) ??
+    persisted?.blocks.find(block => block.internal && block.appRequestId === id);
+  if (!saved || persisted?.id !== recipient.id || saved.text !== queued.text ||
+      JSON.stringify(saved.monoDecision) !== JSON.stringify(queued.monoDecision) || saved.appRequestId !== id)
+    throw Error("Decision evidence queue save could not be verified");
 }
 
 /** Call immediately before queue publication/turn submission; metadata is a reference, never authority. */
-export async function assertDecisionQueueConsumer(message: QueuedMessage, recipientId: string, decision: MonoDecision | undefined, host: DecisionHost): Promise<void> {
-  const reference = message.monoDecision;
-  if (!reference || !decision || reference.decisionId !== decision.id || reference.recipientId !== recipientId ||
-      reference.resolutionVersion !== decision.resolutionVersion || !decision.escalationChain.some(entry => entry.id === recipientId) ||
-      !reference.eventId.startsWith(`decision:${decision.id}:${decision.resolutionVersion}:`) || decision.deliveryState !== "current")
-    throw Error("Decision evidence is stale or unavailable");
-  assertDecisionCurrent(decision, host);
-  const expected = retainedDecisionDelivery(decision, reference.eventId);
-  if (reference.managerId !== host.current(decision).run.ownerMonoId || !expected || expected.event.id !== reference.eventId || expected.recipientId !== recipientId ||
-      message.text !== decisionEvidenceText(expected) || message.id !== await decisionQueueId(reference.eventId) || message.appRequestId !== message.id)
-    throw Error("Decision evidence does not match its retained delivery");
-  assertDecisionCurrent(decision, host);
+export async function assertDecisionQueueConsumer(message: QueuedMessage, recipientId: string, read: () => MonoDecision | undefined, host: DecisionHost): Promise<() => void> {
+  const validate = () => {
+    const decision = read();
+    const reference = message.monoDecision;
+    if (!reference || !decision || reference.decisionId !== decision.id || reference.recipientId !== recipientId ||
+        reference.resolutionVersion !== decision.resolutionVersion || !decision.escalationChain.some(entry => entry.id === recipientId) ||
+        !reference.eventId.startsWith(`decision:${decision.id}:${decision.resolutionVersion}:`) || decision.deliveryState !== "current")
+      throw Error("Decision evidence is stale or unavailable");
+    assertDecisionCurrent(decision, host);
+    const expected = retainedDecisionDelivery(decision, reference.eventId);
+    if (reference.managerId !== host.current(decision).run.ownerMonoId || !expected || expected.event.id !== reference.eventId || expected.recipientId !== recipientId ||
+        message.text !== decisionEvidenceText(expected) || message.appRequestId !== message.id)
+      throw Error("Decision evidence does not match its retained delivery");
+    assertDecisionCurrent(decision, host);
+  };
+  validate();
+  const id = await decisionQueueId(message.monoDecision!.eventId);
+  validate();
+  if (message.id !== id) throw Error("Decision evidence does not match its retained delivery");
+  return validate;
 }

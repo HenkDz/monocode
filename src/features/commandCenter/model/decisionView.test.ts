@@ -39,3 +39,15 @@ it("only previews bounded unreadable pending text without reconstructing active 
   expect(unreadableDecisionPreview({ ...entry, raw: "invalid JSON" })).toEqual([]);
   expect(entry.raw).toBe(raw);
 });
+
+it("derives conflict notices and retained consolidation receipts for the actual project only", async () => {
+  const change = { type: "autonomy-change", actorId: "user", projectId: "C:/Project", at: 1000,
+    replaced: [{ projectId: "C:/Project", value: "everything" }, { projectId: "c:/project/", value: "high-impact-only" }], value: "medium-and-up" };
+  const ledger = new MonoManagerGoals({ load: async () => ({ version: 1, goals: [], receipts: { audit: { signature: "retained", result: change } },
+    autonomy: { "C:/Project": "everything", "c:/project/": "high-impact-only" } }), save: async () => {} });
+  await ledger.hydrate("manager");
+  const view = selectDecisionView(ledger, roster, 1000, "c:\\project");
+  expect(view.autonomyConflicts).toEqual([{ managerId: "manager", projectId: "c:/project" }]);
+  expect(view.autonomyChanges).toEqual([{ managerId: "manager", change }]);
+  expect(selectDecisionView(ledger, roster, 1000, "C:/Other").autonomyChanges).toEqual([]);
+});

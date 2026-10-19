@@ -4,7 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MonoManagerGoals, type GoalLedger, type MonoManagerGoal } from "./monoManagerGoals";
-import { bossMayDecide, decisionAuthorityGuidance, parseDecisionPayload, validateDecisionHistory, type DecisionCommand, type DecisionHost, type DecisionPayload, type DecisionSnapshot } from "./monoDecisions";
+import { bossMayDecide, decisionAuthorityGuidance, parseDecisionPayload, parseDecisionAction, validateDecisionHistory, type DecisionCommand, type DecisionHost, type DecisionPayload, type DecisionSnapshot } from "./monoDecisions";
 import { addManagerWakeEvent, type ManagerWakeState } from "../../orchestration/model/managerWake";
 import { newSession } from "../../sessions/model/session";
 import type { CrewMessage } from "./monoCrewEvents";
@@ -351,6 +351,77 @@ it.each(["member", "orchestrator", "archived", "missing"])("rejects %s as an aut
   await expect(f.ledger.handleDecision("manager", "policy", { action: "autonomy", projectId: "/project", value: "everything" }, f.host)).rejects.toThrow("Unknown decision project");
   expect(f.storage.save).not.toHaveBeenCalled();
 });
+
+it.each([
+  ["C:\\Work\\Project\\", "c:/work/project", "C:/WORK/PROJECT/"],
+  ["\\\\Server\\Share\\Project\\", "//server/share/project", "//SERVER/SHARE/PROJECT/"],
+])("uses one canonical autonomy policy for Windows project %s without a goal", async (rosterPath, canonical, alias) => {
+  const f = fixture();
+  Object.assign(f.saved.get("manager")!, { goals: [], autonomy: { [rosterPath]: "everything", "/other": "medium-and-up" } });
+  f.state.roster[1].projects = [rosterPath];
+  f.host.actor = { kind: "user" };
+  f.host.current = () => { throw Error("no active goal"); };
+  await f.reload();
+  expect(f.ledger.autonomy("manager", alias)).toBe("everything");
+  await f.ledger.handleDecision("manager", "alias-policy", { action: "autonomy", projectId: alias, value: "medium-and-up" }, f.host);
+  await f.reload();
+  expect(f.saved.get("manager")!.autonomy).toEqual({ [canonical]: "medium-and-up", "/other": "medium-and-up" });
+  expect(f.ledger.autonomy("manager", rosterPath)).toBe("medium-and-up");
+  expect(f.ledger.autonomyChanges("manager")).toEqual([]);
+  expect(f.saved.get("manager")!.goals).toEqual([]);
+});
+
+it("uses stricter conflicting aliases without blocking user resolution and audits explicit consolidation", async () => {
+  const f = fixture();
+  f.state.goal.projectId = "C:/Work/Project";
+  f.state.run.cwd = "c:/work/project/";
+  for (const mono of f.state.roster) mono.projects = ["C:\\WORK\\Project"];
+  const policies = { "c:\\work\\project\\": "everything" as const };
+  f.saved.get("manager")!.autonomy = policies;
+  await f.ingest();
+  await expect(f.act("manager", "resolve", { optionId: "reuse" })).rejects.toThrow("required authority");
+  f.saved.get("manager")!.autonomy = { ...policies, "C:/Work/Project": "high-impact-only" };
+  await f.reload();
+  const before = structuredClone(f.saved.get("manager"));
+  expect(f.ledger.autonomy("manager", "C:/WORK/PROJECT")).toBe("everything");
+  expect(f.ledger.autonomyConflicts("manager")).toEqual(["c:/work/project"]);
+  await expect(f.act("manager", "resolve", { optionId: "reuse" })).rejects.toThrow("required authority");
+  await f.act("manager", "escalate"); await f.act("boss", "escalate");
+  await f.act("user", "resolve", { optionId: "reuse" });
+  expect(f.ledger.decisions("manager")[0]).toMatchObject({ status: "decided", decidedBy: "user" });
+  f.host.actor = { kind: "user" };
+  await f.ledger.handleDecision("manager", "conflict", { action: "autonomy", projectId: "C:/work/project", value: "medium-and-up" }, f.host);
+  await f.reload();
+  expect(f.saved.get("manager")!.autonomy).toEqual({ "c:/work/project": "medium-and-up" });
+  expect(f.ledger.autonomyConflicts("manager")).toEqual([]);
+  expect(f.ledger.autonomyChanges("manager")).toEqual([{ type: "autonomy-change", projectId: "c:/work/project", actorId: "user", at: expect.any(Number),
+    replaced: Object.entries(before!.autonomy!).map(([projectId, value]) => ({ projectId, value })), value: "medium-and-up" }]);
+});
+
+it("keeps differently cased POSIX project policies separate", async () => {
+  const f = fixture();
+  f.saved.get("manager")!.autonomy = { "/Project": "everything", "/project": "medium-and-up" };
+  await f.reload();
+  expect(f.ledger.autonomy("manager", "/Project")).toBe("everything");
+  expect(f.ledger.autonomy("manager", "/project")).toBe("medium-and-up");
+});
+
+it.each([
+  { action: "resolve", optionId: "reuse" }, { action: "escalate" },
+  { action: "raise-impact", impact: "high" }, { action: "remind" },
+])("parses only exact bounded team decision action $action", command => {
+  expect(parseDecisionAction({ version: 1, type: "decision-action", decisionId: "worker:question", expectedVersion: 0, ...command }))
+    .toEqual({ decisionId: "worker:question", expectedVersion: 0, ...command });
+});
+
+it.each([
+  { actor: { kind: "user" } }, { requestId: "text-retry" }, { expectedVersion: -1 }, { expectedVersion: 0.5 },
+  { expectedVersion: "0" }, { expectedVersion: Number.MAX_SAFE_INTEGER + 1 }, { decisionId: "x".repeat(257) },
+  { optionId: "x".repeat(65) }, { optionId: "" }, { action: "escalate", optionId: "reuse" },
+  { action: "delegate" }, { action: "autonomy" }, { action: "raise-impact", impact: "unknown", optionId: undefined },
+])("rejects malformed, unbounded or impersonated team action %j", delta => {
+  expect(() => parseDecisionAction({ version: 1, type: "decision-action", action: "resolve", decisionId: "worker:question", expectedVersion: 0, optionId: "reuse", ...delta })).toThrow();
+});
 it("caps resolved history at 200, retains every pending record and keeps duplicate tombstones", async () => {
   const f = fixture(); await f.ingest(); await f.act("manager", "resolve", { optionId: "reuse" });
   const record = f.ledger.decisions("manager")[0];
@@ -378,6 +449,30 @@ it("refuses oversized saves while retaining prior durable values", async () => {
   await expect(f.ingest()).rejects.toThrow("capacity");
   expect(f.host.deliver).not.toHaveBeenCalled();
   expect(f.saved.get("manager")!.decisions).toBeUndefined();
+});
+
+it("preserves the exact autonomy audit receipt through decision compaction, retry and reload", async () => {
+  const f = fixture();
+  f.saved.get("manager")!.autonomy = { "/project": "everything", "/project/": "high-impact-only" };
+  f.host.actor = { kind: "user" };
+  const command = { action: "autonomy" as const, projectId: "/project", value: "high-impact-only" as const };
+  const result = await f.ledger.handleDecision("manager", "audit-policy", command, f.host);
+  const receipt = structuredClone(f.saved.get("manager")!.receipts["audit-policy"]);
+  f.host.actor = { kind: "mono", id: "worker" };
+  await f.ingest(); await f.act("manager", "resolve", { optionId: "reuse" });
+  const record = f.ledger.decisions("manager")[0];
+  f.saved.get("manager")!.decisions = Array.from({ length: 205 }, (_, index) => ({ ...structuredClone(record),
+    id: `audit-history-${index}`, source: { ...record.source, id: `audit-history-${index}` }, decidedAt: index, createdAt: 0, updatedAt: index }));
+  await f.reload();
+  await f.ledger.acknowledgeEvents("manager", []);
+  await f.reload();
+  expect(f.ledger.decisions("manager")).toHaveLength(200);
+  expect(f.ledger.decisionsPruned("manager")).toBe(5);
+  expect(f.saved.get("manager")!.receipts["audit-policy"]).toEqual(receipt);
+  expect(f.ledger.autonomyChanges("manager")).toEqual([result]);
+  f.host.actor = { kind: "user" };
+  expect(await f.ledger.handleDecision("manager", "audit-policy", command, f.host)).toEqual(result);
+  expect(f.ledger.autonomyChanges("manager")).toHaveLength(1);
 });
 
 it("round-trips the production control_save/control_load adapter through a synthetic disk SQLite database", async () => {

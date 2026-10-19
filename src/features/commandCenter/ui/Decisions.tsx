@@ -94,12 +94,17 @@ export function Decisions({ view, roster, actions, unavailable = false, presenta
     <div className="decisions-scroll">
       {unavailable && <p role="alert">Decision history is unavailable. Actions will return when it can be loaded.</p>}
       {!!view.loading.length && <p role="status">Loading decision history for {view.loading.length} {view.loading.length === 1 ? "Manager" : "Managers"}…</p>}
+      {!!view.autonomyConflicts.length && <p className="decision-note">Autonomy setting had conflicting copies; using the stricter one.</p>}
       <DecisionQuarantineNotice quarantine={view.quarantine} actions={actions} disabled={unavailable} />
       {tab === "pending" ? <>{view.pending.map(item => <DecisionCard key={`${item.managerId}:${item.decision.id}`} item={item} roster={roster} actions={actions} disabled={unavailable} />)}
         {!view.pending.length && !unavailable && !view.loading.length && <div className="decision-empty"><h2>Nothing needs your decision</h2><p>The team keeps working toward the goals.</p></div>}
         {!!view.teamPending && <p className="decision-note">{view.teamPending} {view.teamPending === 1 ? "decision is" : "decisions are"} with Managers &amp; the Boss.</p>}</>
         : view.log.length ? <ol className="decision-log">{view.log.map(({ managerId, decision }) => <DecisionHistory key={`${managerId}:${decision.id}`} decision={decision} roster={roster} />)}</ol>
         : <p className="decision-empty">No recorded decisions yet.</p>}
+      {tab === "log" && !!view.autonomyChanges.length && <ul className="decision-log" aria-label="Autonomy setting changes">{view.autonomyChanges.map(({ managerId, change }, index) =>
+        <li className="decision-log-item" key={`${managerId}:${change.at}:${index}`}><div><p>{projectName(change.projectId)} · Autonomy copies consolidated</p>
+          <strong>{[...new Set(change.replaced.map(copy => copy.value))].join(" / ")} → {change.value}</strong><small>You · explicit project setting</small></div>
+          <time dateTime={new Date(change.at).toISOString()}>{new Date(change.at).toLocaleString()}</time></li>)}</ul>}
       {!unavailable && !view.loading.length && <footer className="decisions-handled"><span aria-hidden="true">✓</span><p><strong>{view.handledToday}</strong> recorded decisions handled by Managers &amp; the Boss today</p>
         <button type="button" onClick={() => setTab("log")}>View log</button></footer>}
       {!!view.pruned && <p className="decision-note">{view.pruned} older records archived. Counts reflect retained, readable history.</p>}

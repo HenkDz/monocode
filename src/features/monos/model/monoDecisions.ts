@@ -92,6 +92,37 @@ const timestamp = (value: unknown) => typeof value === "number" && Number.isSafe
 export const projectAutonomy = (value: unknown = "high-impact-only") =>
   oneOf(value, ["high-impact-only", "medium-and-up", "everything"] as const);
 
+/** Legacy Windows spellings share policy; ask more when retained copies conflict. */
+export function decisionProjectAutonomy(autonomy: GoalLedger["autonomy"], projectId: string): ProjectAutonomy {
+  const values = Object.entries(autonomy ?? {}).filter(([project]) => pathKey(project) === pathKey(projectId))
+    .map(([, value]) => projectAutonomy(value));
+  return values.includes("everything") ? "everything" : values.includes("medium-and-up") ? "medium-and-up" : "high-impact-only";
+}
+
+export type DecisionAutonomyChange = {
+  type: "autonomy-change"; projectId: string; actorId: "user"; at: number;
+  replaced: { projectId: string; value: ProjectAutonomy }[]; value: ProjectAutonomy;
+};
+
+export type DecisionTeamAction = Exclude<DecisionCommand, { action: "ingest" | "autonomy" | "delegate" }>;
+
+/** Existing team.message text protocol: identity and retry ID come only from its authenticated envelope. */
+export function parseDecisionAction(value: unknown): DecisionTeamAction {
+  const raw = object(value);
+  if (raw.version !== 1 || raw.type !== "decision-action" ||
+      !["resolve", "escalate", "raise-impact", "remind"].includes(String(raw.action)))
+    throw Error("Team messages cannot impersonate user decision gestures");
+  const extra = raw.action === "resolve" ? "optionId" : raw.action === "raise-impact" ? "impact" : undefined;
+  if (Object.keys(raw).some(key => !["version", "type", "action", "decisionId", "expectedVersion", extra].includes(key)))
+    throw Error("Invalid decision action fields");
+  text(raw.decisionId, 256);
+  if (!timestamp(raw.expectedVersion)) throw Error("Invalid decision action version");
+  if (raw.action === "resolve") text(raw.optionId, 64);
+  if (raw.action === "raise-impact") oneOf(raw.impact, ["low", "med", "high"]);
+  const { version: _version, type: _type, ...command } = raw;
+  return command as DecisionTeamAction;
+}
+
 /** JSON occupies the existing team.message text field; summaries are never parsed as authority. */
 export function parseDecisionPayload(value: unknown): DecisionPayload {
   const raw = object(value);
@@ -388,11 +419,17 @@ export async function handleDecisionCommand(ownerId: string, requestId: string, 
   }
   if (Object.keys(ledger.receipts).length >= 4000) throw Error("Goal receipt capacity reached; history retained");
   if (command.action === "autonomy") {
-    ledger = { ...ledger, autonomy: { ...ledger.autonomy, [command.projectId]: command.value } };
+    const replaced = Object.entries(ledger.autonomy ?? {}).filter(([project]) => pathKey(project) === pathKey(command.projectId));
+    const autonomy = Object.fromEntries(Object.entries(ledger.autonomy ?? {}).filter(([project]) => pathKey(project) !== pathKey(command.projectId)));
+    ledger = { ...ledger, autonomy: { ...autonomy, [pathKey(command.projectId)]: command.value } };
+    const result: DecisionAutonomyChange | ProjectAutonomy = new Set(replaced.map(([, value]) => value)).size > 1
+      ? { type: "autonomy-change", projectId: pathKey(command.projectId), actorId: "user", at: Date.now(),
+          replaced: replaced.map(([projectId, value]) => ({ projectId, value })), value: command.value }
+      : command.value;
     assertProject();
-    await access.save(ownerId, { ...ledger, receipts: { ...ledger.receipts, [requestId]: { signature, result: command.value } } });
+    await access.save(ownerId, { ...ledger, receipts: { ...ledger.receipts, [requestId]: { signature, result } } });
     assertProject();
-    return command.value;
+    return result;
   }
   let decision: MonoDecision;
   let messages: DecisionDelivery[];
@@ -444,7 +481,7 @@ export async function handleDecisionCommand(ownerId: string, requestId: string, 
       actorId: host.actor.kind === "user" ? "user" : host.actor.id, level: reminding ? "boss" : current.level, at: now });
     decision.updatedAt = now;
     if (command.action === "resolve") {
-      const autonomy = projectAutonomy(ledger.autonomy?.[decision.projectId]);
+      const autonomy = decisionProjectAutonomy(ledger.autonomy, decision.projectId);
       if (current.level !== "user" && (!bossMayDecide(decision, autonomy) || current.level === "manager" && decision.impact !== "low")) throw Error("Escalate this decision to its required authority");
       if (!decision.options.some(option => option.id === command.optionId)) throw Error("Choose a retained decision option");
       decision = { ...decision, status: "decided", selectedOptionId: command.optionId, decidedBy: current.id, decidedAt: now };

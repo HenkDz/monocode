@@ -8,8 +8,8 @@ import type { Mono, MonoProject } from "./mono";
 import type { Block } from "../../sessions/model/session";
 import { assertManagerRequest } from "./managerAuthorizedWork";
 import type { ManagerRequestRecovery } from "./managerAuthorizedWork";
-import { handleDecisionCommand, recoverDecisionReceipt, validateDecisionHistory, quarantineDecisionHistory, compactDecisionHistory, projectAutonomy } from "./monoDecisions";
-import type { DecisionCommand, DecisionHost, DecisionReceipt, DecisionQuarantine, MonoDecision, ProjectAutonomy } from "./monoDecisions";
+import { handleDecisionCommand, recoverDecisionReceipt, validateDecisionHistory, quarantineDecisionHistory, compactDecisionHistory, decisionProjectAutonomy } from "./monoDecisions";
+import type { DecisionCommand, DecisionHost, DecisionReceipt, DecisionQuarantine, DecisionAutonomyChange, MonoDecision, ProjectAutonomy } from "./monoDecisions";
 
 /** Non-repository recents must not hide the projects that can own a Manager. */
 export async function validManagerProjects(projects: readonly MonoProject[], resolve: (path: string) => Promise<string>): Promise<{ project: MonoProject; folder: string }[]> {
@@ -227,7 +227,26 @@ export class MonoManagerGoals {
     return this.ledgers.get(id)?.decisionsPruned ?? 0;
   }
   autonomy(id: string, projectId: string): ProjectAutonomy {
-    return projectAutonomy(this.ledgers.get(id)?.autonomy?.[projectId]);
+    return decisionProjectAutonomy(this.ledgers.get(id)?.autonomy, projectId);
+  }
+  autonomyConflicts(id: string): string[] {
+    const copies = new Map<string, Set<ProjectAutonomy>>();
+    for (const [project, value] of Object.entries(this.ledgers.get(id)?.autonomy ?? {})) {
+      const key = pathKey(project);
+      copies.set(key, (copies.get(key) ?? new Set()).add(value));
+    }
+    return [...copies].filter(([, values]) => values.size > 1).map(([key]) => key);
+  }
+  autonomyChanges(id: string): DecisionAutonomyChange[] {
+    // Receipt results are display evidence, never authority; bound every retained preview field.
+    return structuredClone(Object.values(this.ledgers.get(id)?.receipts ?? {}).flatMap(({ result }) => {
+      const entry = result as DecisionAutonomyChange | null;
+      const path = (value: unknown) => typeof value === "string" && value.length > 0 && value.length <= 4000;
+      const policy = (value: unknown) => ["everything", "medium-and-up", "high-impact-only"].includes(String(value));
+      return entry?.type === "autonomy-change" && entry.actorId === "user" && path(entry.projectId) && policy(entry.value) &&
+        Number.isSafeInteger(entry.at) && entry.at >= 0 && Number.isFinite(new Date(entry.at).getTime()) && Array.isArray(entry.replaced) && entry.replaced.length <= 4000 &&
+        entry.replaced.every(copy => copy && path(copy.projectId) && policy(copy.value)) ? [entry] : [];
+    }));
   }
   handleDecision(id: string, requestId: string, command: DecisionCommand, host: DecisionHost) {
     const retained = structuredClone(command);

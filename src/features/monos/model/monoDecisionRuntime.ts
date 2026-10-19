@@ -3,7 +3,7 @@ import type { Session } from "../../sessions/model/session";
 import type { OrchestrationRun } from "../../orchestration/model/orchestrationState";
 import type { Mono } from "./mono";
 import type { MonoManagerGoals } from "./monoManagerGoals";
-import { parseDecisionPayload, type DecisionCommand, type DecisionDelivery, type DecisionHost, type DecisionSnapshot, type MonoDecision } from "./monoDecisions";
+import { parseDecisionPayload, parseDecisionAction, type DecisionCommand, type DecisionDelivery, type DecisionHost, type DecisionSnapshot, type MonoDecision } from "./monoDecisions";
 import type { CrewMessage } from "./monoCrewEvents";
 import { assertManagerDelivery, isManagerUserRequest, managerReportTasks, managerRequestBinding, managerRequestBindingCurrent } from "./managerAuthorizedWork";
 
@@ -15,6 +15,8 @@ export type DecisionRuntimeHost = {
   generation(sessionId: string): number;
   /** Runtime-owned habit/automation association, never a caller-supplied actor. */
   eventOwner(sessionId: string): string | undefined;
+  /** Await retained original goal/session/run hydration; never construct a user block. */
+  hydrate(): Promise<void>;
   /** Existing durable CC5D/session queued event path; MUST NOT steer or create user authority. */
   queue(message: DecisionDelivery, decision: MonoDecision, validate: () => void): Promise<void>;
   /** Upsert an in-app notification by exact event ID; pending rail derives from this same ledger. */
@@ -76,9 +78,10 @@ export function runtimeDecisionHost(managerId: string, actor: DecisionHost["acto
 }
 
 /** Only this UI adapter creates a user actor; other entry points derive the owning Mono. */
-export function executeDecisionUi(event: Event, managerId: string, requestId: string,
+export async function executeDecisionUi(event: Event, managerId: string, requestId: string,
   command: Exclude<DecisionCommand, { action: "ingest" }>, host: DecisionRuntimeHost): Promise<unknown> {
   assertDecisionUiGesture(event);
+  await host.hydrate();
   return host.ledger.handleDecision(managerId, requestId, command, runtimeDecisionHost(managerId, { kind: "user" }, "", undefined, host));
 }
 
@@ -98,6 +101,8 @@ export async function handleDecisionTeamMessage(sourceSessionId: string, request
   validateActor();
   if (message.senderId !== actor.id || message.id !== `${sourceSessionId}:${requestId}` || message.text.length > 6000)
     throw Error("Structured decision sender does not match its authenticated turn");
+  await host.hydrate();
+  validateActor();
   if (raw.type === "decision") {
     parseDecisionPayload(raw);
     const runs = host.runs().filter(run => run.status === "active" && !run.recovering &&
@@ -116,22 +121,20 @@ export async function handleDecisionTeamMessage(sourceSessionId: string, request
     return host.ledger.handleDecision(run.ownerMonoId!, requestId, { action: "ingest", goalId: goal.id, message },
       runtimeDecisionHost(run.ownerMonoId!, { kind: "mono", id: actor.id }, actor.id, goal.id, host, validateActor));
   }
-  const input = raw as Record<string, unknown>;
-  if (input.version !== 1 || !["resolve", "escalate", "raise-impact", "remind"].includes(String(input.action)))
-    throw Error("Team messages cannot impersonate user decision gestures");
+  const command = parseDecisionAction(raw);
   const retained = host.roster().filter(mono => mono.role === "manager").flatMap(manager => host.ledger.decisions(manager.id)
-    .filter(decision => decision.id === input.decisionId).map(decision => ({ managerId: manager.id, decision })));
+    .filter(decision => decision.id === command.decisionId).map(decision => ({ managerId: manager.id, decision })));
   if (retained.length !== 1) throw Error("Retained decision is unavailable");
   const { managerId, decision } = retained[0];
   if (message.managerId !== managerId || !decision.escalationChain.some(entry => entry.id === actor.id) ||
       !decision.escalationChain.some(entry => entry.id === message.recipientId)) throw Error("Decision action is outside its actual chain");
-  const command = Object.fromEntries(Object.entries(input).filter(([key]) => key !== "type" && key !== "version"));
-  return host.ledger.handleDecision(managerId, requestId, command as DecisionCommand,
+  return host.ledger.handleDecision(managerId, requestId, command,
     runtimeDecisionHost(managerId, { kind: "mono", id: actor.id }, decision.requestingMonoId, decision.identity.goalId, host, validateActor));
 }
 
 export async function reraiseUnreadableDecision(event: Event, managerId: string, requestId: string, oldDecisionId: string, host: DecisionRuntimeHost): Promise<void> {
   assertDecisionUiGesture(event);
+  await host.hydrate();
   const manager = host.roster().find(mono => mono.id === managerId && mono.role === "manager" && mono.archivedAt == null);
   const retained = host.ledger.decisionQuarantine(managerId).some(entry => {
     try {

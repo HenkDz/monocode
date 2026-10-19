@@ -73,6 +73,7 @@ export function ProjectAutonomyControl({ managerId, projectId, value, actions }:
     <button type="button" key={policy} aria-pressed={value === policy} disabled={busy} onClick={event => {
       if (pending.current) return;
       pending.current = true; setBusy(true); setError("");
-      void actions.autonomy(event.nativeEvent, managerId, projectId, policy).catch(() => setError("Couldn't save this setting — try again")).finally(() => { pending.current = false; setBusy(false); });
+      const gesture = event.nativeEvent;
+      void Promise.resolve().then(() => actions.autonomy(gesture, managerId, projectId, policy)).catch(() => setError("Couldn't save this setting — try again")).finally(() => { pending.current = false; setBusy(false); });
     }}>{label}</button>)}</div><p>Protected operations still ask you at execution time.</p>{error && <p role="alert">{error}</p>}</div>;
 }

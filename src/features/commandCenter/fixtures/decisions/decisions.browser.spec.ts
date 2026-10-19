@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { join } from "node:path";
 test.beforeEach(async ({ page }) => { await page.goto("/"); await expect(page.getByRole("heading", { name: "Should we reuse the existing queue?" })).toBeVisible(); });
 test("real click sends one ordinary queued user message; synthetic click sends nothing", async ({ page }) => {
-  const option = page.getByRole("button", { name: "Reuse the existing queue Recommended" });
+  const option = page.getByRole("article", { name: "Should we reuse the existing queue?" }).getByRole("button", { name: "Reuse the existing queue Recommended" });
   await option.dispatchEvent("click");
   await expect(page.getByRole("alert")).toContainText("Couldn't reach Atlas");
   expect(await page.evaluate(() => window.decisionFixture.sends.length)).toBe(0);
@@ -15,7 +15,7 @@ test("real click sends one ordinary queued user message; synthetic click sends n
   expect(queue?.blocks[queue.blocks.length - 1]).toMatchObject({ role: "user", text: sends[0].text });
 });
 test("normal refusal or missing chat leaves a visible retry; moved/stopped chat retains normal queue behavior", async ({ page }) => {
-  const option = page.getByRole("button", { name: "Reuse the existing queue Recommended" });
+  const option = page.getByRole("article", { name: "Should we reuse the existing queue?" }).getByRole("button", { name: "Reuse the existing queue Recommended" });
   await page.evaluate(() => window.decisionFixture.mode("missing")); await option.click();
   await expect(page.getByRole("alert")).toContainText("Couldn't reach Atlas");
   await page.evaluate(() => window.decisionFixture.mode("refuse")); await option.click();

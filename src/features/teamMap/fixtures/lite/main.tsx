@@ -33,6 +33,7 @@ function Fixture() {
       return sendDecisionFromClick(event, `${managerId}:${decisionId}`, optionId, {
         read: () => ledger.decisions(managerId).find(row => row.id === decisionId),
         open: async id => ["worker-chat", "boss-chat"].includes(id), bossSession: async () => "boss-chat",
+        askerName: id => roster.find(mono => mono.id === id)?.name ?? "the asker",
         submit: async (sessionId, text) => { sends.push({ sessionId, text }); return true; },
         record: async selected => {
           if (selected === undefined) await ledger.delegateDecision(managerId, decisionId);

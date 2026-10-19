@@ -224,6 +224,7 @@ fn project_mcp_inspect(project: &Path) -> Result<(ProjectMcpPin, Vec<std::fs::Fi
     project_mcp_pin_root(project, &mut guards)?;
     let project_identity = project_mcp_file_id(guards.last().ok_or("Missing project pin")?)?;
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    project_mcp_pin_root(exe.parent().ok_or("Missing executable directory")?, &mut guards)?;
     let mut executable = project_mcp_pin(&exe, false)?;
     if executable.metadata().map_err(|e| e.to_string())?.len() > 256 * 1024 * 1024 { return Err("Executable exceeds MCP pin bound".into()); }
     let mut hash = Sha256::new();
@@ -323,6 +324,7 @@ fn project_mcp_execute(request: ProjectMcpRead, cancel: std::sync::Arc<std::sync
     let (actual_pin, _guards) = project_mcp_inspect(Path::new(&request.project))?;
     if request.pin != actual_pin { return Err("MCP executable, schema or project identity changed; approve the new pin".into()); }
     if cancel.load(std::sync::atomic::Ordering::SeqCst) { return Err("MCP operation cancelled before launch".into()); }
+    if project_mcp_now()? >= request.deadline { return Err("MCP operation deadline expired before launch".into()); }
     let mut command = Command::new(std::env::current_exe().map_err(|e| e.to_string())?);
     command.args(["mcp-project-read", "--project", &request.project, "--identity", &request.pin.project_identity, "--path", &request.path, "--deadline", &request.deadline.to_string()])
         .env_clear().current_dir(&request.project).creation_flags(0x08000000)

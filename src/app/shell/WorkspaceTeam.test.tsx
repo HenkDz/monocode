@@ -3,6 +3,8 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Mono, MonoState } from "../../features/monos/model/mono";
+import { monoLiveState } from "../../features/monos/model/monoNavigation";
+import type { OrchestrationRun } from "../../features/orchestration/model/orchestrationState";
 import { WorkspaceTeam, workspaceTeam } from "./WorkspaceTeam";
 
 const mono = (id: string, extra: Partial<Mono> = {}): Mono => ({
@@ -109,4 +111,22 @@ it("shows honest unassigned project states without losing the pinned Boss", () =
   expect(host.textContent).toContain("No Manager assigned");
   expect(host.querySelector('[data-workspace-mono="Boss"]')).not.toBeNull();
   expect(host.querySelector('[data-workspace-mono="Atlas"]')).toBeNull();
+});
+
+it("carries the owning run's pause reason through the canonical state into its member row", () => {
+  const run = {
+    version: 2, leadId: "manager-run", ownerMonoId: "Manager", cwd: "C:/repo",
+    status: "paused", lastPauseReason: "Owner explicitly paused for review",
+    allowedHarnesses: ["codex"], maxWorkers: 1, cli: "fixture", continuations: 0, requests: {}, dispatches: [],
+    tasks: [{ id: "queued", memberId: "Atlas", title: "Review", status: "queued", dependsOn: [] }],
+  } as unknown as OrchestrationRun;
+  act(() => root.render(createElement(WorkspaceTeam, {
+    roster, project: "C:/repo",
+    states: new Map([["Atlas", monoLiveState(roster, [run], [], "Atlas")]]),
+    onOpen: vi.fn(), onCreate: vi.fn(), onDelete: vi.fn(),
+  })));
+  const row = host.querySelector<HTMLButtonElement>('[data-workspace-mono="Atlas"]')!;
+  expect(row.textContent).toContain("Queued");
+  expect(row.title).toContain("Owner explicitly paused for review");
+  expect(row.title).not.toContain("Waiting for an available worker");
 });

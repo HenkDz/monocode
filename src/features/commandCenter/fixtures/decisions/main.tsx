@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { createRoot } from "react-dom/client";
-import "../../../../styles/index.css";
+import "./styles.css";
 import { Decisions, ProjectAutonomyControl, type DecisionUiActions } from "../../ui/Decisions";
 import { selectDecisionView } from "../../model/decisionView";
 import { MonoManagerGoals } from "../../../monos/model/monoManagerGoals";

@@ -48,6 +48,7 @@ test("inspectable dark, light and narrow frames preserve readable cards and log"
   for (const [name, url, width] of [["dark", "/", 1280], ["light", "/?theme=light", 1280], ["narrow", "/?rail=1", 390]] as const) {
     await page.setViewportSize({ width, height: 1000 }); await page.goto(url);
     await expect(page.locator(".decision-card")).toHaveCount(2);
+    expect(await page.locator(".decision-card").first().evaluate(element => getComputedStyle(element).getPropertyValue("--color-stroke").trim())).not.toBe("");
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: join(process.env.CCV2_EVIDENCE_DIR!, `${name}.png`), fullPage: true });
   }

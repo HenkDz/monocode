@@ -2,9 +2,8 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 
 const evidence = process.env.CCFB4_EVIDENCE ?? "test-results/ccfb4/screenshots";
 
-async function scrollDrawer(page: Page, drawer: Locator) {
+async function scrollDrawer(page: Page, drawer: Locator, body = drawer.locator(".modal-panel > div")) {
   await drawer.locator(".modal-panel").evaluate(el => Promise.all(el.getAnimations().map(animation => animation.finished)));
-  const body = drawer.locator(".modal-panel > div");
   const close = drawer.getByRole("button", { name: "Close", exact: true });
   const header = drawer.locator(".modal-panel > header");
   const before = await header.boundingBox();
@@ -13,6 +12,7 @@ async function scrollDrawer(page: Page, drawer: Locator) {
   await page.mouse.wheel(0, 600);
   await expect.poll(() => body.evaluate(el => el.scrollTop)).toBeGreaterThan(0);
   await body.evaluate(el => { el.scrollTop = el.scrollHeight; });
+  expect(await body.evaluate(el => Math.abs(el.scrollHeight - el.clientHeight - el.scrollTop) <= 1)).toBe(true);
   await expect(close).toBeInViewport({ ratio: 1 });
   expect((await header.boundingBox())!.y).toBe(before!.y);
   return body;
@@ -60,7 +60,18 @@ for (const width of [1440, 390]) for (const theme of ["dark", "light"]) {
     await copy.click();
     expect(await page.evaluate(() => (window as unknown as { copiedPath: string }).copiedPath)).toBe("//?/C:/Users/synthetic/.codex");
     await expect(copy).toHaveAttribute("title", "//?/C:/Users/synthetic/.codex");
-    await expect(drawer.getByText("~/.codex", { exact: true }).first()).toBeVisible();
+    await expect(drawer.getByText("C:/Users/synthetic/.codex", { exact: true })).toBeVisible();
+    await summary.click();
+    await expect(list).toBeHidden();
+    await summary.click();
+    await expect(list).toBeVisible();
+    const last = drawer.getByRole("button").last();
+    await last.focus();
+    await page.keyboard.press("Tab");
+    await expect(drawer.getByRole("button", { name: "Close", exact: true })).toBeFocused();
+    await page.keyboard.press("Shift+Tab");
+    await expect(last).toBeFocused();
+    expect(await drawer.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
     await drawer.getByRole("button", { name: "Close", exact: true }).click();
     await expect(details).toBeFocused();
 
@@ -69,12 +80,15 @@ for (const width of [1440, 390]) for (const theme of ["dark", "light"]) {
     await manager.click();
     const message = page.getByRole("dialog", { name: "Review hand-off", exact: true });
     await scrollDrawer(page, message);
+    await expect(message.locator("time")).toBeInViewport({ ratio: 1 });
     await page.keyboard.press("Escape");
     await expect(manager).toBeFocused();
     const error = page.getByRole("button", { name: "Error details", exact: true });
     await error.click();
     const diagnostic = page.getByRole("dialog", { name: "Storage error details", exact: true });
-    await scrollDrawer(page, diagnostic);
+    await scrollDrawer(page, diagnostic, diagnostic.locator("pre"));
+    await diagnostic.getByRole("button", { name: "Copy details", exact: true }).click();
+    expect(await page.evaluate(() => (window as unknown as { copiedPath: string }).copiedPath)).toBe(await diagnostic.locator("pre").textContent());
     await diagnostic.getByRole("button", { name: "Close", exact: true }).click();
     await expect(error).toBeFocused();
     expect(errors).toEqual([]);

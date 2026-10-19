@@ -214,7 +214,7 @@ it("copies the raw selected home and context paths and announces clipboard failu
     receipt: { contextId: "base", contextIdentity: "synthetic", owners: [] },
   }] });
   await act(async () => root.render(<MonoCodexStorageSource harness="codex" cwd="/synthetic/repo" />));
-  expect(container.querySelector("span[title]")?.textContent).toBe("~/.codex");
+  expect(container.querySelector("span[title]")?.textContent).toBe("C:/Users/synthetic/.codex");
   const copy = container.querySelector<HTMLButtonElement>('[aria-label="Copy selected Codex home path"]')!;
   expect(copy.title).toBe(sourceHome);
   await act(async () => copy.click());
@@ -227,6 +227,29 @@ it("copies the raw selected home and context paths and announces clipboard failu
   await act(async () => copy.click());
   expect(container.querySelector('[role="status"]')?.textContent).toBe("Could not copy path");
   expect(native.retireCredentials).not.toHaveBeenCalled();
+});
+
+it.each([
+  ["//?/UNC/Users/share/context", "//Users/share/context"],
+  ["C:/Users/Other/.codex", "C:/Users/Other/.codex"],
+  ["/home/synthetic-backup/.codex", "/home/synthetic-backup/.codex"],
+  ["//?/UNC/home/share/context", "//home/share/context"],
+  ["//Users/share/context", "//Users/share/context"],
+  ["//home/share/context", "//home/share/context"],
+  ["//?/C:/Users/A/.codex", "C:/Users/A/.codex"],
+  ["C:/Users/AB/.codex", "C:/Users/AB/.codex"],
+  ["/home/Other/.codex", "/home/Other/.codex"],
+  ["Users/Other/context", "Users/Other/context"],
+  ["\\\\?\\C:\\Users\\A\\.codex", "C:/Users/A/.codex"],
+  ["\\\\?\\UNC\\Users\\share\\context", "//Users/share/context"],
+  ["\\\\?\\UNC\\home\\share\\context", "//home/share/context"],
+])("displays and copies %s without inventing a home or losing its server/share", async (sourceHome, display) => {
+  native.info.mockResolvedValue({ home: "/synthetic/mono", sourceHome, sourceKind: "account", shareHooks: false });
+  await act(async () => root.render(<MonoCodexStorageSource harness="codex" cwd="/synthetic/repo" />));
+  expect(container.querySelector("span[title]")?.textContent).toBe(display);
+  expect(container.querySelector("span[title]")?.getAttribute("title")).toBe(sourceHome);
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Copy selected Codex home path"]')!.click());
+  expect(native.copy).toHaveBeenCalledExactlyOnceWith(sourceHome);
 });
 
 it("gives explicit Elevated guidance and withholds ineffective Full access for restricted messages", async () => {

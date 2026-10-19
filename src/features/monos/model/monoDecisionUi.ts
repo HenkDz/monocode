@@ -1,10 +1,10 @@
 import { assertDecisionUiGesture, type MonoDecision } from "./monoDecisions";
 import type { SubmissionAcceptance } from "../../../app/model/submissionAcceptance";
 
-const quoted = (value: string) => value.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g, " ")
+const quoted = (value: string) => value.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ")
   .replace(/[`*_#\[\]<>~\\]/g, "").replace(/"/g, "'").replace(/\s+/g, " ").trim().slice(0, 120);
-export function decisionUserText(row: MonoDecision, optionId?: string): string {
-  if (optionId === undefined) return `Please decide on the asker's question "${quoted(row.question)}": ${row.options.map(option => `"${quoted(option.label)}"`).join(" or ")}.`;
+export function decisionUserText(row: MonoDecision, optionId?: string, askerName = "the asker"): string {
+  if (optionId === undefined) return `Please decide for "${quoted(askerName)}" on the asker's question "${quoted(row.question)}": ${row.options.map(option => `"${quoted(option.label)}"`).join(" or ")}.`;
   const option = row.options.find(option => option.id === optionId);
   if (!option) throw Error("Choose one of the options");
   return `Decision on your question "${quoted(row.question)}": go with "${quoted(option.label)}".`;
@@ -14,6 +14,7 @@ export type DecisionSendHost = {
   read(): MonoDecision | undefined;
   open(sessionId: string): Promise<boolean>;
   bossSession(bossId: string): Promise<string | undefined>;
+  askerName(id: string): string;
   submit(sessionId: string, text: string, attachments: []): SubmissionAcceptance;
   record(optionId?: string): Promise<void>;
   pending: Set<string>;
@@ -27,7 +28,7 @@ export async function sendDecisionFromClick(event: Event, key: string, optionId:
   const row = host.read();
   if (!row || row.readOnly || row.status !== "waiting" || row.noLongerNeededAt != null || row.answererId !== "user") throw Error("This ask no longer needs your answer");
   if (optionId === undefined && row.operation !== "work") throw Error("This ask needs your answer");
-  const text = decisionUserText(row, optionId);
+  const text = decisionUserText(row, optionId, host.askerName(row.requestingMonoId));
   host.pending.add(key);
   try {
     const boss = row.escalationChain.find(entry => entry.level === "boss");

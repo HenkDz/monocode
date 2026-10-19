@@ -10,13 +10,15 @@ export type DecisionUiActions = {
   answer(event: Event, managerId: string, decisionId: string, optionId?: string): Promise<{ logFailed: boolean }>;
   autonomy(event: Event, managerId: string, projectId: string, value: ProjectAutonomy): Promise<void>;
   openProject(projectId: string): void;
+  wasAccepted?(managerId: string, decisionId: string): boolean;
 };
 export function DecisionCard({ item, roster, actions, sentInitially = false }: { item: OwnedDecision; roster: readonly Mono[]; actions: DecisionUiActions; sentInitially?: boolean }) {
   const { decision, managerId } = item;
   const titleId = useId();
   const pending = useRef(false);
   const target = decisionActorName(roster, decision.requestingMonoId);
-  const [busy, setBusy] = useState(false), [sent, setSent] = useState(sentInitially), [notice, setNotice] = useState(sentInitially ? `Sent to ${target}` : "");
+  const acceptedInitially = sentInitially || !!actions.wasAccepted?.(managerId, decision.id);
+  const [busy, setBusy] = useState(false), [sent, setSent] = useState(acceptedInitially), [notice, setNotice] = useState(acceptedInitially ? "Answer sent" : "");
   const choose = (event: Event, optionId?: string) => {
     if (pending.current || sent) return;
     pending.current = true; setBusy(true); setNotice("");

@@ -10208,6 +10208,7 @@ function Workspace({
     answer: (event, managerId, decisionId, optionId) => sendDecisionFromClick(event, `${managerId}:${decisionId}`, optionId, {
       read: () => monoManagerGoals.decisions(managerId).find(row => row.id === decisionId),
       open: async id => !!await ensureOpenSession(id),
+      askerName: id => findMono(id)?.name ?? "the asker",
       bossSession: async id => {
         const boss = findMono(id);
         if (boss?.role !== "orchestrator" || boss.archivedAt != null) return;
@@ -10223,6 +10224,7 @@ function Workspace({
         }
       }, pending: decisionPending.current, accepted: decisionAccepted.current,
     }),
+    wasAccepted: (managerId, decisionId) => decisionAccepted.current.has(`${managerId}:${decisionId}`),
     autonomy: (event, managerId, projectId, value) => {
       const manager = findMono(managerId);
       if (manager?.role !== "manager" || manager.archivedAt != null || !manager.projects.some(project => sameProjectPath(project, projectId))) return Promise.reject(Error("Project is unavailable"));
@@ -13166,7 +13168,7 @@ function Workspace({
     void (async () => {
       const ended = new Set([
         ...monoManagerGoals.goals().filter(goal => goal.state === "done" || goal.state === "cancelled").map(goal => goal.id),
-        ...orchestrationRuns.flatMap(run => run.tasks.filter(task => task.status === "completed" || task.status === "cancelled").map(task => task.id)),
+        ...orchestrationRuns.flatMap(run => run.tasks.filter(task => ["completed", "cancelled", "failed", "interrupted"].includes(task.status)).map(task => task.id)),
       ]);
       const missing = new Set<string>();
       for (const manager of listMonos().filter(mono => mono.role === "manager")) {

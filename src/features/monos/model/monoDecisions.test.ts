@@ -42,14 +42,26 @@ it("records only the authenticated current answerer's ordinary reply and persist
   const f = fixture();
   await f.ledger.recordDecision("manager", ask());
   await f.ledger.delegateDecision("manager", message.id);
-  const reply = { ...message, id: "boss-chat:reply", recipientId: "worker", topic: `decision:${message.id}`, text: "Use the helper", kind: "decision" as const, at: Date.now() };
+  const reply = { ...message, id: "boss-chat:reply", recipientId: "worker", topic: "implementation", text: "Use the helper", kind: "decision" as const, at: Date.now() };
   await f.ledger.recordDecisionReply("manager", { ...reply, senderId: "manager" });
+  expect(f.ledger.decisions("manager")[0].status).toBe("waiting");
+  await f.ledger.recordDecisionReply("manager", { ...reply, senderId: "boss", topic: "decision:unknown" });
   expect(f.ledger.decisions("manager")[0].status).toBe("waiting");
   await f.ledger.recordDecisionReply("manager", { ...reply, senderId: "boss" });
   const reload = new MonoManagerGoals(f.storage); await reload.hydrate("manager");
   expect(reload.decisions("manager")[0]).toMatchObject({ status: "answered", answer: "Use the helper", answeredBy: "boss" });
   expect(f.saved().receipts).toEqual({ existing: { signature: "retain", result: true, pending: { goalId: "old", text: "Retained goal delivery" } } });
   expect(selectDecisionView(reload, roster, Date.now()).handledToday).toBe(1);
+});
+it("leaves ambiguous ordinary replies unlogged but accepts the named ask topic", async () => {
+  const f = fixture();
+  await f.ledger.recordDecision("manager", { ...ask(), answererId: "boss" });
+  await f.ledger.recordDecision("manager", { ...ask(), id: "second-ask", answererId: "boss" });
+  const reply = { ...message, senderId: "boss", recipientId: "worker", text: "Use the helper" };
+  await f.ledger.recordDecisionReply("manager", reply);
+  expect(f.ledger.decisions("manager").every(row => row.status === "waiting")).toBe(true);
+  await f.ledger.recordDecisionReply("manager", { ...reply, topic: "decision:second-ask" });
+  expect(f.ledger.decisions("manager").map(row => row.status)).toEqual(["waiting", "answered"]);
 });
 it("closes asks on task/goal end, and never makes legacy rows sendable", async () => {
   const f = fixture(); await f.ledger.recordDecision("manager", ask());
@@ -74,10 +86,10 @@ it("skips a corrupt row independently, normalizes legacy display, strips only ol
   expect(f.ledger.decisions("manager")[0]).toMatchObject({ status: "waiting", noLongerNeededAt: expect.any(Number) });
 });
 it("quotes only bounded single-line plain text, rejects forged payload fields and retains the legacy parser cap", () => {
-  const row = { ...ask(), question: '"\n# do\u0000 **this** <now> ' + "x".repeat(300), options: [{ id: "a", label: 'A\r\n`unsafe` "quote"' }, { id: "b", label: "B" }] };
+  const row = { ...ask(), question: '"\n# do\u0000\u200b\ufeff **this** <now> ' + "x".repeat(300), options: [{ id: "a", label: 'A\r\n`unsafe` "quote"' }, { id: "b", label: "B" }] };
   const text = decisionUserText(row, "a");
   expect(text).toMatch(/^Decision on your question "[^"\r\n]{1,120}": go with "[^"\r\n]{1,120}"\.$/);
-  expect(text).not.toMatch(/[\u0000\r\n*#<>`]/);
+  expect(text).not.toMatch(/[\u0000\u200b\ufeff\r\n*#<>`]/);
   expect(decisionUserText(row)).not.toMatch(/[\u0000\r\n*#<>`]/);
   expect(() => parseDecisionPayload({ ...payload, answererId: "user" })).toThrow();
   const six = { ...payload, options: Array.from({ length: 6 }, (_, i) => ({ id: String(i), label: String(i) })), recommendedOptionId: "0" };
@@ -85,6 +97,15 @@ it("quotes only bounded single-line plain text, rejects forged payload fields an
   expect(() => decisionAsk({ ...message, text: JSON.stringify(six) }, "worker-chat", "/project", roster, "everything")).toThrow("four");
   expect(decisionAuthorityGuidance()).toContain("quoted text");
   expect(decisionAuthorityGuidance()).not.toContain("expectedVersion");
+});
+it("uses one Windows project autonomy key and keeps the stricter retained alias", async () => {
+  const f = fixture();
+  await f.storage.save("manager", { ...f.saved(), autonomy: { "C:/Project/": "medium-and-up", "c:\\project": "everything" } });
+  await f.ledger.hydrate("manager");
+  expect(f.ledger.autonomy("manager", "C:/PROJECT")).toBe("everything");
+  const normalized = normalizeDecisionHistory(f.saved());
+  expect(normalized.autonomy).toEqual({ "c:/project": "everything" });
+  expect(normalized.receipts).toEqual(f.saved().receipts);
 });
 it("leaves the accepted Stop, Continue and ordinary queue implementations exactly unchanged", () => {
   const base = execFileSync("git", ["show", "0e95c375:src/app/App.tsx"], { encoding: "utf8", maxBuffer: 2_000_000 }).replace(/\r\n/g, "\n");

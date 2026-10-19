@@ -24,7 +24,7 @@ await ledger.recordDecision("manager", { ...row, id: "worker-chat:protected", qu
 const pending = new Set<string>(), accepted = new Set<string>();
 const chats = new Map<string, Session>(["worker-chat", "boss-chat"].map(id => [id, { ...newSession("claude", "/synthetic/project"), id, busy: true, turnReady: false }]));
 const sends: { sessionId: string; text: string; attachments: [] }[] = [];
-let mode: "normal" | "refuse" | "missing" = "normal";
+let mode: "normal" | "refuse" | "missing" | "log-fail" = "normal";
 const submit = async (sessionId: string, text: string, attachments: []) => {
   await new Promise(resolve => setTimeout(resolve, 80));
   if (mode === "refuse") return false;
@@ -38,11 +38,14 @@ const actions: DecisionUiActions = {
   answer: (event, managerId, decisionId, optionId) => sendDecisionFromClick(event, decisionId, optionId, {
     read: () => ledger.decisions(managerId).find(entry => entry.id === decisionId),
     open: async id => mode !== "missing" && chats.has(id), bossSession: async () => "boss-chat", submit,
+    askerName: id => roster.find(mono => mono.id === id)?.name ?? "the asker",
     record: async selected => {
+      if (mode === "log-fail") throw Error("Synthetic log failure");
       if (selected === undefined) await ledger.delegateDecision(managerId, decisionId);
       else await ledger.recordDecisionAnswer(managerId, decisionId, "user", row.options.find(option => option.id === selected)!.label);
     }, pending, accepted,
   }),
+  wasAccepted: (_managerId, decisionId) => accepted.has(decisionId),
   autonomy: (event, managerId, projectId, value) => ledger.setAutonomy(event, managerId, projectId, value),
   openProject: () => {},
 };
@@ -55,7 +58,7 @@ const controls = {
   moved: () => { const session = chats.get("worker-chat")!; chats.set(session.id, { ...session, cwd: "/synthetic/moved" }); },
   queueReady: () => { const session = chats.get("worker-chat")!; return { dispatch: canDispatchQueuedHead(session), steer: canSteerQueuedHead(session) }; },
   typed: (text: string) => submit("worker-chat", text, []),
-  bossReply: () => ledger.recordDecisionReply("manager", { id: "boss-chat:reply", managerId: "manager", senderId: "boss", recipientId: "worker", topic: `decision:${row.id}`, text: "Reuse the existing queue", at: Date.now() }),
+  bossReply: () => ledger.recordDecisionReply("manager", { id: "boss-chat:reply", managerId: "manager", senderId: "boss", recipientId: "worker", topic: "queue", text: "Reuse the existing queue", at: Date.now() }),
   finish: () => ledger.finishDecisionAsks(new Set(["task"]), new Set()),
   autonomy: () => ledger.autonomy("manager", "/synthetic/project"),
 };

@@ -42,6 +42,8 @@ import "./treeMap.css";
 import { OrbitMap } from "./OrbitMap";
 import { EdgePulse } from "./EdgePulse";
 import { loadOrbitPreferences, saveOrbitPreferences } from "./orbit";
+import type { CommandMapDecisions } from "./commandMap";
+import type { BossGoalRoute } from "./BossGoalForm";
 
 export type TeamMapProps = {
   sessions: readonly Session[];
@@ -50,6 +52,8 @@ export type TeamMapProps = {
   scope?: string;
   onOpenMono: (id: string) => void;
   onClose: () => void;
+  decisions?: CommandMapDecisions;
+  bossGoal?: BossGoalRoute;
 };
 type Props = TeamMapProps & { onToggleView?: () => void; onSelectMono?: (id: string) => void; selectedMonoId?: string; onDismissSelection?: () => boolean };
 type MapEvent = ReturnType<typeof teamMapEvents>[number];

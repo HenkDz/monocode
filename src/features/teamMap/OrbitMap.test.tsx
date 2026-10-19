@@ -3,208 +3,195 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Mono } from "../monos/model/mono";
-import { recordCrewMessage } from "../monos/model/monoCrewEvents";
 import type { OrchestrationRun } from "../orchestration/model/orchestrationState";
 import { newSession } from "../sessions/model/session";
-import { TeamMap } from "./TeamMap";
+import { monoManagerGoals } from "../monos/model/monoManagerGoals";
+import { getMonoTranscriptPage, type MonoTranscriptPage } from "../sessions/data/sessionStore";
+import { TeamMap, type TeamMapProps } from "./TeamMap";
 import { ORBIT_PREFERENCES_KEY } from "./orbit";
 
-vi.mock("@tauri-apps/api/core", async original => ({
-  ...await original<object>(), invoke: vi.fn(async () => null),
-}));
+vi.mock("@tauri-apps/api/core", async original => ({ ...await original<object>(), invoke: vi.fn(async () => null) }));
+vi.mock("../sessions/ui/AgentTranscript", () => ({ MonoActivityTrail: ({ blocks }: { blocks: { id: string; text: string }[] }) => <ol aria-label="Activity in chronological order">{blocks.map(block => <li key={block.id}>{block.text}</li>)}</ol> }));
+vi.mock("../sessions/data/sessionStore", async original => ({ ...await original<object>(), getMonoTranscriptPage: vi.fn() }));
 
 const roster: Mono[] = [
   { id: "boss", name: "Orchestrator", role: "orchestrator", projects: ["/app", "/site"], mascot: "cat", color: "#abcdef" },
-  { id: "manager", name: "App Manager", role: "manager", reportsTo: "boss", projects: ["/app"], managerProject: "/app", mascot: "cat", color: "#abcdef" },
-  { id: "backend", name: "Backend", role: "member", reportsTo: "manager", projects: ["/app"], specialty: "API and UI implementation", workerProfile: { harness: "codex", model: "codex:gpt-6.1-sol" }, mascot: "cat", color: "#abcdef" },
+  { id: "manager", name: "App Manager", role: "manager", reportsTo: "boss", managerEngineId: "engine", projects: ["/app"], managerProject: "/app", mascot: "cat", color: "#abcdef" },
+  { id: "backend", name: "Backend", role: "member", reportsTo: "manager", projects: ["/app"], mascot: "cat", color: "#abcdef" },
   { id: "frontend", name: "Frontend", role: "member", reportsTo: "manager", projects: ["/app"], mascot: "cat", color: "#abcdef" },
   { id: "site-manager", name: "Site Manager", role: "manager", reportsTo: "boss", projects: ["/site"], managerProject: "/site", mascot: "cat", color: "#abcdef" },
-  { id: "designer", name: "Designer", role: "member", reportsTo: "site-manager", projects: ["/site"], mascot: "cat", color: "#abcdef" },
 ];
-const runs = [{ leadId: "engine", ownerMonoId: "manager", cwd: "/app", tasks: [
-  { id: "blocked", memberId: "backend", sessionId: "worker", title: "Choose API contract", prompt: "Choose API contract", result: "", status: "blocked" },
-  { id: "working", memberId: "frontend", sessionId: "ui-worker", title: "Build Orbit rows", prompt: "Implement and verify the Orbit rows", result: "", status: "running" },
+const runs = [{ leadId: "engine", ownerMonoId: "manager", cwd: "/app", status: "active", tasks: [
+  { id: "blocked", memberId: "backend", sessionId: "worker", title: "Choose API contract", prompt: "Choose API contract", result: "", status: "blocked", dependsOn: [] },
+  { id: "working", memberId: "frontend", sessionId: "ui-worker", title: "Build project drawer", prompt: "Implement and verify the drawer", result: "", status: "running", dependsOn: [] },
 ], dispatches: [] }] as unknown as OrchestrationRun[];
 let host: HTMLDivElement;
 let root: ReturnType<typeof createRoot>;
 let reducedMotion = false;
-const open = vi.fn(), close = vi.fn();
-const renderMap = (activeRuns: OrchestrationRun[] = runs, scope?: string) => act(async () => root.render(
-  <TeamMap sessions={[]} runs={activeRuns} statuses={new Map()} scope={scope} onOpenMono={open} onClose={close} />,
-));
-const button = (label: string) => host.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)!;
-const focusProject = (name: string) => button(`Focus ${name} team`);
-const members = () => [...host.querySelectorAll<HTMLButtonElement>(".orbit-member-row > button:first-child")];
-let frames: FrameRequestCallback[];
+let width = 1100;
 let resize: () => void;
-let viewportWidth = 1100;
-const key = async (element: EventTarget, value: string) => {
-  await act(async () => element.dispatchEvent(new KeyboardEvent("keydown", { key: value, bubbles: true, cancelable: true })));
-  await act(async () => { const pending = frames.splice(0); pending.forEach(callback => callback(performance.now())); });
+const open = vi.fn(), close = vi.fn();
+const renderMap = (props: Partial<TeamMapProps> = {}) => act(async () => root.render(<TeamMap sessions={[]} runs={runs} statuses={new Map()} onOpenMono={open} onClose={close} {...props} />));
+const button = (label: string) => host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
+const click = (label: string) => act(async () => button(label).click());
+const key = (element: EventTarget, value: string, shiftKey = false) => act(async () => element.dispatchEvent(new KeyboardEvent("keydown", { key: value, shiftKey, bubbles: true, cancelable: true })));
+const decisions: NonNullable<TeamMapProps["decisions"]> = {
+  needYou: 2, handledToday: 6, incomplete: false,
+  rail: <div data-decision-ui><h2>Decisions</h2><p>Shared decision rail</p></div>,
+  project: path => ({ pending: path === "/app" ? 2 : 0, teamPending: 1, incomplete: false,
+    autonomy: <div>Shared autonomy control</div>, cards: <div>Shared decision cards</div> }),
 };
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  reducedMotion = false;
+  reducedMotion = false; width = 1100;
   vi.spyOn(window, "matchMedia").mockImplementation(() => ({ matches: reducedMotion, addEventListener: vi.fn(), removeEventListener: vi.fn() }) as unknown as MediaQueryList);
-  viewportWidth = 1100;
-  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(() => viewportWidth);
+  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(() => width);
   vi.stubGlobal("ResizeObserver", class { constructor(callback: () => void) { resize = callback; } observe() {} disconnect() {} });
-  frames = [];
-  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => frames.push(callback));
-  vi.stubGlobal("cancelAnimationFrame", vi.fn());
-  Object.defineProperty(SVGElement.prototype, "beginElementAt", { configurable: true, value: vi.fn() });
-  localStorage.clear();
-  localStorage.setItem("monocode:mono-roster", JSON.stringify(roster));
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { callback(performance.now()); return 1; });
+  localStorage.clear(); localStorage.setItem("monocode:mono-roster", JSON.stringify(roster));
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
   open.mockReset(); close.mockReset();
 });
-afterEach(async () => {
-  await act(async () => root.unmount()); host.remove(); localStorage.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals();
-  Reflect.deleteProperty(SVGElement.prototype, "beginElementAt");
-});
+afterEach(async () => { await act(async () => root.unmount()); host.remove(); localStorage.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
-it("defaults to Orbit and persists the Tree choice while keeping both views available", async () => {
+it("defaults to the Command map and keeps the saved Tree view available", async () => {
   await renderMap();
-  expect(host.querySelector(".orbit-capsule")).not.toBeNull();
+  expect(host.querySelector("h1")?.textContent).toBe("Command map");
+  expect(host.querySelectorAll(".command-map-project")).toHaveLength(2);
   await act(async () => [...host.querySelectorAll<HTMLButtonElement>("button")].find(node => node.textContent === "Tree")!.click());
   expect(JSON.parse(localStorage.getItem(ORBIT_PREFERENCES_KEY)!).view).toBe("tree");
   expect(host.querySelector(".team-map-canvas")).not.toBeNull();
-  await act(async () => root.unmount()); root = createRoot(host);
-  await renderMap();
-  expect(host.querySelector(".team-map-canvas")).not.toBeNull();
-  await act(async () => [...host.querySelectorAll<HTMLButtonElement>("button")].find(node => node.textContent === "Orbit")!.click());
-  expect(JSON.parse(localStorage.getItem(ORBIT_PREFERENCES_KEY)!).view).toBe("orbit");
-  expect(host.querySelector(".orbit-capsule")).not.toBeNull();
 });
 
-it("starts with the attention project, sorts its team and retains model and specialty text", async () => {
-  await renderMap();
-  expect(members().map(node => node.getAttribute("aria-label")?.split(",")[0])).toEqual(["Backend", "Frontend"]);
-  expect(host.textContent).toContain("Now: Build Orbit rows");
-  expect(host.textContent).toContain("codex:gpt-6.1-sol");
-  const specialty = host.querySelector<HTMLElement>('[title="API and UI implementation"]')!;
-  expect(specialty.textContent).toBe("API and UI implementation");
-  expect(specialty.parentElement?.className).toBe("orbit-member-name");
-  expect(host.querySelector(".orbit-center")?.getAttribute("data-status")).toBe("idle");
-  expect(host.querySelector(".orbit-center")?.textContent).toContain("Needs you");
+it("places Boss above projects and derives whole-line working activity", async () => {
+  await renderMap({ decisions });
+  const boss = host.querySelector<HTMLElement>(".command-map-boss")!;
+  const project = button("Open app project");
+  expect(boss.style.left).toBe("550px");
+  expect(parseFloat(project.style.top)).toBeGreaterThan(164);
+  expect(host.querySelectorAll('.command-map-links path[data-working="true"]')).toHaveLength(1);
+  expect(host.querySelectorAll("animateMotion")).toHaveLength(0);
+  expect(boss.textContent).toContain("2");
+  expect(host.querySelector('.command-map-team[aria-label="2 members"]')?.children).toHaveLength(2);
 });
 
-it("shows the Orchestrator's own busy status separately from team attention", async () => {
-  localStorage.setItem("monocode:mono-roster", JSON.stringify(roster.map(mono => mono.id === "boss" ? { ...mono, sessionId: "boss-chat" } : mono)));
-  const session = { ...newSession("codex", "/app"), id: "boss-chat", busy: true };
-  await act(async () => root.render(<TeamMap sessions={[session]} runs={runs} statuses={new Map()} onOpenMono={open} onClose={close} />));
-  expect(host.querySelector(".orbit-center")?.getAttribute("data-status")).toBe("working");
-  expect(host.querySelector(".orbit-center")?.textContent).toContain("Needs you");
+it("uses explicit unavailable metrics and never promotes generic attention into a decision count", async () => {
+  await renderMap();
+  expect(host.querySelector(".command-map-vitals")?.textContent).toContain("— decided by team today");
+  expect(host.querySelector(".command-map-vitals")?.textContent).toContain("— need you");
+  expect(host.textContent).toContain("Decision history unavailable");
+  expect(button("Open app project").querySelector(".command-map-badge")).toBeNull();
 });
 
-it("rotates with left and right, moves through the team, opens Enter and collapses Escape", async () => {
-  await renderMap();
-  await act(async () => focusProject("app").focus());
-  await key(focusProject("app"), "ArrowRight");
-  expect(document.activeElement).toBe(focusProject("site"));
-  await key(focusProject("site"), "ArrowDown");
-  expect(document.activeElement?.getAttribute("aria-label")).toContain("Designer,");
-  await key(document.activeElement!, "ArrowLeft");
-  expect(document.activeElement).toBe(focusProject("app"));
-  await key(focusProject("app"), "ArrowDown");
-  expect(document.activeElement).toBe(members()[0]);
-  await key(document.activeElement!, "ArrowDown");
-  expect(document.activeElement).toBe(members()[1]);
-  await key(document.activeElement!, "ArrowUp");
-  expect(document.activeElement).toBe(members()[0]);
-  await key(document.activeElement!, "Escape");
-  expect(members()).toHaveLength(0);
+it("opens and switches project drawers through real map selections, returns focus on Escape", async () => {
+  await renderMap({ decisions });
+  await click("Open app project");
+  expect(host.querySelector('[role="dialog"] h2')?.textContent).toBe("app");
+  expect(document.activeElement).toBe(button("Close project"));
+  expect(host.querySelector('[data-decision-ui]')?.textContent).toContain("Shared autonomy control");
+  await key(button("Close project"), "Escape");
+  expect(host.querySelector('[role="dialog"]')).toBeNull();
+  expect(document.activeElement).toBe(button("Open app project"));
   expect(close).not.toHaveBeenCalled();
-  await act(async () => focusProject("app").click());
-  await key(focusProject("app"), "ArrowDown");
-  await key(document.activeElement!, "Enter");
-  expect(open).toHaveBeenCalledExactlyOnceWith("backend");
-  expect(close).toHaveBeenCalledOnce();
+  await click("Open site project");
+  expect(host.querySelector('[role="dialog"] h2')?.textContent).toBe("site");
 });
 
-it("dims project and Needs you filters without removing ring neighbors or team rows", async () => {
+it("traps drawer Tab focus and makes surrounding map, header and decisions inert", async () => {
+  await renderMap({ decisions }); await click("Open app project");
+  const dialog = host.querySelector('[role="dialog"]')!;
+  const controls = [...dialog.querySelectorAll<HTMLButtonElement>("button")];
+  await key(controls[0], "Tab", true);
+  expect(document.activeElement).toBe(controls[controls.length - 1]);
+  expect(host.querySelector(".team-map-toolbar")?.hasAttribute("inert")).toBe(true);
+  expect(host.querySelector(".command-map-main")?.hasAttribute("inert")).toBe(true);
+  expect(host.querySelector(".command-map-rail")?.hasAttribute("inert")).toBe(true);
+});
+
+it("shows exact goal source as a bounded preview with recorded accepted progress", async () => {
+  const title = "Full saved goal\n" + "source ".repeat(150);
+  vi.spyOn(monoManagerGoals, "goals").mockReturnValue([{ id: "goal", managerId: "engine", title, state: "running", updatedAt: 1 } as ReturnType<typeof monoManagerGoals.goals>[number]]);
+  const tasks = runs[0].tasks.map((task, index) => ({ ...task, monoGoalId: "goal", accepted: index === 0 }));
+  await renderMap({ runs: [{ ...runs[0], tasks }] }); await click("Open app project");
+  expect(host.querySelector('.command-map-goal progress')?.getAttribute("value")).toBe("1");
+  expect(host.textContent).toContain("1 of 2 tasks accepted · 50%");
+  expect(monoManagerGoals.goals()[0].title).toBe(title);
+  expect(host.querySelector('.command-map-goal > p')!.textContent!.length).toBeLessThanOrEqual(600);
+});
+
+it("preserves paused parent state and opens CC-TX work only through its custom fold", async () => {
+  const session = { ...newSession("codex", "/app"), id: "worker", blocks: [{ id: "saved", role: "assistant", text: "Saved work evidence" }] } as ReturnType<typeof newSession>;
+  const paused = { ...runs[0], status: "paused", lastPauseReason: "Owner held execution", tasks: [{ ...runs[0].tasks[0], status: "queued" }] } as OrchestrationRun;
+  await renderMap({ runs: [paused], sessions: [session] }); await click("Open app project");
+  expect(host.textContent).toContain("Owner held execution");
+  expect(host.querySelector('[aria-label="Activity in chronological order"]')).toBeNull();
+  const fold = [...host.querySelectorAll<HTMLButtonElement>("button")].find(node => node.textContent?.includes("Show work · 1 steps"))!;
+  await act(async () => fold.click());
+  expect(fold.getAttribute("aria-expanded")).toBe("true");
+  expect(host.textContent).toContain("Saved work evidence");
+  await click("Close project");
+  expect(host.querySelector('[aria-label="Activity in chronological order"]')).toBeNull();
+});
+
+it("uses existing Manager/member/Boss navigation and closes the surface", async () => {
+  await renderMap(); await click("Open app project");
+  await act(async () => [...host.querySelectorAll<HTMLButtonElement>("button")].find(node => node.textContent === "Message App Manager")!.click());
+  expect(open).toHaveBeenCalledWith("manager"); expect(close).toHaveBeenCalledOnce();
+  open.mockClear(); close.mockClear();
+  await click("Open chat with Orchestrator");
+  expect(open).toHaveBeenCalledExactlyOnceWith("boss"); expect(close).toHaveBeenCalledOnce();
+});
+
+it("keeps every project available at narrow widths and gives arrow keys real focus targets", async () => {
+  width = 320;
   await renderMap();
-  const order = [...host.querySelectorAll(".orbit-capsule")];
-  const project = host.querySelector<HTMLSelectElement>('[aria-label="Project"]')!;
-  await act(async () => { project.value = "/site"; project.dispatchEvent(new Event("change", { bubbles: true })); });
-  expect([...host.querySelectorAll(".orbit-capsule")]).toEqual(order);
-  expect(focusProject("app").closest(".orbit-capsule")?.getAttribute("data-dimmed")).toBe("true");
-  await act(async () => { project.value = ""; project.dispatchEvent(new Event("change", { bubbles: true })); });
-  await act(async () => focusProject("app").click());
-  await act(async () => [...host.querySelectorAll<HTMLButtonElement>("button")].find(node => node.textContent === "Needs you")!.click());
-  expect(members()).toHaveLength(2);
-  expect(members()[0].closest(".orbit-member-row")?.getAttribute("data-dimmed")).toBe("false");
-  expect(members()[1].closest(".orbit-member-row")?.getAttribute("data-dimmed")).toBe("true");
+  expect(button("Open app project").style.left).toBe("160px");
+  expect(button("Open site project").style.top).toBe("580px");
+  await act(async () => button("Open app project").focus());
+  await key(button("Open app project"), "ArrowDown");
+  expect(document.activeElement).toBe(button("Open site project"));
+  width = 800; await act(async () => resize());
+  expect(host.querySelectorAll(".command-map-project")).toHaveLength(2);
 });
 
-it("restores the last idle focus but gives scoped Manager opens precedence", async () => {
-  await renderMap([]);
-  await act(async () => focusProject("site").click());
-  expect(JSON.parse(localStorage.getItem(ORBIT_PREFERENCES_KEY)!).focus).toBe("site-manager");
-  await act(async () => root.unmount()); root = createRoot(host);
-  await renderMap([]);
-  expect(members()[0].getAttribute("aria-label")).toContain("Designer,");
-  await act(async () => root.unmount()); root = createRoot(host);
-  await renderMap([], "manager");
-  expect(members()[0].getAttribute("aria-label")).toContain("Backend,");
-  expect(host.querySelectorAll(".orbit-capsule")).toHaveLength(2);
-});
-
-it("keeps consistent center and Manager chat affordances", async () => {
-  await renderMap();
-  await act(async () => button("Open chat with App Manager").click());
-  expect(open).toHaveBeenCalledExactlyOnceWith("manager");
-  open.mockReset(); close.mockReset();
-  await act(async () => button("Open chat with Orchestrator").click());
-  expect(open).toHaveBeenCalledExactlyOnceWith("boss");
-});
-
-it("opens the focused Manager with Enter", async () => {
-  await renderMap();
-  await act(async () => focusProject("site").click());
-  await key(focusProject("site"), "Enter");
-  expect(open).toHaveBeenCalledExactlyOnceWith("site-manager");
-  expect(close).toHaveBeenCalledOnce();
-});
-
-it("persists dragged ring order and keeps it across resize and remount", async () => {
-  await renderMap([]);
-  const source = focusProject("site").closest(".orbit-capsule")!;
-  const destination = focusProject("app").closest(".orbit-capsule")!;
-  const start = new Event("dragstart", { bubbles: true });
-  Object.defineProperty(start, "dataTransfer", { value: { setData: vi.fn() } });
-  await act(async () => source.dispatchEvent(start));
-  await act(async () => destination.dispatchEvent(new Event("drop", { bubbles: true, cancelable: true })));
-  const ids = () => [...host.querySelectorAll<HTMLElement>(".orbit-capsule")].map(node => node.dataset.id);
-  expect(ids()).toEqual(["site-manager", "manager"]);
-  expect(JSON.parse(localStorage.getItem(ORBIT_PREFERENCES_KEY)!).order).toEqual(["site-manager", "manager"]);
-  await act(async () => { viewportWidth = 650; resize(); });
-  expect(ids()).toEqual(["site-manager", "manager"]);
-  await act(async () => root.unmount()); root = createRoot(host);
-  await renderMap([]);
-  expect(ids()).toEqual(["site-manager", "manager"]);
-});
-
-it("pages larger orgs while arrows can cross the page boundary", async () => {
-  const managers = Array.from({ length: 10 }, (_, index) => ({ ...roster[1], id: `project-${index}`, name: `Project ${index}`, managerProject: `/project-${index}`, projects: [`/project-${index}`] }));
-  localStorage.setItem("monocode:mono-roster", JSON.stringify([roster[0], ...managers]));
-  await renderMap([]);
-  expect(host.querySelectorAll(".orbit-capsule")).toHaveLength(8);
-  await act(async () => [...host.querySelectorAll<HTMLButtonElement>("button")].find(node => node.textContent === "Next projects")!.click());
-  expect(host.querySelectorAll(".orbit-capsule")).toHaveLength(2);
-  expect(focusProject("project-8").getAttribute("aria-pressed")).toBe("true");
-  await key(focusProject("project-8"), "ArrowLeft");
-  expect(host.querySelectorAll(".orbit-capsule")).toHaveLength(8);
-  expect(document.activeElement).toBe(focusProject("project-7"));
-});
-
-it("subscribes to reports using static reduced-motion indicators and preserves the feed", async () => {
+it("marks partial retained decision history and reduced motion without changing routing", async () => {
   reducedMotion = true;
-  await renderMap();
+  await renderMap({ decisions: { ...decisions, incomplete: true } });
   expect(host.querySelector('[data-reduced-motion="true"]')).not.toBeNull();
-  await act(async () => recordCrewMessage({ id: "orbit-report", managerId: "manager", senderId: "backend", recipientId: "manager", topic: "Report", text: "API verified", at: Date.now() }));
-  expect(host.querySelector('[data-event-id="orbit-report"]')).not.toBeNull();
-  expect(host.querySelector("animateMotion")).toBeNull();
-  expect(host.querySelector(".team-map-timeline")?.textContent).toContain("API verified");
+  expect(host.querySelector(".command-map-vitals")?.textContent).toContain("≥6");
+  expect(host.textContent).toContain("Decision history incomplete · retained records");
+  expect(host.querySelector('textarea')?.disabled).toBe(true);
+});
+
+it("keeps saved dispatch report and saved turn model separate from the retried assignment", async () => {
+  const retainedRun = { ...runs[0], tasks: [{ ...runs[0].tasks[0], status: "running", sessionId: "new-worker", activeDispatchId: "new", lastDispatchId: "new", result: "CURRENT report" }], dispatches: [
+    { id: "old", taskId: "blocked", sessionId: "old-worker", state: "completed", startedAt: 1, updatedAt: 2, result: "OLD saved dispatch report" },
+    { id: "new", taskId: "blocked", sessionId: "new-worker", state: "running", startedAt: 3, updatedAt: 4 },
+  ] } as OrchestrationRun;
+  const oldSession = { ...newSession("codex", "/app"), id: "old-worker", model: "CURRENT DEFAULT MUST NOT LABEL HISTORY", blocks: [
+    { id: "old-turn", role: "user", text: "Saved original request", turnModel: { harness: "codex", id: "saved-model", name: "Saved model provenance" } },
+  ] } as ReturnType<typeof newSession>;
+  await renderMap({ runs: [retainedRun], sessions: [oldSession] }); await click("Open app project");
+  await act(async () => [...host.querySelectorAll<HTMLButtonElement>("button")].find(node => node.textContent?.includes("Show work"))!.click());
+  const attempts = host.querySelector<HTMLSelectElement>('[aria-label="Backend work attempt"]')!;
+  await act(async () => { attempts.value = "old-worker"; attempts.dispatchEvent(new Event("change", { bubbles: true })); });
+  expect(host.textContent).toContain("OLD saved dispatch report");
+  expect(host.textContent).toContain("Saved model provenance");
+  expect(host.textContent).not.toContain("CURRENT DEFAULT MUST NOT LABEL HISTORY");
+  expect(host.textContent).toContain("History · Task blocked · dispatch old · completed");
+});
+
+it("drops an older transcript page when its project drawer is closed before load resolves", async () => {
+  let finish!: (page: MonoTranscriptPage) => void;
+  vi.mocked(getMonoTranscriptPage).mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  const session = { ...newSession("codex", "/app"), id: "worker", monoTranscript: { before: 20, firstBlockId: "tail" }, blocks: [{ id: "tail", role: "assistant", text: "Current tail" }] } as ReturnType<typeof newSession>;
+  await renderMap({ sessions: [session] }); await click("Open app project");
+  await act(async () => [...host.querySelectorAll<HTMLButtonElement>("button")].find(node => node.textContent?.includes("Show work"))!.click());
+  await act(async () => [...host.querySelectorAll<HTMLButtonElement>("button")].find(node => node.textContent === "Load earlier work")!.click());
+  expect(getMonoTranscriptPage).toHaveBeenLastCalledWith("worker", { before: 20 });
+  await click("Close project"); await click("Open site project");
+  await act(async () => finish({ blocks: [{ id: "late", role: "assistant", text: "OLD late page must not cross projects" }], before: null, hasNewer: false }));
+  expect(host.textContent).not.toContain("OLD late page must not cross projects");
+  expect(host.querySelector('[role="dialog"] h2')?.textContent).toBe("site");
 });

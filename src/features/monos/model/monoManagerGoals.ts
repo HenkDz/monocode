@@ -8,8 +8,8 @@ import type { Mono, MonoProject } from "./mono";
 import type { Block } from "../../sessions/model/session";
 import { assertManagerRequest } from "./managerAuthorizedWork";
 import type { ManagerRequestRecovery } from "./managerAuthorizedWork";
-import { handleDecisionCommand, recoverDecisionReceipt, validateDecisionHistory, compactDecisionHistory, projectAutonomy } from "./monoDecisions";
-import type { DecisionCommand, DecisionHost, DecisionReceipt, MonoDecision, ProjectAutonomy } from "./monoDecisions";
+import { handleDecisionCommand, recoverDecisionReceipt, validateDecisionHistory, quarantineDecisionHistory, compactDecisionHistory, projectAutonomy } from "./monoDecisions";
+import type { DecisionCommand, DecisionHost, DecisionReceipt, DecisionQuarantine, MonoDecision, ProjectAutonomy } from "./monoDecisions";
 
 /** Non-repository recents must not hide the projects that can own a Manager. */
 export async function validManagerProjects(projects: readonly MonoProject[], resolve: (path: string) => Promise<string>): Promise<{ project: MonoProject; folder: string }[]> {
@@ -70,6 +70,7 @@ export type GoalLedger = {
   decisions?: MonoDecision[];
   autonomy?: Record<string, ProjectAutonomy>;
   decisionsPruned?: number;
+  decisionQuarantine?: DecisionQuarantine[];
 };
 export type GoalOrigin = {
   kind: "user" | "habit" | "event";
@@ -182,7 +183,7 @@ export class MonoManagerGoals {
   }
   private async load(id: string) {
     if (this.ledgers.has(id)) return this.ledgers.get(id)!;
-    const ledger = (await this.storage.load(id)) ?? {
+    let ledger = (await this.storage.load(id)) ?? {
       version: 1 as const,
       goals: [],
       receipts: {},
@@ -201,7 +202,11 @@ export class MonoManagerGoals {
       )
     )
       throw Error("Unsupported Mono goal history");
-    validateDecisionHistory(ledger);
+    const recovered = quarantineDecisionHistory(ledger, id);
+    if (recovered !== ledger) {
+      await this.save(id, recovered);
+      return recovered;
+    }
     this.ledgers.set(id, ledger);
     this.changed();
     return ledger;
@@ -212,6 +217,12 @@ export class MonoManagerGoals {
   decisions(id: string): MonoDecision[] {
     return structuredClone(this.ledgers.get(id)?.decisions ?? []);
   }
+  decisionHistoryState(id: string): "loading" | "ready" {
+    return this.ledgers.has(id) ? "ready" : "loading";
+  }
+  decisionQuarantine(id: string): DecisionQuarantine[] {
+    return structuredClone(this.ledgers.get(id)?.decisionQuarantine ?? []);
+  }
   decisionsPruned(id: string): number {
     return this.ledgers.get(id)?.decisionsPruned ?? 0;
   }
@@ -221,7 +232,7 @@ export class MonoManagerGoals {
   handleDecision(id: string, requestId: string, command: DecisionCommand, host: DecisionHost) {
     const retained = structuredClone(command);
     const authenticatedHost: DecisionHost = { actor: structuredClone(host.actor),
-      current: decision => host.current(decision), deliver: (delivery, validate) => host.deliver(delivery, validate) };
+      roster: () => host.roster(), current: decision => host.current(decision), deliver: (delivery, validate) => host.deliver(delivery, validate) };
     return this.serial(async () => {
       await this.load(id);
       return handleDecisionCommand(id, requestId, retained, authenticatedHost, {
@@ -289,7 +300,10 @@ export class MonoManagerGoals {
     this.listeners.forEach((fn) => fn());
   }
   private async save(id: string, ledger: GoalLedger) {
-    validateDecisionHistory(ledger);
+    const previous = this.ledgers.get(id)?.decisionQuarantine ?? [];
+    if (previous.some((entry, index) => JSON.stringify(entry) !== JSON.stringify(ledger.decisionQuarantine?.[index])))
+      throw Error("Quarantined decision evidence is read-only");
+    validateDecisionHistory(ledger, id);
     ledger = compactDecisionHistory(ledger);
     if (new TextEncoder().encode(JSON.stringify(ledger)).length > 7_000_000)
       throw Error("Goal history capacity reached; existing work is retained");

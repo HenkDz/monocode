@@ -278,6 +278,8 @@ export type MonoSessionCompletion = {
 };
 
 export type QueuedMessage = {
+  /** Evidence only; revalidate the retained decision before consumption, never steer. */
+  monoDecision?: { managerId: string; decisionId: string; resolutionVersion: number; eventId: string; recipientId: string };
   /** A durably accepted Manager digest; wait for idle and preserve its receipt. */
   managerWake?: { leadId: string; receiptId: string };
   appRequestId?: string;
@@ -363,6 +365,7 @@ export type Block = {
   /** Stable CLI request that submitted this turn, for safe retries. */
   appRequestId?: string;
   monoSource?: QueuedMessage["monoSource"];
+  monoDecision?: QueuedMessage["monoDecision"];
   monoTeamMessage?: { id: string; name: string; mascot: string; color: string; topic: string; text: string };
   /** Provider-reported token metrics for this user turn, when available. */
   turnMetrics?: TurnMetrics;

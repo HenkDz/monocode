@@ -23,6 +23,17 @@ function chat(patch: Partial<Session> = {}): Session {
   };
 }
 
+it("holds decision evidence for idle delivery and never permits explicit or automatic steering", () => {
+  const message: QueuedMessage = { ...queued("decision-event"), monoDecision: { managerId: "manager", decisionId: "original:question", resolutionVersion: 1, eventId: "decision:original:question:1:decision:0", recipientId: "worker" } };
+  const session = chat({ busy: true, turnReady: true, queuedMessages: [message] });
+  expect(canSteerQueuedHead(session)).toBe(false);
+  expect(queuedMessageForSubmit(session, message.id, "steer")).toBeUndefined();
+  expect(canDispatchQueuedHead(session)).toBe(false);
+  expect(canDispatchQueuedHead({ ...session, busy: false })).toBe(true);
+  expect(canDispatchQueuedHead({ ...session, busy: false, codexStorageHeld: {} })).toBe(false);
+  expect(canDispatchQueuedHead({ ...session, busy: false, blocks: [{ id: "approval", role: "approval", text: "Exact operation", approval: { requestId: 42 } }] })).toBe(false);
+});
+
 describe("queuedHead", () => {
   it("returns the first queued follow-up", () => {
     expect(queuedHead(chat())?.id).toBe("a");

@@ -251,12 +251,21 @@ function sanitizeMonoSource(value: QueuedMessage["monoSource"]): QueuedMessage["
   return { id: value.id, name: value.name, mascot: value.mascot, color: value.color, goalId: value.goalId };
 }
 
+function sanitizeMonoDecision(value: QueuedMessage["monoDecision"]): QueuedMessage["monoDecision"] {
+  if (!value || typeof value !== "object" || Array.isArray(value) ||
+      ![value.managerId, value.decisionId, value.eventId, value.recipientId].every(item => typeof item === "string" && item.length > 0 && item.length <= 512) ||
+      !Number.isSafeInteger(value.resolutionVersion) || value.resolutionVersion < 0) return undefined;
+  return { managerId: value.managerId, decisionId: value.decisionId, resolutionVersion: value.resolutionVersion, eventId: value.eventId, recipientId: value.recipientId };
+}
+
 function sanitizeQueuedMessages(value: unknown): QueuedMessage[] {
   if (!Array.isArray(value)) return [];
   const seen = new Set<string>();
   return value.flatMap((entry) => {
     if (!entry || typeof entry !== "object") return [];
     const message = entry as QueuedMessage;
+    const monoDecision = sanitizeMonoDecision(message.monoDecision);
+    if (message.monoDecision !== undefined && !monoDecision) return [];
     const managerWake = message.managerWake;
     if (managerWake !== undefined && (
       !managerWake || typeof managerWake !== "object" || Array.isArray(managerWake) ||
@@ -329,6 +338,7 @@ function sanitizeQueuedMessages(value: unknown): QueuedMessage[] {
           ? { blockId: message.blockId }
           : {}),
         text: message.text,
+        ...(monoDecision ? { monoDecision } : {}),
         ...(managerWake ? { managerWake: { leadId: managerWake.leadId, receiptId: managerWake.receiptId } } : {}),
         ...(typeof message.appRequestId === "string" &&
           (APP_REQUEST_ID.test(message.appRequestId) || (managerWake && LEGACY_MANAGER_DIGEST_ID.test(message.appRequestId)))
@@ -1109,7 +1119,7 @@ function sanitizeBlock(
   }
   if (block.role === "user" && !block.internal && !block.draft && !block.attachments?.length && block.appRequestId == null &&
       block.monoSource == null && block.monoSessionCompletion == null &&
-      block.monoTeamMessage == null && block.monoHabit == null) {
+      block.monoTeamMessage == null && block.monoHabit == null && block.monoDecision == null) {
     const submission = sanitizeMonoGoalSubmission(block.monoGoalSubmission);
     if (submission?.userMessageId === block.id) next.monoGoalSubmission = submission;
   }
@@ -1171,6 +1181,8 @@ function sanitizeBlock(
   const completion = sanitizeMonoSessionCompletion(block.monoSessionCompletion);
   const monoSource = sanitizeMonoSource(block.monoSource);
   if (monoSource) next.monoSource = monoSource;
+  const monoDecision = sanitizeMonoDecision(block.monoDecision);
+  if (block.internal && monoDecision) next.monoDecision = monoDecision;
   const team = block.monoTeamMessage;
   if (block.role === "user" && team && [team.id, team.name, team.mascot, team.color].every(value => typeof value === "string" && value.length > 0 && value.length <= 256) && typeof team.topic === "string" && team.topic.length <= 120 && typeof team.text === "string" && team.text.length <= 8000)
     next.monoTeamMessage = { id: team.id, name: team.name, mascot: team.mascot, color: team.color, topic: team.topic, text: team.text };

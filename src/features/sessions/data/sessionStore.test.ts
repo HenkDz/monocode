@@ -74,6 +74,17 @@ it("persists internal events without adding them to the user outbox", () => {
   expect(pending.queuedMessages).toBeUndefined();
 });
 
+it("preserves queued decision references and internal evidence without manufacturing user authority", () => {
+  const reference = { managerId: "manager", decisionId: "original:question", resolutionVersion: 1, eventId: "decision:original:question:1:decision:0", recipientId: "worker" };
+  const session = { ...newSession("claude", "/tmp"), queuedMessages: [{ id: "decision-event", appRequestId: "decision-event", text: "Evidence only", attachments: [], monoDecision: reference }],
+    blocks: [{ id: "event", appRequestId: "decision-event", role: "user" as const, text: "Evidence only", internal: true, monoDecision: reference }] };
+  const saved = sanitizeSessionForPersist(session);
+  expect(saved.queuedMessages![0].monoDecision).toEqual(reference);
+  expect(saved.blocks[0]).toMatchObject({ internal: true, monoDecision: reference, appRequestId: "decision-event" });
+  expect(sanitizeSessionForPersist(JSON.parse(JSON.stringify(session)))).toEqual(saved);
+  expect(sanitizeSessionForPersist({ ...session, queuedMessages: [{ ...session.queuedMessages[0], monoDecision: { ...reference, resolutionVersion: -1 } }] }).queuedMessages).toBeUndefined();
+});
+
 it("preserves bounded team card references through persistence and reload", () => {
   const session = newSession("codex", "/tmp");
   session.blocks = [{ id: "team-card", role: "assistant", text: "", monoTeamChange: { managerId: "manager-1", changeId: "change-1" } }];

@@ -4,7 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MonoManagerGoals, type GoalLedger, type MonoManagerGoal } from "./monoManagerGoals";
-import { bossMayDecide, parseDecisionPayload, validateDecisionHistory, type DecisionCommand, type DecisionHost, type DecisionPayload, type DecisionSnapshot } from "./monoDecisions";
+import { bossMayDecide, decisionAuthorityGuidance, parseDecisionPayload, validateDecisionHistory, type DecisionCommand, type DecisionHost, type DecisionPayload, type DecisionSnapshot } from "./monoDecisions";
 import { addManagerWakeEvent, type ManagerWakeState } from "../../orchestration/model/managerWake";
 import { newSession } from "../../sessions/model/session";
 import type { CrewMessage } from "./monoCrewEvents";
@@ -15,6 +15,16 @@ const databases: DatabaseSync[] = [];
 afterEach(() => { for (const db of databases.splice(0)) db.close(); ipc.mockReset(); });
 const payload: DecisionPayload = { version: 1, type: "decision", question: "Which implementation?", impact: "low", context: "Existing authorized task",
   options: [{ id: "reuse", label: "Reuse the helper" }, { id: "change", label: "Change implementation" }], recommendedOptionId: "reuse", operation: "work" };
+
+it("keeps the shared prompt protocol short and truthful about protected operations", () => {
+  const guidance = decisionAuthorityGuidance();
+  expect(guidance.length).toBeLessThanOrEqual(1250);
+  for (const required of ["high-impact-only: Boss may decide low/med", "medium-and-up: Boss may decide low", "everything: Boss may decide only explicitly", "summaries", "original goal only", "merge|install|sign-in|destructive|system-settings|spend", "Never claim higher-level decisions"])
+    expect(guidance).toContain(required);
+  console.info(`V2 decision prompt delta: ${guidance.length + 1} characters per org chart; authority core unchanged.`);
+  expect(decisionAuthorityGuidance("member").length).toBeLessThanOrEqual(160);
+  console.info(`V2 member prompt delta: ${decisionAuthorityGuidance("member").length + 1} characters; full protocol fetched via app rules team.`);
+});
 
 function fixture(override: Partial<DecisionPayload> = {}) {
   const goal: MonoManagerGoal = { id: "goal", monoId: "manager", managerId: "engine", projectId: "/project", userMessageId: "original", requestId: "manager-original", title: "Fix existing work", state: "running", prUrls: [], createdAt: 1, updatedAt: 1 };
@@ -35,7 +45,7 @@ function fixture(override: Partial<DecisionPayload> = {}) {
   const storage = { load: vi.fn(async (id: string) => structuredClone(saved.get(id) ?? null)), save: vi.fn(async (id: string, value: GoalLedger) => { saved.set(id, structuredClone(value)); }) };
   let ledger = new MonoManagerGoals(storage);
   const inboxes = new Map<string, ManagerWakeState>();
-  const host: DecisionHost = { actor: { kind: "mono", id: "worker" }, current: () => state,
+  const host: DecisionHost = { actor: { kind: "mono", id: "worker" }, roster: () => state.roster, current: () => state,
     deliver: vi.fn(async (message, validate) => {
       validate();
       inboxes.set(message.recipientId, addManagerWakeEvent(inboxes.get(message.recipientId), message.event));
@@ -259,13 +269,15 @@ it("preserves retryable deliveries when the trusted context lookup is temporaril
   await f.ledger.recoverDecisions("manager", f.host);
   expect(f.inboxes.get("worker")!.events).toHaveLength(1);
 });
-it("rejects immutable operation corruption and impact lowering in saved history", async () => {
+it.each(["operation", "impact"] as const)("quarantines immutable %s corruption without authorizing it", async field => {
   const f = fixture({ impact: "high", operation: "merge" }); await f.ingest();
-  f.saved.get("manager")!.decisions![0].operation = "work";
-  await expect(f.reload()).rejects.toThrow("immutable");
-  f.saved.get("manager")!.decisions![0].operation = "merge";
-  f.saved.get("manager")!.decisions![0].impact = "low";
-  await expect(f.reload()).rejects.toThrow("immutable");
+  if (field === "operation") f.saved.get("manager")!.decisions![0].operation = "work";
+  else f.saved.get("manager")!.decisions![0].impact = "low";
+  const raw = structuredClone(f.saved.get("manager")!.decisions);
+  await f.reload();
+  expect(f.ledger.decisionHistoryState("manager")).toBe("ready");
+  expect(f.ledger.decisions("manager")).toEqual([]);
+  expect(JSON.parse(f.ledger.decisionQuarantine("manager")[0].raw).decisions).toEqual(raw);
 });
 
 it.each([{}, { impact: "unknown" }, { question: "x".repeat(301) }, { context: "x".repeat(2001) }, { options: Array(7).fill({ id: "a", label: "a" }) }, { operation: "credentials" }])("rejects malformed, oversized or unknown payload %j", value => {
@@ -275,18 +287,69 @@ it("retains context/options as untrusted text without execution or telemetry", (
   const value = { ...payload, context: "<script>throw Error('executed')</script>", options: [{ id: "reuse", label: "<b>Untrusted</b>" }, payload.options[1]] };
   expect(parseDecisionPayload(value)).toEqual(value);
 });
-it("refuses corrupt present history instead of overwriting it", async () => {
+it("preserves corrupt present history outside authority and keeps unrelated goal work usable", async () => {
   const f = fixture(); await f.ingest();
   f.saved.get("manager")!.decisions![0].impact = "unknown" as never;
-  await expect(f.reload()).rejects.toThrow();
-  expect(f.saved.get("manager")!.decisions![0].impact).toBe("unknown");
+  const raw = structuredClone(f.saved.get("manager")!);
+  f.storage.save.mockRejectedValueOnce(Error("disk unavailable"));
+  await expect(f.reload()).rejects.toThrow("disk unavailable");
+  expect(f.saved.get("manager")).toEqual(raw);
+  expect(f.ledger.decisionHistoryState("manager")).toBe("loading");
+  await f.reload();
+  expect(f.ledger.decisionHistoryState("manager")).toBe("ready");
+  expect(f.ledger.goals("manager")).toEqual(raw.goals);
+  expect(f.ledger.decisions("manager")).toEqual([]);
+  const evidence = f.ledger.decisionQuarantine("manager");
+  expect(f.ledger.autonomy("manager", "/project")).toBe("high-impact-only");
+  await f.ledger.recoverDecisions("manager", f.host);
+  await expect(f.ledger.handleDecision("manager", "reuse-corrupt-id", { action: "ingest", goalId: "goal", message: f.message }, f.host)).rejects.toThrow("new decision ID");
+  f.message.id = "worker-session:re-raised";
+  await f.ledger.handleDecision("manager", "re-raised", { action: "ingest", goalId: "goal", message: f.message }, f.host);
+  await f.act("manager", "resolve", { optionId: "reuse" });
+  expect(f.ledger.decisions("manager")[0]).toMatchObject({ id: "worker-session:re-raised", status: "decided" });
+  expect(f.ledger.decisionQuarantine("manager")).toEqual(evidence);
+  await f.ledger.retireManagerRequests("engine");
+  const quarantined = f.saved.get("manager")!;
+  expect(quarantined.goals[0].state).toBe("cancelled");
+  expect(quarantined.receipts.legacy).toEqual(raw.receipts.legacy);
+  expect(quarantined.receipts.ingest.signature).toEqual(raw.receipts.ingest.signature);
+  expect(JSON.parse(quarantined.decisionQuarantine![0].raw)).toMatchObject({ decisions: raw.decisions, receipts: { ingest: raw.receipts.ingest.decision } });
+  await f.reload();
+  expect(f.ledger.decisionQuarantine("manager")).toEqual(quarantined.decisionQuarantine);
 });
 it("validates pending delivery envelopes on reload", async () => {
   const f = fixture();
   vi.mocked(f.host.deliver).mockRejectedValueOnce(Error("recipient unavailable"));
   await expect(f.ingest()).rejects.toThrow("recipient unavailable");
   f.saved.get("manager")!.receipts.ingest.decision!.remaining[0].event.text = "forged user answer";
-  await expect(f.reload()).rejects.toThrow("receipt identity");
+  const raw = structuredClone(f.saved.get("manager")!);
+  await f.reload();
+  expect(f.ledger.decisionHistoryState("manager")).toBe("ready");
+  expect(JSON.parse(f.ledger.decisionQuarantine("manager")[0].raw).receipts).toEqual({ ingest: raw.receipts.ingest.decision });
+  expect(f.saved.get("manager")!.receipts.ingest.decision).toBeUndefined();
+});
+
+it("changes autonomy from a live Manager roster with no goal, run or sessions", async () => {
+  const f = fixture();
+  f.saved.get("manager")!.goals = [];
+  f.host.actor = { kind: "user" };
+  f.host.current = () => { throw Error("no active goal"); };
+  await f.ledger.handleDecision("manager", "no-goal", { action: "autonomy", projectId: "/project", value: "everything" }, f.host);
+  await f.reload();
+  expect(f.ledger.autonomy("manager", "/project")).toBe("everything");
+  expect(f.saved.get("manager")!.goals).toEqual([]);
+  f.state.roster[1].projects = [];
+  await expect(f.ledger.handleDecision("manager", "wrong-project", { action: "autonomy", projectId: "/project", value: "high-impact-only" }, f.host)).rejects.toThrow("Unknown decision project");
+  await expect(f.ledger.handleDecision("manager", "no-goal", { action: "autonomy", projectId: "/project", value: "everything" }, f.host)).rejects.toThrow("Unknown decision project");
+});
+
+it.each(["member", "orchestrator", "archived", "missing"])("rejects %s as an autonomy Manager", async kind => {
+  const f = fixture(); f.host.actor = { kind: "user" };
+  if (kind === "missing") f.state.roster.splice(1, 1);
+  else if (kind === "archived") f.state.roster[1].archivedAt = 1;
+  else f.state.roster[1].role = kind as "member" | "orchestrator";
+  await expect(f.ledger.handleDecision("manager", "policy", { action: "autonomy", projectId: "/project", value: "everything" }, f.host)).rejects.toThrow("Unknown decision project");
+  expect(f.storage.save).not.toHaveBeenCalled();
 });
 it("caps resolved history at 200, retains every pending record and keeps duplicate tombstones", async () => {
   const f = fixture(); await f.ingest(); await f.act("manager", "resolve", { optionId: "reuse" });

@@ -1,0 +1,64 @@
+.decisions { container: decisions / inline-size; display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; color: var(--color-content); background: var(--color-background-base); font: 13px/1.6 var(--font-sans); }
+.decisions-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 24px 28px 16px; }
+.decisions-heading h1 { margin: 2px 0; font-size: 26px; font-weight: 600; letter-spacing: -.04em; }
+.decisions-eyebrow { font-size: 10px; text-transform: uppercase; letter-spacing: .12em; }
+.decisions-heading > span, .decisions-eyebrow, .decision-meta, .decision-context, .decision-note, .decision-empty p, .decision-chain, .decision-log-item small, .decision-log-item time { color: color-mix(in srgb, var(--color-content) 68%, transparent); }
+.decisions button, .decision-autonomy button { font: inherit; cursor: pointer; color: inherit; }
+.decisions button:disabled, .decision-autonomy button:disabled { cursor: default; opacity: .5; }
+.decisions button:focus-visible, .decision-autonomy button:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
+.decisions-tabs { display: flex; gap: 24px; padding: 0 28px; border-bottom: 1px solid var(--color-stroke); }
+.decisions-tabs > button { padding: 10px 0; border-bottom: 2px solid transparent; color: color-mix(in srgb, var(--color-content) 68%, transparent); }
+.decisions-tabs > button[aria-pressed=true] { border-color: var(--color-accent); color: var(--color-content); }
+.decisions-tabs button span { font-variant-numeric: tabular-nums; font-size: 11px; border-radius: 4px; padding: 1px 5px; margin-left: 6px; background: var(--color-selection-subtle); }
+.decisions-scroll { overflow: auto; min-height: 0; padding: 20px 28px 28px; scrollbar-gutter: stable; }
+.decision-card { border: 1px solid var(--color-stroke); border-radius: 12px; padding: 22px; margin-bottom: 16px; overflow-wrap: anywhere; }
+.decision-chain { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; list-style: none; font-size: 11px; margin: 0 0 12px; padding: 0; }
+.decision-chain li + li::before { content: "→"; margin-right: 5px; opacity: .5; }
+.decision-chain li[data-level=user] { color: var(--color-accent); }
+.decision-card h2 { font-size: 17px; line-height: 1.4; font-weight: 600; letter-spacing: -.02em; margin: 0 0 10px; }
+.decision-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; font-size: 11px; }
+.decision-impact { padding: 2px 7px; border-radius: 4px; background: var(--color-selection-subtle); font-weight: 600; }
+.decision-impact[data-impact=high] { color: var(--color-content); border: 1px solid color-mix(in srgb, var(--color-accent) 65%, var(--color-stroke)); }
+.decision-context { white-space: pre-wrap; margin: 12px 0 16px; }
+.decision-options { display: grid; gap: 7px; }
+.decision-options > button { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; padding: 11px 13px; border: 1px solid var(--color-stroke); border-radius: 7px; text-align: left; background: transparent; }
+.decision-options > button:not(:disabled):hover { background: var(--color-selection-subtle); }
+.decision-options > button[data-recommended=true] { border-color: color-mix(in srgb, var(--color-accent) 50%, var(--color-stroke)); background: color-mix(in srgb, var(--color-accent) 5%, transparent); }
+.decision-options small { flex-shrink: 0; font-size: 10px; color: var(--color-accent); }
+.decision-card footer { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-top: 17px; font-size: 11px; }
+.decision-card footer button, .decisions-handled button { padding: 4px 0; }
+.decision-note { font-size: 11px; margin: 12px 0; }
+.decision-empty { padding: 28px 0; }
+.decision-empty h2 { font-size: 16px; font-weight: 500; margin-bottom: 6px; }
+.decisions-handled { display: flex; align-items: center; gap: 10px; font-size: 11px; padding: 16px 0; border-top: 1px solid var(--color-stroke); }
+.decisions-handled > span { color: var(--color-accent); }
+.decisions-handled button { margin-left: auto; white-space: nowrap; }
+.decision-log { list-style: none; padding: 0; margin: 0; }
+.decision-log-item { display: grid; grid-template-columns: 6px minmax(0, 1fr) auto; gap: 12px; padding: 17px 0; border-bottom: 1px solid var(--color-stroke); overflow-wrap: anywhere; }
+.decision-log-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--color-accent); margin-top: 8px; }
+.decision-log-item small { display: block; font-size: 11px; margin-top: 4px; }
+.decision-log-item strong { font-weight: 500; }
+.decision-log-item time { font-size: 10px; }
+.decision-quarantine { margin-bottom: 16px; border-left: 2px solid var(--color-accent); background: var(--color-selection-subtle); padding: 12px; font-size: 11px; overflow-wrap: anywhere; }
+.decision-quarantine > div:first-child { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.decision-quarantine pre { max-height: 200px; overflow: auto; white-space: pre-wrap; font: 11px/1.6 var(--font-mono); margin-block: 10px; }
+.decision-reraise { border-top: 1px solid var(--color-stroke); padding: 12px 0; }
+.decision-reraise button { text-decoration: underline; text-underline-offset: 3px; }
+.decision-autonomy { font: 11px/1.6 var(--font-sans); }
+.decision-autonomy > div { display: flex; flex-wrap: wrap; gap: 3px; margin: 8px 0; padding: 3px; border: 1px solid var(--color-stroke); border-radius: 7px; }
+.decision-autonomy button { flex: 1; border-radius: 4px; padding: 6px 8px; white-space: nowrap; }
+.decision-autonomy button[aria-pressed=true] { background: var(--color-selection-subtle); }
+.decision-autonomy p { color: color-mix(in srgb, var(--color-content) 68%, transparent); }
+.decisions[data-presentation=rail] .decisions-heading { padding: 18px 16px 12px; }
+.decisions[data-presentation=rail] .decisions-heading h1 { font-size: 20px; }
+.decisions[data-presentation=rail] .decisions-tabs { padding-inline: 16px; }
+.decisions[data-presentation=rail] .decisions-scroll { padding: 16px; }
+@container decisions (max-width: 480px) {
+  .decisions-heading { padding: 20px 16px 12px; }
+  .decisions-tabs { padding-inline: 16px; }
+  .decisions-scroll { padding: 16px; }
+  .decision-card { padding: 16px; }
+  .decision-options > button { flex-wrap: wrap; gap: 5px; }
+  .decision-log-item { grid-template-columns: 5px minmax(0, 1fr); }
+  .decision-log-item time { grid-column: 2; }
+}

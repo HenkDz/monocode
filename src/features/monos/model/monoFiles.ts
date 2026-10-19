@@ -321,7 +321,7 @@ export function forgetAgentContext(sessionId: string): void {
 }
 
 /** Bumped when the fixed rules below change, so live chats get them again. */
-export const MONO_PROMPT_VERSION = 26;
+export const MONO_PROMPT_VERSION = 27;
 
 const ORG_HANDED_KEY = "monocode:org-handed";
 export type OrgContextPlan = { hash: string; model: string; provider?: string; text?: string };

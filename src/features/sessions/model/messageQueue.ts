@@ -45,7 +45,8 @@ export function canDispatchQueuedHead(session: Session): boolean {
   }
   const head = queuedHead(session);
   if (!head) return false;
-  if (head.managerWake && (session.pendingQuestion || hasPendingApproval(session.blocks))) return false;
+  if ((head.managerWake || head.monoDecision) && (session.pendingQuestion || hasPendingApproval(session.blocks))) return false;
+  if (head.monoDecision && (session.pendingSwitch || session.codexStorageHeld || session.codexStorageReturnChoice)) return false;
   if (isEditingQueuedHead(session)) return false;
   if (isPreparingHandoff(session)) return false;
   return true;
@@ -58,6 +59,7 @@ export function canSteerQueuedHead(session: Session): boolean {
     !!head &&
     !head.monoSessionCompletion &&
     !head.managerWake &&
+    !head.monoDecision &&
     !head.monoSource &&
     !!session.busy &&
     !!session.turnReady &&
@@ -89,7 +91,7 @@ export function queuedMessageForSubmit(
     (entry) => entry.id === messageId,
   );
   if (!message) return undefined;
-  if (mode === "steer") return message.monoSessionCompletion || message.monoSource || message.managerWake ? undefined : message;
+  if (mode === "steer") return message.monoSessionCompletion || message.monoSource || message.managerWake || message.monoDecision ? undefined : message;
   if (queuedHead(session)?.id !== messageId) return undefined;
   if (!canDispatchQueuedHead(session)) return undefined;
   return message;

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="boot-opaque">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -87,6 +87,76 @@
         justify-content: center;
         pointer-events: none;
         transition: opacity 0.16s ease;
+        flex-direction: column;
+        gap: 20px;
+        color: #eee;
+        font:
+          14px/1.5 system-ui,
+          sans-serif;
+        text-align: center;
+        padding: 32px;
+      }
+
+      html.boot-opaque,
+      .boot-opaque body,
+      .boot-opaque #root {
+        background: var(--color-background-base) !important;
+      }
+
+      .theme-light #boot-splash {
+        color: #222;
+      }
+      #boot-splash [hidden] {
+        display: none;
+      }
+      #boot-splash p {
+        max-width: 440px;
+        margin: 0;
+      }
+      #boot-splash button {
+        font: inherit;
+        color: inherit;
+        background: var(--color-background-base);
+        border: 1px solid currentColor;
+        border-radius: 6px;
+        padding: 8px 16px;
+        cursor: pointer;
+      }
+      #boot-splash button:focus-visible {
+        outline: 2px solid #389bff;
+        outline-offset: 4px;
+      }
+      #boot-splash [data-boot-controls] {
+        position: absolute;
+        top: 0;
+        right: 0;
+        height: 40px;
+      }
+      #boot-splash [data-boot-controls] button {
+        border: 0;
+        border-radius: 0;
+        padding: 0;
+      }
+      #boot-splash[data-state="error"],
+      #boot-splash[data-state="timeout"] {
+        opacity: 1;
+        pointer-events: auto;
+        transition: none;
+      }
+      .boot-paint-marker {
+        position: fixed;
+        bottom: 12px;
+        left: 12px;
+        font:
+          12px system-ui,
+          sans-serif;
+        color: #888;
+        pointer-events: none;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #boot-splash {
+          transition: none;
+        }
       }
 
       #boot-splash.boot-splash-out {
@@ -102,8 +172,14 @@
     </style>
   </head>
   <body>
-    <div id="boot-splash" aria-hidden="true">
+    <div id="boot-splash" data-state="loading" aria-hidden="true">
+      <div data-boot-controls></div>
       <img src="/monocode.png" alt="" />
+      <p data-boot-message role="alert"></p>
+      <button data-boot-retry type="button" hidden>Retry</button>
+      <button data-boot-continue type="button" hidden>
+        Continue without transparency
+      </button>
     </div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>

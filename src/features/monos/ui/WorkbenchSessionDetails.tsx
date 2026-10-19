@@ -4,6 +4,7 @@ import { formatLiveElapsed } from "../../sessions/model/liveAgents";
 import type { Session } from "../../sessions/model/session";
 import { MemberDetails } from "./MonoTeamPage";
 import { workbenchTurn } from "./WorkbenchHeader";
+import { MonoPath } from "./MonoPath";
 
 export function WorkbenchSessionDetails({
   session,
@@ -75,9 +76,7 @@ export function WorkbenchSessionDetails({
         </p>
       )}
       <h3 className="mt-6 mb-2 font-medium">Working copy</h3>
-      <p className="break-all font-mono">
-        {session.worktreeCwd ?? session.cwd}
-      </p>
+      <MonoPath path={session.worktreeCwd ?? session.cwd} label="working copy" />
       <p className="mt-4 mb-4 text-content/65">
         Model, effort and access controls apply to the next message.
       </p>

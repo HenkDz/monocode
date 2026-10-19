@@ -144,6 +144,7 @@ it("requires an explicit scoped confirmation before clearing an inactive owned c
   native.info.mockResolvedValue(info); native.retireCredentials.mockResolvedValue(undefined);
   await act(async () => root.render(<MonoCodexStorageSource harness="codex" providerAccountId="account" cwd="/synthetic/repo" />));
   expect(native.retireCredentials).not.toHaveBeenCalled();
+  await act(async () => buttonNamed("Private credential copies:").click());
   await act(async () => buttonNamed("Clear inactive private credentials").click());
   expect(native.retireCredentials).not.toHaveBeenCalled();
   expect(container.textContent).toContain("including any changed login");
@@ -158,16 +159,74 @@ it("withholds credential retirement for active contexts and preserves a failed i
   const namespace = { contextId: "base", home: "C:/synthetic/private", copies: 1, active: true, receipt: { contextId: "base", contextIdentity: "1:2", owners: [] } };
   native.info.mockResolvedValue({ home: namespace.home, sourceHome: "C:/synthetic/source", sourceKind: "account", shareHooks: false, credentialNamespaces: [namespace] });
   await act(async () => root.render(<MonoCodexStorageSource harness="codex" providerAccountId="account" cwd="/synthetic/repo" />));
+  await act(async () => buttonNamed("Private credential copies:").click());
   expect(buttonNamed("Clear inactive private credentials")).toBeUndefined();
   expect(container.textContent).toContain("Close every server");
   await act(async () => root.render(null));
   native.info.mockResolvedValue({ home: namespace.home, sourceHome: "C:/synthetic/source", sourceKind: "account", shareHooks: false, credentialNamespaces: [{ ...namespace, active: false }] });
   native.retireCredentials.mockRejectedValue(new Error("This context became active; credentials preserved"));
   await act(async () => root.render(<MonoCodexStorageSource harness="codex" providerAccountId="account" cwd="/synthetic/repo" />));
+  await act(async () => buttonNamed("Private credential copies:").click());
   await act(async () => buttonNamed("Clear inactive private credentials").click());
   await act(async () => buttonNamed("Confirm clear private credentials").click());
   expect(container.querySelector('[role="alert"]')?.textContent).toContain("credentials preserved");
   expect(buttonNamed("Confirm clear private credentials")).toBeDefined();
+});
+
+it("summarizes copies rather than context count and opens an accessible short-label list without clearing", async () => {
+  const namespaces = [
+    { contextId: "base", home: "//?/C:/Users/synthetic/.codex/mono", copies: 2, active: true },
+    { contextId: "a".repeat(64), home: "//?/C:/Users/synthetic/.codex/mono/.monocode-skill-contexts/" + "a".repeat(64), copies: 3, active: false },
+    { contextId: "b".repeat(64), home: "//?/C:/Users/synthetic/.codex/mono/.monocode-skill-contexts/" + "b".repeat(64), copies: 2, active: false },
+  ].map(namespace => ({ ...namespace, receipt: { contextId: namespace.contextId, contextIdentity: "synthetic", owners: [] } }));
+  const info = { home: "/synthetic/mono", sourceHome: "//?/C:/Users/synthetic/.codex", sourceKind: "default", shareHooks: false, credentialNamespaces: namespaces };
+  native.info.mockResolvedValue(info);
+  const renderSource = (account = "account") => root.render(<MonoCodexStorageSource harness="codex" providerAccountId={account} cwd="/synthetic/repo" />);
+  await act(async () => renderSource());
+  const summary = buttonNamed("Private credential copies:");
+  expect(summary.textContent).toContain("Private credential copies: 7 (2 in use)");
+  expect(summary.getAttribute("aria-expanded")).toBe("false");
+  const list = container.querySelector('[aria-label="Private credential contexts"]')!;
+  expect(list.closest<HTMLElement>("[hidden]")).not.toBeNull();
+  expect(list.querySelectorAll("li")).toHaveLength(3);
+  await act(async () => summary.click());
+  expect(summary.getAttribute("aria-expanded")).toBe("true");
+  expect(summary.getAttribute("aria-controls")).toBe(list.parentElement!.id);
+  expect(list.textContent).toContain("Base context");
+  expect(list.textContent).toContain("Skill context 2");
+  expect(list.textContent).toContain("In use");
+  expect(list.textContent).not.toContain("a".repeat(64));
+  expect(container.textContent).not.toContain("//?/");
+  expect(native.retireCredentials).not.toHaveBeenCalled();
+  await act(async () => buttonNamed("Clear inactive private credentials").click());
+  await act(async () => buttonNamed("Cancel").click());
+  expect(buttonNamed("Confirm clear private credentials")).toBeUndefined();
+  expect(native.retireCredentials).not.toHaveBeenCalled();
+  await act(async () => renderSource("another"));
+  expect(buttonNamed("Private credential copies:").getAttribute("aria-expanded")).toBe("false");
+});
+
+it("copies the raw selected home and context paths and announces clipboard failure", async () => {
+  const sourceHome = "\\\\?\\C:\\Users\\synthetic\\.codex";
+  const home = "//?/C:/synthetic/private/context";
+  native.info.mockResolvedValue({ home, sourceHome, sourceKind: "default", shareHooks: false, credentialNamespaces: [{
+    contextId: "base", home, copies: 1, active: false,
+    receipt: { contextId: "base", contextIdentity: "synthetic", owners: [] },
+  }] });
+  await act(async () => root.render(<MonoCodexStorageSource harness="codex" cwd="/synthetic/repo" />));
+  expect(container.querySelector("span[title]")?.textContent).toBe("~/.codex");
+  const copy = container.querySelector<HTMLButtonElement>('[aria-label="Copy selected Codex home path"]')!;
+  expect(copy.title).toBe(sourceHome);
+  await act(async () => copy.click());
+  expect(native.copy).toHaveBeenCalledExactlyOnceWith(sourceHome);
+  expect(container.querySelector('[role="status"]')?.textContent).toBe("Path copied");
+  await act(async () => buttonNamed("Private credential copies:").click());
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Copy base context path"]')!.click());
+  expect(native.copy).toHaveBeenLastCalledWith(home);
+  native.copy.mockRejectedValueOnce(new Error("Clipboard unavailable"));
+  await act(async () => copy.click());
+  expect(container.querySelector('[role="status"]')?.textContent).toBe("Could not copy path");
+  expect(native.retireCredentials).not.toHaveBeenCalled();
 });
 
 it("gives explicit Elevated guidance and withholds ineffective Full access for restricted messages", async () => {

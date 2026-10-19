@@ -28,6 +28,7 @@ import type { AgentLiveState } from "../../src/features/agents/model/agentLiveSt
 import "../../src/styles/index.css";
 
 const params = new URLSearchParams(location.search);
+const drawerStress = params.get("drawerStress") === "yes";
 const scenario = params.get("scenario") ?? "failed";
 const historicalSession = params.get("kind") === "historical-session";
 const workerSession = params.get("kind") === "session" || historicalSession;
@@ -184,6 +185,7 @@ if (waiting) {
 if (!waiting && !working)
   current.error =
     "Codex launch failed: conversation store could not be opened. SQLite error: database is locked (SQLITE_BUSY). Review attempt: not started.";
+if (drawerStress) current.error += "\n" + "Synthetic diagnostic line; no real storage was opened.\n".repeat(80);
 if (historicalSession) {
   current.sessionId = "new-review-worker";
   current.status = "blocked";
@@ -451,7 +453,7 @@ if (!zero)
     senderId: manager.id,
     recipientId: member.id,
     topic: "Review hand-off",
-    text: "Review the saved change after storage recovery. Keep the current branch. No merge or live model turn is requested.",
+    text: "Review the saved change after storage recovery. Keep the current branch. No merge or live model turn is requested." + (drawerStress ? "\nSynthetic Manager message line.\n".repeat(80) : ""),
     at: now - 60_000,
   });
 const liveState: AgentLiveState =
@@ -494,8 +496,26 @@ publishCardSessions(
 );
 setComposerDraft(sessionId, "Keep my draft");
 mockWindows("main");
+let credentialNamespaces = Array.from({ length: 12 }, (_, i) => ({
+  contextId: i === 0 ? "base" : i.toString(16).padStart(64, "0"),
+  home: `//?/C:/Users/synthetic/.monocode/codex-monos/default/.monocode-skill-contexts/${i.toString(16).padStart(64, "0")}`,
+  copies: 2,
+  active: i < 2,
+  receipt: { contextId: i === 0 ? "base" : i.toString(16).padStart(64, "0"), contextIdentity: `synthetic-${i}`, owners: [] },
+}));
 mockIPC(
   (command, args) => {
+    if (drawerStress && command === "codex_mono_store_info") return {
+      home: "C:/synthetic/mono", sourceHome: "//?/C:/Users/synthetic/.codex", sourceKind: "default", shareHooks: false, credentialNamespaces,
+    };
+    if (drawerStress && command === "codex_mono_store_retire_credentials") {
+      events.push({ action: "retire-credentials", options: args });
+      const receipt = (args as { receipt: { contextId: string } }).receipt;
+      const namespace = credentialNamespaces.find(item => item.contextId === receipt.contextId);
+      if (namespace?.active) throw new Error("Synthetic context is active; credentials preserved");
+      credentialNamespaces = credentialNamespaces.filter(item => item !== namespace);
+      return null;
+    }
     if (command === "list_dir") return [];
     if (command === "git_worktrees")
       return {

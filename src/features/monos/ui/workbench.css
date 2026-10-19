@@ -412,6 +412,11 @@ div:has(> .cc7u-drawer) {
   border-radius: 0;
   background: var(--color-background-base);
 }
+.cc7u-drawer > .modal-panel {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
 .cc7u-facts > div {
   display: flex;
   justify-content: space-between;

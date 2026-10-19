@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { Decisions, type DecisionUiActions } from "./Decisions";
 import { selectDecisionView } from "../model/decisionView";
-import { fixtureLedger, roster } from "../../teamMap/fixtures/lite/data";
+import { ask, fixtureLedger, roster } from "../../teamMap/fixtures/lite/data";
 
 let host: HTMLDivElement, root: ReturnType<typeof createRoot>;
 afterEach(async () => { await act(async () => root?.unmount()); host?.remove(); vi.useRealTimers(); vi.unstubAllGlobals(); });
@@ -38,4 +38,18 @@ it.each([0, 1])("retains accepted row %i in place with the same DOM identity unt
   expect(after[index].querySelector<HTMLButtonElement>(".decision-options button")!.disabled).toBe(true);
   await act(async () => vi.advanceTimersByTime(1300));
   expect([...host.querySelectorAll(".decision-card")]).toEqual([before[1 - index]]);
+});
+
+it("keeps the selector's current ordering when no accepted row is fading", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const ledger = await fixtureLedger();
+  const actions: DecisionUiActions = { answer: async () => ({ logFailed: false }), autonomy: async () => {}, openProject: () => {} };
+  function Host() {
+    useSyncExternalStore(ledger.subscribe, ledger.snapshot);
+    return <Decisions view={selectDecisionView(ledger, roster, Date.now())} roster={roster} actions={actions} />;
+  }
+  host = document.createElement("div"); document.body.append(host); root = createRoot(host);
+  await act(async () => root.render(<Host />));
+  await act(async () => { await ledger.recordDecision("manager", { ...ask, id: "older", question: "Older live ask", createdAt: ask.createdAt - 1 }); });
+  expect(host.querySelector(".decision-card h2")?.textContent).toBe("Older live ask");
 });

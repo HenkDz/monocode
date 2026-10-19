@@ -12,7 +12,7 @@ export function appMapHostSource() {
     if (!node) throw Error(`Missing App declaration: ${name}`);
     return node;
   };
-  const states = ["[decisionError, setDecisionError]", "[decisionRefresh, setDecisionRefresh]", "[decisionLoaded, setDecisionLoaded]", "decisionLoadKey", "[decisionNow, setDecisionNow]", "decisionPending"];
+  const states = ["[decisionError, setDecisionError]", "[decisionRefresh, setDecisionRefresh]", "[decisionLoaded, setDecisionLoaded]", "decisionLoadKey", "[, setDecisionNow]", "decisionPending"];
   const statements = [...new Set(states.map(name => declaration(name).parent.parent.getText(ast)))];
   const effects = nodes.filter(node => ts.isExpressionStatement(node) && ts.isCallExpression(node.expression) && node.expression.expression.getText(ast) === "useEffect" &&
     (node.getText(ast).includes("setDecisionLoaded(decisionLoadKey)") || node.getText(ast).includes("midnight.setHours")));

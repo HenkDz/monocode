@@ -1682,7 +1682,7 @@ function Workspace({
   const [decisionRefresh, setDecisionRefresh] = useState(0);
   const [decisionLoaded, setDecisionLoaded] = useState<string>();
   const decisionLoadKey = JSON.stringify([monosSnap, teamMap.open, decisionRefresh]);
-  const [decisionNow, setDecisionNow] = useState(Date.now);
+  const [, setDecisionNow] = useState(Date.now);
   const decisionPending = useRef(new Set<string>()), decisionAccepted = useRef(new Set<string>());
   useEffect(() => {
     let cancelled = false;
@@ -17607,7 +17607,7 @@ function Workspace({
                 {decisionError ? <p role="alert" className="px-6 py-3 text-sm">{decisionError} <button type="button" onClick={() => { setDecisionError(undefined); setDecisionRefresh(value => value + 1); }}>Try again</button></p>
                   : decisionLoaded !== decisionLoadKey && <p role="status" className="px-6 py-3 text-sm">Loading decisions…</p>}
                 <TeamMap key={teamMap.scope ?? "org"} sessions={sessions} runs={orchestrationRuns} statuses={managerPrStatuses} scope={teamMap.scope} onClose={teamMap.close} onOpenMono={id => void onOpenMono(id)}
-                  decisions={!decisionError && decisionLoaded === decisionLoadKey ? commandMapDecisions(monoManagerGoals, listMonos(), decisionActions, decisionNow) : undefined}
+                  decisions={!decisionError && decisionLoaded === decisionLoadKey ? commandMapDecisions(monoManagerGoals, listMonos(), decisionActions, Date.now()) : undefined}
                   bossGoal={mapBossContext ? { context: mapBossContext, submit: submitBossGoal } : undefined} />
               </div>}
                   <div

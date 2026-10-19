@@ -54,7 +54,7 @@ export function Decisions({ view, roster, actions, presentation = "page", error,
       return actions.wasAccepted?.(item.managerId, item.decision.id)
         ? [{ ...item, sentToBoss: item.sentToBoss ?? !view.log.some(row => key(row) === key(item) && row.decision.answeredBy === "user") }] : [];
     });
-    setShown({ pending: view.pending, rows: [...rows, ...pending.values()] });
+    setShown({ pending: view.pending, rows: rows.some(item => item.sentToBoss !== undefined) ? [...rows, ...pending.values()] : view.pending });
   }
   const leaving = JSON.stringify(shown.rows.filter(item => item.sentToBoss !== undefined).map(key));
   useEffect(() => {

@@ -18,7 +18,9 @@ const sends: { sessionId: string; text: string }[] = [];
 const gestures: { trusted: boolean; type: string; action: string }[] = [];
 const pending = new Set<string>(), accepted = new Set<string>();
 const session = { ...newSession("codex", project), id: "worker-chat", pendingQuestion: { requestId: 1, title: "Choose the API contract", questions: [] } };
-const controls = { sends, gestures, autonomy: () => ledger.autonomy("manager", project) };
+const controls = { sends, gestures, autonomy: () => ledger.autonomy("manager", project),
+  reply: () => ledger.recordDecisionReply("manager", { id: "boss-chat:answer", managerId: "manager", senderId: "boss", recipientId: "worker", topic: "decision:ask", text: "Reuse the interface", at: Date.now() }),
+};
 declare global { interface Window { mapLiteFixture: typeof controls } }
 window.mapLiteFixture = controls;
 

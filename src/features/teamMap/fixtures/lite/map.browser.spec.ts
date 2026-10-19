@@ -45,8 +45,10 @@ for (const [width, theme] of [[1600, "dark"], [390, "light"]] as const) {
     await drawer.getByRole("article", { name: "Choose the API contract" }).getByRole("button", { name: "Let the Boss decide" }).click();
     await expect.poll(() => page.evaluate(() => window.mapLiteFixture.sends.length)).toBe(1);
     expect(await page.evaluate(() => window.mapLiteFixture.sends[0].sessionId)).toBe("boss-chat");
+    await page.evaluate(() => window.mapLiteFixture.reply());
     await drawer.getByRole("button", { name: "Decision log", exact: true }).click();
     await expect(drawer.locator(".decision-log")).toBeVisible();
+    await expect(drawer.locator(".decision-log")).toContainText("Reuse the interface");
     await page.keyboard.press("Escape");
     await expect(drawer).toHaveCount(0);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);

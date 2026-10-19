@@ -22,7 +22,8 @@ export function OrbitMap({ sessions, runs, statuses, scope, onOpenMono, onClose,
       const { state, task } = projectMemberTask(project, node.mono, runs, sessions);
       return { ...node, state, status: state.status, title: task?.title ?? state.activity ?? "No assigned task" };
     });
-    return { ...project, manager: { ...project.manager, state: mapOwnState(project.manager.mono, runs, sessions) }, members };
+    const state = mapOwnState(project.manager.mono, runs, sessions);
+    return { ...project, manager: { ...project.manager, state, status: state.status === "idle" && project.manager.status === "pr-ready" ? "pr-ready" as const : state.status }, members };
   }), [map.nodes, runs, sessions]);
   const boss = map.nodes.find(node => node.mono.role === "orchestrator");
   const bossState = boss && mapOwnState(boss.mono, runs, sessions);
@@ -32,8 +33,9 @@ export function OrbitMap({ sessions, runs, statuses, scope, onOpenMono, onClose,
   const [width, setWidth] = useState(1000);
   const viewport = useRef<HTMLDivElement>(null);
   const projectButtons = useRef(new Map<string, HTMLButtonElement>());
+  const returnProject = useRef<string | undefined>(undefined);
   const closeButton = useRef<HTMLButtonElement>(null);
-  const focusBeforeMap = useRef<Element | null>(null);
+  const focusBeforeMap = useRef<Element | null>(document.activeElement);
   const [reducedMotion, setReducedMotion] = useState(() => window.matchMedia("(prefers-reduced-motion: reduce)").matches);
   const focused = projects.find(project => project.manager.id === selected);
   const columns = Math.max(1, Math.min(4, Math.floor(width / 220)));
@@ -48,7 +50,6 @@ export function OrbitMap({ sessions, runs, statuses, scope, onOpenMono, onClose,
   const inFlight = goals.filter(goal => !goal.archived && !["done", "cancelled"].includes(goal.state)).length;
 
   useEffect(() => {
-    focusBeforeMap.current = document.activeElement;
     if (!scope) closeButton.current?.focus();
     const measure = () => setWidth(viewport.current?.clientWidth || 1000);
     measure();
@@ -67,11 +68,16 @@ export function OrbitMap({ sessions, runs, statuses, scope, onOpenMono, onClose,
       setSelected(undefined); closeButton.current?.focus();
     }
   }, [projects, selected]);
+  useEffect(() => {
+    if (!selected && returnProject.current) {
+      projectButtons.current.get(returnProject.current)?.focus();
+      returnProject.current = undefined;
+    }
+  }, [selected]);
 
   const closeProject = () => {
-    const id = selected;
+    returnProject.current = selected;
     setSelected(undefined);
-    if (id) requestAnimationFrame(() => projectButtons.current.get(id)?.focus());
   };
   const openChat = (id: string) => { onClose(); onOpenMono(id); };
   const openProject = (id: string) => {

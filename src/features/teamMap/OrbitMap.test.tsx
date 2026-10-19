@@ -89,7 +89,7 @@ it("opens and switches project drawers through real map selections, returns focu
   await click("Open app project");
   expect(host.querySelector('[role="dialog"] h2')?.textContent).toBe("app");
   expect(document.activeElement).toBe(button("Close project"));
-  expect(host.querySelector('[data-decision-ui]')?.textContent).toContain("Shared autonomy control");
+  expect(host.querySelector('[role="dialog"] [data-decision-ui]')?.textContent).toContain("Shared autonomy control");
   await key(button("Close project"), "Escape");
   expect(host.querySelector('[role="dialog"]')).toBeNull();
   expect(document.activeElement).toBe(button("Open app project"));
@@ -175,11 +175,12 @@ it("keeps saved dispatch report and saved turn model separate from the retried a
   await renderMap({ runs: [retainedRun], sessions: [oldSession] }); await click("Open app project");
   await act(async () => [...host.querySelectorAll<HTMLButtonElement>("button")].find(node => node.textContent?.includes("Show work"))!.click());
   const attempts = host.querySelector<HTMLSelectElement>('[aria-label="Backend work attempt"]')!;
-  await act(async () => { attempts.value = "old-worker"; attempts.dispatchEvent(new Event("change", { bubbles: true })); });
+  await act(async () => { attempts.value = "old"; attempts.dispatchEvent(new Event("change", { bubbles: true })); });
   expect(host.textContent).toContain("OLD saved dispatch report");
   expect(host.textContent).toContain("Saved model provenance");
   expect(host.textContent).not.toContain("CURRENT DEFAULT MUST NOT LABEL HISTORY");
   expect(host.textContent).toContain("History · Task blocked · dispatch old · completed");
+  expect(host.querySelector('.command-map-fold')?.textContent).toContain("1 steps");
 });
 
 it("drops an older transcript page when its project drawer is closed before load resolves", async () => {

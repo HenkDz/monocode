@@ -37,14 +37,14 @@ function MemberTask({ project, node, runs, sessions, onOpenMono }: {
   sessions: readonly Session[]; onOpenMono: (id: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const [evidenceSessionId, setEvidenceSessionId] = useState<string>();
+  const [evidenceDispatchId, setEvidenceDispatchId] = useState<string>();
   const foldId = useId();
   const { task, dispatch, session, state, history, owned } = projectMemberTask(project, node.mono, runs, sessions);
-  const selectedHistory = history.find(entry => entry.dispatch.sessionId === evidenceSessionId);
+  const selectedHistory = history.find(entry => entry.dispatch.id === evidenceDispatchId);
   const evidence = selectedHistory ? sessions.find(session => session.id === selectedHistory.dispatch.sessionId) : session;
   const historical = selectedHistory && selectedHistory.dispatch.id !== dispatch?.id;
   const report = selectedHistory ? workbenchSessionTask(owned, selectedHistory.dispatch.sessionId) : task;
-  const steps = session?.blocks.filter(block => !block.internal && !block.draft && block.role !== "handoff" && (presentationText(block.monoTeamMessage?.text ?? block.text).trim() || block.tool || block.image || block.attachments?.length || block.taskList || block.plan)).length;
+  const steps = evidence?.blocks.filter(block => !block.internal && !block.draft && block.role !== "handoff" && (presentationText(block.monoTeamMessage?.text ?? block.text).trim() || block.tool || block.image || block.attachments?.length || block.taskList || block.plan)).length;
   const look = monoLook(node.mono);
   return <article className="command-map-task" data-status={state.status}>
     <PixelMascot name={look.mascot} color={look.color} still className="size-6" />
@@ -57,8 +57,8 @@ function MemberTask({ project, node, runs, sessions, onOpenMono }: {
         <span aria-hidden="true">{expanded ? "−" : "+"}</span> Show work{steps != null ? ` · ${steps} steps` : ""}
       </button>
       {expanded && <div id={foldId}>
-        {history.length > 0 && <select aria-label={`${look.name} work attempt`} value={selectedHistory?.dispatch.sessionId ?? ""} onChange={event => setEvidenceSessionId(event.target.value || undefined)}>
-          <option value="">Current assignment</option>{history.map(({ dispatch: attempt }) => <option key={attempt.id} value={attempt.sessionId}>{attempt.id === dispatch?.id ? "Current" : "Saved"} · {mapText(attempt.id, 60)} · {attempt.state}</option>)}
+        {history.length > 0 && <select aria-label={`${look.name} work attempt`} value={selectedHistory?.dispatch.id ?? ""} onChange={event => setEvidenceDispatchId(event.target.value || undefined)}>
+          <option value="">Current assignment</option>{history.map(({ dispatch: attempt }) => <option key={attempt.id} value={attempt.id}>{attempt.id === dispatch?.id ? "Current" : "Saved"} · {mapText(attempt.id, 60)} · {attempt.state}</option>)}
         </select>}
         {report && <p className="command-map-muted">{historical ? "History" : "Current assignment"} · Task {mapText(report.id, 80)} · dispatch {mapText(selectedHistory?.dispatch.id ?? dispatch?.id ?? "unavailable", 80)} · {report.status}</p>}
         {historical && report?.result.trim() && <p>Saved dispatch report: {mapText(report.result, 600)}</p>}

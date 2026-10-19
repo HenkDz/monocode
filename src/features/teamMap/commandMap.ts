@@ -28,7 +28,7 @@ export const mapText = (text: string, limit = 220) => {
 };
 
 export function projectGoals(project: OrbitProject, goals: readonly MonoManagerGoal[]) {
-  return goals.filter(goal => !goal.archived && (goal.managerId === project.manager.mono.managerEngineId ||
+  return goals.filter(goal => !goal.archived && (!goal.projectId || projectKey(goal.projectId) === projectKey(project.project)) && (goal.managerId === project.manager.mono.managerEngineId ||
     !project.manager.mono.managerEngineId && projectKey(goal.projectId ?? "") === projectKey(project.project)))
     .sort((a, b) => Number(["done", "cancelled"].includes(a.state)) - Number(["done", "cancelled"].includes(b.state)) || b.updatedAt - a.updatedAt);
 }
@@ -52,8 +52,9 @@ export function goalProgress(goal: MonoManagerGoal | undefined, runs: readonly O
 }
 
 export function projectMemberTask(project: OrbitProject, member: Mono, runs: readonly OrchestrationRun[], sessions: readonly Session[]) {
-  const owned = runs.filter(run => run.ownerMonoId === project.manager.id ||
-    !!project.manager.mono.managerEngineId && run.leadId === project.manager.mono.managerEngineId);
+  const owned = runs.filter(run => (run.ownerMonoId ? run.ownerMonoId === project.manager.id :
+    !!project.manager.mono.managerEngineId && run.leadId === project.manager.mono.managerEngineId) &&
+    (!run.cwd || projectKey(run.cwd) === projectKey(project.project)));
   const tasks = memberTasks(owned, member.id);
   const task = tasks.find(entry => ["queued", "running", "cancelling"].includes(entry.status)) ?? tasks[0];
   const run = task && owned.find(entry => entry.tasks.includes(task));
@@ -61,7 +62,7 @@ export function projectMemberTask(project: OrbitProject, member: Mono, runs: rea
   const session = sessions.find(entry => entry.id === (dispatch?.sessionId ?? task?.sessionId));
   const own = sessions.find(entry => entry.id === member.sessionId);
   const workerState = monoState(session, { task, tasks: run?.tasks, runStatus: run?.status, pauseReason: run?.lastPauseReason, wakeStates: run?.wakeState ? [run.wakeState] : [] });
-  const ownState = own && monoState(own);
+  const ownState = own && monoState({ ...own, codexStorageError: own.codexStorageError ?? session?.codexStorageError });
   const state = workerState.status === "needs-you" ? workerState : ownState && ownState.liveState?.status !== "idle" ? ownState : workerState;
   const history = owned.flatMap(run => (run.dispatches ?? []).filter(dispatch => run.tasks.some(task => task.id === dispatch.taskId && task.memberId === member.id))
     .map(dispatch => ({ run, dispatch }))).sort((a, b) => b.dispatch.startedAt - a.dispatch.startedAt);

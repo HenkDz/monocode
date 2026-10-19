@@ -29,6 +29,8 @@ export function isIntegrationUserEvent(event: Event | undefined, requestId: stri
 /** Returns results only after the final receipt is durable and authority remains current. */
 export async function executeLocalTool(call: LocalToolCall, host: LocalToolBrokerHost, approval?: Event): Promise<unknown> {
   const captured = structuredClone(call);
+  if (captured.tool === "project.skill.install" || captured.tool === "project.skill.archive")
+    throw Error("Use the inspected skill's Install or Remove button yourself.");
   const initial = structuredClone(host.current(captured));
   const policy = evaluateLocalToolCall(captured, initial.context, initial.grant, host.now());
   if (policy.action === "deny") throw Error(policy.reason);

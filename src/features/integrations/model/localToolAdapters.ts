@@ -1,6 +1,4 @@
 import { invoke } from "@tauri-apps/api/core";
-import { invalidateSkills } from "../../skills/model/skills";
-import { invalidateProjectFiles } from "../../files/model/fileIndex";
 import { validateLocalToolCall, type LocalToolCall } from "./localToolPolicy";
 
 export type ProjectMcpPin = { projectIdentity: string; executionIdentity: string; schemaHash: string };
@@ -20,6 +18,7 @@ export async function executeLocalNativeTool(call: LocalToolCall, validate: () =
   const { tool } = validateLocalToolCall(captured);
   // shortcut: gh stays existing local CLI access until atomic native account custody is implemented.
   if (tool.id.startsWith("github.")) throw Error("Existing local CLI access · account not pinned. Governed GitHub execution is unavailable.");
+  if (tool.id.startsWith("project.skill.")) throw Error("Use the inspected skill's Install or Remove button yourself.");
   const check = () => { validate(); if (signal.aborted) throw Error("Local operation cancelled"); };
   check();
   if (tool.id === "local-mcp.project.read") {
@@ -37,13 +36,5 @@ export async function executeLocalNativeTool(call: LocalToolCall, validate: () =
       if (cancelled?.error) throw Error(`Native MCP cancellation failed: ${String(cancelled.error)}`);
     }
   }
-  const args = captured.args as { name: string; source?: string; projectIdentity: string; fingerprint: string };
-  check();
-  const result = await invoke(tool.id === "project.skill.install" ? "install_project_skill" : "archive_project_skill", {
-    project: captured.binding.projectPath, name: args.name, ...(args.source ? { source: args.source } : {}),
-    expectedProjectIdentity: args.projectIdentity, expectedFingerprint: args.fingerprint,
-  });
-  check();
-  invalidateSkills({ cwd: captured.binding.projectPath }); invalidateProjectFiles(captured.binding.projectPath);
-  return result;
+  throw Error("Unsupported local operation");
 }

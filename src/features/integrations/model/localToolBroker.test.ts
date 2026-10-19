@@ -67,6 +67,13 @@ it("does not approve protected execution through synthetic UI, CLI or decision e
   expect(host.reserve).not.toHaveBeenCalled(); expect(host.execute).not.toHaveBeenCalled();
 });
 it("captures the original call and grant before awaits", async () => {
+  // Skill operations never enter the durable host, even with a supplied grant.
+  for (const tool of ["project.skill.install", "project.skill.archive"]) {
+    const skill = fixture(); skill.call.tool = tool; skill.host.current = vi.fn(skill.host.current);
+    await expect(executeLocalTool(skill.call, skill.host)).rejects.toThrow("button yourself");
+    expect(skill.host.current).not.toHaveBeenCalled(); expect(skill.host.reserve).not.toHaveBeenCalled();
+    expect(skill.host.record).not.toHaveBeenCalled(); expect(skill.host.execute).not.toHaveBeenCalled();
+  }
   const { call, host, grant } = fixture(); const reserve = host.reserve;
   host.reserve = async (...args) => { const result = await reserve(...args); grant.tools[0].scopes.push("extra"); return result; };
   await expect(executeLocalTool(call, host)).rejects.toThrow("approval changed");

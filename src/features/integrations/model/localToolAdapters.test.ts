@@ -14,19 +14,17 @@ it("refuses governed gh execution without an atomic native account path", async 
   await expect(executeLocalNativeTool(call, vi.fn(), new AbortController().signal)).rejects.toThrow("account not pinned");
   expect(mocks.invoke).not.toHaveBeenCalled();
 });
-it("routes only the inspected project package, without a generic installer or home fallback", async () => {
+it("keeps agent and durable broker paths unbound for skill installation", async () => {
   const { call } = integrationFixture(); call.tool = "project.skill.install";
   call.args = { source: "C:/synthetic/local/fixture", name: "fixture", projectIdentity: call.binding.projectIdentity, fingerprint: "a".repeat(64) };
-  await executeLocalNativeTool(call, vi.fn(), new AbortController().signal);
-  expect(mocks.invoke).toHaveBeenCalledExactlyOnceWith("install_project_skill", { project: call.binding.projectPath, source: call.args.source, name: "fixture", expectedProjectIdentity: call.binding.projectIdentity, expectedFingerprint: "a".repeat(64) });
-  expect(mocks.skills).toHaveBeenCalledWith({ cwd: call.binding.projectPath });
-  expect(mocks.files).toHaveBeenCalledWith(call.binding.projectPath);
+  await expect(executeLocalNativeTool(call, vi.fn(), new AbortController().signal)).rejects.toThrow("button yourself");
+  expect(mocks.invoke).not.toHaveBeenCalled();
 });
-it("refuses an already stopped operation before native execution", async () => {
+it("keeps archive unbound from the agent path, including stopped calls", async () => {
   const { call } = integrationFixture(); call.tool = "project.skill.archive";
   call.args = { name: "fixture", projectIdentity: call.binding.projectIdentity, fingerprint: "a".repeat(64) };
   const controller = new AbortController(); controller.abort();
-  await expect(executeLocalNativeTool(call, vi.fn(), controller.signal)).rejects.toThrow("cancelled");
+  await expect(executeLocalNativeTool(call, vi.fn(), controller.signal)).rejects.toThrow("button yourself");
   expect(mocks.invoke).not.toHaveBeenCalled();
 });
 it("cancels the original owned MCP request and suppresses late result egress", async () => {

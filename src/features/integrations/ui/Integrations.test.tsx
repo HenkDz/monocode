@@ -4,109 +4,61 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { Integrations } from "./Integrations";
 import { IntegrationRequestCard, type IntegrationRequestView } from "./IntegrationRequestCard";
-import { isIntegrationUserEvent } from "../model/localToolBroker";
 
+const mocks = vi.hoisted(() => ({ invoke: vi.fn() }));
+vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
+vi.mock("../../skills/model/skills", () => ({ invalidateSkills: vi.fn() }));
+vi.mock("../../files/model/fileIndex", () => ({ invalidateProjectFiles: vi.fn() }));
 let container: HTMLDivElement, root: Root;
-const request = (): IntegrationRequestView => ({ id: "request", name: "Project read", requester: "Manager", project: "Synthetic project", mono: "Atlas", goal: "Read project text",
-  provider: "local MCP", available: true, status: "pending", request: { version: 1, type: "capability-request", kind: "access", service: "local-mcp", reason: "<script>untrusted reason</script>", tools: ["local-mcp.project.read"], scopes: ["file:readme.txt"], deadline: 5000 } });
-beforeEach(() => { vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true); container = document.createElement("div"); document.body.append(container); root = createRoot(container); });
+const request = (): IntegrationRequestView => ({ id: "request", name: "fixture", requester: "Manager", project: "Synthetic project", projectPath: "C:/synthetic/project", mono: "Atlas", goal: "Read project text",
+  provider: "skill", available: true, status: "pending", request: { version: 1, type: "capability-request", kind: "install", service: "skill", source: "C:/synthetic/local", reason: "<script>untrusted reason</script>", tools: ["project.skill.install"], scopes: ["skill:fixture"], deadline: 5000 } });
+const inspection = { name: "fixture", declaredName: "fixture", description: "Synthetic description", project: "C:/synthetic/project", projectIdentity: "windows:1:2", source: "C:/synthetic/local", fingerprint: "a".repeat(64), totalBytes: 12,
+  files: [{ path: "SKILL.md", bytes: 8 }, { path: "scripts/helper.ps1", bytes: 4 }] };
+beforeEach(() => { vi.clearAllMocks(); mocks.invoke.mockResolvedValue(inspection); vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true); container = document.createElement("div"); document.body.append(container); root = createRoot(container); });
 afterEach(() => { act(() => root.unmount()); container.remove(); vi.unstubAllGlobals(); });
 const button = (text: string) => [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === text)!;
 
-it("renders honest empty states, broker limits and no invented totals", async () => {
-  await act(async () => root.render(<Integrations connected={[]} requests={[]} onRequest={vi.fn()} onRevoke={vi.fn()} />));
-  expect(container.textContent).toContain("No approved local integrations");
-  expect(container.textContent).toContain("Selected results may be sent to the AI provider");
-  expect(container.textContent).toContain("follow their permission mode");
-  expect(container.textContent).toContain("not a machine sandbox");
-  expect(container.textContent).not.toContain("data never leaves");
+it("shows only supplied installed skills and proven GitHub CLI access with plain installed copy", async () => {
+  const access = request(); access.provider = "local MCP"; access.request = { ...access.request, kind: "access", service: "local-mcp" };
+  await act(async () => root.render(<Integrations connected={[
+    { id: "skill", name: "fixture", provider: "skill", scope: "Synthetic project", projectPath: "C:/synthetic/project", monos: ["Atlas"], available: true },
+    { id: "mcp", name: "Hidden MCP", provider: "local MCP", scope: "project", monos: [], available: true },
+    { id: "gh", name: "GitHub", provider: "gh CLI", scope: "project", monos: [], available: true },
+  ]} requests={[access]} onRequest={vi.fn()} />));
+  expect(container.textContent).toContain("Installed in Synthetic project");
+  expect(container.textContent).toContain("Local CLI access (account not pinned)");
+  for (const text of ["Available to Atlas", "delivery unverified", "Hidden MCP", "Access request", "Connect", "Call count", "Rules"]) expect(container.textContent).not.toContain(text);
+  expect(mocks.invoke).not.toHaveBeenCalled();
 });
-it("shows exact tools on an accessible custom fold without executing", async () => {
-  const onAction = vi.fn();
-  await act(async () => root.render(<IntegrationRequestCard item={request()} onAction={onAction} />));
-  expect(container.querySelector("script")).toBeNull();
-  expect(container.querySelector("details")).toBeNull();
-  expect(button("See tools").getAttribute("aria-expanded")).toBe("false");
-  await act(async () => button("See tools").click());
-  expect(button("Hide tools").getAttribute("aria-expanded")).toBe("true");
-  expect(container.textContent).toContain("local-mcp.project.read"); expect(onAction).not.toHaveBeenCalled();
-});
-it("never offers a governed gh connection from existing CLI availability", async () => {
-  const item = request(); item.provider = "gh CLI"; item.request = { ...item.request, service: "github", tools: ["github.pr.read"] };
-  const onAction = vi.fn();
-  await act(async () => root.render(<IntegrationRequestCard item={item} onAction={onAction} />));
-  expect(button("Review").disabled).toBe(true);
-  expect(container.textContent).toContain("account not pinned");
-  await act(async () => button("Review").click()); expect(onAction).not.toHaveBeenCalled();
-});
-it("keeps unavailable installs safe and allows Not now", async () => {
-  const item = request(); item.available = false; item.provider = "skill"; item.request = { ...item.request, kind: "install", service: "skill", source: "C:/synthetic/local" };
-  const onAction = vi.fn(async () => {});
-  await act(async () => root.render(<IntegrationRequestCard item={item} onAction={onAction} />));
-  expect(button("Install").disabled).toBe(true); expect(container.textContent).toContain("Install not available yet");
-  await act(async () => button("Install").click()); expect(onAction).not.toHaveBeenCalled();
-  await act(async () => button("Not now").click()); expect(onAction).toHaveBeenCalledWith(expect.any(Event), item, "later");
-});
-it("passes the original native event and exact view to the host without granting user authority itself", async () => {
+
+it("inspects exact files without installing, refuses a synthetic Install, and sends Not now as an ordinary answer", async () => {
   const item = request(), onAction = vi.fn(async () => {});
   await act(async () => root.render(<IntegrationRequestCard item={item} onAction={onAction} />));
-  const event = new MouseEvent("click", { bubbles: true });
-  await act(async () => button("Connect").dispatchEvent(event));
-  expect(onAction).toHaveBeenCalledWith(event, item, "execute");
-  expect(isIntegrationUserEvent(event, item.id)).toBe(false);
-});
-it("requires inspection before install and shows its exact files, bytes and fingerprint", async () => {
-  const item = request(); item.provider = "skill"; item.request = { ...item.request, kind: "install", service: "skill", source: "C:/synthetic/skill" };
-  const onAction = vi.fn(async () => {});
-  await act(async () => root.render(<IntegrationRequestCard item={item} onAction={onAction} />));
+  expect(container.querySelector("script")).toBeNull();
   expect(button("Install").disabled).toBe(true);
-  item.inspection = { name: "fixture", declaredName: "fixture", description: "Synthetic declared skill description", project: "C:/synthetic/project", projectIdentity: "windows:1:2", source: "C:/synthetic/skill", fingerprint: "a".repeat(64), totalBytes: 12,
-    files: [{ path: "SKILL.md", bytes: 8 }, { path: "scripts/helper.ps1", bytes: 4 }] };
+  await act(async () => button("Inspect files").click());
+  expect(mocks.invoke).toHaveBeenCalledExactlyOnceWith("inspect_project_skill", { project: item.projectPath, source: item.request.source, name: "fixture" });
+  expect(container.textContent).toContain("Synthetic description");
+  expect(container.textContent).toContain("scripts/helper.ps1");
+  expect(container.textContent).toContain("12 bytes");
+  await act(async () => button("Install").click());
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain("button yourself");
+  await act(async () => button("Not now").click());
+  expect(onAction).toHaveBeenCalledExactlyOnceWith(expect.any(Event), item, "later");
+  expect(mocks.invoke).toHaveBeenCalledTimes(1);
+  item.status = "completed";
   await act(async () => root.render(<IntegrationRequestCard item={item} onAction={onAction} />));
-  expect(button("Install").disabled).toBe(false);
-  expect(container.textContent).toContain("Declared skill: fixture");
-  expect(container.textContent).toContain("Synthetic declared skill description");
-  await act(async () => button("See files & tools").click());
-  expect(container.textContent).toContain("scripts/helper.ps1"); expect(container.textContent).toContain("12 bytes"); expect(container.textContent).toContain("a".repeat(64));
-  expect(onAction).not.toHaveBeenCalled();
+  expect(container.textContent).not.toContain("Installed in");
 });
-it("keeps Remove unavailable until the host prepares an exact inspected operation", async () => {
-  const item = { id: "skill", name: "Fixture", provider: "skill" as const, scope: "project", monos: [], available: true, removeRequestId: undefined as string | undefined };
-  const onRevoke = vi.fn(async () => {});
-  await act(async () => root.render(<Integrations connected={[item]} requests={[]} onRequest={vi.fn()} onRevoke={onRevoke} />));
-  expect(button("Remove").disabled).toBe(true);
-  item.removeRequestId = "remove-operation";
-  await act(async () => root.render(<Integrations connected={[item]} requests={[]} onRequest={vi.fn()} onRevoke={onRevoke} />));
-  expect(button("Remove").dataset.integrationExecute).toBe("remove-operation");
-  const event = new MouseEvent("click", { bubbles: true });
-  await act(async () => button("Remove").dispatchEvent(event));
-  expect(onRevoke).toHaveBeenCalledExactlyOnceWith(event, item);
-});
-it("requests inspection through its own native event without granting execution", async () => {
-  const item = request(); item.provider = "skill"; item.request = { ...item.request, kind: "install", service: "skill", source: "C:/synthetic/skill" };
-  const onAction = vi.fn(async () => {});
-  await act(async () => root.render(<IntegrationRequestCard item={item} onAction={onAction} />));
-  const event = new MouseEvent("click", { bubbles: true });
-  expect(button("Inspect files").dataset.integrationExecute).toBeUndefined();
-  await act(async () => button("Inspect files").dispatchEvent(event));
-  expect(onAction).toHaveBeenCalledExactlyOnceWith(event, item, "inspect");
-  expect(button("Install").disabled).toBe(true);
-});
-it("retains failures visibly and does not invent a completion", async () => {
-  await act(async () => root.render(<IntegrationRequestCard item={request()} onAction={async () => { throw Error("receipt uncertain"); }} />));
-  await act(async () => button("Connect").click());
-  expect(container.querySelector('[role="alert"]')?.textContent).toBe("receipt uncertain");
-  expect(container.textContent).not.toContain("Completed");
-});
-it("distinguishes unavailable counts from actual zero and propagates revoke failure", async () => {
-  const revoke = vi.fn(async () => { throw Error("revoke save failed"); });
-  await act(async () => root.render(<Integrations connected={[
-    { id: "one", name: "GitHub", provider: "gh CLI", scope: "project", monos: ["Manager"], available: true },
-    { id: "two", name: "Local read", provider: "local MCP", scope: "one file", monos: [], available: true, callCount: 0 },
-  ]} requests={[]} onRequest={vi.fn()} onRevoke={revoke} />));
-  expect(container.textContent).toContain("Call count unavailable"); expect(container.textContent).toContain("0 calls");
-  expect(container.textContent).toContain("Existing local CLI access · account not pinned");
-  expect([...container.querySelectorAll("button")].filter(item => item.textContent === "Revoke")).toHaveLength(1);
-  await act(async () => button("Revoke").click());
-  expect(container.querySelector('[role="alert"]')?.textContent).toBe("revoke save failed");
+
+it("re-inspects installed bytes before enabling Remove and never archives on a synthetic click", async () => {
+  await act(async () => root.render(<Integrations connected={[{ id: "skill", name: "fixture", provider: "skill", scope: "Synthetic project", projectPath: "C:/synthetic/project", skillPath: "C:/synthetic/project/.agents/skills/fixture/SKILL.md", monos: ["Atlas"], available: true, skillDelivery: "discovered" }]} requests={[]} onRequest={vi.fn()} />));
+  expect(container.textContent).toContain("Available to Atlas");
+  expect(button("Remove")).toBeUndefined();
+  await act(async () => button("Inspect to remove").click());
+  expect(mocks.invoke).toHaveBeenCalledExactlyOnceWith("inspect_project_skill", { project: "C:/synthetic/project", source: "C:/synthetic/project/.agents/skills/fixture", name: "fixture" });
+  expect(button("Remove").disabled).toBe(false);
+  await act(async () => button("Remove").click());
+  expect(mocks.invoke).toHaveBeenCalledTimes(1);
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain("button yourself");
 });

@@ -19,6 +19,7 @@ import { MonoTeamActivity } from "../features/monos/ui/MonoTeamActivity";
 import { WorkspaceContextTabs, WorkspaceGoals, WorkspaceWorktree, WorkspaceWorktrees, WorkspaceUsage, type WorkspaceContextTab } from "./shell/WorkspaceContext";
 import { workspaceTeam } from "./shell/WorkspaceTeam";
 import { TeamMap } from "../features/teamMap/TeamMap";
+import { commandMapDecisions } from "../features/teamMap/commandMapDecisions";
 // CC7C integration: Mission control uses the existing full-view navigation.
 import { MissionControl, MISSION_CONTROL_SCOPE } from "../features/commandCenter/ui/MissionControl";
 import { useUsageDashboard } from "../features/providers/model/useUsageDashboard";
@@ -1678,13 +1679,31 @@ function Workspace({
   const monosSnap = useSyncExternalStore(subscribeMonos, monosSnapshot);
   const decisionRevision = useSyncExternalStore(monoManagerGoals.subscribe, monoManagerGoals.snapshot);
   const [decisionError, setDecisionError] = useState<string>();
+  const [decisionRefresh, setDecisionRefresh] = useState(0);
+  const [decisionLoaded, setDecisionLoaded] = useState<string>();
+  const decisionLoadKey = JSON.stringify([monosSnap, teamMap.open, decisionRefresh]);
+  const [, setDecisionNow] = useState(Date.now);
   const decisionPending = useRef(new Set<string>()), decisionAccepted = useRef(new Set<string>());
   useEffect(() => {
     let cancelled = false;
     void Promise.all(listMonos().filter(mono => mono.role === "manager" && mono.archivedAt == null).map(mono => monoManagerGoals.hydrate(mono.id)))
-      .then(() => { if (!cancelled) setDecisionError(undefined); }, () => { if (!cancelled) setDecisionError("Couldn't load earlier decisions — reopen this page to try again"); });
+      .then(() => { if (!cancelled) { setDecisionError(undefined); setDecisionLoaded(decisionLoadKey); } }, () => { if (!cancelled) { setDecisionLoaded(undefined); setDecisionError("Couldn't load earlier decisions — try again"); } });
     return () => { cancelled = true; };
-  }, [monosSnap, teamMap.open]);
+  }, [decisionLoadKey]);
+  useEffect(() => {
+    if (!teamMap.open) return;
+    let timer: ReturnType<typeof setTimeout>;
+    const refresh = () => {
+      setDecisionNow(Date.now());
+      clearTimeout(timer);
+      const midnight = new Date(); midnight.setHours(24, 0, 0, 0);
+      timer = setTimeout(refresh, Math.max(1, midnight.getTime() - Date.now()));
+    };
+    refresh();
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => { clearTimeout(timer); window.removeEventListener("focus", refresh); document.removeEventListener("visibilitychange", refresh); };
+  }, [teamMap.open]);
   const usageRoster = useMemo(() => listMonos(), [monosSnap]);
   const usage = useUsageDashboard({ roster: usageRoster, runs: orchestrationRuns, sessions });
   const usageAccounts = usage.snapshot.groups.flatMap(group => group.provider === "codex" || group.provider === "claude" ? providerAccounts(group.provider) : []);
@@ -10230,7 +10249,10 @@ function Workspace({
       if (manager?.role !== "manager" || manager.archivedAt != null || !manager.projects.some(project => sameProjectPath(project, projectId))) return Promise.reject(Error("Project is unavailable"));
       return monoManagerGoals.setAutonomy(event, managerId, projectId, value);
     },
-    openProject: project => { teamMap.close(); void onSelectProject(project); },
+    openProject: project => {
+      const manager = listMonos().find(mono => mono.role === "manager" && mono.archivedAt == null && mono.projects.some(path => sameProjectPath(path, project)));
+      if (manager) onOpenTeamMap(manager.id);
+    },
   };
   const saveDraftRef = useRef(onSaveDraft);
   saveDraftRef.current = onSaveDraft;
@@ -13458,6 +13480,19 @@ function Workspace({
       projects.filter(project => remoteProjectFor(project.path) ||
         !recents.some(recent => projectKey(recent.path) === projectKey(project.path))).map(project => project.path));
   };
+  const submitBossGoal = async (text: string, submission?: MonoGoalSubmission) => {
+    const grand = submission ? findMono(submission.ownerId) : listMonos().find(mono => mono.role === "orchestrator");
+    if (!grand || grand.role !== "orchestrator" || grand.archivedAt != null)
+      throw Error("That Grand Orchestrator is no longer available");
+    const session = await ensureMonoSession(grand.id, {
+      home: homeDir, load: ensureOpenSession, save: saveMonoPermissions, create: newDefaultSession,
+      add: created => { sessionsRef.current = [...sessionsRef.current, created]; setSessions(sessionsRef.current); },
+    });
+    if (!session) return false;
+    return submission ? submitMonoGoalRef.current(session.id, text, [], submission) : submitSession(session.id, text, []);
+  };
+  const mapBoss = listMonos().find(mono => mono.role === "orchestrator" && mono.archivedAt == null);
+  const mapBossContext = mapBoss && goalRoutingForMono(mapBoss.id);
   submitMonoGoalRef.current = async (sessionId, text, attachments, submission, recovery) => {
     const mono = monoForSession(sessionId);
     if (!mono || mono.id !== submission.ownerId || mono.role !== "orchestrator")
@@ -17526,17 +17561,7 @@ function Workspace({
                 isLocalSession={session => !remoteProjectFor(session.cwd)}
                 command={<MissionCommandBar open={teamMap.open && teamMap.scope === MISSION_CONTROL_SCOPE}
                   goalRouting={goalRoutingForMono(listMonos().find(mono => mono.role === "orchestrator")?.id ?? "")}
-                  onSubmit={async (text, submission) => {
-                    const grand = submission ? findMono(submission.ownerId) : listMonos().find(mono => mono.role === "orchestrator");
-                    if (!grand || grand.role !== "orchestrator" || grand.archivedAt != null)
-                      throw Error("That Grand Orchestrator is no longer available");
-                    const session = await ensureMonoSession(grand.id, {
-                      home: homeDir, load: ensureOpenSession, save: saveMonoPermissions, create: newDefaultSession,
-                      add: created => { sessionsRef.current = [...sessionsRef.current, created]; setSessions(sessionsRef.current); },
-                    });
-                    if (!session) return false;
-                    return submission ? submitMonoGoalRef.current(session.id, text, [], submission) : submitSession(session.id, text, []);
-                  }} />}
+                  onSubmit={submitBossGoal} />}
                 renderAttention={onClose => <AttentionQueue sessions={sessions} runs={orchestrationRuns} open presentation="panel"
                   readSessions={() => sessionsRef.current} readRuns={() => orchestrator.snapshot()}
                   selectedAccount={session => selectedProviderAccountId("codex", session.cwd)}
@@ -17578,9 +17603,12 @@ function Workspace({
                 {usage.historyWarning && <p role="status" className="px-6 pt-3 text-xs text-content/65">{usage.historyWarning}</p>}
                 <UsageDashboard snapshot={usage.snapshot} history={usage.history} onRefresh={usage.refresh} onOpenSettings={() => openSettings("providers", "provider-accounts")} />
               </div>}
-              {teamMap.open && teamMap.scope !== MISSION_CONTROL_SCOPE && teamMap.scope !== ATTENTION_QUEUE_SCOPE && teamMap.scope !== DECISIONS_SCOPE && teamMap.scope !== USAGE_DASHBOARD_SCOPE && <div className="flex min-h-0 min-w-0 flex-1 flex-col lg:flex-row">
-                <TeamMap key={teamMap.scope ?? "org"} sessions={sessions} runs={orchestrationRuns} statuses={managerPrStatuses} scope={teamMap.scope} onClose={teamMap.close} onOpenMono={id => void onOpenMono(id)} />
-                <aside aria-label="Command map decisions" className="flex max-h-[45%] min-h-0 shrink-0 border-stroke lg:max-h-none lg:w-[340px] lg:border-l"><Decisions view={selectDecisionView(monoManagerGoals, listMonos(), Date.now(), listMonos().find(mono => mono.id === teamMap.scope && mono.role === "manager")?.projects[0])} roster={listMonos()} actions={decisionActions} presentation="rail" error={decisionError} /></aside>
+              {teamMap.open && teamMap.scope !== MISSION_CONTROL_SCOPE && teamMap.scope !== ATTENTION_QUEUE_SCOPE && teamMap.scope !== DECISIONS_SCOPE && teamMap.scope !== USAGE_DASHBOARD_SCOPE && <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                {decisionError ? <p role="alert" className="px-6 py-3 text-sm">{decisionError} <button type="button" onClick={() => { setDecisionError(undefined); setDecisionRefresh(value => value + 1); }}>Try again</button></p>
+                  : decisionLoaded !== decisionLoadKey && <p role="status" className="px-6 py-3 text-sm">Loading decisions…</p>}
+                <TeamMap key={teamMap.scope ?? "org"} sessions={sessions} runs={orchestrationRuns} statuses={managerPrStatuses} scope={teamMap.scope} onClose={teamMap.close} onOpenMono={id => void onOpenMono(id)}
+                  decisions={!decisionError && decisionLoaded === decisionLoadKey ? commandMapDecisions(monoManagerGoals, listMonos(), decisionActions, Date.now()) : undefined}
+                  bossGoal={mapBossContext ? { context: mapBossContext, submit: submitBossGoal } : undefined} />
               </div>}
                   <div
                     className={

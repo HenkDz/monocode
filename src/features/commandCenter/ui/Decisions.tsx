@@ -41,17 +41,25 @@ export function DecisionCard({ item, roster, actions, sentInitially = false, sen
 }
 export function Decisions({ view, roster, actions, presentation = "page", error, attention, attentionCount = 0 }: { view: DecisionView; roster: readonly Mono[]; actions: DecisionUiActions; presentation?: "page" | "rail"; error?: string; attention?: ReactNode; attentionCount?: number }) {
   const [tab, setTab] = useState<"pending" | "log">("pending");
-  const previous = useRef(view.pending);
-  const [leaving, setLeaving] = useState<(OwnedDecision & { sentToBoss: boolean })[]>([]);
+  const key = (item: OwnedDecision) => JSON.stringify([item.managerId, item.decision.id]);
+  type Row = OwnedDecision & { sentToBoss?: boolean };
+  const [shown, setShown] = useState<{ pending: typeof view.pending; rows: Row[] }>({ pending: view.pending, rows: view.pending });
+  // Keep accepted rows in place before DOM commit, so a second native click cannot hit the next ask.
+  if (shown.pending !== view.pending) {
+    const pending = new Map(view.pending.map(item => [key(item), item]));
+    const rows = shown.rows.flatMap((item): Row[] => {
+      const current = pending.get(key(item));
+      pending.delete(key(item));
+      if (current) return [current];
+      return actions.wasAccepted?.(item.managerId, item.decision.id)
+        ? [{ ...item, sentToBoss: item.sentToBoss ?? !view.log.some(row => key(row) === key(item) && row.decision.answeredBy === "user") }] : [];
+    });
+    setShown({ pending: view.pending, rows: rows.some(item => item.sentToBoss !== undefined) ? [...rows, ...pending.values()] : view.pending });
+  }
+  const leaving = JSON.stringify(shown.rows.filter(item => item.sentToBoss !== undefined).map(key));
   useEffect(() => {
-    const sent = previous.current.filter(item => !view.pending.some(current => current.decision.id === item.decision.id) &&
-      actions.wasAccepted?.(item.managerId, item.decision.id)).map(item => ({ ...item, sentToBoss: !view.log.some(current => current.decision.id === item.decision.id && current.decision.answeredBy === "user") }));
-    previous.current = view.pending;
-    if (sent.length) setLeaving(items => [...items, ...sent]);
-  }, [view.pending, view.log, actions]);
-  useEffect(() => {
-    if (!leaving.length) return;
-    const timer = setTimeout(() => setLeaving([]), 1300);
+    if (leaving === "[]") return;
+    const timer = setTimeout(() => setShown(current => ({ ...current, rows: current.rows.filter(item => item.sentToBoss === undefined) })), 1300);
     return () => clearTimeout(timer);
   }, [leaving]);
   return <section className="decisions" data-presentation={presentation} data-decision-ui aria-label="Decisions">
@@ -59,7 +67,7 @@ export function Decisions({ view, roster, actions, presentation = "page", error,
     <div className="decisions-tabs" role="group" aria-label="Decision view"><button type="button" aria-pressed={tab === "pending"} onClick={() => setTab("pending")}>Needs you <span>{view.pending.length + attentionCount}</span></button><button type="button" aria-pressed={tab === "log"} onClick={() => setTab("log")}>Decision log</button></div>
     <div className="decisions-scroll">
       {error && <p role="alert" className="decision-note">{error}</p>}
-      {tab === "pending" ? <>{leaving.map(item => <DecisionCard key={`sent:${item.decision.id}`} item={item} roster={roster} actions={actions} sentInitially sentToBoss={item.sentToBoss} />)}{view.pending.map(item => <DecisionCard key={item.decision.id} item={item} roster={roster} actions={actions} />)}
+      {tab === "pending" ? <>{shown.rows.map(item => <DecisionCard key={key(item)} item={item} roster={roster} actions={actions} sentInitially={item.sentToBoss !== undefined} sentToBoss={item.sentToBoss} />)}
         {!view.pending.length && !attentionCount && <div className="decision-empty"><h2>Nothing needs your decision</h2><p>The team keeps working toward the goals.</p></div>}
         {attention}
         {!!view.teamPending && <p className="decision-note">{view.teamPending} with Managers &amp; the Boss</p>}</>

@@ -9,7 +9,7 @@ test("compares approved decisions prototype", async ({ page }) => {
   await page.screenshot({ path: `${frames}/prototype-map.png` });
   await page.goto(pathToFileURL(resolve("../cc-program/vision/workspace.html")).href);
   await expect(page.locator(".side")).toContainText("Search or ask the Boss");
-  await page.getByText("Decisions", { exact: true }).click();
+  await page.getByRole("link", { name: /Decisions/ }).click();
   await page.screenshot({ path: `${frames}/prototype-workspace.png` });
 });
 

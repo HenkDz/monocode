@@ -9,7 +9,7 @@ import { selectDecisionView } from "../../src/features/commandCenter/model/decis
 import { MonoManagerGoals } from "../../src/features/monos/model/monoManagerGoals";
 import { type Mono, listMonos, findMono, monoForSession, isMonoSession } from "../../src/features/monos/model/mono";
 import { type DecisionRuntimeHost, handleDecisionTeamMessage, runtimeDecisionHost, executeDecisionUi, reraiseUnreadableDecision } from "../../src/features/monos/model/monoDecisionRuntime";
-import { retainedDecisionDelivery, StaleDecision, assertDecisionCurrent } from "../../src/features/monos/model/monoDecisions";
+import { retainedDecisionDelivery, StaleDecision, assertDecisionCurrent, isMonoDecisionEventId } from "../../src/features/monos/model/monoDecisions";
 import { managerRequestBinding, managerRequestBindingCurrent } from "../../src/features/monos/model/managerAuthorizedWork";
 import { assertDecisionDigestConsumer, assertDecisionQueueConsumer, queueDecisionEvidence, decisionQueueId, decisionEvidenceText } from "../../src/features/monos/model/monoDecisionDelivery";
 import { teamMessageKind, teamMessageRequiresReply } from "../../src/features/monos/model/monoCrewEvents";
@@ -77,7 +77,7 @@ const scope = { decisionRuntime, monoManagerGoals: ledger, listMonos, findMono, 
   turnGen, decisionOriginalBlocks: { current: new Map() }, setDecisionUnavailable: () => {}, habitRunMono: () => undefined,
   orchestrator: engine, invoke, writeSession, readPersistedSession, managerRequestBinding, managerRequestBindingCurrent,
   queueDecisionEvidence, retainedDecisionDelivery, decisionQueueId, decisionEvidenceText, isMonoSession,
-  runtimeDecisionHost, assertDecisionDigestConsumer, assertDecisionQueueConsumer, StaleDecision, assertDecisionCurrent, dequeueQueuedMessage,
+  runtimeDecisionHost, assertDecisionDigestConsumer, assertDecisionQueueConsumer, StaleDecision, assertDecisionCurrent, isMonoDecisionEventId, dequeueQueuedMessage,
   getMonoGoalRecoveryBlocks: async (id: string) => (disk[id] as Session | undefined)?.blocks ?? [],
   acceptManagerWakeQueue, flushSync: (fn: () => void) => fn(),
 };

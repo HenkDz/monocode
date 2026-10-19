@@ -25,6 +25,7 @@ for (const [width, theme] of [[1440, "dark"], [860, "light"], [390, "dark"]] as 
     // A real keyboard-generated click is trusted even without an existing goal.
     await everything.focus(); await page.keyboard.press("Enter");
     await expect(everything).toHaveAttribute("aria-pressed", "true");
+    await page.screenshot({ path: `${frames}/keyboard-autonomy-${width}-${theme}.png` });
     expect(await page.evaluate(() => (window as any).decisionProof.goals.length)).toBe(0);
     await page.getByRole("button", { name: "Send original request", exact: true }).click();
     await page.getByRole("button", { name: "Receive authenticated team question", exact: true }).click();

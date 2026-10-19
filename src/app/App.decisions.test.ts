@@ -12,7 +12,7 @@ import { teamMessageKind, teamMessageRequiresReply } from "../features/monos/mod
 import { teamMessageRoute } from "../features/monos/model/monoOrg";
 import { handleDecisionTeamMessage, runtimeDecisionHost, executeDecisionUi, reraiseUnreadableDecision, type DecisionRuntimeHost } from "../features/monos/model/monoDecisionRuntime";
 import { assertDecisionQueueConsumer, assertDecisionDigestConsumer, queueDecisionEvidence, decisionQueueId, decisionEvidenceText } from "../features/monos/model/monoDecisionDelivery";
-import { retainedDecisionDelivery, StaleDecision, assertDecisionCurrent } from "../features/monos/model/monoDecisions";
+import { retainedDecisionDelivery, StaleDecision, assertDecisionCurrent, isMonoDecisionEventId } from "../features/monos/model/monoDecisions";
 import { acceptManagerWakeQueue, addManagerWakeEvent, prepareManagerWake } from "../features/orchestration/model/managerWake";
 import type { OrchestrationRun } from "../features/orchestration/model/orchestrationState";
 import { canDispatchQueuedHead, canSteerQueuedHead, queuedHead, dequeueQueuedMessage } from "../features/sessions/model/messageQueue";
@@ -88,7 +88,7 @@ async function fixture() {
     setSessions: state.setState, turnGen, decisionOriginalBlocks: { current: new Map() }, setDecisionUnavailable: vi.fn(),
     habitRunMono: () => undefined, orchestrator: engine, invoke, writeSession, readPersistedSession,
     managerRequestBinding, managerRequestBindingCurrent, queueDecisionEvidence, retainedDecisionDelivery, decisionQueueId, decisionEvidenceText, isMonoSession,
-    runtimeDecisionHost, assertDecisionDigestConsumer, assertDecisionQueueConsumer, StaleDecision, assertDecisionCurrent, dequeueQueuedMessage,
+    runtimeDecisionHost, assertDecisionDigestConsumer, assertDecisionQueueConsumer, StaleDecision, assertDecisionCurrent, isMonoDecisionEventId, dequeueQueuedMessage,
     getMonoGoalRecoveryBlocks: async () => { throw Error("Test unexpectedly bypassed its committed original user block"); },
     acceptManagerWakeQueue, flushSync: (fn: () => void) => fn(),
   };
@@ -135,6 +135,34 @@ it("executes actual authenticated App ingress, CC5D coalescence/save-readback, a
   expect(restored.decisions("manager").find(decision => decision.id === `${f.worker.id}:question`)).toMatchObject({ status: "decided", selectedOptionId: "reuse" });
   expect(restored.goals("manager")).toHaveLength(1);
   expect((disks.get("mono-goals:manager") as GoalLedger).receipts.question.decision!.remaining).toEqual([]);
+});
+
+it("keeps ordinary CC5D prerequisite decisions outside the V2 digest guard and retirement namespace", async () => {
+  const f = await fixture();
+  await f.engine.queueManagerMessage("engine", { id: "decision:report:dispatch-accept", kind: "decision", at: 1, text: "Accept this prerequisite to unlock queued work", requestId: "accept-prerequisite" });
+  await expect(f.digest()).resolves.toBe(true);
+  const session = f.state.session(f.manager.id)!, head = queuedHead(session)!;
+  const validate = assertDecisionDigestConsumer(head, () => f.run(), () => [], runtimeDecisionHost("manager", { kind: "mono", id: "manager" }, "", undefined, f.decisionRuntime.current));
+  expect(validate).not.toThrow();
+  expect(isMonoDecisionEventId("decision:report:dispatch-accept")).toBe(false);
+  expect(isMonoDecisionEventId("decision:worker:request:1:decision:0")).toBe(true);
+  expect((await readPersistedSession(session.id))!.queuedMessages![0]).toEqual(head);
+  expect(f.ledger.decisions("manager")).toEqual([]);
+  f.engine.replace({ ...f.run(), ownerMonoId: undefined });
+  const submit = vi.fn(async (_id: string, _text: string, _attachments: unknown, _options: { validateDecisionDelivery?: () => void }) => true);
+  const consume = evaluateDecisionApp<() => Promise<void>>(source.consumer, { ...f.scope, session, next: head,
+    scheduled: new Set([session.id]), queueDispatchingRef: { current: new Set([session.id]) },
+    codexStorageRecovery: { current: {} }, canDispatchQueuedHead, canSteerQueuedHead, queuedHead,
+    canSteerHarness: () => false, monoForSession, submitSession: submit, setQueueDispatchVersion: vi.fn() });
+  await consume();
+  expect(submit).toHaveBeenCalledOnce();
+  expect(submit.mock.calls[0][3].validateDecisionDelivery).toBeUndefined();
+  submit.mockClear();
+  f.engine.replace({ ...f.run(), wakeState: { ...f.run().wakeState!, receipt: { ...f.run().wakeState!.receipt!, body: "A different digest" } } });
+  await consume();
+  expect(submit).not.toHaveBeenCalled();
+  expect(queuedHead(f.state.session(session.id)!)!.error).toContain("digest identity changed");
+  expect(f.state.session(session.id)!.queueStatus).toBe("paused");
 });
 
 it.each(["save", "readback"])("retains the actual App Manager outbox after a failed %s", async failure => {

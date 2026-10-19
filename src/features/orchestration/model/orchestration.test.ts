@@ -139,17 +139,17 @@ async function saveTaskDocument(f: ReturnType<typeof setup>, task: Orchestration
 it("retires only stale decision membership and durably reopens unrelated coalesced reports", async () => {
   const f = setup(); await f.start();
   let run = { ...f.manager.run("lead")!, projectManager: true };
-  run = { ...run, wakeState: addManagerWakeEvent(run.wakeState, { id: "decision:old:0:manager", requestId: "old", kind: "question", at: 1, text: "Old question" }) };
+  run = { ...run, wakeState: addManagerWakeEvent(run.wakeState, { id: "decision:old:0:question:1", requestId: "old", kind: "question", at: 1, text: "Old question" }) };
   run = { ...run, wakeState: addManagerWakeEvent(run.wakeState, { id: "ordinary-report", requestId: "report", kind: "info", at: 2, text: "Keep this report" }) };
   run = { ...run, wakeState: prepareManagerWake(run, Date.now() + 1000) };
   const receipt = run.wakeState!.receipt!;
   f.saved.set("lead", run);
   const restored = new Orchestrator(f.store); await restored.hydrate("lead");
   await expect(restored.retireDecisionDigest("lead", receipt.id, ["ordinary-report"])).rejects.toThrow("Only retained stale decision");
-  await restored.retireDecisionDigest("lead", receipt.id, ["decision:old:0:manager"]);
+  await restored.retireDecisionDigest("lead", receipt.id, ["decision:old:0:question:1"]);
   const saved = f.saved.get("lead")!;
-  expect(saved.wakeState!.receipt).toMatchObject({ id: receipt.id, retiredEventIds: ["decision:old:0:manager"] });
-  expect(saved.wakeState!.events.find(event => event.id === "decision:old:0:manager")!.acknowledgedAt).toBeTypeOf("number");
+  expect(saved.wakeState!.receipt).toMatchObject({ id: receipt.id, retiredEventIds: ["decision:old:0:question:1"] });
+  expect(saved.wakeState!.events.find(event => event.id === "decision:old:0:question:1")!.acknowledgedAt).toBeTypeOf("number");
   expect(saved.wakeState!.events.find(event => event.id === "ordinary-report")).toMatchObject({ text: "Keep this report", acknowledgedAt: undefined });
   const reloaded = new Orchestrator(f.store); await reloaded.hydrate("lead");
   expect(reloaded.run("lead")!.wakeState).toEqual(saved.wakeState);

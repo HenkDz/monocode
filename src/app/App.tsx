@@ -21,7 +21,7 @@ import { Decisions, type DecisionUiActions } from "../features/commandCenter/ui/
 import { selectDecisionView } from "../features/commandCenter/model/decisionView";
 import { executeDecisionUi, handleDecisionTeamMessage, reraiseUnreadableDecision, runtimeDecisionHost, type DecisionRuntimeHost } from "../features/monos/model/monoDecisionRuntime";
 import { assertDecisionQueueConsumer, assertDecisionDigestConsumer, queueDecisionEvidence, decisionQueueId, decisionEvidenceText } from "../features/monos/model/monoDecisionDelivery";
-import { retainedDecisionDelivery, assertDecisionCurrent, StaleDecision } from "../features/monos/model/monoDecisions";
+import { retainedDecisionDelivery, assertDecisionCurrent, StaleDecision, isMonoDecisionEventId } from "../features/monos/model/monoDecisions";
 import { workspaceTeam } from "./shell/WorkspaceTeam";
 import { TeamMap } from "../features/teamMap/TeamMap";
 // CC7C integration: Mission control uses the existing full-view navigation.
@@ -10449,7 +10449,11 @@ function Workspace({
           try {
             let validateDecisionDelivery: (() => void) | undefined;
             const decisionTurn = { generation: turnGen.current.get(session.id) };
-            if (head.monoDecision || head.managerWake) {
+            const digestRun = head.managerWake && (orchestrator.run(head.managerWake.leadId) ?? orchestrator.snapshot().find(run => run.ownerSessionId === session.id && run.wakeState?.receipt?.id === head.managerWake!.receiptId));
+            const digestReceipt = digestRun?.wakeState?.receipt;
+            if (head.managerWake && (!digestReceipt || digestReceipt.id !== head.managerWake.receiptId || head.id !== digestReceipt.id || head.appRequestId !== digestReceipt.id || head.text !== digestReceipt.body))
+              throw Error("Manager digest identity changed; evidence retained");
+            if (head.monoDecision || digestRun?.wakeState?.receipt?.eventIds.some(isMonoDecisionEventId)) {
               await decisionRuntime.current.hydrate();
               const binding = managerRequestBinding(latest);
               let validate: () => void;
@@ -10591,7 +10595,7 @@ function Workspace({
                 if (head.monoDecision) await retireCurrent(head.monoDecision.managerId, head.monoDecision.decisionId, head.monoDecision.resolutionVersion);
                 const run = head.managerWake && (orchestrator.run(head.managerWake.leadId) ?? orchestrator.snapshot().find(run => run.ownerSessionId === session.id && run.wakeState?.receipt?.id === head.managerWake!.receiptId));
                 const retired = run?.wakeState?.receipt?.eventIds.filter(id => {
-                  if (!id.startsWith("decision:")) return false;
+                  if (!isMonoDecisionEventId(id)) return false;
                   const decision = monoManagerGoals.decisions(run.ownerMonoId!).find(decision => id.startsWith(`decision:${decision.id}:`));
                   if (!decision || !retainedDecisionDelivery(decision, id) || decision.deliveryState === "stale") return true;
                   try { assertDecisionCurrent(decision, runtimeDecisionHost(run.ownerMonoId!, { kind: "mono", id: run.ownerMonoId! }, "", undefined, decisionRuntime.current)); return false; }
@@ -12830,12 +12834,12 @@ function Workspace({
         const run = readRun();
         const session = sessionsRef.current.find(session => session.id === id);
         const binding = session && managerRequestBinding(session), generation = turnGen.current.get(id);
-        const decisionGuard = run?.wakeState?.events.some(event => receipt.eventIds.includes(event.id) && event.id.startsWith("decision:")) && run.ownerMonoId
+        const decisionGuard = run?.wakeState?.events.some(event => receipt.eventIds.includes(event.id) && isMonoDecisionEventId(event.id)) && run.ownerMonoId
           ? assertDecisionDigestConsumer({ id: receipt.id, appRequestId: receipt.id, text: receipt.body, attachments: [], managerWake: { leadId: run.leadId, receiptId: receipt.id } },
               readRun, () => monoManagerGoals.decisions(run.ownerMonoId!), runtimeDecisionHost(run.ownerMonoId, { kind: "mono", id: run.ownerMonoId }, "", undefined, decisionRuntime.current)) : () => {};
         const validate = () => {
           decisionGuard();
-          if (run?.wakeState?.events.some(event => receipt.eventIds.includes(event.id) && event.id.startsWith("decision:")) &&
+          if (run?.wakeState?.events.some(event => receipt.eventIds.includes(event.id) && isMonoDecisionEventId(event.id)) &&
               (turnGen.current.get(id) !== generation || !managerRequestBindingCurrent(sessionsRef.current.find(session => session.id === id), binding) || readRun()?.managerTurnId !== run.managerTurnId))
             throw Error("Manager decision digest turn or binding changed before publication");
         };

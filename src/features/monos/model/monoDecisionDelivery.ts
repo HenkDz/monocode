@@ -1,6 +1,6 @@
 import { managerRequestBinding, managerRequestBindingCurrent } from "./managerAuthorizedWork";
 import type { MonoDecision, DecisionDelivery, DecisionHost } from "./monoDecisions";
-import { assertDecisionCurrent, retainedDecisionDelivery, StaleDecision } from "./monoDecisions";
+import { assertDecisionCurrent, retainedDecisionDelivery, StaleDecision, isMonoDecisionEventId } from "./monoDecisions";
 import type { QueuedMessage, Session } from "../../sessions/model/session";
 import type { OrchestrationRun } from "../../orchestration/model/orchestrationState";
 
@@ -88,7 +88,7 @@ export function assertDecisionDigestConsumer(message: QueuedMessage, readRun: ()
     if (!run || run.status !== "active" || !message.managerWake || ![run.leadId, run.ownerSessionId].includes(message.managerWake.leadId) ||
         !receipt || receipt.id !== message.managerWake.receiptId || message.id !== receipt.id || message.appRequestId !== receipt.id || message.text !== receipt.body)
       throw Error("Manager digest identity changed; evidence retained");
-    for (const id of receipt.eventIds.filter(id => id.startsWith("decision:"))) {
+    for (const id of receipt.eventIds.filter(isMonoDecisionEventId)) {
       const decision = readDecisions().find(decision => id.startsWith(`decision:${decision.id}:`));
       const expected = decision && retainedDecisionDelivery(decision, id);
       const event = run.wakeState!.events.find(event => event.id === id);

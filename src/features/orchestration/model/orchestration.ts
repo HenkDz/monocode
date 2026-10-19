@@ -3,6 +3,7 @@ import { GITHUB_AGENT_GUIDANCE } from "../../inbox/model/githubAgentGuidance";
 import { approvedMemberReview } from "./memberReview";
 import { memberContinuity } from "./memberContinuity";
 import { addManagerWakeEvent, ManagerWakeScheduler, reconcileManagerWake, type ManagerWakeEvent, type ManagerWakeReceipt } from "./managerWake";
+import { isMonoDecisionEventId } from "../../monos/model/monoDecisions";
 import type { Artifact } from "../../artifacts/artifacts";
 import { usageLimitFromError } from "../../sessions/model/usageLimit";
 import { isCodexStorageError } from "../../monos/model/monoCodexStorage";
@@ -447,7 +448,7 @@ export class Orchestrator {
     const result = this.actions.catch(() => undefined).then(async () => {
       const run = this.run(leadId), receipt = run?.wakeState?.receipt;
       if (!run?.wakeState || !receipt || receipt.id !== receiptId) throw Error("The retained Manager digest changed");
-      if (!retiredEventIds.length || retiredEventIds.some(id => !id.startsWith("decision:") || !receipt.eventIds.includes(id)))
+      if (!retiredEventIds.length || retiredEventIds.some(id => !isMonoDecisionEventId(id) || !receipt.eventIds.includes(id)))
         throw Error("Only retained stale decision events may retire a Manager digest");
       await this.commit({ ...run, wakeState: { ...run.wakeState, delivery: undefined,
         receipt: { ...receipt, retiredEventIds: [...retiredEventIds], moreEvents: receipt.eventIds.some(id => !retiredEventIds.includes(id)), acknowledgedAt: receipt.acknowledgedAt ?? Date.now() },

@@ -225,6 +225,11 @@ export function compactDecisionHistory(ledger: GoalLedger): GoalLedger {
   return pruned.size ? { ...ledger, decisions: ledger.decisions!.filter(entry => !pruned.has(entry.id)), decisionsPruned: (ledger.decisionsPruned ?? 0) + pruned.size } : ledger;
 }
 
+/** CC5D also owns decision:report:* IDs; only the complete V2 shape belongs here. */
+export function isMonoDecisionEventId(id: string): boolean {
+  return /^decision:.+:\d+:(?:question|escalation|decision):\d+$/.test(id);
+}
+
 function delivery(decision: MonoDecision, index: number, kind: "question" | "escalation" | "decision", senderId: string): DecisionDelivery {
   const recipientId = decision.escalationChain[index].id;
   const content = decision.eventProtocol === 2

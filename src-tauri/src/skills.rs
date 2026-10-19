@@ -183,6 +183,15 @@ mod project_install {
         Ok(path)
     }
 
+    fn claim_stage(path: &Path) -> Result<File, String> {
+        let file = open_entry(path, true)?;
+        let metadata = file.metadata().map_err(|e| e.to_string())?;
+        if !metadata.is_dir() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err("Skill stage must remain an ordinary directory".into());
+        }
+        Ok(file)
+    }
+
     pub(super) fn install(project: &Path, source: &Path, name: &str, expected_identity: &str, expected_fingerprint: &str) -> Result<ProjectSkillInspection, String> {
         let mut snapshot = inspect(project, source, name)?;
         if snapshot.inspection.project_identity != expected_identity || snapshot.inspection.fingerprint != expected_fingerprint {
@@ -195,7 +204,7 @@ mod project_install {
         if std::fs::symlink_metadata(&target).is_ok() { return Err("This skill already exists; choose a versioned name".into()); }
         let stage = skills.join(format!(".{name}.monocode-stage-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&stage).map_err(|e| e.to_string())?;
-        let stage_pin = open_entry(&stage, true)?;
+        let stage_pin = claim_stage(&stage)?;
         let stage_identity = file_identity(&stage_pin)?;
         let result = (|| {
             for (relative, bytes) in &snapshot.files {
@@ -241,6 +250,26 @@ mod project_install {
         let target = archive.join(format!("{name}-{}", uuid::Uuid::new_v4()));
         rename_handle(&moving, &target, false)?;
         Ok(crate::fs::path_to_js(&target))
+    }
+
+    #[cfg(test)]
+    mod stage_tests {
+        use super::*;
+
+        #[test]
+        fn skill_stage_claim_refuses_reparse_or_file_substitution() {
+            let root = std::env::temp_dir().join(format!("monocode-skill-stage-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir(&root).unwrap();
+            std::fs::create_dir(root.join("ordinary")).unwrap();
+            std::fs::write(root.join("file"), b"synthetic").unwrap();
+            junction::create(root.join("ordinary"), root.join("linked")).unwrap();
+            assert!(claim_stage(&root.join("linked")).is_err());
+            assert!(claim_stage(&root.join("file")).is_err());
+            assert!(claim_stage(&root.join("ordinary")).is_ok());
+            assert_eq!(std::fs::read(root.join("file")).unwrap(), b"synthetic");
+            junction::delete(root.join("linked")).unwrap();
+            std::fs::remove_dir_all(root).unwrap();
+        }
     }
 }
 

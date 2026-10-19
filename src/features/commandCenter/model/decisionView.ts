@@ -1,10 +1,27 @@
 import type { Mono } from "../../monos/model/mono";
 import type { MonoDecision } from "../../monos/model/monoDecisions";
-import type { MonoManagerGoals } from "../../monos/model/monoManagerGoals";
+import type { MonoManagerGoals, MonoManagerGoal } from "../../monos/model/monoManagerGoals";
+import type { OrchestrationRun } from "../../orchestration/model/orchestrationState";
+import type { Session } from "../../sessions/model/session";
+import { teamDecisions } from "../../monos/model/monoTeamActivity";
 import { pathKey } from "../../../shared/lib/paths";
 
 export type OwnedDecision = { managerId: string; decision: MonoDecision };
 export type DecisionView = { pending: OwnedDecision[]; log: OwnedDecision[]; teamPending: number; handledToday: number; pruned: number; skipped: number };
+export function endedDecisionSources(goals: readonly MonoManagerGoal[], runs: readonly OrchestrationRun[]): Set<string> {
+  return new Set([
+    ...goals.filter(goal => goal.state === "done" || goal.state === "cancelled").map(goal => goal.id),
+    ...runs.flatMap(run => run.tasks.filter(task => task.status === "cancelled").map(task => task.id)),
+  ]);
+}
+export function decisionCountsByProject(roster: readonly Mono[], sessions: readonly Session[], runs: readonly OrchestrationRun[], view: DecisionView): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const project of [...teamDecisions(roster, sessions, runs).map(item => item.project), ...view.pending.map(item => item.decision.projectId)]) {
+    const key = pathKey(project);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return counts;
+}
 export function selectDecisionView(ledger: MonoManagerGoals, roster: readonly Mono[], now: number, projectId?: string): DecisionView {
   const managers = roster.filter(mono => mono.role === "manager" && mono.archivedAt == null && (projectId === undefined || mono.projects.some(project => pathKey(project) === pathKey(projectId))));
   const all = managers.flatMap(manager => ledger.decisions(manager.id).map(decision => ({ managerId: manager.id, decision })))

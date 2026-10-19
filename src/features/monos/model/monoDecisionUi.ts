@@ -4,7 +4,7 @@ import type { SubmissionAcceptance } from "../../../app/model/submissionAcceptan
 const quoted = (value: string) => value.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ")
   .replace(/[`*_#\[\]<>~\\]/g, "").replace(/"/g, "'").replace(/\s+/g, " ").trim().slice(0, 120);
 export function decisionUserText(row: MonoDecision, optionId?: string, askerName = "the asker"): string {
-  if (optionId === undefined) return `Please decide for "${quoted(askerName)}" on the asker's question "${quoted(row.question)}": ${row.options.map(option => `"${quoted(option.label)}"`).join(" or ")}.`;
+  if (optionId === undefined) return `Please decide for "${quoted(askerName)}" on the asker's question "${quoted(row.question)}": ${row.options.map(option => `"${quoted(option.label)}"`).join(" or ")}. Reply via team.message to the asker using topic ${JSON.stringify(`decision:${row.id}`)}.`;
   const option = row.options.find(option => option.id === optionId);
   if (!option) throw Error("Choose one of the options");
   return `Decision on your question "${quoted(row.question)}": go with "${quoted(option.label)}".`;

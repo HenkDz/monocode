@@ -1,8 +1,11 @@
-import { useSyncExternalStore } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
 import { Decisions, ProjectAutonomyControl, type DecisionUiActions } from "../../ui/Decisions";
-import { selectDecisionView } from "../../model/decisionView";
+import { selectDecisionView, endedDecisionSources, decisionCountsByProject } from "../../model/decisionView";
+import { AttentionQueueView } from "../../ui/AttentionQueue";
+import { teamDecisions } from "../../../monos/model/monoTeamActivity";
+import type { OrchestrationRun, OrchestrationTask } from "../../../orchestration/model/orchestrationState";
 import { MonoManagerGoals } from "../../../monos/model/monoManagerGoals";
 import { decisionAsk, type DecisionPayload } from "../../../monos/model/monoDecisions";
 import { sendDecisionFromClick } from "../../../monos/model/monoDecisionUi";
@@ -16,9 +19,10 @@ const roster: Mono[] = [
   { id: "manager", name: "Mira", role: "manager", reportsTo: "boss", projects: ["/synthetic/project"], sessionId: "manager-chat", mascot: "m", color: "blue" },
   { id: "worker", name: "Atlas", role: "member", reportsTo: "manager", projects: ["/synthetic/project"], mascot: "w", color: "blue" },
 ];
-const payload: DecisionPayload = { version: 1, type: "decision", question: "Should we reuse the existing queue?", impact: "high", context: "This keeps the experience simple and preserves the current Stop and Continue behavior.", options: [{ id: "reuse", label: "Reuse the existing queue" }, { id: "change", label: "Change the queue" }], recommendedOptionId: "reuse", operation: "work" };
-const ledger = new MonoManagerGoals({ load: async () => null, save: async () => {} });
-const row = decisionAsk({ id: "worker-chat:ask", managerId: "manager", senderId: "worker", recipientId: "manager", kind: "question", topic: "queue", text: JSON.stringify(payload), at: Date.now() }, "worker-chat", "/synthetic/project", roster, "high-impact-only", { taskId: "task" })!;
+const params = new URLSearchParams(location.search);
+const payload: DecisionPayload = { version: 1, type: "decision", question: "Should we reuse the existing queue?", impact: params.has("delegation") ? "med" : "high", context: "This keeps the experience simple and preserves the current Stop and Continue behavior.", options: [{ id: "reuse", label: "Reuse the existing queue" }, { id: "change", label: "Change the queue" }], recommendedOptionId: "reuse", operation: "work" };
+const ledger = new MonoManagerGoals({ load: async () => params.has("delegation") ? { version: 1, goals: [], receipts: {}, autonomy: { "/synthetic/project": "everything" } } : null, save: async () => {} });
+const row = decisionAsk({ id: "worker-chat:ask", managerId: "manager", senderId: "worker", recipientId: "manager", kind: "question", topic: "queue", text: JSON.stringify(payload), at: Date.now() }, "worker-chat", "/synthetic/project", roster, params.has("delegation") ? "everything" : "high-impact-only", { taskId: "task" })!;
 await ledger.recordDecision("manager", row);
 await ledger.recordDecision("manager", { ...row, id: "worker-chat:protected", question: "Send the project update to the team?", operation: "message-people" });
 const pending = new Set<string>(), accepted = new Set<string>();
@@ -58,19 +62,28 @@ const controls = {
   moved: () => { const session = chats.get("worker-chat")!; chats.set(session.id, { ...session, cwd: "/synthetic/moved" }); },
   queueReady: () => { const session = chats.get("worker-chat")!; return { dispatch: canDispatchQueuedHead(session), steer: canSteerQueuedHead(session) }; },
   typed: (text: string) => submit("worker-chat", text, []),
-  bossReply: () => ledger.recordDecisionReply("manager", { id: "boss-chat:reply", managerId: "manager", senderId: "boss", recipientId: "worker", topic: "queue", text: "Reuse the existing queue", at: Date.now() }),
-  finish: () => ledger.finishDecisionAsks(new Set(["task"]), new Set()),
+  bossReply: (explicit = false) => ledger.recordDecisionReply("manager", { id: "boss-chat:reply", managerId: "manager", senderId: "boss", recipientId: "worker", topic: explicit ? `decision:${row.id}` : "queue", text: "Reuse the existing queue", at: Date.now() }),
+  answerer: () => ledger.decisions("manager").find(entry => entry.id === row.id)?.answererId,
+  settle: (status: OrchestrationTask["status"]) => ledger.finishDecisionAsks(endedDecisionSources([], [{ tasks: [{ id: "task", status }] } as OrchestrationRun]), new Set()),
+  finish: () => ledger.finishDecisionAsks(endedDecisionSources([], [{ tasks: [{ id: "task", status: "cancelled" }] } as OrchestrationRun]), new Set()),
   autonomy: () => ledger.autonomy("manager", "/synthetic/project"),
 };
 declare global { interface Window { decisionFixture: typeof controls } }
 window.decisionFixture = controls;
-const params = new URLSearchParams(location.search);
 document.documentElement.classList.toggle("theme-light", params.get("theme") === "light");
 function Fixture() {
   useSyncExternalStore(ledger.subscribe, ledger.snapshot);
+  const [paused, setPaused] = useState(params.has("attention"));
+  const managerChat = { ...newSession("claude", "/synthetic/project"), id: "manager-chat" };
+  const runs = params.has("attention") ? [{ leadId: "engine", ownerMonoId: "manager", ownerSessionId: managerChat.id, projectManager: true, status: paused ? "paused" : "active", cwd: "/synthetic/project", tasks: [] } as unknown as OrchestrationRun] : [];
+  const view = selectDecisionView(ledger, roster, Date.now());
   return <main style={{ maxWidth: params.get("rail") ? 360 : 900, margin: "0 auto", height: "100vh", display: "flex", flexDirection: "column" }}>
+    {params.has("attention") && <output aria-label="Decisions badge">{decisionCountsByProject(roster, [managerChat], runs, view).get("/synthetic/project") ?? 0}</output>}
     <div style={{ padding: "16px 28px" }}><ProjectAutonomyControl managerId="manager" projectId="/synthetic/project" value={ledger.autonomy("manager", "/synthetic/project")} actions={actions} /></div>
-    <Decisions view={selectDecisionView(ledger, roster, Date.now())} roster={roster} actions={actions} presentation={params.get("rail") ? "rail" : "page"} />
+    <Decisions view={view} roster={roster} actions={actions} presentation={params.get("rail") ? "rail" : "page"}
+      attentionCount={teamDecisions(roster, [managerChat], runs).length}
+      attention={params.has("attention") && <AttentionQueueView input={{ roster, sessions: [managerChat], runs, goals: [] }} open presentation="panel" onClose={() => {}}
+        callbacks={{ approval: () => {}, question: () => {}, questionInteraction: () => {}, repair: async () => {}, resume: () => {}, resumeAtReset: () => {}, retryDelivery: () => {}, continueManager: async () => setPaused(false), inspect: () => {} }} />} />
   </main>;
 }
 createRoot(document.getElementById("root")!).render(<Fixture />);

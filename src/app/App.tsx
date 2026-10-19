@@ -16,6 +16,8 @@ import { resolveMonoRolePermissions, snapshotMonoWorkerPermissions } from "../fe
 import { archiveMonoConversation, archiveProjectMonos, offerProjectMonoRestore, projectMonoTeam } from "../features/monos/model/monoArchive";
 import { loadMonoView, saveMonoView, monoForView, monoViewProject, memberDetailsView, selectedOrgMono, monoLiveState } from "../features/monos/model/monoNavigation";
 import { MonoTeamActivity } from "../features/monos/ui/MonoTeamActivity";
+import { WorkspaceContextTabs, WorkspaceGoals, WorkspaceWorktree, WorkspaceWorktrees, WorkspaceUsage, type WorkspaceContextTab } from "./shell/WorkspaceContext";
+import { workspaceTeam } from "./shell/WorkspaceTeam";
 import { TeamMap } from "../features/teamMap/TeamMap";
 // CC7C integration: Mission control uses the existing full-view navigation.
 import { MissionControl, MISSION_CONTROL_SCOPE } from "../features/commandCenter/ui/MissionControl";
@@ -1591,6 +1593,8 @@ function Workspace({
     null,
   );
   const [rightPanelOpen, setRightPanelOpenState] = useState(loadRightPanelOpen);
+  const [workspaceContextTab, setWorkspaceContextTab] = useState<WorkspaceContextTab>("goal");
+  const [contextWorktree, setContextWorktree] = useState<{ project: string; path: string }>();
   const [rightPanelTab, setRightPanelTabState] =
     useState<RightPanelTab>(loadRightPanelTab);
   // A closed panel keeps its contents until it has slid out.
@@ -1598,6 +1602,7 @@ function Workspace({
   const rightPanelOpenRef = useRef(rightPanelOpen);
   rightPanelOpenRef.current = rightPanelOpen;
   const showRightPanel = useCallback((tab: RightPanelTab) => {
+    setWorkspaceContextTab("tools");
     setRightPanelTabState(tab);
     saveRightPanelTab(tab);
     setRightPanelOpenState(true);
@@ -16827,6 +16832,25 @@ function Workspace({
     // The roster is read through its snapshot.
   }, [monosSnap, sessions, monoReplies.counts, orchestrationRuns]);
   const monoRail = useStableValue(monoRailState);
+  const workspaceDecisionCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const decision of teamDecisions(listMonos(), sessions, orchestrationRuns).filter(decision => !decision.approval)) {
+      const key = pathKey(decision.project);
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    return counts;
+  }, [monosSnap, sessions, orchestrationRuns]);
+  const workspaceRoster = workspaceTeam(listMonos(), sidebarCwd);
+  const workspaceMonoIds = new Set([...(workspaceRoster.manager ? [workspaceRoster.manager.id] : []), ...workspaceRoster.members.map(mono => mono.id)]);
+  const workspaceWorking = [...workspaceMonoIds].filter(id => monoRail.states.get(id)?.status === "working").length;
+  const workspaceDecisions = workspaceDecisionCounts.get(pathKey(sidebarCwd)) ?? 0;
+  const workspaceProjectStatus = `${workspaceWorking} working · ${workspaceDecisions} ${workspaceDecisions === 1 ? "decision" : "decisions"}`;
+  const workspaceProjectStatuses = useMemo(() => new Map([...recents.map(project => project.path), sidebarCwd].map(project => {
+    const team = workspaceTeam(listMonos(), project);
+    const working = [team.manager, ...team.members].filter(mono => mono && monoRail.states.get(mono.id)?.status === "working").length;
+    const decisions = workspaceDecisionCounts.get(pathKey(project)) ?? 0;
+    return [pathKey(project), `${working} working · ${decisions} ${decisions === 1 ? "decision" : "decisions"}`];
+  })), [recents, sidebarCwd, monosSnap, monoRail, workspaceDecisionCounts]);
   const busyProjectPaths = useStableValue(
     promptableSessions.flatMap((session) =>
       session.busy && session.cwd ? [session.cwd] : [],
@@ -16887,7 +16911,6 @@ function Workspace({
     insetLayout &&
     (rightPanelOpen || rightPanelClosing) &&
     !settingsOpen &&
-    !monoCovers &&
     !activeAppView &&
     looksLikeProject(sidebarCwd);
   // The right panel grows from the card's edge and pushes the workspace. Its
@@ -16961,7 +16984,7 @@ function Workspace({
   const showRightPanelToggle =
     insetLayout && !settingsOpen && looksLikeProject(sidebarCwd);
   rightPanelToggleRef.current =
-    showRightPanelToggle && !(monoCovers && monoViewMono) && !activeAppView
+    showRightPanelToggle && !activeAppView
       ? onToggleRightPanel
       : null;
   const rightPanelChanges = useProjectDiffStats(
@@ -17094,10 +17117,10 @@ function Workspace({
       tab={insetLayout ? "sessions" : sidebarTab}
       onTabChange={setSidebarTab}
       rightPanel={
-        insetLayout && !settingsOpen && !monoCovers
+        insetLayout && !settingsOpen
           ? {
               host: rightPanelHost,
-              open: rightPanelOpen || rightPanelClosing,
+              open: (rightPanelOpen || rightPanelClosing) && workspaceContextTab === "tools",
               tab: rightPanelTab,
               onTabChange: showRightPanel,
             }
@@ -17241,6 +17264,17 @@ function Workspace({
       onOpenProject={pickProject}
       onRemoveProject={onRemoveProject}
       monos={sidebarMonos}
+      workspaceWorktrees={insetLayout ? <WorkspaceWorktrees project={sidebarCwd} sessions={sessions} selectedPath={contextWorktree && sameProjectPath(contextWorktree.project, sidebarCwd) ? contextWorktree.path : undefined} onNew={() => setCreatingWorktreeProject(sidebarCwd)} onSelect={tree => {
+        setContextWorktree({ project: sidebarCwd, path: tree.path });
+        showRightPanel(rightPanelTab);
+        setWorkspaceContextTab("worktree");
+      }} /> : undefined}
+      decisionCounts={workspaceDecisionCounts}
+      projectStatus={workspaceProjectStatus}
+      projectStatuses={workspaceProjectStatuses}
+      workspaceUsage={<WorkspaceUsage snapshot={usage.snapshot} monoIds={workspaceMonoIds} compact />}
+      commandMapActive={teamMap.open && !teamMap.scope}
+      decisionsActive={teamMap.open && teamMap.scope === ATTENTION_QUEUE_SCOPE}
       monoViewActive={monoCovers}
       onNew={onNew}
       openSessions={openProjectSessions}
@@ -17377,7 +17411,7 @@ function Workspace({
                 }}
               />
             )}
-          <div className="flex min-h-0 min-w-0 flex-1">
+          <div className="relative flex min-h-0 min-w-0 flex-1">
             {insetLayout ? (
               <div
                 ref={setInsetRailHost}
@@ -17959,15 +17993,19 @@ function Workspace({
                     inert={rightPanelClosing || undefined}
                     className={
                       insetRightPanelShown
-                        ? "relative flex h-full shrink-0 flex-col overflow-hidden border-l border-stroke"
+                        ? "relative flex h-full shrink-0 flex-col overflow-hidden border-l border-stroke max-[900px]:absolute max-[900px]:inset-y-0 max-[900px]:right-0 max-[900px]:z-20 max-[900px]:max-w-full max-[900px]:bg-background-base"
                         : "hidden"
                     }
                   >
+                    <WorkspaceContextTabs tab={workspaceContextTab} onChange={setWorkspaceContextTab} onClose={onToggleRightPanel}>
+                      {workspaceContextTab === "goal" ? <WorkspaceGoals project={sidebarCwd} sessions={sessions} usage={usage.snapshot} onOpenMono={onOpenRailMono} /> : null}
+                      {workspaceContextTab === "worktree" ? <WorkspaceWorktree project={sidebarCwd} path={contextWorktree && sameProjectPath(contextWorktree.project, sidebarCwd) ? contextWorktree.path : undefined} sessions={sessions} onOpen={tree => onSelectProjectWorktree(sidebarCwd, tree)} onChanges={path => onOpenWorktreeChanges(sidebarCwd, path)} onRemove={onRemoveWorktree} /> : null}
                     <div
                       ref={setRightPanelHost}
                       aria-label="Project tools"
-                      className="flex min-h-0 flex-1 flex-col"
+                      className={workspaceContextTab === "tools" ? "flex min-h-0 flex-1 flex-col" : "hidden"}
                     />
+                    </WorkspaceContextTabs>
                     <div
                       role="separator"
                       aria-orientation="vertical"

@@ -1,4 +1,5 @@
 import type { IconComponent } from "../../shared/ui/icons";
+import type { ReactNode } from "react";
 
 type Props = {
   label: string;
@@ -10,6 +11,7 @@ type Props = {
   dot?: boolean;
   shortcut?: string;
   ariaLabel?: string;
+  trailing?: ReactNode;
 };
 
 export function RailAction({
@@ -22,6 +24,7 @@ export function RailAction({
   dot = false,
   shortcut,
   ariaLabel,
+  trailing,
 }: Props) {
   return (
     <button
@@ -74,7 +77,7 @@ export function RailAction({
       <span className="min-w-0 flex-1 truncate text-sm font-medium leading-tight">
         {label}
       </span>
-      {dot ? (
+      {trailing}{dot ? (
         <span aria-hidden className="size-2 shrink-0 rounded-full bg-accent" />
       ) : shortcut ? (
         <span aria-hidden className="shrink-0 text-[11px] text-content/40">

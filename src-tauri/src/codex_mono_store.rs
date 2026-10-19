@@ -1264,7 +1264,7 @@ impl Drop for ClaimedEntry {
 }
 
 #[cfg(windows)]
-fn open_entry(path: &Path, locked: bool) -> Result<std::fs::File, String> {
+pub(crate) fn open_entry(path: &Path, locked: bool) -> Result<std::fs::File, String> {
     use std::os::windows::fs::OpenOptionsExt;
     use windows_sys::Win32::{
         Foundation::GENERIC_READ,
@@ -1297,7 +1297,7 @@ fn entry_identity(path: &Path) -> Result<(u64, u64), String> {
     }
 }
 
-fn file_identity(file: &std::fs::File) -> Result<(u64, u64), String> {
+pub(crate) fn file_identity(file: &std::fs::File) -> Result<(u64, u64), String> {
     #[cfg(windows)]
     {
         let info = handle_file_info(file)?;
@@ -2074,7 +2074,7 @@ fn file_info(
 }
 
 #[cfg(windows)]
-fn handle_file_info(
+pub(crate) fn handle_file_info(
     file: &std::fs::File,
 ) -> Result<windows_sys::Win32::Storage::FileSystem::BY_HANDLE_FILE_INFORMATION, String> {
     use std::os::windows::io::AsRawHandle;
@@ -2175,7 +2175,7 @@ fn replace_link(temp: &Path, target: &Path) -> Result<(), String> {
 }
 
 #[cfg(windows)]
-fn rename_handle(file: &std::fs::File, target: &Path, replace: bool) -> Result<(), String> {
+pub(crate) fn rename_handle(file: &std::fs::File, target: &Path, replace: bool) -> Result<(), String> {
     use std::os::windows::{ffi::OsStrExt, io::AsRawHandle};
     use windows_sys::Win32::Storage::FileSystem::{
         FileRenameInfoEx, SetFileInformationByHandle, FILE_RENAME_INFO,

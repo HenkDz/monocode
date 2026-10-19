@@ -11,6 +11,241 @@ const MAX_FRONTMATTER_BYTES: usize = 16 * 1024;
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct ProjectSkillFile {
+    path: String,
+    bytes: u64,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectSkillInspection {
+    name: String,
+    project: String,
+    project_identity: String,
+    source: String,
+    fingerprint: String,
+    files: Vec<ProjectSkillFile>,
+    total_bytes: u64,
+}
+
+#[tauri::command(async)]
+pub fn inspect_project_skill(project: String, source: String, name: String) -> Result<ProjectSkillInspection, String> {
+    #[cfg(windows)]
+    return project_install::inspect(Path::new(&project), Path::new(&source), &name).map(|snapshot| snapshot.inspection);
+    #[cfg(not(windows))]
+    { let _ = (project, source, name); Err("Project skill installation is unavailable on this platform".into()) }
+}
+
+#[tauri::command(async)]
+pub fn install_project_skill(project: String, source: String, name: String, expected_project_identity: String, expected_fingerprint: String) -> Result<ProjectSkillInspection, String> {
+    #[cfg(windows)]
+    return project_install::install(Path::new(&project), Path::new(&source), &name, &expected_project_identity, &expected_fingerprint);
+    #[cfg(not(windows))]
+    { let _ = (project, source, name, expected_project_identity, expected_fingerprint); Err("Project skill installation is unavailable on this platform".into()) }
+}
+
+#[tauri::command(async)]
+pub fn archive_project_skill(project: String, name: String, expected_project_identity: String, expected_fingerprint: String) -> Result<String, String> {
+    #[cfg(windows)]
+    return project_install::archive(Path::new(&project), &name, &expected_project_identity, &expected_fingerprint);
+    #[cfg(not(windows))]
+    { let _ = (project, name, expected_project_identity, expected_fingerprint); Err("Project skill archive is unavailable on this platform".into()) }
+}
+
+// shortcut: Windows handle pins only; add descriptor-relative publication before enabling other platforms.
+#[cfg(windows)]
+mod project_install {
+    use super::*;
+    use std::fs::{File, OpenOptions};
+    use std::io::{Read, Write};
+    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+    use std::path::{Component, Prefix};
+    use sha2::{Digest, Sha256};
+    use crate::codex_mono_store::{file_identity, handle_file_info, open_entry, rename_handle};
+    use windows_sys::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE};
+
+    const MAX_FILES: usize = 128;
+    const MAX_PACKAGE_BYTES: u64 = 4 * 1024 * 1024;
+    const MAX_FILE_BYTES: u64 = 1024 * 1024;
+
+    pub(super) struct Snapshot {
+        pub(super) inspection: ProjectSkillInspection,
+        source_identity: (u64, u64),
+        files: Vec<(String, Vec<u8>)>,
+        _pins: Vec<File>,
+    }
+
+    fn safe_name(name: &str) -> bool {
+        let stem = name.split('.').next().unwrap_or("").to_ascii_lowercase();
+        !name.is_empty() && name.len() <= 128 && !name.ends_with(['.', ' ']) &&
+            name.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c)) &&
+            ![".", ".."].contains(&name) && !["con", "prn", "aux", "nul"].contains(&stem.as_str()) &&
+            !(stem.len() == 4 && (stem.starts_with("com") || stem.starts_with("lpt")) && matches!(stem.as_bytes()[3], b'1'..=b'9'))
+    }
+
+    fn skill_name(name: &str) -> Result<(), String> {
+        if !is_valid_skill_name(name) || !safe_name(name) { return Err("Choose a lowercase skill name; use a new versioned name if it exists".into()); }
+        Ok(())
+    }
+
+    fn pin(path: &Path, directory: bool) -> Result<File, String> {
+        let file = OpenOptions::new().read(true)
+            .share_mode(FILE_SHARE_READ | if directory { FILE_SHARE_WRITE } else { 0 })
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | if directory { FILE_FLAG_BACKUP_SEMANTICS } else { 0 })
+            .open(path).map_err(|e| format!("Cannot pin {}: {e}", path.display()))?;
+        let meta = file.metadata().map_err(|e| e.to_string())?;
+        if meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 || meta.is_dir() != directory ||
+            !directory && (!meta.is_file() || handle_file_info(&file)?.nNumberOfLinks != 1) {
+            return Err("Skill paths cannot contain links, reparse points or special files".into());
+        }
+        Ok(file)
+    }
+
+    fn pin_path(path: &Path, pins: &mut Vec<File>) -> Result<PathBuf, String> {
+        if !path.is_absolute() { return Err("Use an absolute local project or source directory".into()); }
+        let mut current = PathBuf::new();
+        for part in path.components() {
+            match part {
+                Component::Prefix(prefix) if matches!(prefix.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_)) => current.push(part.as_os_str()),
+                Component::RootDir => current.push(part.as_os_str()),
+                Component::Normal(name) if name.to_str().is_some_and(|name| !name.is_empty() && name != "." && name != ".." &&
+                    !name.ends_with(['.', ' ']) && !name.chars().any(|c| c.is_control() || "<>:\"/\\|?*".contains(c))) => current.push(name),
+                _ => return Err("Skill directories must use contained local paths without traversal".into()),
+            }
+            if current.is_absolute() && !matches!(part, Component::Prefix(_)) { pins.push(pin(&current, true)?); }
+        }
+        std::fs::canonicalize(&current).map_err(|e| e.to_string())
+    }
+
+    fn identity(file: &File) -> Result<String, String> {
+        let (volume, index) = file_identity(file)?;
+        Ok(format!("windows:{volume}:{index}"))
+    }
+
+    fn read_package(root: &Path, relative: &Path, depth: usize, files: &mut Vec<(String, Vec<u8>)>, total: &mut u64, pins: &mut Vec<File>) -> Result<(), String> {
+        if depth > 8 { return Err("Skill package exceeds eight directory levels".into()); }
+        let mut entries = std::fs::read_dir(root.join(relative)).map_err(|e| e.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries {
+            if pins.len() >= 256 { return Err("Skill package exceeds the directory and file entry limit".into()); }
+            let name = entry.file_name();
+            if !name.to_str().is_some_and(safe_name) { return Err("Unsupported skill package file name".into()); }
+            let child = relative.join(name);
+            let metadata = std::fs::symlink_metadata(entry.path()).map_err(|e| e.to_string())?;
+            let directory = metadata.is_dir();
+            let mut file = pin(&entry.path(), directory)?;
+            if directory {
+                pins.push(file);
+                read_package(root, &child, depth + 1, files, total, pins)?;
+            } else {
+                if files.len() >= MAX_FILES || metadata.len() > MAX_FILE_BYTES { return Err("Skill package exceeds 128 files or 1 MiB per file".into()); }
+                let mut bytes = Vec::new();
+                Read::by_ref(&mut file).take(MAX_FILE_BYTES + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+                *total += bytes.len() as u64;
+                if bytes.len() as u64 > MAX_FILE_BYTES || *total > MAX_PACKAGE_BYTES { return Err("Skill package exceeds 4 MiB".into()); }
+                files.push((child.to_string_lossy().replace('\\', "/"), bytes));
+                pins.push(file);
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn inspect(project: &Path, source: &Path, name: &str) -> Result<Snapshot, String> {
+        skill_name(name)?;
+        let mut pins = Vec::new();
+        let project = pin_path(project, &mut pins)?;
+        let project_identity = identity(pins.last().ok_or("Missing project pin")?)?;
+        let source = pin_path(source, &mut pins)?;
+        let source_identity = file_identity(pins.last().ok_or("Missing source pin")?)?;
+        let mut files = Vec::new(); let mut total = 0;
+        read_package(&source, Path::new(""), 0, &mut files, &mut total, &mut pins)?;
+        files.sort_by(|a, b| a.0.cmp(&b.0));
+        let skill = files.iter().find(|(path, _)| path == "SKILL.md").ok_or("A local skill requires SKILL.md")?;
+        let text = std::str::from_utf8(&skill.1).map_err(|_| "SKILL.md must be UTF-8")?;
+        let (parsed_name, description) = parse_frontmatter(text, "");
+        if parsed_name.is_empty() || description.is_empty() { return Err("SKILL.md requires a valid name and description".into()); }
+        let mut hash = Sha256::new();
+        for (path, bytes) in &files { hash.update((path.len() as u64).to_le_bytes()); hash.update(path.as_bytes()); hash.update((bytes.len() as u64).to_le_bytes()); hash.update(bytes); }
+        let inspection = ProjectSkillInspection { name: name.into(), project: crate::fs::path_to_js(&project), project_identity,
+            source: crate::fs::path_to_js(&source), fingerprint: format!("{:x}", hash.finalize()),
+            files: files.iter().map(|(path, bytes)| ProjectSkillFile { path: path.clone(), bytes: bytes.len() as u64 }).collect(), total_bytes: total };
+        Ok(Snapshot { inspection, source_identity, files, _pins: pins })
+    }
+
+    fn directory(parent: &Path, name: &str, pins: &mut Vec<File>) -> Result<PathBuf, String> {
+        let path = parent.join(name);
+        match std::fs::create_dir(&path) {
+            Ok(()) => (),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => (),
+            Err(e) => return Err(e.to_string()),
+        }
+        pins.push(pin(&path, true)?);
+        Ok(path)
+    }
+
+    pub(super) fn install(project: &Path, source: &Path, name: &str, expected_identity: &str, expected_fingerprint: &str) -> Result<ProjectSkillInspection, String> {
+        let mut snapshot = inspect(project, source, name)?;
+        if snapshot.inspection.project_identity != expected_identity || snapshot.inspection.fingerprint != expected_fingerprint {
+            return Err("Project or skill source changed; inspect it again before approving".into());
+        }
+        let project = PathBuf::from(&snapshot.inspection.project);
+        let agents = directory(&project, ".agents", &mut snapshot._pins)?;
+        let skills = directory(&agents, "skills", &mut snapshot._pins)?;
+        let target = skills.join(name);
+        if std::fs::symlink_metadata(&target).is_ok() { return Err("This skill already exists; choose a versioned name".into()); }
+        let stage = skills.join(format!(".{name}.monocode-stage-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&stage).map_err(|e| e.to_string())?;
+        let stage_pin = open_entry(&stage, true)?;
+        let stage_identity = file_identity(&stage_pin)?;
+        let result = (|| {
+            for (relative, bytes) in &snapshot.files {
+                let dest = stage.join(relative);
+                let mut parent = stage.clone();
+                let mut stage_pins = Vec::new();
+                if let Some(relative_parent) = Path::new(relative).parent() {
+                    for part in relative_parent.components() { parent = directory(&parent, part.as_os_str().to_str().ok_or("Invalid file path")?, &mut stage_pins)?; }
+                }
+                let mut file = OpenOptions::new().write(true).create_new(true).open(&dest).map_err(|e| e.to_string())?;
+                file.write_all(bytes).map_err(|e| e.to_string())?;
+                file.sync_all().map_err(|e| e.to_string())?;
+            }
+            if file_identity(&stage_pin)? != stage_identity { return Err("Skill stage identity changed".into()); }
+            rename_handle(&stage_pin, &target, false)?;
+            Ok(snapshot.inspection.clone())
+        })();
+        result.map_err(|error: String| format!("{error}; staged bytes preserved at {}", stage.display()))
+    }
+
+    pub(super) fn archive(project: &Path, name: &str, expected_identity: &str, expected_fingerprint: &str) -> Result<String, String> {
+        skill_name(name)?;
+        let mut pins = Vec::new();
+        let project = pin_path(project, &mut pins)?;
+        if identity(pins.last().ok_or("Missing project pin")?)? != expected_identity { return Err("Project identity changed".into()); }
+        let agents = pin_path(&project.join(".agents"), &mut pins)?;
+        let skills = pin_path(&agents.join("skills"), &mut pins)?;
+        let source = skills.join(name);
+        let inspected = inspect(&project, &source, name)?;
+        if inspected.inspection.fingerprint != expected_fingerprint { return Err("Skill changed; inspect current bytes before removing".into()); }
+        let source_identity = inspected.source_identity;
+        let expected_files = inspected.files.clone();
+        drop(inspected);
+        let moving = open_entry(&source, true)?;
+        if moving.metadata().map_err(|e| e.to_string())?.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 ||
+            file_identity(&moving)? != source_identity { return Err("Cannot archive a linked or replaced skill".into()); }
+        let mut files = Vec::new(); let mut bytes = 0; let mut content_pins = Vec::new();
+        read_package(&source, Path::new(""), 0, &mut files, &mut bytes, &mut content_pins)?;
+        files.sort_by(|a, b| a.0.cmp(&b.0));
+        if files != expected_files { return Err("Skill changed before archive; current bytes preserved".into()); }
+        drop(content_pins);
+        let archive = directory(&agents, "skill-archive", &mut pins)?;
+        let target = archive.join(format!("{name}-{}", uuid::Uuid::new_v4()));
+        rename_handle(&moving, &target, false)?;
+        Ok(crate::fs::path_to_js(&target))
+    }
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct DiscoveredSkill {
     pub name: String,
     pub description: String,
@@ -637,6 +872,76 @@ mod tests {
         );
         assert_eq!(name, "review-pr");
         assert_eq!(desc, "Review pull requests. Use when asked to review.");
+    }
+
+    #[cfg(windows)]
+    fn local_package(source: &Path) {
+        std::fs::write(source.join("SKILL.md"), "---\nname: fixture\ndescription: Synthetic fixture\n---\nRead helpers on demand.\n").unwrap();
+        std::fs::create_dir(source.join("scripts")).unwrap();
+        std::fs::write(source.join("scripts/check.ps1"), b"throw 'must never execute'\r\n").unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn project_skill_install_and_archive_preserve_all_bytes_and_source() {
+        let project = tmp("install-project"); let source = tmp("install-source");
+        local_package(&source.0);
+        let inspected = inspect_project_skill(project.0.to_string_lossy().into(), source.0.to_string_lossy().into(), "fixture".into()).unwrap();
+        assert_eq!(inspected.files.len(), 2);
+        let installed = install_project_skill(project.0.to_string_lossy().into(), source.0.to_string_lossy().into(), "fixture".into(), inspected.project_identity.clone(), inspected.fingerprint.clone()).unwrap();
+        assert_eq!(installed, inspected);
+        let target = project.0.join(".agents/skills/fixture");
+        let discovered = list_skills_from(&project.0, None, None);
+        assert!(discovered.iter().any(|skill| skill.scope == "project" && skill.name == "fixture" && Path::new(&skill.path).ends_with(".agents/skills/fixture/SKILL.md")));
+        assert_eq!(std::fs::read(target.join("scripts/check.ps1")).unwrap(), std::fs::read(source.0.join("scripts/check.ps1")).unwrap());
+        let archived = archive_project_skill(project.0.to_string_lossy().into(), "fixture".into(), inspected.project_identity, inspected.fingerprint).unwrap();
+        assert!(!target.exists());
+        assert_eq!(std::fs::read(Path::new(&archived).join("SKILL.md")).unwrap(), std::fs::read(source.0.join("SKILL.md")).unwrap());
+        assert_eq!(std::fs::read(Path::new(&archived).join("scripts/check.ps1")).unwrap(), b"throw 'must never execute'\r\n");
+        assert!(source.0.join("SKILL.md").is_file());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn project_skill_install_refuses_changed_source_identity_and_existing_target() {
+        let project = tmp("refusal-project"); let source = tmp("refusal-source"); local_package(&source.0);
+        let inspected = inspect_project_skill(project.0.to_string_lossy().into(), source.0.to_string_lossy().into(), "fixture".into()).unwrap();
+        let attempt = |identity: String, hash: String| install_project_skill(project.0.to_string_lossy().into(), source.0.to_string_lossy().into(), "fixture".into(), identity, hash);
+        assert!(attempt("different".into(), inspected.fingerprint.clone()).is_err());
+        std::fs::write(source.0.join("scripts/check.ps1"), b"changed").unwrap();
+        assert!(attempt(inspected.project_identity.clone(), inspected.fingerprint).is_err());
+        let fresh = inspect_project_skill(project.0.to_string_lossy().into(), source.0.to_string_lossy().into(), "fixture".into()).unwrap();
+        attempt(fresh.project_identity.clone(), fresh.fingerprint.clone()).unwrap();
+        assert!(attempt(fresh.project_identity, fresh.fingerprint).unwrap_err().contains("already exists"));
+        assert_eq!(std::fs::read(project.0.join(".agents/skills/fixture/scripts/check.ps1")).unwrap(), b"changed");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn project_skill_install_refuses_source_and_destination_junctions() {
+        let project = tmp("links-project"); let source = tmp("links-source"); let foreign = tmp("links-foreign"); local_package(&source.0);
+        junction::create(&foreign.0, source.0.join("escape")).unwrap();
+        assert!(inspect_project_skill(project.0.to_string_lossy().into(), source.0.to_string_lossy().into(), "fixture".into()).is_err());
+        junction::delete(source.0.join("escape")).unwrap();
+        let inspected = inspect_project_skill(project.0.to_string_lossy().into(), source.0.to_string_lossy().into(), "fixture".into()).unwrap();
+        junction::create(&foreign.0, project.0.join(".agents")).unwrap();
+        assert!(install_project_skill(project.0.to_string_lossy().into(), source.0.to_string_lossy().into(), "fixture".into(), inspected.project_identity, inspected.fingerprint).is_err());
+        assert!(!foreign.0.join("skills").exists());
+        junction::delete(project.0.join(".agents")).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn project_skill_inspection_refuses_hardlinks_oversize_and_path_names() {
+        let project = tmp("bounds-project"); let source = tmp("bounds-source"); local_package(&source.0);
+        for name in ["../other", "con", "nul", "fixture.", "a/b"] {
+            assert!(inspect_project_skill(project.0.to_string_lossy().into(), source.0.to_string_lossy().into(), name.into()).is_err());
+        }
+        std::fs::hard_link(source.0.join("SKILL.md"), source.0.join("alias.md")).unwrap();
+        assert!(inspect_project_skill(project.0.to_string_lossy().into(), source.0.to_string_lossy().into(), "fixture".into()).is_err());
+        std::fs::remove_file(source.0.join("alias.md")).unwrap();
+        std::fs::write(source.0.join("large.bin"), vec![0; 1024 * 1024 + 1]).unwrap();
+        assert!(inspect_project_skill(project.0.to_string_lossy().into(), source.0.to_string_lossy().into(), "fixture".into()).is_err());
     }
 
     #[test]

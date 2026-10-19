@@ -200,7 +200,8 @@ mod project_install {
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => (),
             Err(e) => return Err(e.to_string()),
         }
-        pins.push(readonly_directory(&path)?);
+        // Rename opens its target parent for writing; deletion and rename sharing stay denied.
+        pins.push(pin(&path, true)?);
         Ok(path)
     }
 

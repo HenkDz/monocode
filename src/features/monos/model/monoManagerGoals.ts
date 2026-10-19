@@ -8,8 +8,9 @@ import type { Mono, MonoProject } from "./mono";
 import type { Block } from "../../sessions/model/session";
 import { assertManagerRequest } from "./managerAuthorizedWork";
 import type { ManagerRequestRecovery } from "./managerAuthorizedWork";
-import { handleDecisionCommand, recoverDecisionReceipt, validateDecisionHistory, compactDecisionHistory, projectAutonomy } from "./monoDecisions";
-import type { DecisionCommand, DecisionHost, DecisionReceipt, MonoDecision, ProjectAutonomy } from "./monoDecisions";
+import { normalizeDecisionHistory, projectAutonomy, decisionAnswerer, assertDecisionUiGesture, parseDecisionPayload } from "./monoDecisions";
+import type { MonoDecision, ProjectAutonomy } from "./monoDecisions";
+import type { CrewMessage } from "./monoCrewEvents";
 
 /** Non-repository recents must not hide the projects that can own a Manager. */
 export async function validManagerProjects(projects: readonly MonoProject[], resolve: (path: string) => Promise<string>): Promise<{ project: MonoProject; folder: string }[]> {
@@ -60,7 +61,6 @@ type Receipt = {
   signature: string;
   result: unknown;
   pending?: { goalId: string; text: string; cancel?: boolean; request?: ManagerRequestRecovery };
-  decision?: DecisionReceipt;
 };
 export type GoalLedger = {
   version: 1;
@@ -70,6 +70,7 @@ export type GoalLedger = {
   decisions?: MonoDecision[];
   autonomy?: Record<string, ProjectAutonomy>;
   decisionsPruned?: number;
+  decisionsSkipped?: number;
 };
 export type GoalOrigin = {
   kind: "user" | "habit" | "event";
@@ -182,7 +183,7 @@ export class MonoManagerGoals {
   }
   private async load(id: string) {
     if (this.ledgers.has(id)) return this.ledgers.get(id)!;
-    const ledger = (await this.storage.load(id)) ?? {
+    let ledger = (await this.storage.load(id)) ?? {
       version: 1 as const,
       goals: [],
       receipts: {},
@@ -201,7 +202,7 @@ export class MonoManagerGoals {
       )
     )
       throw Error("Unsupported Mono goal history");
-    validateDecisionHistory(ledger);
+    ledger = normalizeDecisionHistory(ledger);
     this.ledgers.set(id, ledger);
     this.changed();
     return ledger;
@@ -215,27 +216,59 @@ export class MonoManagerGoals {
   decisionsPruned(id: string): number {
     return this.ledgers.get(id)?.decisionsPruned ?? 0;
   }
+  decisionsSkipped(id: string): number {
+    return this.ledgers.get(id)?.decisionsSkipped ?? 0;
+  }
   autonomy(id: string, projectId: string): ProjectAutonomy {
     return projectAutonomy(this.ledgers.get(id)?.autonomy?.[projectId]);
   }
-  handleDecision(id: string, requestId: string, command: DecisionCommand, host: DecisionHost) {
-    const retained = structuredClone(command);
-    const authenticatedHost: DecisionHost = { actor: structuredClone(host.actor),
-      current: decision => host.current(decision), deliver: (delivery, validate) => host.deliver(delivery, validate) };
-    return this.serial(async () => {
-      await this.load(id);
-      return handleDecisionCommand(id, requestId, retained, authenticatedHost, {
-        read: () => this.ledgers.get(id)!, save: (owner, ledger) => this.save(owner, ledger),
-      });
-    });
-  }
-  recoverDecisions(id: string, host: DecisionHost) {
+  recordDecision(id: string, decision: MonoDecision) {
     return this.serial(async () => {
       const ledger = await this.load(id);
-      for (const [requestId, receipt] of Object.entries(ledger.receipts)) {
-        if (receipt.decision?.remaining.length) await recoverDecisionReceipt(id, requestId, host, {
-          read: () => this.ledgers.get(id)!, save: (owner, value) => this.save(owner, value),
-        });
+      if (ledger.decisions?.some(row => row.id === decision.id)) return;
+      await this.save(id, { ...ledger, decisions: [...(ledger.decisions ?? []), decision] });
+    });
+  }
+  recordDecisionAnswer(id: string, decisionId: string, actorId: string, answer: string, at = Date.now()) {
+    return this.serial(async () => {
+      const ledger = await this.load(id);
+      const row = ledger.decisions?.find(row => row.id === decisionId);
+      if (!row || row.readOnly || row.noLongerNeededAt != null || row.status !== "waiting" || row.answererId !== actorId || row.operation !== "work" && actorId !== "user") return;
+      await this.save(id, { ...ledger, decisions: ledger.decisions!.map(entry => entry.id === decisionId
+        ? { ...entry, status: "answered" as const, answer, answeredBy: actorId, answeredAt: at } : entry) });
+    });
+  }
+  recordDecisionReply(id: string, message: CrewMessage) {
+    try { parseDecisionPayload(JSON.parse(message.text)); return; } catch { /* Ordinary text replies need no special protocol. */ }
+    const row = this.decisions(id).find(row => message.topic === `decision:${row.id}` && message.recipientId === row.requestingMonoId);
+    if (row) return this.recordDecisionAnswer(id, row.id, message.senderId, message.text, message.at);
+  }
+  delegateDecision(id: string, decisionId: string) {
+    return this.serial(async () => {
+      const ledger = await this.load(id);
+      const row = ledger.decisions?.find(row => row.id === decisionId);
+      const boss = row?.escalationChain.find(entry => entry.level === "boss");
+      if (!row || !boss || row.readOnly || row.operation !== "work" || row.answererId !== "user" || row.status !== "waiting" || row.noLongerNeededAt != null) return;
+      await this.save(id, { ...ledger, decisions: ledger.decisions!.map(entry => entry.id === decisionId ? { ...entry, answererId: boss.id } : entry) });
+    });
+  }
+  setAutonomy(event: Event, id: string, projectId: string, value: ProjectAutonomy) {
+    assertDecisionUiGesture(event);
+    projectAutonomy(value);
+    return this.serial(async () => {
+      const ledger = await this.load(id);
+      await this.save(id, { ...ledger, autonomy: { ...ledger.autonomy, [projectId]: value },
+        decisions: ledger.decisions?.map(row => !row.readOnly && row.projectId === projectId && row.status === "waiting" && row.answererId === decisionAnswerer(row, projectAutonomy(ledger.autonomy?.[projectId]))
+          ? { ...row, answererId: decisionAnswerer(row, value) } : row) });
+    });
+  }
+  finishDecisionAsks(ended: ReadonlySet<string>, missingLegacyChats: ReadonlySet<string>) {
+    return this.serial(async () => {
+      for (const [id, ledger] of this.ledgers) {
+        const decisions = ledger.decisions?.map(row => row.status === "waiting" && row.noLongerNeededAt == null &&
+          (row.goalId && ended.has(row.goalId) || row.taskId && ended.has(row.taskId) || row.readOnly && missingLegacyChats.has(row.id))
+          ? { ...row, noLongerNeededAt: Date.now() } : row);
+        if (decisions?.some((row, index) => row !== ledger.decisions![index])) await this.save(id, { ...ledger, decisions });
       }
     });
   }
@@ -289,8 +322,7 @@ export class MonoManagerGoals {
     this.listeners.forEach((fn) => fn());
   }
   private async save(id: string, ledger: GoalLedger) {
-    validateDecisionHistory(ledger);
-    ledger = compactDecisionHistory(ledger);
+    ledger = normalizeDecisionHistory(ledger);
     if (new TextEncoder().encode(JSON.stringify(ledger)).length > 7_000_000)
       throw Error("Goal history capacity reached; existing work is retained");
     await this.storage.save(id, ledger);

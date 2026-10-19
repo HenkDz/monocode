@@ -45,6 +45,7 @@ import { workspaceTeam } from "./WorkspaceTeam";
 import { pathKey } from "../../shared/lib/paths";
 import { worktreeTaskSessions } from "../../features/source-control/model/worktreeSessions";
 import { workbenchSessionTask } from "../../features/monos/model/monoNavigation";
+import { ProjectAutonomyControl, type DecisionUiActions } from "../../features/commandCenter/ui/Decisions";
 
 const button =
   "rounded-lg border border-stroke px-2.5 py-1.5 text-[11px] text-content/75 hover:bg-content/5 disabled:opacity-40";
@@ -232,11 +233,13 @@ export function WorkspaceGoals({
   sessions,
   usage,
   onOpenMono,
+  decisionActions,
 }: {
   project: string;
   sessions: readonly Session[];
   usage?: UsageDashboardSnapshot;
   onOpenMono: (id: string) => void;
+  decisionActions?: DecisionUiActions;
 }) {
   useSyncExternalStore(subscribeMonos, monosSnapshot);
   useSyncExternalStore(monoManagerGoals.subscribe, monoManagerGoals.snapshot);
@@ -270,6 +273,7 @@ export function WorkspaceGoals({
       aria-label="Goal & tasks"
       className="min-h-0 flex-1 overflow-y-auto pb-4"
     >
+      {manager && decisionActions && <div className="px-4 pt-4"><ProjectAutonomyControl managerId={manager.id} projectId={project} value={monoManagerGoals.autonomy(manager.id, project)} actions={decisionActions} /></div>}
       <h2 className={heading}>Goal</h2>
       {goals.length ? (
         goals.map((goal) => {

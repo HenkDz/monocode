@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 type State = { calls: { command: string; args: Record<string, unknown> }[]; sends: { id: string; text: string }[]; pending: boolean; fingerprint: string; logFails: boolean; finish(): void; logs(): { kind: string; requiresReply: boolean; summary: string }[] };
@@ -6,6 +6,37 @@ const state = (page: Page) => page.evaluate(() => { const value = (window as unk
 const nav = (page: Page, name: string) => page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name, exact: true });
 const firstAsk = (page: Page) => page.locator(".decision-card").filter({ has: page.getByRole("heading", { name: "Install fixture?", exact: true }) });
 const installs = (value: Awaited<ReturnType<typeof state>>) => value.calls.filter(call => call.command === "install_project_skill");
+
+test("both Inspect double-clicks require a separate execution; native second-click detail is refused while keyboard and later single clicks work", async ({ page }) => {
+  await page.goto("/tests/browser/ccvision-v4a-actual.html"); await nav(page, "Integrations").click();
+  const card = page.locator(".integration-request");
+  const secondClick = async (button: Locator) => {
+    const bounds = (await button.boundingBox())!;
+    await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+    await page.mouse.down({ clickCount: 2 }); await page.mouse.up({ clickCount: 2 });
+  };
+  await card.getByRole("button", { name: "Inspect files", exact: true }).dblclick();
+  expect(installs(await state(page))).toHaveLength(0);
+  if (await card.getByRole("button", { name: "Inspect files", exact: true }).isVisible()) await card.getByRole("button", { name: "Inspect files", exact: true }).click();
+  await expect(card.getByText("From C:/synthetic/source/fixture", { exact: true })).toBeVisible();
+  await secondClick(card.getByRole("button", { name: "Install", exact: true }));
+  await expect(card.getByRole("alert")).toHaveText("Click Install or Remove once after inspecting.");
+  expect(installs(await state(page))).toHaveLength(0);
+  await card.getByRole("button", { name: "Inspect files", exact: true }).click();
+  await card.getByRole("button", { name: "Install", exact: true }).focus(); await page.keyboard.press("Enter");
+  const row = page.locator(".integration-row").filter({ hasText: "fixture" });
+  await expect(row).toHaveCount(1); expect(installs(await state(page))).toHaveLength(1);
+  await row.getByRole("button", { name: "Inspect to remove", exact: true }).dblclick();
+  expect((await state(page)).calls.filter(call => call.command === "archive_project_skill")).toHaveLength(0);
+  if (await row.getByRole("button", { name: "Inspect to remove", exact: true }).isVisible()) await row.getByRole("button", { name: "Inspect to remove", exact: true }).click();
+  await secondClick(row.getByRole("button", { name: "Remove", exact: true }));
+  await expect(row.getByRole("alert")).toHaveText("Click Install or Remove once after inspecting.");
+  expect((await state(page)).calls.filter(call => call.command === "archive_project_skill")).toHaveLength(0);
+  await row.getByRole("button", { name: "Inspect to remove", exact: true }).click();
+  await row.getByRole("button", { name: "Remove", exact: true }).click();
+  await expect(row).toHaveCount(0);
+  expect((await state(page)).calls.filter(call => call.command === "archive_project_skill")).toHaveLength(1);
+});
 
 test("actual App Ask renderer keeps native double-click isolated from the next protected answer; ordinary answers never install", async ({ page }) => {
   await page.goto("/tests/browser/ccvision-v4a-actual.html"); await nav(page, "Decisions").click();

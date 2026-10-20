@@ -59,6 +59,7 @@ function SkillInstallCard({ item, onAction, onLog, onChanged }: Props) {
     <h3 id={title}>{item.name} for {item.project}</h3>
     <p className="integration-reason">{item.request.reason}</p>
     {inspection && <><p><strong>{inspection.declaredName}</strong> · {inspection.totalBytes.toLocaleString()} bytes</p>
+      <p>From <code className="break-all">{inspection.source}</code></p>
       <p>{inspection.description}</p>
       <ul>{inspection.files.map(file => <li key={file.path}><code>{file.path}</code> · {file.bytes.toLocaleString()} bytes</li>)}</ul>
       <p className="integration-note">Files are copied as inspected. Nothing runs during install.</p></>}

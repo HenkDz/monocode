@@ -21,6 +21,7 @@ export function useProjectSkillBusy(project: string, name: string): boolean {
 export async function executeInspectedProjectSkill(event: Event, buttonId: string, inspection: ProjectSkillInspection,
   operation: "install" | "archive", log?: SkillOperationLog): Promise<void> {
   if (!isIntegrationUserEvent(event, buttonId)) throw Error("Use the Install or Remove button yourself.");
+  if (event instanceof MouseEvent && event.detail > 1) throw Error("Click Install or Remove once after inspecting.");
   const captured = structuredClone(inspection);
   const key = keyFor(captured.project, captured.name);
   if (inFlight.has(key)) throw Error("This skill already has an operation in progress.");

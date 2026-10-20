@@ -5,3 +5,10 @@
 @source "../../../projects/ui/PixelMascot.tsx";
 @source "../../ui";
 @source "../../../../shared/ui";
+@source "../../../../app/shell/WorkspaceContext.tsx";
+@source "../../../../app/shell/WorkspaceTeam.tsx";
+@source "../../ui/GoalTaskSummary.tsx";
+.fixture-workspace { display: grid; grid-template-columns: minmax(0, 360px) minmax(0, 380px); justify-content: center; height: 100vh; color: var(--color-content); background: var(--color-background-base); }
+.fixture-workspace > aside { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-inline: 1px solid var(--color-stroke); padding-top: 16px; }
+.fixture-workspace-decisions { display: flex; min-width: 0; }
+@media (max-width: 600px) { .fixture-workspace { grid-template-columns: minmax(0, 1fr); } .fixture-workspace-decisions { display: none; } }

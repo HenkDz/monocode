@@ -12,6 +12,6 @@ const child = spawn(process.execPath, [fileURLToPath(new URL("../../../../../nod
   { cwd: evidence, env: environment, windowsHide: true, stdio: "inherit" });
 child.on("error", error => { console.error(error); process.exitCode = 1; });
 child.on("close", exitCode => {
-  writeFileSync(join(evidence, "launch.json"), JSON.stringify({ exitCode, fixture: "Actual goal selectors, click guard, decision adapter, ProjectDrawer and policy components; synthetic callback ports; Start disconnected; not App/native/provider acceptance" }, null, 2));
+  writeFileSync(join(evidence, "launch.json"), JSON.stringify({ exitCode, fixture: "Actual goal selectors, click guard, decision adapter, ProjectDrawer, WorkspaceGoals, WorkspaceTeam and policy components; synthetic callback ports; no retained recovery/Start in this component fixture; not App/native/provider acceptance" }, null, 2));
   process.exitCode = exitCode ?? 1;
 });

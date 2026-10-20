@@ -43,7 +43,7 @@ test("Ask me for stays a clean stack in dark/light narrow/wide frames", async ({
     const control = page.locator(".command-map-drawer .decision-autonomy");
     await expect(control).toBeVisible();
     await expect(control).toContainText("You'll still approve merges, installs and deletes.");
-    expect(await page.locator(".command-map-drawer > header svg").evaluate(element => element.getBoundingClientRect().width)).toBe(32);
+    expect(await page.locator(".command-map-drawer > header .pixel-mascot").evaluate(element => element.getBoundingClientRect().width)).toBe(32);
     const boxes = await control.locator("button").evaluateAll(buttons => buttons.map(button => { const r = button.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width }; }));
     expect(boxes).toHaveLength(3); expect(new Set(boxes.map(box => box.y)).size).toBe(3);
     expect(new Set(boxes.map(box => box.width)).size).toBe(1);

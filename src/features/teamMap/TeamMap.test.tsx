@@ -214,8 +214,9 @@ it("refits the focused team when its viewport resizes", async () => {
 it("reorders whole project columns by explicit controls and preserves order when arranged and reopened", async () => {
   await renders();
   expect(host.querySelector('[draggable="true"], .tree-project-grip')).toBeNull();
-  const project = host.querySelector<HTMLSelectElement>('[aria-label="Project to reorder"]')!;
-  await act(async () => { project.value = "site-manager"; project.dispatchEvent(new Event("change", { bubbles: true })); });
+  const project = host.querySelector<HTMLButtonElement>('[aria-label="Project to reorder: app"]')!;
+  await act(async () => project.click());
+  await act(async () => [...document.querySelectorAll<HTMLButtonElement>('[role="option"]')].find(option => option.textContent === "site")!.click());
   expect(host.querySelector<HTMLButtonElement>('[aria-label="Move project right"]')!.disabled).toBe(true);
   await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Move project left"]')!.click());
   expect([...host.querySelectorAll('.tree-project-header strong')].map(node => node.textContent)).toEqual(["site", "app"]);

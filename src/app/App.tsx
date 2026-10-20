@@ -17860,6 +17860,8 @@ function Workspace({
                                             : "hidden"
                                         }
                                       >
+                                        <div className="flex shrink-0 flex-wrap items-center justify-end gap-1 px-2.5 py-2 empty:hidden">
+                                        <TeamMapHeaderAction monoId={monoForSession(session.id)?.id} onOpen={onOpenTeamMap} />
                                         {insetLayout &&
                                         visible &&
                                         monoViewMono ? (
@@ -17872,11 +17874,9 @@ function Workspace({
                                             onOpenSettings={
                                               onOpenMonoViewSettings
                                             }
-                                            // The overview header's row, so both share a centre line.
-                                            className="absolute right-2.5 top-0 z-10 h-10"
                                           />
                                         ) : null}
-                                        <TeamMapHeaderAction monoId={monoForSession(session.id)?.id} onOpen={onOpenTeamMap} />
+                                        </div>
                                          <SessionPane
                                           {...sessionPaneProps}
                                           session={session}

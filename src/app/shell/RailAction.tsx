@@ -62,16 +62,8 @@ export function RailAction({
           : "text-content/50 hover:bg-content/10 hover:text-content"
       } disabled:cursor-default disabled:opacity-40`}
     >
-      {badge != null ? (
-        <span
-          aria-hidden
-          className="absolute left-1 top-1/2 grid min-w-4 -translate-y-1/2 place-items-center rounded-full bg-accent px-1 text-[10px] font-semibold leading-none text-white tabular-nums"
-        >
-          {badge > 99 ? "99+" : badge}
-        </span>
-      ) : null}
       <Icon
-        className={`size-4 shrink-0 opacity-70 ${badge != null ? "ml-4" : ""}`}
+        className="size-4 shrink-0 opacity-70"
         strokeWidth={1.75}
       />
       <span className="min-w-0 flex-1 truncate text-sm font-medium leading-tight">
@@ -82,6 +74,14 @@ export function RailAction({
       ) : shortcut ? (
         <span aria-hidden className="shrink-0 text-[11px] text-content/40">
           {shortcut}
+        </span>
+      ) : null}
+      {badge != null ? (
+        <span
+          aria-hidden
+          className="grid min-w-4 shrink-0 place-items-center rounded-md bg-content/8 px-1 text-[10px] font-medium leading-4 text-content/55 tabular-nums"
+        >
+          {badge > 99 ? "99+" : badge}
         </span>
       ) : null}
     </button>

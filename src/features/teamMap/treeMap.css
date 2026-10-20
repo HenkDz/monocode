@@ -37,7 +37,8 @@
 .tree-project-header:hover { background: color-mix(in srgb, var(--color-content) 4%, transparent); }
 .tree-project-header:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 .tree-project-order { display: flex; align-items: center; gap: 4px; }
-.tree-project-order select { max-width: 128px; }
+.tree-project-order > div { width: 128px; }
+.tree-project-order button { height: 34px; }
 .tree-project-header strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tree-project-header > span:last-child { margin-left: auto; white-space: nowrap; color: color-mix(in srgb, var(--color-content) 60%, transparent); }
 .tree-project-mark { display: grid; place-items: center; flex-shrink: 0; width: 24px; height: 24px; border: 1px solid var(--color-stroke); border-radius: 4px; background: color-mix(in srgb, var(--color-content) 4%, transparent); font-size: 12px; color: color-mix(in srgb, var(--color-content) 70%, transparent); }
@@ -115,5 +116,5 @@
   .tree-map .team-map-toolbar { padding: 16px; }
   .tree-map .team-map-legend { padding: 0 16px 12px; }
   .tree-map .team-map-filters { flex-wrap: wrap; }
-  .tree-map .team-map-filters label { flex: 1; }
+  .tree-map .team-map-filters label { flex: 1; min-width: 112px; }
 }

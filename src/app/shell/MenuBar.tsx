@@ -318,15 +318,15 @@ export function MenuBar({
             kind: "item",
             id: "toggle_sidebar",
             label: "Toggle Sidebar",
-            shortcut: shortcut("App: Toggle Sidebar", `${MOD}B`),
+            shortcut: shortcut("App: Toggle Sidebar", `${MOD}${SHIFT}B`),
           },
           {
             kind: "item",
             id: "toggle_session_sidebar",
-            label: "Toggle Session Sidebar",
+            label: "Toggle Panel",
             shortcut: shortcut(
               "App: Toggle Session Sidebar",
-              `${MOD}${SHIFT}B`,
+              `${MOD}B`,
             ),
           },
           { kind: "item", id: "open_inbox", label: "Inbox" },

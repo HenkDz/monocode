@@ -1431,8 +1431,8 @@ function TitleBarComponent({
             </span>
           </div>
         ) : null}
-        {trailingControls}
       </div>
+      {trailingControls}
       {!standaloneTitle && tabMenu && contextTab ? (
         <ExplorerMenu
           x={tabMenu.x}

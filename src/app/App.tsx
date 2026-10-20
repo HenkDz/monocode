@@ -14814,9 +14814,10 @@ function Workspace({
         const opening = onOpenMono(mono.id);
         const request = monoViewRequest.current;
         await opening;
+        const current = dedicatedMono(project);
         if (request !== monoViewRequest.current ||
-            monoViewIdRef.current !== mono.sessionId ||
-            dedicatedMono(project)?.id !== mono.id || !available()) return;
+            !current?.sessionId || monoViewIdRef.current !== current.sessionId ||
+            current.id !== mono.id || !available()) return;
         setMonoPanelTab("details");
         setMonoDetailsOpen(true);
         setMonoActivity(null);

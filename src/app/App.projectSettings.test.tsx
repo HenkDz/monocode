@@ -6,7 +6,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import ts from "typescript";
 import { MonoDetails } from "../features/monos/ui/MonoDetails";
-import { dedicatedMono, findMono, listMonos, monoForSession, monoLook, updateMono } from "../features/monos/model/mono";
+import { dedicatedMono, findMono, listMonos, monoForSession, monoLook, updateMono, saveMonoSessionId } from "../features/monos/model/mono";
 import { monoLiveState } from "../features/monos/model/monoNavigation";
 import { loadRecents, projectRailItems, sameProjectPath } from "../features/projects/model/recents";
 import { newSession, sessionWorkCwd } from "../features/sessions/model/session";
@@ -18,6 +18,8 @@ vi.mock("../features/monos/ui/MonoHabits", async original => ({ ...await origina
 vi.mock("../features/sessions/data/sessionStore", async original => ({ ...await original<object>(), listSessionsByProject: async () => [] }));
 vi.mock("../integrations/harness/core/child", async original => ({
   ...await original<object>(), monoCodexSkillsCatalog: async () => ({ skills: [], plugins: [], roleDefaults: { manager: [], member: [], orchestrator: [], mono: [] } }),
+  // Storage-source display is unrelated to routing; never inspect native/profile storage here.
+  monoCodexStorageInfo: async () => ({ home: "/synthetic-home/mono", sourceHome: "/synthetic-home/account", sourceKind: "account", shareHooks: false }),
 }));
 vi.mock("../features/sessions/ui/ModelPicker", () => ({
   ModelPicker: ({ project }: { project: string }) => React.createElement("span", { "data-model-project": project }, "Synthetic model control"),
@@ -179,5 +181,49 @@ it("reports an existing Manager open failure without an unhandled rejection", as
   await act(async () => f.gear(f.projects[0]));
   expect(f.scope.message).toHaveBeenCalledWith(expect.stringContaining("Manager is unavailable"), expect.objectContaining({ kind: "error" }));
   expect(f.scope.monoDetailsOpen).toBe(false);
+  f.noLaunch();
+});
+
+it("independent first-open Manager settings uses the session just bound by the existing Mono loader", async () => {
+  const f=fixture();
+  updateMono("manager-1", mono=>({...mono,sessionId:undefined}));
+  const created={...f.sessions[1],id:"new-existing-mono-session"};
+  // Existing ensureMonoSession saves this binding before returning on first open; native workspace allocation is a synthetic port.
+  f.scope.ensureMonoSession.mockImplementationOnce(async (id:string)=>{
+    saveMonoSessionId(id,created.id);
+    f.scope.sessions.push(created);
+    return created;
+  });
+  await act(async()=>f.gear(f.projects[1]));
+  console.log(JSON.stringify({phase:"first-open-settings",view:f.scope.monoViewIdRef.current,currentBinding:dedicatedMono(f.projects[1])?.sessionId,details:f.scope.monoDetailsOpen,noticeCount:f.scope.message.mock.calls.length}));
+  expect(dedicatedMono(f.projects[1])?.sessionId).toBe(created.id);
+  expect(f.scope.monoViewIdRef.current).toBe(created.id);
+  const explained=f.scope.message.mock.calls.some((call:any[])=>typeof call[0]==="string"&&call[0].length>0);
+  expect(f.scope.monoDetailsOpen||explained,"Configured Manager first-open gear must show Details or a clear refusal; silent chat-only opening is not settings").toBe(true);
+  if(f.scope.monoDetailsOpen){
+    await f.render();
+    expect(container.querySelector('[data-mono-details]')?.getAttribute("data-open")).toBe("true");
+    expect(container.querySelector('[data-model-project]')?.getAttribute("data-model-project")).toBe(f.projects[1]);
+  }
+  f.noLaunch();
+});
+
+it.each(["changed binding", "another Manager"])("refuses first-open settings after %s", async reason => {
+  const f = fixture();
+  updateMono("manager-1", mono => ({ ...mono, sessionId: undefined }));
+  const created = { ...f.sessions[1], id: "new-existing-mono-session" };
+  f.scope.ensureMonoSession.mockImplementationOnce(async (id: string) => {
+    saveMonoSessionId(id, created.id);
+    f.scope.sessions.push(created);
+    if (reason === "changed binding") saveMonoSessionId(id, f.sessions[0].id);
+    else updateMono("manager-0", mono => ({ ...mono, projects: [f.projects[1]], lastUsedAt: Date.now() + 1 }));
+    return created;
+  });
+  await act(async () => f.gear(f.projects[1]));
+  expect(dedicatedMono(f.projects[1])?.id).toBe(reason === "changed binding" ? "manager-1" : "manager-0");
+  expect(dedicatedMono(f.projects[1])?.sessionId).toBe(f.sessions[0].id);
+  expect(f.scope.monoViewIdRef.current).toBe(created.id);
+  expect(f.scope.monoDetailsOpen).toBe(false);
+  expect(f.scope.message).not.toHaveBeenCalled();
   f.noLaunch();
 });

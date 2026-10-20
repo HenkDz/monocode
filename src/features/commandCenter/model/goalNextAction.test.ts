@@ -71,7 +71,24 @@ it("does not attribute unrelated held info to a goal or revive cancelled tasks",
   expect(f.read()?.action).toBe("start");
 });
 
-it.each(["stop", "account", "checkout", "task", "goal"])("rechecks %s after opening the existing conversation", async changed => {
+it("keeps the existing paused Manager Continue path when its queue is paused", () => {
+  const f = fixture(); f.run.status = "paused";
+  f.session.queueStatus = "paused";
+  f.session.queuedMessages = [{ id: "held", text: "Original queued work", attachments: [] }];
+  expect(f.read()?.action).toBe("continue");
+});
+
+it("does not resume the same Manager twice from different goal surfaces while Continue is pending", async () => {
+  const f = fixture(); f.run.status = "paused";
+  f.input.goals.push({ ...f.goal, id: "second" });
+  const first = runGoalNextAction(f.click, f.read()!, f.host);
+  const second = selectGoalNextAction(f.input, "second")!;
+  await expect(runGoalNextAction(f.click, second, { ...f.host, read: () => selectGoalNextAction(f.input, "second") })).rejects.toThrow("already been sent");
+  await first;
+  expect(f.host.continueManager).toHaveBeenCalledOnce();
+});
+
+it.each(["stop", "account", "checkout", "task", "goal", "manager"])("rechecks %s after opening the existing conversation", async changed => {
   const f = fixture(), step = f.read()!;
   f.host.open = async () => {
     if (changed === "stop") f.run.status = "stopped";
@@ -79,6 +96,7 @@ it.each(["stop", "account", "checkout", "task", "goal"])("rechecks %s after open
     if (changed === "checkout") f.session.worktreeCwd = "/other";
     if (changed === "task") f.task.status = "cancelled";
     if (changed === "goal") f.goal.updatedAt++;
+    if (changed === "manager") { f.manager.id = "replacement"; f.run.ownerMonoId = "replacement"; }
   };
   await expect(runGoalNextAction(f.click, step, f.host)).rejects.toThrow("goal changed");
   expect(f.host.startGoal).not.toHaveBeenCalled();

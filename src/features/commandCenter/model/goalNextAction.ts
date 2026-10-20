@@ -27,13 +27,14 @@ export function selectGoalNextAction(input: GoalViewInput, goalId: string, decis
   const decision = decisions.find(decision => decision.status === "waiting" && decision.answererId === "user" && !decision.readOnly && decision.noLongerNeededAt == null &&
     pathKey(decision.projectId) === pathKey(goal.projectId) && (decision.goalId === goal.id || tasks.some(task => task.id === decision.taskId)));
   const target = approval?.id ?? (decision ? session.id : undefined);
-  if (!target && (session.codexStorageError || session.codexStoragePreparing || session.usageLimit || session.pendingSwitch || session.worktreeRemoved || session.worktreePreparing ||
-    session.queuedMessages?.length || session.pendingMonoEvents?.length || session.queueStatus === "paused")) return;
+  if (!target && (session.codexStorageError || session.codexStoragePreparing || session.usageLimit || session.pendingSwitch || session.worktreeRemoved || session.worktreePreparing)) return;
+  if (!target && run.status !== "paused" && (session.queuedMessages?.length || session.pendingMonoEvents?.length || session.queueStatus === "paused")) return;
   if (!target && !pending.length && tasks.length) return;
   const action = target ? "open" : run.status === "paused" ? "continue" : "start";
   return { goalId: goal.id, projectId: goal.projectId, managerMonoId: manager.id, managerId: run.leadId, sessionId: target ?? session.id, action,
     label: target ? "Waiting for your approval — Open" : action === "continue" ? "Manager paused — Continue" : "Next task hasn't started — Start",
-    revision: JSON.stringify([goal.id, goal.state, goal.updatedAt, run.status, run.workspace, session.id, session.cwd, session.worktreeCwd, session.providerAccountId, action, target,
+    revision: JSON.stringify([goal.id, goal.monoId, goal.managerId, goal.projectId, goal.userMessageId, goal.state, goal.updatedAt, manager.id, run.status, run.workspace, session.id, session.cwd, session.worktreeCwd, session.providerAccountId,
+      session.blocks.filter(block => block.role === "user" && !block.draft).slice(-1)[0]?.id, action, target,
       decision?.id, approval?.pendingQuestion?.requestId, approval?.blocks.filter(block => block.approval && !block.approval.decided).map(block => block.id),
       tasks.map(task => [task.id, task.status, task.activeDispatchId, task.lastDispatchId, task.accepted])]) };
 }
@@ -54,8 +55,9 @@ export async function runGoalNextAction(event: Event, step: GoalNextStep, host: 
   current();
   if (step.action === "open") { await host.open(step.sessionId); return; }
   const key = `goal:${step.revision}`;
-  if (host.pending.has(key) || host.accepted.has(key)) throw Error("This request has already been sent to the Manager.");
-  host.pending.add(key);
+  const pendingKey = step.action === "continue" ? `continue:${step.managerId}` : key;
+  if (host.pending.has(pendingKey) || host.accepted.has(key)) throw Error("This request has already been sent to the Manager.");
+  host.pending.add(pendingKey);
   try {
     if (step.action === "continue") await host.continueManager(step.managerId);
     else {
@@ -65,5 +67,5 @@ export async function runGoalNextAction(event: Event, step: GoalNextStep, host: 
       await host.startGoal(step.goalId);
     }
     host.accepted.add(key);
-  } finally { host.pending.delete(key); }
+  } finally { host.pending.delete(pendingKey); }
 }

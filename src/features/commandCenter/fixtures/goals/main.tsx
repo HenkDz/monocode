@@ -10,7 +10,7 @@ import type { OrchestrationRun, OrchestrationTask } from "../../../orchestration
 import { selectGoalNextAction, runGoalNextAction, type GoalNextStep } from "../../model/goalNextAction";
 import { GoalNextAction } from "../../ui/GoalNextAction";
 import "../../../teamMap/commandMap.css";
-import "../../../../styles/index.css";
+import "./styles.css";
 
 const params = new URLSearchParams(location.search), mode = params.get("mode");
 document.documentElement.classList.toggle("theme-light", params.get("theme") === "light");

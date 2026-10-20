@@ -15,7 +15,7 @@ import { collectWorkspaceSnapshot, parseWorkspaceSnapshot, hydrateWorkspaceSnaps
 import type { Worktree } from "../features/source-control/model/worktrees";
 import { pathKey, isEqualOrInside } from "../shared/lib/paths";
 import { worktreeSessionGroups } from "../features/source-control/model/worktreeSessions";
-import { shellPageTabId, shellPageForTab, isViewTab } from "../features/workspace/model/appViewTabs";
+import { shellPageTabId, shellPageForTab, appViewTabId, isViewTab } from "../features/workspace/model/appViewTabs";
 
 const ast = ts.createSourceFile("App.tsx", readFileSync("src/app/App.tsx", "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const nodes: ts.Node[] = []; const visit = (node: ts.Node) => { nodes.push(node); ts.forEachChild(node, visit); }; visit(ast);
@@ -139,4 +139,25 @@ it("opens and closes shell pages under their own title-tab identities through ac
     displayedTabNavigation: { current: { activeId: "shell-page:decisions", tabs: order.map(id => ({ id })), select: neighbor } }, teamMap: { close }, nextDisplayedTabAfterClose: () => "chat" });
   action("shell-page:decisions"); expect(pages).toEqual(["commandMap"]); expect(order).toEqual(["chat", "shell-page:commandMap"]);
   expect(close).toHaveBeenCalledOnce(); expect(neighbor).toHaveBeenCalledWith("chat");
+});
+
+it("actual App quit/save getters serialize only workspace chats while all seven page identities stay outside the persisted union", () => {
+  const session = { ...newSession("codex", "C:/repo"), id: "retained-chat", providerSessionId: "bound-thread", blocks: [{ id: "user", role: "user" as const, text: "keep this conversation" }] };
+  const tab = newTab(session.id);
+  const pages = [shellPageTabId("commandMap"), shellPageTabId("decisions"), shellPageTabId("integrations"), shellPageTabId("usage"), appViewTabId("inbox"), appViewTabId("notes"), appViewTabId("automations")];
+  const registration = nodes.find(node => ts.isCallExpression(node) && node.expression.getText(ast) === "setQuitWorkspace") as ts.CallExpression;
+  const scope = { sessionsRef: { current: [session] }, tabsRef: { current: [tab] }, activeTabIdRef: { current: tab.id } };
+  const getter = (index: number) => new Function(...Object.keys(scope), ts.transpile(`return ${registration.arguments[index].getText(ast)}`, { target: ts.ScriptTarget.ES2022 }))(...Object.values(scope));
+  for (const page of pages) {
+    const rendererNavigation = { activeId: page, tabs: [{ id: tab.id }, ...pages.map(id => ({ id }))] };
+    expect(rendererNavigation.tabs).toHaveLength(8);
+    const snapshot = collectWorkspaceSnapshot(getter(1)(), getter(0)(), getter(2)(), "C:/repo", new Map());
+    const serialized = JSON.stringify(snapshot);
+    for (const id of pages) expect(serialized).not.toContain(id);
+    expect(snapshot.tabs.map(tab => tab.id)).toEqual([tab.id]);
+    expect(snapshot.activeTabId).toBe(tab.id);
+    const restored = hydrateWorkspaceSnapshot(parseWorkspaceSnapshot(JSON.parse(serialized))!, new Map([[session.id, session]]))!;
+    expect(restored.tabs).toHaveLength(1); expect(restored.sessions.map(session => session.id)).toEqual(["retained-chat"]);
+    expect(restored.sessions[0].providerSessionId).toBe("bound-thread");
+  }
 });

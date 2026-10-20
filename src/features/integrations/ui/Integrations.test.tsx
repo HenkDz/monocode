@@ -26,8 +26,15 @@ it("shows only supplied installed skills and proven GitHub CLI access with plain
     { id: "gh", name: "GitHub", provider: "gh CLI", scope: "project", monos: [], available: true },
   ]} requests={[access]} onRequest={vi.fn()} />));
   expect(container.textContent).toContain("Installed in Synthetic project");
-  expect(container.textContent).toContain("Local CLI access (account not pinned)");
+  expect(container.textContent).toContain("Uses your GitHub login on this PC");
   for (const text of ["Available to Atlas", "delivery unverified", "Hidden MCP", "Access request", "Connect", "Call count", "Rules"]) expect(container.textContent).not.toContain(text);
+  expect(mocks.invoke).not.toHaveBeenCalled();
+});
+
+it("explains the empty project list without probing or offering an install", async () => {
+  await act(async () => root.render(<Integrations connected={[]} requests={[]} onRequest={vi.fn()} />));
+  expect(container.textContent).toContain("When a Manager needs a skill, it'll ask you here. Installed skills show up in this list.");
+  expect(container.querySelector("button")).toBeNull();
   expect(mocks.invoke).not.toHaveBeenCalled();
 });
 

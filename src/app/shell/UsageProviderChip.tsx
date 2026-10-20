@@ -297,7 +297,7 @@ export function UsageProviderChip({
                         ? 100 - clampUsedPercent(entry.window.usedPercent)
                         : entry.window.usedPercent,
                     )}{" "}
-                    {formatRateLimitWindowChipLabel(entry.window, now)}
+                    {showRemaining ? "left" : "used"} · resets {formatRateLimitWindowChipLabel(entry.window, now)}
                   </span>
                 </span>
               ))}

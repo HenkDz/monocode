@@ -1,9 +1,12 @@
 import {
   CheckCircle,
+  CircleAlert,
+  CircleDashed,
   ChevronLeft,
   ChevronRight,
   Code,
   DashboardSquare,
+  FileScript,
   Inbox,
   PanelLeft,
   PanelRightToggle,
@@ -11,6 +14,7 @@ import {
   Plus,
   Search,
   Settings,
+  Share,
   StickyNote,
   Terminal,
   X,
@@ -77,9 +81,19 @@ const APP_VIEW_ICONS = {
   automations: Zap,
 };
 
+const PAGE_LABELS = {
+  commandMap: "Command map",
+  decisions: "Decisions",
+  integrations: "Integrations",
+  usage: "Usage",
+};
+const PAGE_ICONS = { commandMap: Share, decisions: CircleAlert, integrations: FileScript, usage: CircleDashed };
+
 export type Tab = {
   id: string;
   appView?: AppView;
+  /** Presentation of the open page; the underlying workspace identity is retained. */
+  page?: keyof typeof PAGE_LABELS;
   /** A Mono open as a tab; its name is the title. */
   mono?: { mascot: string; color: string; status: MonoState["status"] };
   /** Project folder name, e.g. `agent-terminal`. */
@@ -191,8 +205,8 @@ export function tabCopy(tab: Tab): {
   meta: string;
   tooltip: string;
 } {
-  if (tab.appView) {
-    const headline = APP_VIEW_LABELS[tab.appView];
+  if (tab.page || tab.appView) {
+    const headline = tab.page ? PAGE_LABELS[tab.page] : APP_VIEW_LABELS[tab.appView!];
     return { headline, meta: "", tooltip: headline };
   }
   if (tab.mono) return { headline: tab.title, meta: "", tooltip: tab.title };
@@ -363,7 +377,7 @@ function TitleTabItem({
 }) {
   const { headline, meta, tooltip } = tabCopy(tab);
   const fileIcon = tab.files[0];
-  const AppViewIcon = tab.appView ? APP_VIEW_ICONS[tab.appView] : null;
+  const AppViewIcon = tab.page ? PAGE_ICONS[tab.page] : tab.appView ? APP_VIEW_ICONS[tab.appView] : null;
   const accessibleTooltip =
     (tab.doneHarnesses?.length ?? 0) > 0
       ? `${tooltip} · Response complete`
@@ -800,7 +814,7 @@ function TitleBarComponent({
   const paneDropArmed = useRef(false);
   const appTabIds = useRef(new Set<string>());
   appTabIds.current = new Set(
-    tabs.filter((tab) => tab.appView || tab.mono).map((tab) => tab.id),
+    tabs.filter((tab) => tab.page || tab.appView || tab.mono).map((tab) => tab.id),
   );
   const externalTabDrop = useMemo<
     ReorderExternalDrop<string> | undefined
@@ -911,8 +925,8 @@ function TitleBarComponent({
   );
   const systemTitle = useMemo(() => {
     const activeName = activeTab
-      ? activeTab.appView
-        ? APP_VIEW_LABELS[activeTab.appView]
+      ? activeTab.page || activeTab.appView
+        ? tabCopy(activeTab).headline
         : activeTab.mono
           ? activeTab.title
           : activeTab.files[0]
@@ -1070,7 +1084,7 @@ function TitleBarComponent({
     showRightPanelToggle ||
     (mono && (onToggleMonoOverview || onOpenMonoSettings)) ||
     (!IS_MAC && !hideWindowControls) ? (
-      <div className="flex h-full shrink-0 items-stretch">
+      <div className="ml-auto flex h-full shrink-0 items-stretch">
         {mono && onToggleMonoPanel ? (
           <div className="flex items-center px-3">
             <IconButton

@@ -14799,6 +14799,39 @@ function Workspace({
     ],
   );
 
+  const onOpenProjectSettings = useCallback(
+    async (project: string) => {
+      const available = () => projectRailItems(loadRecents(), projectCwdRef.current)
+        .some(item => sameProjectPath(item.path, project));
+      const mono = dedicatedMono(project);
+      if (!mono || !available()) {
+        void message("Project settings are unavailable until a Manager is configured for this project.", {
+          title: "MonoCode", kind: "warning",
+        });
+        return;
+      }
+      try {
+        const opening = onOpenMono(mono.id);
+        const request = monoViewRequest.current;
+        await opening;
+        if (request !== monoViewRequest.current ||
+            monoViewIdRef.current !== mono.sessionId ||
+            dedicatedMono(project)?.id !== mono.id || !available()) return;
+        setMonoPanelTab("details");
+        setMonoDetailsOpen(true);
+        setMonoActivity(null);
+        setMonoSessions(null);
+        setMonoArtifact(null);
+        setMonoChanges(null);
+      } catch (error) {
+        void message(`Could not open project settings.\n\n${String(error)}`, {
+          title: "MonoCode", kind: "error",
+        });
+      }
+    },
+    [onOpenMono],
+  );
+
   useEffect(() => {
     const taskMetrics = new Map<string, Record<string, ReturnType<typeof selectTaskMetrics>>>();
     for (const run of orchestrationRuns) {
@@ -17499,7 +17532,7 @@ function Workspace({
               )}
               onNewWorktree={setCreatingWorktreeProject}
       onOpenProject={pickProject}
-      onProjectSettings={path => { void onOpenProjectManager(path); }}
+      onProjectSettings={onOpenProjectSettings}
       onRemoveProject={onRemoveProject}
       monos={sidebarMonos}
       workspaceWorktrees={insetLayout && !isRemoteProjectPath(sidebarCwd) ? <WorktreeChats project={sidebarCwd} sessions={sessions} history={history} openSessions={sidebarOpenSessions}

@@ -400,10 +400,10 @@ describe("workspace navigation keybindings", () => {
         ),
       ),
     ).toEqual([
-      { command: "App: Toggle Sidebar", keys: `${MOD}B`, when: "Always" },
+      { command: "App: Toggle Sidebar", keys: `${MOD}${SHIFT}B`, when: "Always" },
       {
         command: "App: Toggle Session Sidebar",
-        keys: `${MOD}${SHIFT}B`,
+        keys: `${MOD}B`,
         when: "Always",
       },
     ]);

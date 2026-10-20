@@ -4,7 +4,10 @@ import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 // @ts-expect-error production App expressions supplied by fixture plugin
 import { bindPanelApp } from "virtual:ccux1-panel";
 import { TitleBar } from "../../src/app/shell/TitleBar";
-import { WorkspaceContextTabs, WorkspaceGoals, WorkspaceWorktree, WorkspaceChanges, WorkspaceWorktrees } from "../../src/app/shell/WorkspaceContext";
+import { WorkspaceContextTabs, WorkspaceGoals, WorkspaceWorktree, WorkspaceChanges } from "../../src/app/shell/WorkspaceContext";
+import { SearchableProjectPicker } from "../../src/features/projects/ui/SearchableProjectPicker";
+import { ProjectManagerRow } from "../../src/features/orchestration/ui/ProjectManagerRow";
+import { WorktreeChats } from "../../src/features/source-control/ui/WorktreeChats";
 import { WorkspaceTeam, workspaceTeam } from "../../src/app/shell/WorkspaceTeam";
 import { MonoDetails } from "../../src/features/monos/ui/MonoDetails";
 import { MonoTeamActivity } from "../../src/features/monos/ui/MonoTeamActivity";
@@ -139,14 +142,14 @@ function Fixture() {
   app.monoDetailsPanel = details;
   const panel = renderPanel();
   app.monoDetailsPanel = saved;
-  return <div className="flex h-screen min-w-0 flex-col bg-background-base text-content">
+  return <div className="flex h-screen min-w-0 flex-col overflow-hidden bg-background-base text-content">
     {app.workspaceTitleBar()}
     <div className="relative flex min-h-0 flex-1">
-      <aside className="w-64 shrink-0 border-r border-stroke p-2 max-[700px]:w-44">
+      <aside className="min-h-0 w-64 shrink-0 overflow-y-auto border-r border-stroke p-2 max-[700px]:w-44">
         <WorkspaceTeam project={project} roster={listMonos()} states={new Map()} activeId={app.monoViewMono?.id} onOpen={app.onOpenRailMono} onCreate={noop} onDelete={noop} />
-        <button className="m-2 rounded border border-stroke px-3 py-1 text-xs" onClick={() => app.onOpenProjectSettings(project)}>Project settings</button>
-        <button className="m-2 rounded border border-stroke px-3 py-1 text-xs" onClick={() => app.onOpenProjectManager(project)}>Manager row</button>
-        <WorkspaceWorktrees project={project} sessions={sessions} onSelect={app.selectRow} />
+        <SearchableProjectPicker cwd={project} recents={[{ path: project, openedAt: 1 }]} onSelectProject={noop} onProjectSettings={app.onOpenProjectSettings} />
+        <ProjectManagerRow project={project} sessions={sessions} onOpen={app.onOpenProjectManager} onOpenMember={app.onOpenMember} />
+        <WorktreeChats project={project} selectedPath={app.projectWorktree?.path ?? project} sessions={sessions} history={[]} openSessions={[]} unseen={new Set()} onSelect={app.selectRow} onChat={noop} onNew={noop} onCreate={noop} />
         {(['Command map', 'Decisions', 'Integrations', 'Usage', 'Inbox', 'Notes', 'Automations', 'Search', 'Settings', 'PR page'] as const).map(page => <button key={page} className="block px-3 py-1 text-xs" onClick={() => {
           app.pageName = page;
           if (page === 'Command map') app.onOpenTeamMap();

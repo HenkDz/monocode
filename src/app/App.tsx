@@ -17384,7 +17384,7 @@ function Workspace({
         insetLayout && !settingsOpen
           ? {
               host: rightPanelHost,
-              open: (rightPanelOpen || rightPanelClosing) && workspaceContextTab === "changes",
+              open: (rightPanelOpen || rightPanelClosing) && workspaceContextTab === "changes" && rightPanelTab !== "changes",
               tab: rightPanelTab,
               onTabChange: showRightPanel,
             }

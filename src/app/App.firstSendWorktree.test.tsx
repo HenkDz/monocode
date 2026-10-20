@@ -84,7 +84,7 @@ it.each(['picker', 'sidebar', 'retry', 'reset', 'unmount'] as const)('locks the 
     return createElement(Composer, {
       harness: 'claude', model: 'claude-sonnet', runtimeMode: 'supervised', cwd: original.cwd, executionCwd: original.worktreeCwd,
       branch: 'feature-a', draftWorkspace: true, initialDraft: 'first message', hideProjectPicker: true,
-      draftResetToken: resetToken,
+      draftResetToken: resetToken, focused: false,
       onFocus: noop, onCwdChange: noop, onModelChange: noop, onRuntimeModeChange: noop,
       onSubmit: submit, onSubmitStart: () => start(original.id),
       onWorktreeChange: async (tree: Worktree) => { calls.push(tree.path); await composerChange(original.id, tree); },

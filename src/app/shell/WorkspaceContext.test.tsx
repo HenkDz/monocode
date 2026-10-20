@@ -137,7 +137,7 @@ const renderTree = async (path = "C:/repo/feature", remove = vi.fn()) => {
 it("shows the real project autonomy without a contradictory Not configured placeholder", async () => {
   mocks.roster = [{ id: "manager", role: "manager", projects: ["C:/repo"], mascot: "cat", color: "blue" } as Mono];
   const actions = { autonomy: vi.fn(), outcome: vi.fn(), allow: vi.fn(), deny: vi.fn(), resolve: vi.fn(), activate: vi.fn() };
-  await act(async () => root.render(createElement(WorkspaceGoals, { project: "C:/repo", decisionActions: actions as never })));
+  await act(async () => root.render(createElement(WorkspaceGoals, { project: "C:/repo", sessions: [], onOpenMono: vi.fn(), decisionActions: actions as never })));
   expect(host.querySelector('[aria-label="Project decision autonomy"]')).not.toBeNull();
   expect(host.querySelector('button[aria-pressed="true"]')?.textContent).toBe("Medium & up");
   expect(host.textContent).not.toContain("Not configured");
@@ -250,7 +250,8 @@ it("keeps goals and tasks scoped to their project and does not invent autonomy o
 it("uses a one-line task summary and keeps the original prompt, IDs and copy behind Show work", async () => {
   const prompt = "RAW TASK PROMPT\nFull scope and constraints";
   mocks.goals = [{ id: "goal", title: "Ship routing", projectId: "C:/repo", state: "running" }] as MonoManagerGoal[];
-  mocks.runs = [{ cwd: "C:/repo", status: "active", tasks: [{ id: "raw-task-id", monoGoalId: "goal", title: prompt, prompt, status: "queued", dependsOn: [], result: "RAW REPORT" }] }] as OrchestrationRun[];
+  mocks.runs = [{ version: 2, leadId: "engine", cwd: "C:/repo", status: "active", allowedHarnesses: ["claude"], maxWorkers: 1, cli: "mono", continuations: 0, requests: {},
+    tasks: [{ id: "raw-task-id", monoGoalId: "goal", sessionId: "worker-chat", harness: "claude", model: "claude-sonnet", title: prompt, prompt, status: "queued", dependsOn: [], files: [], scopes: [], accepted: false, delivered: false, result: "RAW REPORT" }] }];
   const copy = vi.fn(async () => {}), next = vi.fn();
   vi.stubGlobal("navigator", { clipboard: { writeText: copy } });
   await act(async () => root.render(createElement(WorkspaceGoals, { project: "C:/repo", sessions: [], onOpenMono: vi.fn(),

@@ -76,7 +76,8 @@ it("actual App opens the worker approval ahead of a ledger ask while retaining t
   const worker = { ...newSession("codex", "/repo"), id: "worker", blocks: [{ id: "approval", role: "tool" as const, text: "", approval: { requestId: 7 } }] };
   f.sessionsRef.current.push(worker);
   f.roster.push({ ...f.manager, id: "worker-mono", sessionId: worker.id, role: "member", reportsTo: f.manager.id });
-  f.run.tasks.push({ id: "task", monoGoalId: f.goal.id, status: "queued", sessionId: worker.id, memberId: "worker-mono", dependsOn: [], accepted: false } as OrchestrationRun["tasks"][number]);
+  f.run.tasks.push({ id: "task", monoGoalId: f.goal.id, status: "queued", sessionId: worker.id, memberId: "worker-mono", dependsOn: [], accepted: false,
+    title: "Worker approval", harness: worker.harness, model: worker.model, prompt: "Wait for approval", files: [], scopes: [], result: "", delivered: false });
   await f.ledger.recordDecision(f.manager.id, { version: 1, type: "decision", id: "waiting", projectId: f.project.id, goalId: f.goal.id,
     requestingMonoId: "worker-mono", requesterSessionId: worker.id, escalationChain: [{ id: f.manager.id, level: "manager" }, { id: "user", level: "user" }],
     status: "waiting", answererId: "user", createdAt: 1, question: "Which unrelated next step?", impact: "high", context: "Still needs an answer", operation: "work",

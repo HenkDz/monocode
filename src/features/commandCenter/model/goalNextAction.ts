@@ -27,7 +27,7 @@ export function selectGoalNextAction(input: GoalViewInput, goalId: string, decis
   if (sources.some(session => session.busy)) return;
   const approval = sources.find(session => session.pendingQuestion || session.blocks.some(block => block.approval && !block.approval.decided));
   const approvalBlock = approval?.blocks.find(block => block.approval && !block.approval.decided);
-  const decision = decisions.find(decision => decision.status === "waiting" && decision.answererId === "user" && !decision.readOnly && decision.noLongerNeededAt == null &&
+  const decision = approval ? undefined : decisions.find(decision => decision.status === "waiting" && decision.answererId === "user" && !decision.readOnly && decision.noLongerNeededAt == null &&
     pathKey(decision.projectId) === pathKey(goal.projectId) && (decision.goalId === goal.id || tasks.some(task => task.id === decision.taskId)));
   const target = approval?.id ?? (decision ? session.id : undefined);
   if (!target && !pending.length && tasks.length) return;

@@ -42,7 +42,7 @@ export function DecisionCard({ item, roster, actions, sentInitially = false, sen
     {notice && <p className="decision-note" role={sent ? "status" : "alert"}>{notice}</p>}
   </article>;
 }
-export function Decisions({ view, roster, actions, presentation = "page", error, attention, attentionCount = 0 }: { view: DecisionView; roster: readonly Mono[]; actions: DecisionUiActions; presentation?: "page" | "rail"; error?: string; attention?: ReactNode; attentionCount?: number }) {
+export function Decisions({ view, roster, actions, presentation = "page", error, attention, attentionCount = 0, goalActions, goalActionCount = 0 }: { view: DecisionView; roster: readonly Mono[]; actions: DecisionUiActions; presentation?: "page" | "rail"; error?: string; attention?: ReactNode; attentionCount?: number; goalActions?: ReactNode; goalActionCount?: number }) {
   const [tab, setTab] = useState<"pending" | "log">("pending");
   const key = (item: OwnedDecision) => JSON.stringify([item.managerId, item.decision.id]);
   type Row = OwnedDecision & { sentToBoss?: boolean };
@@ -66,12 +66,13 @@ export function Decisions({ view, roster, actions, presentation = "page", error,
     return () => clearTimeout(timer);
   }, [leaving]);
   return <section className="decisions" data-presentation={presentation} data-decision-ui aria-label="Decisions">
-    <header className="decisions-heading"><div><span className="decisions-eyebrow">Your calls</span><h1>Decisions</h1></div><span>{view.pending.length + attentionCount ? `${view.pending.length + attentionCount} need you` : "All clear"}</span></header>
-    <div className="decisions-tabs" role="group" aria-label="Decision view"><button type="button" aria-pressed={tab === "pending"} onClick={() => setTab("pending")}>Needs you <span>{view.pending.length + attentionCount}</span></button><button type="button" aria-pressed={tab === "log"} onClick={() => setTab("log")}>Decision log</button></div>
+    <header className="decisions-heading"><div><span className="decisions-eyebrow">Your calls</span><h1>Decisions</h1></div><span>{view.pending.length + attentionCount + goalActionCount ? `${view.pending.length + attentionCount + goalActionCount} need you` : "All clear"}</span></header>
+    <div className="decisions-tabs" role="group" aria-label="Decision view"><button type="button" aria-pressed={tab === "pending"} onClick={() => setTab("pending")}>Needs you {!!(view.pending.length + attentionCount + goalActionCount) && <span>{view.pending.length + attentionCount + goalActionCount}</span>}</button><button type="button" aria-pressed={tab === "log"} onClick={() => setTab("log")}>Decision log</button></div>
     <div className="decisions-scroll">
       {error && <p role="alert" className="decision-note">{error}</p>}
       {tab === "pending" ? <>{shown.rows.map(item => <DecisionCard key={key(item)} item={item} roster={roster} actions={actions} sentInitially={item.sentToBoss !== undefined} sentToBoss={item.sentToBoss} />)}
-        {!view.pending.length && !attentionCount && <div className="decision-empty"><h2>Nothing needs your decision</h2><p>The team keeps working toward the goals.</p></div>}
+        {goalActions}
+        {!view.pending.length && !attentionCount && !goalActionCount && <div className="decision-empty"><h2>Nothing needs your decision</h2><p>The team keeps working toward the goals.</p></div>}
         {attention}
         {!!view.teamPending && <p className="decision-note">{view.teamPending} with Managers &amp; the Boss</p>}</>
         : <ol className="decision-log">{view.log.map(({ decision }) => <li key={decision.id} className="decision-log-item"><span className="decision-log-dot" aria-hidden="true" /><div><p>{decision.question}</p><strong>{decision.noLongerNeededAt != null ? "No longer needed" : decision.answer ?? "Earlier ask"}</strong><small>{decision.answeredBy ? decisionActorName(roster, decision.answeredBy) : "No answer recorded"}</small></div><time dateTime={new Date(decision.answeredAt ?? decision.createdAt).toISOString()}>{new Date(decision.answeredAt ?? decision.createdAt).toLocaleString()}</time></li>)}</ol>}
@@ -89,5 +90,5 @@ export function ProjectAutonomyControl({ managerId, projectId, value, actions }:
       pending.current = true; setBusy(true); setError("");
       const gesture = event.nativeEvent;
       void Promise.resolve().then(() => actions.autonomy(gesture, managerId, projectId, policy)).catch(() => setError("Couldn't save this setting — try again")).finally(() => { pending.current = false; setBusy(false); });
-    }}>{label}</button>)}</div><p>Protected operations still ask you at execution time.</p>{error && <p role="alert">{error}</p>}</div>;
+    }}>{label}</button>)}</div><p>You'll still approve merges, installs and deletes.</p>{error && <p role="alert">{error}</p>}</div>;
 }

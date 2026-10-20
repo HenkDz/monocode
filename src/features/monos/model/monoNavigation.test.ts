@@ -234,9 +234,9 @@ it("shows held updates across the manager's owned runs without attributing them 
   ] as unknown as OrchestrationRun[];
   const manager = { ...newSession("codex", "/app"), id: "manager" };
   const state = monoLiveState(roster, runs, [manager], "m");
-  expect(state.liveState).toEqual({ status: "waiting-on-member", reason: "held-updates", detail: "Waiting for 2 workers · 3 updates held" });
+  expect(state.liveState).toEqual({ status: "waiting-on-member", reason: "held-updates", detail: "Waiting for 2 workers · Has an update for you" });
   expect(state.status).toBe("idle");
-  expect(monoStatusLabel(state)).toBe("Waiting for 2 workers · 3 updates held");
+  expect(monoStatusLabel(state)).toBe("Waiting for 2 workers · Has an update for you");
   expect(monoLiveState(roster, runs, [manager], "o").liveState).toEqual({ status: "idle" });
   const blocked = monoLiveState(roster, runs, [{ ...manager, codexStorageError: "Repair required" }], "m");
   expect(blocked.liveState).toEqual({ status: "blocked", reason: "storage", detail: "Repair required" });

@@ -152,7 +152,7 @@ function deriveAgentLiveState(session?: AgentLiveSession, context: AgentLiveCont
     && waitingDispatches.has(candidate.activeDispatchId ?? candidate.lastDispatchId ?? "")).length ?? 0;
   if (held || waiting) return {
     status: "waiting-on-member", reason: "held-updates",
-    detail: `${waiting ? `Waiting for ${waiting} worker${waiting === 1 ? "" : "s"} · ` : ""}${held} update${held === 1 ? "" : "s"} held`,
+    detail: [waiting ? `Waiting for ${waiting} worker${waiting === 1 ? "" : "s"}` : "", held ? "Has an update for you" : ""].filter(Boolean).join(" · "),
   };
   const active = context.tasks?.filter(candidate => ["queued", "running", "cancelling"].includes(candidate.status)) ?? [];
   const review = active.find(candidate => candidate.reviewOf);

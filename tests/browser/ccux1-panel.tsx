@@ -12,6 +12,7 @@ import { WorkspaceTeam, workspaceTeam } from "../../src/app/shell/WorkspaceTeam"
 import { MonoDetails } from "../../src/features/monos/ui/MonoDetails";
 import { MonoTeamActivity } from "../../src/features/monos/ui/MonoTeamActivity";
 import { PullRequestsList } from "../../src/features/pullRequests/ui/PullRequestsList";
+import { openPullRequests } from "../../src/features/pullRequests/model/pullRequestView";
 import { dedicatedMono, findMono, listMonos, monoForSession, monoLook, monoState, updateMono, saveMonoSessionId } from "../../src/features/monos/model/mono";
 import { monoLiveState } from "../../src/features/monos/model/monoNavigation";
 import { newSession, sessionWorkCwd } from "../../src/features/sessions/model/session";
@@ -95,6 +96,7 @@ function Fixture() {
       teamMap: { open: false, scope: undefined, close: () => { state.teamMap.open = false; state.teamMap.scope = undefined; update(); }, show: (scope: string) => { state.teamMap.open = true; state.teamMap.scope = scope; update(); } }, settingsOpenRef: { current: false }, settingsReturnViewRef: { current: {} },
       closeMonoView: () => { state.monoViewId = null; state.monoViewIdRef.current = null; update(); },
       searchViewOpen: false, inboxViewOpen: false, notesViewOpen: false, automationsViewOpen: false,
+      pullRequestsViewScope: null,
       searchViewOpenRef: { current: false }, inboxViewOpenRef: { current: false }, notesViewOpenRef: { current: false }, automationsViewOpenRef: { current: false },
       rememberAppView: (view: string) => { state.activeAppView = view; },
       ensureMonoSession: async (id: string) => {
@@ -112,7 +114,7 @@ function Fixture() {
       state.insetRightPanelShown = state.rightPanelOpen;
       refresh(n => n + 1);
     };
-    for (const key of ["settingsOpen", "searchViewOpen", "inboxViewOpen", "notesViewOpen", "automationsViewOpen", "rightPanelOpen", "rightPanelClosing", "workspaceContextTab", "rightPanelTab", "monoPanelTab", "monoDetailsOpen", "monoTeamRequest", "monoViewId", "monoActivity", "monoSessions", "monoArtifact", "monoChanges"]) {
+    for (const key of ["settingsOpen", "searchViewOpen", "inboxViewOpen", "pullRequestsViewScope", "notesViewOpen", "automationsViewOpen", "rightPanelOpen", "rightPanelClosing", "workspaceContextTab", "rightPanelTab", "monoPanelTab", "monoDetailsOpen", "monoTeamRequest", "monoViewId", "monoActivity", "monoSessions", "monoArtifact", "monoChanges"]) {
       const setter = `set${key[0].toUpperCase()}${key.slice(1)}${key === "rightPanelOpen" || key === "rightPanelTab" ? "State" : ""}`;
       state[setter] = (value: any) => {
         state[key] = typeof value === "function" ? value(state[key]) : value;
@@ -131,6 +133,7 @@ function Fixture() {
     return host;
   });
   useEffect(() => { window.addEventListener("keydown", app.keydown, true); return () => window.removeEventListener("keydown", app.keydown, true); }, [app]);
+  useEffect(() => { window.addEventListener("monocode:open-pull-requests", app.openPRRoute); return () => window.removeEventListener("monocode:open-pull-requests", app.openPRRoute); }, [app]);
   app.openPage = app.openPageValue();
   const blankTab = { id: "workspace", project: "Synthetic project", title: "", more: [], sessionCount: 1, harnesses: [], busyHarnesses: [], files: [] };
   app.titleTabs = app.openPage ? [{ ...blankTab, id: shellPageTabId(app.openPage), page: app.openPage }] : app.activeAppView ? [{ ...blankTab, id: appViewTabId(app.activeAppView), appView: app.activeAppView }] : [];
@@ -156,7 +159,8 @@ function Fixture() {
           else if (page === 'Decisions') app.onOpenTeamMap(DECISIONS_SCOPE);
           else if (page === 'Integrations') app.onOpenTeamMap(INTEGRATIONS_SCOPE);
           else if (page === 'Usage') app.onOpenTeamMap(USAGE_DASHBOARD_SCOPE);
-          else if (page === 'Inbox' || page === 'PR page') app.onOpenInbox();
+          else if (page === 'Inbox') app.onOpenInbox();
+          else if (page === 'PR page') openPullRequests();
           else if (page === 'Notes') app.onOpenNotes();
           else if (page === 'Automations') app.onOpenAutomations();
           else if (page === 'Search') app.onOpenSearch();

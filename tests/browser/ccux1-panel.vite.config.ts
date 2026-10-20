@@ -19,7 +19,9 @@ export default defineConfig(async environment => {
           if (names.includes(name)) code[name] = (node.initializer as ts.CallExpression).arguments[0].getText(ast);
           if (["workspaceTitleBar", "monoDetailsPanel"].includes(name)) code[name] = `() => (${node.initializer!.getText(ast)})`;
           if (name === "openPage") code.openPageValue = `() => (${node.initializer!.getText(ast)})`;
+          if (name === "open" && node.initializer?.getText(ast).includes("setPullRequestsViewScope(scope)")) code.openPRRoute = node.initializer.getText(ast);
         }
+        if (ts.isConditionalExpression(node) && node.whenTrue.getText(ast).startsWith("<PullRequestsView")) code.pullRequestsPageSelected = `() => (${node.condition.getText(ast)})`;
         if (ts.isJsxElement(node) && node.openingElement.tagName.getText(ast) === "div" && node.openingElement.attributes.properties.some(prop => ts.isJsxAttribute(prop) && prop.name.getText(ast) === "ref" && prop.initializer?.getText(ast) === "{setRightPanelRef}")) code.panel = `() => (${node.getText(ast)})`;
         if (ts.isIfStatement(node) && node.expression.getText(ast) === "shortcut" && node.thenStatement.getText(ast).includes('run("toggle_session_sidebar"')) code.keydown = `(e) => { const shortcut = resolveAppShortcut(e); ${node.getText(ast)} }`;
         if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(ast) === "WorktreeChats") {
@@ -29,7 +31,7 @@ export default defineConfig(async environment => {
         ts.forEachChild(node, visit);
       };
       visit(ast);
-      for (const key of [...names, "workspaceTitleBar", "monoDetailsPanel", "panel", "keydown", "selectRow"]) if (!code[key]) throw Error(`Missing production seam: ${key}`);
+      for (const key of [...names, "workspaceTitleBar", "monoDetailsPanel", "panel", "keydown", "selectRow", "openPRRoute", "pullRequestsPageSelected"]) if (!code[key]) throw Error(`Missing production seam: ${key}`);
       const output = ts.transpileModule(Object.entries(code).map(([key, value]) => `host.${key} = ${value};`).join("\n"), { compilerOptions: { jsx: ts.JsxEmit.React, target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText;
       return `export function bindPanelApp(host) { Function("host", ${JSON.stringify(`with(host){${output}}`)})(host); return host; }`;
     },

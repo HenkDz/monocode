@@ -83,6 +83,7 @@ test("every page keeps one top-right titlebar control set with the panel open an
     for (const route of ['Command map', 'Decisions', 'Integrations', 'Usage', 'Inbox', 'Notes', 'Automations', 'Search', 'Settings', 'PR page']) {
       await page.getByRole("button", { name: "Hide panel", exact: true }).click();
       await page.getByRole("button", { name: route, exact: true }).click();
+      if (route === 'PR page') expect(await page.evaluate(() => (window as any).panelFixture.app.pullRequestsPageSelected())).toBe(true);
       await corner(page);
       await page.getByRole("button", { name: "Panel", exact: true }).click();
       await corner(page);

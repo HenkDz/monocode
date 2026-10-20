@@ -42,7 +42,7 @@ import {
 } from "../../features/providers/model/rateLimits";
 import { GitBranch, Plus, X } from "../../shared/ui/icons";
 import { workspaceTeam } from "./WorkspaceTeam";
-import { pathKey } from "../../shared/lib/paths";
+import { displayPath, isEqualOrInside, pathKey } from "../../shared/lib/paths";
 import { worktreeTaskSessions } from "../../features/source-control/model/worktreeSessions";
 import { workbenchSessionTask } from "../../features/monos/model/monoNavigation";
 import { ProjectAutonomyControl, type DecisionUiActions } from "../../features/commandCenter/ui/Decisions";
@@ -496,6 +496,11 @@ function WorkspaceWorktreeRow({
       <span className="min-w-0 flex-1 truncate text-left font-mono">
         {tree.branch ?? `Detached ${tree.head.slice(0, 7)}`}
       </span>
+      {!isEqualOrInside(tree.path, project) && (
+        <span title={tree.path} className="shrink-0 text-[9px] text-content/45">
+          outside project
+        </span>
+      )}
       {pr && (
         <span className="max-w-[45%] truncate rounded bg-content/5 px-1.5 py-0.5 text-[9px]">
           #{pr.number} · {label}
@@ -536,7 +541,7 @@ export function WorkspaceWorktree({
     <section
       role="tabpanel"
       aria-label="Worktree"
-      className="min-h-0 flex-1 overflow-y-auto p-4"
+      className="min-h-0 min-w-0 flex-1 overflow-y-auto p-4"
     >
       {tree ? (
         <WorktreeDetails
@@ -632,6 +637,15 @@ function WorktreeDetails({
         <GitBranch className="size-4 shrink-0" />
         <span className="break-all">{tree.branch ?? "Detached HEAD"}</span>
       </h2>
+      {!isEqualOrInside(tree.path, project) && (
+        <p
+          title={tree.path}
+          className="mt-1 break-all text-[11px] text-content/55"
+        >
+          Lives in {tree.path}
+          {tree.isMain ? " (the repo's main checkout)" : ""}
+        </p>
+      )}
       <dl className="my-4 space-y-2 text-[11px] text-content/60">
         <div className="flex justify-between gap-3">
           <dt>Owner</dt>
@@ -659,9 +673,19 @@ function WorktreeDetails({
         <div className="flex justify-between gap-3">
           <dt>Local changes</dt>
           <dd>
-            {index
-              ? `${index.files.length} files · +${index.additions} / −${index.deletions}`
-              : "Unavailable"}
+            {index ? (
+              <>
+                {index.files.length} files ·{" "}
+                <span className="text-green-700 dark:text-green-400">
+                  +{index.additions}
+                </span>{" "}
+                <span className="text-red-600 dark:text-red-400">
+                  −{index.deletions}
+                </span>
+              </>
+            ) : (
+              "Unavailable"
+            )}
           </dd>
         </div>
       </dl>
@@ -703,32 +727,75 @@ function WorktreeDetails({
           </p>
         </div>
       ) : (
-        <p className="my-3 text-[12px] text-content/50">
-          No pull request is currently known for this worktree.
-        </p>
+        <div className="my-3 rounded-xl border border-stroke bg-content/3 p-3 text-[12px]">
+          <h3 className="font-medium">No pull request yet</h3>
+          <p className="mb-3 mt-1 text-[11px] text-content/55">
+            Create one when this branch is ready for review.
+          </p>
+          <button
+            type="button"
+            className="rounded-lg bg-content px-3 py-1.5 text-[11px] font-medium text-background-base hover:opacity-85 disabled:opacity-40"
+            disabled={unavailable || !tree.branch}
+            onClick={() => setCreating(true)}
+          >
+            Create PR
+          </button>
+        </div>
       )}
       {index && index.files.length > 0 && (
         <div className="mt-4">
           <h3 className="mb-2 text-[10px] uppercase tracking-wide text-content/45">
             Changed files · local checkout
           </h3>
-          {index.files.map((file) => (
-            <button
-              type="button"
-              key={file.path}
-              title={file.path}
-              onClick={onChanges}
-              className="flex w-full justify-between gap-2 py-1 text-left font-mono text-[10px] text-content/60"
-            >
-              <span className="truncate">{file.path}</span>
-              <span className="shrink-0">
-                +{file.additions} / −{file.deletions}
-              </span>
-            </button>
-          ))}
+          {index.files.map((file) => {
+            const relative = displayPath(file.path, tree.path);
+            const split = relative.lastIndexOf("/");
+            const added =
+              file.status === "added" || file.status === "untracked";
+            return (
+              <button
+                type="button"
+                key={file.path}
+                title={file.path}
+                onClick={onChanges}
+                className="flex w-full min-w-0 items-center gap-2 rounded-md py-1.5 text-left text-[11px] hover:bg-content/5"
+              >
+                <span
+                  data-file-status={file.status}
+                  title={file.status}
+                  aria-label={file.status}
+                  className={`w-3 shrink-0 text-center font-mono text-[9px] ${added ? "text-green-700 dark:text-green-400" : file.status === "deleted" ? "text-red-600 dark:text-red-400" : "text-amber-700 dark:text-amber-400"}`}
+                >
+                  {added ? "A" : file.status === "deleted" ? "D" : "M"}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-medium text-content/85">
+                    {relative.slice(split + 1)}
+                  </span>
+                  {split >= 0 && (
+                    <span className="block truncate text-[10px] text-content/40">
+                      {relative.slice(0, split)}
+                    </span>
+                  )}
+                </span>
+                <span className="shrink-0 font-mono text-[10px]">
+                  <span className="text-green-700 dark:text-green-400">
+                    +{file.additions}
+                  </span>{" "}
+                  <span className="text-red-600 dark:text-red-400">
+                    −{file.deletions}
+                  </span>
+                </span>
+              </button>
+            );
+          })}
         </div>
       )}
-      <div className="mt-4 flex flex-wrap gap-2">
+      <div
+        role="group"
+        aria-label="Worktree actions"
+        className="mt-4 flex flex-wrap gap-2 border-t border-stroke pt-3"
+      >
         <button
           type="button"
           className={button}
@@ -757,16 +824,6 @@ function WorktreeDetails({
         >
           Changes
         </button>
-        {!pr && (
-          <button
-            type="button"
-            className={button}
-            disabled={unavailable || !tree.branch}
-            onClick={() => setCreating(true)}
-          >
-            Create PR
-          </button>
-        )}
         <button
           type="button"
           className={button}

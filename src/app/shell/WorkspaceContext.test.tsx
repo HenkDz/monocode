@@ -271,6 +271,8 @@ it("uses only a fresh single associated account for the mini meter, never an agg
   expect(
     host.querySelector('[role="meter"]')?.getAttribute("aria-valuenow"),
   ).toBe("62");
+  expect(host.querySelector('[role="meter"]')?.getAttribute("title")).toBe("Codex · Studio: 62% left");
+  expect(host.querySelector('[role="meter"]')?.getAttribute("aria-label")).toBe("Codex Studio remaining");
   snapshot.groups[0].accounts[0].freshness = "stale";
   await act(async () =>
     root.render(

@@ -216,7 +216,10 @@ it.each(["changed binding", "another Manager"])("refuses first-open settings aft
     saveMonoSessionId(id, created.id);
     f.scope.sessions.push(created);
     if (reason === "changed binding") saveMonoSessionId(id, f.sessions[0].id);
-    else updateMono("manager-0", mono => ({ ...mono, projects: [f.projects[1]], lastUsedAt: Date.now() + 1 }));
+    else {
+      updateMono("manager-1", mono => ({ ...mono, projects: ["C:/synthetic/retired"] }));
+      updateMono("manager-0", mono => ({ ...mono, projects: [f.projects[1]] }));
+    }
     return created;
   });
   await act(async () => f.gear(f.projects[1]));

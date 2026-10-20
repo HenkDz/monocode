@@ -1334,6 +1334,16 @@ function Workspace({
     resolve: (choice: SessionDeleteChoice) => void;
   }>();
   const switchingWorktrees = useRef(new Map<string, string>());
+  const pendingComposerSubmits = useRef(new Set<string>());
+  const onComposerSubmitStart = useCallback((sessionId: string) => {
+    pendingComposerSubmits.current.add(sessionId);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      pendingComposerSubmits.current.delete(sessionId);
+    };
+  }, []);
   const removingWorktreePaths = useRef(new Set<string>());
   const deleteConfirmationPending = useRef(false);
   const [tabs, setTabs] = useState<WorkspaceTab[]>(
@@ -1916,6 +1926,7 @@ function Workspace({
     sessions,
     pins: workspacePins.current,
     tabWorkspace,
+    canReuseSession: id => !pendingComposerSubmits.current.has(id),
     moveSession: (id, tree, isCurrent) =>
       onWorktreeChange(id, tree, false, isCurrent),
     activateTab: (id) => {
@@ -6736,12 +6747,14 @@ function Workspace({
 
   const onCwdChange = useCallback(
     async (sessionId: string, cwd: string) => {
+      if (pendingComposerSubmits.current.has(sessionId)) return;
       if (isProjectManager(sessionId)) return;
       const registered = projectRailItems(loadRecents(), "").map((item) => item.path);
       const addition = registered.some((path) => sameProjectPath(path, cwd))
         ? { path: normalizeProjectPath(cwd), project: normalizeProjectPath(cwd), branch: null }
         : await chooseProjectAddition(cwd, registered);
       if (!addition) return;
+      if (pendingComposerSubmits.current.has(sessionId)) return;
       const normalized = addition.project;
       const current = sessionsRef.current.find((s) => s.id === sessionId);
       const previous = current?.cwd;
@@ -6781,7 +6794,7 @@ function Workspace({
       setRecents(rememberProject(normalized));
       setSessions((prev) =>
         prev.map((s) => {
-          if (s.id !== sessionId) return s;
+          if (s.id !== sessionId || pendingComposerSubmits.current.has(sessionId)) return s;
           // A blank session moving into a project adopts its provider defaults;
           // a conversation keeps its own provider.
           const base = isBlankSession(s)
@@ -6823,6 +6836,7 @@ function Workspace({
 
   const onBranchChange = useCallback(
     (sessionId: string) => {
+      if (pendingComposerSubmits.current.has(sessionId)) return;
       notifyGitChanged();
       const current = sessionsRef.current.find((s) => s.id === sessionId);
       if (!current) return;
@@ -6850,7 +6864,7 @@ function Workspace({
           if (
             session.id !== sessionId ||
             !isBlankSession(session) || session.providerSessionId || session.queuedMessages?.length ||
-            session.worktreePreparing || switchingWorktrees.current.has(sessionId)
+            session.worktreePreparing || switchingWorktrees.current.has(sessionId) || pendingComposerSubmits.current.has(sessionId)
           ) {
             return session;
           }
@@ -6881,7 +6895,7 @@ function Workspace({
         prev.map((session) =>
           session.id === sessionId &&
           isBlankSession(session) && !session.providerSessionId && !session.queuedMessages?.length &&
-          !session.worktreePreparing && !switchingWorktrees.current.has(sessionId) &&
+          !session.worktreePreparing && !switchingWorktrees.current.has(sessionId) && !pendingComposerSubmits.current.has(sessionId) &&
           session.workspaceMode === "worktree"
             ? { ...session, worktreeBase: base }
             : session,
@@ -6909,6 +6923,7 @@ function Workspace({
       if (
         !current ||
         current.busy ||
+        pendingComposerSubmits.current.has(sessionId) ||
         removingSessionIds.current.has(sessionId) ||
         switchingWorktrees.current.has(sessionId)
       ) {
@@ -6959,6 +6974,7 @@ function Workspace({
         if (
           !source ||
           source.busy ||
+          pendingComposerSubmits.current.has(sessionId) ||
           (fromComposer && !source.worktreeRemoved && (!isBlankSession(source) || !!source.providerSessionId || !!source.queuedMessages?.length)) ||
           source.cwd !== current.cwd ||
           sessionWorkCwd(source) !== sessionWorkCwd(current)
@@ -6993,6 +7009,7 @@ function Workspace({
         const latest = sessionsRef.current.find((s) => s.id === sessionId);
         if (
           !latest ||
+          pendingComposerSubmits.current.has(sessionId) ||
           (!latest.worktreeRemoved && !isBlankSession(latest)) ||
           latest.cwd !== current.cwd ||
           sessionWorkCwd(latest) !== sessionWorkCwd(current)
@@ -7008,8 +7025,9 @@ function Workspace({
         if (latest.worktreeRemoved)
           await keepSessionChanges(sessionId, target.path);
         pendingPersist.current.delete(sessionId);
-        if (shouldPersistSession(next)) await upsertSession(next, current => sessionInWorktree(current, target));
-        if (!isCurrent()) return;
+        if (pendingComposerSubmits.current.has(sessionId)) return;
+        if (shouldPersistSession(next)) await upsertSession(next, current => pendingComposerSubmits.current.has(sessionId) ? current : sessionInWorktree(current, target));
+        if (!isCurrent() || pendingComposerSubmits.current.has(sessionId)) return;
         invalidateLoadedSession(sessionId);
         sessionsRef.current = sessionsRef.current.map((s) =>
           s.id === sessionId ? sessionInWorktree(s, target) : s,
@@ -7055,6 +7073,7 @@ function Workspace({
         sessions: sessionsRef.current,
         activeTabId: activeTabIdRef.current,
         paths,
+        canReuseSession: id => !pendingComposerSubmits.current.has(id),
       });
       const last = steps[steps.length - 1];
       if (!last) return;
@@ -16608,6 +16627,7 @@ function Workspace({
     onCwdChange,
     onBranchChange,
     onWorktreeChange: onComposerWorktreeChange,
+    onSubmitStart: onComposerSubmitStart,
     onRemoteSnapshot,
     onWorkspaceModeChange,
     onWorktreeBaseChange,

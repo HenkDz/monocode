@@ -255,6 +255,7 @@ export type SessionPaneProps = {
     attachments: Attachment[],
     options?: ComposerTurnOptions,
   ) => boolean | void;
+  onSubmitStart?: (sessionId: string) => (() => void);
   onSubmitGoal?: (
     sessionId: string,
     text: string,
@@ -427,6 +428,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
   onSaveDraft,
   onRemoveDraft,
   onSubmit,
+  onSubmitStart,
   onSubmitGoal,
   monoGoalRouting,
   onStop,
@@ -1141,6 +1143,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
         onSaveDraft={(text, attachments) =>
           onSaveDraft(session.id, text, attachments)
         }
+        onSubmitStart={onSubmitStart ? () => onSubmitStart(session.id) : undefined}
         onSubmit={(text, attachments, options) => {
           if (!dockComposer) composerDockMotion.captureLaunch();
           return onSubmit(

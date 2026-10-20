@@ -55,7 +55,8 @@ it("actual App new-chat callback starts in the visibly selected worktree", () =>
 it("actual App mode callback refuses first-message/provider/queue locks and preserves homes", () => {
   const draft = { ...newSession("codex", "C:/repo"), id: "draft", worktreeCwd: "C:/repo/child", codexStorageHome: "synthetic-home" };
   const store = new SessionStateStore([draft]);
-  const action = callback("onWorkspaceModeChange", { updateSessionState, sessionsRef: store.ref, setSessions: store.setState, isBlankSession, switchingWorktrees: { current: new Map() } });
+  const pendingComposerSubmits = { current: new Set<string>() };
+  const action = callback("onWorkspaceModeChange", { updateSessionState, sessionsRef: store.ref, setSessions: store.setState, isBlankSession, switchingWorktrees: { current: new Map() }, pendingComposerSubmits });
   action("draft", "worktree", "main");
   expect(store.snapshot()[0]).toMatchObject({ worktreeCwd: undefined, workspaceMode: "worktree", worktreeBase: "main", codexStorageHome: "synthetic-home" });
   for (const locked of [ { busy: true }, { providerSessionId: "thread" }, { blocks: [{ id: "first", role: "user", text: "started" }] }, { queuedMessages: [{ id: "queue", text: "pending" }] }, { worktreePreparing: "Preparing" } ]) {
@@ -63,6 +64,12 @@ it("actual App mode callback refuses first-message/provider/queue locks and pres
     const before = store.snapshot()[0]; action("draft", "worktree", "main");
     expect(store.snapshot()[0]).toBe(before);
   }
+  store.setState([draft]); pendingComposerSubmits.current.add("draft");
+  action("draft", "worktree", "main"); expect(store.snapshot()[0]).toBe(draft);
+  const preparing = { ...draft, workspaceMode: "worktree" as const, worktreeBase: "main" };
+  store.setState([preparing]);
+  const base = callback("onWorktreeBaseChange", { updateSessionState, sessionsRef: store.ref, setSessions: store.setState, isBlankSession, switchingWorktrees: { current: new Map() }, pendingComposerSubmits });
+  base("draft", "other"); expect(store.snapshot()[0]).toBe(preparing);
 });
 
 it("actual App union predicate roundtrips all checkout tabs and hidden state without extra schema", async () => {
@@ -98,7 +105,7 @@ it("actual App worktree callback refuses a started chat and rechecks after async
   const store = new SessionStateStore([draft]);
   const list = vi.fn<() => Promise<{ worktrees: Worktree[] }>>();
   const forget = vi.fn();
-  const action = callback("onWorktreeChange", { sessionsRef: store.ref, isProjectManager: () => false, isBlankSession,
+  const action = callback("onWorktreeChange", { sessionsRef: store.ref, pendingComposerSubmits: { current: new Set() }, isProjectManager: () => false, isBlankSession,
     removingSessionIds: { current: new Set() }, switchingWorktrees: { current: new Map() }, removingWorktreePaths: { current: new Set() }, pendingPersist: { current: new Map() },
     orchestrator: { forSession: () => undefined }, pathKey, sessionWorkCwd, isEqualOrInside, listWorktrees: list, forgetHarnessSession: forget });
   store.setState([{ ...draft, providerSessionId: "thread", blocks: [{ id: "sent", role: "user", text: "started" }] }]);

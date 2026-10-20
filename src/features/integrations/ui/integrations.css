@@ -1,0 +1,34 @@
+.integrations-page { display: flex; flex-direction: column; min-height: 0; height: 100%; color: var(--color-content); background: var(--color-background-base); }
+.integrations-page > header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 16px; padding: 20px 24px; border-bottom: 1px solid color-mix(in srgb, var(--color-content) 10%, transparent); }
+.integrations-page h2 { margin: 0; font-size: 16px; font-weight: 600; }
+.integrations-page header p { margin: 0; font-size: 12px; opacity: .65; }
+.integrations-body { padding: 8px 24px 28px; overflow: auto; overscroll-behavior: contain; }
+.integration-section-label { margin: 24px 0 8px; font-size: 11px; font-weight: 500; letter-spacing: .06em; text-transform: uppercase; opacity: .55; }
+.integration-list { margin: 0; padding: 0; list-style: none; }
+.integration-row { display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 14px 0; border-bottom: 1px solid color-mix(in srgb, var(--color-content) 8%, transparent); }
+.integration-logo { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; background: color-mix(in srgb, var(--color-content) 8%, transparent); font-size: 12px; font-weight: 600; }
+.integration-row-copy { min-width: 0; overflow-wrap: anywhere; font-size: 13px; }
+.integration-row-copy p { margin: 4px 0 0; font-size: 12px; opacity: .65; }
+.integration-row-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; max-width: 220px; }
+.integration-provider, .integration-tag { display: inline-block; padding: 2px 7px; border-radius: 5px; font-size: 10.5px; background: color-mix(in srgb, var(--color-accent) 12%, transparent); color: var(--color-content); }
+.integration-request { margin: 14px 0; padding: 14px 16px; border: 1px solid color-mix(in srgb, var(--color-accent) 25%, transparent); border-radius: 14px; background: color-mix(in srgb, var(--color-content) 3%, transparent); color: var(--color-content); overflow-wrap: anywhere; }
+.integration-eyebrow { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; font-size: 11.5px; opacity: .75; }
+.integration-request h3 { margin: 8px 0 4px; font-size: 14px; font-weight: 600; }
+.integration-reason { margin: 0 0 12px; font-size: 13px; line-height: 1.55; opacity: .7; white-space: pre-wrap; max-height: 10em; overflow: auto; }
+.integration-scopes { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; font-size: 11.5px; }
+.integration-scopes > span { border-radius: 7px; padding: 3px 8px; border: 1px solid color-mix(in srgb, var(--color-content) 12%, transparent); background: color-mix(in srgb, var(--color-content) 4%, transparent); }
+.integration-note { margin: 8px 0; font-size: 11.5px; line-height: 1.6; opacity: .65; overflow-wrap: anywhere; }
+.integration-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.integration-primary { border-radius: 9px; padding: 7px 12px; border: 1px solid color-mix(in srgb, var(--color-accent) 45%, transparent); background: color-mix(in srgb, var(--color-accent) 20%, transparent); font-size: 12px; color: inherit; cursor: pointer; }
+.integration-primary:hover { background: color-mix(in srgb, var(--color-accent) 30%, transparent); }
+.integration-primary:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.integration-primary:disabled { opacity: .4; cursor: default; }
+.integration-tools { margin-top: 14px; padding: 10px 12px; border-radius: 8px; background: color-mix(in srgb, var(--color-content) 4%, transparent); font-size: 12px; }
+.integration-tools ul { margin: 0; padding-left: 16px; }
+.integration-tools pre { overflow: auto; max-height: 220px; font-size: 11px; }
+.integration-error { margin: 10px 0 0; font-size: 12px; color: var(--color-red-400, #f87171); }
+.integration-rules { margin: 0 0 18px; font-size: 12.5px; }
+.integration-rules > div { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 24px; padding: 8px 0; }
+.integration-rules dt { opacity: .65; }
+.integration-rules dd { margin: 0; text-align: right; font-weight: 500; }
+@media (max-width: 640px) { .integrations-page > header, .integrations-body { padding-left: 16px; padding-right: 16px; } .integration-row { grid-template-columns: 36px minmax(0, 1fr); } .integration-row-actions { grid-column: 2; justify-content: flex-start; max-width: none; } .integration-rules > div { display: block; } .integration-rules dd { margin-top: 4px; text-align: left; } }

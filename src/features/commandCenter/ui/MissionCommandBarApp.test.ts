@@ -1,12 +1,13 @@
 import { readFileSync } from "node:fs";
 import { expect, it, vi } from "vitest";
+import ts from "typescript";
 
 // Exercise the small App hook without mounting the native/provider shell.
 function adapter() {
   const source = readFileSync(new URL("../../../app/App.tsx", import.meta.url), "utf8");
-  const marker = source.indexOf("CC7N shell hook");
-  const start = source.indexOf("onSubmit={async (text, submission) => {", marker) + "onSubmit={".length;
-  const end = source.indexOf("}} />}", start) + 1;
+  const marker = source.indexOf("const submitBossGoal = ");
+  const start = marker + "const submitBossGoal = ".length;
+  const end = source.indexOf("\n  };", start) + 4;
   expect(marker).toBeGreaterThan(0);
   expect(end).toBeGreaterThan(start);
   let grand: { id: string; role: string; archivedAt?: number } | undefined = { id: "grand", role: "orchestrator" };
@@ -20,7 +21,8 @@ function adapter() {
     submitMonoGoalRef: { current: vi.fn(async () => true) },
     submitSession: vi.fn(async () => true),
   };
-  const submit = Function(...Object.keys(dependencies), `return (${source.slice(start, end)});`)(...Object.values(dependencies)) as
+  expect(source).toContain("onSubmit={submitBossGoal}");
+  const submit = Function(...Object.keys(dependencies), ts.transpile(`return (${source.slice(start, end)});`))(...Object.values(dependencies)) as
     (text: string, submission?: { ownerId: string }) => Promise<boolean>;
   return { submit, dependencies, replace: (value: typeof grand) => { grand = value; } };
 }

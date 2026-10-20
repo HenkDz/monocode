@@ -7,6 +7,389 @@ use tauri::State;
 use crate::dirs_home;
 use crate::fs::expand_home;
 
+const PROJECT_MCP_VERSION: &str = "2025-06-18";
+const PROJECT_MCP_TOOL: &str = "monocode_project_read";
+const PROJECT_MCP_FRAME: u64 = 512 * 1024;
+
+fn project_mcp_schema() -> Value {
+    serde_json::json!({"type":"object","properties":{"path":{"type":"string","minLength":1,"maxLength":512}},"required":["path"],"additionalProperties":false})
+}
+
+fn project_mcp_schema_hash() -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(project_mcp_schema().to_string().as_bytes()))
+}
+
+fn project_mcp_tool() -> Value {
+    serde_json::json!({"name":PROJECT_MCP_TOOL,"description":"Read one explicitly approved project text file (up to 64 KiB). Selected results may reach the AI provider.",
+        "inputSchema":project_mcp_schema(),"_meta":{"monocodeSchemaHash":project_mcp_schema_hash()}})
+}
+
+pub(crate) fn project_secret_filename(path: &str) -> bool {
+    let filename = path.rsplit('/').next().unwrap_or("").to_ascii_lowercase();
+    [".pem", ".key", ".p12", ".pfx", ".keystore", ".ppk", ".jks", ".p8", ".kdbx", ".env"].iter().any(|suffix| filename.ends_with(suffix)) ||
+        ["id_rsa", "id_ed25519", "id_ecdsa", "id_dsa", ".env", "secrets."].iter().any(|prefix| filename.starts_with(prefix)) ||
+        filename.contains("credentials") && filename.ends_with(".json") ||
+        filename.contains(".tfstate") || filename.contains(".tfvars") ||
+        filename.starts_with("service-account") && filename.ends_with(".json") || filename.ends_with("-sa.json") ||
+        [".npmrc", ".pypirc", ".netrc", ".git-credentials", "hosts.yml"].contains(&filename.as_str())
+}
+
+fn project_mcp_path(path: &str) -> Result<(), String> {
+    if project_secret_filename(path) {
+        return Err(serde_json::json!({"action":"deny","code":"protected-file","reason":"Project read refuses known credential and token filenames. Choose a non-secret project file."}).to_string());
+    }
+    if path.is_empty() || path.len() > 512 || path.split('/').any(|part| part.is_empty() || part.starts_with('.') ||
+        part.ends_with(['.', ' ']) || part.chars().any(|c| c.is_control() || "<>:\"\\|?*~".contains(c))) {
+        return Err("Choose an exact non-hidden project-relative text file without traversal".into());
+    }
+    Ok(())
+}
+
+fn project_mcp_now() -> Result<u64, String> {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|duration| duration.as_millis() as u64).map_err(|e| e.to_string())
+}
+
+fn project_mcp_frame(reader: &mut impl std::io::BufRead) -> Result<Option<Value>, String> {
+    use std::io::{BufRead, Read};
+    let mut bytes = Vec::new();
+    let count = reader.take(PROJECT_MCP_FRAME + 1).read_until(b'\n', &mut bytes).map_err(|e| e.to_string())?;
+    if count == 0 { return Ok(None); }
+    if count as u64 > PROJECT_MCP_FRAME || !bytes.ends_with(b"\n") { return Err("MCP frame exceeds bounds or lacks newline".into()); }
+    let text = std::str::from_utf8(&bytes).map_err(|_| "MCP messages must be UTF-8")?;
+    serde_json::from_str(text).map(Some).map_err(|e| format!("Invalid MCP JSON: {e}"))
+}
+
+fn project_mcp_serve(reader: &mut impl std::io::BufRead, writer: &mut impl std::io::Write,
+    root: &Path, identity: &str, path: &str, deadline: u64) -> Result<(), String> {
+    use serde_json::json;
+    project_mcp_path(path)?;
+    let mut phase = 0;
+    let mut ids = std::collections::HashSet::new();
+    for _ in 0..8 {
+        let Some(message) = project_mcp_frame(reader)? else { return Ok(()); };
+        if project_mcp_now()? >= deadline { return Err("MCP operation deadline expired".into()); }
+        let object = message.as_object().ok_or("MCP message must be an object")?;
+        if message["jsonrpc"] != "2.0" || object.keys().any(|key| !["jsonrpc", "id", "method", "params"].contains(&key.as_str())) {
+            return Err("Unsupported MCP envelope".into());
+        }
+        let method = message["method"].as_str().ok_or("MCP method is required")?;
+        if !object.contains_key("id") {
+            if method == "notifications/initialized" && phase == 1 { phase = 2; continue; }
+            if method == "notifications/cancelled" { return Ok(()); }
+            return Err("Unexpected MCP notification".into());
+        }
+        let id = message["id"].clone();
+        if !(id.is_string() || id.is_i64()) || !ids.insert(id.to_string()) { return Err("MCP request ID must be unique".into()); }
+        let params = &message["params"];
+        let mut complete = false;
+        let result: Result<Value, (i32, String)> = match method {
+            "initialize" if phase == 0 && params["protocolVersion"] == PROJECT_MCP_VERSION && params["capabilities"].is_object() && params["clientInfo"].is_object() => {
+                phase = 1;
+                Ok(json!({"protocolVersion":PROJECT_MCP_VERSION,"capabilities":{"tools":{"listChanged":false}},"serverInfo":{"name":"monocode-project-read","version":env!("CARGO_PKG_VERSION")}}))
+            }
+            "initialize" => Err((-32602, "Unsupported initialization or protocol version".into())),
+            "ping" => Ok(json!({})),
+            "tools/list" if phase == 2 && (params.is_null() || params.as_object().is_some_and(|value| value.is_empty())) => Ok(json!({"tools":[project_mcp_tool()]})),
+            "tools/call" if phase == 2 => {
+                let valid = params.as_object().is_some_and(|params| params.len() == 2 && params.contains_key("name") && params.contains_key("arguments")) &&
+                    params["name"] == PROJECT_MCP_TOOL && params["arguments"].as_object().is_some_and(|args| args.len() == 1 && args.get("path").and_then(Value::as_str) == Some(path));
+                if !valid { Err((-32602, "Tool and arguments must match the approved exact project read".into())) }
+                else {
+                    complete = true;
+                    match project_mcp_read(root, identity, path) {
+                        Ok(text) => Ok(json!({"content":[{"type":"text","text":text}],"isError":false})),
+                        Err(reason) => Ok(json!({"content":[{"type":"text","text":reason}],"isError":true})),
+                    }
+                }
+            }
+            _ => Err((-32601, "Unsupported method or MCP lifecycle phase".into())),
+        };
+        let response = match result {
+            Ok(result) => json!({"jsonrpc":"2.0","id":id,"result":result}),
+            Err((code, message)) => json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":message}}),
+        };
+        writeln!(writer, "{response}").map_err(|e| e.to_string())?;
+        writer.flush().map_err(|e| e.to_string())?;
+        if complete { return Ok(()); }
+    }
+    Err("MCP operation message limit reached".into())
+}
+
+/// Early CLI only: no app initialization, storage, profile discovery or credentials.
+pub(crate) fn project_mcp_cli(args: Vec<String>) -> i32 {
+    let run = || -> Result<(), String> {
+        if args.len() != 8 || args[0] != "--project" || args[2] != "--identity" || args[4] != "--path" || args[6] != "--deadline" {
+            return Err("Invalid fixed project MCP invocation".into());
+        }
+        let deadline = args[7].parse::<u64>().map_err(|_| "Invalid MCP deadline")?;
+        let now = project_mcp_now()?;
+        if deadline <= now || deadline - now > 30_000 { return Err("MCP deadline must be within thirty seconds".into()); }
+        project_mcp_serve(&mut std::io::stdin().lock(), &mut std::io::stdout().lock(), Path::new(&args[1]), &args[3], &args[5], deadline)
+    };
+    match run() { Ok(()) => 0, Err(reason) => { eprintln!("Project MCP refused: {reason}"); 1 } }
+}
+
+// shortcut: enable non-Windows only after descriptor-relative path pins are implemented.
+#[cfg(not(windows))]
+fn project_mcp_read(_root: &Path, _identity: &str, _path: &str) -> Result<String, String> {
+    Err("Pinned project MCP reads are unavailable on this platform".into())
+}
+
+#[cfg(windows)]
+fn project_mcp_read(root: &Path, identity: &str, path: &str) -> Result<String, String> {
+    use std::io::Read;
+    project_mcp_path(path)?;
+    let mut pins = Vec::new();
+    let root = project_mcp_pin_root(root, &mut pins)?;
+    if project_mcp_file_id(pins.last().ok_or("Missing project pin")?)? != identity { return Err("Project filesystem identity changed".into()); }
+    let mut parent = root.clone();
+    let parts: Vec<_> = path.split('/').collect();
+    for part in &parts[..parts.len() - 1] { parent.push(part); pins.push(project_mcp_pin(&parent, true)?); }
+    let file_path = parent.join(parts[parts.len() - 1]);
+    let mut file = project_mcp_pin(&file_path, false)?;
+    // Check the pinned long name too, so filesystem aliases cannot hide protected names.
+    let resolved = std::fs::canonicalize(&file_path).map_err(|e| e.to_string())?;
+    let relative = resolved.strip_prefix(&root).map_err(|_| "Project MCP file escaped its pinned root")?;
+    project_mcp_path(&relative.to_string_lossy().replace('\\', "/"))?;
+    if file.metadata().map_err(|e| e.to_string())?.len() > 65_536 { return Err("Project MCP text file exceeds 64 KiB".into()); }
+    let mut bytes = Vec::new();
+    file.by_ref().take(65_537).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+    if bytes.len() > 65_536 { return Err("Project MCP text file exceeds 64 KiB".into()); }
+    String::from_utf8(bytes).map_err(|_| "Project MCP reads UTF-8 text only".into())
+}
+
+#[cfg(windows)]
+fn project_mcp_pin(path: &Path, directory: bool) -> Result<std::fs::File, String> {
+    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+    use windows_sys::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE};
+    let file = std::fs::OpenOptions::new().read(true).share_mode(FILE_SHARE_READ | if directory { FILE_SHARE_WRITE } else { 0 })
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | if directory { FILE_FLAG_BACKUP_SEMANTICS } else { 0 }).open(path).map_err(|e| e.to_string())?;
+    let meta = file.metadata().map_err(|e| e.to_string())?;
+    if meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 || meta.is_dir() != directory ||
+        !directory && (!meta.is_file() || crate::codex_mono_store::handle_file_info(&file)?.nNumberOfLinks != 1) {
+        return Err("Project MCP refuses linked, reparse or special paths".into());
+    }
+    Ok(file)
+}
+
+#[cfg(windows)]
+fn project_mcp_pin_root(path: &Path, pins: &mut Vec<std::fs::File>) -> Result<PathBuf, String> {
+    use std::path::{Component, Prefix};
+    if !path.is_absolute() { return Err("An absolute registered local project is required".into()); }
+    let mut current = PathBuf::new();
+    for part in path.components() {
+        match part {
+            Component::Prefix(prefix) if matches!(prefix.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_)) => current.push(part.as_os_str()),
+            Component::RootDir => current.push(part.as_os_str()),
+            Component::Normal(name) if name.to_str().is_some_and(|name| !name.ends_with(['.', ' ']) && !name.chars().any(|c| c.is_control() || "<>:\"/\\|?*".contains(c))) => current.push(name),
+            _ => return Err("Project MCP root must be a local path without traversal".into()),
+        }
+        if current.is_absolute() && !matches!(part, Component::Prefix(_)) { pins.push(project_mcp_pin(&current, true)?); }
+    }
+    std::fs::canonicalize(current).map_err(|e| e.to_string())
+}
+
+#[cfg(windows)]
+fn project_mcp_file_id(file: &std::fs::File) -> Result<String, String> {
+    let (volume, index) = crate::codex_mono_store::file_identity(file)?;
+    Ok(format!("windows:{volume}:{index}"))
+}
+
+#[derive(Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProjectMcpPin {
+    project_identity: String,
+    execution_identity: String,
+    schema_hash: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProjectMcpRead {
+    operation_id: String,
+    project: String,
+    path: String,
+    deadline: u64,
+    pin: ProjectMcpPin,
+}
+
+#[tauri::command(async)]
+pub fn inspect_project_mcp(project: String) -> Result<ProjectMcpPin, String> {
+    #[cfg(windows)]
+    return project_mcp_inspect(Path::new(&project)).map(|(pin, _guards)| pin);
+    #[cfg(not(windows))]
+    { let _ = project; Err("Pinned project MCP is unavailable on this platform".into()) }
+}
+
+#[cfg(windows)]
+fn project_mcp_inspect(project: &Path) -> Result<(ProjectMcpPin, Vec<std::fs::File>), String> {
+    project_mcp_inspect_executable(project, &std::env::current_exe().map_err(|e| e.to_string())?)
+}
+
+#[cfg(windows)]
+fn project_mcp_inspect_executable(project: &Path, exe: &Path) -> Result<(ProjectMcpPin, Vec<std::fs::File>), String> {
+    use std::io::Read;
+    use sha2::{Digest, Sha256};
+    let mut guards = Vec::new();
+    project_mcp_pin_root(project, &mut guards)?;
+    let project_identity = project_mcp_file_id(guards.last().ok_or("Missing project pin")?)?;
+    project_mcp_pin_root(exe.parent().ok_or("Missing executable directory")?, &mut guards)?;
+    let mut executable = project_mcp_pin(exe, false)?;
+    if executable.metadata().map_err(|e| e.to_string())?.len() > 256 * 1024 * 1024 { return Err("Executable exceeds MCP pin bound".into()); }
+    let mut hash = Sha256::new();
+    let mut buffer = [0u8; 65_536];
+    loop { let read = executable.read(&mut buffer).map_err(|e| e.to_string())?; if read == 0 { break; } hash.update(&buffer[..read]); }
+    let execution_identity = format!("monocode-project-read-v1:{}:{:x}", project_mcp_file_id(&executable)?, hash.finalize());
+    guards.push(executable);
+    Ok((ProjectMcpPin { project_identity, execution_identity, schema_hash: project_mcp_schema_hash() }, guards))
+}
+
+struct ProjectMcpOperation {
+    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    created: std::time::Instant,
+    active: bool,
+}
+
+// Owned-child cancellation only; approval authority and durable receipts remain in the existing goal ledger.
+fn project_mcp_operations() -> &'static std::sync::Mutex<std::collections::HashMap<String, ProjectMcpOperation>> {
+    static OPERATIONS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, ProjectMcpOperation>>> = std::sync::OnceLock::new();
+    OPERATIONS.get_or_init(Default::default)
+}
+
+#[tauri::command]
+pub fn cancel_project_mcp(window: tauri::WebviewWindow, operation_id: String) -> Result<(), String> {
+    if operation_id.is_empty() || operation_id.len() > 128 || !operation_id.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"_-".contains(&byte)) {
+        return Err("Invalid MCP operation ID".into());
+    }
+    project_mcp_cancel(&format!("{}:{operation_id}", window.label()))
+}
+
+fn project_mcp_cancel(key: &str) -> Result<(), String> {
+    let mut operations = project_mcp_operations().lock().map_err(|_| "MCP operation lock failed")?;
+    operations.retain(|_, value| value.active || value.created.elapsed() < std::time::Duration::from_secs(60));
+    if operations.len() >= 128 && !operations.contains_key(key) { return Err("MCP cancellation capacity reached".into()); }
+    let operation = operations.entry(key.into()).or_insert_with(|| ProjectMcpOperation { cancel: Default::default(), created: std::time::Instant::now(), active: false });
+    operation.cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+    Ok(())
+}
+
+#[tauri::command(async)]
+pub fn read_project_mcp(window: tauri::WebviewWindow, request: ProjectMcpRead) -> Result<Value, String> {
+    if request.operation_id.is_empty() || request.operation_id.len() > 128 || !request.operation_id.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"_-".contains(&byte)) {
+        return Err("Invalid MCP operation ID".into());
+    }
+    let key = format!("{}:{}", window.label(), request.operation_id);
+    let cancel = {
+        let mut operations = project_mcp_operations().lock().map_err(|_| "MCP operation lock failed")?;
+        operations.retain(|_, value| value.active || value.created.elapsed() < std::time::Duration::from_secs(60));
+        if operations.contains_key(&key) || operations.len() >= 128 { return Err("MCP operation already started, cancelled or at capacity".into()); }
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        operations.insert(key.clone(), ProjectMcpOperation { cancel: cancel.clone(), active: true, created: std::time::Instant::now() });
+        cancel
+    };
+    let result = project_mcp_execute(request, cancel);
+    if let Ok(mut operations) = project_mcp_operations().lock() {
+        if let Some(operation) = operations.get_mut(&key) { operation.active = false; }
+    }
+    result
+}
+
+#[cfg(not(windows))]
+fn project_mcp_execute(_request: ProjectMcpRead, _cancel: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Result<Value, String> {
+    Err("Pinned project MCP is unavailable on this platform".into())
+}
+
+#[cfg(windows)]
+fn project_mcp_exchange(child: &mut std::process::Child,
+    receiver: &std::sync::mpsc::Receiver<Result<Option<Value>, String>>,
+    id: i32, method: &str, params: Value, check: &impl Fn() -> Result<(), String>) -> Result<Value, String> {
+    use std::io::Write;
+    check()?;
+    let stdin = child.stdin.as_mut().ok_or("MCP child stdin missing")?;
+    writeln!(stdin, "{}", serde_json::json!({"jsonrpc":"2.0","id":id,"method":method,"params":params})).map_err(|e| e.to_string())?;
+    stdin.flush().map_err(|e| e.to_string())?;
+    loop {
+        check()?;
+        match receiver.recv_timeout(std::time::Duration::from_millis(10)) {
+            Ok(Ok(Some(response))) if response["jsonrpc"] == "2.0" && response["id"] == id && response.get("result").is_some() && response.get("error").is_none() => return Ok(response["result"].clone()),
+            Ok(Ok(Some(_))) => return Err("MCP returned an unexpected response or error".into()),
+            Ok(Ok(None)) => return Err("MCP child closed before the response".into()),
+            Ok(Err(reason)) => return Err(reason),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => (),
+            Err(_) => return Err("MCP child output disconnected".into()),
+        }
+    }
+}
+
+#[cfg(windows)]
+fn project_mcp_execute(request: ProjectMcpRead, cancel: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Result<Value, String> {
+    project_mcp_execute_executable(request, cancel, &std::env::current_exe().map_err(|e| e.to_string())?, |_| {})
+}
+
+#[cfg(windows)]
+fn project_mcp_execute_executable(request: ProjectMcpRead, cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    executable: &Path, on_spawn: impl FnOnce(&std::process::Child)) -> Result<Value, String> {
+    use std::io::{BufReader, Write};
+    use std::os::windows::process::CommandExt;
+    use std::process::{Command, Stdio};
+    use serde_json::json;
+    project_mcp_path(&request.path)?;
+    let now = project_mcp_now()?;
+    if request.deadline <= now || request.deadline - now > 30_000 { return Err("MCP deadline must be within thirty seconds".into()); }
+    let (actual_pin, _guards) = project_mcp_inspect_executable(Path::new(&request.project), executable)?;
+    if request.pin != actual_pin { return Err("MCP executable, schema or project identity changed; approve the new pin".into()); }
+    if cancel.load(std::sync::atomic::Ordering::SeqCst) { return Err("MCP operation cancelled before launch".into()); }
+    if project_mcp_now()? >= request.deadline { return Err("MCP operation deadline expired before launch".into()); }
+    let mut command = Command::new(executable);
+    command.args(["mcp-project-read", "--project", &request.project, "--identity", &request.pin.project_identity, "--path", &request.path, "--deadline", &request.deadline.to_string()])
+        .env_clear().current_dir(&request.project).creation_flags(0x08000000)
+        .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+    struct OwnedChild { child: std::process::Child, reader: Option<std::thread::JoinHandle<()>>, receiver: Option<std::sync::mpsc::Receiver<Result<Option<Value>, String>>> }
+    impl Drop for OwnedChild {
+        fn drop(&mut self) {
+            self.child.stdin.take();
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+            self.receiver.take();
+            if let Some(reader) = self.reader.take() { let _ = reader.join(); }
+        }
+    }
+    let mut owned = OwnedChild { child: command.spawn().map_err(|e| e.to_string())?, reader: None, receiver: None };
+    on_spawn(&owned.child);
+    let stdout = owned.child.stdout.take().ok_or("MCP child stdout missing")?;
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    owned.reader = Some(std::thread::Builder::new().name("monocode-project-mcp-output".into()).spawn(move || {
+        let mut stdout = BufReader::new(stdout);
+        for _ in 0..4 {
+            let frame = project_mcp_frame(&mut stdout);
+            let done = !matches!(&frame, Ok(Some(_)));
+            if sender.send(frame).is_err() || done { break; }
+        }
+    }).map_err(|e| e.to_string())?);
+    owned.receiver = Some(receiver);
+    let check = || -> Result<(), String> {
+        if cancel.load(std::sync::atomic::Ordering::SeqCst) { return Err("MCP operation cancelled".into()); }
+        if project_mcp_now()? >= request.deadline { return Err("MCP operation deadline expired".into()); }
+        Ok(())
+    };
+    let receiver = owned.receiver.as_ref().ok_or("MCP receiver missing")?;
+    let initialized = project_mcp_exchange(&mut owned.child, receiver, 1, "initialize", json!({"protocolVersion":PROJECT_MCP_VERSION,"capabilities":{},"clientInfo":{"name":"MonoCode","version":env!("CARGO_PKG_VERSION")}}), &check)?;
+    if initialized["protocolVersion"] != PROJECT_MCP_VERSION || initialized["serverInfo"]["name"] != "monocode-project-read" || !initialized["capabilities"]["tools"].is_object() {
+        return Err("MCP initialization pin mismatch".into());
+    }
+    writeln!(owned.child.stdin.as_mut().ok_or("MCP child stdin missing")?, "{}", json!({"jsonrpc":"2.0","method":"notifications/initialized"})).map_err(|e| e.to_string())?;
+    owned.child.stdin.as_mut().ok_or("MCP child stdin missing")?.flush().map_err(|e| e.to_string())?;
+    let tools = project_mcp_exchange(&mut owned.child, receiver, 2, "tools/list", json!({}), &check)?;
+    if tools != json!({"tools":[project_mcp_tool()]}) { return Err("MCP tool/schema pin mismatch".into()); }
+    let result = project_mcp_exchange(&mut owned.child, receiver, 3, "tools/call", json!({"name":PROJECT_MCP_TOOL,"arguments":{"path":request.path}}), &check)?;
+    check()?;
+    if result["isError"] != false || !result["content"].as_array().is_some_and(|parts| parts.len() == 1 && parts[0]["type"] == "text" && parts[0]["text"].as_str().is_some_and(|text| text.len() <= 65_536)) {
+        return Err("MCP tool refused or returned an invalid bounded text result".into());
+    }
+    Ok(result)
+}
+
 fn claude_desktop_config(home: &Path) -> PathBuf {
     #[cfg(target_os = "macos")]
     {
@@ -735,6 +1118,122 @@ fn strip_jsonc(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    fn compiled_parent_proof(cancel_after_spawn: bool) {
+        use std::os::windows::io::{AsHandle, AsRawHandle, OwnedHandle};
+        use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
+        let executable = PathBuf::from(std::env::var_os("MONOCODE_PROJECT_MCP_TEST_EXE").expect("Build the current CLI and explicitly set MONOCODE_PROJECT_MCP_TEST_EXE"));
+        let test_executable = std::env::current_exe().unwrap();
+        let expected = test_executable.parent().unwrap().parent().unwrap().join("monocode-cli.exe");
+        assert_eq!(std::fs::canonicalize(&executable).unwrap(), std::fs::canonicalize(expected).unwrap(), "Only this target's compiled CLI is allowed");
+        let root = std::env::temp_dir().join(format!("monocode-project-mcp-parent-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("readme.txt"), b"synthetic parent project read").unwrap();
+        let pin = project_mcp_inspect_executable(&root, &executable).unwrap().0;
+        let cancel = Arc::new(AtomicBool::new(false));
+        let observed: Mutex<Option<OwnedHandle>> = Mutex::new(None);
+        let result = project_mcp_execute_executable(ProjectMcpRead { operation_id: uuid::Uuid::new_v4().to_string(),
+            project: root.to_string_lossy().into(), path: "readme.txt".into(), deadline: project_mcp_now().unwrap() + 30_000, pin }, cancel.clone(), &executable, |child| {
+                *observed.lock().unwrap() = Some(child.as_handle().try_clone_to_owned().unwrap());
+                eprintln!("Owned compiled MCP child {} launched; cancel_after_spawn={cancel_after_spawn}", child.id());
+                if cancel_after_spawn { cancel.store(true, Ordering::SeqCst); }
+            });
+        if cancel_after_spawn { assert!(result.unwrap_err().contains("cancelled")); }
+        else { assert_eq!(result.unwrap()["content"][0]["text"], "synthetic parent project read"); }
+        let handle = observed.lock().unwrap().take().expect("An actual owned child must have started");
+        assert_eq!(unsafe { windows_sys::Win32::System::Threading::WaitForSingleObject(handle.as_raw_handle() as _, 0) }, windows_sys::Win32::Foundation::WAIT_OBJECT_0, "Owned child must be positively exited after native return");
+        eprintln!("Owned compiled MCP child positively exited; native parent returned");
+        drop(handle);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires a separately built current CLI; run the explicit compiled-parent gate"]
+    fn compiled_project_mcp_parent_reads_and_reaps() { compiled_parent_proof(false); }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires a separately built current CLI; run the explicit compiled-parent gate"]
+    fn compiled_project_mcp_parent_cancels_live_child_and_reaps() { compiled_parent_proof(true); }
+
+    #[test]
+    fn pinned_project_mcp_refuses_secret_names_case_and_malformed_paths() {
+        for path in ["secret.pem", "SECRET.PEM", "a/client.key", "a/STORE.P12", "a/store.pfx", "id_rsa.pub", "id_ed25519_backup", "serviceCredentials.JSON", "vault.keystore", ".npmrc", ".pypirc", ".netrc",
+            "id_ecdsa.pub", "ID_DSA_BACKUP", "server.ppk", "store.JKS", "key.p8", "vault.kdbx", "terraform.tfstate.backup", "terraform.tfvars.json", ".env.production", "local.env", ".git-credentials", "hosts.yml", "service-account-demo.json", "project-sa.json", "secrets.yaml"] {
+            let reason: Value = serde_json::from_str(&project_mcp_path(path).unwrap_err()).unwrap();
+            assert_eq!(reason["code"], "protected-file", "{path}");
+        }
+        for path in ["", "../outside", "/absolute", "C:/outside", "dir//file", "dir/.env", "file.", "dir\\file", "file\0.txt", "CREDEN~1.JSON", "ENV~1"] { assert!(project_mcp_path(path).is_err(), "{path}"); }
+        assert!(project_mcp_path("src/model.ts").is_ok());
+    }
+
+    #[test]
+    fn pinned_project_mcp_enforces_framing_and_lifecycle() {
+        use std::io::Cursor;
+        let mut output = Vec::new();
+        project_mcp_serve(&mut Cursor::new(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}\n"), &mut output, Path::new("synthetic"), "identity", "readme.txt", project_mcp_now().unwrap() + 10_000).unwrap();
+        let response: Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(response["error"]["code"], -32601);
+        assert!(project_mcp_frame(&mut Cursor::new(b"{}" )).is_err());
+        assert!(project_mcp_frame(&mut Cursor::new(vec![b' '; PROJECT_MCP_FRAME as usize + 1])).is_err());
+        assert!(project_mcp_frame(&mut Cursor::new(b"[invalid]\n")).is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn pinned_project_mcp_actual_native_read_and_protocol_initialize_list_call() {
+        use serde_json::json;
+        use std::io::Cursor;
+        let root = std::env::temp_dir().join(format!("monocode-project-mcp-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("readme.txt"), b"synthetic project read").unwrap();
+        let mut pins = Vec::new(); project_mcp_pin_root(&root, &mut pins).unwrap();
+        let identity = project_mcp_file_id(pins.last().unwrap()).unwrap(); drop(pins);
+        let messages = [json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":PROJECT_MCP_VERSION,"capabilities":{},"clientInfo":{"name":"fixture","version":"1"}}}),
+            json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+            json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}),
+            json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":PROJECT_MCP_TOOL,"arguments":{"path":"readme.txt"}}})];
+        let input = messages.iter().map(|message| format!("{message}\n")).collect::<String>();
+        let mut output = Vec::new();
+        project_mcp_serve(&mut Cursor::new(input.as_bytes()), &mut output, &root, &identity, "readme.txt", project_mcp_now().unwrap() + 10_000).unwrap();
+        let replies: Vec<Value> = String::from_utf8(output).unwrap().lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+        assert_eq!(replies.len(), 3);
+        assert_eq!(replies[0]["result"]["protocolVersion"], PROJECT_MCP_VERSION);
+        assert_eq!(replies[1]["result"]["tools"], json!([project_mcp_tool()]));
+        assert_eq!(replies[2]["result"]["content"][0]["text"], "synthetic project read");
+        assert!(project_mcp_read(&root, "different", "readme.txt").is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn pinned_project_mcp_refuses_hardlink_alias_junction_and_oversize() {
+        let root = std::env::temp_dir().join(format!("monocode-project-mcp-bounds-{}", uuid::Uuid::new_v4()));
+        let foreign = std::env::temp_dir().join(format!("monocode-project-mcp-foreign-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap(); std::fs::create_dir(&foreign).unwrap();
+        std::fs::write(root.join("secret.key"), b"synthetic credential fixture").unwrap();
+        std::fs::hard_link(root.join("secret.key"), root.join("alias.txt")).unwrap();
+        std::fs::write(root.join("large.txt"), vec![b'x'; 65_537]).unwrap();
+        junction::create(&foreign, root.join("escape")).unwrap();
+        std::fs::write(foreign.join("foreign.txt"), b"synthetic foreign").unwrap();
+        let mut pins = Vec::new(); project_mcp_pin_root(&root, &mut pins).unwrap();
+        let identity = project_mcp_file_id(pins.last().unwrap()).unwrap(); drop(pins);
+        for path in ["alias.txt", "escape/foreign.txt", "large.txt"] { assert!(project_mcp_read(&root, &identity, path).is_err(), "{path}"); }
+        assert_eq!(std::fs::read(foreign.join("foreign.txt")).unwrap(), b"synthetic foreign");
+        junction::delete(root.join("escape")).unwrap();
+        std::fs::remove_dir_all(root).unwrap(); std::fs::remove_dir_all(foreign).unwrap();
+    }
+
+    #[test]
+    fn pinned_project_mcp_cancellation_is_bounded_and_retained_before_start() {
+        let key = format!("synthetic-window:{}", uuid::Uuid::new_v4());
+        project_mcp_cancel(&key).unwrap();
+        let mut operations = project_mcp_operations().lock().unwrap();
+        assert!(operations.get(&key).unwrap().cancel.load(std::sync::atomic::Ordering::SeqCst));
+        operations.remove(&key);
+    }
 
     #[test]
     fn parses_single_server_from_standard_json() {

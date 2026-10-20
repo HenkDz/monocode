@@ -956,6 +956,7 @@ pub(crate) fn validate_team_input(action: &str, input: &Value) -> Result<(), Str
 /// second renderer that recovers another process's live sessions.
 pub fn maybe_run(args: Vec<String>) -> Option<i32> {
     match args.first().map(String::as_str) {
+        Some("mcp-project-read") => Some(crate::mcp::project_mcp_cli(args.into_iter().skip(1).collect())),
         Some("control") => Some(run(args.into_iter().skip(1).collect())),
         Some("app") => Some(run_app(args.into_iter().skip(1).collect())),
         Some("--help" | "-h") => Some(print_output(

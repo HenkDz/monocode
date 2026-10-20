@@ -4,6 +4,9 @@ import { PixelMascot } from "../projects/ui/PixelMascot";
 import { MonoActivityTrail } from "../sessions/ui/AgentTranscript";
 import { useMonoTranscript } from "../monos/hooks/useMonoTranscript";
 import { workbenchSessionTask } from "../monos/model/monoNavigation";
+import { activityTaskTitle } from "../monos/model/monoTeamActivity";
+import { OrgArtifactLinks } from "../artifacts/ui/OrgArtifactLinks";
+import { ManagerUpdates } from "../monos/ui/ManagerUpdates";
 import { presentationText } from "../sessions/model/transcriptPresentation";
 import type { Session, TurnModel } from "../sessions/model/session";
 import type { OrchestrationRun } from "../orchestration/model/orchestrationState";
@@ -50,9 +53,8 @@ function MemberTask({ project, node, runs, sessions, onOpenMono }: {
     <PixelMascot name={look.mascot} color={look.color} still className="size-6" />
     <div>
       <div className="command-map-task-heading"><button type="button" onClick={() => onOpenMono(node.id)}>{look.name}</button><span>{mapText(monoStatusLabel(state), 100)}</span></div>
-      <p>{mapText(task?.title || state.activity || "No assigned task")}</p>
-      {state.activity && task?.title !== state.activity && <p className="command-map-muted">{mapText(state.activity, 240)}</p>}
-      {task?.result.trim() && <p className="command-map-muted">Saved task report: {mapText(task.result, 280)}</p>}
+      <p className="command-map-task-summary">{task ? activityTaskTitle(task) : "No assigned task"}</p>
+      {state.liveState?.reason === "paused" && <p className="command-map-muted">{state.liveState.detail}</p>}
       <button type="button" className="command-map-fold" aria-expanded={expanded} aria-controls={foldId} onClick={() => setExpanded(!expanded)}>
         <span aria-hidden="true">{expanded ? "−" : "+"}</span> Show work{steps != null ? ` · ${steps} steps` : ""}
       </button>
@@ -61,7 +63,14 @@ function MemberTask({ project, node, runs, sessions, onOpenMono }: {
           <option value="">Current assignment</option>{history.map(({ dispatch: attempt }) => <option key={attempt.id} value={attempt.id}>{attempt.id === dispatch?.id ? "Current" : "Saved"} · {mapText(attempt.id, 60)} · {attempt.state}</option>)}
         </select>}
         {report && <p className="command-map-muted">{historical ? "History" : "Current assignment"} · Task {mapText(report.id, 80)} · dispatch {mapText(selectedHistory?.dispatch.id ?? dispatch?.id ?? "unavailable", 80)} · {report.status}</p>}
-        {historical && report?.result.trim() && <p>Saved dispatch report: {mapText(report.result, 600)}</p>}
+        {report?.prompt && <pre className="command-map-brief">{presentationText(report.prompt)}</pre>}
+        {state.activity && <p className="command-map-muted">{presentationText(state.activity)}</p>}
+        {report?.result.trim() && <p>Saved {historical ? "dispatch" : "task"} report: {presentationText(report.result)}</p>}
+        {report && <OrgArtifactLinks monoId={node.id} links={[
+          { id: report.reportArtifactId, label: "Report" },
+          { id: report.reviewArtifactId ?? report.reviewVerdict?.artifactId, label: "Review" },
+          { id: report.prSummaryArtifactId, label: "PR summary" },
+        ]} />}
         {evidence ? <WorkTrace key={evidence.id} session={evidence} recordedModel={(selectedHistory?.dispatch ?? dispatch)?.turnModel} /> : <p>Recorded conversation is not loaded. <button type="button" onClick={() => onOpenMono(node.id)}>Open Workbench</button></p>}
       </div>}
     </div>
@@ -98,13 +107,16 @@ export function ProjectDrawer({ project, goals, runs, sessions, decisions, onClo
       if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
     }}>
-    <header><PixelMascot name={look.mascot} color={look.color} still className="size-8" /><div><h2 id={titleId}>{mapText(project.name, 100)}</h2><p>{mapText(monoStatusLabel(project.manager.state), 120)}</p></div>
+    <header><PixelMascot name={look.mascot} color={look.color} still className="size-8" /><div><h2 id={titleId}>{mapText(project.name, 100)}</h2>
+      {project.manager.state.liveState?.reason === "held-updates" ? <ManagerUpdates monoId={project.manager.id} label={monoStatusLabel(project.manager.state)} events={runs.filter(run => run.ownerMonoId === project.manager.id || run.leadId === project.manager.mono.managerEngineId).flatMap(run => run.wakeState?.events.filter(event => event.acknowledgedAt == null) ?? [])} /> : <p>{mapText(monoStatusLabel(project.manager.state), 120)}</p>}
+      {currentGoals.map(goal => decisions?.goalAction?.(goal.id)).find(Boolean)}</div>
       <button ref={close} type="button" aria-label="Close project" onClick={onClose}><X className="size-4" /></button></header>
     <div className="command-map-drawer-scroll">
       <section className="command-map-goal"><h3>Current goal</h3>
         {currentGoals.length > 1 && <select aria-label="Project goal" value={goal?.id} onChange={event => setGoalId(event.target.value)}>{currentGoals.map(entry => <option key={entry.id} value={entry.id}>{mapText(entry.title, 100)} · {entry.state}</option>)}</select>}
         <p>{goal ? mapText(goal.title, 600) : !decisions || decisions.incomplete ? "Goal history unavailable" : "No recorded goal yet"}</p>
         {progress ? <><progress aria-label="Accepted goal tasks" max={progress.total} value={progress.accepted} /><p className="command-map-muted">{progress.accepted} of {progress.total} tasks accepted · {progress.percent}%</p></> : <p className="command-map-muted">Progress unavailable</p>}
+        {goal && decisions?.goalAction?.(goal.id)}
       </section>
       <section data-decision-ui><h3>This project decides</h3>{decisions?.autonomy ?? <p className="command-map-muted">Autonomy unavailable</p>}
         <h3>Waiting decisions</h3>{decisions?.cards ?? <p className="command-map-muted">Decision history unavailable</p>}</section>

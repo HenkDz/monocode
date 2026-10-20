@@ -22,6 +22,7 @@ import {
 import { usePrStatusCache } from "../../source-control/hooks/usePrStatus";
 import type { GitPr } from "../../../platform/tauri/fs";
 import { ArtifactText } from "../../artifacts/ui/ArtifactReference";
+import { ManagerUpdates } from "./ManagerUpdates";
 
 export function crewFeed(
   roster: readonly Mono[],
@@ -198,7 +199,7 @@ export function MonoOrgActivity({
                 {look.name}
               </button>
               <span className="ml-auto shrink-0 text-content/60">
-                {monoStatusLabel(state)}
+                {state.liveState?.reason === "held-updates" ? <ManagerUpdates monoId={mono.id} label={monoStatusLabel(state)} events={runs.filter(run => run.ownerMonoId === mono.id || run.leadId === mono.managerEngineId || !!mono.sessionId && run.ownerSessionId === mono.sessionId).flatMap(run => run.wakeState?.events.filter(event => event.acknowledgedAt == null) ?? [])} /> : monoStatusLabel(state)}
                 {state.teamWorking ? ` · ${monoTeamWorkingLabel(state)}` : ""}
                 {start !== undefined
                   ? ` · ${formatLiveElapsed(start, now)}`

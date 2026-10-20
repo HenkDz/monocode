@@ -8,6 +8,7 @@ import { syntheticAttention } from "../fixtures/attention/syntheticAttention";
 import { goals, roster, runs, sessions, now } from "../fixtures/syntheticMission";
 import { selectGoalViews } from "../model/goalView";
 import type { AttentionCallbacks, AttentionInput } from "../model/attention";
+import type { GoalNextStep } from "../model/goalNextAction";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => null) }));
 
@@ -37,6 +38,15 @@ const deferred = () => {
 };
 
 describe("Attention queue", () => {
+  it("lets the shared goal row own its exact approval while preserving unrelated blockers", async () => {
+    const input = inputFor("manager", "storage");
+    const manager = input.sessions.find(session => session.id === "manager")!;
+    const approval = manager.blocks.find(block => block.approval && !block.approval.decided)!;
+    const step = { action: "open", sessionId: manager.id, key: `${manager.id}:approval:${approval.approval!.requestId}` } as GoalNextStep;
+    await act(async () => root.render(<AttentionQueueView input={input} callbacks={callbacks()} open onClose={() => {}} coveredGoalSteps={[step]} />));
+    expect(host.querySelector('[data-attention-source="approval"]')).toBeNull();
+    expect(host.querySelector('[data-attention-source="storage"]')).not.toBeNull();
+  });
   it("omits unknown panel ages while keeping full-page coverage explicit and recorded ages visible", async () => {
     const input = inputFor("storage", "manager");
     await act(async () => root.render(<AttentionQueueView input={input} callbacks={callbacks()} open onClose={() => {}} presentation="panel" />));

@@ -39,6 +39,9 @@ import { Decisions, DECISIONS_SCOPE, type DecisionUiActions } from "../features/
 import { selectDecisionView, endedDecisionSources, decisionCountsByProject } from "../features/commandCenter/model/decisionView";
 import { prepareDecisionMessage } from "../features/monos/model/monoDecisions";
 import { sendDecisionFromClick } from "../features/monos/model/monoDecisionUi";
+import { selectGoalNextAction, runGoalNextAction, distinctGoalNextActions, type GoalNextStep } from "../features/commandCenter/model/goalNextAction";
+import { GoalNextAction } from "../features/commandCenter/ui/GoalNextAction";
+import { ManagerUpdates } from "../features/monos/ui/ManagerUpdates";
 import { openGoalTarget } from "../features/commandCenter/model/goalView";
 import { TeamMapHeaderAction, useTeamMap } from "../features/teamMap/navigation";
 import { recordCrewDecision } from "../features/monos/model/monoCrewEvents";
@@ -15386,6 +15389,38 @@ function Workspace({
     teamMap.show(scope);
   }, [teamMap.show, workspaceNavigation.cancel]);
 
+  const readGoalNextAction = useCallback((goalId: string) => selectGoalNextAction({
+    goals: monoManagerGoals.goals(), roster: listMonos(), runs: orchestrator.snapshot(), sessions: sessionsRef.current,
+  }, goalId, listMonos().filter(mono => mono.role === "manager" && mono.archivedAt == null).flatMap(mono => monoManagerGoals.decisions(mono.id))), []);
+  const goalNextSteps = useStableValue(useMemo(() => monoManagerGoals.goals().flatMap(goal => {
+    const step = readGoalNextAction(goal.id); return step ? [step] : [];
+  }), [readGoalNextAction, sessions, orchestrationRuns, monosSnap, decisionRevision]));
+  const goalNextRows = useMemo(() => distinctGoalNextActions(goalNextSteps), [goalNextSteps]);
+  const onGoalNextAction = useCallback((event: Event, step: GoalNextStep) => runGoalNextAction(event, step, {
+    read: () => readGoalNextAction(step.goalId),
+    open: async id => { teamMap.close(); await onOpenApprovalSession(id); },
+    openDecision: () => onOpenTeamMap(DECISIONS_SCOPE),
+    continueManager: id => orchestrator.continueManager(id),
+    continueRequest: request => continueManagerRequest(request),
+    pending: decisionPending.current, accepted: decisionAccepted.current,
+  }), [readGoalNextAction, teamMap.close, onOpenApprovalSession, onOpenTeamMap]);
+  const renderGoalNextAction = useCallback((step: GoalNextStep) => <GoalNextAction key={step.revision} step={step} onAction={onGoalNextAction} />, [onGoalNextAction]);
+  const renderGoalAction = useCallback((goalId: string) => {
+    const step = goalNextSteps.find(step => step.goalId === goalId); return step ? renderGoalNextAction(step) : null;
+  }, [goalNextSteps, renderGoalNextAction]);
+  const renderManagerGoalAction = useCallback((monoId: string) => {
+    const manager = findMono(monoId);
+    if (manager?.role !== "manager") return null;
+    const step = goalNextRows.find(step => step.managerMonoId === monoId);
+    const events = orchestrationRuns.filter(run => run.ownerMonoId === monoId || run.leadId === manager.managerEngineId).flatMap(run => run.wakeState?.events.filter(event => event.acknowledgedAt == null) ?? []);
+    return step || events.length ? <>{step && renderGoalNextAction(step)}{!!events.length && <div className="px-2 pb-2 text-[11px] text-content/60"><ManagerUpdates monoId={monoId} events={events} /></div>}</> : null;
+  }, [goalNextRows, renderGoalNextAction, orchestrationRuns, monosSnap]);
+  const additionalGoalDecisionCount = useMemo(() => {
+    const known = new Set([...teamDecisions(listMonos(), sessions, orchestrationRuns).map(item => item.key),
+      ...selectDecisionView(monoManagerGoals, listMonos(), Date.now()).pending.map(item => `decision:${item.managerId}:${item.decision.id}`)]);
+    return goalNextRows.filter(step => !known.has(step.key)).length;
+  }, [goalNextRows, sessions, orchestrationRuns, monosSnap, decisionRevision]);
+
   const onOpenAutomationSession = useCallback(
     async (sessionId: string) => {
       const session = await ensureOpenSession(sessionId);
@@ -16979,8 +17014,8 @@ function Workspace({
   }, [monosSnap, sessions, monoReplies.counts, orchestrationRuns]);
   const monoRail = useStableValue(monoRailState);
   const workspaceDecisionCounts = useMemo(() => {
-    return decisionCountsByProject(listMonos(), sessions, orchestrationRuns, selectDecisionView(monoManagerGoals, listMonos(), Date.now()));
-  }, [monosSnap, sessions, orchestrationRuns, decisionRevision]);
+    return decisionCountsByProject(listMonos(), sessions, orchestrationRuns, selectDecisionView(monoManagerGoals, listMonos(), Date.now()), goalNextSteps);
+  }, [monosSnap, sessions, orchestrationRuns, decisionRevision, goalNextSteps]);
   const workspaceRoster = workspaceTeam(listMonos(), sidebarCwd);
   const workspaceMonoIds = new Set([...(workspaceRoster.manager ? [workspaceRoster.manager.id] : []), ...workspaceRoster.members.map(mono => mono.id)]);
   const workspaceWorking = [...workspaceMonoIds].filter(id => monoRail.states.get(id)?.status === "working").length;
@@ -17027,6 +17062,7 @@ function Workspace({
             onOpen: onOpenRailMono,
             onCreate: onCreateMono,
             onDelete: onDeleteRailMono,
+            nextAction: renderManagerGoalAction,
           }
         : undefined,
     [
@@ -17036,6 +17072,7 @@ function Workspace({
       onOpenRailMono,
       onCreateMono,
       onDeleteRailMono,
+      renderManagerGoalAction,
     ],
   );
   const compactRailActive = compactProjectRail && !projectRailOpen;
@@ -17608,8 +17645,9 @@ function Workspace({
               {teamMap.open && teamMap.scope === DECISIONS_SCOPE && <>
                 <div className="flex gap-5 px-6 pt-4 text-xs text-content/65"><button type="button" onClick={teamMap.close}>Back to conversation</button><button type="button" onClick={() => onOpenTeamMap(ATTENTION_QUEUE_SCOPE)}>Approvals &amp; blockers</button><button type="button" onClick={() => onOpenTeamMap(INTEGRATIONS_SCOPE)}>Integrations</button></div>
                 <Decisions view={selectDecisionView(monoManagerGoals, listMonos(), Date.now())} roster={listMonos()} actions={decisionActions} error={decisionError}
+                  goalActions={goalNextRows.filter(step => !step.decisionId).map(renderGoalNextAction)} goalActionCount={additionalGoalDecisionCount}
                   attentionCount={teamDecisions(listMonos(), sessions, orchestrationRuns).length}
-                  attention={<AttentionQueue sessions={sessions} runs={orchestrationRuns} open presentation="panel"
+                  attention={<AttentionQueue sessions={sessions} runs={orchestrationRuns} coveredGoalSteps={goalNextRows} open presentation="panel"
                     readSessions={() => sessionsRef.current} readRuns={() => orchestrator.snapshot()}
                     selectedAccount={session => selectedProviderAccountId("codex", session.cwd)}
                     isLocalSession={session => !remoteProjectFor(session.cwd)} onClose={teamMap.close}
@@ -17649,7 +17687,7 @@ function Workspace({
                 {decisionError ? <p role="alert" className="px-6 py-3 text-sm">{decisionError} <button type="button" onClick={() => { setDecisionError(undefined); setDecisionRefresh(value => value + 1); }}>Try again</button></p>
                   : decisionLoaded !== decisionLoadKey && <p role="status" className="px-6 py-3 text-sm">Loading decisions…</p>}
                 <TeamMap key={teamMap.scope ?? "org"} sessions={sessions} runs={orchestrationRuns} statuses={managerPrStatuses} scope={teamMap.scope} onClose={teamMap.close} onOpenMono={id => void onOpenMono(id)}
-                  decisions={!decisionError && decisionLoaded === decisionLoadKey ? commandMapDecisions(monoManagerGoals, listMonos(), decisionActions, Date.now()) : undefined}
+                  decisions={!decisionError && decisionLoaded === decisionLoadKey ? commandMapDecisions(monoManagerGoals, listMonos(), decisionActions, Date.now(), { steps: goalNextSteps, render: renderGoalNextAction }) : undefined}
                   bossGoal={mapBossContext ? { context: mapBossContext, submit: submitBossGoal } : undefined} />
               </div>}
                   <div
@@ -18160,7 +18198,7 @@ function Workspace({
                     }
                   >
                     <WorkspaceContextTabs tab={workspaceContextTab} onChange={setWorkspaceContextTab} onClose={onToggleRightPanel}>
-                      {workspaceContextTab === "goal" ? <WorkspaceGoals project={sidebarCwd} sessions={sessions} usage={usage.snapshot} onOpenMono={onOpenRailMono} decisionActions={decisionActions} /> : null}
+                      {workspaceContextTab === "goal" ? <WorkspaceGoals project={sidebarCwd} sessions={sessions} usage={usage.snapshot} onOpenMono={onOpenRailMono} decisionActions={decisionActions} goalAction={renderGoalAction} /> : null}
                       {workspaceContextTab === "worktree" ? <WorkspaceWorktree project={sidebarCwd} path={contextWorktree && sameProjectPath(contextWorktree.project, sidebarCwd) ? contextWorktree.path : undefined} sessions={sessions} onOpen={tree => onSelectProjectWorktree(sidebarCwd, tree)} onChanges={path => onOpenWorktreeChanges(sidebarCwd, path)} onRemove={onRemoveWorktree} /> : null}
                     <div
                       ref={setRightPanelHost}

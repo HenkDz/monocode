@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { DecisionUiActions } from "../commandCenter/ui/Decisions";
 import { commandMapDecisions } from "./commandMapDecisions";
 import { ask, fixtureLedger, project, roster } from "./fixtures/lite/data";
+import type { GoalNextStep } from "../commandCenter/model/goalNextAction";
 
 let host: HTMLDivElement;
 let root: ReturnType<typeof createRoot>;
@@ -15,6 +16,20 @@ beforeEach(() => {
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
 });
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); });
+
+it("counts the supplied actionable goals and shares their renderer without crossing Managers", async () => {
+  const ledger = await fixtureLedger([]);
+  const step: GoalNextStep = { goalId: "goal", key: "engine:continue", projectId: project, managerMonoId: "manager", managerId: "engine", sessionId: "chat", action: "continue", label: "Manager paused — Continue", revision: "one" };
+  const render = vi.fn((value: GoalNextStep) => <button key={value.revision}>{value.label}</button>);
+  const map = commandMapDecisions(ledger, roster, actions, Date.now(), { steps: [step], render });
+  expect(map.needYou).toBe(1);
+  const scoped = map.project(project, "manager");
+  expect(scoped.pending).toBe(1);
+  expect(scoped.goalAction?.("foreign")).toBeUndefined();
+  await act(async () => root.render(<>{scoped.goalAction?.("goal")}{scoped.cards}</>));
+  expect([...host.querySelectorAll("button")].filter(button => button.textContent === step.label)).toHaveLength(2);
+  expect(map.project(project, "foreign-manager").pending).toBe(0);
+});
 
 it("uses lite retained counts and isolates a drawer to its live Manager and project", async () => {
   const ledger = await fixtureLedger([ask, { ...ask, id: "team", answererId: "boss" }, { ...ask, id: "other-project", projectId: "C:/other" },

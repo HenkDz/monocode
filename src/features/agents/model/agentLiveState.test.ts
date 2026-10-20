@@ -233,7 +233,7 @@ describe("selectAgentLiveState", () => {
       task("running", { id: "retry", activeDispatchId: "new-retry", lastDispatchId: "retry" }),
     ];
     const state = selectAgentLiveState(session(), { tasks, wakeStates: [wakeState, { waves: [{ id: "overlap", dispatchIds: ["one"] }], events: [] } as ManagerWakeState] });
-    expect(state).toEqual({ status: "waiting-on-member", reason: "held-updates", detail: "Waiting for 2 workers · 3 updates held" });
+    expect(state).toEqual({ status: "waiting-on-member", reason: "held-updates", detail: "Waiting for 2 workers · Has an update for you" });
     expect(agentLiveStateLabel(state)).toBe(state.detail);
     expect(agentLiveStateTooltip(state)).toBe(state.detail);
   });
@@ -241,12 +241,12 @@ describe("selectAgentLiveState", () => {
   it("keeps held info visible without workers and clears it only after acknowledgement", () => {
     const event = { id: "info", kind: "info", at: 1, text: "Progress" };
     const wakeState = { waves: [], events: [event] } as ManagerWakeState;
-    expect(agentLiveStateLabel(selectAgentLiveState(session(), { wakeStates: [wakeState] }))).toBe("1 update held");
+    expect(agentLiveStateLabel(selectAgentLiveState(session(), { wakeStates: [wakeState] }))).toBe("Has an update for you");
     expect(selectAgentLiveState(session(), { wakeStates: [{ ...wakeState, events: [{ ...wakeState.events[0], acknowledgedAt: 0 }] }] })).toEqual({ status: "idle" });
     expect(agentLiveStateLabel(selectAgentLiveState(session(), {
       tasks: [task("running", { activeDispatchId: "worker" })],
       wakeStates: [{ waves: [{ id: "wave", dispatchIds: ["worker"] }], events: [] } as ManagerWakeState],
-    }))).toBe("Waiting for 1 worker · 0 updates held");
+    }))).toBe("Waiting for 1 worker");
   });
 
   it.each([

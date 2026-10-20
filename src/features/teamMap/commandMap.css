@@ -69,6 +69,8 @@
 .command-map-task-heading { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 6px; }
 .command-map-task-heading button { font-weight: 600; }
 .command-map-task-heading > span { color: var(--map-muted); font-size: 11px; }
+.command-map-task-summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.command-map-brief { white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; border: 1px solid var(--color-stroke); border-radius: 8px; font: 12px/1.6 var(--font-sans); }
 .command-map-fold { display: inline-flex; gap: 7px; align-items: center; color: var(--map-muted); font-size: 12px; padding: 4px 0; }
 .command-map-fold:hover, .command-map-manager-chat button:hover { color: var(--color-content); }
 .command-map-trace { margin-top: 10px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--color-stroke); background: var(--map-panel); }

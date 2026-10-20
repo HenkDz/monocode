@@ -134,6 +134,33 @@ it("preserves paused parent state and opens CC-TX work only through its custom f
   expect(host.querySelector('[aria-label="Activity in chronological order"]')).toBeNull();
 });
 
+it("keeps a prompt copied into a task title, full reports and artifacts inside Show work", async () => {
+  const prompt = "RAW TASK INSTRUCTIONS\n" + "scope and constraints ".repeat(30);
+  const task = { ...runs[0].tasks[0], title: prompt, prompt, result: "REPORT BODY", reportArtifactId: "artifact-source" };
+  await renderMap({ runs: [{ ...runs[0], tasks: [task] }] }); await click("Open app project");
+  expect(host.querySelector(".command-map-task-summary")?.textContent).toBe("Untitled task");
+  expect(host.textContent).not.toContain("RAW TASK INSTRUCTIONS");
+  expect(host.textContent).not.toContain("REPORT BODY");
+  expect(host.textContent).not.toContain("artifact-source");
+  const fold = host.querySelector<HTMLButtonElement>(".command-map-fold")!;
+  await act(async () => fold.click());
+  expect(host.querySelector(".command-map-brief")?.textContent).toBe(prompt);
+  expect(host.textContent).toContain("REPORT BODY");
+  expect(host.querySelector('[data-org-artifact="artifact-source"]')).not.toBeNull();
+  expect(host.querySelector("details")).toBeNull();
+});
+
+it("renders the same supplied goal action in the goal panel and Manager row", async () => {
+  vi.spyOn(monoManagerGoals, "goals").mockReturnValue([{ id: "goal", managerId: "engine", title: "Next step", state: "running", updatedAt: 1 } as ReturnType<typeof monoManagerGoals.goals>[number]]);
+  const action = vi.fn();
+  await renderMap({ decisions: { ...decisions, project: path => ({ ...decisions.project(path, "manager"), goalAction: id => <button type="button" onClick={() => action(id)}>Manager paused — Continue</button> }) } });
+  await click("Open app project");
+  const buttons = [...host.querySelectorAll<HTMLButtonElement>('button')].filter(button => button.textContent === "Manager paused — Continue");
+  expect(buttons).toHaveLength(2);
+  await act(async () => buttons[0].click()); await act(async () => buttons[1].click());
+  expect(action.mock.calls).toEqual([["goal"], ["goal"]]);
+});
+
 it("uses existing Manager/member/Boss navigation and closes the surface", async () => {
   await renderMap(); await click("Open app project");
   await act(async () => [...host.querySelectorAll<HTMLButtonElement>("button")].find(node => node.textContent === "Message App Manager")!.click());

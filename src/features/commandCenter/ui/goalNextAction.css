@@ -1,0 +1,5 @@
+.goal-next-action { min-width: 0; margin: 10px 0; font: 12px/1.5 var(--font-sans); }
+.goal-next-action > button { width: 100%; padding: 9px 12px; border: 1px solid var(--color-stroke); border-radius: 8px; text-align: left; color: var(--color-content); background: var(--color-selection-subtle); cursor: pointer; }
+.goal-next-action > button:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.goal-next-action > button:disabled { cursor: default; opacity: .6; }
+.goal-next-action > span, .goal-next-action > p { display: block; margin: 6px 0; color: color-mix(in srgb, var(--color-content) 68%, transparent); }

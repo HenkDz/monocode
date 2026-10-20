@@ -85,6 +85,7 @@ function Fixture() {
     MISSION_CONTROL_SCOPE: "mission-control", ATTENTION_QUEUE_SCOPE: "attention-queue", DECISIONS_SCOPE: "decisions", USAGE_DASHBOARD_SCOPE: "usage",
     TeamMap, sessions, orchestrationRuns: [], managerPrStatuses: new Map(), onOpenMono: (id: string) => opened.push(id), commandMapDecisions,
     INTEGRATIONS_SCOPE, capabilityDecisionReason, renderIntegrationRequest: () => null, // Integration rendering has its own actual-App fixture.
+    goalNextSteps: [], renderGoalNextAction: () => null, // Existing-goal binding is covered by the separate App goal callback fixture.
   };
   return <div style={{ height: "100vh", display: "flex", flexDirection: "column" }}>
     <div style={{ padding: "6px 16px", fontSize: 11 }}>Actual App source-selected map branch/callbacks · injected shell/native ports <button onClick={() => teamMap.show()}>Fixture open map</button></div>

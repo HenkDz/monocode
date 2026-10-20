@@ -51,3 +51,29 @@ test("Ask me for stays a clean stack in dark/light narrow/wide frames", async ({
     await page.screenshot({ path: join(process.env.CCUX1_GOALS_EVIDENCE!, `${theme}-${width}.png`), fullPage: true });
   }
 });
+
+test("actual WorkspaceGoals and sidebar Manager share the same action and preserve full task copy behind Show work", async ({ page }) => {
+  await page.goto("/?workspace=1");
+  const actions = page.getByRole("button", { name: "Manager paused — Continue", exact: true });
+  await expect(actions).toHaveCount(3);
+  await expect(page.locator("[data-task-summary]")).toHaveText("Implement the routing check");
+  await expect(page.getByText("RAW PROMPT:", { exact: false })).toHaveCount(0);
+  await page.getByRole("button", { name: "Show work", exact: false }).click();
+  await expect(page.getByRole("button", { name: "Copy work", exact: true })).toBeVisible();
+  await expect(page.locator("[aria-label='Goal & tasks'] pre")).toContainText("RAW PROMPT:");
+  await actions.first().click();
+  await expect.poll(() => page.evaluate(() => window.goalFixture.continued)).toEqual(["engine"]);
+  await actions.last().click();
+  expect(await page.evaluate(() => window.goalFixture.continued)).toEqual(["engine"]);
+});
+
+test("actual workspace side panel fits dark/light narrow/wide frames", async ({ page }) => {
+  for (const theme of ["dark", "light"]) for (const width of [1280, 390]) {
+    await page.setViewportSize({ width, height: 900 }); await page.goto(`/?workspace=1&theme=${theme}`);
+    const panel = page.getByRole("tabpanel", { name: "Goal & tasks", exact: true });
+    await expect(panel.locator(".decision-autonomy")).toBeVisible();
+    await expect(panel.locator("[data-task-summary]")).toHaveCount(1);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: join(process.env.CCUX1_GOALS_EVIDENCE!, `workspace-${theme}-${width}.png`), fullPage: true });
+  }
+});

@@ -10,6 +10,8 @@ import type { Mono } from "../features/monos/model/mono";
 import type { OrchestrationRun } from "../features/orchestration/model/orchestrationState";
 import { pathKey } from "../shared/lib/paths";
 import { decisionCountsByProject } from "../features/commandCenter/model/decisionView";
+import { renderToStaticMarkup } from "react-dom/server";
+import { commandMapDecisions } from "../features/teamMap/commandMapDecisions";
 
 const ast = ts.createSourceFile("App.tsx", readFileSync("src/app/App.tsx", "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const nodes: ts.Node[] = [];
@@ -30,6 +32,7 @@ afterEach(() => { dispose?.(); dispose = undefined; vi.unstubAllGlobals(); });
 
 async function fixture() {
   const manager: Mono = { id: "manager", sessionId: "chat", managerEngineId: "engine", role: "manager", projects: ["/repo"], mascot: "cat", color: "blue" };
+  const roster = [manager];
   const project: ManagerProject = { id: "/repo", folder: "/repo", name: "Project", managerId: "engine", managerMonoId: manager.id, managerExists: true, running: 0, needsDecision: 0, ready: 0, blocked: [], goals: [] };
   const original = { id: "original", role: "user" as const, text: "Implement the existing routing goal" };
   const ledger = new MonoManagerGoals({ load: async () => null, save: async () => {} });
@@ -56,17 +59,58 @@ async function fixture() {
     getMonoGoalRecoveryBlocks: () => { throw Error("Unexpected history read"); } };
   managerGoalHost.current.deliver = evaluate(delivery.initializer.getText(ast), scope);
   dispose = evaluate<() => (() => void)>(registration.arguments[0].getText(ast), scope)();
-  const read = evaluate<(goalId: string) => GoalNextStep | undefined>(declaration("readGoalNextAction"), { selectGoalNextAction, monoManagerGoals: ledger, listMonos: () => [manager], orchestrator, sessionsRef });
-  const opened = vi.fn(async () => {}), close = vi.fn();
+  const read = evaluate<(goalId: string) => GoalNextStep | undefined>(declaration("readGoalNextAction"), { selectGoalNextAction, monoManagerGoals: ledger, listMonos: () => roster, orchestrator, sessionsRef });
+  const opened = vi.fn(async () => {}), openedPage = vi.fn(), close = vi.fn();
   const action = evaluate<(event: Event, step: GoalNextStep) => Promise<void>>(declaration("onGoalNextAction"), {
-    runGoalNextAction, readGoalNextAction: read, teamMap: { close }, onOpenApprovalSession: opened, onOpenTeamMap: opened, DECISIONS_SCOPE: "decisions", orchestrator,
+    runGoalNextAction, readGoalNextAction: read, teamMap: { close }, onOpenApprovalSession: opened, onOpenTeamMap: openedPage, DECISIONS_SCOPE: "decisions", orchestrator,
     continueManagerRequest, decisionPending: { current: new Set<string>() }, decisionAccepted: { current: new Set<string>() },
   });
   const click = new Event("click"), button = document.createElement("button"); button.dataset.decisionUi = "";
   Object.defineProperties(click, { isTrusted: { value: true }, target: { value: button } });
-  return { ledger, goal, manager, project, original, request, sessionsRef, run, read, action, click, opened, orchestrator, upsertSession,
+  return { ledger, goal, manager, roster, project, original, request, sessionsRef, run, read, action, click, opened, openedPage, orchestrator, upsertSession,
     afterOpen: (callback: typeof afterOpen) => { afterOpen = callback; } };
 }
+
+it("actual App opens the worker approval ahead of a ledger ask while retaining that ask and deduplicating its counts", async () => {
+  const f = await fixture();
+  const worker = { ...newSession("codex", "/repo"), id: "worker", blocks: [{ id: "approval", role: "tool" as const, text: "", approval: { requestId: 7 } }] };
+  f.sessionsRef.current.push(worker);
+  f.roster.push({ ...f.manager, id: "worker-mono", sessionId: worker.id, role: "member", reportsTo: f.manager.id });
+  f.run.tasks.push({ id: "task", monoGoalId: f.goal.id, status: "queued", sessionId: worker.id, memberId: "worker-mono", dependsOn: [], accepted: false } as OrchestrationRun["tasks"][number]);
+  await f.ledger.recordDecision(f.manager.id, { version: 1, type: "decision", id: "waiting", projectId: f.project.id, goalId: f.goal.id,
+    requestingMonoId: "worker-mono", requesterSessionId: worker.id, escalationChain: [{ id: f.manager.id, level: "manager" }, { id: "user", level: "user" }],
+    status: "waiting", answererId: "user", createdAt: 1, question: "Which unrelated next step?", impact: "high", context: "Still needs an answer", operation: "work",
+    options: [{ id: "a", label: "First" }, { id: "b", label: "Second" }] });
+  const step = f.read(f.goal.id)!;
+  await f.action(f.click, step);
+  expect(f.opened).toHaveBeenCalledExactlyOnceWith(worker.id);
+  expect(f.openedPage).not.toHaveBeenCalled();
+  expect(step).toMatchObject({ key: "worker:approval:7", sessionId: worker.id });
+  expect(step.decisionId).toBeUndefined();
+  const actions = { answer: vi.fn(async () => ({ logFailed: false })), autonomy: vi.fn(async () => {}), openProject: vi.fn() };
+  const map = commandMapDecisions(f.ledger, f.roster, actions, 1, { steps: [step, step], render: value => <button key={value.key}>{value.label}</button> });
+  const view = { pending: [{ managerId: f.manager.id, decision: f.ledger.decisions(f.manager.id)[0] }], log: [], teamPending: 0, handledToday: 0, pruned: 0, skipped: 0 };
+  expect(decisionCountsByProject(f.roster, f.sessionsRef.current, [f.run], view, [step, step]).get("/repo")).toBe(2);
+  expect(map.needYou).toBe(2);
+  const markup = renderToStaticMarkup(map.rail);
+  expect(markup).toContain("Which unrelated next step?");
+  expect(markup).toContain(step.label);
+  expect(markup).toContain("2 need you");
+
+  worker.blocks = [];
+  await expect(f.action(f.click, step)).rejects.toThrow("goal changed");
+  const ledgerStep = f.read(f.goal.id)!;
+  expect(ledgerStep).toMatchObject({ key: "decision:manager:waiting", decisionId: "waiting" });
+  await f.action(f.click, ledgerStep);
+  expect(f.openedPage).toHaveBeenCalledExactlyOnceWith("decisions");
+  expect(f.opened).toHaveBeenCalledOnce();
+  expect(decisionCountsByProject(f.roster, f.sessionsRef.current, [f.run], view, [ledgerStep]).get("/repo")).toBe(1);
+  expect(f.ledger.goals()).toHaveLength(1);
+  expect(f.ledger.decisions(f.manager.id)[0].status).toBe("waiting");
+  expect(f.sessionsRef.current[0].queuedMessages ?? []).toHaveLength(0);
+  expect(f.orchestrator.continueManager).not.toHaveBeenCalled();
+  expect(actions.answer).not.toHaveBeenCalled();
+});
 
 it("runs actual App Start -> existing registered recovery -> actual App delivery -> delegate with the same goal and no second ledger entry", async () => {
   const f = await fixture(), step = f.read(f.goal.id)!;

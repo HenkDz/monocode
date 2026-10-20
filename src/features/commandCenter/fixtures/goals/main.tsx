@@ -9,6 +9,10 @@ import { newSession } from "../../../sessions/model/session";
 import type { OrchestrationRun, OrchestrationTask } from "../../../orchestration/model/orchestrationState";
 import { selectGoalNextAction, runGoalNextAction, type GoalNextStep } from "../../model/goalNextAction";
 import { GoalNextAction } from "../../ui/GoalNextAction";
+import { WorkspaceGoals } from "../../../../app/shell/WorkspaceContext";
+import { WorkspaceTeam } from "../../../../app/shell/WorkspaceTeam";
+import { monoLiveState } from "../../../monos/model/monoNavigation";
+import { orchestrator } from "../../../orchestration/model/orchestration";
 import "../../../teamMap/commandMap.css";
 import "./styles.css";
 
@@ -35,6 +39,8 @@ const task = { id: "task", memberId: "worker", memberName: "Builder", monoGoalId
 const run = { leadId: "engine", ownerMonoId: "manager", ownerSessionId: "chat", cwd: project, projectManager: true, status: mode === "info" || mode === "approval" ? "active" : "paused", tasks: [task], dispatches: [], wakeState: { waves: [], events: mode === "info" ? [{ id: "RAW EVENT ID", kind: "info", at: 1, text: "RAW UPDATE: retained informational event" }] : [] } } as unknown as OrchestrationRun;
 const managerChat = { ...newSession("claude", "/synthetic/manager/workspace"), id: "chat", blocks: mode === "approval" ? [{ id: "approval", role: "tool", text: "", approval: { requestId: 42 } }] as never : [] };
 const sessions = [managerChat, { ...newSession("claude", project), id: "worker-chat" }];
+const persistedRuns = [run];
+orchestrator.snapshot = () => persistedRuns; // useSyncExternalStore needs a stable snapshot; no engine is initialized.
 const calls = { continued: [] as string[], opened: [] as string[] };
 declare global { interface Window { goalFixture: typeof calls } }
 window.goalFixture = calls;
@@ -43,7 +49,7 @@ function Fixture() {
   const [runs] = useState([run]);
   const pending = useRef(new Set<string>()), accepted = useRef(new Set<string>());
   const input = { roster, runs, sessions, goals: monoManagerGoals.goals() };
-  // Start is deliberately disconnected until the existing-goal contract is approved.
+  // This component fixture has no retained recovery record; actual App Start is covered by its connected regression.
   const steps = input.goals.flatMap(goal => { const step = selectGoalNextAction(input, goal.id); return step && step.action !== "start" ? [step] : []; });
   const render = (step: GoalNextStep) => <GoalNextAction key={step.revision} step={step} onAction={(event, selected) => runGoalNextAction(event, selected, {
     read: () => selectGoalNextAction(input, selected.goalId),
@@ -52,11 +58,20 @@ function Fixture() {
     continueRequest: async () => { throw Error("No recovery record in this component-only fixture"); },
     pending: pending.current, accepted: accepted.current,
   })} />;
-  const decisions = commandMapDecisions(monoManagerGoals, roster, {
+  const actions = {
     answer: async () => { throw Error("No fixture decisions"); },
-    autonomy: (event, managerId, projectId, value) => monoManagerGoals.setAutonomy(event, managerId, projectId, value),
+    autonomy: (event: Event, managerId: string, projectId: string, value: Parameters<typeof monoManagerGoals.setAutonomy>[3]) => monoManagerGoals.setAutonomy(event, managerId, projectId, value),
     openProject: () => {},
-  }, Date.now(), { steps, render });
+  };
+  const decisions = commandMapDecisions(monoManagerGoals, roster, actions, Date.now(), { steps, render });
+  if (params.has("workspace")) return <main className="fixture-workspace">
+    <aside><WorkspaceTeam roster={roster} project={project} states={new Map(roster.map(mono => [mono.id, monoLiveState(roster, runs, sessions, mono.id)]))}
+      onOpen={id => calls.opened.push(id)} onCreate={() => {}} onDelete={() => {}}
+      nextAction={id => { const step = steps.find(step => step.managerMonoId === id); return step && render(step); }} />
+      <WorkspaceGoals project={project} sessions={sessions} onOpenMono={id => calls.opened.push(id)} decisionActions={actions}
+        goalAction={id => { const step = steps.find(step => step.goalId === id); return step && render(step); }} />
+    </aside><section className="fixture-workspace-decisions">{decisions.rail}</section>
+  </main>;
   return <main style={{ height: "100vh", display: "flex", flexDirection: "column" }}>
     <TeamMap sessions={sessions} runs={runs} statuses={new Map()} scope="manager" onOpenMono={id => calls.opened.push(id)} onClose={() => {}} decisions={decisions} />
   </main>;

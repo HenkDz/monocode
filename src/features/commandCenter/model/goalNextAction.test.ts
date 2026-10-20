@@ -6,6 +6,7 @@ import type { MonoManagerGoal } from "../../monos/model/monoManagerGoals";
 import type { OrchestrationRun, OrchestrationTask } from "../../orchestration/model/orchestrationState";
 import { runGoalNextAction, selectGoalNextAction, type GoalActionHost } from "./goalNextAction";
 import { appendManagerRecovery, managerRequestBinding } from "../../monos/model/managerAuthorizedWork";
+import type { MonoDecision } from "../../monos/model/monoDecisions";
 
 function fixture() {
   const manager = { id: "manager", role: "manager", managerEngineId: "engine", sessionId: "chat", projects: ["/app"] } as Mono;
@@ -49,6 +50,32 @@ it("uses existing Continue for a paused Manager and opens an actual approval fir
   expect(f.read()).toMatchObject({ action: "open", sessionId: "chat", label: "Waiting for your approval — Open" });
   await runGoalNextAction(f.click, f.read()!, f.host);
   expect(f.host.continueRequest).not.toHaveBeenCalled();
+});
+
+it.each(["approval", "question"])("keeps a worker %s ahead of a waiting ledger decision, including its navigation identity", async kind => {
+  const f = fixture();
+  const worker = { ...newSession("codex", "/app"), id: "worker" };
+  if (kind === "approval") worker.blocks.push({ id: "approval", role: "tool", text: "", approval: { requestId: 7 } } as never);
+  else worker.pendingQuestion = { requestId: 7, questions: [] };
+  f.input.sessions.push(worker);
+  const decisions = [{ id: "waiting", projectId: "/app", goalId: f.goal.id, status: "waiting", answererId: "user" } as MonoDecision];
+  f.host.read = () => selectGoalNextAction(f.input, f.goal.id, decisions);
+  f.host.openDecision = vi.fn();
+  const step = f.host.read()!;
+  expect(step).toMatchObject({ action: "open", sessionId: "worker", key: `worker:${kind}:7` });
+  expect(step.decisionId).toBeUndefined();
+  await runGoalNextAction(f.click, step, f.host);
+  expect(f.host.open).toHaveBeenCalledExactlyOnceWith("worker");
+  expect(f.host.openDecision).not.toHaveBeenCalled();
+
+  worker.blocks = []; worker.pendingQuestion = undefined;
+  await expect(runGoalNextAction(f.click, step, f.host)).rejects.toThrow("goal changed");
+  const ledgerStep = f.host.read()!;
+  expect(ledgerStep).toMatchObject({ action: "open", sessionId: "chat", key: "decision:manager:waiting", decisionId: "waiting" });
+  await runGoalNextAction(f.click, ledgerStep, f.host);
+  expect(f.host.openDecision).toHaveBeenCalledExactlyOnceWith("waiting");
+  expect(f.host.continueRequest).not.toHaveBeenCalled();
+  expect(f.host.continueManager).not.toHaveBeenCalled();
 });
 
 it.each(["stopped", "finished", "wrong-project", "wrong-manager", "running", "manager-busy", "cancelled-goal", "recovery", "queued-message"])("does not offer Start for %s", condition => {

@@ -143,6 +143,16 @@ it("shows the real project autonomy without a contradictory Not configured place
   expect(host.textContent).not.toContain("Not configured");
 });
 
+it("puts quick actions first and removes legacy Open workspace and duplicate folder controls", async () => {
+  await act(async () => root.render(createElement(WorkspaceWorktree, {
+    project: "C:/repo", path: "C:/repo/feature", sessions: [], onOpen: vi.fn(), onChanges: vi.fn(), onRemove: vi.fn(), onRunScript: vi.fn(),
+  })));
+  expect(host.querySelector('[aria-label="Worktree quick actions"]')).not.toBeNull();
+  expect(host.textContent).toContain("Open in File Explorer");
+  expect(host.textContent).not.toContain("Open workspace"); expect(host.textContent).not.toContain("Open folder");
+  expect(host.querySelector('section')?.firstElementChild?.getAttribute('aria-label')).toBe("Worktree quick actions");
+});
+
 it("opens the existing create/delete review UIs without performing any mutation, and labels unsupported updates", async () => {
   const remove = await renderTree();
   expect(host.textContent).toContain("2 / 1");

@@ -12,7 +12,7 @@ export function WorktreeQuickActions({ project, path, unavailable, onRun }: {
   useEffect(() => {
     let current = true;
     setScripts([]); setError(undefined);
-    if (!unavailable) void packageScripts(project).then(value => { if (current) setScripts(value); }, () => { /* Projects without package.json have no npm scripts. */ });
+    if (!unavailable) void packageScripts(path).then(value => { if (current) setScripts(value); }, () => { /* Projects without package.json have no npm scripts. */ });
     return () => { current = false; };
   }, [project, path, unavailable]);
   const run = async (name: string) => {

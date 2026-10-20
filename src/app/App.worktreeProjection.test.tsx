@@ -15,6 +15,7 @@ import { collectWorkspaceSnapshot, parseWorkspaceSnapshot, hydrateWorkspaceSnaps
 import type { Worktree } from "../features/source-control/model/worktrees";
 import { pathKey, isEqualOrInside } from "../shared/lib/paths";
 import { worktreeSessionGroups } from "../features/source-control/model/worktreeSessions";
+import { shellPageTabId, shellPageForTab, isViewTab } from "../features/workspace/model/appViewTabs";
 
 const ast = ts.createSourceFile("App.tsx", readFileSync("src/app/App.tsx", "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const nodes: ts.Node[] = []; const visit = (node: ts.Node) => { nodes.push(node); ts.forEachChild(node, visit); }; visit(ast);
@@ -92,14 +93,50 @@ it("bounds only open tab surfaces per checkout while keeping the active tab and 
   expect(kept).toHaveLength(24); expect(kept).toContain(tabs[0]); expect(sessions).toHaveLength(30);
 });
 
+it("actual App worktree callback refuses a started chat and rechecks after async checkout discovery", async () => {
+  const draft = { ...newSession("codex", "C:/repo"), id: "draft", codexStorageHome: "synthetic-home" };
+  const store = new SessionStateStore([draft]);
+  const list = vi.fn<() => Promise<{ worktrees: Worktree[] }>>();
+  const forget = vi.fn();
+  const action = callback("onWorktreeChange", { sessionsRef: store.ref, isProjectManager: () => false, isBlankSession,
+    removingSessionIds: { current: new Set() }, switchingWorktrees: { current: new Map() }, removingWorktreePaths: { current: new Set() }, pendingPersist: { current: new Map() },
+    orchestrator: { forSession: () => undefined }, pathKey, sessionWorkCwd, isEqualOrInside, listWorktrees: list, forgetHarnessSession: forget });
+  store.setState([{ ...draft, providerSessionId: "thread", blocks: [{ id: "sent", role: "user", text: "started" }] }]);
+  await expect(action("draft", trees[1], true)).rejects.toThrow("original worktree");
+  expect(list).not.toHaveBeenCalled();
+  store.setState([draft]);
+  let resolve!: (value: { worktrees: Worktree[] }) => void;
+  list.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+  const pending = action("draft", trees[1], true);
+  store.setState([{ ...draft, providerSessionId: "new-thread", blocks: [{ id: "sent", role: "user", text: "started while waiting" }] }]);
+  resolve({ worktrees: trees });
+  await expect(pending).rejects.toThrow("session changed");
+  expect(forget).not.toHaveBeenCalled(); expect(store.session("draft")!.providerSessionId).toBe("new-thread");
+  expect(store.session("draft")!.codexStorageHome).toBe("synthetic-home");
+});
+
 it("actual App script callback runs only after confirmation against the exact selected checkout", async () => {
   const open = vi.fn(); const ask = vi.fn(async () => false); const list = vi.fn(async () => ({ worktrees: trees }));
   const projectCwdRef = { current: "C:/repo" }; let focus = { path: "C:/repo/child", branch: "feature" };
-  const action = callback("onRunProjectScript", { sameProjectPath, projectCwdRef, worktreeFocus: () => focus, removingWorktreePaths: { current: new Set() }, isEqualOrInside, isLocalProject: (path: string) => path.startsWith("C:"),
+  const action = callback("onRunProjectScript", { workspaceSessionRequest: { current: 0 }, sameProjectPath, projectCwdRef, worktreeFocus: () => focus, removingWorktreePaths: { current: new Set() }, isEqualOrInside, isLocalProject: (path: string) => path.startsWith("C:"),
     packageScripts: async () => [{ name: "test", command: "vitest run", run: "npm run test" }], listWorktrees: list, ask, openProjectTerminal: open });
   expect(open).not.toHaveBeenCalled();
   await action("C:/repo", focus.path, "test"); expect(open).not.toHaveBeenCalled();
-  ask.mockResolvedValue(true); await action("C:/repo", focus.path, "test"); expect(open).toHaveBeenCalledExactlyOnceWith("C:/repo/child", "npm run test");
+  ask.mockResolvedValue(true); await action("C:/repo", focus.path, "test"); expect(open).toHaveBeenCalledExactlyOnceWith("C:/repo/child", "npm run test", expect.any(Function));
   ask.mockImplementation(async () => { focus = { path: "C:/repo", branch: "main" }; return true; });
   await expect(action("C:/repo", "C:/repo/child", "test")).rejects.toThrow("changed"); expect(open).toHaveBeenCalledTimes(1);
+});
+
+it("opens and closes shell pages under their own title-tab identities through actual App callbacks", () => {
+  const open = vi.fn();
+  const select = callback("onSelectTitleTab", { shellPageForTab, onOpenTeamMap: open, DECISIONS_SCOPE: "decision-scope", INTEGRATIONS_SCOPE: "integration-scope", USAGE_DASHBOARD_SCOPE: "usage-scope" });
+  for (const [page, scope] of [["commandMap", undefined], ["decisions", "decision-scope"], ["integrations", "integration-scope"], ["usage", "usage-scope"]] as const) {
+    const id = shellPageTabId(page); expect(isViewTab(id)).toBe(true); select(id); expect(open).toHaveBeenLastCalledWith(scope);
+  }
+  let pages = ["commandMap", "decisions"], order = ["chat", "shell-page:commandMap", "shell-page:decisions"];
+  const close = vi.fn(), neighbor = vi.fn();
+  const action = callback("closeViewTab", { shellPageForTab, setOpenShellPages: (update: (value: string[]) => string[]) => { pages = update(pages); }, setTitleTabOrder: (update: (value: string[]) => string[]) => { order = update(order); },
+    displayedTabNavigation: { current: { activeId: "shell-page:decisions", tabs: order.map(id => ({ id })), select: neighbor } }, teamMap: { close }, nextDisplayedTabAfterClose: () => "chat" });
+  action("shell-page:decisions"); expect(pages).toEqual(["commandMap"]); expect(order).toEqual(["chat", "shell-page:commandMap"]);
+  expect(close).toHaveBeenCalledOnce(); expect(neighbor).toHaveBeenCalledWith("chat");
 });

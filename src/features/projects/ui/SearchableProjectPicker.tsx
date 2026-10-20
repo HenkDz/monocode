@@ -365,7 +365,7 @@ export function ProjectPickerPopover({
       const index =
         target instanceof HTMLInputElement
           ? active
-          : Array.prototype.indexOf.call(rows, target);
+          : Array.prototype.indexOf.call(rows, target instanceof HTMLElement ? (target.closest("[data-project-picker-row]") ?? target) : target);
       const project = filteredProjects[index - filteredMonos.length];
       const row = rows[index];
       if (!project || !row) return;
@@ -491,7 +491,7 @@ export function ProjectPickerPopover({
               itemSeed,
             );
             return (
-              <div key={item.path} className="flex items-center">
+              <div key={item.path} data-project-picker-row className="flex items-center">
               <button
                 type="button"
                 title={item.path}

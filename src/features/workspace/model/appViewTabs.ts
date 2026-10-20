@@ -7,6 +7,14 @@ export const APP_VIEW_LABELS = {
 
 export type AppView = keyof typeof APP_VIEW_LABELS;
 
+export const SHELL_PAGE_LABELS = { commandMap: "Command map", decisions: "Decisions", integrations: "Integrations", usage: "Usage" } as const;
+export type ShellPage = keyof typeof SHELL_PAGE_LABELS;
+export const shellPageTabId = (page: ShellPage) => `shell-page:${page}`;
+export function shellPageForTab(id: string): ShellPage | undefined {
+  const page = id.startsWith("shell-page:") ? id.slice("shell-page:".length) : "";
+  return Object.prototype.hasOwnProperty.call(SHELL_PAGE_LABELS, page) ? page as ShellPage : undefined;
+}
+
 export function appViewTabId(view: AppView): string {
   return `app-view:${view}`;
 }
@@ -30,7 +38,7 @@ export function monoForTab(id: string): string | undefined {
 
 /** Whether a title tab is a view of its own rather than a workspace tab. */
 export function isViewTab(id: string): boolean {
-  return !!appViewForTab(id) || !!monoForTab(id);
+  return !!appViewForTab(id) || !!monoForTab(id) || !!shellPageForTab(id);
 }
 
 /** Keep the shared order and append newly opened tabs regardless of type. */

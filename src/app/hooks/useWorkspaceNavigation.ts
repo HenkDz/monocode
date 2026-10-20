@@ -149,6 +149,7 @@ export function useWorkspaceNavigation(options: Options) {
             session &&
             !isManagerTab(tab) &&
             isBlankSession(session) &&
+            !session.providerSessionId && !session.queuedMessages?.length && !session.worktreePreparing &&
             sameProjectPath(session.cwd, next.project)
           ) {
             moving.current.add(session.id);

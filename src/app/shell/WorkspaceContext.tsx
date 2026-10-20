@@ -807,7 +807,7 @@ function WorktreeDetails({
         aria-label="Worktree actions"
         className="mt-4 flex flex-wrap gap-2 border-t border-stroke pt-3"
       >
-        <button
+        {!onRunScript && <><button
           type="button"
           className={button}
           disabled={unavailable}
@@ -826,7 +826,7 @@ function WorktreeDetails({
           }}
         >
           Open folder
-        </button>
+        </button></>}
         <button
           type="button"
           className={button}

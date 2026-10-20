@@ -238,6 +238,7 @@ import {
   appViewForTab,
   appViewTabId,
   isViewTab,
+  SHELL_PAGE_LABELS, shellPageTabId, shellPageForTab, type ShellPage,
   monoForTab,
   monoTabId,
   nextDisplayedTabAfterClose,
@@ -1611,6 +1612,7 @@ function Workspace({
   );
   const [rightPanelOpen, setRightPanelOpenState] = useState(loadRightPanelOpen);
   const [workspaceContextTab, setWorkspaceContextTab] = useState<WorkspaceContextTab>("goal");
+  const [openShellPages, setOpenShellPages] = useState<ShellPage[]>([]);
   const [rightPanelTab, setRightPanelTabState] =
     useState<RightPanelTab>(loadRightPanelTab);
   // A closed panel keeps its contents until it has slid out.
@@ -3565,13 +3567,14 @@ function Workspace({
   }, []);
 
   const openProjectTerminal = useCallback(
-    (cwd: string, command?: string) => {
+    (cwd: string, command?: string, authorized?: () => boolean) => {
       const workdir = cwd || projectCwdRef.current;
       const projectPath = projectCwdRef.current;
       if (!isLocalProject(projectPath)) return false;
       const existingDock = findProjectTerminal(projectTerminalsRef.current, projectPath);
       const file = newTerminalFile(workdir, existingDock ? nextDockTerminalTitle(existingDock, workdir) : undefined, projectPath);
       if (command) prepareTerminalCommand(file.id, workdir, command, () =>
+        (!authorized || authorized()) &&
         sameProjectPath(projectCwdRef.current, projectPath) &&
         sameProjectPath(worktreeFocus(projectPath)?.path ?? projectPath, workdir));
       setProjectTerminals((prev) => {
@@ -3597,23 +3600,24 @@ function Workspace({
   );
 
   const onRunProjectScript = useCallback(async (project: string, path: string, name: string) => {
-    const isCurrent = () => sameProjectPath(projectCwdRef.current, project) &&
+    const request = workspaceSessionRequest.current;
+    const isCurrent = () => workspaceSessionRequest.current === request && sameProjectPath(projectCwdRef.current, project) &&
       sameProjectPath(worktreeFocus(project)?.path ?? project, path) &&
       ![...removingWorktreePaths.current].some(removed => isEqualOrInside(path, removed));
     if (!isLocalProject(project) || !isLocalProject(path) || !isCurrent()) throw new Error("Select this worktree before running a script.");
-    const scripts = await packageScripts(project);
+    const scripts = await packageScripts(path);
     const script = scripts.find(script => script.name === name);
     if (!script || !isCurrent()) throw new Error("The project or script changed. Try again.");
     const listed = await listWorktrees(project);
     if (!isCurrent() || !listed.worktrees.some(tree => sameProjectPath(tree.path, path) && !tree.missing && !tree.prunable))
       throw new Error("This worktree is unavailable.");
     if (!await ask(`Run ${script.run} in ${path}?\n\n${script.command}`, { title: "Run project script", kind: "warning" })) return;
-    const latestScripts = await packageScripts(project);
+    const latestScripts = await packageScripts(path);
     const latestTrees = await listWorktrees(project);
     if (!isCurrent() || latestScripts.find(row => row.name === name)?.command !== script.command ||
       !latestTrees.worktrees.some(tree => sameProjectPath(tree.path, path) && !tree.missing && !tree.prunable))
       throw new Error("The worktree or script changed. Run it again from the selected worktree.");
-    openProjectTerminal(path, script.run);
+    openProjectTerminal(path, script.run, isCurrent);
   }, [openProjectTerminal]);
 
   const onOpenTerminal = useCallback(
@@ -14837,11 +14841,19 @@ function Workspace({
     return () => window.removeEventListener("monocode:mono-card-reply", reply);
   }, []);
 
+  const openPage: ShellPage | undefined = !teamMap.open ? undefined
+    : teamMap.scope === DECISIONS_SCOPE ? "decisions"
+    : teamMap.scope === INTEGRATIONS_SCOPE ? "integrations"
+    : teamMap.scope === USAGE_DASHBOARD_SCOPE ? "usage"
+    : teamMap.scope === ATTENTION_QUEUE_SCOPE || teamMap.scope === MISSION_CONTROL_SCOPE ? undefined
+    : "commandMap";
+  useEffect(() => { if (openPage) setOpenShellPages(current => current.includes(openPage) ? current : [...current, openPage]); }, [openPage]);
   const orderedTitleTabs: TitleTab[] = orderByIds(
     [
       ...deckProjectTabs.map((tab) =>
         toTitleTab(tab, sessions, dirtyFiles, unseenFinishedIds),
       ),
+      ...openShellPages.map((page): TitleTab => ({ id: shellPageTabId(page), page, project: "", title: SHELL_PAGE_LABELS[page], more: [], sessionCount: 0, harnesses: [], busyHarnesses: [], files: [] })),
       ...(insetLayout
         ? openAppViews
             .filter((view) => view !== "notes" || notesEnabled)
@@ -14902,17 +14914,9 @@ function Workspace({
     isBlankWorkspaceTab(deckProjectTabs[0], sessions)
       ? deckProjectTabs[0].id
       : undefined;
-  const openPage: TitleTab["page"] = !teamMap.open ? undefined
-    : teamMap.scope === DECISIONS_SCOPE ? "decisions"
-    : teamMap.scope === INTEGRATIONS_SCOPE ? "integrations"
-    : teamMap.scope === USAGE_DASHBOARD_SCOPE ? "usage"
-    : teamMap.scope === ATTENTION_QUEUE_SCOPE || teamMap.scope === MISSION_CONTROL_SCOPE ? undefined
-    : "commandMap";
   const nextTitleTabs = (placeholderTab
     ? orderedTitleTabs.filter((tab) => tab.id !== placeholderTab)
-    : orderedTitleTabs).map(tab => openPage && tab.id === ((insetLayout ? shownViewTabId : undefined) ?? activeTabId)
-      ? { ...tab, page: openPage }
-      : tab);
+    : orderedTitleTabs);
   tabProjectsRef.current = new Map(
     nextTitleTabs.map((tab) => [tab.id, tab.project]),
   );
@@ -15717,6 +15721,11 @@ function Workspace({
 
   const onSelectTitleTab = useCallback(
     (id: string) => {
+      const page = shellPageForTab(id);
+      if (page) {
+        const scopes = { commandMap: undefined, decisions: DECISIONS_SCOPE, integrations: INTEGRATIONS_SCOPE, usage: USAGE_DASHBOARD_SCOPE };
+        onOpenTeamMap(scopes[page]); return;
+      }
       const monoId = monoForTab(id);
       if (monoId) {
         void onOpenMono(monoId);
@@ -15747,12 +15756,13 @@ function Workspace({
       onOpenInbox,
       onOpenNotes,
       onOpenAutomations,
+      onOpenTeamMap,
     ],
   );
 
   displayedTabNavigation.current = {
     tabs: insetLayout ? titleTabs : [],
-    activeId: settingsOpen
+    activeId: openPage ? shellPageTabId(openPage) : settingsOpen
       ? ""
       : monoCovers
         ? (monoViewTabId ?? "")
@@ -15806,12 +15816,24 @@ function Workspace({
   );
   const closeViewTab = useCallback(
     (id: string, selectNeighbor?: boolean) => {
+      const page = shellPageForTab(id);
+      if (page) {
+        setOpenShellPages(current => current.filter(entry => entry !== page));
+        setTitleTabOrder(current => current.filter(entry => entry !== id));
+        const navigation = displayedTabNavigation.current;
+        if (navigation.activeId === id) {
+          teamMap.close();
+          const next = selectNeighbor !== false ? nextDisplayedTabAfterClose(navigation.tabs, id, id) : undefined;
+          if (next) navigation.select?.(next);
+        }
+        return;
+      }
       const view = appViewForTab(id);
       if (view) onCloseAppView(view, selectNeighbor);
       const monoId = monoForTab(id);
       if (monoId) onCloseMonoTab(monoId, selectNeighbor);
     },
-    [onCloseAppView, onCloseMonoTab],
+    [onCloseAppView, onCloseMonoTab, teamMap.close],
   );
   const onCloseDisplayedTab = useCallback(
     (id: string) => {
@@ -15879,11 +15901,13 @@ function Workspace({
     [onReorderTabs],
   );
   const onCloseVisibleTab = useCallback(() => {
-    if (insetLayout && monoCovers && monoViewTabId) closeViewTab(monoViewTabId);
+    if (openPage) closeViewTab(shellPageTabId(openPage));
+    else if (insetLayout && monoCovers && monoViewTabId) closeViewTab(monoViewTabId);
     else if (insetLayout && activeAppView) onCloseAppView(activeAppView);
     else onCloseFocused();
   }, [
     insetLayout,
+    openPage,
     monoCovers,
     monoViewTabId,
     activeAppView,
@@ -17239,7 +17263,7 @@ function Workspace({
       }
       hideWindowControls={!teamMap.open && monoCovers && (insetLayout && !monoViewMono?.role ? monoOverviewOpen && !!monoOverviewPanel : monoSidebarOpen && !!monoDetailsPanel)}
       activeId={
-        monoViewSession && (!teamMap.open || insetLayout)
+        openPage ? shellPageTabId(openPage) : monoViewSession && (!teamMap.open || insetLayout)
           ? insetLayout
             ? (monoViewTabId ?? "")
             : ""

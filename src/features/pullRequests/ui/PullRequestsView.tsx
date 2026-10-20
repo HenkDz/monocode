@@ -1,7 +1,6 @@
 import { useEffect, useState, type ComponentProps } from "react";
 import { ArrowLeft, GitPullRequest } from "../../../shared/ui/icons";
 import { OverlayNav } from "../../../app/shell/TitleBar";
-import { WindowControls } from "../../../app/shell/WindowControls";
 import { IS_MAC } from "../../../platform/tauri/platform";
 import { projectName } from "../../../shared/lib/paths";
 import { InboxDetail } from "../../inbox/ui/InboxView";
@@ -154,7 +153,6 @@ export function PullRequestsView({
             All pull requests
           </button>
         )}
-        {IS_MAC ? null : <WindowControls />}
       </header>
       {selected ? (
         <InboxDetail

@@ -13,8 +13,8 @@ type AppShortcutEvent = ShortcutEvent & {
 const APP_SHORTCUTS: [string, string, boolean][] = [
   ["App: New Window", "n", true],
   ["App: Open Project", "o", false],
-  ["App: Toggle Sidebar", "b", false],
-  ["App: Toggle Session Sidebar", "b", true],
+  ["App: Toggle Sidebar", "b", true],
+  ["App: Toggle Session Sidebar", "b", false],
   ["App: Toggle Mono", "i", false],
   ["App: Go to File", "p", false],
   ["App: Command Palette", "p", true],

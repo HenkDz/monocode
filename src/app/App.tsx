@@ -16,7 +16,7 @@ import { resolveMonoRolePermissions, snapshotMonoWorkerPermissions } from "../fe
 import { archiveMonoConversation, archiveProjectMonos, offerProjectMonoRestore, projectMonoTeam } from "../features/monos/model/monoArchive";
 import { loadMonoView, saveMonoView, monoForView, monoViewProject, memberDetailsView, selectedOrgMono, monoLiveState } from "../features/monos/model/monoNavigation";
 import { MonoTeamActivity } from "../features/monos/ui/MonoTeamActivity";
-import { WorkspaceContextTabs, WorkspaceGoals, WorkspaceWorktree, WorkspaceUsage, type WorkspaceContextTab } from "./shell/WorkspaceContext";
+import { WorkspaceContextTabs, WorkspaceGoals, WorkspaceWorktree, WorkspaceChanges, WorkspaceUsage, type WorkspaceContextTab } from "./shell/WorkspaceContext";
 import { WorktreeChats } from "../features/source-control/ui/WorktreeChats";
 import { workspaceTeam } from "./shell/WorkspaceTeam";
 import { TeamMap } from "../features/teamMap/TeamMap";
@@ -218,8 +218,8 @@ import { ResourcePressureNotice } from "../features/notifications/ui/ResourcePre
 import { HarnessUpdateNotice } from "../features/providers/ui/HarnessUpdateNotice";
 import { NewLayoutNotice } from "./shell/NewLayoutNotice";
 import { WhatsNewDialog } from "./shell/WhatsNewDialog";
-import { MonoViewActions, TitleBar, type Tab as TitleTab } from "./shell/TitleBar";
-import { WindowControls } from "./shell/WindowControls";
+import { TitleBar, type Tab as TitleTab } from "./shell/TitleBar";
+import { PullRequestsList } from "../features/pullRequests/ui/PullRequestsList";
 import { MonoDetails } from "../features/monos/ui/MonoDetails";
 import { changeMonoWorkingDirectory, isMonoHomeDirectory, migrateMonoWorkingDirectory } from "../features/monos/model/monoWorkingDirectory";
 import { acceptMonoWorkingDirectoryMigration, monoWorkingDirectoryMigrationPending } from "../features/monos/model/monoWorkingDirectoryMigration";
@@ -309,14 +309,12 @@ import {
   INSET_LAYOUT_DEFAULT,
   loadInsetLayout,
   loadProjectRailOpen,
-  loadRightPanelOpen,
   loadRightPanelTab,
   loadRightPanelWidth,
   loadSessionSidebarOpen,
   RIGHT_PANEL_WIDTH_DEFAULT,
   RIGHT_PANEL_WIDTH_MAX,
   RIGHT_PANEL_WIDTH_MIN,
-  saveRightPanelOpen,
   saveRightPanelTab,
   saveRightPanelWidth,
   subscribeInsetLayout,
@@ -1469,7 +1467,7 @@ function Workspace({
       setMonoChanges(null);
       setMonoSessions(null);
       if (monoForSession(sessionId)?.role) {
-        setMonoDetailsOpen(true);
+        setMonoDetailsOpen(true); setWorkspaceContextTab("activity"); setRightPanelOpenState(true); setRightPanelClosing(false);
         setMonoPanelTab("activity");
         setMonoActivity({ sessionId, turnId, blocks });
       } else {
@@ -1620,7 +1618,7 @@ function Workspace({
   const [rightPanelHost, setRightPanelHost] = useState<HTMLDivElement | null>(
     null,
   );
-  const [rightPanelOpen, setRightPanelOpenState] = useState(loadRightPanelOpen);
+  const [rightPanelOpen, setRightPanelOpenState] = useState(true);
   const [workspaceContextTab, setWorkspaceContextTab] = useState<WorkspaceContextTab>("goal");
   const [openShellPages, setOpenShellPages] = useState<ShellPage[]>([]);
   const [rightPanelTab, setRightPanelTabState] =
@@ -1630,26 +1628,30 @@ function Workspace({
   const rightPanelOpenRef = useRef(rightPanelOpen);
   rightPanelOpenRef.current = rightPanelOpen;
   const showRightPanel = useCallback((tab: RightPanelTab) => {
-    setWorkspaceContextTab("tools");
+    setWorkspaceContextTab("changes");
     setRightPanelTabState(tab);
     saveRightPanelTab(tab);
     setRightPanelOpenState(true);
     setRightPanelClosing(false);
-    saveRightPanelOpen(true);
   }, []);
   const onToggleRightPanel = useCallback(() => {
     const next = !rightPanelOpenRef.current;
     rightPanelOpenRef.current = next;
-    saveRightPanelOpen(next);
     setRightPanelOpenState(next);
     setRightPanelClosing(!next);
   }, []);
+  useEffect(() => {
+    if (!monoDetailsOpen && !monoActivity && !monoSessions && !monoArtifact && !monoChanges && !monoShownSession && !monoOverviewDocument) return;
+    setWorkspaceContextTab("activity");
+    setRightPanelOpenState(true);
+    setRightPanelClosing(false);
+  }, [monoDetailsOpen, monoActivity, monoSessions, monoArtifact, monoChanges, monoShownSession, monoOverviewDocument]);
   // Its handle sits on the left edge, so dragging left widens it.
   const rightPanelResize = useDragResize({
     direction: "left",
     min: RIGHT_PANEL_WIDTH_MIN,
     max: () =>
-      Math.min(RIGHT_PANEL_WIDTH_MAX, Math.floor(window.innerWidth * 0.5)),
+      Math.min(RIGHT_PANEL_WIDTH_MAX, Math.floor(window.innerWidth * (window.innerWidth <= 1100 ? 1 : 0.5))),
     defaultWidth: RIGHT_PANEL_WIDTH_DEFAULT,
     initial: loadRightPanelWidth(),
     onCommit: saveRightPanelWidth,
@@ -5578,7 +5580,7 @@ function Workspace({
   const onCreateMono = useCallback((projects?: readonly string[]) => {
     const monoId = createMono(projects).id;
     if (insetLayout) setMonoSettingsFor(monoId);
-    else { setMonoPanelTab("details"); setMonoDetailsOpen(true); }
+    else { setMonoPanelTab("details"); setMonoDetailsOpen(true); setWorkspaceContextTab("activity"); setRightPanelOpenState(true); setRightPanelClosing(false); }
     void onOpenMono(monoId);
   }, [insetLayout, onOpenMono]);
 
@@ -5588,7 +5590,7 @@ function Workspace({
       if (!findMono(monoId)) return;
       void onOpenMono(monoId).then(() => {
         setMonoPanelTab("details");
-        setMonoDetailsOpen(true);
+        setMonoDetailsOpen(true); setWorkspaceContextTab("activity"); setRightPanelOpenState(true); setRightPanelClosing(false);
         setMonoTeamRequest(findMono(monoId)?.role === "member" ? 0 : Date.now());
       });
     };
@@ -5813,7 +5815,12 @@ function Workspace({
   const onOpenMember = useCallback(async (memberId: string) => {
     const member = findMono(memberId);
     if (member?.role !== "member") return;
-    await onOpenMono(memberId);
+    const opening = onOpenMono(memberId);
+    const request = monoViewRequest.current;
+    await opening;
+    if (request !== monoViewRequest.current || monoViewIdRef.current !== findMono(memberId)?.sessionId) return;
+    setMonoPanelTab("details");
+    setMonoDetailsOpen(true); setWorkspaceContextTab("activity"); setRightPanelOpenState(true); setRightPanelClosing(false);
   }, [onOpenMono]);
 
   const restoredMonoView = useRef(false);
@@ -14782,7 +14789,15 @@ function Workspace({
   const onOpenProjectManager = useCallback(
     async (project: string) => {
       const mono = dedicatedMono(project);
-      if (mono) return onOpenMono(mono.id);
+      if (mono) {
+        const opening = onOpenMono(mono.id);
+        const request = monoViewRequest.current;
+        await opening;
+        if (request !== monoViewRequest.current || monoViewIdRef.current !== findMono(mono.id)?.sessionId) return;
+        setMonoPanelTab("details");
+        setMonoDetailsOpen(true); setWorkspaceContextTab("activity"); setRightPanelOpenState(true); setRightPanelClosing(false);
+        return;
+      }
       closeMonoView();
       const request = ++workspaceSessionRequest.current;
       workspaceNavigation.cancel();
@@ -14819,7 +14834,7 @@ function Workspace({
             !current?.sessionId || monoViewIdRef.current !== current.sessionId ||
             current.id !== mono.id || !available()) return;
         setMonoPanelTab("details");
-        setMonoDetailsOpen(true);
+        setMonoDetailsOpen(true); setWorkspaceContextTab("activity"); setRightPanelOpenState(true); setRightPanelClosing(false);
         setMonoActivity(null);
         setMonoSessions(null);
         setMonoArtifact(null);
@@ -15157,16 +15172,11 @@ function Workspace({
     });
   }, [insetLayout, onToggleSessionSidebar]);
 
-  // The inset layout's sidebar already answers the primary toggle, so the
-  // session sidebar's shortcut takes the right panel instead.
+  // Retain the command ID so existing custom bindings reach the unified panel.
   const rightPanelToggleRef = useRef<(() => void) | null>(null);
   const onToggleSessionSidebarShortcut = useCallback(() => {
-    if (insetLayout) {
-      rightPanelToggleRef.current?.();
-      return;
-    }
-    onToggleSessionSidebar();
-  }, [insetLayout, onToggleSessionSidebar]);
+    rightPanelToggleRef.current?.();
+  }, []);
 
   const onToggleProjectRail = useCallback(() => {
     setProjectRailOpen((open) => {
@@ -16733,6 +16743,7 @@ function Workspace({
   const monoDetailsPanel =
     monoViewMono && monoViewSession ? (
       <MonoDetails
+        embedded
         providerAccountId={monoViewSession.providerAccountId}
         sessionId={monoViewSession.id}
         sessions={sessions}
@@ -16748,7 +16759,7 @@ function Workspace({
           monoArtifact?.sessionId !== monoViewSession.id &&
           monoChanges?.sessionId !== monoViewSession.id
         }
-        tab={monoPanelTab}
+        tab="details"
         onTabChange={(tab) => {
           setMonoPanelTab(tab);
           if (tab === "activity") setMonoActivity(null);
@@ -16796,7 +16807,6 @@ function Workspace({
         onWindowsSandboxChange={windowsSandbox => onWindowsSandboxChange(monoViewSession.id, windowsSandbox)}
         onClose={() => { setMonoDetailsOpen(false); setMonoActivity(null); }}
         onReset={() => onResetMono(monoViewSession.id)}
-        windowControls={monoCovers && !IS_MAC ? <WindowControls /> : undefined}
       />
     ) : null;
   const monoActivityPanel =
@@ -16998,7 +17008,7 @@ function Workspace({
         onBackFromDocument={() => setMonoOverviewDocument(null)}
         onOpenFile={onOpenFile}
         onClose={() => setMonoOverviewOpen(false)}
-        windowControls={monoCovers && !IS_MAC ? <WindowControls /> : undefined}
+
       />
     ) : null;
   const monoSettingsDialog =
@@ -17032,11 +17042,11 @@ function Workspace({
     ) : null;
   const monoArtifactPanel = monoViewMono && monoArtifact && monoArtifact.sessionId === monoViewSession?.id ? (
     <ArtifactPanel key={monoArtifact.id} id={monoArtifact.id} color={monoViewMono.color} onClose={onCloseMonoArtifact} onOpenFile={onOpenFile}
-      windowControls={monoCovers && !IS_MAC ? <WindowControls /> : undefined} />
+      />
   ) : null;
   const monoChangesPanel = monoViewMono && monoChanges && monoChanges.sessionId === monoViewSession?.id ? (
     <MonoChangesPanel sessionId={monoChanges.sessionId} cwd={monoChanges.cwd} request={monoChanges.request} color={monoViewMono.color}
-      textHarness={monoViewSession?.harness} onClose={onCloseMonoChanges} windowControls={monoCovers && !IS_MAC ? <WindowControls /> : undefined} />
+      textHarness={monoViewSession?.harness} onClose={onCloseMonoChanges} />
   ) : null;
   const monoSessionsPanel =
     monoViewMono && selectedMonoSessions ? (
@@ -17088,7 +17098,7 @@ function Workspace({
         }}
         onOpenInWorkspace={onOpenMonoLaunchedSession}
         onClose={() => setMonoSessions(null)}
-        windowControls={monoCovers && !IS_MAC ? <WindowControls /> : undefined}
+
       />
     ) : null;
   const monoRailState = useMemo(() => {
@@ -17125,7 +17135,14 @@ function Workspace({
     ),
   );
   const onOpenRailMono = useCallback(
-    (monoId: string) => void onOpenMono(monoId),
+    async (monoId: string) => {
+      const opening = onOpenMono(monoId);
+      const request = monoViewRequest.current;
+      await opening;
+      if (request !== monoViewRequest.current || monoViewIdRef.current !== findMono(monoId)?.sessionId) return;
+      setMonoPanelTab("details");
+      setMonoDetailsOpen(true); setWorkspaceContextTab("activity"); setRightPanelOpenState(true); setRightPanelClosing(false);
+    },
     [onOpenMono],
   );
   const onDeleteRailMono = useCallback(
@@ -17168,21 +17185,16 @@ function Workspace({
     ],
   );
   const compactRailActive = compactProjectRail && !projectRailOpen;
-  const compactTitleNavigation =
-    IS_MAC && compactRailActive && !chromeSurfaceOpen;
-  const compactTitleBar = compactTitleNavigation && !monoCovers;
-  const topTitleBar = compactTitleBar || (!IS_MAC && teamMap.open);
-  // The inset layout keeps its tabs across the top of the window at all
-  // times, with the rail and the card below them.
-  const titleBarSpansWindow = insetLayout || topTitleBar;
-  const titleBarInBody = !insetLayout && !topTitleBar;
+  const compactTitleNavigation = IS_MAC && compactRailActive && !chromeSurfaceOpen;
+
+
+
+  // One titlebar owns controls across every page and panel.
+  const titleBarSpansWindow = true;
+  const titleBarInBody = false;
   // Matches when the sidebar portals Explorer or Changes into the panel.
   const insetRightPanelShown =
-    insetLayout &&
-    (rightPanelOpen || rightPanelClosing) &&
-    !settingsOpen &&
-    !activeAppView &&
-    looksLikeProject(sidebarCwd);
+    rightPanelOpen || rightPanelClosing;
   // The right panel grows from the card's edge and pushes the workspace. Its
   // own contents keep their full width and ride its edge.
   // A reversal mid-slide starts from wherever the width currently is.
@@ -17251,20 +17263,15 @@ function Workspace({
   }, [rightPanelClosing, rightPanelOpen]);
   // The same shared stats the sidebar's Changes tab reads, so the toggle
   // that opens it can carry its dot.
-  const showRightPanelToggle =
-    insetLayout && !settingsOpen && looksLikeProject(sidebarCwd);
+  const showRightPanelToggle = true;
   rightPanelToggleRef.current =
-    showRightPanelToggle && !activeAppView
+    showRightPanelToggle
       ? onToggleRightPanel
       : null;
   const rightPanelChanges = useProjectDiffStats(
     gitCwd || sidebarCwd,
     showRightPanelToggle && isLocalProject(sidebarCwd),
   );
-  const onToggleMonoOverview = () => setMonoOverviewOpen(!monoOverviewOpen);
-  const onOpenMonoViewSettings = monoViewMono
-    ? () => setMonoSettingsFor(monoViewMono.id)
-    : undefined;
   // A new session takes over from a Mono in view.
   const onNewFromTitleBar = () => {
     if (monoViewIdRef.current) closeMonoView();
@@ -17295,27 +17302,13 @@ function Workspace({
               setMonoPanelTab("details");
               setMonoActivity(null);
               setMonoSessions(null);
-              setMonoDetailsOpen(true);
+              setMonoDetailsOpen(true); setWorkspaceContextTab("activity"); setRightPanelOpenState(true); setRightPanelClosing(false);
               setMonoArtifact(null);
               setMonoChanges(null);
             }
           : undefined
       }
-      onToggleMonoPanel={monoCovers && (!insetLayout || !!monoViewMono?.role) ? () => {
-        if (monoSidebarOpen) {
-          setMonoDetailsOpen(false); setMonoActivity(null); setMonoSessions(null); setMonoArtifact(null); setMonoChanges(null);
-        } else setMonoDetailsOpen(true);
-      } : undefined}
-      monoPanelOpen={monoSidebarOpen}
-      // The inset layout keeps these in the Mono's pane, under its tab.
-      onToggleMonoOverview={
-        monoCovers && insetLayout && !monoViewMono?.role ? onToggleMonoOverview : undefined
-      }
-      monoOverviewOpen={monoOverviewOpen}
-      onOpenMonoSettings={
-        monoCovers && insetLayout && !monoViewMono?.role ? onOpenMonoViewSettings : undefined
-      }
-      hideWindowControls={!teamMap.open && monoCovers && (insetLayout && !monoViewMono?.role ? monoOverviewOpen && !!monoOverviewPanel : monoSidebarOpen && !!monoDetailsPanel)}
+      hideWindowControls={false}
       activeId={
         openPage ? shellPageTabId(openPage) : monoViewSession && (!teamMap.open || insetLayout)
           ? insetLayout
@@ -17337,7 +17330,7 @@ function Workspace({
         showRightPanelToggle ? onToggleRightPanel : undefined
       }
       rightPanelDot={(rightPanelChanges?.files ?? 0) > 0}
-      rightPanelUnavailable={!!activeAppView}
+      rightPanelUnavailable={false}
       canGoBack={teamMap.open || !!monoViewId || tabVisitNav.canBack}
       canGoForward={tabVisitNav.canForward}
       onGoBack={onRailBack}
@@ -17391,7 +17384,7 @@ function Workspace({
         insetLayout && !settingsOpen
           ? {
               host: rightPanelHost,
-              open: (rightPanelOpen || rightPanelClosing) && workspaceContextTab === "tools",
+              open: (rightPanelOpen || rightPanelClosing) && workspaceContextTab === "changes",
               tab: rightPanelTab,
               onTabChange: showRightPanel,
             }
@@ -17541,8 +17534,6 @@ function Workspace({
         onCreate={() => setCreatingWorktreeProject(sidebarCwd)} onChat={id => { void onSelectHistorySession(id); }}
         onNew={tree => onNewWorktreeSession(sidebarCwd, tree)} onSelect={tree => {
         onSelectProjectWorktree(sidebarCwd, tree);
-        showRightPanel(rightPanelTab);
-        setWorkspaceContextTab("worktree");
       }} /> : undefined}
       decisionCounts={workspaceDecisionCounts}
       projectStatus={workspaceProjectStatus}
@@ -17575,7 +17566,7 @@ function Workspace({
       // switches projects.
       projectRailOpen={!insetLayout && projectRailOpen}
       compactProjectRail={!insetLayout && compactProjectRail}
-      titleBarAbove={insetLayout || compactTitleBar}
+      titleBarAbove
       inset={insetLayout}
       onToggleProjectRail={onToggleProjectRail}
       unseenFinishedIds={unseenFinishedIds}
@@ -17783,7 +17774,7 @@ function Workspace({
               {teamMap.open && teamMap.scope !== MISSION_CONTROL_SCOPE && teamMap.scope !== ATTENTION_QUEUE_SCOPE && teamMap.scope !== DECISIONS_SCOPE && teamMap.scope !== USAGE_DASHBOARD_SCOPE && teamMap.scope !== INTEGRATIONS_SCOPE && <div className="flex min-h-0 min-w-0 flex-1 flex-col">
                 {decisionError ? <p role="alert" className="px-6 py-3 text-sm">{decisionError} <button type="button" onClick={() => { setDecisionError(undefined); setDecisionRefresh(value => value + 1); }}>Try again</button></p>
                   : decisionLoaded !== decisionLoadKey && <p role="status" className="px-6 py-3 text-sm">Loading decisions…</p>}
-                <TeamMap key={teamMap.scope ?? "org"} sessions={sessions} runs={orchestrationRuns} statuses={managerPrStatuses} scope={teamMap.scope} onClose={teamMap.close} onOpenMono={id => void onOpenMono(id)}
+                <TeamMap key={teamMap.scope ?? "org"} sessions={sessions} runs={orchestrationRuns} statuses={managerPrStatuses} scope={teamMap.scope} onClose={teamMap.close} onOpenMono={id => void onOpenRailMono(id)}
                   decisions={!decisionError && decisionLoaded === decisionLoadKey ? commandMapDecisions(monoManagerGoals, listMonos(), decisionActions, Date.now(), { steps: goalNextSteps, render: renderGoalNextAction }) : undefined}
                   bossGoal={mapBossContext ? { context: mapBossContext, submit: submitBossGoal } : undefined} />
               </div>}
@@ -18005,20 +17996,6 @@ function Workspace({
                                       >
                                         <div className="flex shrink-0 flex-wrap items-center justify-end gap-1 px-2.5 py-2 empty:hidden">
                                         <TeamMapHeaderAction monoId={monoForSession(session.id)?.id} onOpen={onOpenTeamMap} />
-                                        {insetLayout &&
-                                        visible &&
-                                        monoViewMono ? (
-                                          <MonoViewActions
-                                            name={monoLook(monoViewMono).name}
-                                            overviewOpen={monoOverviewOpen}
-                                            onToggleOverview={
-                                              onToggleMonoOverview
-                                            }
-                                            onOpenSettings={
-                                              onOpenMonoViewSettings
-                                            }
-                                          />
-                                        ) : null}
                                         </div>
                                          <SessionPane
                                           {...sessionPaneProps}
@@ -18098,7 +18075,6 @@ function Workspace({
                           ))}
                         </main>
                       </div>
-                      {monoCovers ? (insetLayout && !monoViewMono?.role ? monoOverviewPanel : <>{monoDetailsPanel}{monoActivityPanel}{monoSessionsPanel}{monoArtifactPanel}{monoChangesPanel}</>) : null}
                       {monoSettingsDialog}
                       {workspacePanelSide === "right" && !insetLayout ? <div ref={setWorkspacePanelHost} className="contents" /> : null}
                     </div>
@@ -18282,7 +18258,7 @@ function Workspace({
                   ) : null}
                   {insetLayout ? null : usageFooter}
                 </div>
-                {insetLayout ? (
+                {
                   // Part of the card: the project tools beside the
                   // workspace, behind a hairline.
                   <div
@@ -18290,17 +18266,35 @@ function Workspace({
                     inert={rightPanelClosing || undefined}
                     className={
                       insetRightPanelShown
-                        ? "relative flex h-full shrink-0 flex-col overflow-hidden border-l border-stroke max-[900px]:absolute max-[900px]:inset-y-0 max-[900px]:right-0 max-[900px]:z-20 max-[900px]:max-w-full max-[900px]:bg-background-base"
+                        ? "relative flex h-full shrink-0 flex-col overflow-hidden border-l border-stroke max-[1100px]:absolute max-[1100px]:inset-y-0 max-[1100px]:right-0 max-[1100px]:z-20 max-[1100px]:max-w-full max-[1100px]:bg-background-base"
                         : "hidden"
                     }
                   >
-                    <WorkspaceContextTabs tab={workspaceContextTab} onChange={setWorkspaceContextTab} onClose={onToggleRightPanel}>
+                    <WorkspaceContextTabs tab={workspaceContextTab} onChange={tab => { setWorkspaceContextTab(tab); if (tab === "changes") setRightPanelTabState("changes"); }} onClose={onToggleRightPanel}>
                       {workspaceContextTab === "goal" ? <WorkspaceGoals project={sidebarCwd} sessions={sessions} usage={usage.snapshot} onOpenMono={onOpenRailMono} decisionActions={decisionActions} goalAction={renderGoalAction} /> : null}
-                      {workspaceContextTab === "worktree" ? <WorkspaceWorktree project={sidebarCwd} path={projectWorktree?.path ?? sidebarCwd} sessions={sessions} onRunScript={onRunProjectScript} onOpen={tree => onSelectProjectWorktree(sidebarCwd, tree)} onChanges={path => onOpenWorktreeChanges(sidebarCwd, path)} onRemove={onRemoveWorktree} /> : null}
+                      {workspaceContextTab === "worktree" && looksLikeProject(sidebarCwd) ? <WorkspaceWorktree project={sidebarCwd} path={projectWorktree?.path ?? sidebarCwd} sessions={sessions} onRunScript={onRunProjectScript} onOpen={tree => onSelectProjectWorktree(sidebarCwd, tree)} onChanges={path => onOpenWorktreeChanges(sidebarCwd, path)} onRemove={onRemoveWorktree} /> : null}
+                      {workspaceContextTab === "changes" && rightPanelTab === "changes" && looksLikeProject(sidebarCwd) ? <WorkspaceChanges key={projectWorktree?.path ?? sidebarCwd} path={projectWorktree?.path ?? sidebarCwd} onOpen={() => onOpenWorktreeChanges(sidebarCwd, projectWorktree?.path ?? sidebarCwd)} /> : null}
+                      {(workspaceContextTab === "worktree" || workspaceContextTab === "changes") && !looksLikeProject(sidebarCwd) ? <p className="px-4 py-3 text-xs text-content/50">Select a project to view this tab.</p> : null}
+                      {workspaceContextTab === "prs" ? <PullRequestsList compact sessions={sessions} runs={orchestrationRuns} scope={{ project: sidebarCwd }} onOpen={entry => {
+                        const tree = projectCheckoutList.data?.worktrees.find(tree => sameProjectPath(tree.path, entry.cwd));
+                        if (!tree || tree.missing || tree.prunable) { void message("This pull request's worktree is unavailable.", { title: "MonoCode", kind: "warning" }); return; }
+                        onSelectProjectWorktree(sidebarCwd, tree);
+                        setWorkspaceContextTab("worktree");
+                      }} /> : null}
+                      {workspaceContextTab === "activity" ? <div className="flex min-h-0 flex-1 flex-col overflow-y-auto [&_.mono-details-panel]:!w-full [&_.mono-details-panel]:!min-w-0 [&_.mono-details-panel]:!border-l-0">
+                        {monoViewMono && monoViewSession ? <>
+                          {monoViewMono.role ? <MonoTeamActivity monoId={monoViewMono.id} sessions={sessions} runs={orchestrationRuns} statuses={managerPrStatuses} onApproval={onApproval} onQuestion={onQuestionReply} onQuestionInteraction={onQuestionInteraction} /> : null}
+                          {monoActivity && monoActivityView ? <section aria-label="This agent's work" className="flex min-h-40 max-h-80 shrink-0 flex-col overflow-y-auto">{monoActivityView}</section> : null}
+                          {!monoViewMono.role ? <button type="button" className="border-y border-stroke px-4 py-2 text-left text-xs text-content/65 hover:bg-content/5" onClick={() => { setMonoDetailsOpen(open => !open); setMonoOverviewOpen(true); }}>{monoDetailsOpen ? "Show work" : "Details and settings"}</button> : null}
+                          {(monoViewMono.role || monoDetailsOpen) && !monoArtifactPanel && !monoChangesPanel && !monoSessionsPanel ? <><h2 className="border-y border-stroke px-4 py-2 text-xs font-medium">{monoLook(monoViewMono).name} · Details and settings</h2>{monoDetailsPanel}</> : null}
+                          {monoActivityPanel}{monoSessionsPanel}{monoArtifactPanel}{monoChangesPanel}
+                          {!monoViewMono.role && !monoSidebarOpen ? monoOverviewPanel : null}
+                        </> : <><h2 className="px-4 py-3 text-xs font-medium">Team activity</h2>{workspaceTeam(listMonos(), sidebarCwd).manager ? <MonoTeamActivity monoId={workspaceTeam(listMonos(), sidebarCwd).manager!.id} sessions={sessions} runs={orchestrationRuns} statuses={managerPrStatuses} onApproval={onApproval} onQuestion={onQuestionReply} onQuestionInteraction={onQuestionInteraction} /> : <p className="px-4 py-2 text-xs text-content/50">No team configured for this project.</p>}</>}
+                      </div> : null}
                     <div
                       ref={setRightPanelHost}
                       aria-label="Project tools"
-                      className={workspaceContextTab === "tools" ? "flex min-h-0 flex-1 flex-col" : "hidden"}
+                      className={workspaceContextTab === "changes" && rightPanelTab !== "changes" ? "flex min-h-0 flex-1 flex-col" : "hidden"}
                     />
                     </WorkspaceContextTabs>
                     <div
@@ -18319,7 +18313,7 @@ function Workspace({
                       onDoubleClick={rightPanelResize.onDoubleClick}
                     />
                   </div>
-                ) : null}
+                }
               </div>
               {insetLayout
                 ? (usageFooter ??

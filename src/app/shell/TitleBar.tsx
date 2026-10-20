@@ -10,7 +10,6 @@ import {
   Inbox,
   PanelLeft,
   PanelRightToggle,
-  GitBranch,
   Plus,
   Search,
   Settings,
@@ -752,7 +751,7 @@ export function OverlayNav({
       ) : null}
       {onToggleSidebar ? (
         <IconButton
-          label={`Toggle Sidebar (${MOD}B)`}
+          label={`Toggle Sidebar (${MOD}${SHIFT}B)`}
           onClick={onToggleSidebar}
         >
           <PanelLeft className="size-3.5" strokeWidth={1.75} />
@@ -1076,7 +1075,7 @@ function TitleBarComponent({
     projectless &&
     railClosed &&
     Boolean(onOpenInbox || onOpenNotes || onOpenSettings);
-  const showRightPanelToggle = inset && Boolean(onToggleRightPanel);
+  const showRightPanelToggle = Boolean(onToggleRightPanel);
   // Inset project context also belongs beside Mono chats; app views have none.
   const rightPanelOff = rightPanelUnavailable;
   const changesDot = rightPanelDot && !rightPanelOff;
@@ -1087,7 +1086,7 @@ function TitleBarComponent({
     (mono && (onToggleMonoOverview || onOpenMonoSettings)) ||
     (!IS_MAC && !hideWindowControls) ? (
       <div className="ml-auto flex h-full shrink-0 items-stretch">
-        {mono && onToggleMonoPanel ? (
+        {mono && onToggleMonoPanel && !showRightPanelToggle ? (
           <div className="flex items-center px-3">
             <IconButton
               label={monoPanelOpen ? "Hide Mono panel" : "Show Mono panel"}
@@ -1114,18 +1113,18 @@ function TitleBarComponent({
           // Clear of the window's right edge, like the traffic lights' inset
           // on the left.
           <div className="flex items-center pl-1.5 pr-3">
-            <IconButton
-              label={
-                changesDot
-                  ? `Toggle right sidebar (${MOD}${SHIFT}B, uncommitted changes)`
-                  : `Toggle right sidebar (${MOD}${SHIFT}B)`
-              }
-              active={rightPanelOpen && !rightPanelOff}
+            <button
+              type="button"
+              aria-label="Panel"
+              title="Toggle panel (Ctrl+B)"
+              aria-pressed={rightPanelOpen && !rightPanelOff}
+              data-tauri-drag-region="false"
+              className="flex items-center gap-1.5 rounded-md border border-stroke px-2 py-1 text-[11px] text-content/65 hover:bg-content/5 aria-pressed:bg-selection aria-pressed:text-content"
               disabled={rightPanelOff}
               onClick={onToggleRightPanel}
             >
               <span className="relative grid">
-                <GitBranch
+                <PanelRightToggle
                   className={`size-3.5 ${changesDot ? "overview-tab-icon-with-dot" : ""}`}
                   strokeWidth={1.75}
                 />
@@ -1136,10 +1135,11 @@ function TitleBarComponent({
                   />
                 ) : null}
               </span>
-            </IconButton>
+              <span>Panel</span>
+            </button>
           </div>
         ) : null}
-        {mono && (onToggleMonoOverview || onOpenMonoSettings) ? (
+        {mono && !showRightPanelToggle && (onToggleMonoOverview || onOpenMonoSettings) ? (
           <MonoViewActions
             name={mono.look.name}
             overviewOpen={monoOverviewOpen}
@@ -1198,7 +1198,7 @@ function TitleBarComponent({
             // Hovering the toggle peeks a collapsed sidebar out.
             <span data-sidebar-peek-trigger className="flex">
               <IconButton
-                label={`Toggle Sidebar (${MOD}B)`}
+                label={`Toggle Sidebar (${MOD}${SHIFT}B)`}
                 onClick={onToggleSessionSidebar}
               >
                 <PanelLeft className="size-3.5" strokeWidth={1.75} />
@@ -1239,7 +1239,7 @@ function TitleBarComponent({
           {trafficLightsVisible ? <div className="w-[78px] shrink-0" /> : null}
           <div className="flex shrink-0 items-center px-1.5">
             <IconButton
-              label={`Toggle Sidebar (${MOD}B)`}
+              label={`Toggle Sidebar (${MOD}${SHIFT}B)`}
               onClick={onToggleSidebar}
             >
               <PanelLeft className="size-3.5" strokeWidth={1.75} />
@@ -1264,7 +1264,7 @@ function TitleBarComponent({
             <div className="w-[70px] shrink-0" />
           ) : null}
           <IconButton
-            label={`Toggle Session Sidebar (${MOD}${SHIFT}B)`}
+            label="Toggle Session Sidebar"
             onClick={onToggleSessionSidebar}
           >
             <DashboardSquare className="size-3.5" strokeWidth={1.75} />

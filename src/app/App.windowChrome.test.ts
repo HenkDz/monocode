@@ -7,15 +7,27 @@ import { ccfb2ShellExpressions } from "../../tests/browser/ccfb2ShellPaths";
 import { WindowControls } from "./shell/WindowControls";
 
 const source = ccfb2ShellExpressions();
+const titleAst = ts.createSourceFile("TitleBar.tsx", readFileSync(new URL("./shell/TitleBar.tsx", import.meta.url), "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+let titleControls = "";
+const visitTitle = (node: ts.Node) => {
+  if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(titleAst) === "WindowControls") titleControls = node.parent.getText(titleAst);
+  ts.forEachChild(node, visitTitle);
+};
+visitTitle(titleAst);
+it("removes every App panel control injection and retains the separate boot recovery owner", () => {
+  expect(readFileSync(new URL("./App.tsx", import.meta.url), "utf8")).not.toContain("<WindowControls");
+  expect(readFileSync(new URL("../main.tsx", import.meta.url), "utf8")).toContain("return () => controls.unmount()");
+  expect(titleControls).toContain("!IS_MAC && !hideWindowControls");
+});
 it.each([
-  ["Windows workspace", false, false, false, false, false, false],
+  ["Windows workspace", false, false, false, false, true, false],
   ["Windows page", false, true, false, false, true, false],
   ["Windows page over Mono panel", false, true, true, false, true, false],
-  ["Windows Mono panel", false, false, true, false, false, true],
-  ["Mac workspace", true, false, false, false, false, false],
+  ["Windows Mono panel", false, false, true, false, true, false],
+  ["Mac workspace", true, false, false, false, true, false],
   ["Mac compact workspace", true, false, false, true, true, false],
-  ["Mac page", true, true, false, false, false, false],
-  ["Mac compact page over Mono", true, true, true, true, false, false],
+  ["Mac page", true, true, false, false, true, false],
+  ["Mac compact page over Mono", true, true, true, true, true, false],
 ])("keeps the source-selected chrome ownership for %s", (_name, IS_MAC, open, monoCovers, compactRailActive, top, hide) => {
   const scope = { IS_MAC, monoCovers, compactRailActive, teamMap: { open }, monoSidebarOpen: true, monoDetailsPanel: {},
     searchViewOpen: false, settingsOpen: false, inboxViewOpen: false, notesViewOpen: false, automationsViewOpen: false,
@@ -29,7 +41,7 @@ it.each([
 });
 
 for (const file of ["search/ui/SearchView", "inbox/ui/InboxView", "pullRequests/ui/PullRequestsView", "notes/ui/NotesView", "automations/ui/AutomationsView", "settings/ui/SettingsView"]) {
-  it.each([false, true])(`preserves one existing custom-control owner in ${file} (Mac: %s)`, IS_MAC => {
+  it.each([false, true])(`preserves one global titlebar owner without a duplicate in ${file} (Mac: %s)`, IS_MAC => {
     const ast = ts.createSourceFile("page.tsx", readFileSync(new URL(`../features/${file}.tsx`, import.meta.url), "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
     const controls: ts.JsxSelfClosingElement[] = [];
     const visit = (node: ts.Node) => {
@@ -37,10 +49,9 @@ for (const file of ["search/ui/SearchView", "inbox/ui/InboxView", "pullRequests/
       ts.forEachChild(node, visit);
     };
     visit(ast);
-    expect(controls).toHaveLength(1);
-    expect(ts.isConditionalExpression(controls[0].parent)).toBe(true);
-    const expression = controls[0].parent.getText(ast);
-    const element = new Function("React", "IS_MAC", "WindowControls", "tabbed", ts.transpile(`return ${expression};`, { jsx: ts.JsxEmit.React }))(React, IS_MAC, WindowControls, false);
+    // Part C supersedes standalone page control ownership; the global titlebar owns them.
+    expect(controls).toHaveLength(0);
+    const element = new Function("React", "IS_MAC", "WindowControls", "hideWindowControls", ts.transpile(`return ${titleControls};`, { jsx: ts.JsxEmit.React }))(React, IS_MAC, WindowControls, false);
     const markup = renderToStaticMarkup(element);
     expect((markup.match(/aria-label="Minimize window"/g) ?? []).length).toBe(IS_MAC ? 0 : 1);
     expect((markup.match(/aria-label="Close window"/g) ?? []).length).toBe(IS_MAC ? 0 : 1);

@@ -13,6 +13,8 @@ import {
   WorkspaceUsage,
   WorkspaceWorktree,
   WorkspaceWorktrees,
+  WorkspaceChanges,
+  type WorkspaceContextTab,
 } from "./WorkspaceContext";
 
 const mocks = vi.hoisted(() => ({
@@ -111,6 +113,23 @@ afterEach(() => {
   act(() => root.unmount());
   host.remove();
   vi.unstubAllGlobals();
+});
+
+it("keeps Changes tied to the selected checkout, ignores stale reads, and opens its diff", async () => {
+  let finishOld!: (value: unknown) => void;
+  mocks.index.mockImplementationOnce(() => new Promise(resolve => { finishOld = resolve; }));
+  const open = vi.fn();
+  await act(async () => root.render(createElement(WorkspaceChanges, { path: "C:/repo/old", onOpen: open })));
+  mocks.index.mockResolvedValueOnce({ files: [{ path: "C:/repo/current/current.ts", status: "added", additions: 17, deletions: 0 }] });
+  await act(async () => root.render(createElement(WorkspaceChanges, { path: "C:/repo/current", onOpen: open })));
+  expect(host.textContent).toContain("current.ts");
+  await act(async () => finishOld({ files: [{ path: "C:/repo/old/foreign.ts", status: "modified", additions: 1, deletions: 1 }] }));
+  expect(host.textContent).not.toContain("foreign.ts");
+  act(() => Array.from(host.querySelectorAll("button")).find(button => button.textContent === "Open diff")!.click());
+  expect(open).toHaveBeenCalledOnce();
+  mocks.index.mockRejectedValueOnce(Error("Checkout unavailable"));
+  await act(async () => root.render(createElement(WorkspaceChanges, { path: "C:/repo/missing", onOpen: open })));
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain("Checkout unavailable");
 });
 const click = (text: string) =>
   act(() =>
@@ -329,7 +348,7 @@ it("uses only a fresh single associated account for the mini meter, never an agg
 it("moves context tabs by keyboard with focus and a separate close control", () => {
   const close = vi.fn();
   function Probe() {
-    const [tab, setTab] = useState<"goal" | "worktree" | "tools">("goal");
+    const [tab, setTab] = useState<WorkspaceContextTab>("goal");
     return createElement(WorkspaceContextTabs, {
       tab,
       onChange: setTab,
@@ -346,9 +365,14 @@ it("moves context tabs by keyboard with focus and a separate close control", () 
   );
   expect(document.activeElement?.textContent).toBe("Worktree");
   expect(document.activeElement?.getAttribute("aria-selected")).toBe("true");
+  expect(host.querySelectorAll('[role="tab"]')).toHaveLength(5);
+  act(() => list.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true })));
+  expect(document.activeElement?.textContent).toBe("Activity");
+  act(() => list.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
+  expect(document.activeElement?.textContent).toBe("Goal");
   act(() =>
     host
-      .querySelector<HTMLButtonElement>('[aria-label="Close project context"]')!
+      .querySelector<HTMLButtonElement>('[aria-label="Hide panel"]')!
       .click(),
   );
   expect(close).toHaveBeenCalledOnce();

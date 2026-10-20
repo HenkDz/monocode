@@ -91,7 +91,7 @@ function fixture() {
     onWindowsSandboxChange: noop, onResetMono: noop, saveSettingsSection: vi.fn(), startTransition: (run: () => void) => run(),
   };
   for (const key of ["monoViewId", "monoTeamRequest", "monoActivity", "monoShownSession", "monoShownSessionFocused", "monoOverviewDocument",
-    "monoPanelTab", "monoDetailsOpen", "monoSessions", "monoArtifact", "monoChanges", "settingsOpen", "filePickerOpen", "searchViewOpen",
+    "workspaceContextTab", "rightPanelOpenState", "rightPanelClosing", "monoPanelTab", "monoDetailsOpen", "monoSessions", "monoArtifact", "monoChanges", "settingsOpen", "filePickerOpen", "searchViewOpen",
     "inboxViewOpen", "notesViewOpen", "automationsViewOpen", "settingsSection", "settingsAnchor", "notificationProjectPath", "composerFocused",
     "composerFocusToken", "projectTerminalFocused", "sessions"]) {
     scope[`set${key[0].toUpperCase()}${key.slice(1)}`] = vi.fn((value: any) => { scope[key] = typeof value === "function" ? value(scope[key]) : value; });
@@ -126,7 +126,11 @@ it.each([0, 1])("actual App project gear opens Manager %s Details/settings with 
   const panel = container.querySelector('[data-mono-details]')!;
   expect(panel).not.toBeNull();
   expect(panel.getAttribute("data-open")).toBe("true");
-  expect(panel.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe("Details");
+  // Part C embeds these settings under Activity; no second panel or tab strip.
+  expect(panel.querySelector('[role="tab"]')).toBeNull();
+  expect(panel.tagName).toBe("SECTION");
+  expect(f.scope.workspaceContextTab).toBe("activity");
+  expect(f.scope.rightPanelOpenState).toBe(true);
   expect(panel.querySelector('[data-mono-settings]')).not.toBeNull();
   expect(panel.querySelector('[data-model-project]')?.getAttribute("data-model-project")).toBe(f.projects[index]);
   expect(panel.querySelector('[data-mono-worktree]')?.textContent).toBe(f.projects[index]);
@@ -145,6 +149,33 @@ it("keeps the actual Sidebar App Settings callback on global settings", () => {
   expect(f.scope.monoDetailsOpen).toBe(false);
   expect(f.scope.ensureMonoSession).not.toHaveBeenCalled();
   expect(f.scope.monoViewIdRef.current).toBeNull();
+  f.noLaunch();
+});
+
+it.each(["onOpenRailMono", "onOpenProjectManager"])("routes actual %s to Activity with embedded settings and no separate member sidebar", async entry => {
+  const f = fixture();
+  const open = entry === "onOpenProjectManager" ? f.scope.onOpenProjectManager : callback(entry, f.scope);
+  await act(async () => open(entry === "onOpenProjectManager" ? f.projects[1] : "manager-1"));
+  expect(f.scope.workspaceContextTab).toBe("activity");
+  expect(f.scope.rightPanelOpenState).toBe(true);
+  await f.render();
+  expect(container.querySelectorAll("[data-mono-details]")).toHaveLength(1);
+  expect(container.querySelector("aside.mono-details-panel")).toBeNull();
+  expect(container.querySelector('[data-model-project]')?.getAttribute("data-model-project")).toBe(f.projects[1]);
+  f.noLaunch();
+});
+
+it("refuses a stale Manager row open even when an older view still matches its session", async () => {
+  const f = fixture();
+  f.scope.monoViewIdRef.current = f.sessions[1].id;
+  let finish!: (value: typeof f.sessions[number]) => void;
+  f.scope.ensureMonoSession.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  let opening!: Promise<void>;
+  await act(async () => { opening = f.scope.onOpenProjectManager(f.projects[1]); });
+  f.scope.monoViewRequest.current++;
+  await act(async () => { finish(f.sessions[1]); await opening; });
+  expect(f.scope.rightPanelOpenState).not.toBe(true);
+  expect(f.scope.monoDetailsOpen).toBe(false);
   f.noLaunch();
 });
 

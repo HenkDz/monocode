@@ -13,7 +13,6 @@ import { HarnessIcon } from "../../sessions/ui/HarnessIcon";
 import { MatchText } from "../../../shared/ui/MatchText";
 import { ProjectLogoIcon } from "../../projects/ui/ProjectLogoIcon";
 import { OverlayNav } from "../../../app/shell/TitleBar";
-import { WindowControls } from "../../../app/shell/WindowControls";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
 import {
   conversationRowsFrom,
@@ -418,7 +417,6 @@ export function SearchView({
             />
           ) : null}
         </label>
-        {!tabbed && !IS_MAC ? <WindowControls /> : null}
       </div>
 
       <div className="flex h-9 shrink-0 items-center gap-px border-b border-stroke px-3">

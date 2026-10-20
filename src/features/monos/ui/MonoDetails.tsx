@@ -57,6 +57,7 @@ type Route =
   | { kind: "habit" | "archive"; id: string };
 
 type Props = {
+  embedded?: boolean;
   sessions?: PullRequestContext["sessions"];
   runs?: PullRequestContext["runs"];
   teamActivity?: ReactNode;
@@ -97,6 +98,7 @@ type Props = {
  * soul, memory and settings open directly as pages that slide over it.
  */
 export function MonoDetails({
+  embedded = false,
   sessions,
   runs,
   teamActivity,
@@ -299,15 +301,8 @@ export function MonoDetails({
     ];
   });
 
-  return (
-    <MonoSidebar
-      open={open}
-      kind={tab}
-      label={`${agent.name} ${tab}`}
-      color={agent.color}
-      windowControls={windowControls}
-    >
-      <MonoSidebarHeader
+  const content = <>
+      {!embedded && <MonoSidebarHeader
         title={tab === "details" ? "Details" : tab === "activity" ? "Activity" : "PRs"}
         onClose={onClose}
       >
@@ -318,11 +313,11 @@ export function MonoDetails({
             panelId={panelId}
           />
         ) : undefined}
-      </MonoSidebarHeader>
+      </MonoSidebarHeader>}
       <div
         id={panelId}
         role="tabpanel"
-        aria-labelledby={onTabChange ? `${panelId}-${tab}` : undefined}
+        aria-labelledby={!embedded && onTabChange ? `${panelId}-${tab}` : undefined}
         className="flex min-h-0 flex-1 flex-col"
       >
         {tab === "details" && pages.length === 0 && <div className="shrink-0 border-b border-stroke px-4 py-3 text-xs text-content/70" data-mono-next-turn>
@@ -408,7 +403,9 @@ export function MonoDetails({
           )}
         </PanelStack>
       </div>
-    </MonoSidebar>
+    </>;
+  return embedded ? <section data-mono-details data-open={open} aria-label={`${agent.name} details and settings`} className="flex min-h-0 flex-1 flex-col">{content}</section> : (
+    <MonoSidebar open={open} kind={tab} label={`${agent.name} ${tab}`} color={agent.color} windowControls={windowControls}>{content}</MonoSidebar>
   );
 }
 

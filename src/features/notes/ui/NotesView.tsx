@@ -14,7 +14,6 @@ import { ProjectLogoIcon } from "../../projects/ui/ProjectLogoIcon";
 import { ProjectMascot } from "../../projects/ui/ProjectMascot";
 import { SearchableProjectPicker } from "../../projects/ui/SearchableProjectPicker";
 import { OverlayNav } from "../../../app/shell/TitleBar";
-import { WindowControls } from "../../../app/shell/WindowControls";
 import { useDragResize } from "../../../shared/hooks/useDragResize";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
 import { useTabGroupLogos } from "../../projects/hooks/useTabGroupLogos";
@@ -367,7 +366,6 @@ export function NotesView({
             />
             <span className="min-w-0 truncate text-content">Notes</span>
           </div>
-          {IS_MAC ? null : <WindowControls />}
         </div>
       ) : null}
       <div className="flex min-h-0 min-w-0 flex-1">

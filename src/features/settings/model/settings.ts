@@ -1199,10 +1199,10 @@ export const KEYBINDINGS: KeybindingRow[] = [
         },
       ]
     : []),
-  { command: "App: Toggle Sidebar", keys: `${MOD}B`, when: "Always" },
+  { command: "App: Toggle Sidebar", keys: `${MOD}${SHIFT}B`, when: "Always" },
   {
     command: "App: Toggle Session Sidebar",
-    keys: `${MOD}${SHIFT}B`,
+    keys: `${MOD}B`,
     when: "Always",
   },
   { command: "App: Switch Model", keys: `${MOD}.`, when: "Always" },

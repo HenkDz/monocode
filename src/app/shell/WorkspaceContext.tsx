@@ -55,7 +55,35 @@ const heading =
   "px-4 pb-1 pt-5 text-[10px] font-medium uppercase tracking-wider text-content/45";
 const empty = "px-4 py-2 text-[12px] text-content/50";
 
-export type WorkspaceContextTab = "goal" | "worktree" | "tools";
+export type WorkspaceContextTab = "goal" | "worktree" | "changes" | "prs" | "activity";
+export function WorkspaceChanges({ path, onOpen }: { path: string; onOpen: () => void }) {
+  const [result, setResult] = useState<{ path: string; index?: GitDiffIndex; error?: string }>();
+  useEffect(() => {
+    let disposed = false;
+    let generation = 0;
+    const refresh = () => {
+      const request = ++generation;
+      void gitDiffIndex(path).then(index => {
+        if (!disposed && request === generation) setResult({ path, index });
+      }, error => {
+        if (!disposed && request === generation) setResult({ path, error: String(error) });
+      });
+    };
+    refresh();
+    const stop = subscribeGitChanged(refresh);
+    return () => { disposed = true; stop(); };
+  }, [path]);
+  const current = result?.path === path ? result : undefined;
+  return <section role="tabpanel" aria-label="Changed files" className="min-h-0 flex-1 overflow-y-auto p-4">
+    <h2 className="mb-3 text-xs font-medium">Changed files</h2>
+    {current?.error ? <p role="alert" className="text-xs text-danger">Could not refresh changes. {current.error}</p> : !current?.index ? <p role="status" className="text-xs text-content/50">Loading changes…</p> : current.index.files.length ? current.index.files.map(file => <button type="button" key={file.path} title={file.path} onClick={onOpen} className="flex w-full items-center gap-2 border-b border-stroke py-2 text-left text-xs hover:bg-content/5">
+      <span className="shrink-0 font-mono text-content/50">{file.status === "added" || file.status === "untracked" ? "A" : file.status === "deleted" ? "D" : "M"}</span>
+      <span className="min-w-0 flex-1 truncate">{displayPath(file.path, path)}</span>
+      <span className="shrink-0 text-[10px]"><span className="text-green-700 dark:text-green-400">+{file.additions}</span> <span className="text-red-600 dark:text-red-400">−{file.deletions}</span></span>
+    </button>) : <p className="text-xs text-content/50">No changes yet.</p>}
+    <button type="button" className={`${button} mt-4`} onClick={onOpen}>Open diff</button>
+  </section>;
+}
 export function WorkspaceContextTabs({
   tab,
   onChange,
@@ -75,16 +103,16 @@ export function WorkspaceContextTabs({
           aria-label="Project context"
           className="flex min-w-0 flex-1 gap-1 px-2 py-2"
           onKeyDown={(event) => {
-            const tabs: WorkspaceContextTab[] = ["goal", "worktree", "tools"];
+            const tabs: WorkspaceContextTab[] = ["goal", "worktree", "changes", "prs", "activity"];
             const next =
               event.key === "Home"
                 ? 0
                 : event.key === "End"
-                  ? 2
+                  ? tabs.length - 1
                   : event.key === "ArrowRight"
-                    ? (tabs.indexOf(tab) + 1) % 3
+                    ? (tabs.indexOf(tab) + 1) % tabs.length
                     : event.key === "ArrowLeft"
-                      ? (tabs.indexOf(tab) + 2) % 3
+                      ? (tabs.indexOf(tab) + tabs.length - 1) % tabs.length
                       : undefined;
             if (next == null) return;
             event.preventDefault();
@@ -96,9 +124,11 @@ export function WorkspaceContextTabs({
         >
           {(
             [
-              ["goal", "Goal & tasks"],
+              ["goal", "Goal"],
               ["worktree", "Worktree"],
-              ["tools", "Files & changes"],
+              ["changes", "Changes"],
+              ["prs", "PRs"],
+              ["activity", "Activity"],
             ] as const
           ).map(([id, label]) => (
             <button
@@ -117,8 +147,8 @@ export function WorkspaceContextTabs({
         {onClose && (
           <button
             type="button"
-            aria-label="Close project context"
-            title="Close project context"
+            aria-label="Hide panel"
+            title="Hide panel (Ctrl+B)"
             onClick={onClose}
             className="grid size-6 shrink-0 place-items-center rounded-md text-content/50 hover:bg-content/10"
           >

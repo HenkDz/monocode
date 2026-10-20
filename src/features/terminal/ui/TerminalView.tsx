@@ -28,6 +28,7 @@ import {
   type TerminalFitMode,
 } from "../model/terminalLayout";
 import { IS_MAC } from "../../../platform/tauri/platform";
+import { takeTerminalCommand, forgetTerminalCommand } from "../model/terminalCommand";
 import "@xterm/xterm/css/xterm.css";
 
 type Props = {
@@ -275,9 +276,14 @@ export function TerminalView({ id, cwd, active, onMetaChange }: Props) {
     const starting = (stoppingPtys.get(id) ?? Promise.resolve())
       .then(start)
       .then(() => {
-        if (!closed) spawned.current = true;
+        if (!closed) {
+          spawned.current = true;
+          const command = takeTerminalCommand(id, cwd);
+          if (command) return writePty(id, `${command}\r`);
+        }
       })
       .catch((error) => {
+        forgetTerminalCommand(id);
         spawned.current = false;
         if (!closed) {
           const message =

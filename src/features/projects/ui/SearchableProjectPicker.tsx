@@ -69,6 +69,7 @@ type Props = {
   onOpenProject?: () => void;
   onAllProjects?: () => void;
   onProjectSettings?: (path: string) => void;
+  projectStatuses?: ReadonlyMap<string, string>;
   /** Opens the project's context menu; the search input receives focus back. */
   onProjectContextMenu?: (
     path: string,
@@ -96,6 +97,7 @@ export function SearchableProjectPicker({
   onOpenProject,
   onAllProjects,
   onProjectSettings,
+  projectStatuses,
   onProjectContextMenu,
   projectMenuActive = false,
   monos,
@@ -223,6 +225,7 @@ export function SearchableProjectPicker({
           onSelectProject={onSelectProject}
           onAllProjects={onAllProjects}
           onProjectSettings={onProjectSettings}
+          projectStatuses={projectStatuses}
           onOpenProject={onOpenProject}
           onProjectContextMenu={onProjectContextMenu}
           projectMenuActive={projectMenuActive}

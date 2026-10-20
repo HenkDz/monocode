@@ -1,6 +1,5 @@
 import { createPortal } from "react-dom";
 import { WorkspaceTeam } from "./WorkspaceTeam";
-import { pathKey } from "../../shared/lib/paths";
 import { UsageDashboardNav } from "../../features/providers/ui/UsageDashboard";
 import { TeamMapNav } from "../../features/teamMap/navigation";
 // CC7C entry point stays outside CC7A's ProjectRail.
@@ -30,7 +29,6 @@ import {
   Chatting,
   Check,
   ChevronDown,
-  ChevronLeft,
   ChevronRight,
   CircleAlert,
   CircleDashed,
@@ -83,7 +81,7 @@ import {
   type GitFileDiffKind,
   type GitHistoryCommit,
 } from "../../platform/tauri/fs";
-import { MOD, SHIFT } from "../../platform/tauri/platform";
+import { MOD } from "../../platform/tauri/platform";
 import { useTrafficLightsVisible } from "../../platform/tauri/useTrafficLightsVisible";
 import { copyText } from "../../platform/tauri/clipboard";
 import { resolveModel } from "../../features/sessions/model/models";
@@ -160,8 +158,6 @@ import type {
 import type { LiveAgent } from "../../features/sessions/model/liveAgents";
 import type { SessionSummary } from "../../features/sessions/data/sessionStore";
 import {
-  keybindingShortcutLabel,
-  subscribeKeybindings,
   type SettingsSectionId,
   type WorkspacePanelSide,
 } from "../../features/settings/model/settings";
@@ -378,6 +374,7 @@ type Props = {
   panelSide?: WorkspacePanelSide;
   panelHost?: HTMLElement | null;
   onOpenProject?: () => void;
+  onProjectSettings?: (path: string) => void;
   onRemoveProject?: (path: string, options: { purgeData: boolean }) => void;
   onNew?: () => string | void;
   onNewTerminal?: () => void;
@@ -508,6 +505,7 @@ function SidebarComponent({
   panelSide = "left",
   panelHost = null,
   onOpenProject,
+  onProjectSettings,
   onRemoveProject,
   onNew,
   onSearch,
@@ -2412,7 +2410,12 @@ function SidebarComponent({
       data-tauri-drag-region="deep"
     >
       <div className="flex min-w-0 flex-1 items-center">
-        {railNavigatesWorktrees ? (
+        {inset && onSelectProject ? (
+          <SearchableProjectPicker cwd={cwd} recents={recents} onSelectProject={onSelectProject}
+            onOpenProject={onOpenProject} onAllProjects={onOpenTeamMap} onProjectSettings={onProjectSettings}
+            projectStatuses={projectStatuses} appearance="filled" className="w-full"
+            buttonClassName="!h-9 w-full !justify-start !px-2.5 !text-[13px] !text-content" />
+        ) : railNavigatesWorktrees ? (
           <WorkspaceHeading cwd={cwd} pending={workspaceSwitchPending} />
         ) : (headerProject || !remoteProject) && cwd && cwd !== "~" ? (
           <SidebarWorktreeSwitcher
@@ -2703,7 +2706,7 @@ function SidebarComponent({
           {/* The project's Monos, above its folders. */}
           {inset && railMonos && inProject ? <WorkspaceTeam {...railMonos} roster={listMonos()} project={cwd} /> : null}
           {inset ? workspaceWorktrees : null}
-          {!cwd || cwd === "~" ? (
+          {inset && workspaceWorktrees ? null : !cwd || cwd === "~" ? (
             <p className="px-3 py-2 text-[12px] text-content/50">
               No project folder
             </p>
@@ -3126,14 +3129,14 @@ function SidebarComponent({
             </div>
           </>
         ) : null}
-        {inset && onSelectProject ? (
-          <ProjectSpacesBar
-            projects={spaceProjects}
-            cwd={cwd}
-            busyProjectPaths={busyProjectPaths}
-            decisionCounts={decisionCounts}
-            onSelectProject={onSelectProject}
-          />
+        {inset ? (
+          <div className="flex shrink-0 items-center gap-2 border-t border-stroke px-3 py-2">
+            <button type="button" onClick={onOpenSettings} aria-label="App Settings"
+              className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-[12px] text-content/60 hover:bg-content/5 hover:text-content">
+              <Settings className="size-3.5" />Settings
+            </button>
+            <button type="button" onClick={onOpenUsage} aria-label="Open usage" className="ml-auto min-w-0 text-[11px] text-content/45">{workspaceUsage}</button>
+          </div>
         ) : null}
       </>
       {sessionMenu ? (
@@ -4000,176 +4003,6 @@ function CompactRailAction({
         <span
           aria-hidden
           className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-accent"
-        />
-      ) : null}
-    </button>
-  );
-}
-
-/** Zen-style spaces at the foot of the inset sidebar: each project's logo or
- * mascot, the current one lifted, and a way to open another. */
-/** Projects the spaces bar shows at once; the chevrons page through more. */
-const SPACES_SHOWN = 5;
-
-function ProjectSpacesBar({
-  projects,
-  cwd,
-  busyProjectPaths,
-  decisionCounts,
-  onSelectProject,
-}: {
-  projects: readonly string[];
-  cwd: string;
-  busyProjectPaths?: Iterable<string>;
-  decisionCounts?: ReadonlyMap<string, number>;
-  onSelectProject: (path: string) => void;
-}) {
-  const projectTooltip = useRailTooltip("top");
-  const shortcuts = useSyncExternalStore(subscribeKeybindings, () =>
-    [
-      keybindingShortcutLabel("Project: Previous", `${MOD}${SHIFT}←`),
-      keybindingShortcutLabel("Project: Next", `${MOD}${SHIFT}→`),
-    ]
-      .filter(Boolean)
-      .join(" / "),
-  );
-  const shown = Math.min(projects.length, SPACES_SHOWN);
-  const lastStart = Math.max(0, projects.length - shown);
-  const activeIndex = projects.findIndex((path) => sameProjectPath(path, cwd));
-  const [start, setStart] = useState(() =>
-    Math.min(lastStart, Math.max(0, activeIndex - shown + 1)),
-  );
-  // Bring the current project into view when it changes from elsewhere,
-  // moving the window no further than it needs to.
-  useEffect(() => {
-    if (activeIndex < 0) return;
-    setStart((current) =>
-      activeIndex < current
-        ? activeIndex
-        : activeIndex >= current + shown
-          ? activeIndex - shown + 1
-          : current,
-    );
-  }, [activeIndex, shown]);
-  const first = Math.min(start, lastStart);
-  const visible = projects.slice(first, first + shown);
-  const rowRef = useRef<HTMLDivElement>(null);
-  const step = (direction: -1 | 1) => {
-    const next = Math.min(lastStart, Math.max(0, first + direction));
-    if (next === first) return;
-    setStart(next);
-    // A short slide in from the side the new project comes from.
-    const row = rowRef.current;
-    if (
-      !row ||
-      typeof row.animate !== "function" ||
-      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
-    )
-      return;
-    row.animate(
-      [
-        { transform: `translateX(${direction * 12}px)`, opacity: 0.4 },
-        { transform: "none", opacity: 1 },
-      ],
-      { duration: 200, easing: "cubic-bezier(0.32, 0.72, 0, 1)" },
-    );
-  };
-  const chevron = (direction: -1 | 1) => {
-    const disabled = direction < 0 ? first <= 0 : first >= lastStart;
-    const Icon = direction < 0 ? ChevronLeft : ChevronRight;
-    const label = direction < 0 ? "Previous projects" : "More projects";
-    return (
-      <button
-        type="button"
-        title={label}
-        aria-label={label}
-        disabled={disabled}
-        data-tauri-drag-region="false"
-        onClick={() => step(direction)}
-        className="grid size-5 shrink-0 place-items-center rounded-md text-content/50 hover:bg-content/10 hover:text-content disabled:pointer-events-none disabled:opacity-30"
-      >
-        <Icon className="size-3.5" strokeWidth={1.75} />
-      </button>
-    );
-  };
-  return (
-    // As tall as the usage footer beside it, so the two read as one strip.
-    // A mini carousel: up to five spaces spread evenly, chevrons either side.
-    // Its edges line up with the rows above, and its controls with the usage
-    // footer's; each space takes an equal share.
-    <div
-      {...projectTooltip.handlers}
-      className="flex h-[30px] shrink-0 items-center gap-1 px-2 pb-0.5"
-    >
-      {chevron(-1)}
-      <div className="min-w-0 flex-1 overflow-hidden">
-        <div
-          ref={rowRef}
-          role="tablist"
-          aria-label="Projects"
-          className="flex w-full items-center gap-1"
-        >
-          {visible.map((path) => (
-            <ProjectSpaceButton
-              key={path}
-              path={path}
-              active={sameProjectPath(path, cwd)}
-              busy={projectPathBusy(busyProjectPaths, path)}
-              decisions={decisionCounts?.get(pathKey(path)) ?? 0}
-              shortcuts={shortcuts}
-              onSelect={() => onSelectProject(path)}
-            />
-          ))}
-        </div>
-      </div>
-      {chevron(1)}
-      {projectTooltip.tooltip}
-    </div>
-  );
-}
-
-function ProjectSpaceButton({
-  path,
-  active,
-  busy,
-  decisions,
-  shortcuts,
-  onSelect,
-}: {
-  path: string;
-  active: boolean;
-  busy: boolean;
-  decisions: number;
-  shortcuts: string;
-  onSelect: () => void;
-}) {
-  const label = useProjectLabel(path);
-  return (
-    <button
-      type="button"
-      role="tab"
-      aria-selected={active}
-      aria-label={`${label}${busy ? ", working" : ""}${decisions ? `, ${decisions} decisions` : ""}`}
-      data-rail-tip={label}
-      data-rail-tip-detail={shortcuts || undefined}
-      data-tauri-drag-region="false"
-      onClick={active ? undefined : onSelect}
-      className={`relative grid h-5 min-w-0 flex-1 place-items-center rounded-md transition-[opacity,background-color] duration-200 ease-out motion-reduce:transition-none ${
-        active
-          ? "bg-content/10 opacity-100"
-          : "opacity-45 hover:bg-content/5 hover:opacity-100"
-      }`}
-    >
-      <CurrentProjectIcon
-        cwd={path}
-        busy={busy}
-        className="size-3"
-        mascotClassName="size-2.5"
-      />
-      {decisions > 0 ? <span aria-hidden className="absolute right-1 top-0.5 size-1.5 rounded-full bg-amber-400" /> : busy && !active ? (
-        <span
-          aria-hidden
-          className="absolute right-1 top-0.5 size-1.5 rounded-full bg-accent"
         />
       ) : null}
     </button>

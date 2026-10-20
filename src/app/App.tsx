@@ -16,7 +16,8 @@ import { resolveMonoRolePermissions, snapshotMonoWorkerPermissions } from "../fe
 import { archiveMonoConversation, archiveProjectMonos, offerProjectMonoRestore, projectMonoTeam } from "../features/monos/model/monoArchive";
 import { loadMonoView, saveMonoView, monoForView, monoViewProject, memberDetailsView, selectedOrgMono, monoLiveState } from "../features/monos/model/monoNavigation";
 import { MonoTeamActivity } from "../features/monos/ui/MonoTeamActivity";
-import { WorkspaceContextTabs, WorkspaceGoals, WorkspaceWorktree, WorkspaceWorktrees, WorkspaceUsage, type WorkspaceContextTab } from "./shell/WorkspaceContext";
+import { WorkspaceContextTabs, WorkspaceGoals, WorkspaceWorktree, WorkspaceUsage, type WorkspaceContextTab } from "./shell/WorkspaceContext";
+import { WorktreeChats } from "../features/source-control/ui/WorktreeChats";
 import { workspaceTeam } from "./shell/WorkspaceTeam";
 import { TeamMap } from "../features/teamMap/TeamMap";
 import { commandMapDecisions } from "../features/teamMap/commandMapDecisions";
@@ -609,12 +610,14 @@ import {
   planWorkspaceTabClose,
   switchSessionInTab,
   workspaceTabCwd,
-  workspaceTabWorktree,
   focusedWorkspaceTabCwd,
   isManagerTab,
 } from "../features/workspace/model/workspaceTabGroups";
 import { applyAddToChatRequest } from "../features/sessions/model/addChatToWorkspace";
 import { newWorkspaceSession } from "./model/newWorkspaceSession";
+import { boundWorktreeTabs, chatTabWorktree } from "../features/source-control/model/chatWorktree";
+import { packageScripts } from "../features/projects/model/packageScripts";
+import { prepareTerminalCommand } from "../features/terminal/model/terminalCommand";
 import {
   ADD_TO_CHAT_EVENT,
   type AddToChatRequest,
@@ -1608,7 +1611,6 @@ function Workspace({
   );
   const [rightPanelOpen, setRightPanelOpenState] = useState(loadRightPanelOpen);
   const [workspaceContextTab, setWorkspaceContextTab] = useState<WorkspaceContextTab>("goal");
-  const [contextWorktree, setContextWorktree] = useState<{ project: string; path: string }>();
   const [rightPanelTab, setRightPanelTabState] =
     useState<RightPanelTab>(loadRightPanelTab);
   // A closed panel keeps its contents until it has slid out.
@@ -1865,60 +1867,45 @@ function Workspace({
   }, [tabs, sessions, activeTabId, projectCwd]);
 
   const projectWorktree = useWorktreeFocus(projectCwd);
+  const projectCheckoutList = useProjectWorktrees(projectCwd, isLocalProject(projectCwd));
   const [creatingWorktreeProject, setCreatingWorktreeProject] =
     useState<string>();
   const creatingWorktrees = useProjectWorktrees(
     creatingWorktreeProject ?? "",
     !!creatingWorktreeProject,
   );
-  /** Tab or session id -> the workspace it was opened or moved in. A tab
-   * belongs to the workspace it was opened in, whatever worktree it runs in:
-   * opening a session, or moving one from its composer, never switches the
-   * workspace. Unpinned tabs (restored ones) group by their own worktree. */
-  // Only the default workspace's tabs were saved, so every restored tab
-  // belongs to it, including one its composer moved to a worktree.
-  const [restoredPins] = useState(
-    () =>
-      new Map(
-        tabs.flatMap((tab) => {
-          const project = workspaceTabCwd(tab, sessions);
-          return project && !isRemoteProjectPath(project)
-            ? [[tab.id, project] as const]
-            : [];
-        }),
-      ),
-  );
-  const workspacePins = useRef(restoredPins);
+  const workspacePins = useRef(new Map<string, string>());
   const workspaceSessionRequest = useRef(0);
   const tabWorkspace = useCallback(
     (tab: WorkspaceTab, list: readonly Session[]) => {
-      if (isManagerTab(tab)) return workspaceTabWorktree(tab, list);
-      const pinnedTab = workspacePins.current.get(tab.id);
-      if (pinnedTab) return pinnedTab;
-      for (const id of leafIds(tab.layout)) {
-        const pinned = workspacePins.current.get(id);
-        if (pinned) return pinned;
-      }
-      return workspaceTabWorktree(tab, list);
+      const project = workspaceTabCwd(tab, list);
+      return chatTabWorktree(tab, list, project && sameProjectPath(project, projectCwd)
+        ? projectCheckoutList.data?.worktrees : undefined);
     },
-    [],
+    [projectCwd, projectCheckoutList.data],
   );
   const tabWorktreeOf = useCallback(
     (tab: WorkspaceTab) => tabWorkspace(tab, sessionsRef.current),
     [tabWorkspace],
   );
-  /** Saved tabs: the app reopens on each project's default workspace, so
-   * tabs from other worktrees close with it instead of piling up. */
-  const keepWorkspaceTab = useCallback(
-    (tab: WorkspaceTab) => {
-      if (isManagerTab(tab)) return true;
-      const project = workspaceTabCwd(tab, sessionsRef.current);
-      if (!project || isRemoteProjectPath(project)) return true;
-      const workspace = tabWorkspace(tab, sessionsRef.current);
-      return !workspace || sameProjectPath(workspace, project);
-    },
-    [tabWorkspace],
-  );
+  // Persist the existing union, including hidden checkouts; only rendering is scoped.
+  const keepWorkspaceTab = useCallback(() => true, []);
+  useEffect(() => {
+    setTabs(current => boundWorktreeTabs(current, sessionsRef.current, activeTabId, tabWorktreeOf));
+  }, [tabs, activeTabId, tabWorktreeOf]);
+  useLayoutEffect(() => {
+    const tab = tabs.find(tab => tab.id === activeTabId);
+    if (!tab || isManagerTab(tab) || !isLocalProject(projectCwd)) return;
+    const project = workspaceTabCwd(tab, sessions);
+    if (!project || !sameProjectPath(project, projectCwd)) return;
+    const path = tabWorkspace(tab, sessions);
+    if (!path) return;
+    const existing = worktreeFocus(project);
+    if (sameProjectPath(existing?.path ?? project, path)) return;
+    const session = sessions.find(session => session.id === tab.focusedId);
+    const tree = projectCheckoutList.data?.worktrees.find(tree => sameProjectPath(tree.path, path));
+    setWorktreeFocus(project, sameProjectPath(path, project) ? undefined : { path, branch: tree?.branch ?? session?.branch ?? null });
+  }, [activeTabId, projectCwd, tabs, sessions, tabWorkspace, projectCheckoutList.data]);
 
   const workspaceNavigation = useWorkspaceNavigation({
     project: projectCwd,
@@ -3578,17 +3565,17 @@ function Workspace({
   }, []);
 
   const openProjectTerminal = useCallback(
-    (cwd: string) => {
+    (cwd: string, command?: string) => {
       const workdir = cwd || projectCwdRef.current;
       const projectPath = projectCwdRef.current;
       if (!isLocalProject(projectPath)) return false;
+      const existingDock = findProjectTerminal(projectTerminalsRef.current, projectPath);
+      const file = newTerminalFile(workdir, existingDock ? nextDockTerminalTitle(existingDock, workdir) : undefined, projectPath);
+      if (command) prepareTerminalCommand(file.id, workdir, command, () =>
+        sameProjectPath(projectCwdRef.current, projectPath) &&
+        sameProjectPath(worktreeFocus(projectPath)?.path ?? projectPath, workdir));
       setProjectTerminals((prev) => {
         const existing = findProjectTerminal(prev, projectPath);
-        const file = newTerminalFile(
-          workdir,
-          existing ? nextDockTerminalTitle(existing, workdir) : undefined,
-          projectPath,
-        );
         if (!existing) {
           return [
             ...prev,
@@ -3608,6 +3595,26 @@ function Workspace({
     },
     [focusProjectTerminal],
   );
+
+  const onRunProjectScript = useCallback(async (project: string, path: string, name: string) => {
+    const isCurrent = () => sameProjectPath(projectCwdRef.current, project) &&
+      sameProjectPath(worktreeFocus(project)?.path ?? project, path) &&
+      ![...removingWorktreePaths.current].some(removed => isEqualOrInside(path, removed));
+    if (!isLocalProject(project) || !isLocalProject(path) || !isCurrent()) throw new Error("Select this worktree before running a script.");
+    const scripts = await packageScripts(project);
+    const script = scripts.find(script => script.name === name);
+    if (!script || !isCurrent()) throw new Error("The project or script changed. Try again.");
+    const listed = await listWorktrees(project);
+    if (!isCurrent() || !listed.worktrees.some(tree => sameProjectPath(tree.path, path) && !tree.missing && !tree.prunable))
+      throw new Error("This worktree is unavailable.");
+    if (!await ask(`Run ${script.run} in ${path}?\n\n${script.command}`, { title: "Run project script", kind: "warning" })) return;
+    const latestScripts = await packageScripts(project);
+    const latestTrees = await listWorktrees(project);
+    if (!isCurrent() || latestScripts.find(row => row.name === name)?.command !== script.command ||
+      !latestTrees.worktrees.some(tree => sameProjectPath(tree.path, path) && !tree.missing && !tree.prunable))
+      throw new Error("The worktree or script changed. Run it again from the selected worktree.");
+    openProjectTerminal(path, script.run);
+  }, [openProjectTerminal]);
 
   const onOpenTerminal = useCallback(
     (cwd: string, asWorkspaceTab = false, occupySessionId?: string) => {
@@ -4680,7 +4687,6 @@ function Workspace({
     const worktree = projectWorktree?.path ?? projectCwd;
     return filterTabsForProject(tabs, sessions, projectCwd).filter((tab) => {
       if (isManagerTab(tab)) return false;
-      if (tab.id === activeTabId) return true;
       const workspace = tabWorkspace(tab, sessions);
       return !workspace || sameProjectPath(workspace, worktree);
     });
@@ -6835,12 +6841,12 @@ function Workspace({
 
   const onWorkspaceModeChange = useCallback(
     (sessionId: string, mode: WorkspaceMode, base?: string) => {
-      setSessions((prev) =>
+      updateSessionState(sessionsRef, setSessions, (prev) =>
         prev.map((session) => {
           if (
             session.id !== sessionId ||
-            (!isBlankSession(session) &&
-              !(session.workspaceMode && !session.worktreeCwd && !session.busy))
+            !isBlankSession(session) || session.providerSessionId || session.queuedMessages?.length ||
+            session.worktreePreparing || switchingWorktrees.current.has(sessionId)
           ) {
             return session;
           }
@@ -6850,6 +6856,8 @@ function Workspace({
                   ...session,
                   workspaceMode: "worktree",
                   worktreeBase: base || session.worktreeBase,
+                  worktreeCwd: undefined,
+                  branch: undefined,
                 }
               : session
             : {
@@ -6865,13 +6873,11 @@ function Workspace({
 
   const onWorktreeBaseChange = useCallback(
     (sessionId: string, base: string) => {
-      setSessions((prev) =>
+      updateSessionState(sessionsRef, setSessions, (prev) =>
         prev.map((session) =>
           session.id === sessionId &&
-          (isBlankSession(session) ||
-            (!!session.workspaceMode &&
-              !session.worktreeCwd &&
-              !session.busy)) &&
+          isBlankSession(session) && !session.providerSessionId && !session.queuedMessages?.length &&
+          !session.worktreePreparing && !switchingWorktrees.current.has(sessionId) &&
           session.workspaceMode === "worktree"
             ? { ...session, worktreeBase: base }
             : session,
@@ -6892,6 +6898,10 @@ function Workspace({
       if (isProjectManager(sessionId))
         throw new Error("The Manager stays at the project root.");
       const current = sessionsRef.current.find((s) => s.id === sessionId);
+      if (fromComposer && current && !current.worktreeRemoved &&
+        (!isBlankSession(current) || current.providerSessionId || current.queuedMessages?.length || current.worktreePreparing)) {
+        throw new Error("This chat stays in its original worktree. Start a new chat to work elsewhere.");
+      }
       if (
         !current ||
         current.busy ||
@@ -6934,7 +6944,7 @@ function Workspace({
         if (!isCurrent()) return;
         const target = listed.worktrees.find(
           (entry) =>
-            pathKey(entry.path) === pathKey(tree.path) && !entry.missing,
+            pathKey(entry.path) === pathKey(tree.path) && !entry.missing && !entry.prunable,
         );
         if (!target) {
           throw new Error(
@@ -6945,6 +6955,7 @@ function Workspace({
         if (
           !source ||
           source.busy ||
+          (fromComposer && !source.worktreeRemoved && (!isBlankSession(source) || !!source.providerSessionId || !!source.queuedMessages?.length)) ||
           source.cwd !== current.cwd ||
           sessionWorkCwd(source) !== sessionWorkCwd(current)
         ) {
@@ -7159,6 +7170,8 @@ function Workspace({
   const onSelectProjectWorktree = useCallback(
     (project: string, tree: Worktree) => {
       if (tree.missing) return;
+      teamMap.close();
+      setSearchViewOpen(false); setInboxViewOpen(false); setNotesViewOpen(false); setAutomationsViewOpen(false); setSettingsOpen(false);
       workspaceSessionRequest.current++;
       openResolvedProjects([project]);
       workspaceNavigation.selectWorkspace(
@@ -7174,6 +7187,7 @@ function Workspace({
   const onNewWorktreeSession = useCallback(
     (project: string, tree: Worktree, options?: WorktreeSessionOptions) => {
       if (tree.missing) return;
+      teamMap.close();
       workspaceSessionRequest.current++;
       workspaceNavigation.cancel();
       const focus = sameProjectPath(tree.path, project)
@@ -17235,6 +17249,7 @@ function Workspace({
       }
       standaloneTitle={!teamMap.open && !monoCovers && managerActive ? "Manager" : undefined}
       cwd={sidebarCwd}
+      worktree={projectWorktree}
       projectRailOpen={projectRailOpen}
       sessionSidebarOpen={sessionSidebarOpen}
       compactRail={!insetLayout && compactTitleNavigation}
@@ -17440,10 +17455,14 @@ function Workspace({
               )}
               onNewWorktree={setCreatingWorktreeProject}
       onOpenProject={pickProject}
+      onProjectSettings={path => { void onOpenProjectManager(path); }}
       onRemoveProject={onRemoveProject}
       monos={sidebarMonos}
-      workspaceWorktrees={insetLayout ? <WorkspaceWorktrees project={sidebarCwd} sessions={sessions} selectedPath={contextWorktree && sameProjectPath(contextWorktree.project, sidebarCwd) ? contextWorktree.path : undefined} onNew={() => setCreatingWorktreeProject(sidebarCwd)} onSelect={tree => {
-        setContextWorktree({ project: sidebarCwd, path: tree.path });
+      workspaceWorktrees={insetLayout && !isRemoteProjectPath(sidebarCwd) ? <WorktreeChats project={sidebarCwd} sessions={sessions} history={history} openSessions={sidebarOpenSessions}
+        activeId={activeSessionId} unseen={unseenFinishedIds} selectedPath={projectWorktree?.path ?? sidebarCwd}
+        onCreate={() => setCreatingWorktreeProject(sidebarCwd)} onChat={id => { void onSelectHistorySession(id); }}
+        onNew={tree => onNewWorktreeSession(sidebarCwd, tree)} onSelect={tree => {
+        onSelectProjectWorktree(sidebarCwd, tree);
         showRightPanel(rightPanelTab);
         setWorkspaceContextTab("worktree");
       }} /> : undefined}
@@ -18199,7 +18218,7 @@ function Workspace({
                   >
                     <WorkspaceContextTabs tab={workspaceContextTab} onChange={setWorkspaceContextTab} onClose={onToggleRightPanel}>
                       {workspaceContextTab === "goal" ? <WorkspaceGoals project={sidebarCwd} sessions={sessions} usage={usage.snapshot} onOpenMono={onOpenRailMono} decisionActions={decisionActions} goalAction={renderGoalAction} /> : null}
-                      {workspaceContextTab === "worktree" ? <WorkspaceWorktree project={sidebarCwd} path={contextWorktree && sameProjectPath(contextWorktree.project, sidebarCwd) ? contextWorktree.path : undefined} sessions={sessions} onOpen={tree => onSelectProjectWorktree(sidebarCwd, tree)} onChanges={path => onOpenWorktreeChanges(sidebarCwd, path)} onRemove={onRemoveWorktree} /> : null}
+                      {workspaceContextTab === "worktree" ? <WorkspaceWorktree project={sidebarCwd} path={projectWorktree?.path ?? sidebarCwd} sessions={sessions} onRunScript={onRunProjectScript} onOpen={tree => onSelectProjectWorktree(sidebarCwd, tree)} onChanges={path => onOpenWorktreeChanges(sidebarCwd, path)} onRemove={onRemoveWorktree} /> : null}
                     <div
                       ref={setRightPanelHost}
                       aria-label="Project tools"

@@ -47,6 +47,7 @@ import { worktreeTaskSessions } from "../../features/source-control/model/worktr
 import { workbenchSessionTask } from "../../features/monos/model/monoNavigation";
 import { ProjectAutonomyControl, type DecisionUiActions } from "../../features/commandCenter/ui/Decisions";
 import { GoalTaskSummary } from "../../features/commandCenter/ui/GoalTaskSummary";
+import { WorktreeQuickActions } from "../../features/source-control/ui/WorktreeQuickActions";
 
 const button =
   "rounded-lg border border-stroke px-2.5 py-1.5 text-[11px] text-content/75 hover:bg-content/5 disabled:opacity-40";
@@ -348,10 +349,10 @@ export function WorkspaceGoals({
       )}
       <h2 className={heading}>This project decides</h2>
       <dl className="space-y-2 px-4 py-2 text-[11px] text-content/60">
-        <div className="flex justify-between gap-3">
+        {!(manager && decisionActions) && <div className="flex justify-between gap-3">
           <dt>Ask me for</dt>
           <dd>Not configured</dd>
-        </div>
+        </div>}
         <div className="flex justify-between gap-3">
           <dt>Decided by team today</dt>
           <dd>Not recorded</dd>
@@ -521,9 +522,11 @@ export function WorkspaceWorktree({
   onOpen,
   onChanges,
   onRemove,
+  onRunScript,
 }: {
   project: string;
   path?: string;
+  onRunScript?: (project: string, path: string, name: string) => Promise<void>;
   sessions: readonly Session[];
   onOpen: (tree: Worktree) => void;
   onChanges: (path: string) => void;
@@ -553,6 +556,7 @@ export function WorkspaceWorktree({
           project={project}
           tree={tree}
           sessions={sessions}
+          onRunScript={onRunScript}
           onOpen={() => onOpen(tree)}
           onChanges={() => onChanges(tree.path)}
           onRemove={onRemove}
@@ -575,9 +579,11 @@ function WorktreeDetails({
   onChanges,
   onRemove,
   onDeleted,
+  onRunScript,
 }: {
   project: string;
   tree: Worktree;
+  onRunScript?: (project: string, path: string, name: string) => Promise<void>;
   sessions: readonly Session[];
   onOpen: () => void;
   onChanges: () => void;
@@ -637,6 +643,7 @@ function WorktreeDetails({
   const unavailable = tree.missing || tree.prunable;
   return (
     <>
+      {onRunScript ? <WorktreeQuickActions project={project} path={tree.path} unavailable={unavailable} onRun={onRunScript} /> : null}
       <h2 className="flex items-center gap-2 text-[13px] font-medium">
         <GitBranch className="size-4 shrink-0" />
         <span className="break-all">{tree.branch ?? "Detached HEAD"}</span>

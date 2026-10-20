@@ -60,6 +60,7 @@ vi.mock("../../features/monos/model/monoManagerGoals", () => ({
     subscribe: () => () => {},
     snapshot: () => 0,
     goals: () => mocks.goals,
+    autonomy: () => "medium-and-up",
   },
 }));
 vi.mock("../../features/monos/model/mono", async (importOriginal) => ({
@@ -132,6 +133,15 @@ const renderTree = async (path = "C:/repo/feature", remove = vi.fn()) => {
   );
   return remove;
 };
+
+it("shows the real project autonomy without a contradictory Not configured placeholder", async () => {
+  mocks.roster = [{ id: "manager", role: "manager", projects: ["C:/repo"], mascot: "cat", color: "blue" } as Mono];
+  const actions = { autonomy: vi.fn(), outcome: vi.fn(), allow: vi.fn(), deny: vi.fn(), resolve: vi.fn(), activate: vi.fn() };
+  await act(async () => root.render(createElement(WorkspaceGoals, { project: "C:/repo", decisionActions: actions as never })));
+  expect(host.querySelector('[aria-label="Project decision autonomy"]')).not.toBeNull();
+  expect(host.querySelector('button[aria-pressed="true"]')?.textContent).toBe("Medium & up");
+  expect(host.textContent).not.toContain("Not configured");
+});
 
 it("opens the existing create/delete review UIs without performing any mutation, and labels unsupported updates", async () => {
   const remove = await renderTree();

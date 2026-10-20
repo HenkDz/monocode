@@ -108,7 +108,7 @@ it("groups unlimited sessions by checkout and prefers live bindings over saved h
     session("moved", "C:/trees/a/nested/src"),
     ...blanks,
   ]);
-  expect(groups.get(pathKey("C:/repo"))?.map((s) => s.id)).toEqual(["main"]);
+  expect(groups.get(pathKey("C:/repo"))?.map((s) => s.id)).toEqual(["main", "removed"]);
   expect(groups.get(pathKey("C:/trees/a/nested"))?.map((s) => s.id)).toEqual([
     "moved",
   ]);

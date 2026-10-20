@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-// Independent real Composer + real picker + source-selected App callback, synthetic ports only.
+// Real PaneTree/SessionPane/Composer + picker and source-selected App callbacks, synthetic ports only.
 import { readFileSync } from 'node:fs';
 import { act, createElement } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -16,10 +16,14 @@ const fixture = vi.hoisted(() => ({
 }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: async (command: string) => { throw Error(`Unlisted native port: ${command}`); } }));
 vi.mock('@tauri-apps/api/webview', () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
+vi.mock('../features/files/ui/FilePane', () => ({ FilePane: () => null }));
 vi.mock('../features/source-control/hooks/useProjectBranches', () => ({ useProjectBranchesState: () => fixture.branches }));
 vi.mock('../features/source-control/hooks/useProjectWorktrees', () => ({ useProjectWorktrees: () => fixture.trees }));
 vi.mock('../features/sessions/model/attachments', async original => ({ ...await original<typeof import('../features/sessions/model/attachments')>(), attachmentsFromFiles: fixture.read }));
 import { Composer } from '../features/sessions/ui/Composer';
+import { PaneTree } from '../features/workspace/ui/PaneTree';
+import { TranscriptPool, TranscriptPoolOutlet } from '../features/sessions/ui/TranscriptPool';
+import { clearComposerDraft } from '../features/sessions/model/draftCache';
 import { newSession, sessionWorkCwd } from '../features/sessions/model/session';
 import { isBlankSession } from '../features/projects/model/projectReturn';
 import { sessionInWorktree } from '../features/source-control/model/worktrees';
@@ -141,4 +145,71 @@ it.each(['picker', 'sidebar', 'retry', 'reset', 'unmount'] as const)('locks the 
     await act(async () => retryOption!.click());
     expect(sessionWorkCwd(sessionsRef.current[0])).toBe('C:/synthetic/b');
   }
+});
+
+it.each(['single', 'split', 'pooled'] as const)('forwards actual App submit-start through real PaneTree/SessionPane/Composer: %s', async mode => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+  Element.prototype.scrollIntoView = () => {};
+  const original = { ...newSession('claude', 'C:/synthetic/repo'), id: `pane-${mode}`, worktreeCwd: 'C:/synthetic/a', composerSeed: 'first message', providerAccountId: 'synthetic-account' };
+  const other = { ...newSession('claude', original.cwd), id: `other-${mode}` };
+  const pendingComposerSubmits = { current: new Set<string>() };
+  const start = callback('onComposerSubmitStart', { pendingComposerSubmits });
+  const releases: ReturnType<typeof vi.fn>[] = [];
+  const onComposerSubmitStart = vi.fn((id: string) => {
+    const release = vi.fn(start(id));
+    releases.push(release);
+    return release;
+  });
+  let lockedAtSubmit = false;
+  const onSubmit = vi.fn(() => {
+    lockedAtSubmit = pendingComposerSubmits.current.has(original.id);
+    return mode !== 'split';
+  });
+  let finishPaste!: (attachments: unknown[]) => void;
+  const pending = new Promise<unknown[]>(resolve => { finishPaste = resolve; });
+  fixture.read.mockReset().mockReturnValue(pending);
+  const noop = () => {};
+  // Select App's actual shared-prop initializer so this cannot hand-wire around its boundary.
+  const declaration = nodes.find(node => ts.isVariableDeclaration(node) && node.name.getText(ast) === 'sessionPaneProps') as ts.VariableDeclaration;
+  const ports = { onComposerSubmitStart, onSubmit, recents: [], workspaceNavigation: { pending: false }, active: original };
+  const scope = new Proxy(ports, { has: () => true, get: (target, name) => name === Symbol.unscopables ? undefined : name in target ? Reflect.get(target, name) : noop });
+  const shared = Function('scope', `with(scope) { ${ts.transpile(`return (${declaration.initializer!.getText(ast)});`, { target: ts.ScriptTarget.ES2022 })} }`)(scope);
+  const pool = mode === 'pooled' ? new TranscriptPool() : undefined;
+  const container = document.createElement('div'); document.body.append(container); root = createRoot(container);
+  try {
+    await act(async () => root!.render(createElement('div', null,
+      createElement(PaneTree, { ...shared, visible: true,
+        layout: mode === 'split'
+          ? { type: 'split', id: 'split', dir: 'right', children: [{ type: 'leaf', id: original.id }, { type: 'leaf', id: other.id }], sizes: [0.5, 0.5] }
+          : { type: 'leaf', id: original.id },
+        sessions: [original, other], editorPanes: [], dirtyFileIds: new Set(), fileErrorCounts: new Map(),
+        focusedId: other.id, composerFocused: false, transcriptPool: pool,
+      }),
+      pool ? createElement(TranscriptPoolOutlet, { pool }) : null,
+    )));
+    const pane = container.querySelector<HTMLElement>(`[data-pane-id="${original.id}"]`)!;
+    expect(pane).toBeTruthy();
+    const paste = new Event('paste', { bubbles: true, cancelable: true });
+    Object.defineProperty(paste, 'clipboardData', { value: { getData: () => '', files: [new File(['image'], 'synthetic.png', { type: 'image/png' })], items: [] } });
+    await act(async () => pane.querySelector('textarea')!.dispatchEvent(paste));
+    expect(fixture.read).toHaveBeenCalledOnce();
+    await act(async () => pane.querySelector<HTMLButtonElement>('[aria-label="Send"]')!.click());
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(onComposerSubmitStart, 'Actual PaneTree must forward App submit-start before paste settles').toHaveBeenCalledExactlyOnceWith(original.id);
+    expect(pendingComposerSubmits.current).toEqual(new Set([original.id]));
+    expect(releases[0]).not.toHaveBeenCalled();
+    expect(sessionWorkCwd(original)).toBe('C:/synthetic/a');
+    expect(original.providerAccountId).toBe('synthetic-account');
+    await act(async () => { finishPaste([]); await pending; });
+    expect(onSubmit).toHaveBeenCalledExactlyOnceWith(original.id, 'first message', [], { intent: 'default' });
+    expect(lockedAtSubmit).toBe(true);
+    expect(releases[0]).toHaveBeenCalledOnce();
+    expect(pendingComposerSubmits.current.size).toBe(0);
+  } finally {
+    await act(async () => { finishPaste([]); await pending; });
+    await act(async () => root!.unmount()); root = undefined;
+    clearComposerDraft(original.id); clearComposerDraft(other.id);
+  }
+  expect(releases[0]).toHaveBeenCalledOnce();
 });

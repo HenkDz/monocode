@@ -98,6 +98,7 @@ type Shared = {
     settingId?: string,
   ) => void;
   onRuntimeModeChange: (sessionId: string, mode: RuntimeMode) => void;
+  onSubmitStart?: (sessionId: string) => (() => void);
   onSubmit: (
     sessionId: string,
     text: string,
@@ -240,6 +241,7 @@ function PaneTreeComponent({
   onRuntimeModeChange,
   onSaveDraft,
   onRemoveDraft,
+  onSubmitStart,
   onSubmit,
   onStop,
   onCompactContext,
@@ -806,6 +808,7 @@ function PaneTreeComponent({
                   onRuntimeModeChange={onRuntimeModeChange}
                   onSaveDraft={onSaveDraft}
                   onRemoveDraft={onRemoveDraft}
+                  onSubmitStart={onSubmitStart}
                   onSubmit={onSubmit}
                   onStop={onStop}
                   onCompactContext={onCompactContext}

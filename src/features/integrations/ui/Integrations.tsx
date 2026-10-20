@@ -60,15 +60,15 @@ export function Integrations({ connected, requests, loading = false, error, onRe
   const installed = connected.filter(item => item.provider === "skill" || item.provider === "gh CLI" && item.available);
   const suggestions = requests.filter(item => item.provider === "skill" && item.request.kind === "install" && item.request.service === "skill");
   return <section className="integrations-page" aria-labelledby={title} aria-busy={loading}>
-    <header><h2 id={title}>Integrations</h2><p>Project skills and local tools</p></header>
+    <header><h2 id={title}>Integrations</h2><p>Skills and tools for this project</p></header>
     <div className="integrations-body">
       {loading && <p role="status">Loading integrations…</p>}
       {error && <p className="integration-error" role="alert">{error}</p>}
-      {installed.length > 0 && <ul className="integration-list">{installed.map(item => item.provider === "skill"
+      {installed.length > 0 && <><h3 className="integration-section-label">Available in this project</h3><ul className="integration-list">{installed.map(item => item.provider === "skill"
         ? <SkillRow key={JSON.stringify([item.id, item.projectPath, item.skillPath, item.name])} item={item} onLog={onLog} onChanged={onChanged} />
         : <li className="integration-row" key={item.id}><span className="integration-logo" aria-hidden="true">GH</span>
-          <div className="integration-row-copy"><strong>GitHub</strong><p>Local CLI access (account not pinned)</p></div></li>)}</ul>}
-      {!installed.length && !loading && !error && <p className="integration-note">No project integrations found.</p>}
+          <div className="integration-row-copy"><strong>GitHub</strong><p>Uses your GitHub login on this PC</p></div></li>)}</ul></>}
+      {!installed.length && !loading && !error && <div className="integration-empty"><h3>Your project’s skills live here</h3><p>When a Manager needs a skill, it'll ask you here. Installed skills show up in this list.</p></div>}
       {suggestions.length > 0 && <h3 className="integration-section-label">Suggested skills</h3>}
       {suggestions.map(item => <IntegrationRequestCard key={item.id} item={item} onAction={onRequest} onLog={onLog} onChanged={onChanged} />)}
     </div>

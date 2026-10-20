@@ -23,16 +23,19 @@ for (const [width, theme] of (baseline ? [[1440, "dark"], [390, "light"]] : [[14
         const nav = page.getByRole("navigation", { name: "Views" });
         const decision = nav.getByRole("button", { name: "Decisions", exact: true });
         const map = nav.getByRole("button", { name: "Command map", exact: true });
-        const badge = decision.locator("span").last();
-        await expect(badge).toHaveText(count > 99 ? "99+" : `${count}`);
+        const badge = decision.locator("span[aria-hidden]");
+        await expect(badge).toHaveCount(count > 0 ? 1 : 0);
+        if (count > 0) await expect(badge).toHaveText(count > 99 ? "99+" : `${count}`);
         const icon = await decision.locator("svg").boundingBox();
         const peerIcon = await map.locator("svg").boundingBox();
         expect(icon!.x).toBe(peerIcon!.x);
         expect((await decision.locator("span").first().boundingBox())!.x).toBe((await map.locator("span").first().boundingBox())!.x);
-        const row = (await decision.boundingBox())!, bounds = (await badge.boundingBox())!;
-        expect(row.x + row.width - bounds.x - bounds.width).toBe(8);
-        const label = (await decision.locator("span").first().boundingBox())!;
-        expect(label.x + label.width).toBeLessThanOrEqual(bounds.x);
+        if (count > 0) {
+          const row = (await decision.boundingBox())!, bounds = (await badge.boundingBox())!;
+          expect(row.x + row.width - bounds.x - bounds.width).toBe(8);
+          const label = (await decision.locator("span").first().boundingBox())!;
+          expect(label.x + label.width).toBeLessThanOrEqual(bounds.x);
+        }
         await decision.click(); await map.click();
         expect(await page.evaluate(() => (window as any).ccfb5.events)).toEqual(["decisions", "map:org"]);
       }

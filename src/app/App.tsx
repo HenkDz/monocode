@@ -1242,6 +1242,7 @@ function titleTabsEqual(a: TitleTab[], b: TitleTab[]): boolean {
       other != null &&
       tab.id === other.id &&
       tab.appView === other.appView &&
+      tab.page === other.page &&
       tab.mono?.mascot === other.mono?.mascot &&
       tab.mono?.color === other.mono?.color &&
       tab.mono?.status === other.mono?.status &&
@@ -14884,9 +14885,17 @@ function Workspace({
     isBlankWorkspaceTab(deckProjectTabs[0], sessions)
       ? deckProjectTabs[0].id
       : undefined;
-  const nextTitleTabs = placeholderTab
+  const openPage: TitleTab["page"] = !teamMap.open ? undefined
+    : teamMap.scope === DECISIONS_SCOPE ? "decisions"
+    : teamMap.scope === INTEGRATIONS_SCOPE ? "integrations"
+    : teamMap.scope === USAGE_DASHBOARD_SCOPE ? "usage"
+    : teamMap.scope === ATTENTION_QUEUE_SCOPE || teamMap.scope === MISSION_CONTROL_SCOPE ? undefined
+    : "commandMap";
+  const nextTitleTabs = (placeholderTab
     ? orderedTitleTabs.filter((tab) => tab.id !== placeholderTab)
-    : orderedTitleTabs;
+    : orderedTitleTabs).map(tab => openPage && tab.id === ((insetLayout ? shownViewTabId : undefined) ?? activeTabId)
+      ? { ...tab, page: openPage }
+      : tab);
   tabProjectsRef.current = new Map(
     nextTitleTabs.map((tab) => [tab.id, tab.project]),
   );
@@ -17136,7 +17145,7 @@ function Workspace({
     <TitleBar
       // A Mono in full view stands apart from the project's tabs, except
       // in the inset layout, where it is one of them.
-      tabs={monoCovers && !insetLayout ? NO_TITLE_TABS : titleTabs}
+      tabs={monoCovers && !insetLayout && !teamMap.open ? NO_TITLE_TABS : titleTabs}
       content={
         insetLayout && settingsOpen ? (
           <div
@@ -17147,7 +17156,7 @@ function Workspace({
         ) : undefined
       }
       mono={
-        monoCovers && monoViewMono && monoViewSession
+        !teamMap.open && monoCovers && monoViewMono && monoViewSession
           ? { look: monoLook(monoViewMono), state: monoRail.states.get(monoViewMono.id) ?? monoState(monoViewSession) }
           : undefined
       }
@@ -17179,7 +17188,7 @@ function Workspace({
       }
       hideWindowControls={!teamMap.open && monoCovers && (insetLayout && !monoViewMono?.role ? monoOverviewOpen && !!monoOverviewPanel : monoSidebarOpen && !!monoDetailsPanel)}
       activeId={
-        monoViewSession
+        monoViewSession && (!teamMap.open || insetLayout)
           ? insetLayout
             ? (monoViewTabId ?? "")
             : ""
@@ -17187,7 +17196,7 @@ function Workspace({
             ? appViewTabId(activeAppView)
             : activeTabId
       }
-      standaloneTitle={!monoCovers && managerActive ? "Manager" : undefined}
+      standaloneTitle={!teamMap.open && !monoCovers && managerActive ? "Manager" : undefined}
       cwd={sidebarCwd}
       projectRailOpen={projectRailOpen}
       sessionSidebarOpen={sessionSidebarOpen}
@@ -17626,7 +17635,6 @@ function Workspace({
                 <UsageDashboard snapshot={usage.snapshot} history={usage.history} onRefresh={usage.refresh} onOpenSettings={() => openSettings("providers", "provider-accounts")} />
               </div>}
               {teamMap.open && teamMap.scope === INTEGRATIONS_SCOPE && <div className="flex min-h-0 flex-1 flex-col">
-                <div className="flex gap-5 px-6 pt-4 text-xs text-content/65"><button type="button" onClick={teamMap.close}>Back to conversation</button><button type="button" onClick={() => onOpenTeamMap(DECISIONS_SCOPE)}>Decisions</button></div>
                 <ProjectIntegrations key={pathKey(sidebarCwd)} project={sidebarCwd} roster={listMonos()} sessions={sessions} runs={orchestrationRuns} goals={monoManagerGoals.goals()}
                   decisions={listMonos().filter(mono => mono.role === "manager" && mono.archivedAt == null).flatMap(manager => monoManagerGoals.decisions(manager.id).map(decision => ({ managerId: manager.id, decision })))}
                   refresh={integrationRefresh} onChanged={() => setIntegrationRefresh(value => value + 1)} onLog={line => integrationLog(sidebarCwd, line)}

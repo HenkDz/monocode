@@ -76,7 +76,7 @@ export function RailAction({
           {shortcut}
         </span>
       ) : null}
-      {badge != null ? (
+      {badge != null && badge > 0 ? (
         <span
           aria-hidden
           className="grid min-w-4 shrink-0 place-items-center rounded-md bg-content/8 px-1 text-[10px] font-medium leading-4 text-content/55 tabular-nums"

@@ -132,6 +132,7 @@ type Props = {
   standaloneTitle?: string;
   activeId: string;
   cwd: string;
+  worktree?: { path: string; branch: string | null };
   /**
    * The Mono filling the main area. It takes the tabs' place in classic mode.
    */
@@ -766,6 +767,7 @@ function TitleBarComponent({
   standaloneTitle,
   activeId,
   cwd,
+  worktree,
   mono,
   onShowMonoDetails,
   onToggleMonoPanel,
@@ -1244,6 +1246,14 @@ function TitleBarComponent({
             </IconButton>
           </div>
         </>
+      ) : null}
+
+      {looksLikeProject(cwd) && !mono && !content && !standaloneTitle ? (
+        <div aria-label="Project and worktree" title={worktree?.path ?? cwd}
+          className="flex min-w-0 max-w-56 shrink items-center gap-2 border-r border-stroke px-3 text-[11px] text-content/50">
+          <span className="truncate font-medium text-content/80">{basename(cwd)}</span>
+          <span>/</span><span className="truncate">{worktree ? basename(worktree.path) : basename(cwd)}</span>
+        </div>
       ) : null}
       {!inset &&
       !sessionSidebarOpen &&

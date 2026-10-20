@@ -102,6 +102,7 @@ import { ContextMeter } from "./ContextMeter";
 import { AttachmentChip } from "./AttachmentChip";
 import { BranchPicker } from "../../source-control/ui/BranchPicker";
 import { WorktreePicker } from "../../source-control/ui/WorktreePicker";
+import { ChatWorktreePicker } from "../../source-control/ui/ChatWorktreePicker";
 import {
   isWorkspaceModeShortcut,
   WorkspaceIdentity,
@@ -1778,7 +1779,14 @@ export function Composer({
           onClose={() => ref.current?.focus()}
         />
       ) : null}
-      {hideBranchPicker ? null : draftWorkspace &&
+      {hideBranchPicker ? null : !remote && onWorktreeChange && !worktreeRemoved ? (
+        <ChatWorktreePicker project={cwd} path={executionCwd} branch={branch}
+          draft={!!draftWorkspace} enabled={enabled && !busy && !submitLockRef.current}
+          pendingBase={workspaceMode === "worktree" ? resolvedWorktreeBase : undefined}
+          onSelect={onWorktreeChange}
+          onCreate={onWorkspaceModeChange ? base => onWorkspaceModeChange("worktree", base) : undefined}
+          onClose={() => ref.current?.focus()} />
+      ) : draftWorkspace &&
         onWorkspaceModeChange &&
         onWorktreeBaseChange ? (
         <>

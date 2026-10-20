@@ -25,7 +25,7 @@ import {
   resolveTabGroupLogo,
   resolveTabGroupMascot,
 } from "../../workspace/model/tabGroups";
-import { Check, ChevronDown, Plus, Search } from "../../../shared/ui/icons";
+import { Check, ChevronDown, Plus, Search, Settings, Share } from "../../../shared/ui/icons";
 import { Popover, type PopoverAnchor } from "../../../shared/ui/Popover";
 import { ProjectLogoIcon } from "./ProjectLogoIcon";
 import { ProjectMascot } from "./ProjectMascot";
@@ -67,6 +67,8 @@ type Props = {
   compact?: boolean;
   onSelectProject: (path: string) => void;
   onOpenProject?: () => void;
+  onAllProjects?: () => void;
+  onProjectSettings?: (path: string) => void;
   /** Opens the project's context menu; the search input receives focus back. */
   onProjectContextMenu?: (
     path: string,
@@ -92,6 +94,8 @@ export function SearchableProjectPicker({
   compact = false,
   onSelectProject,
   onOpenProject,
+  onAllProjects,
+  onProjectSettings,
   onProjectContextMenu,
   projectMenuActive = false,
   monos,
@@ -217,6 +221,8 @@ export function SearchableProjectPicker({
           currentProject={cwd}
           onDismiss={closePicker}
           onSelectProject={onSelectProject}
+          onAllProjects={onAllProjects}
+          onProjectSettings={onProjectSettings}
           onOpenProject={onOpenProject}
           onProjectContextMenu={onProjectContextMenu}
           projectMenuActive={projectMenuActive}
@@ -249,6 +255,8 @@ type ProjectPickerPopoverProps = Pick<
   Props,
   | "onSelectProject"
   | "onOpenProject"
+  | "onAllProjects"
+  | "onProjectSettings"
   | "onProjectContextMenu"
   | "projectMenuActive"
   | "monos"
@@ -273,6 +281,8 @@ export function ProjectPickerPopover({
   onDismiss,
   onSelectProject,
   onOpenProject,
+  onAllProjects,
+  onProjectSettings,
   onProjectContextMenu,
   projectMenuActive = false,
   monos,
@@ -419,6 +429,10 @@ export function ProjectPickerPopover({
           className="min-w-0 flex-1 bg-transparent text-[13px] text-content outline-none placeholder:text-content/35"
         />
       </label>
+      {onAllProjects ? <button type="button" onClick={() => { onDismiss(); onAllProjects(); }}
+        className="mx-1.5 mt-1.5 flex shrink-0 items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13px] text-content/75 hover:bg-content/5">
+        <Share className="size-4" />All projects
+      </button> : null}
       <div
         ref={listRef}
         className="min-h-0 flex-1 overflow-y-auto overscroll-none p-1.5"
@@ -474,8 +488,8 @@ export function ProjectPickerPopover({
               itemSeed,
             );
             return (
+              <div key={item.path} className="flex items-center">
               <button
-                key={item.path}
                 type="button"
                 title={item.path}
                 onMouseEnter={() => setActive(index)}
@@ -525,6 +539,13 @@ export function ProjectPickerPopover({
                   {projectStatuses?.get(pathKey(item.path)) ?? prettyParent(item.path)}
                 </span>
               </button>
+              {onProjectSettings ? <button type="button" aria-label={`${itemLabel} project settings`}
+                title="Project settings: Manager, autonomy, scripts, skills"
+                onClick={() => { onDismiss(); onProjectSettings(item.path); }}
+                className="mr-1 grid size-7 shrink-0 place-items-center rounded-md text-content/45 hover:bg-content/8 hover:text-content">
+                <Settings className="size-3.5" />
+              </button> : null}
+              </div>
             );
           })
         ) : filteredMonos.length ? null : (
@@ -558,7 +579,7 @@ export function ProjectPickerPopover({
               className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] text-content/75 hover:bg-content/8 hover:text-content"
             >
               <Plus className="size-4 shrink-0" strokeWidth={1.75} />
-              <span>New project</span>
+              <span>Add project</span>
             </button>
           ) : null}
         </div>

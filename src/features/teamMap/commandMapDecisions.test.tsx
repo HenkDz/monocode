@@ -19,7 +19,7 @@ afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi
 
 it("counts the supplied actionable goals and shares their renderer without crossing Managers", async () => {
   const ledger = await fixtureLedger([]);
-  const step: GoalNextStep = { goalId: "goal", projectId: project, managerMonoId: "manager", managerId: "engine", sessionId: "chat", action: "continue", label: "Manager paused — Continue", revision: "one" };
+  const step: GoalNextStep = { goalId: "goal", key: "engine:continue", projectId: project, managerMonoId: "manager", managerId: "engine", sessionId: "chat", action: "continue", label: "Manager paused — Continue", revision: "one" };
   const render = vi.fn((value: GoalNextStep) => <button key={value.revision}>{value.label}</button>);
   const map = commandMapDecisions(ledger, roster, actions, Date.now(), { steps: [step], render });
   expect(map.needYou).toBe(1);

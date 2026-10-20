@@ -41,6 +41,7 @@ export function WorkspaceTeam({
     const look = monoLook(mono);
     const state: MonoState = props.states.get(mono.id) ?? { status: "idle" };
     const label = monoLiveStatusLabel(state);
+    const nextAction = props.nextAction?.(mono.id);
     const unread =
       mono.id === props.activeId ? 0 : (props.unseenCounts?.get(mono.id) ?? 0);
     const detail = [
@@ -54,7 +55,7 @@ export function WorkspaceTeam({
       .filter(Boolean)
       .join("\n");
     return (
-      <AgentDetailTooltip key={mono.id} detail={detail}>
+      <Fragment key={mono.id}><AgentDetailTooltip detail={detail}>
         <button
           type="button"
           data-sidebar-row
@@ -81,7 +82,7 @@ export function WorkspaceTeam({
               )}
             </span>
             <span className="mt-0.5 block truncate text-[11px] text-content/60">
-              {state.liveState && !state.attentionLocation ? (
+              {nextAction && state.liveState?.reason === "held-updates" ? null : state.liveState && !state.attentionLocation ? (
                 <AgentStatusLabel state={state.liveState} />
               ) : (
                 label
@@ -95,7 +96,7 @@ export function WorkspaceTeam({
             </span>
           )}
         </button>
-      </AgentDetailTooltip>
+      </AgentDetailTooltip>{nextAction}</Fragment>
     );
   };
   return (
@@ -141,3 +142,4 @@ export function WorkspaceTeam({
     </section>
   );
 }
+import { Fragment } from "react";

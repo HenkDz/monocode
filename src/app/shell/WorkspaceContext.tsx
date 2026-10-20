@@ -46,6 +46,7 @@ import { displayPath, isEqualOrInside, pathKey } from "../../shared/lib/paths";
 import { worktreeTaskSessions } from "../../features/source-control/model/worktreeSessions";
 import { workbenchSessionTask } from "../../features/monos/model/monoNavigation";
 import { ProjectAutonomyControl, type DecisionUiActions } from "../../features/commandCenter/ui/Decisions";
+import { GoalTaskSummary } from "../../features/commandCenter/ui/GoalTaskSummary";
 
 const button =
   "rounded-lg border border-stroke px-2.5 py-1.5 text-[11px] text-content/75 hover:bg-content/5 disabled:opacity-40";
@@ -234,12 +235,14 @@ export function WorkspaceGoals({
   usage,
   onOpenMono,
   decisionActions,
+  goalAction,
 }: {
   project: string;
   sessions: readonly Session[];
   usage?: UsageDashboardSnapshot;
   onOpenMono: (id: string) => void;
   decisionActions?: DecisionUiActions;
+  goalAction?: (goalId: string) => ReactNode;
 }) {
   useSyncExternalStore(subscribeMonos, monosSnapshot);
   useSyncExternalStore(monoManagerGoals.subscribe, monoManagerGoals.snapshot);
@@ -301,6 +304,7 @@ export function WorkspaceGoals({
                   </p>
                 </>
               )}
+              {goalAction?.(goal.id)}
             </div>
           );
         })
@@ -320,7 +324,7 @@ export function WorkspaceGoals({
               key={task.id}
               className="border-b border-stroke px-4 py-2.5 text-[12px]"
             >
-              <p className="break-words">{task.title}</p>
+              <GoalTaskSummary task={task} goalTitle={goals.find(goal => goal.id === task.monoGoalId)?.title} />
               <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] text-content/55">
                 {owner ? (
                   <button

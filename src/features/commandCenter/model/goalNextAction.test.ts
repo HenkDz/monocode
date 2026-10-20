@@ -5,16 +5,18 @@ import type { Mono } from "../../monos/model/mono";
 import type { MonoManagerGoal } from "../../monos/model/monoManagerGoals";
 import type { OrchestrationRun, OrchestrationTask } from "../../orchestration/model/orchestrationState";
 import { runGoalNextAction, selectGoalNextAction, type GoalActionHost } from "./goalNextAction";
+import { appendManagerRecovery, managerRequestBinding } from "../../monos/model/managerAuthorizedWork";
 
 function fixture() {
   const manager = { id: "manager", role: "manager", managerEngineId: "engine", sessionId: "chat", projects: ["/app"] } as Mono;
-  const goal = { id: "goal", managerId: "engine", projectId: "/app", state: "running", updatedAt: 1 } as MonoManagerGoal;
+  const goal = { id: "goal", monoId: "manager", userMessageId: "original", requestId: "manager-original", managerId: "engine", projectId: "/app", state: "running", updatedAt: 1 } as MonoManagerGoal;
   const task = { id: "task", monoGoalId: "goal", status: "queued", sessionId: "worker", dependsOn: [], accepted: false } as OrchestrationTask;
   const run = { leadId: "engine", ownerMonoId: "manager", ownerSessionId: "chat", projectManager: true, cwd: "/app", status: "active", tasks: [task] } as OrchestrationRun;
-  const session = { ...newSession("codex", "/app"), id: "chat" };
+  const source = { ...newSession("codex", "/app"), id: "chat", codexStorageHome: "/synthetic/home", blocks: [{ id: "original", role: "user" as const, text: "Original goal" }] };
+  const session = appendManagerRecovery(source, { monoId: "manager", sessionId: "chat", managerId: "engine", projectId: "/app", userMessageId: "original", state: "pending", binding: managerRequestBinding(source) });
   const input = { goals: [goal], roster: [manager], runs: [run], sessions: [session] };
   const read = () => selectGoalNextAction(input, "goal");
-  const host: GoalActionHost = { read, open: vi.fn(async () => true), continueManager: vi.fn(async () => {}), startGoal: vi.fn(async () => {}), pending: new Set(), accepted: new Set() };
+  const host: GoalActionHost = { read, open: vi.fn(async () => true), continueManager: vi.fn(async () => {}), continueRequest: vi.fn(async () => {}), pending: new Set(), accepted: new Set() };
   const click = new Event("click");
   const button = document.createElement("button"); button.dataset.decisionUi = "";
   // Synthetic trusted gesture for unit ports; real browser clicks remain a separate gate.
@@ -22,11 +24,11 @@ function fixture() {
   return { input, manager, goal, task, run, session, read, host, click };
 }
 
-it("selects one goal-scoped Start and requires an existing goal-bound callback", async () => {
+it("selects Start only for the exact retained original request and passes that record unchanged", async () => {
   const f = fixture();
   expect(f.read()).toMatchObject({ action: "start", sessionId: "chat", label: "Next task hasn't started — Start" });
   await runGoalNextAction(f.click, f.read()!, f.host);
-  expect(f.host.startGoal).toHaveBeenCalledExactlyOnceWith("goal");
+  expect(f.host.continueRequest).toHaveBeenCalledExactlyOnceWith(f.read()!.request);
   expect(f.host.continueManager).not.toHaveBeenCalled();
 });
 
@@ -46,7 +48,7 @@ it("uses existing Continue for a paused Manager and opens an actual approval fir
   f.session.blocks.push({ id: "approval", role: "tool", text: "", approval: { requestId: 7, decided: false } } as never);
   expect(f.read()).toMatchObject({ action: "open", sessionId: "chat", label: "Waiting for your approval — Open" });
   await runGoalNextAction(f.click, f.read()!, f.host);
-  expect(f.host.startGoal).not.toHaveBeenCalled();
+  expect(f.host.continueRequest).not.toHaveBeenCalled();
 });
 
 it.each(["stopped", "finished", "wrong-project", "wrong-manager", "running", "manager-busy", "cancelled-goal", "recovery", "queued-message"])("does not offer Start for %s", condition => {
@@ -59,7 +61,8 @@ it.each(["stopped", "finished", "wrong-project", "wrong-manager", "running", "ma
   if (condition === "cancelled-goal") f.goal.state = "cancelled";
   if (condition === "recovery") f.run.recovering = true;
   if (condition === "queued-message") f.session.queuedMessages = [{ id: "existing", text: "Already waiting", attachments: [] }];
-  expect(f.read()).toBeUndefined();
+  if (condition === "queued-message") expect(f.read()?.action).toBe("chat");
+  else expect(f.read()).toBeUndefined();
 });
 
 it("does not attribute unrelated held info to a goal or revive cancelled tasks", () => {
@@ -88,41 +91,41 @@ it("does not resume the same Manager twice from different goal surfaces while Co
   expect(f.host.continueManager).toHaveBeenCalledOnce();
 });
 
-it.each(["stop", "account", "checkout", "task", "goal", "manager"])("rechecks %s after opening the existing conversation", async changed => {
+it.each(["stop", "account", "checkout", "task", "goal", "manager"])("rejects stale %s before calling the existing continuation", async changed => {
   const f = fixture(), step = f.read()!;
-  f.host.open = async () => {
     if (changed === "stop") f.run.status = "stopped";
     if (changed === "account") f.session.providerAccountId = "different";
     if (changed === "checkout") f.session.worktreeCwd = "/other";
     if (changed === "task") f.task.status = "cancelled";
     if (changed === "goal") f.goal.updatedAt++;
     if (changed === "manager") { f.manager.id = "replacement"; f.run.ownerMonoId = "replacement"; }
-  };
   await expect(runGoalNextAction(f.click, step, f.host)).rejects.toThrow("goal changed");
-  expect(f.host.startGoal).not.toHaveBeenCalled();
+  expect(f.host.continueRequest).not.toHaveBeenCalled();
 });
 
 it("shares one pending/accepted lock across surfaces and permits a refused send to retry", async () => {
   const f = fixture(), step = f.read()!;
-  f.host.startGoal = vi.fn(async () => { throw Error("Refused"); });
+  f.host.continueRequest = vi.fn(async () => { throw Error("Refused"); });
   await expect(runGoalNextAction(f.click, step, f.host)).rejects.toThrow("Refused");
   expect(f.host.pending.size).toBe(0); expect(f.host.accepted.size).toBe(0);
-  f.host.startGoal = vi.fn(async () => {});
+  f.host.continueRequest = vi.fn(async () => {});
   const first = runGoalNextAction(f.click, step, f.host);
   await expect(runGoalNextAction(f.click, step, f.host)).rejects.toThrow("already been sent");
   await first;
   await expect(runGoalNextAction(f.click, step, f.host)).rejects.toThrow("already been sent");
-  expect(f.host.startGoal).toHaveBeenCalledOnce();
+  expect(f.host.continueRequest).toHaveBeenCalledOnce();
 });
 
 it("rejects programmatic clicks before any action port", async () => {
   const f = fixture();
   await expect(runGoalNextAction(new Event("click"), f.read()!, f.host)).rejects.toThrow("direct click");
-  expect(f.host.open).not.toHaveBeenCalled(); expect(f.host.startGoal).not.toHaveBeenCalled();
+  expect(f.host.open).not.toHaveBeenCalled(); expect(f.host.continueRequest).not.toHaveBeenCalled();
 });
 
 it("does not substitute an ordinary user message when goal binding is unavailable", async () => {
-  const f = fixture(); delete f.host.startGoal;
-  await expect(runGoalNextAction(f.click, f.read()!, f.host)).rejects.toThrow("original Manager request");
+  const f = fixture(); f.session.blocks = f.session.blocks.filter(block => !block.managerRequestRecovery);
+  expect(f.read()).toMatchObject({ action: "chat", label: "Open Manager chat", message: "Next task hasn't started. Ask the Manager to continue." });
+  await runGoalNextAction(f.click, f.read()!, f.host);
+  expect(f.host.continueRequest).not.toHaveBeenCalled();
   expect(f.host.accepted.size).toBe(0);
 });

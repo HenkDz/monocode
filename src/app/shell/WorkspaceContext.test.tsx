@@ -227,6 +227,25 @@ it("keeps goals and tasks scoped to their project and does not invent autonomy o
   expect(host.textContent).toContain("Usage unavailable");
 });
 
+it("uses a one-line task summary and keeps the original prompt, IDs and copy behind Show work", async () => {
+  const prompt = "RAW TASK PROMPT\nFull scope and constraints";
+  mocks.goals = [{ id: "goal", title: "Ship routing", projectId: "C:/repo", state: "running" }] as MonoManagerGoal[];
+  mocks.runs = [{ cwd: "C:/repo", status: "active", tasks: [{ id: "raw-task-id", monoGoalId: "goal", title: prompt, prompt, status: "queued", dependsOn: [], result: "RAW REPORT" }] }] as OrchestrationRun[];
+  const copy = vi.fn(async () => {}), next = vi.fn();
+  vi.stubGlobal("navigator", { clipboard: { writeText: copy } });
+  await act(async () => root.render(createElement(WorkspaceGoals, { project: "C:/repo", sessions: [], onOpenMono: vi.fn(),
+    goalAction: id => createElement("button", { onClick: () => next(id) }, "Manager paused — Continue") })));
+  expect(host.querySelector('[data-task-summary]')?.textContent).toBe("Ship routing");
+  expect(host.textContent).not.toContain("RAW TASK PROMPT"); expect(host.textContent).not.toContain("raw-task-id");
+  await act(async () => [...host.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent?.includes("Show work"))!.click());
+  expect(host.querySelector("pre")?.textContent).toContain(prompt); expect(host.textContent).toContain("raw-task-id");
+  await act(async () => [...host.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Copy work")!.click());
+  expect(copy).toHaveBeenCalledWith(expect.stringContaining(prompt));
+  await act(async () => [...host.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Manager paused — Continue")!.click());
+  expect(next).toHaveBeenCalledExactlyOnceWith("goal");
+  expect(host.querySelector("details")).toBeNull();
+});
+
 it("uses only a fresh single associated account for the mini meter, never an aggregate or stale quota", async () => {
   const snapshot: UsageDashboardSnapshot = {
     now: 1,

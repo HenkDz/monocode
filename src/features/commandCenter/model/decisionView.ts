@@ -5,6 +5,7 @@ import type { OrchestrationRun } from "../../orchestration/model/orchestrationSt
 import type { Session } from "../../sessions/model/session";
 import { teamDecisions } from "../../monos/model/monoTeamActivity";
 import { pathKey } from "../../../shared/lib/paths";
+import type { GoalNextStep } from "./goalNextAction";
 
 export type OwnedDecision = { managerId: string; decision: MonoDecision };
 export type DecisionView = { pending: OwnedDecision[]; log: OwnedDecision[]; teamPending: number; handledToday: number; pruned: number; skipped: number };
@@ -14,13 +15,15 @@ export function endedDecisionSources(goals: readonly MonoManagerGoal[], runs: re
     ...runs.flatMap(run => run.tasks.filter(task => task.status === "cancelled").map(task => task.id)),
   ]);
 }
-export function decisionCountsByProject(roster: readonly Mono[], sessions: readonly Session[], runs: readonly OrchestrationRun[], view: DecisionView): Map<string, number> {
-  const counts = new Map<string, number>();
-  for (const project of [...teamDecisions(roster, sessions, runs).map(item => item.project), ...view.pending.map(item => item.decision.projectId)]) {
+export function decisionCountsByProject(roster: readonly Mono[], sessions: readonly Session[], runs: readonly OrchestrationRun[], view: DecisionView, steps: readonly GoalNextStep[] = []): Map<string, number> {
+  const counts = new Map<string, Set<string>>();
+  for (const [project, id] of [...teamDecisions(roster, sessions, runs).map(item => [item.project, item.key]),
+    ...view.pending.map(item => [item.decision.projectId, `decision:${item.managerId}:${item.decision.id}`]), ...steps.map(step => [step.projectId, step.key])]) {
     const key = pathKey(project);
-    counts.set(key, (counts.get(key) ?? 0) + 1);
+    const sources = counts.get(key) ?? new Set<string>();
+    sources.add(id); counts.set(key, sources);
   }
-  return counts;
+  return new Map([...counts].map(([key, sources]) => [key, sources.size]));
 }
 export function selectDecisionView(ledger: MonoManagerGoals, roster: readonly Mono[], now: number, projectId?: string): DecisionView {
   const managers = roster.filter(mono => mono.role === "manager" && mono.archivedAt == null && (projectId === undefined || mono.projects.some(project => pathKey(project) === pathKey(projectId))));

@@ -49,6 +49,7 @@ function Fixture() {
     read: () => selectGoalNextAction(input, selected.goalId),
     open: async id => { calls.opened.push(id); },
     continueManager: async id => { await new Promise(resolve => setTimeout(resolve, 80)); calls.continued.push(id); },
+    continueRequest: async () => { throw Error("No recovery record in this component-only fixture"); },
     pending: pending.current, accepted: accepted.current,
   })} />;
   const decisions = commandMapDecisions(monoManagerGoals, roster, {

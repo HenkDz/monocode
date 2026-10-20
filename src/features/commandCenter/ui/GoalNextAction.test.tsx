@@ -8,7 +8,7 @@ import { ManagerUpdates } from "../../monos/ui/ManagerUpdates";
 import type { GoalNextStep } from "../model/goalNextAction";
 
 let host: HTMLDivElement, root: ReturnType<typeof createRoot>;
-const step: GoalNextStep = { goalId: "goal", projectId: "/app", managerMonoId: "manager", managerId: "engine", sessionId: "chat", action: "continue", label: "Manager paused — Continue", revision: "one" };
+const step: GoalNextStep = { goalId: "goal", key: "engine:continue", projectId: "/app", managerMonoId: "manager", managerId: "engine", sessionId: "chat", action: "continue", label: "Manager paused — Continue", revision: "one" };
 afterEach(async () => { await act(async () => root?.unmount()); host?.remove(); vi.unstubAllGlobals(); });
 function mount() {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);

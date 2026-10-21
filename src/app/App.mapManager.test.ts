@@ -17,13 +17,14 @@ function fixture() {
   const chat = { ...newSession("codex", "C:/neutral/manager"), id: "chat", providerAccountId: "account", providerSessionId: "provider-chat" };
   const sessionsRef = { current: [chat] as Session[] };
   const submit = vi.fn(async () => true);
-  let account = "selected-account", prepare: () => Promise<Session | undefined> = async () => chat;
+  const accounts: Record<string, string> = Object.fromEntries(PROVIDER_ACCOUNT_PROVIDERS.map(provider => [provider, "selected-account"]));
+  let prepare: () => Promise<Session | undefined> = async () => chat;
   const ports = { findMono: (id: string) => id === "manager" ? manager : undefined, sameProjectPath, sessionsRef,
-    selectedProviderAccountId: () => account, PROVIDER_ACCOUNT_PROVIDERS, ensureMonoSession: vi.fn(async () => prepare()), homeDir: async () => "C:/synthetic/home",
+    selectedProviderAccountId: (provider: string) => accounts[provider], PROVIDER_ACCOUNT_PROVIDERS, ensureMonoSession: vi.fn(async () => prepare()), homeDir: async () => "C:/synthetic/home",
     ensureOpenSession: async () => chat, saveMonoPermissions: async () => {}, newDefaultSession: newSession, setSessions: vi.fn(), submitSessionRef: { current: submit } };
   const send = new Function(...Object.keys(ports), ts.transpile(`return ${callback}`, { target: ts.ScriptTarget.ES2022 }))(...Object.values(ports)) as (managerId: string, project: string, text: string) => Promise<boolean>;
   return { send, submit, chat, sessionsRef, ports, update: (change: Partial<Mono>) => { manager = { ...manager, ...change }; },
-    account: (value: string) => { account = value; }, prepare: (value: () => Promise<Session | undefined>) => { prepare = value; } };
+    account: (value: string, provider = "codex") => { accounts[provider] = value; }, prepare: (value: () => Promise<Session | undefined>) => { prepare = value; } };
 }
 
 it("sends exact ordinary user text to the bound Manager conversation, including a retained neutral cwd", async () => {
@@ -54,6 +55,12 @@ it("preserves refusal and preparation errors from the ordinary user path", async
   f.prepare(async () => { throw Error("Preparation unavailable"); });
   await expect(f.send("manager", "C:/app", "Request")).rejects.toThrow("Preparation unavailable");
   expect(f.submit).toHaveBeenCalledOnce();
+});
+
+it.each(PROVIDER_ACCOUNT_PROVIDERS)("rejects a %s default selection change while preparing without sending", async provider => {
+  const f = fixture(); f.prepare(async () => { f.account("new-selection", provider); return f.chat; });
+  await expect(f.send("manager", "C:/app", "Request")).rejects.toThrow("account changed");
+  expect(f.submit).not.toHaveBeenCalled();
 });
 
 it("allows first session creation only when the exact live Manager binds that returned session", async () => {

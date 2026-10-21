@@ -15,7 +15,7 @@ const roster = [
   { id: "worker", role: "member", name: "Vale", reportsTo: "manager", projects: ["/app"], mascot: "cat", color: "#aaa" },
 ];
 const runs = [{ leadId: "engine", ownerMonoId: "manager", cwd: "/app", status: "active", tasks: [
-  { id: "one", monoGoalId: "goal", memberId: "worker", memberName: "Vale", sessionId: "stale", activeDispatchId: "new", title: "Review the feature", prompt: "Exact instructions", result: "", status: "running", dependsOn: [], workspace: { branch: "feature" } },
+  { id: "one", monoGoalId: "goal", memberId: "worker", memberName: "Vale", sessionId: "stale", activeDispatchId: "new", title: "Review the feature", prompt: "Exact instructions", result: "", status: "running", dependsOn: [], workspace: { id: "feature", projectCwd: "/app", checkoutCwd: "/app-wt", kind: "worktree", branch: "feature" } },
   { id: "two", monoGoalId: "goal", memberId: "worker", memberName: "Vale", sessionId: "second", title: "Review another worktree", prompt: "Other instructions", result: "", status: "queued", dependsOn: [] },
   { id: "failed", monoGoalId: "goal", memberId: "worker", sessionId: "bad", title: "Failed work", prompt: "Failure instructions", result: "", status: "failed", dependsOn: [], error: "Build did not pass" },
 ], dispatches: [{ id: "old", taskId: "one", sessionId: "old", startedAt: 1, state: "completed", result: "Historical result" }, { id: "new", taskId: "one", sessionId: "current", startedAt: 3, state: "running" }] }] as unknown as OrchestrationRun[];

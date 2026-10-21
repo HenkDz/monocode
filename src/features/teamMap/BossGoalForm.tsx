@@ -15,7 +15,7 @@ export function BossGoalForm({ route, manager }: { route?: BossGoalRoute; manage
   const available = manager ? !!manager.send : !!route;
   const recipient = manager?.name ?? "Boss";
   const [sending, setSending] = useState(false);
-  const [error, setError] = useState<string>();
+  const [error, setError] = useState<{ target: string; message: string }>();
   const pending = useRef(false);
   const retained = useRef<{ signature: string; submission: MonoGoalSubmission; rejected: boolean } | null>(null);
 
@@ -37,14 +37,14 @@ export function BossGoalForm({ route, manager }: { route?: BossGoalRoute; manage
       }
       const accepted = manager ? await manager.send!(source) : await route!.submit(source, retained.current!.submission);
       if (!accepted) {
-        if (retained.current) retained.current.rejected = true;
-        setError("Request was not accepted. Your draft is still here.");
+        if (!manager && retained.current) retained.current.rejected = true;
+        setError({ target, message: "Request was not accepted. Your draft is still here." });
         return;
       }
-      retained.current = null;
+      if (!manager) retained.current = null;
       setText("");
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
+      setError({ target, message: reason instanceof Error ? reason.message : String(reason) });
     } finally {
       pending.current = false;
       setSending(false);
@@ -63,6 +63,6 @@ export function BossGoalForm({ route, manager }: { route?: BossGoalRoute; manage
       <button type="submit" disabled={!available || sending || !text.trim()}>{sending ? "Sending…" : "Send"}</button>
     </div>
     {!available && <p>{recipient} requests are unavailable. Open the {recipient} chat to continue.</p>}
-    {error && <p role="alert">{error}</p>}
+    {error?.target === target && <p role="alert">{error.message}</p>}
   </form>;
 }

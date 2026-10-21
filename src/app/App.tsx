@@ -13596,7 +13596,7 @@ function Workspace({
     };
     const original = current();
     const originalSession = sessionsRef.current.find(session => session.id === original.sessionId);
-    const binding = (session: Session) => JSON.stringify([session.id, session.harness, session.cwd, session.worktreeCwd, session.providerAccountId]);
+    const binding = (session: Session) => JSON.stringify([session.id, session.harness, session.cwd, session.worktreeCwd, session.providerAccountId, session.providerSessionId]);
     const expected = originalSession && binding(originalSession);
     const selectedAccount = selectedProviderAccountId("codex", project);
     const session = await ensureMonoSession(managerId, {
@@ -13607,7 +13607,7 @@ function Workspace({
     const live = current(), loaded = sessionsRef.current.find(entry => entry.id === session.id);
     if (original.sessionId && original.sessionId !== session.id || live.sessionId !== session.id || !loaded ||
       binding(loaded) !== binding(session) || expected && expected !== binding(loaded) ||
-      selectedProviderAccountId("codex", project) !== selectedAccount || !sameProjectPath(loaded.cwd, project))
+      selectedProviderAccountId("codex", project) !== selectedAccount)
       throw Error("The Manager conversation or account changed. Your draft is still here.");
     return submitSessionRef.current(session.id, text, []);
   };

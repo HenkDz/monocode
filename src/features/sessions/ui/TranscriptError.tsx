@@ -8,10 +8,12 @@ export function TranscriptError({
   error,
   title,
   onRetry,
+  recovery,
 }: {
   error: string;
   title?: string;
   onRetry?: () => void;
+  recovery?: { label: string; run(): void };
 }) {
   const [details, setDetails] = useState(false);
   const [copyState, setCopyState] = useState("");
@@ -38,6 +40,7 @@ export function TranscriptError({
         </p>
       </div>
       <div className="mt-2 flex flex-wrap items-center gap-1">
+        {recovery && <button type="button" className={button} onClick={recovery.run}>{recovery.label}</button>}
         {onRetry && (
           <button type="button" className={button} onClick={onRetry}>
             Retry

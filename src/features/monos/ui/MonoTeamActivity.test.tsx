@@ -189,9 +189,9 @@ it("shows flat summary rows and counted keyboard tabs, and opens the ready card"
       ),
     );
     expect(container.querySelectorAll("[data-team-project]")).toHaveLength(1);
-    expect(container.querySelectorAll("[role=tab]")).toHaveLength(5);
+    expect(container.querySelectorAll("[role=tab]")).toHaveLength(6);
     const tabs = [...container.querySelectorAll<HTMLButtonElement>("[role=tab]")];
-    expect(tabs.map(tab => tab.textContent)).toEqual(["Needs you 0", "Working 1", "Ready 1", "Finished 1", "Feed 0"]);
+    expect(tabs.map(tab => tab.textContent)).toEqual(["Needs you 0", "Working 1", "Waiting / review 0", "Ready 1", "Finished 1", "Feed 0"]);
     expect(tabs[1].getAttribute("aria-selected")).toBe("true");
     await act(async () => tabs[1].dispatchEvent(new KeyboardEvent("keydown", {key: "ArrowLeft", bubbles: true})));
     expect(tabs[0].getAttribute("aria-selected")).toBe("true");
@@ -200,9 +200,9 @@ it("shows flat summary rows and counted keyboard tabs, and opens the ready card"
     expect(container.querySelector('[data-team-section="Work in progress"]')?.hasAttribute("hidden")).toBe(false);
     expect(container.querySelector('[data-team-section="Ready to merge"]')?.hasAttribute("hidden")).toBe(true);
     await act(async () => tabs[1].dispatchEvent(new KeyboardEvent("keydown", {key: "End", bubbles: true})));
-    expect(tabs[4].getAttribute("aria-selected")).toBe("true");
-    expect(container.querySelector('[role=tabpanel]')?.getAttribute("aria-labelledby")).toBe(tabs[4].id);
-    await act(async () => tabs[2].click());
+    expect(tabs[5].getAttribute("aria-selected")).toBe("true");
+    expect(container.querySelector('[role=tabpanel]')?.getAttribute("aria-labelledby")).toBe(tabs[5].id);
+    await act(async () => tabs[3].click());
     for (const [id, section] of [
       ["ready", "Ready to merge"],
       ["running", "Work in progress"],
@@ -351,7 +351,7 @@ it("classifies pending questions, approvals, review and closed PRs into mutually
         new Map(),
         [],
       )[0].section,
-    ).toBe("Work in progress");
+    ).toBe(status === "running" ? "Work in progress" : "Waiting");
   }
   expect(
     teamActivityTasks(

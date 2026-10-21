@@ -6,6 +6,9 @@ import { WorkbenchSessionDetails } from "./WorkbenchSessionDetails";
 import { newSession, type Session } from "../../sessions/model/session";
 import type { Mono } from "../model/mono";
 import type { MemberDetails } from "./MonoTeamPage";
+import { WorkbenchTask } from "./WorkbenchTask";
+import { orchestrator, type OrchestrationRun } from "../../orchestration/model/orchestration";
+import * as cards from "../model/monoCards";
 
 vi.mock("./MonoTeamPage", () => ({ MemberDetails: (props: ComponentProps<typeof MemberDetails>) => <>
   <p>{props.readOnly ? "This task stays read-only." : "Writable task"}</p>
@@ -54,6 +57,20 @@ function render(value = session(), member?: Mono) {
 function fact(label: string) {
   return [...host.querySelectorAll("dt")].find(item => item.textContent === label)?.nextElementSibling?.textContent;
 }
+
+it("opens the owning Manager through the existing navigation callback for a task/session fault", () => {
+  const task: OrchestrationRun["tasks"][number] = { id: "task", sessionId: "worker", memberId: "member", title: "Review", prompt: "Review", status: "failed", harness: "codex", model: "", files: [], scopes: [], dependsOn: [], error: "task/session state mismatch" };
+  const snapshot = vi.spyOn(orchestrator, "snapshot").mockReturnValue([{ ownerSessionId: "manager", tasks: [task] } as OrchestrationRun]);
+  const open = vi.spyOn(cards, "openCardSession").mockImplementation(() => {});
+  try {
+    act(() => root.render(<WorkbenchTask task={task} />));
+    expect(host.textContent).toContain("Something got out of sync");
+    const button = [...host.querySelectorAll("button")].find(button => button.textContent === "Open Manager");
+    expect(button).toBeDefined();
+    act(() => button!.click());
+    expect(open).toHaveBeenCalledExactlyOnceWith("manager");
+  } finally { snapshot.mockRestore(); open.mockRestore(); }
+});
 
 it("shows exact last-turn counters with cached input included in the input total once", () => {
   const value = session();

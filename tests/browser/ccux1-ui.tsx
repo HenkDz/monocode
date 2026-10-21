@@ -7,7 +7,7 @@ import { RailAction } from "../../src/app/shell/RailAction";
 import { WorkspaceUsage } from "../../src/app/shell/WorkspaceContext";
 import { UsageProviderChip } from "../../src/app/shell/UsageProviderChip";
 import { Integrations } from "../../src/features/integrations/ui/Integrations";
-import { APP_VIEW_LABELS, appViewTabId } from "../../src/features/workspace/model/appViewTabs";
+import { APP_VIEW_LABELS, appViewTabId, SHELL_PAGE_LABELS, REUSABLE_PAGE_TAB_ID } from "../../src/features/workspace/model/appViewTabs";
 import { DECISIONS_SCOPE } from "../../src/features/commandCenter/ui/Decisions";
 import { INTEGRATIONS_SCOPE } from "../../src/features/integrations/model/projectIntegrations";
 import { USAGE_DASHBOARD_SCOPE } from "../../src/features/providers/ui/UsageDashboard";
@@ -38,6 +38,8 @@ const scope: Record<string, unknown> = { insetLayout, teamMap, DECISIONS_SCOPE, 
   placeholderTab: undefined, activeTabId: "workspace", shownViewTabId: overlay ? undefined : appViewTabId(page as "inbox"),
   monoCovers: params.get("mono") === "true", monoViewSession: params.get("mono") === "true" ? {} : undefined, monoViewTabId: undefined,
   monoViewMono: undefined, NO_TITLE_TABS: [], managerActive: params.get("manager") === "true", activeAppView: overlay ? undefined : page,
+  settingsOpen: false, worktreeOverview: undefined, activeWorker: undefined, REUSABLE_PAGE_TAB_ID, SHELL_PAGE_LABELS,
+  pageTab: overlay ? { page } : { appView: page },
 };
 const apps: Tab[] = evaluate("appTabs", scope);
 scope.orderedTitleTabs = [blank, ...apps, ...Array.from({ length: Number(params.get("extra") ?? 0) }, (_, index) => ({ ...blank, id: `extra-${index}`, title: `Other session ${index + 1}` }))];

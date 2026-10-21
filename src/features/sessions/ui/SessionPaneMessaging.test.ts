@@ -581,7 +581,8 @@ it("labels the running member turn metrics separately from assignments", () => {
   render(pane);
   const header = container.querySelector("header")!;
   expect(header.textContent).toContain("Current conversation turn");
-  expect(header.textContent).toContain("1.2k in");
+  expect(header.textContent).toContain("Usage");
+  expect(header.querySelector('[data-workbench-metrics]')?.getAttribute('title')).toContain("1,240");
   expect(header.textContent).not.toContain("No conversation turn running");
   render({
     ...pane,

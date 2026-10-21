@@ -1291,13 +1291,13 @@ function TitleBarComponent({
           showProjectButton && !inset ? " border-l border-stroke" : ""
         }`}
       >
-        {content ? content : mono && !tabs.length ? (
+        {content && !tabs.length ? content : mono && !tabs.length ? (
           <MonoTitle
             look={mono.look}
             state={mono.state}
             onShowDetails={onShowMonoDetails}
           />
-        ) : standaloneTitle ? (
+        ) : standaloneTitle && !tabs.length ? (
           <div
             className="flex min-w-0 flex-1 items-center px-4 text-xs font-medium text-content/80"
             aria-label="Standalone chat"

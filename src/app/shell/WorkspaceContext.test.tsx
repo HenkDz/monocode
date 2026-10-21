@@ -162,14 +162,14 @@ it("shows the real project autonomy without a contradictory Not configured place
   expect(host.textContent).not.toContain("Not configured");
 });
 
-it("puts quick actions first and removes legacy Open workspace and duplicate folder controls", async () => {
+it("puts the worktree summary before compact actions and removes duplicate folder controls (CC-UX2)", async () => {
   await act(async () => root.render(createElement(WorkspaceWorktree, {
     project: "C:/repo", path: "C:/repo/feature", sessions: [], onOpen: vi.fn(), onChanges: vi.fn(), onRemove: vi.fn(), onRunScript: vi.fn(),
   })));
   expect(host.querySelector('[aria-label="Worktree quick actions"]')).not.toBeNull();
   expect(host.textContent).toContain("Open in File Explorer");
   expect(host.textContent).not.toContain("Open workspace"); expect(host.textContent).not.toContain("Open folder");
-  expect(host.querySelector('section')?.firstElementChild?.getAttribute('aria-label')).toBe("Worktree quick actions");
+  expect(host.querySelector('section')?.firstElementChild?.tagName).toBe("H2");
 });
 
 it("opens the existing create/delete review UIs without performing any mutation, and labels unsupported updates", async () => {
@@ -370,12 +370,8 @@ it("moves context tabs by keyboard with focus and a separate close control", () 
   expect(document.activeElement?.textContent).toBe("Activity");
   act(() => list.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
   expect(document.activeElement?.textContent).toBe("Goal");
-  act(() =>
-    host
-      .querySelector<HTMLButtonElement>('[aria-label="Hide panel"]')!
-      .click(),
-  );
-  expect(close).toHaveBeenCalledOnce();
+  expect(host.querySelector('[aria-label="Hide panel"]')).toBeNull();
+  expect(close).not.toHaveBeenCalled(); // The unified titlebar Panel toggle owns closing.
 });
 
 it("retains each task's parent pause and dependency context", async () => {

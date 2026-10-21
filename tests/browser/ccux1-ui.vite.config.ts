@@ -19,7 +19,7 @@ export default defineConfig(async environment => {
           if (ts.isVariableDeclaration(node) && ["openPage", "nextTitleTabs"].includes(node.name.getText(app))) expressions[node.name.getText(app)] = node.initializer!.getText(app);
           if (ts.isSpreadElement(node)) {
             const expression = ts.isParenthesizedExpression(node.expression) ? node.expression.expression : node.expression;
-            if (/^insetLayout\s*\?/.test(expression.getText(app))) expressions.appTabs = expression.getText(app);
+            if (/^pageTab\s*\?/.test(expression.getText(app))) expressions.appTabs = expression.getText(app);
           }
           if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(app) === "TitleBar") {
             for (const attr of node.attributes.properties) if (ts.isJsxAttribute(attr) && ["tabs", "mono", "activeId", "standaloneTitle"].includes(attr.name.getText(app)) && attr.initializer && ts.isJsxExpression(attr.initializer)) expressions[attr.name.getText(app)] = attr.initializer.expression!.getText(app);

@@ -352,8 +352,7 @@ export function orgCrewFeed(
       managerIds.add(mono.id);
   const feed = [
     ...crewFeed(roster, runs, statuses, sessions).filter(event => root?.role !== "member" || event.memberId === rootId).map(event => ({ ...event, count: 1, detail: event.text })),
-  ]
-  ;
+  ];
   const grouped = new Map<string, (typeof feed)[number]>();
   for (const event of crewMessages().filter(event => managerIds.has(event.managerId) && (root?.role !== "member" || event.senderId === rootId || event.recipientId === rootId))) {
     const key = JSON.stringify([event.senderId, event.recipientId, event.topic]);

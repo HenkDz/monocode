@@ -38,7 +38,7 @@ import { getAllRateLimits } from "../features/providers/model/rateLimitsCache";
 import { loadUsageFailoverPolicy, subscribeUsageFailoverPolicy } from "../features/providers/model/usageFailoverSettings";
 import { createMonoUsageFailoverController } from "../features/monos/model/monoUsageFailover";
 import { MissionCommandBar } from "../features/commandCenter/ui/MissionCommandBar";
-import { AttentionQueue, ATTENTION_QUEUE_SCOPE } from "../features/commandCenter/ui/AttentionQueue";
+import { AttentionQueue, AttentionQueueView, ATTENTION_QUEUE_SCOPE } from "../features/commandCenter/ui/AttentionQueue";
 import { Decisions, DECISIONS_SCOPE, type DecisionUiActions } from "../features/commandCenter/ui/Decisions";
 import { selectDecisionView, selectNeedsUser, endedDecisionSources, decisionCountsByProject } from "../features/commandCenter/model/decisionView";
 import { prepareDecisionMessage } from "../features/monos/model/monoDecisions";
@@ -15482,6 +15482,15 @@ function Workspace({
     repairs: attentionSources.repairs, automations: attentionSources.automations }), [sessions, orchestrationRuns, monosSnap, decisionRevision, attentionSources.repairs, attentionSources.automations]);
   const needsUser = useMemo(() => selectNeedsUser(listMonos(), sessions, orchestrationRuns, selectDecisionView(monoManagerGoals, listMonos(), Date.now()), goalNextSteps, attentionInput), [sessions, orchestrationRuns, monosSnap, decisionRevision, goalNextSteps, attentionInput]);
   const goalNextRows = needsUser.goals;
+  const renderNeedsUserAttention = (projectId?: string) => {
+    const ids = projectId && new Set(needsUser.sources.filter(source => sameProjectPath(source.project, projectId)).map(source => source.key));
+    return <AttentionQueueView input={attentionInput} items={ids ? needsUser.attention.filter(item => ids.has(item.id)) : needsUser.attention} sourceError={attentionSources.sourceError} open presentation="panel" integrated
+      readInput={() => ({ ...attentionInput, sessions: sessionsRef.current, runs: orchestrator.snapshot(), roster: listMonos(), goals: monoManagerGoals.goals() })} onClose={teamMap.close}
+      callbacks={{ approval: onApproval, question: onQuestionReply, questionInteraction: onQuestionInteraction,
+        repair: onCodexStorageRepair, compare: onCodexStorageCompare, reveal: onCodexStorageReveal,
+        resume: onUsageLimitResume, resumeAtReset: onUsageLimitResumeAtReset, retryDelivery: onResumeQueue,
+        continueManager: id => orchestrator.continueManager(id), continueRequest: continueAttentionRequest, inspect: id => { teamMap.close(); return onOpenApprovalSession(id); }, inspectAutomation: () => onOpenAutomations() }} />;
+  };
   const onGoalNextAction = useCallback((event: Event, step: GoalNextStep) => runGoalNextAction(event, step, {
     read: () => readGoalNextAction(step.goalId),
     open: async id => { teamMap.close(); await onOpenApprovalSession(id); },
@@ -17756,14 +17765,7 @@ function Workspace({
                 <Decisions view={{ ...selectDecisionView(monoManagerGoals, listMonos(), Date.now()), pending: needsUser.pending }} roster={listMonos()} actions={decisionActions} error={decisionError}
                   goalActions={goalNextRows.filter(step => !step.decisionId).map(renderGoalNextAction)} goalActionCount={additionalGoalDecisionCount}
                   attentionCount={needsUser.attention.filter(item => item.status === "open").length}
-                  attention={<AttentionQueue sessions={sessions} runs={orchestrationRuns} coveredGoalSteps={goalNextRows} open presentation="panel"
-                    readSessions={() => sessionsRef.current} readRuns={() => orchestrator.snapshot()}
-                    selectedAccount={session => selectedProviderAccountId("codex", session.cwd)}
-                    isLocalSession={session => !remoteProjectFor(session.cwd)} onClose={teamMap.close}
-                    callbacks={{ approval: onApproval, question: onQuestionReply, questionInteraction: onQuestionInteraction,
-                      repair: onCodexStorageRepair, compare: onCodexStorageCompare, reveal: onCodexStorageReveal,
-                      resume: onUsageLimitResume, resumeAtReset: onUsageLimitResumeAtReset, retryDelivery: onResumeQueue,
-                      continueManager: id => orchestrator.continueManager(id), continueRequest: continueAttentionRequest, inspect: id => { teamMap.close(); return onOpenApprovalSession(id); }, inspectAutomation: () => onOpenAutomations() }} />} />
+                  attention={renderNeedsUserAttention()} />
               </>}
               <AttentionQueue sessions={sessions} runs={orchestrationRuns} open={teamMap.open && teamMap.scope === ATTENTION_QUEUE_SCOPE}
                 readSessions={() => sessionsRef.current} readRuns={() => orchestrator.snapshot()}
@@ -17796,7 +17798,7 @@ function Workspace({
                 {decisionError ? <p role="alert" className="px-6 py-3 text-sm">{decisionError} <button type="button" onClick={() => { setDecisionError(undefined); setDecisionRefresh(value => value + 1); }}>Try again</button></p>
                   : decisionLoaded !== decisionLoadKey && <p role="status" className="px-6 py-3 text-sm">Loading decisions…</p>}
                 <TeamMap key={teamMap.scope ?? "org"} sessions={sessions} runs={orchestrationRuns} statuses={managerPrStatuses} scope={teamMap.scope} onClose={teamMap.close} onOpenMono={id => void onOpenRailMono(id)}
-                  decisions={!decisionError && decisionLoaded === decisionLoadKey ? commandMapDecisions(monoManagerGoals, listMonos(), decisionActions, Date.now(), { steps: goalNextSteps, render: renderGoalNextAction }) : undefined}
+                  decisions={!decisionError && decisionLoaded === decisionLoadKey ? commandMapDecisions(monoManagerGoals, listMonos(), decisionActions, Date.now(), { steps: goalNextSteps, render: renderGoalNextAction, input: attentionInput, attention: renderNeedsUserAttention }) : undefined}
                   bossGoal={mapBossContext ? { context: mapBossContext, submit: submitBossGoal } : undefined} />
               </div>}
                   <div
@@ -17928,7 +17930,7 @@ function Workspace({
                                   <h1 className="text-lg font-semibold">{basename(worktreeOverview.tree.path)}</h1>
                                   <p className="my-3 text-sm text-content/60">No recent chat here. Start one when you’re ready.</p>
                                   <button type="button" className="mb-5 w-fit rounded-lg bg-content px-3 py-2 text-sm text-background-base" onClick={() => onNewWorktreeSession(worktreeOverview.project, worktreeOverview.tree)}>New chat here</button>
-                                  <WorkspaceWorktree project={worktreeOverview.project} path={worktreeOverview.tree.path} sessions={sessions} onRunScript={onRunProjectScript} onOpen={tree => onSelectProjectWorktree(worktreeOverview.project, tree)} onChanges={path => onOpenWorktreeChanges(worktreeOverview.project, path)} onRemove={onRemoveWorktree} />
+                                  <p className="text-xs text-content/60">{worktreeOverview.tree.branch ?? "Detached checkout"}</p>
                                 </section>}
                                 {tabs.map((tab) => (
                                   <div

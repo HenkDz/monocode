@@ -436,6 +436,7 @@ function Fixture() {
   app.sidebarCwd = cwd;
   app.monoViewSession = sessions.find(session => session.id === app.monoViewId);
   app.monoViewMono = roster.find(mono => mono.sessionId === app.monoViewId);
+  app.chromeSurfaceOpen = app.teamMap.open || !!app.activeAppView || app.settingsOpen;
   const production = app.contextState();
   const contextOpen = production.shown;
   const setContextOpen = (open: boolean) => { if (app.rightPanelOpen !== open) app.onToggleRightPanel(); };

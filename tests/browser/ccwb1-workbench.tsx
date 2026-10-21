@@ -20,6 +20,7 @@ import {
 } from "../../src/features/sessions/model/session";
 import { selectAgentLiveState } from "../../src/features/agents/model/agentLiveState";
 import { selectTaskMetrics } from "../../src/features/agents/model/agentMetrics";
+import { workbenchSessionTask } from "../../src/features/monos/model/monoNavigation";
 import {
   orchestrator,
   type OrchestrationRun,
@@ -237,6 +238,7 @@ const noop = () => {};
 const tabs = [newTab("other-session")];
 let refresh = noop;
 const host: any = {
+  workbenchSessionTask, workerTaskTabs: { current: new Map() }, setOpenMonoTabs: noop,
   ...visits,
   monoForSession,
   findMono,

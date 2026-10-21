@@ -33,16 +33,18 @@ export type AttentionQueueViewProps = {
   sourceError?: string;
   presentation?: "page" | "panel";
   coveredGoalSteps?: readonly GoalNextStep[];
+  items?: readonly AttentionItem[];
+  integrated?: boolean;
 };
 
-export function AttentionQueueView({ input, callbacks, readInput, open, onClose, onOpenMissionControl, sourceError, presentation = "page", coveredGoalSteps }: AttentionQueueViewProps) {
+export function AttentionQueueView({ input, callbacks, readInput, open, onClose, onOpenMissionControl, sourceError, presentation = "page", coveredGoalSteps, items, integrated = false }: AttentionQueueViewProps) {
   const titleId = useId();
   const Heading = presentation === "panel" ? "h2" : "h1";
-  const current = useMemo(() => selectAttention(input).filter(item => !coveredGoalSteps?.some(step => item.status === "open" && (
+  const current = useMemo(() => (items ?? selectAttention(input)).filter(item => !coveredGoalSteps?.some(step => item.status === "open" && (
     step.action === "continue" && item.source === "continue" && item.leadId === step.managerId ||
     step.action === "start" && item.source === "manager-request" && item.sessionId === step.sessionId && item.messageId === `manager-request-${step.request?.userMessageId}` ||
     step.action === "open" && ["approval", "question"].includes(item.source) && step.key === `${item.sessionId}:${item.source}:${item.requestId}`
-  ))), [input, coveredGoalSteps]);
+  ))), [input, coveredGoalSteps, items]);
   const [filter, setFilter] = useState<"open" | "history" | AttentionCategory>("open");
   const [receipts, setReceipts] = useState<Record<string, AttentionReceipt>>({});
   const [history, setHistory] = useState<AttentionItem[]>([]);
@@ -149,18 +151,19 @@ export function AttentionQueueView({ input, callbacks, readInput, open, onClose,
       {(item.createdAt != null || presentation === "page") && <time className="aq-time" title={item.createdAt == null ? undefined : new Date(item.createdAt).toLocaleString()}>{item.createdAt == null ? "Age unavailable" : goalElapsedLabel(Math.max(0, now - item.createdAt))}</time>}
     </article>;
   }
-  return <section className="attention-queue" data-presentation={presentation} aria-labelledby={titleId} hidden={!open} inert={!open || undefined}>
-    <header className="aq-toolbar"><div>{presentation === "page" && <p className="aq-eyebrow">Command center</p>}<Heading className="aq-title" id={titleId}>Attention</Heading>{presentation === "page" && <p>Requests and blockers across your loaded conversations and team runs.</p>}</div>
+  if (integrated && !all.length && !sourceError) return null;
+  return <section className="attention-queue" data-presentation={presentation} aria-label={integrated ? "Requests and blockers" : undefined} aria-labelledby={integrated ? undefined : titleId} hidden={!open} inert={!open || undefined}>
+    {!integrated && <header className="aq-toolbar"><div>{presentation === "page" && <p className="aq-eyebrow">Command center</p>}<Heading className="aq-title" id={titleId}>Attention</Heading>{presentation === "page" && <p>Requests and blockers across your loaded conversations and team runs.</p>}</div>
       <div className="aq-actions">{presentation === "page" && onOpenMissionControl && <button type="button" onClick={onOpenMissionControl}>Back to goals</button>}<button type="button" onClick={onClose}>{presentation === "panel" ? "Close" : "Back to conversation"}</button></div>
-    </header>
+    </header>}
     <div className="aq-scroll"><nav className="aq-filters" aria-label="Attention filters">{filters.map(([value, label]) => <button type="button" key={value} aria-pressed={filter === value} onClick={() => setFilter(value)}>
       {label} · {all.filter(item => value === "history" ? item.status !== "open" : item.status === "open" && (value === "open" || item.category === value)).length}
     </button>)}</nav>
-      <p className="aq-coverage">Blockers first, then oldest recorded request. Task failures need review in their lead; retry preserves the failed attempt.</p>
+      {!integrated && <p className="aq-coverage">Blockers first, then oldest recorded request. Task failures need review in their lead; retry preserves the failed attempt.</p>}
       {sourceError && <p className="aq-receipt" role="alert">{sourceError}</p>}
       {visible.map(row)}
       {!visible.length && <p className="aq-empty">{filter === "history" ? "No resolved or replaced requests observed yet." : "No attention items in this view."}</p>}
-      <p className="aq-footer">Active blockers remain visible until the source clears them. Unavailable or replaced requests stay in History.</p>
+      {!integrated && <p className="aq-footer">Active blockers remain visible until the source clears them. Unavailable or replaced requests stay in History.</p>}
     </div>
   </section>;
 }

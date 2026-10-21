@@ -110,7 +110,7 @@ import { WorkbenchTask } from "../../monos/ui/WorkbenchTask";
 import { cardSession, openCardSession, subscribeCardSessions } from "../../monos/model/monoCards";
 import { selectTaskMetrics } from "../../agents/model/agentMetrics";
 import { TaskMetricsLine } from "../../agents/ui/TaskMetricsLine";
-import { presentationText } from "../model/transcriptPresentation";
+import { coordinationSummary, presentationText } from "../model/transcriptPresentation";
 import { basename, listDir, revealPath } from "../../../platform/tauri/fs";
 import { WorkbenchDrawer } from "../../monos/ui/WorkbenchDrawer";
 import { ManagerWorkbenchNote } from "../../monos/ui/ManagerWorkbenchNote";
@@ -1412,7 +1412,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
           {workbench && (
             <WorkbenchHeader
               session={session}
-              name={isMember ? (workbenchLook?.name ?? "Member") : presentationText(workbenchTask?.title ?? title)}
+              name={isMember ? (workbenchLook?.name ?? "Member") : coordinationSummary(workbenchTask?.title ?? title, 60)}
               role={
                 isMember
                   ? (workbenchMember?.specialty ?? "Team member")

@@ -109,14 +109,13 @@ export function ProjectDrawer({ project, goals, runs, sessions, decisions, onClo
     }}>
     <header><PixelMascot name={look.mascot} color={look.color} still className="size-8" /><div><h2 id={titleId}>{mapText(project.name, 100)}</h2>
       {project.manager.state.liveState?.reason === "held-updates" ? <ManagerUpdates monoId={project.manager.id} label={monoStatusLabel(project.manager.state)} events={runs.filter(run => run.ownerMonoId === project.manager.id || run.leadId === project.manager.mono.managerEngineId).flatMap(run => run.wakeState?.events.filter(event => event.acknowledgedAt == null) ?? [])} /> : <p>{mapText(monoStatusLabel(project.manager.state), 120)}</p>}
-      {currentGoals.map(goal => decisions?.goalAction?.(goal.id)).find(Boolean)}</div>
+      </div>
       <button ref={close} type="button" aria-label="Close project" onClick={onClose}><X className="size-4" /></button></header>
     <div className="command-map-drawer-scroll">
       <section className="command-map-goal"><h3>Current goal</h3>
         {currentGoals.length > 1 && <select aria-label="Project goal" value={goal?.id} onChange={event => setGoalId(event.target.value)}>{currentGoals.map(entry => <option key={entry.id} value={entry.id}>{mapText(entry.title, 100)} · {entry.state}</option>)}</select>}
         <p title={goal?.title}>{goal ? coordinationSummary(goal.title, 60) : !decisions || decisions.incomplete ? "Goal history unavailable" : "No recorded goal yet"}</p>
         {progress ? <><progress aria-label="Accepted goal tasks" max={progress.total} value={progress.accepted} /><p className="command-map-muted">{progress.accepted} of {progress.total} tasks accepted · {progress.percent}%</p></> : <p className="command-map-muted">Progress unavailable</p>}
-        {goal && decisions?.goalAction?.(goal.id)}
       </section>
       <section data-decision-ui><h3>This project decides</h3>{decisions?.autonomy ?? <p className="command-map-muted">Autonomy unavailable</p>}
         <h3>Waiting decisions</h3>{decisions?.cards ?? <p className="command-map-muted">Decision history unavailable</p>}</section>

@@ -159,7 +159,7 @@ it.each(["onOpenRailMono", "onOpenProjectManager"])("routes actual %s to Activit
   expect(f.scope.workspaceContextTab).toBe("activity");
   expect(f.scope.monoDetailsOpen).toBe(false);
   await f.render();
-  expect(container.querySelectorAll("[data-mono-details]")).toHaveLength(0);
+  expect(container.querySelector("[data-mono-details]")?.getAttribute("data-open")).toBe("false");
   expect(container.querySelector("aside.mono-details-panel")).toBeNull();
   await act(async () => f.gear(f.projects[1]));
   await f.render();

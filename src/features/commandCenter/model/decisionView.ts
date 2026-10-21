@@ -18,7 +18,12 @@ export function selectNeedsUser(roster: readonly Mono[], sessions: readonly Sess
   const pending = [...new Map(view.pending.map(item => [`decision:${item.managerId}:${item.decision.id}`, item])).values()];
   const known = new Set([...open.map(attentionKey), ...pending.map(item => `decision:${item.managerId}:${item.decision.id}`)]);
   const goals = [...new Map(steps.filter(step => step.action !== "chat" && !known.has(step.key)).map(step => [step.key, step])).values()];
-  const sources = [...open.map(item => ({ key: item.id, project: runs.find(run => run.leadId === item.leadId)?.cwd ?? sessions.find(session => item.sessionIds.includes(session.id))?.cwd ?? input?.automations?.find(entry => entry.id === item.automationId)?.cwd ?? item.project })),
+  const projectFor = (item: AttentionItem) => {
+    const run = runs.find(run => run.leadId === item.leadId || run.tasks.some(task => item.sessionIds.includes(task.sessionId)));
+    const owner = roster.find(mono => item.sessionIds.includes(mono.sessionId ?? ""));
+    return run?.workspace?.projectCwd ?? run?.cwd ?? owner?.managerProject ?? owner?.projects[0] ?? sessions.find(session => item.sessionIds.includes(session.id))?.cwd ?? input?.automations?.find(entry => entry.id === item.automationId)?.cwd ?? item.project;
+  };
+  const sources = [...open.map(item => ({ key: item.id, project: projectFor(item) })),
     ...pending.map(item => ({ key: `decision:${item.managerId}:${item.decision.id}`, project: item.decision.projectId })),
     ...goals.map(step => ({ key: step.key, project: step.projectId }))];
   return { team, pending, goals, attention, sources, count: sources.length };
@@ -43,8 +48,9 @@ export function decisionCountsByProject(roster: readonly Mono[], sessions: reado
 }
 export function selectDecisionView(ledger: MonoManagerGoals, roster: readonly Mono[], now: number, projectId?: string): DecisionView {
   const managers = roster.filter(mono => mono.role === "manager" && mono.archivedAt == null && (projectId === undefined || mono.projects.some(project => pathKey(project) === pathKey(projectId))));
-  const all = managers.flatMap(manager => ledger.decisions(manager.id).map(decision => ({ managerId: manager.id, decision })))
-    .filter(({ decision }) => projectId === undefined || pathKey(decision.projectId) === pathKey(projectId));
+  const all = [...new Map(managers.flatMap(manager => ledger.decisions(manager.id).map(decision => ({ managerId: manager.id, decision })))
+    .filter(({ decision }) => projectId === undefined || pathKey(decision.projectId) === pathKey(projectId))
+    .map(item => [`decision:${item.managerId}:${item.decision.id}`, item])).values()];
   const waiting = ({ decision }: OwnedDecision) => decision.status === "waiting" && decision.noLongerNeededAt == null && !decision.readOnly;
   const today = new Date(now); today.setHours(0, 0, 0, 0);
   return {

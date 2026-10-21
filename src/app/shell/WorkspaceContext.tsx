@@ -293,7 +293,7 @@ export function WorkspaceGoals({
         !goal.archived &&
         (sameProjectPath(goal.projectId, project) ||
           projectRuns.some((run) => run.leadId === goal.managerId)),
-    );
+    ).sort((a, b) => Number(["done", "cancelled"].includes(a.state)) - Number(["done", "cancelled"].includes(b.state)) || b.updatedAt - a.updatedAt);
   const ids = new Set([
     ...(manager ? [manager.id] : []),
     ...team.members.map((mono) => mono.id),
@@ -318,7 +318,7 @@ export function WorkspaceGoals({
             >
               <GoalTitle title={goal.title} />
               <p className="mt-1 text-[11px] text-content/55">{goal.state}</p>
-              {!!scoped.length && (
+              {!!scoped.length && !["done", "cancelled"].includes(goal.state) && (
                 <>
                   <progress
                     aria-label={`${goal.title}: tasks completed`}

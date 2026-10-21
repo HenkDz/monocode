@@ -15,6 +15,8 @@ import { collectWorkspaceSnapshot, parseWorkspaceSnapshot, hydrateWorkspaceSnaps
 import type { Worktree } from "../features/source-control/model/worktrees";
 import { pathKey, isEqualOrInside } from "../shared/lib/paths";
 import { worktreeSessionGroups } from "../features/source-control/model/worktreeSessions";
+import { summaryFromSession } from "../features/sessions/data/sessionHistory";
+import { sessionActivityAt } from "../features/sessions/model/sessionActivity";
 import { shellPageTabId, shellPageForTab, appViewTabId, isViewTab, REUSABLE_PAGE_TAB_ID } from "../features/workspace/model/appViewTabs";
 
 const ast = ts.createSourceFile("App.tsx", readFileSync("src/app/App.tsx", "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
@@ -27,6 +29,43 @@ function callback<T extends (...args: any[]) => any>(name: string, scope: Record
 }
 const tree = (path: string, isMain = false): Worktree => ({ path, isMain, branch: isMain ? "main" : "feature", head: "abc", missing: false, prunable: false, locked: false, dirty: false, unpushed: 0, sessionIds: [] });
 const trees = [tree("C:/repo"), tree("C:/repo/child"), tree("C:/linked-main", true)];
+
+it("actual worktree selection opens its latest real chat or a calm overview without creating, moving or closing sessions", () => {
+  const session = { ...newSession("codex", "C:/repo"), id: "saved", worktreeCwd: "C:/repo/child", providerSessionId: "retained-provider", blocks: [{ id: "u", role: "user" as const, text: "Keep my work", startedAt: 100 }] };
+  const sessionsRef = { current: [session] };
+  const open = vi.fn(), overview = vi.fn(), setTabs = vi.fn(), createWorkspaceTab = vi.fn(), moveSession = vi.fn();
+  const history = [ { ...summaryFromSession(session), updatedAt: 100 }, { ...summaryFromSession(session), id: "older", updatedAt: 50 }, { ...summaryFromSession(session), id: "draft", draft: true, updatedAt: 200 } ];
+  const scope = { history, sessionsRef, sessionActivityAt, summaryFromSession, isBlankSession, worktreeSessionGroups, pathKey,
+    sameProjectPath, setWorktreeFocus, workspaceSessionRequest: { current: 0 }, workspaceNavigation: { cancel: vi.fn() },
+    teamMap: { close: vi.fn() }, closeMonoView: vi.fn(), setProjectCwd: vi.fn(), setRecents: vi.fn(), rememberProject: () => [],
+    setSearchViewOpen: vi.fn(), setInboxViewOpen: vi.fn(), setNotesViewOpen: vi.fn(), setAutomationsViewOpen: vi.fn(), setSettingsOpen: vi.fn(),
+    setWorktreeOverview: overview, onSelectHistorySession: open, orchestrator: { snapshot: () => [] }, setTabs, createWorkspaceTab, moveSession };
+  const select = callback("onSelectProjectWorktree", scope);
+  select("C:/repo", trees[1]);
+  expect(open).toHaveBeenCalledExactlyOnceWith("saved", { project: "C:/repo", tree: trees[1] });
+  select("C:/repo", { ...trees[1], path: "C:/repo/empty" });
+  expect(overview).toHaveBeenLastCalledWith({ project: "C:/repo", tree: expect.objectContaining({ path: "C:/repo/empty" }) });
+  expect(open).toHaveBeenCalledTimes(1);
+  for (const callback of [setTabs, createWorkspaceTab, moveSession]) expect(callback).not.toHaveBeenCalled();
+  expect(sessionsRef.current).toEqual([session]);
+  expect(session.providerSessionId).toBe("retained-provider");
+  setWorktreeFocus("C:/repo", undefined);
+});
+
+it("actual reusable-page selection and closing preserve all background work tabs", () => {
+  const open = vi.fn(), setTabs = vi.fn(), setReusablePage = vi.fn(), close = vi.fn();
+  const scope = { REUSABLE_PAGE_TAB_ID, pageTab: { page: "decisions" }, setWorktreeOverview: vi.fn(), onOpenTeamMap: open,
+    DECISIONS_SCOPE: "decisions", INTEGRATIONS_SCOPE: "integrations", USAGE_DASHBOARD_SCOPE: "usage", setTabs };
+  callback("onSelectTitleTab", scope)(REUSABLE_PAGE_TAB_ID);
+  expect(open).toHaveBeenCalledExactlyOnceWith("decisions");
+  const select = vi.fn();
+  callback("closeViewTab", { REUSABLE_PAGE_TAB_ID, setReusablePage, setOpenAppViews: vi.fn(), setOpenShellPages: vi.fn(), teamMap: { close },
+    setSearchViewOpen: vi.fn(), setInboxViewOpen: vi.fn(), setNotesViewOpen: vi.fn(), setAutomationsViewOpen: vi.fn(),
+    displayedTabNavigation: { current: { activeId: REUSABLE_PAGE_TAB_ID, tabs: [{ id: "real-work" }, { id: REUSABLE_PAGE_TAB_ID }], select } },
+    nextDisplayedTabAfterClose: () => "real-work", setTabs })(REUSABLE_PAGE_TAB_ID);
+  expect(close).toHaveBeenCalledOnce(); expect(setReusablePage).toHaveBeenCalledWith(undefined);
+  expect(select).toHaveBeenCalledWith("real-work"); expect(setTabs).not.toHaveBeenCalled();
+});
 
 it("uses normalized longest containment, linked main and removed fallback without modifying cwd", () => {
   expect(chatWorktreePath("C:/repo", "c:\\REPO\\child\\src", trees)).toBe("C:/repo/child");

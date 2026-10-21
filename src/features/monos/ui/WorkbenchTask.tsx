@@ -7,12 +7,16 @@ import { AgentMarkdown } from "../../sessions/ui/AgentMarkdown";
 import { TranscriptError } from "../../sessions/ui/TranscriptError";
 import { coordinationSummary, presentationText } from "../../sessions/model/transcriptPresentation";
 import { ShortHashes } from "../../../shared/ui/ShortHashes";
+import { orchestrator } from "../../orchestration/model/orchestration";
+import { openCardSession } from "../model/monoCards";
+import { transcriptError } from "../../sessions/model/transcriptError";
 
 export function WorkbenchTask({ task }: { task: WorkbenchSessionTask }) {
   const [expanded, setExpanded] = useState(false);
   const id = useId();
   const [prError, setPrError] = useState<string>();
   const cwd = task.workspace?.checkoutCwd;
+  const managerSession = orchestrator.snapshot().find(run => run.tasks.some(row => row.id === task.id && row.sessionId === task.sessionId))?.ownerSessionId;
   return (
     <>
       <section className="ccwb1-brief" aria-label="Task brief">
@@ -57,6 +61,7 @@ export function WorkbenchTask({ task }: { task: WorkbenchSessionTask }) {
           <TranscriptError
             error={task.error}
             title={`Couldn't complete ${presentationText(task.title)}`}
+            recovery={managerSession && transcriptError(task.error).family === "sync" ? { label: "Open Manager", run: () => openCardSession(managerSession) } : undefined}
           />
         )}
       {(task.result ||

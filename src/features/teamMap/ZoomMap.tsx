@@ -14,10 +14,10 @@ import { WorktreePrActions } from "../source-control/ui/WorktreePrActions";
 import { usePullRequests } from "../source-control/model/pullRequests";
 import { BossGoalForm } from "./BossGoalForm";
 import { mapOwnState, mapText, projectGoals, projectMemberTask } from "./commandMap";
-import { buildTeamMap } from "./model";
+import { buildTeamMap, teamMapEvents, teamMapFeed } from "./model";
 import { orbitProjects, loadOrbitPreferences, type OrbitProject } from "./orbit";
 import { WorkTrace } from "./ProjectDrawer";
-import { mapCamera, projectCamera, projectMapTasks, projectPoint, TASK_FLOW, TASK_LABEL, zoomCamera, type MapCamera, type MapTask } from "./zoomMapModel";
+import { mapCamera, mapTodaySentence, projectCamera, projectMapTasks, projectPoint, TASK_FLOW, TASK_LABEL, zoomCamera, type MapCamera, type MapTask } from "./zoomMapModel";
 import type { TeamMapProps } from "./TeamMap";
 import "./zoomMap.css";
 
@@ -30,13 +30,13 @@ const taskCount = (tasks: readonly MapTask[]) => `${tasks.filter(entry => entry.
 
 function Segments({ tasks, onHover }: { tasks: readonly MapTask[]; onHover?: (key?: string) => void }) {
   return <span className="zoom-map-segments" aria-label={taskCount(tasks)}>{sortedTasks(tasks).map(entry => <span key={entry.key} data-state={entry.state}
-    title={`${entry.title} — ${TASK_LABEL[entry.state]} · ${entry.task.memberName ?? "Not assigned yet"}`} tabIndex={onHover ? 0 : undefined}
+    title={`${entry.title} — ${TASK_LABEL[entry.state]} · ${entry.memberName ?? "Not assigned yet"}`} tabIndex={onHover ? 0 : undefined}
     onMouseEnter={() => onHover?.(entry.key)} onMouseLeave={() => onHover?.()} onFocus={() => onHover?.(entry.key)} onBlur={() => onHover?.()} />)}</span>;
 }
 
 function TaskChips({ entry }: { entry: MapTask }) {
   return <span className="zoom-map-chips">{(entry.dispatch?.workspace ?? entry.task.workspace)?.branch && <span>⎇ {(entry.dispatch?.workspace ?? entry.task.workspace)!.branch}</span>}
-    {entry.task.prUrl && <span>PR {entry.pr ? `#${entry.pr.number}` : entry.task.prUrl.split("/").at(-1)}</span>}</span>;
+    {entry.task.prUrl && <span>PR {entry.pr ? `#${entry.pr.number}` : entry.task.prUrl.split("/").pop()}</span>}</span>;
 }
 
 function TaskDetail({ entry, sessions, onOpenMono }: { entry: MapTask; sessions: TeamMapProps["sessions"]; onOpenMono: (id: string) => void }) {
@@ -76,6 +76,7 @@ export function ZoomMap({ sessions, runs, statuses, scope, onOpenMono, onClose, 
   const projects = useMemo(() => orbitProjects(nodes, loadOrbitPreferences().order), [nodes]);
   const [focusedId, setFocusedId] = useState(() => projects.find(project => project.manager.id === scope || project.members.some(node => node.id === scope))?.manager.id);
   const [selection, setSelection] = useState<Selection>();
+  const [pendingTask, setPendingTask] = useState<string>();
   const [highlight, setHighlight] = useState<string>();
   const [flash, setFlash] = useState<string>();
   const [approach, setApproach] = useState<string>();
@@ -117,7 +118,8 @@ export function ZoomMap({ sessions, runs, statuses, scope, onOpenMono, onClose, 
   const monoDetailState = selectedMono && focused ? selectedMono.mono.role === "manager" ? mapOwnState(selectedMono.mono, runs, sessions) : projectMemberTask(focused, selectedMono.mono, runs, sessions).state : selectedMono?.state;
   const messages = useMemo(() => crewMessages(), [crewRevision]);
   const today = new Date(); today.setHours(0, 0, 0, 0);
-  const todayFeed = messages.filter(message => message.at >= today.getTime() && message.at <= Date.now() && (!focused || message.managerId === focused.manager.id || message.managerId === focused.manager.mono.managerEngineId)).slice(-4).reverse();
+  const events = useMemo(() => teamMapEvents({ roster, runs, sessions, statuses, messages, goals, scope: focused?.manager.id }), [roster, runs, sessions, statuses, messages, goals, focused?.manager.id]);
+  const todayFeed = teamMapFeed(events.filter(event => Number.isFinite(event.at) && event.at >= today.getTime() && event.at <= Date.now()), roster).slice(0, 4);
 
   useEffect(() => {
     closeButton.current?.focus();
@@ -170,8 +172,13 @@ export function ZoomMap({ sessions, runs, statuses, scope, onOpenMono, onClose, 
     return () => element.removeEventListener("wheel", wheel);
   }, []);
 
-  const selectTask = (entry: MapTask) => {
-    setSelection({ kind: "task", key: entry.key });
+  const selectTask = (entry: MapTask) => { setSelection(undefined); setHighlight(entry.key); setPendingTask(entry.key); };
+  useEffect(() => {
+    if (!pendingTask) return;
+    setPendingTask(undefined);
+    const entry = tasks.find(entry => entry.key === pendingTask);
+    if (!entry) return;
+    // Inspect the current canonical rail after returning from another detail.
     const card = [...(rail.current?.querySelectorAll<HTMLElement>("[data-task-id],[data-session-id]") ?? [])].find(card => card.dataset.taskId === entry.task.id || !!entry.session && card.dataset.sessionId === entry.session.id);
     if (entry.state === "ready" || card) {
       setSelection(undefined); setHighlight(entry.key); setFlash(entry.key);
@@ -180,8 +187,8 @@ export function ZoomMap({ sessions, runs, statuses, scope, onOpenMono, onClose, 
         target?.scrollIntoView?.({ block: "nearest" }); target?.focus();
       });
       clearTimeout(flashTimer.current); flashTimer.current = setTimeout(() => setFlash(undefined), 2200);
-    }
-  };
+    } else setSelection({ kind: "task", key: entry.key });
+  }, [pendingTask]);
   const card = (entry: MapTask) => {
     const mono = roster.find(mono => mono.id === entry.task.memberId), look = mono && monoLook(mono);
     return <button type="button" key={entry.key} className="zoom-map-task" data-state={entry.state} data-task={entry.task.id}
@@ -272,7 +279,7 @@ export function ZoomMap({ sessions, runs, statuses, scope, onOpenMono, onClose, 
       </div>
       <div className="zoom-map-camera-controls" aria-label="Camera controls"><button type="button" aria-label="Zoom in" onClick={() => { setMoving(true); setCamera(zoomCamera(camera, size.width / 2, size.height / 2, Math.min(base.scale * 2, camera.scale * 1.2))); }}>+</button><button type="button" aria-label="Zoom out" onClick={() => { const scale = camera.scale / 1.2; if (focused && scale < base.scale * .72) leave(); else { setMoving(true); setCamera(zoomCamera(camera, size.width / 2, size.height / 2, scale)); } }}>−</button><button type="button" aria-label="Show whole map" onClick={() => { leave(); setCamera(mapCamera(size, projects.length)); }}>⊞</button></div>
       <BossGoalForm route={bossGoal} manager={focused ? { id: focused.manager.id, name: monoLook(focused.manager.mono).name, send: onSendManager ? text => onSendManager(focused.manager.id, focused.project, text) : undefined } : undefined} />
-      <footer className="zoom-map-today" aria-label="Today"><b>Today</b>{todayFeed.length ? todayFeed.map(message => <span key={message.id} title={message.text}>{coordinationSummary(message.summary ?? message.text, 150)}</span>) : <span>No recorded team updates today.</span>}</footer>
+      <footer className="zoom-map-today" aria-label="Today"><b>Today</b>{todayFeed.length ? todayFeed.map(event => <span key={event.id} title={mapTodaySentence(event, roster)}>{mapTodaySentence(event, roster)}</span>) : <span>No recorded team updates today.</span>}</footer>
     </div>
     <aside className="zoom-map-rail" ref={rail} aria-label="Needs you and details" data-flash={!!flash} data-has-merges={visibleReady.length > 0}>
       {selection && (selectedTask || selectedGoal || selectedMono) ? <><button type="button" className="zoom-map-back" onClick={() => { setSelection(undefined); setHighlight(undefined); }}>← Needs you</button><div className="zoom-map-detail" key={JSON.stringify(selection)}>

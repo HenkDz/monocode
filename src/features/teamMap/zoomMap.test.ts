@@ -5,7 +5,7 @@ import { newSession } from "../sessions/model/session";
 import { prStatusKey } from "../source-control/hooks/usePrStatus";
 import { buildTeamMap } from "./model";
 import { orbitProjects } from "./orbit";
-import { mapCamera, mapTaskState, projectCamera, projectMapTasks, projectPoint, zoomCamera } from "./zoomMapModel";
+import { mapCamera, mapTaskState, mapTodaySentence, projectCamera, projectMapTasks, projectPoint, zoomCamera } from "./zoomMapModel";
 
 const roster = [{ id: "manager", role: "manager" as const, managerEngineId: "engine", managerProject: "/app", projects: ["/app"], mascot: "cat", color: "#aaa" }];
 const project = orbitProjects(buildTeamMap({ roster, runs: [], sessions: [] }).nodes)[0];
@@ -59,4 +59,10 @@ it("keeps the pointer's world coordinate stable during partial zoom and fits arb
   expect((300 - next.x) / next.scale).toBeCloseTo((300 - camera.x) / camera.scale);
   expect((250 - next.y) / next.scale).toBeCloseTo((250 - camera.y) / camera.scale);
   expect(projectPoint(8).y).toBeGreaterThan(projectPoint(4).y);
+});
+
+it("summarizes source events as plain actor sentences without inventing successful outcomes", () => {
+  const event = { id: "event", at: 1, source: "manager", target: "member", label: "Review the feature", kind: "escalation" as const };
+  expect(mapTodaySentence(event, [{ ...roster[0], name: "Mira" }])).toBe("Mira asked for help with Review the feature");
+  expect(mapTodaySentence({ ...event, kind: "review", changes: true }, [{ ...roster[0], name: "Mira" }])).toBe("Mira requested changes to Review the feature");
 });

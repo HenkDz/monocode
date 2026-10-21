@@ -7,6 +7,9 @@ import type { OrchestrationRun, OrchestrationTask } from "../orchestration/model
 import type { Session } from "../sessions/model/session";
 import { pullRequestReady } from "../source-control/model/pullRequests";
 import type { OrbitProject } from "./orbit";
+import { monoLook, type Mono } from "../monos/model/mono";
+import { coordinationSummary } from "../sessions/model/transcriptPresentation";
+import type { TeamMapEvent } from "./model";
 
 export const TASK_FLOW = ["planned", "working", "review", "ready", "done"] as const;
 export const TASK_LABEL = { planned: "Planned", working: "Working", review: "In review", ready: "Ready to merge", done: "Done", failed: "Failed", blocked: "Blocked", interrupted: "Interrupted", cancelled: "Cancelled", closed: "Closed without merging" };
@@ -34,12 +37,22 @@ export function projectMapTasks(project: OrbitProject, runs: readonly Orchestrat
     const dispatch = run.dispatches?.find(entry => entry.id === (task.activeDispatchId ?? task.lastDispatchId) && entry.taskId === task.id);
     const session = sessions.find(entry => entry.id === (dispatch?.sessionId ?? task.sessionId));
     const pr = taskPrStatus(task, statuses);
+    const member = project.members.find(node => node.id === task.memberId);
     return { key: JSON.stringify([run.leadId, task.id]), run, task, dispatch, session, pr, state: mapTaskState(task, pr),
       title: activityTaskTitle(task), latest: activityTaskEvent(task, session),
+      memberName: member ? monoLook(member.mono).name : task.memberName,
       live: selectAgentLiveState(session, { task, tasks: run.tasks, runStatus: run.status, pauseReason: run.lastPauseReason }) };
   }));
 }
 export type MapTask = ReturnType<typeof projectMapTasks>[number];
+
+export function mapTodaySentence(event: TeamMapEvent, roster: readonly Mono[]) {
+  const mono = roster.find(mono => mono.id === event.source);
+  const actor = mono ? monoLook(mono).name : "The team";
+  const title = coordinationSummary(event.label, 120);
+  const verbs = { dispatch: "assigned", report: "reported on", review: event.changes ? "requested changes to" : "approved", pr: "reported a PR ready for review for", escalation: "asked for help with", message: "shared", closed: "closed", accepted: "finished" };
+  return title.startsWith(`${actor} `) ? title : `${actor} ${verbs[event.kind]} ${title}`;
+}
 
 export type MapCamera = { x: number; y: number; scale: number };
 export type MapSize = { width: number; height: number };

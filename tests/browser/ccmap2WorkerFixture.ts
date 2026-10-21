@@ -54,6 +54,7 @@ export function createWorkerFixture(bind: (host: any) => unknown) {
     workspaceNavigation: { cancel: () => events.push({ action: "cancel-navigation" }) },
     teamMap: { open: false, close: () => { host.teamMap.open = false; refresh(); } },
     orchestrator: { snapshot: () => host.orchestrationRuns, ownerSession: (id: string) => id, forSession: () => undefined, run: () => undefined },
+    invoke: async () => [],
     ensureOpenSession: async (id: string) => {
       events.push({ action: "load", id });
       if (deferred.has(id)) await new Promise<void>(resolve => pending.set(id, resolve));

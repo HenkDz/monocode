@@ -1,11 +1,11 @@
+import { createWorkerFixture } from "../../tests/browser/ccmap2WorkerFixture";
+import { bindWorkerApp } from "../../tests/browser/ccmap2WorkerPaths";
 // @vitest-environment happy-dom
 import { readFileSync } from "node:fs";
 import ts from "typescript";
 import { expect, it, vi } from "vitest";
 import { newSession, sessionWorkCwd, type Session } from "../features/sessions/model/session";
 import { newTab, leafIds } from "../features/workspace/model/layout";
-import { findOpenSessionTab, switchSessionInTab } from "../features/workspace/model/workspaceTabGroups";
-import { workbenchSessionTask } from "../features/monos/model/monoNavigation";
 import type { OrchestrationRun } from "../features/orchestration/model/orchestrationState";
 import { newWorkspaceSession } from "./model/newWorkspaceSession";
 import { setWorktreeFocus } from "../features/source-control/model/worktreeFocus";
@@ -33,31 +33,20 @@ function callback<T extends (...args: any[]) => any>(name: string, scope: Record
 const tree = (path: string, isMain = false): Worktree => ({ path, isMain, branch: isMain ? "main" : "feature", head: "abc", missing: false, prunable: false, locked: false, dirty: false, unpushed: 0, sessionIds: [] });
 const trees = [tree("C:/repo"), tree("C:/repo/child"), tree("C:/linked-main", true)];
 
-it("actual App history navigation reuses one plain task UI slot and retains every real session", async () => {
+it("actual App task history navigation reuses one worker page and retains every real session", async () => {
+  const f = createWorkerFixture(bindWorkerApp), scope = f.host;
   const sessions = Array.from({ length: 20 }, (_, index) => ({ ...newSession("codex", "C:/repo"), id: `worker-${index}`, providerSessionId: `provider-${index}`, busy: index === 0, queuedMessages: [{ id: `queue-${index}`, text: "Keep queued follow-up", attachments: [] }], blocks: [{ id: `user-${index}`, role: "user" as const, text: "Keep transcript" }] }));
-  const run: OrchestrationRun = { version: 2, leadId: "manager", cwd: "C:/repo", status: "active", allowedHarnesses: ["codex"], maxWorkers: 1, cli: "synthetic", continuations: 0, requests: {}, tasks: sessions.map(session => ({ id: session.id, memberId: "member", sessionId: session.id, title: "Task", prompt: "Task", status: "completed", accepted: false, delivered: true, result: "", harness: "codex", model: "", files: [], scopes: [], dependsOn: [] })) };
-  const unrelated = newTab("unrelated"), tabsRef = { current: [unrelated] }, workerTaskTabs = { current: new Map<string, string>() };
-  const scope = {
-    teamMap: { close: vi.fn() }, workspaceSessionRequest: { current: 0 }, workspaceNavigation: { cancel: vi.fn() },
-    ensureOpenSession: async (id: string) => sessions.find(session => session.id === id), looksLikeProject: () => false,
-    monoForSession: () => undefined, setWorktreeOverview: vi.fn(), workbenchSessionTask, workerTaskTabs, findMono: () => ({ id: "member", role: "member" }), setOpenMonoTabs: vi.fn(),
-    orchestrator: { snapshot: () => [run], forSession: () => undefined }, isProjectManager: () => false,
-    setSearchViewOpen: vi.fn(), setInboxViewOpen: vi.fn(), setNotesViewOpen: vi.fn(), setAutomationsViewOpen: vi.fn(), setSettingsOpen: vi.fn(),
-    linkedSessionUpdatesRef: { current: new Map() }, focusOpenSession: (id: string) => !!tabsRef.current.find(tab => tab.focusedId === id),
-    findOpenSessionTab, leafIds, switchSessionInTab, sessionsRef: { current: sessions }, tabsRef, workspacePins: { current: new Map() }, sessionWorkCwd,
-    setTabs: (next: typeof tabsRef.current) => { tabsRef.current = next; }, setActiveTabId: vi.fn(), setComposerFocused: vi.fn(),
-    replaceBlankPaneWithSession: () => false, newTab, appendTab: (tab: typeof unrelated) => { tabsRef.current.push(tab); },
-  };
-  const open = callback<(id: string) => Promise<void>>("onSelectHistorySession", scope);
-  await open(sessions[0].id); const slot = tabsRef.current[1].id;
-  for (const session of sessions.slice(1)) await open(session.id);
-  expect(tabsRef.current).toHaveLength(2);
-  expect(tabsRef.current[0]).toBe(unrelated);
-  expect(tabsRef.current[1]).toMatchObject({ id: slot, focusedId: "worker-19" });
-  expect(leafIds(tabsRef.current[1].layout)).toEqual(["worker-19"]);
-  expect(scope.sessionsRef.current).toBe(sessions);
+  scope.sessions = [...scope.sessions, ...sessions]; scope.sessionsRef.current = scope.sessions;
+  f.run.tasks = sessions.map(session => ({ id: session.id, memberId: "worker", sessionId: session.id, title: "Task", prompt: "Task", status: "completed", accepted: false, delivered: true, result: "", harness: "codex", model: "", files: [], scopes: [], dependsOn: [] }));
+  const unrelated = scope.tabs[0], originalSessions = scope.sessionsRef.current;
+  for (const session of sessions) await scope.onSelectHistorySession(session.id);
+  expect(scope.tabs).toHaveLength(1); expect(scope.tabs[0]).toBe(unrelated);
+  expect(scope.workerPages.worker.target).toEqual({ taskId: "worker-19", sessionId: "worker-19" });
+  expect(scope.openMonoTabs).toEqual(["worker"]);
+  expect(scope.sessionsRef.current).toBe(originalSessions);
   expect(sessions[0]).toMatchObject({ providerSessionId: "provider-0", busy: true, queuedMessages: [{ id: "queue-0" }], blocks: [{ text: "Keep transcript" }] });
   expect(sessions.map(session => session.providerSessionId)).toEqual(Array.from({ length: 20 }, (_, index) => `provider-${index}`));
+  expect(f.events.filter(event => ["activate-tab", "append-tab", "project", "sidebar", "worktree", "persist"].includes(event.action))).toEqual([]);
 });
 
 it("actual worktree selection opens its latest real chat or a calm overview without creating, moving or closing sessions", () => {

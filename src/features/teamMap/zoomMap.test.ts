@@ -54,7 +54,11 @@ it("caps fitted reading size and grows width instead of type on ultrawide screen
   const wide = projectCamera({ width: 3052, height: 1050 }, projectPoint(0));
   const narrow = projectCamera({ width: 390, height: 450 }, projectPoint(0));
   expect(regular.width).toBeGreaterThanOrEqual(1000); expect(wide.width).toBe(1800); expect(wide.camera.scale / 4).toBe(1.2);
-  expect(narrow.width).toBe(1000); expect(narrow.camera.scale / 4).toBeCloseTo(.342);
+  expect(narrow.width).toBeLessThan(1000); expect(narrow.camera.scale / 4).toBeGreaterThanOrEqual(.8);
+  expect(narrow.width * narrow.camera.scale / 4).toBeCloseTo(390 - 48);
+  const supported = projectCamera({ width: 540, height: 610 }, projectPoint(0));
+  expect(supported.camera.scale / 4).toBeGreaterThanOrEqual(.8);
+  expect(supported.width * supported.camera.scale / 4).toBeLessThanOrEqual(540 - 48);
   expect(regular.camera.scale / 4).toBeGreaterThanOrEqual(.8);
 });
 

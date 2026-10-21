@@ -79,7 +79,7 @@ export function OrbitMap({ sessions, runs, statuses, scope, onOpenMono, onClose,
     returnProject.current = selected;
     setSelected(undefined);
   };
-  const openChat = (id: string) => { onClose(); onOpenMono(id); };
+  const openChat: TeamMapProps["onOpenMono"] = (id, target) => { onClose(); onOpenMono(id, target); };
   const openProject = (id: string) => {
     setSelected(id);
     saveOrbitPreferences({ ...loadOrbitPreferences(), focus: id });

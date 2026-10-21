@@ -166,7 +166,7 @@ export function selectGoalViews(input: GoalViewInput): GoalViewModel {
         members.push({ name, state });
       const reviewed = task.reviewOf && workerRun.tasks.find(candidate => candidate.id === task.reviewOf!.taskId);
       return { id: `${workerRun.leadId}:${task.id}`, monoId: task.memberId, role: "worker", name,
-        state, activity: task.title, target: { taskId: task.id, sessionId },
+        state, activity: task.title, target: { taskId: task.id, ...(state.status === "needs-you" ? { requestSessionId: sessionId } : { sessionId }) },
         metrics: selectTaskMetrics(task, workerRun.dispatches ?? [], input.sessions, now),
         elapsedMs: attempts.find(attempt => attempt.edge.id === latest?.id)?.elapsedMs, elapsedLabel: "Attempt elapsed",
         attempts, review: task.reviewOf ? { ...task.reviewOf, title: reviewed?.title ?? "Unknown task",

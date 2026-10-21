@@ -1,3 +1,5 @@
+import { createWorkerFixture } from "../../tests/browser/ccmap2WorkerFixture";
+import { bindWorkerApp } from "../../tests/browser/ccmap2WorkerPaths";
 // @vitest-environment happy-dom
 import { afterEach, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
@@ -291,54 +293,22 @@ it("explicit Task Queue wins over the background default while mandatory queues 
 
 it.each(["onVisitBack", "onVisitForward"])(
   "actual %s cancels cold loads, Mono opens and terminal focus",
-  async (direction) => {
-    let finish!: (session: Session) => void;
-    const host: any = bind({
-      ...visits,
-      monoViewIdRef: { current: null },
-      monoViewRequest: { current: 0 },
-      activeTabIdRef: { current: "task-tab" },
-      tabsRef: { current: [{ id: "task-tab" }] },
-      tabVisitRef: {
-        current: {
-          current: "task-tab",
-          back: direction === "onVisitBack" ? ["home"] : [],
-          forward: direction === "onVisitForward" ? ["home"] : [],
-        },
-      },
-      tabVisitFromHistoryRef: { current: false },
-      workspaceSessionRequest: { current: 0 },
-      monoForSession: (id: string) =>
-        id === "home" ? { role: "member" } : undefined,
-      listMonos: () => [{ role: "member", sessionId: "home" }],
-      teamMap: { close: noop },
-      workspaceNavigation: { cancel: vi.fn() },
-      ensureOpenSession: () =>
-        new Promise<Session>((resolve) => {
-          finish = resolve;
-        }),
-      commitTabVisit: (next: unknown) => {
-        host.tabVisitRef.current = next;
-      },
-      setMonoViewId: (id: string) => {
-        host.view = id;
-      },
-      setMonoActivity: noop,
-      setMonoSessions: noop,
-      setMonoShownSessionFocused: vi.fn(),
-      setProjectTerminalFocused: vi.fn(),
-      setComposerFocused: vi.fn(),
-      setComposerFocusToken: vi.fn(),
-      activateTab: vi.fn(),
-    });
+  async direction => {
+    const f = createWorkerFixture(bindWorkerApp), host = f.host;
+    host.workerVisitTargets.current.set("home", { ownerId: "worker", target: null });
+    host.tabVisitRef.current = { current: host.tabs[0].id,
+      back: direction === "onVisitBack" ? ["home"] : [], forward: direction === "onVisitForward" ? ["home"] : [] };
+    host.workspaceNavigation.cancel = vi.fn();
+    host.setMonoShownSessionFocused = vi.fn(); host.setProjectTerminalFocused = vi.fn(); host.setComposerFocused = vi.fn(); host.setComposerFocusToken = vi.fn();
+    host.activateTab = vi.fn();
+    f.defer("cold-task");
     const pending = host.onSelectHistorySession("cold-task");
     const request = host.workspaceSessionRequest.current;
     host[direction]();
     expect(host.workspaceSessionRequest.current).toBe(request + 1);
     expect(host.monoViewRequest.current).toBe(1);
-    finish({ ...newSession("codex", "/synthetic"), id: "cold-task" });
-    await pending;
-    expect(host.view).toBe("home");
+    f.release("cold-task"); await pending; await Promise.resolve();
+    expect(host.monoViewId).toBe("worker-home");
     expect(host.activateTab).not.toHaveBeenCalled();
     expect(host.workspaceNavigation.cancel).toHaveBeenCalledTimes(2);
     expect(host.setProjectTerminalFocused).toHaveBeenCalledWith(false);

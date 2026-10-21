@@ -132,7 +132,7 @@ describe("Mission control goal projection", () => {
       sessionId: "replacement", turnBlockId: "retry-turn", startedAt: 200, dispatchedAt: 200, state: "running", finishedAt: undefined,
     })])], sessions: [...sessions, session("replacement", [turn("retry-turn", 20)], { busy: true })] }).live[0];
     const worker = view.nodes[2];
-    expect(worker.target).toEqual({ sessionId: "replacement" });
+    expect(worker.target).toEqual({ taskId: "task", sessionId: "replacement" });
     expect(worker.attempts?.map(attempt => attempt.edge.id)).toEqual(["dispatch", "retry"]);
     expect(worker.elapsedMs).toBe(800);
     expect(worker.metrics).toMatchObject({ turns: 2, inputTokens: 30 });
@@ -182,7 +182,7 @@ describe("Mission control goal projection", () => {
     expect(result.live[0].nodes[2].state).toMatchObject({ status: "done" });
     const workerOnly = project({ sessions: [sessions[0], sessions[1], session("worker", [approval])], runs: [run([task("task", { status: "running" })])] });
     expect(workerOnly.live[0].nodes[2].state?.status).toBe("needs-you");
-    expect(workerOnly.live[0].nodes[2].target).toEqual({ requestSessionId: "worker" });
+    expect(workerOnly.live[0].nodes[2].target).toEqual({ taskId: "task", requestSessionId: "worker" });
     expect(workerOnly.attention).toHaveLength(0);
   });
 
@@ -190,7 +190,7 @@ describe("Mission control goal projection", () => {
     const result = project({ sessions: [...sessions.slice(0, 2), session("worker", [], { codexStorageError: "Storage failed" })],
       runs: [run([task("task", { status: "blocked" })])] });
     expect(result.attention).toHaveLength(1);
-    expect(result.attention[0].target).toEqual({ sessionId: "worker" });
+    expect(result.attention[0].target).toEqual({ taskId: "task", sessionId: "worker" });
     expect(project({ runs: [run([task("task", { status: "failed", error: "Tests failed" })])] }).attention).toHaveLength(0);
     expect(project({ runs: [run([task("task", { status: "queued", dependsOn: ["missing"] })])] }).attention).toHaveLength(0);
   });

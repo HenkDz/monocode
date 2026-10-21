@@ -65,9 +65,13 @@ for (const [width, height] of [[1600, 950], [1710, 1390], [3432, 1308]]) {
     await page.getByRole('button', { name: '+13 more', exact: true }).click();
     await expect(page.locator('.zoom-map-done-chip')).toHaveCount(17); await fitted(page);
     await page.locator('[data-task="terminal-14"]').click();
-    await expect(page.locator('.zoom-map-detail')).toContainText('Saved change 14');
+    await expect(page.locator('.zoom-map-rail [data-task-id="terminal-14"]')).toBeFocused();
+    await expect(page.locator('.zoom-map-rail [data-task-id="terminal-14"]')).toHaveCount(1);
+    await page.keyboard.press('Escape');
+    await page.locator('[data-task="terminal-12"]').click();
+    await expect(page.locator('.zoom-map-detail')).toContainText('Saved change 12');
     await page.getByRole('button', { name: 'Show work', exact: true }).click();
-    await expect(page.locator('.zoom-map-detail')).toContainText('Task terminal-14');
+    await expect(page.locator('.zoom-map-detail')).toContainText('Task terminal-12');
     await page.keyboard.press('Escape'); await page.getByRole('button', { name: 'Show less', exact: true }).click();
     await fitted(page);
     await page.getByRole('button', { name: 'Zoom in', exact: true }).click();

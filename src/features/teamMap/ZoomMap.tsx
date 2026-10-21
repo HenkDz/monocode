@@ -335,7 +335,7 @@ export function ZoomMap({ sessions, runs, statuses, scope, onOpenMono, onClose, 
       </div></> : <>
         <h2>Needs you {focused && <small>in {focused.name}</small>} <small>· {scopedNeed ?? "—"}</small></h2>
         {focused && <button type="button" className="zoom-map-back" onClick={leave}>← Everything else that needs you</button>}
-        {visibleReady.map(entry => { const record = prs.find(record => projectKey(record.cwd) === projectKey((entry.dispatch?.workspace ?? entry.task.workspace)?.checkoutCwd ?? "") && record.pr.url === entry.pr?.url && !record.unavailable); return <article className="zoom-map-merge" key={entry.key} tabIndex={-1} data-merge-task={entry.key} data-selected={flash === entry.key}>
+        {visibleReady.map(entry => { const record = prs.find(record => projectKey(record.cwd) === projectKey((entry.dispatch?.workspace ?? entry.task.workspace)?.checkoutCwd ?? "") && record.pr.url === entry.pr?.url && !record.unavailable); return <article className="zoom-map-merge" key={entry.key} tabIndex={-1} data-merge-task={entry.key} data-selected={selection?.kind === "railTask" && selection.key === entry.key} data-flash={flash === entry.key}>
           <small>{entry.task.memberName ?? "Mono"} → {entry.run.projectName ?? "Manager"} → You</small><h3>Review &amp; merge · {entry.title}</h3><p>Approved current head · checks pass. Merging is your call.</p>
           {record ? <WorktreePrActions entry={record} sessionId={entry.dispatch?.sessionId ?? entry.task.sessionId} taskId={entry.task.id} /> : <p>Open conversation to refresh the recorded PR review.</p>}
           <button type="button" onClick={() => openChat(entry.task.memberId ?? entry.run.ownerMonoId!)}>Open conversation</button>

@@ -75,6 +75,8 @@ function fixture() {
     loadRecents, projectRailItems, sameProjectPath, sessionWorkCwd,
     sessions, sessionsRef: { current: sessions }, orchestrationRuns: [], managerPrStatuses: [], homeDir: "/synthetic-home",
     monoViewId: null, monoViewIdRef: { current: null }, monoViewRequest: { current: 0 }, lastMonoIdRef: { current: undefined },
+    workerPages: {}, workerPagesRef: { current: {} }, workerSelectedSessionIdRef: { current: undefined }, workerPageError: undefined,
+    openMonoTabs: [], composerFocusToken: 0,
     workspaceSessionRequest: { current: 0 }, workspaceNavigation: { cancel: vi.fn() }, projectCwdRef: { current: projects[0] },
     insetLayoutRef: { current: true }, insetLayout: true, teamMap: { close: vi.fn() },
     monoPanelTab: "activity", monoDetailsOpen: false, monoActivity: { sessionId: "old" }, monoSessions: { sessionId: "old" },
@@ -86,16 +88,17 @@ function fixture() {
     ensureOpenSession: vi.fn(), saveMonoPermissions: vi.fn(), newDefaultSession: vi.fn(),
     ensureProjectManager: vi.fn(), onSelectHistorySession: vi.fn(), closeMonoView: vi.fn(),
     onSubmit: vi.fn(), onSubmitGoal: vi.fn(), onModelChange: vi.fn(), onModelSettingsChange: vi.fn(), onRuntimeModeChange: vi.fn(),
-    message: vi.fn(async () => {}), saveOpenMono: vi.fn(), setOpenMonoTabs: noop,
+    message: vi.fn(async () => {}), saveOpenMono: vi.fn(),
     onApproval: noop, onQuestionReply: noop, onQuestionInteraction: noop, onOpenFile: noop, onOpenDiff: noop,
     onWindowsSandboxChange: noop, onResetMono: noop, saveSettingsSection: vi.fn(), startTransition: (run: () => void) => run(),
   };
-  for (const key of ["monoViewId", "monoTeamRequest", "monoActivity", "monoShownSession", "monoShownSessionFocused", "monoOverviewDocument",
+  for (const key of ["workerPages", "workerPageError", "openMonoTabs", "monoViewId", "monoTeamRequest", "monoActivity", "monoShownSession", "monoShownSessionFocused", "monoOverviewDocument",
     "worktreeOverview", "workspaceContextTab", "rightPanelOpenState", "rightPanelClosing", "monoPanelTab", "monoDetailsOpen", "monoSessions", "monoArtifact", "monoChanges", "settingsOpen", "filePickerOpen", "searchViewOpen",
     "inboxViewOpen", "notesViewOpen", "automationsViewOpen", "settingsSection", "settingsAnchor", "notificationProjectPath", "composerFocused",
     "composerFocusToken", "projectTerminalFocused", "sessions"]) {
     scope[`set${key[0].toUpperCase()}${key.slice(1)}`] = vi.fn((value: any) => { scope[key] = typeof value === "function" ? value(scope[key]) : value; });
   }
+  scope.setWorkerPage = callback("setWorkerPage", scope);
   scope.onOpenMono = callback("onOpenMono", scope);
   scope.onOpenProjectManager = callback("onOpenProjectManager", scope);
   if (declaration("onOpenProjectSettings")) scope.onOpenProjectSettings = callback("onOpenProjectSettings", scope);
@@ -257,9 +260,10 @@ it.each(["changed binding", "another Manager"])("refuses first-open settings aft
     return created;
   });
   await act(async () => f.gear(f.projects[1]));
+  expect(f.scope.ensureMonoSession).toHaveBeenCalledExactlyOnceWith("manager-1", expect.any(Object));
   expect(dedicatedMono(f.projects[1])?.id).toBe(reason === "changed binding" ? "manager-1" : "manager-0");
   expect(dedicatedMono(f.projects[1])?.sessionId).toBe(f.sessions[0].id);
-  expect(f.scope.monoViewIdRef.current).toBe(created.id);
+  expect(f.scope.monoViewIdRef.current).toBe(reason === "changed binding" ? null : created.id);
   expect(f.scope.monoDetailsOpen).toBe(false);
   expect(f.scope.message).not.toHaveBeenCalled();
   f.noLaunch();

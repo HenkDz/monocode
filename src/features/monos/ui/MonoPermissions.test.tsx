@@ -187,7 +187,7 @@ it("uses the saved member chat's source and engine in Team details and opens tha
   expect(permissions().querySelector("[data-access-picker-trigger]")).toBeNull();
   expect(engine().textContent).toContain("Elevated (blocked)");
   await clickText("Open chat to use role default");
-  expect(open).toHaveBeenCalledWith("resident");
+  expect(open).toHaveBeenCalledWith("resident", undefined);
   expect(findMono(member.id)?.runtimeModeSource).toBe("role");
 });
 

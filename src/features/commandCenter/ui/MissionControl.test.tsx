@@ -86,7 +86,7 @@ describe("CC7N Cockpit", () => {
     expect(drawer.querySelector('[data-agent-state="blocked"]')?.textContent).toBe("Blocked · storage");
     expect(drawer.querySelectorAll("details, summary")).toHaveLength(0);
     await act(async () => drawer.querySelector<HTMLButtonElement>('[aria-label="Open Reviewer"]')!.click());
-    expect(open).toHaveBeenCalledWith({ sessionId: "synthetic-reviewer-chat" });
+    expect(open).toHaveBeenCalledWith({ sessionId: "synthetic-reviewer-chat", taskId: "synthetic-review" });
     expect(drawer.querySelector('[aria-label="Open Reviewer"]')?.getAttribute("title")).toContain("dispatch-synthetic-build");
   });
   it("switches Phases/Ledger and pages recorded evidence without asserting unknown phases", async () => {

@@ -45,7 +45,7 @@ describe("Delegation timeline and local route", () => {
     const open = vi.fn(async () => { throw Error("Session unavailable"); });
     await act(async () => root.render(<DelegationTimeline timeline={timeline()} onBack={() => {}} onOpenTarget={open} />));
     await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Open Reviewer attempt dispatch-synthetic-review"]')!.click());
-    expect(open).toHaveBeenCalledWith({ sessionId: "synthetic-reviewer-chat" });
+    expect(open).toHaveBeenCalledWith({ sessionId: "synthetic-reviewer-chat", taskId: "synthetic-review" });
     expect(host.querySelector('[role="alert"]')?.textContent).toContain("Session unavailable");
   });
 

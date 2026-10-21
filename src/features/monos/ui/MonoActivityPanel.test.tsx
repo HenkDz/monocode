@@ -204,7 +204,7 @@ it("filters one flat member timeline and keeps injected protocol and diagnostics
         .find((button) => button.textContent === "Open worker session")!
         .click(),
     );
-    expect(openCardSession).toHaveBeenCalledWith("worker");
+    expect(openCardSession).toHaveBeenCalledWith("worker", { taskId: task.id, sessionId: "worker" });
     await act(async () => chip("assignments").click());
     await act(async () =>
       host
@@ -213,7 +213,7 @@ it("filters one flat member timeline and keeps injected protocol and diagnostics
         )!
         .click(),
     );
-    expect(openCardSession).toHaveBeenCalledWith(task.sessionId);
+    expect(openCardSession).toHaveBeenCalledWith(task.sessionId, { taskId: task.id, sessionId: task.sessionId });
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     await act(async () => root.render(<WorkbenchTask task={task} />));
     expect(host.textContent).not.toContain("Check reconciliation.");
@@ -277,7 +277,7 @@ it("keeps default failed task cards and their readers free of raw storage errors
         .find((button) => button.textContent === "Open")!
         .click(),
     );
-    expect(openCardSession).toHaveBeenCalledWith(task.sessionId);
+    expect(openCardSession).toHaveBeenCalledWith(task.sessionId, { taskId: task.id, sessionId: task.sessionId });
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     await act(async () => root.render(<WorkbenchTask task={task} />));
     expect(
@@ -326,7 +326,7 @@ it("opens the exact assignment when different Managers reuse a task identity", a
     );
     expect(assignments).toHaveLength(2);
     await act(async () => assignments[1].click());
-    expect(openCardSession).toHaveBeenCalledWith("worker-b");
+    expect(openCardSession).toHaveBeenCalledWith("worker-b", { taskId: task.id, sessionId: "worker-b" });
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     await act(async () => root.render(<WorkbenchTask task={runs[1].tasks[0]} />));
     expect(host.textContent).toContain("Assignment b");

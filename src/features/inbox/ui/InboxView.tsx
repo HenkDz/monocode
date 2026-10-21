@@ -46,7 +46,6 @@ import { InboxProviderMark } from "./InboxProviderMark";
 import { ProjectLogoIcon } from "../../projects/ui/ProjectLogoIcon";
 import { ProjectMascot } from "../../projects/ui/ProjectMascot";
 import { IconButton, OverlayNav } from "../../../app/shell/TitleBar";
-import { WindowControls } from "../../../app/shell/WindowControls";
 import { useDragResize } from "../../../shared/hooks/useDragResize";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
 import { useTabGroupLogos } from "../../projects/hooks/useTabGroupLogos";
@@ -1244,7 +1243,6 @@ export function InboxView({
             />
             <span className="min-w-0 truncate text-content">Inbox</span>
           </div>
-          {IS_MAC ? null : <WindowControls />}
         </div>
       ) : null}
 

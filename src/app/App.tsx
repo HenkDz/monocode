@@ -16,7 +16,8 @@ import { resolveMonoRolePermissions, snapshotMonoWorkerPermissions } from "../fe
 import { archiveMonoConversation, archiveProjectMonos, offerProjectMonoRestore, projectMonoTeam } from "../features/monos/model/monoArchive";
 import { loadMonoView, saveMonoView, monoForView, monoViewProject, memberDetailsView, selectedOrgMono, monoLiveState } from "../features/monos/model/monoNavigation";
 import { MonoTeamActivity } from "../features/monos/ui/MonoTeamActivity";
-import { WorkspaceContextTabs, WorkspaceGoals, WorkspaceWorktree, WorkspaceWorktrees, WorkspaceUsage, type WorkspaceContextTab } from "./shell/WorkspaceContext";
+import { WorkspaceContextTabs, WorkspaceGoals, WorkspaceWorktree, WorkspaceChanges, WorkspaceUsage, type WorkspaceContextTab } from "./shell/WorkspaceContext";
+import { WorktreeChats } from "../features/source-control/ui/WorktreeChats";
 import { workspaceTeam } from "./shell/WorkspaceTeam";
 import { TeamMap } from "../features/teamMap/TeamMap";
 import { commandMapDecisions } from "../features/teamMap/commandMapDecisions";
@@ -39,6 +40,9 @@ import { Decisions, DECISIONS_SCOPE, type DecisionUiActions } from "../features/
 import { selectDecisionView, endedDecisionSources, decisionCountsByProject } from "../features/commandCenter/model/decisionView";
 import { prepareDecisionMessage } from "../features/monos/model/monoDecisions";
 import { sendDecisionFromClick } from "../features/monos/model/monoDecisionUi";
+import { selectGoalNextAction, runGoalNextAction, distinctGoalNextActions, type GoalNextStep } from "../features/commandCenter/model/goalNextAction";
+import { GoalNextAction } from "../features/commandCenter/ui/GoalNextAction";
+import { ManagerUpdates } from "../features/monos/ui/ManagerUpdates";
 import { openGoalTarget } from "../features/commandCenter/model/goalView";
 import { TeamMapHeaderAction, useTeamMap } from "../features/teamMap/navigation";
 import { recordCrewDecision } from "../features/monos/model/monoCrewEvents";
@@ -214,8 +218,8 @@ import { ResourcePressureNotice } from "../features/notifications/ui/ResourcePre
 import { HarnessUpdateNotice } from "../features/providers/ui/HarnessUpdateNotice";
 import { NewLayoutNotice } from "./shell/NewLayoutNotice";
 import { WhatsNewDialog } from "./shell/WhatsNewDialog";
-import { MonoViewActions, TitleBar, type Tab as TitleTab } from "./shell/TitleBar";
-import { WindowControls } from "./shell/WindowControls";
+import { TitleBar, type Tab as TitleTab } from "./shell/TitleBar";
+import { PullRequestsList } from "../features/pullRequests/ui/PullRequestsList";
 import { MonoDetails } from "../features/monos/ui/MonoDetails";
 import { changeMonoWorkingDirectory, isMonoHomeDirectory, migrateMonoWorkingDirectory } from "../features/monos/model/monoWorkingDirectory";
 import { acceptMonoWorkingDirectoryMigration, monoWorkingDirectoryMigrationPending } from "../features/monos/model/monoWorkingDirectoryMigration";
@@ -234,6 +238,7 @@ import {
   appViewForTab,
   appViewTabId,
   isViewTab,
+  SHELL_PAGE_LABELS, shellPageTabId, shellPageForTab, type ShellPage,
   monoForTab,
   monoTabId,
   nextDisplayedTabAfterClose,
@@ -304,14 +309,12 @@ import {
   INSET_LAYOUT_DEFAULT,
   loadInsetLayout,
   loadProjectRailOpen,
-  loadRightPanelOpen,
   loadRightPanelTab,
   loadRightPanelWidth,
   loadSessionSidebarOpen,
   RIGHT_PANEL_WIDTH_DEFAULT,
   RIGHT_PANEL_WIDTH_MAX,
   RIGHT_PANEL_WIDTH_MIN,
-  saveRightPanelOpen,
   saveRightPanelTab,
   saveRightPanelWidth,
   subscribeInsetLayout,
@@ -606,12 +609,14 @@ import {
   planWorkspaceTabClose,
   switchSessionInTab,
   workspaceTabCwd,
-  workspaceTabWorktree,
   focusedWorkspaceTabCwd,
   isManagerTab,
 } from "../features/workspace/model/workspaceTabGroups";
 import { applyAddToChatRequest } from "../features/sessions/model/addChatToWorkspace";
 import { newWorkspaceSession } from "./model/newWorkspaceSession";
+import { boundWorktreeTabs, chatTabWorktree } from "../features/source-control/model/chatWorktree";
+import { packageScripts } from "../features/projects/model/packageScripts";
+import { prepareTerminalCommand } from "../features/terminal/model/terminalCommand";
 import {
   ADD_TO_CHAT_EVENT,
   type AddToChatRequest,
@@ -1242,6 +1247,7 @@ function titleTabsEqual(a: TitleTab[], b: TitleTab[]): boolean {
       other != null &&
       tab.id === other.id &&
       tab.appView === other.appView &&
+      tab.page === other.page &&
       tab.mono?.mascot === other.mono?.mascot &&
       tab.mono?.color === other.mono?.color &&
       tab.mono?.status === other.mono?.status &&
@@ -1326,6 +1332,16 @@ function Workspace({
     resolve: (choice: SessionDeleteChoice) => void;
   }>();
   const switchingWorktrees = useRef(new Map<string, string>());
+  const pendingComposerSubmits = useRef(new Set<string>());
+  const onComposerSubmitStart = useCallback((sessionId: string) => {
+    pendingComposerSubmits.current.add(sessionId);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      pendingComposerSubmits.current.delete(sessionId);
+    };
+  }, []);
   const removingWorktreePaths = useRef(new Set<string>());
   const deleteConfirmationPending = useRef(false);
   const [tabs, setTabs] = useState<WorkspaceTab[]>(
@@ -1451,7 +1467,7 @@ function Workspace({
       setMonoChanges(null);
       setMonoSessions(null);
       if (monoForSession(sessionId)?.role) {
-        setMonoDetailsOpen(true);
+        setMonoDetailsOpen(true); setWorkspaceContextTab("activity"); setRightPanelOpenState(true); setRightPanelClosing(false);
         setMonoPanelTab("activity");
         setMonoActivity({ sessionId, turnId, blocks });
       } else {
@@ -1602,9 +1618,9 @@ function Workspace({
   const [rightPanelHost, setRightPanelHost] = useState<HTMLDivElement | null>(
     null,
   );
-  const [rightPanelOpen, setRightPanelOpenState] = useState(loadRightPanelOpen);
+  const [rightPanelOpen, setRightPanelOpenState] = useState(true);
   const [workspaceContextTab, setWorkspaceContextTab] = useState<WorkspaceContextTab>("goal");
-  const [contextWorktree, setContextWorktree] = useState<{ project: string; path: string }>();
+  const [openShellPages, setOpenShellPages] = useState<ShellPage[]>([]);
   const [rightPanelTab, setRightPanelTabState] =
     useState<RightPanelTab>(loadRightPanelTab);
   // A closed panel keeps its contents until it has slid out.
@@ -1612,26 +1628,30 @@ function Workspace({
   const rightPanelOpenRef = useRef(rightPanelOpen);
   rightPanelOpenRef.current = rightPanelOpen;
   const showRightPanel = useCallback((tab: RightPanelTab) => {
-    setWorkspaceContextTab("tools");
+    setWorkspaceContextTab("changes");
     setRightPanelTabState(tab);
     saveRightPanelTab(tab);
     setRightPanelOpenState(true);
     setRightPanelClosing(false);
-    saveRightPanelOpen(true);
   }, []);
   const onToggleRightPanel = useCallback(() => {
     const next = !rightPanelOpenRef.current;
     rightPanelOpenRef.current = next;
-    saveRightPanelOpen(next);
     setRightPanelOpenState(next);
     setRightPanelClosing(!next);
   }, []);
+  useEffect(() => {
+    if (!monoDetailsOpen && !monoActivity && !monoSessions && !monoArtifact && !monoChanges && !monoShownSession && !monoOverviewDocument) return;
+    setWorkspaceContextTab("activity");
+    setRightPanelOpenState(true);
+    setRightPanelClosing(false);
+  }, [monoDetailsOpen, monoActivity, monoSessions, monoArtifact, monoChanges, monoShownSession, monoOverviewDocument]);
   // Its handle sits on the left edge, so dragging left widens it.
   const rightPanelResize = useDragResize({
     direction: "left",
     min: RIGHT_PANEL_WIDTH_MIN,
     max: () =>
-      Math.min(RIGHT_PANEL_WIDTH_MAX, Math.floor(window.innerWidth * 0.5)),
+      Math.min(RIGHT_PANEL_WIDTH_MAX, Math.floor(window.innerWidth * (window.innerWidth <= 1100 ? 1 : 0.5))),
     defaultWidth: RIGHT_PANEL_WIDTH_DEFAULT,
     initial: loadRightPanelWidth(),
     onCommit: saveRightPanelWidth,
@@ -1861,60 +1881,45 @@ function Workspace({
   }, [tabs, sessions, activeTabId, projectCwd]);
 
   const projectWorktree = useWorktreeFocus(projectCwd);
+  const projectCheckoutList = useProjectWorktrees(projectCwd, isLocalProject(projectCwd));
   const [creatingWorktreeProject, setCreatingWorktreeProject] =
     useState<string>();
   const creatingWorktrees = useProjectWorktrees(
     creatingWorktreeProject ?? "",
     !!creatingWorktreeProject,
   );
-  /** Tab or session id -> the workspace it was opened or moved in. A tab
-   * belongs to the workspace it was opened in, whatever worktree it runs in:
-   * opening a session, or moving one from its composer, never switches the
-   * workspace. Unpinned tabs (restored ones) group by their own worktree. */
-  // Only the default workspace's tabs were saved, so every restored tab
-  // belongs to it, including one its composer moved to a worktree.
-  const [restoredPins] = useState(
-    () =>
-      new Map(
-        tabs.flatMap((tab) => {
-          const project = workspaceTabCwd(tab, sessions);
-          return project && !isRemoteProjectPath(project)
-            ? [[tab.id, project] as const]
-            : [];
-        }),
-      ),
-  );
-  const workspacePins = useRef(restoredPins);
+  const workspacePins = useRef(new Map<string, string>());
   const workspaceSessionRequest = useRef(0);
   const tabWorkspace = useCallback(
     (tab: WorkspaceTab, list: readonly Session[]) => {
-      if (isManagerTab(tab)) return workspaceTabWorktree(tab, list);
-      const pinnedTab = workspacePins.current.get(tab.id);
-      if (pinnedTab) return pinnedTab;
-      for (const id of leafIds(tab.layout)) {
-        const pinned = workspacePins.current.get(id);
-        if (pinned) return pinned;
-      }
-      return workspaceTabWorktree(tab, list);
+      const project = workspaceTabCwd(tab, list);
+      return chatTabWorktree(tab, list, project && sameProjectPath(project, projectCwd)
+        ? projectCheckoutList.data?.worktrees : undefined);
     },
-    [],
+    [projectCwd, projectCheckoutList.data],
   );
   const tabWorktreeOf = useCallback(
     (tab: WorkspaceTab) => tabWorkspace(tab, sessionsRef.current),
     [tabWorkspace],
   );
-  /** Saved tabs: the app reopens on each project's default workspace, so
-   * tabs from other worktrees close with it instead of piling up. */
-  const keepWorkspaceTab = useCallback(
-    (tab: WorkspaceTab) => {
-      if (isManagerTab(tab)) return true;
-      const project = workspaceTabCwd(tab, sessionsRef.current);
-      if (!project || isRemoteProjectPath(project)) return true;
-      const workspace = tabWorkspace(tab, sessionsRef.current);
-      return !workspace || sameProjectPath(workspace, project);
-    },
-    [tabWorkspace],
-  );
+  // Persist the existing union, including hidden checkouts; only rendering is scoped.
+  const keepWorkspaceTab = useCallback(() => true, []);
+  useEffect(() => {
+    setTabs(current => boundWorktreeTabs(current, sessionsRef.current, activeTabId, tabWorktreeOf));
+  }, [tabs, activeTabId, tabWorktreeOf]);
+  useLayoutEffect(() => {
+    const tab = tabs.find(tab => tab.id === activeTabId);
+    if (!tab || isManagerTab(tab) || !isLocalProject(projectCwd)) return;
+    const project = workspaceTabCwd(tab, sessions);
+    if (!project || !sameProjectPath(project, projectCwd)) return;
+    const path = tabWorkspace(tab, sessions);
+    if (!path) return;
+    const existing = worktreeFocus(project);
+    if (sameProjectPath(existing?.path ?? project, path)) return;
+    const session = sessions.find(session => session.id === tab.focusedId);
+    const tree = projectCheckoutList.data?.worktrees.find(tree => sameProjectPath(tree.path, path));
+    setWorktreeFocus(project, sameProjectPath(path, project) ? undefined : { path, branch: tree?.branch ?? session?.branch ?? null });
+  }, [activeTabId, projectCwd, tabs, sessions, tabWorkspace, projectCheckoutList.data]);
 
   const workspaceNavigation = useWorkspaceNavigation({
     project: projectCwd,
@@ -1923,6 +1928,7 @@ function Workspace({
     sessions,
     pins: workspacePins.current,
     tabWorkspace,
+    canReuseSession: id => !pendingComposerSubmits.current.has(id),
     moveSession: (id, tree, isCurrent) =>
       onWorktreeChange(id, tree, false, isCurrent),
     activateTab: (id) => {
@@ -3574,17 +3580,18 @@ function Workspace({
   }, []);
 
   const openProjectTerminal = useCallback(
-    (cwd: string) => {
+    (cwd: string, command?: string, authorized?: () => boolean) => {
       const workdir = cwd || projectCwdRef.current;
       const projectPath = projectCwdRef.current;
       if (!isLocalProject(projectPath)) return false;
+      const existingDock = findProjectTerminal(projectTerminalsRef.current, projectPath);
+      const file = newTerminalFile(workdir, existingDock ? nextDockTerminalTitle(existingDock, workdir) : undefined, projectPath);
+      if (command) prepareTerminalCommand(file.id, workdir, command, () =>
+        (!authorized || authorized()) &&
+        sameProjectPath(projectCwdRef.current, projectPath) &&
+        sameProjectPath(worktreeFocus(projectPath)?.path ?? projectPath, workdir));
       setProjectTerminals((prev) => {
         const existing = findProjectTerminal(prev, projectPath);
-        const file = newTerminalFile(
-          workdir,
-          existing ? nextDockTerminalTitle(existing, workdir) : undefined,
-          projectPath,
-        );
         if (!existing) {
           return [
             ...prev,
@@ -3604,6 +3611,27 @@ function Workspace({
     },
     [focusProjectTerminal],
   );
+
+  const onRunProjectScript = useCallback(async (project: string, path: string, name: string) => {
+    const request = workspaceSessionRequest.current;
+    const isCurrent = () => workspaceSessionRequest.current === request && sameProjectPath(projectCwdRef.current, project) &&
+      sameProjectPath(worktreeFocus(project)?.path ?? project, path) &&
+      ![...removingWorktreePaths.current].some(removed => isEqualOrInside(path, removed));
+    if (!isLocalProject(project) || !isLocalProject(path) || !isCurrent()) throw new Error("Select this worktree before running a script.");
+    const scripts = await packageScripts(path);
+    const script = scripts.find(script => script.name === name);
+    if (!script || !isCurrent()) throw new Error("The project or script changed. Try again.");
+    const listed = await listWorktrees(project);
+    if (!isCurrent() || !listed.worktrees.some(tree => sameProjectPath(tree.path, path) && !tree.missing && !tree.prunable))
+      throw new Error("This worktree is unavailable.");
+    if (!await ask(`Run ${script.run} in ${path}?\n\n${script.command}`, { title: "Run project script", kind: "warning" })) return;
+    const latestScripts = await packageScripts(path);
+    const latestTrees = await listWorktrees(project);
+    if (!isCurrent() || latestScripts.find(row => row.name === name)?.command !== script.command ||
+      !latestTrees.worktrees.some(tree => sameProjectPath(tree.path, path) && !tree.missing && !tree.prunable))
+      throw new Error("The worktree or script changed. Run it again from the selected worktree.");
+    openProjectTerminal(path, script.run, isCurrent);
+  }, [openProjectTerminal]);
 
   const onOpenTerminal = useCallback(
     (cwd: string, asWorkspaceTab = false, occupySessionId?: string) => {
@@ -4676,7 +4704,6 @@ function Workspace({
     const worktree = projectWorktree?.path ?? projectCwd;
     return filterTabsForProject(tabs, sessions, projectCwd).filter((tab) => {
       if (isManagerTab(tab)) return false;
-      if (tab.id === activeTabId) return true;
       const workspace = tabWorkspace(tab, sessions);
       return !workspace || sameProjectPath(workspace, worktree);
     });
@@ -5553,7 +5580,7 @@ function Workspace({
   const onCreateMono = useCallback((projects?: readonly string[]) => {
     const monoId = createMono(projects).id;
     if (insetLayout) setMonoSettingsFor(monoId);
-    else { setMonoPanelTab("details"); setMonoDetailsOpen(true); }
+    else { setMonoPanelTab("details"); setMonoDetailsOpen(true); setWorkspaceContextTab("activity"); setRightPanelOpenState(true); setRightPanelClosing(false); }
     void onOpenMono(monoId);
   }, [insetLayout, onOpenMono]);
 
@@ -5563,7 +5590,7 @@ function Workspace({
       if (!findMono(monoId)) return;
       void onOpenMono(monoId).then(() => {
         setMonoPanelTab("details");
-        setMonoDetailsOpen(true);
+        setMonoDetailsOpen(true); setWorkspaceContextTab("activity"); setRightPanelOpenState(true); setRightPanelClosing(false);
         setMonoTeamRequest(findMono(monoId)?.role === "member" ? 0 : Date.now());
       });
     };
@@ -5788,7 +5815,12 @@ function Workspace({
   const onOpenMember = useCallback(async (memberId: string) => {
     const member = findMono(memberId);
     if (member?.role !== "member") return;
-    await onOpenMono(memberId);
+    const opening = onOpenMono(memberId);
+    const request = monoViewRequest.current;
+    await opening;
+    if (request !== monoViewRequest.current || monoViewIdRef.current !== findMono(memberId)?.sessionId) return;
+    setMonoPanelTab("details");
+    setMonoDetailsOpen(true); setWorkspaceContextTab("activity"); setRightPanelOpenState(true); setRightPanelClosing(false);
   }, [onOpenMono]);
 
   const restoredMonoView = useRef(false);
@@ -6722,12 +6754,14 @@ function Workspace({
 
   const onCwdChange = useCallback(
     async (sessionId: string, cwd: string) => {
+      if (pendingComposerSubmits.current.has(sessionId)) return;
       if (isProjectManager(sessionId)) return;
       const registered = projectRailItems(loadRecents(), "").map((item) => item.path);
       const addition = registered.some((path) => sameProjectPath(path, cwd))
         ? { path: normalizeProjectPath(cwd), project: normalizeProjectPath(cwd), branch: null }
         : await chooseProjectAddition(cwd, registered);
       if (!addition) return;
+      if (pendingComposerSubmits.current.has(sessionId)) return;
       const normalized = addition.project;
       const current = sessionsRef.current.find((s) => s.id === sessionId);
       const previous = current?.cwd;
@@ -6767,7 +6801,7 @@ function Workspace({
       setRecents(rememberProject(normalized));
       setSessions((prev) =>
         prev.map((s) => {
-          if (s.id !== sessionId) return s;
+          if (s.id !== sessionId || pendingComposerSubmits.current.has(sessionId)) return s;
           // A blank session moving into a project adopts its provider defaults;
           // a conversation keeps its own provider.
           const base = isBlankSession(s)
@@ -6809,6 +6843,7 @@ function Workspace({
 
   const onBranchChange = useCallback(
     (sessionId: string) => {
+      if (pendingComposerSubmits.current.has(sessionId)) return;
       notifyGitChanged();
       const current = sessionsRef.current.find((s) => s.id === sessionId);
       if (!current) return;
@@ -6831,12 +6866,12 @@ function Workspace({
 
   const onWorkspaceModeChange = useCallback(
     (sessionId: string, mode: WorkspaceMode, base?: string) => {
-      setSessions((prev) =>
+      updateSessionState(sessionsRef, setSessions, (prev) =>
         prev.map((session) => {
           if (
             session.id !== sessionId ||
-            (!isBlankSession(session) &&
-              !(session.workspaceMode && !session.worktreeCwd && !session.busy))
+            !isBlankSession(session) || session.providerSessionId || session.queuedMessages?.length ||
+            session.worktreePreparing || switchingWorktrees.current.has(sessionId) || pendingComposerSubmits.current.has(sessionId)
           ) {
             return session;
           }
@@ -6846,6 +6881,8 @@ function Workspace({
                   ...session,
                   workspaceMode: "worktree",
                   worktreeBase: base || session.worktreeBase,
+                  worktreeCwd: undefined,
+                  branch: undefined,
                 }
               : session
             : {
@@ -6861,13 +6898,11 @@ function Workspace({
 
   const onWorktreeBaseChange = useCallback(
     (sessionId: string, base: string) => {
-      setSessions((prev) =>
+      updateSessionState(sessionsRef, setSessions, (prev) =>
         prev.map((session) =>
           session.id === sessionId &&
-          (isBlankSession(session) ||
-            (!!session.workspaceMode &&
-              !session.worktreeCwd &&
-              !session.busy)) &&
+          isBlankSession(session) && !session.providerSessionId && !session.queuedMessages?.length &&
+          !session.worktreePreparing && !switchingWorktrees.current.has(sessionId) && !pendingComposerSubmits.current.has(sessionId) &&
           session.workspaceMode === "worktree"
             ? { ...session, worktreeBase: base }
             : session,
@@ -6888,9 +6923,14 @@ function Workspace({
       if (isProjectManager(sessionId))
         throw new Error("The Manager stays at the project root.");
       const current = sessionsRef.current.find((s) => s.id === sessionId);
+      if (fromComposer && current && !current.worktreeRemoved &&
+        (!isBlankSession(current) || current.providerSessionId || current.queuedMessages?.length || current.worktreePreparing)) {
+        throw new Error("This chat stays in its original worktree. Start a new chat to work elsewhere.");
+      }
       if (
         !current ||
         current.busy ||
+        pendingComposerSubmits.current.has(sessionId) ||
         removingSessionIds.current.has(sessionId) ||
         switchingWorktrees.current.has(sessionId)
       ) {
@@ -6930,7 +6970,7 @@ function Workspace({
         if (!isCurrent()) return;
         const target = listed.worktrees.find(
           (entry) =>
-            pathKey(entry.path) === pathKey(tree.path) && !entry.missing,
+            pathKey(entry.path) === pathKey(tree.path) && !entry.missing && !entry.prunable,
         );
         if (!target) {
           throw new Error(
@@ -6941,6 +6981,8 @@ function Workspace({
         if (
           !source ||
           source.busy ||
+          pendingComposerSubmits.current.has(sessionId) ||
+          (fromComposer && !source.worktreeRemoved && (!isBlankSession(source) || !!source.providerSessionId || !!source.queuedMessages?.length)) ||
           source.cwd !== current.cwd ||
           sessionWorkCwd(source) !== sessionWorkCwd(current)
         ) {
@@ -6974,6 +7016,7 @@ function Workspace({
         const latest = sessionsRef.current.find((s) => s.id === sessionId);
         if (
           !latest ||
+          pendingComposerSubmits.current.has(sessionId) ||
           (!latest.worktreeRemoved && !isBlankSession(latest)) ||
           latest.cwd !== current.cwd ||
           sessionWorkCwd(latest) !== sessionWorkCwd(current)
@@ -6989,8 +7032,9 @@ function Workspace({
         if (latest.worktreeRemoved)
           await keepSessionChanges(sessionId, target.path);
         pendingPersist.current.delete(sessionId);
-        if (shouldPersistSession(next)) await upsertSession(next, current => sessionInWorktree(current, target));
-        if (!isCurrent()) return;
+        if (pendingComposerSubmits.current.has(sessionId)) return;
+        if (shouldPersistSession(next)) await upsertSession(next, current => pendingComposerSubmits.current.has(sessionId) ? current : sessionInWorktree(current, target));
+        if (!isCurrent() || pendingComposerSubmits.current.has(sessionId)) return;
         invalidateLoadedSession(sessionId);
         sessionsRef.current = sessionsRef.current.map((s) =>
           s.id === sessionId ? sessionInWorktree(s, target) : s,
@@ -7036,6 +7080,7 @@ function Workspace({
         sessions: sessionsRef.current,
         activeTabId: activeTabIdRef.current,
         paths,
+        canReuseSession: id => !pendingComposerSubmits.current.has(id),
       });
       const last = steps[steps.length - 1];
       if (!last) return;
@@ -7155,6 +7200,8 @@ function Workspace({
   const onSelectProjectWorktree = useCallback(
     (project: string, tree: Worktree) => {
       if (tree.missing) return;
+      teamMap.close();
+      setSearchViewOpen(false); setInboxViewOpen(false); setNotesViewOpen(false); setAutomationsViewOpen(false); setSettingsOpen(false);
       workspaceSessionRequest.current++;
       openResolvedProjects([project]);
       workspaceNavigation.selectWorkspace(
@@ -7170,6 +7217,7 @@ function Workspace({
   const onNewWorktreeSession = useCallback(
     (project: string, tree: Worktree, options?: WorktreeSessionOptions) => {
       if (tree.missing) return;
+      teamMap.close();
       workspaceSessionRequest.current++;
       workspaceNavigation.cancel();
       const focus = sameProjectPath(tree.path, project)
@@ -14741,7 +14789,15 @@ function Workspace({
   const onOpenProjectManager = useCallback(
     async (project: string) => {
       const mono = dedicatedMono(project);
-      if (mono) return onOpenMono(mono.id);
+      if (mono) {
+        const opening = onOpenMono(mono.id);
+        const request = monoViewRequest.current;
+        await opening;
+        if (request !== monoViewRequest.current || monoViewIdRef.current !== findMono(mono.id)?.sessionId) return;
+        setMonoPanelTab("details");
+        setMonoDetailsOpen(true); setWorkspaceContextTab("activity"); setRightPanelOpenState(true); setRightPanelClosing(false);
+        return;
+      }
       closeMonoView();
       const request = ++workspaceSessionRequest.current;
       workspaceNavigation.cancel();
@@ -14756,6 +14812,40 @@ function Workspace({
       closeMonoView,
       onOpenMono,
     ],
+  );
+
+  const onOpenProjectSettings = useCallback(
+    async (project: string) => {
+      const available = () => projectRailItems(loadRecents(), projectCwdRef.current)
+        .some(item => sameProjectPath(item.path, project));
+      const mono = dedicatedMono(project);
+      if (!mono || !available()) {
+        void message("Project settings are unavailable until a Manager is configured for this project.", {
+          title: "MonoCode", kind: "warning",
+        });
+        return;
+      }
+      try {
+        const opening = onOpenMono(mono.id);
+        const request = monoViewRequest.current;
+        await opening;
+        const current = dedicatedMono(project);
+        if (request !== monoViewRequest.current ||
+            !current?.sessionId || monoViewIdRef.current !== current.sessionId ||
+            current.id !== mono.id || !available()) return;
+        setMonoPanelTab("details");
+        setMonoDetailsOpen(true); setWorkspaceContextTab("activity"); setRightPanelOpenState(true); setRightPanelClosing(false);
+        setMonoActivity(null);
+        setMonoSessions(null);
+        setMonoArtifact(null);
+        setMonoChanges(null);
+      } catch (error) {
+        void message(`Could not open project settings.\n\n${String(error)}`, {
+          title: "MonoCode", kind: "error",
+        });
+      }
+    },
+    [onOpenMono],
   );
 
   useEffect(() => {
@@ -14819,11 +14909,19 @@ function Workspace({
     return () => window.removeEventListener("monocode:mono-card-reply", reply);
   }, []);
 
+  const openPage: ShellPage | undefined = !teamMap.open ? undefined
+    : teamMap.scope === DECISIONS_SCOPE ? "decisions"
+    : teamMap.scope === INTEGRATIONS_SCOPE ? "integrations"
+    : teamMap.scope === USAGE_DASHBOARD_SCOPE ? "usage"
+    : teamMap.scope === ATTENTION_QUEUE_SCOPE || teamMap.scope === MISSION_CONTROL_SCOPE ? undefined
+    : "commandMap";
+  useEffect(() => { if (openPage) setOpenShellPages(current => current.includes(openPage) ? current : [...current, openPage]); }, [openPage]);
   const orderedTitleTabs: TitleTab[] = orderByIds(
     [
       ...deckProjectTabs.map((tab) =>
         toTitleTab(tab, sessions, dirtyFiles, unseenFinishedIds),
       ),
+      ...openShellPages.map((page): TitleTab => ({ id: shellPageTabId(page), page, project: "", title: SHELL_PAGE_LABELS[page], more: [], sessionCount: 0, harnesses: [], busyHarnesses: [], files: [] })),
       ...(insetLayout
         ? openAppViews
             .filter((view) => view !== "notes" || notesEnabled)
@@ -14884,9 +14982,9 @@ function Workspace({
     isBlankWorkspaceTab(deckProjectTabs[0], sessions)
       ? deckProjectTabs[0].id
       : undefined;
-  const nextTitleTabs = placeholderTab
+  const nextTitleTabs = (placeholderTab
     ? orderedTitleTabs.filter((tab) => tab.id !== placeholderTab)
-    : orderedTitleTabs;
+    : orderedTitleTabs);
   tabProjectsRef.current = new Map(
     nextTitleTabs.map((tab) => [tab.id, tab.project]),
   );
@@ -15074,16 +15172,11 @@ function Workspace({
     });
   }, [insetLayout, onToggleSessionSidebar]);
 
-  // The inset layout's sidebar already answers the primary toggle, so the
-  // session sidebar's shortcut takes the right panel instead.
+  // Retain the command ID so existing custom bindings reach the unified panel.
   const rightPanelToggleRef = useRef<(() => void) | null>(null);
   const onToggleSessionSidebarShortcut = useCallback(() => {
-    if (insetLayout) {
-      rightPanelToggleRef.current?.();
-      return;
-    }
-    onToggleSessionSidebar();
-  }, [insetLayout, onToggleSessionSidebar]);
+    rightPanelToggleRef.current?.();
+  }, []);
 
   const onToggleProjectRail = useCallback(() => {
     setProjectRailOpen((open) => {
@@ -15377,6 +15470,38 @@ function Workspace({
     teamMap.show(scope);
   }, [teamMap.show, workspaceNavigation.cancel]);
 
+  const readGoalNextAction = useCallback((goalId: string) => selectGoalNextAction({
+    goals: monoManagerGoals.goals(), roster: listMonos(), runs: orchestrator.snapshot(), sessions: sessionsRef.current,
+  }, goalId, listMonos().filter(mono => mono.role === "manager" && mono.archivedAt == null).flatMap(mono => monoManagerGoals.decisions(mono.id))), []);
+  const goalNextSteps = useStableValue(useMemo(() => monoManagerGoals.goals().flatMap(goal => {
+    const step = readGoalNextAction(goal.id); return step ? [step] : [];
+  }), [readGoalNextAction, sessions, orchestrationRuns, monosSnap, decisionRevision]));
+  const goalNextRows = useMemo(() => distinctGoalNextActions(goalNextSteps), [goalNextSteps]);
+  const onGoalNextAction = useCallback((event: Event, step: GoalNextStep) => runGoalNextAction(event, step, {
+    read: () => readGoalNextAction(step.goalId),
+    open: async id => { teamMap.close(); await onOpenApprovalSession(id); },
+    openDecision: () => onOpenTeamMap(DECISIONS_SCOPE),
+    continueManager: id => orchestrator.continueManager(id),
+    continueRequest: request => continueManagerRequest(request),
+    pending: decisionPending.current, accepted: decisionAccepted.current,
+  }), [readGoalNextAction, teamMap.close, onOpenApprovalSession, onOpenTeamMap]);
+  const renderGoalNextAction = useCallback((step: GoalNextStep) => <GoalNextAction key={step.revision} step={step} onAction={onGoalNextAction} />, [onGoalNextAction]);
+  const renderGoalAction = useCallback((goalId: string) => {
+    const step = goalNextSteps.find(step => step.goalId === goalId); return step ? renderGoalNextAction(step) : null;
+  }, [goalNextSteps, renderGoalNextAction]);
+  const renderManagerGoalAction = useCallback((monoId: string) => {
+    const manager = findMono(monoId);
+    if (manager?.role !== "manager") return null;
+    const step = goalNextRows.find(step => step.managerMonoId === monoId);
+    const events = orchestrationRuns.filter(run => run.ownerMonoId === monoId || run.leadId === manager.managerEngineId).flatMap(run => run.wakeState?.events.filter(event => event.acknowledgedAt == null) ?? []);
+    return step || events.length ? <>{step && renderGoalNextAction(step)}{!!events.length && <div className="px-2 pb-2 text-[11px] text-content/60"><ManagerUpdates monoId={monoId} events={events} /></div>}</> : null;
+  }, [goalNextRows, renderGoalNextAction, orchestrationRuns, monosSnap]);
+  const additionalGoalDecisionCount = useMemo(() => {
+    const known = new Set([...teamDecisions(listMonos(), sessions, orchestrationRuns).map(item => item.key),
+      ...selectDecisionView(monoManagerGoals, listMonos(), Date.now()).pending.map(item => `decision:${item.managerId}:${item.decision.id}`)]);
+    return goalNextRows.filter(step => !known.has(step.key)).length;
+  }, [goalNextRows, sessions, orchestrationRuns, monosSnap, decisionRevision]);
+
   const onOpenAutomationSession = useCallback(
     async (sessionId: string) => {
       const session = await ensureOpenSession(sessionId);
@@ -15659,6 +15784,11 @@ function Workspace({
 
   const onSelectTitleTab = useCallback(
     (id: string) => {
+      const page = shellPageForTab(id);
+      if (page) {
+        const scopes = { commandMap: undefined, decisions: DECISIONS_SCOPE, integrations: INTEGRATIONS_SCOPE, usage: USAGE_DASHBOARD_SCOPE };
+        onOpenTeamMap(scopes[page]); return;
+      }
       const monoId = monoForTab(id);
       if (monoId) {
         void onOpenMono(monoId);
@@ -15689,12 +15819,13 @@ function Workspace({
       onOpenInbox,
       onOpenNotes,
       onOpenAutomations,
+      onOpenTeamMap,
     ],
   );
 
   displayedTabNavigation.current = {
     tabs: insetLayout ? titleTabs : [],
-    activeId: settingsOpen
+    activeId: openPage ? shellPageTabId(openPage) : settingsOpen
       ? ""
       : monoCovers
         ? (monoViewTabId ?? "")
@@ -15748,12 +15879,24 @@ function Workspace({
   );
   const closeViewTab = useCallback(
     (id: string, selectNeighbor?: boolean) => {
+      const page = shellPageForTab(id);
+      if (page) {
+        setOpenShellPages(current => current.filter(entry => entry !== page));
+        setTitleTabOrder(current => current.filter(entry => entry !== id));
+        const navigation = displayedTabNavigation.current;
+        if (navigation.activeId === id) {
+          teamMap.close();
+          const next = selectNeighbor !== false ? nextDisplayedTabAfterClose(navigation.tabs, id, id) : undefined;
+          if (next) navigation.select?.(next);
+        }
+        return;
+      }
       const view = appViewForTab(id);
       if (view) onCloseAppView(view, selectNeighbor);
       const monoId = monoForTab(id);
       if (monoId) onCloseMonoTab(monoId, selectNeighbor);
     },
-    [onCloseAppView, onCloseMonoTab],
+    [onCloseAppView, onCloseMonoTab, teamMap.close],
   );
   const onCloseDisplayedTab = useCallback(
     (id: string) => {
@@ -15821,11 +15964,13 @@ function Workspace({
     [onReorderTabs],
   );
   const onCloseVisibleTab = useCallback(() => {
-    if (insetLayout && monoCovers && monoViewTabId) closeViewTab(monoViewTabId);
+    if (openPage) closeViewTab(shellPageTabId(openPage));
+    else if (insetLayout && monoCovers && monoViewTabId) closeViewTab(monoViewTabId);
     else if (insetLayout && activeAppView) onCloseAppView(activeAppView);
     else onCloseFocused();
   }, [
     insetLayout,
+    openPage,
     monoCovers,
     monoViewTabId,
     activeAppView,
@@ -16526,6 +16671,7 @@ function Workspace({
     onCwdChange,
     onBranchChange,
     onWorktreeChange: onComposerWorktreeChange,
+    onSubmitStart: onComposerSubmitStart,
     onRemoteSnapshot,
     onWorkspaceModeChange,
     onWorktreeBaseChange,
@@ -16597,6 +16743,7 @@ function Workspace({
   const monoDetailsPanel =
     monoViewMono && monoViewSession ? (
       <MonoDetails
+        embedded
         providerAccountId={monoViewSession.providerAccountId}
         sessionId={monoViewSession.id}
         sessions={sessions}
@@ -16612,7 +16759,7 @@ function Workspace({
           monoArtifact?.sessionId !== monoViewSession.id &&
           monoChanges?.sessionId !== monoViewSession.id
         }
-        tab={monoPanelTab}
+        tab="details"
         onTabChange={(tab) => {
           setMonoPanelTab(tab);
           if (tab === "activity") setMonoActivity(null);
@@ -16660,7 +16807,6 @@ function Workspace({
         onWindowsSandboxChange={windowsSandbox => onWindowsSandboxChange(monoViewSession.id, windowsSandbox)}
         onClose={() => { setMonoDetailsOpen(false); setMonoActivity(null); }}
         onReset={() => onResetMono(monoViewSession.id)}
-        windowControls={monoCovers && !IS_MAC ? <WindowControls /> : undefined}
       />
     ) : null;
   const monoActivityPanel =
@@ -16862,7 +17008,7 @@ function Workspace({
         onBackFromDocument={() => setMonoOverviewDocument(null)}
         onOpenFile={onOpenFile}
         onClose={() => setMonoOverviewOpen(false)}
-        windowControls={monoCovers && !IS_MAC ? <WindowControls /> : undefined}
+
       />
     ) : null;
   const monoSettingsDialog =
@@ -16896,11 +17042,11 @@ function Workspace({
     ) : null;
   const monoArtifactPanel = monoViewMono && monoArtifact && monoArtifact.sessionId === monoViewSession?.id ? (
     <ArtifactPanel key={monoArtifact.id} id={monoArtifact.id} color={monoViewMono.color} onClose={onCloseMonoArtifact} onOpenFile={onOpenFile}
-      windowControls={monoCovers && !IS_MAC ? <WindowControls /> : undefined} />
+      />
   ) : null;
   const monoChangesPanel = monoViewMono && monoChanges && monoChanges.sessionId === monoViewSession?.id ? (
     <MonoChangesPanel sessionId={monoChanges.sessionId} cwd={monoChanges.cwd} request={monoChanges.request} color={monoViewMono.color}
-      textHarness={monoViewSession?.harness} onClose={onCloseMonoChanges} windowControls={monoCovers && !IS_MAC ? <WindowControls /> : undefined} />
+      textHarness={monoViewSession?.harness} onClose={onCloseMonoChanges} />
   ) : null;
   const monoSessionsPanel =
     monoViewMono && selectedMonoSessions ? (
@@ -16952,7 +17098,7 @@ function Workspace({
         }}
         onOpenInWorkspace={onOpenMonoLaunchedSession}
         onClose={() => setMonoSessions(null)}
-        windowControls={monoCovers && !IS_MAC ? <WindowControls /> : undefined}
+
       />
     ) : null;
   const monoRailState = useMemo(() => {
@@ -16970,8 +17116,8 @@ function Workspace({
   }, [monosSnap, sessions, monoReplies.counts, orchestrationRuns]);
   const monoRail = useStableValue(monoRailState);
   const workspaceDecisionCounts = useMemo(() => {
-    return decisionCountsByProject(listMonos(), sessions, orchestrationRuns, selectDecisionView(monoManagerGoals, listMonos(), Date.now()));
-  }, [monosSnap, sessions, orchestrationRuns, decisionRevision]);
+    return decisionCountsByProject(listMonos(), sessions, orchestrationRuns, selectDecisionView(monoManagerGoals, listMonos(), Date.now()), goalNextSteps);
+  }, [monosSnap, sessions, orchestrationRuns, decisionRevision, goalNextSteps]);
   const workspaceRoster = workspaceTeam(listMonos(), sidebarCwd);
   const workspaceMonoIds = new Set([...(workspaceRoster.manager ? [workspaceRoster.manager.id] : []), ...workspaceRoster.members.map(mono => mono.id)]);
   const workspaceWorking = [...workspaceMonoIds].filter(id => monoRail.states.get(id)?.status === "working").length;
@@ -16989,7 +17135,14 @@ function Workspace({
     ),
   );
   const onOpenRailMono = useCallback(
-    (monoId: string) => void onOpenMono(monoId),
+    async (monoId: string) => {
+      const opening = onOpenMono(monoId);
+      const request = monoViewRequest.current;
+      await opening;
+      if (request !== monoViewRequest.current || monoViewIdRef.current !== findMono(monoId)?.sessionId) return;
+      setMonoPanelTab("details");
+      setMonoDetailsOpen(true); setWorkspaceContextTab("activity"); setRightPanelOpenState(true); setRightPanelClosing(false);
+    },
     [onOpenMono],
   );
   const onDeleteRailMono = useCallback(
@@ -17018,6 +17171,7 @@ function Workspace({
             onOpen: onOpenRailMono,
             onCreate: onCreateMono,
             onDelete: onDeleteRailMono,
+            nextAction: renderManagerGoalAction,
           }
         : undefined,
     [
@@ -17027,24 +17181,20 @@ function Workspace({
       onOpenRailMono,
       onCreateMono,
       onDeleteRailMono,
+      renderManagerGoalAction,
     ],
   );
   const compactRailActive = compactProjectRail && !projectRailOpen;
-  const compactTitleNavigation =
-    IS_MAC && compactRailActive && !chromeSurfaceOpen;
-  const compactTitleBar = compactTitleNavigation && !monoCovers;
-  const topTitleBar = compactTitleBar || (!IS_MAC && teamMap.open);
-  // The inset layout keeps its tabs across the top of the window at all
-  // times, with the rail and the card below them.
-  const titleBarSpansWindow = insetLayout || topTitleBar;
-  const titleBarInBody = !insetLayout && !topTitleBar;
+  const compactTitleNavigation = IS_MAC && compactRailActive && !chromeSurfaceOpen;
+
+
+
+  // One titlebar owns controls across every page and panel.
+  const titleBarSpansWindow = true;
+  const titleBarInBody = false;
   // Matches when the sidebar portals Explorer or Changes into the panel.
   const insetRightPanelShown =
-    insetLayout &&
-    (rightPanelOpen || rightPanelClosing) &&
-    !settingsOpen &&
-    !activeAppView &&
-    looksLikeProject(sidebarCwd);
+    rightPanelOpen || rightPanelClosing;
   // The right panel grows from the card's edge and pushes the workspace. Its
   // own contents keep their full width and ride its edge.
   // A reversal mid-slide starts from wherever the width currently is.
@@ -17113,20 +17263,15 @@ function Workspace({
   }, [rightPanelClosing, rightPanelOpen]);
   // The same shared stats the sidebar's Changes tab reads, so the toggle
   // that opens it can carry its dot.
-  const showRightPanelToggle =
-    insetLayout && !settingsOpen && looksLikeProject(sidebarCwd);
+  const showRightPanelToggle = true;
   rightPanelToggleRef.current =
-    showRightPanelToggle && !activeAppView
+    showRightPanelToggle
       ? onToggleRightPanel
       : null;
   const rightPanelChanges = useProjectDiffStats(
     gitCwd || sidebarCwd,
     showRightPanelToggle && isLocalProject(sidebarCwd),
   );
-  const onToggleMonoOverview = () => setMonoOverviewOpen(!monoOverviewOpen);
-  const onOpenMonoViewSettings = monoViewMono
-    ? () => setMonoSettingsFor(monoViewMono.id)
-    : undefined;
   // A new session takes over from a Mono in view.
   const onNewFromTitleBar = () => {
     if (monoViewIdRef.current) closeMonoView();
@@ -17136,7 +17281,7 @@ function Workspace({
     <TitleBar
       // A Mono in full view stands apart from the project's tabs, except
       // in the inset layout, where it is one of them.
-      tabs={monoCovers && !insetLayout ? NO_TITLE_TABS : titleTabs}
+      tabs={monoCovers && !insetLayout && !teamMap.open ? NO_TITLE_TABS : titleTabs}
       content={
         insetLayout && settingsOpen ? (
           <div
@@ -17147,7 +17292,7 @@ function Workspace({
         ) : undefined
       }
       mono={
-        monoCovers && monoViewMono && monoViewSession
+        !teamMap.open && monoCovers && monoViewMono && monoViewSession
           ? { look: monoLook(monoViewMono), state: monoRail.states.get(monoViewMono.id) ?? monoState(monoViewSession) }
           : undefined
       }
@@ -17157,29 +17302,15 @@ function Workspace({
               setMonoPanelTab("details");
               setMonoActivity(null);
               setMonoSessions(null);
-              setMonoDetailsOpen(true);
+              setMonoDetailsOpen(true); setWorkspaceContextTab("activity"); setRightPanelOpenState(true); setRightPanelClosing(false);
               setMonoArtifact(null);
               setMonoChanges(null);
             }
           : undefined
       }
-      onToggleMonoPanel={monoCovers && (!insetLayout || !!monoViewMono?.role) ? () => {
-        if (monoSidebarOpen) {
-          setMonoDetailsOpen(false); setMonoActivity(null); setMonoSessions(null); setMonoArtifact(null); setMonoChanges(null);
-        } else setMonoDetailsOpen(true);
-      } : undefined}
-      monoPanelOpen={monoSidebarOpen}
-      // The inset layout keeps these in the Mono's pane, under its tab.
-      onToggleMonoOverview={
-        monoCovers && insetLayout && !monoViewMono?.role ? onToggleMonoOverview : undefined
-      }
-      monoOverviewOpen={monoOverviewOpen}
-      onOpenMonoSettings={
-        monoCovers && insetLayout && !monoViewMono?.role ? onOpenMonoViewSettings : undefined
-      }
-      hideWindowControls={!teamMap.open && monoCovers && (insetLayout && !monoViewMono?.role ? monoOverviewOpen && !!monoOverviewPanel : monoSidebarOpen && !!monoDetailsPanel)}
+      hideWindowControls={false}
       activeId={
-        monoViewSession
+        openPage ? shellPageTabId(openPage) : monoViewSession && (!teamMap.open || insetLayout)
           ? insetLayout
             ? (monoViewTabId ?? "")
             : ""
@@ -17187,8 +17318,9 @@ function Workspace({
             ? appViewTabId(activeAppView)
             : activeTabId
       }
-      standaloneTitle={!monoCovers && managerActive ? "Manager" : undefined}
+      standaloneTitle={!teamMap.open && !monoCovers && managerActive ? "Manager" : undefined}
       cwd={sidebarCwd}
+      worktree={projectWorktree}
       projectRailOpen={projectRailOpen}
       sessionSidebarOpen={sessionSidebarOpen}
       compactRail={!insetLayout && compactTitleNavigation}
@@ -17198,7 +17330,7 @@ function Workspace({
         showRightPanelToggle ? onToggleRightPanel : undefined
       }
       rightPanelDot={(rightPanelChanges?.files ?? 0) > 0}
-      rightPanelUnavailable={!!activeAppView}
+      rightPanelUnavailable={false}
       canGoBack={teamMap.open || !!monoViewId || tabVisitNav.canBack}
       canGoForward={tabVisitNav.canForward}
       onGoBack={onRailBack}
@@ -17252,7 +17384,7 @@ function Workspace({
         insetLayout && !settingsOpen
           ? {
               host: rightPanelHost,
-              open: (rightPanelOpen || rightPanelClosing) && workspaceContextTab === "tools",
+              open: (rightPanelOpen || rightPanelClosing) && workspaceContextTab === "changes" && rightPanelTab !== "changes",
               tab: rightPanelTab,
               onTabChange: showRightPanel,
             }
@@ -17394,12 +17526,14 @@ function Workspace({
               )}
               onNewWorktree={setCreatingWorktreeProject}
       onOpenProject={pickProject}
+      onProjectSettings={onOpenProjectSettings}
       onRemoveProject={onRemoveProject}
       monos={sidebarMonos}
-      workspaceWorktrees={insetLayout ? <WorkspaceWorktrees project={sidebarCwd} sessions={sessions} selectedPath={contextWorktree && sameProjectPath(contextWorktree.project, sidebarCwd) ? contextWorktree.path : undefined} onNew={() => setCreatingWorktreeProject(sidebarCwd)} onSelect={tree => {
-        setContextWorktree({ project: sidebarCwd, path: tree.path });
-        showRightPanel(rightPanelTab);
-        setWorkspaceContextTab("worktree");
+      workspaceWorktrees={insetLayout && !isRemoteProjectPath(sidebarCwd) ? <WorktreeChats project={sidebarCwd} sessions={sessions} history={history} openSessions={sidebarOpenSessions}
+        activeId={activeSessionId} unseen={unseenFinishedIds} selectedPath={projectWorktree?.path ?? sidebarCwd}
+        onCreate={() => setCreatingWorktreeProject(sidebarCwd)} onChat={id => { void onSelectHistorySession(id); }}
+        onNew={tree => onNewWorktreeSession(sidebarCwd, tree)} onSelect={tree => {
+        onSelectProjectWorktree(sidebarCwd, tree);
       }} /> : undefined}
       decisionCounts={workspaceDecisionCounts}
       projectStatus={workspaceProjectStatus}
@@ -17432,7 +17566,7 @@ function Workspace({
       // switches projects.
       projectRailOpen={!insetLayout && projectRailOpen}
       compactProjectRail={!insetLayout && compactProjectRail}
-      titleBarAbove={insetLayout || compactTitleBar}
+      titleBarAbove
       inset={insetLayout}
       onToggleProjectRail={onToggleProjectRail}
       unseenFinishedIds={unseenFinishedIds}
@@ -17599,8 +17733,9 @@ function Workspace({
               {teamMap.open && teamMap.scope === DECISIONS_SCOPE && <>
                 <div className="flex gap-5 px-6 pt-4 text-xs text-content/65"><button type="button" onClick={teamMap.close}>Back to conversation</button><button type="button" onClick={() => onOpenTeamMap(ATTENTION_QUEUE_SCOPE)}>Approvals &amp; blockers</button><button type="button" onClick={() => onOpenTeamMap(INTEGRATIONS_SCOPE)}>Integrations</button></div>
                 <Decisions view={selectDecisionView(monoManagerGoals, listMonos(), Date.now())} roster={listMonos()} actions={decisionActions} error={decisionError}
+                  goalActions={goalNextRows.filter(step => !step.decisionId).map(renderGoalNextAction)} goalActionCount={additionalGoalDecisionCount}
                   attentionCount={teamDecisions(listMonos(), sessions, orchestrationRuns).length}
-                  attention={<AttentionQueue sessions={sessions} runs={orchestrationRuns} open presentation="panel"
+                  attention={<AttentionQueue sessions={sessions} runs={orchestrationRuns} coveredGoalSteps={goalNextRows} open presentation="panel"
                     readSessions={() => sessionsRef.current} readRuns={() => orchestrator.snapshot()}
                     selectedAccount={session => selectedProviderAccountId("codex", session.cwd)}
                     isLocalSession={session => !remoteProjectFor(session.cwd)} onClose={teamMap.close}
@@ -17626,7 +17761,6 @@ function Workspace({
                 <UsageDashboard snapshot={usage.snapshot} history={usage.history} onRefresh={usage.refresh} onOpenSettings={() => openSettings("providers", "provider-accounts")} />
               </div>}
               {teamMap.open && teamMap.scope === INTEGRATIONS_SCOPE && <div className="flex min-h-0 flex-1 flex-col">
-                <div className="flex gap-5 px-6 pt-4 text-xs text-content/65"><button type="button" onClick={teamMap.close}>Back to conversation</button><button type="button" onClick={() => onOpenTeamMap(DECISIONS_SCOPE)}>Decisions</button></div>
                 <ProjectIntegrations key={pathKey(sidebarCwd)} project={sidebarCwd} roster={listMonos()} sessions={sessions} runs={orchestrationRuns} goals={monoManagerGoals.goals()}
                   decisions={listMonos().filter(mono => mono.role === "manager" && mono.archivedAt == null).flatMap(manager => monoManagerGoals.decisions(manager.id).map(decision => ({ managerId: manager.id, decision })))}
                   refresh={integrationRefresh} onChanged={() => setIntegrationRefresh(value => value + 1)} onLog={line => integrationLog(sidebarCwd, line)}
@@ -17640,8 +17774,8 @@ function Workspace({
               {teamMap.open && teamMap.scope !== MISSION_CONTROL_SCOPE && teamMap.scope !== ATTENTION_QUEUE_SCOPE && teamMap.scope !== DECISIONS_SCOPE && teamMap.scope !== USAGE_DASHBOARD_SCOPE && teamMap.scope !== INTEGRATIONS_SCOPE && <div className="flex min-h-0 min-w-0 flex-1 flex-col">
                 {decisionError ? <p role="alert" className="px-6 py-3 text-sm">{decisionError} <button type="button" onClick={() => { setDecisionError(undefined); setDecisionRefresh(value => value + 1); }}>Try again</button></p>
                   : decisionLoaded !== decisionLoadKey && <p role="status" className="px-6 py-3 text-sm">Loading decisions…</p>}
-                <TeamMap key={teamMap.scope ?? "org"} sessions={sessions} runs={orchestrationRuns} statuses={managerPrStatuses} scope={teamMap.scope} onClose={teamMap.close} onOpenMono={id => void onOpenMono(id)}
-                  decisions={!decisionError && decisionLoaded === decisionLoadKey ? commandMapDecisions(monoManagerGoals, listMonos(), decisionActions, Date.now()) : undefined}
+                <TeamMap key={teamMap.scope ?? "org"} sessions={sessions} runs={orchestrationRuns} statuses={managerPrStatuses} scope={teamMap.scope} onClose={teamMap.close} onOpenMono={id => void onOpenRailMono(id)}
+                  decisions={!decisionError && decisionLoaded === decisionLoadKey ? commandMapDecisions(monoManagerGoals, listMonos(), decisionActions, Date.now(), { steps: goalNextSteps, render: renderGoalNextAction }) : undefined}
                   bossGoal={mapBossContext ? { context: mapBossContext, submit: submitBossGoal } : undefined} />
               </div>}
                   <div
@@ -17860,23 +17994,9 @@ function Workspace({
                                             : "hidden"
                                         }
                                       >
-                                        {insetLayout &&
-                                        visible &&
-                                        monoViewMono ? (
-                                          <MonoViewActions
-                                            name={monoLook(monoViewMono).name}
-                                            overviewOpen={monoOverviewOpen}
-                                            onToggleOverview={
-                                              onToggleMonoOverview
-                                            }
-                                            onOpenSettings={
-                                              onOpenMonoViewSettings
-                                            }
-                                            // The overview header's row, so both share a centre line.
-                                            className="absolute right-2.5 top-0 z-10 h-10"
-                                          />
-                                        ) : null}
+                                        <div className="flex shrink-0 flex-wrap items-center justify-end gap-1 px-2.5 py-2 empty:hidden">
                                         <TeamMapHeaderAction monoId={monoForSession(session.id)?.id} onOpen={onOpenTeamMap} />
+                                        </div>
                                          <SessionPane
                                           {...sessionPaneProps}
                                           session={session}
@@ -17955,7 +18075,6 @@ function Workspace({
                           ))}
                         </main>
                       </div>
-                      {monoCovers ? (insetLayout && !monoViewMono?.role ? monoOverviewPanel : <>{monoDetailsPanel}{monoActivityPanel}{monoSessionsPanel}{monoArtifactPanel}{monoChangesPanel}</>) : null}
                       {monoSettingsDialog}
                       {workspacePanelSide === "right" && !insetLayout ? <div ref={setWorkspacePanelHost} className="contents" /> : null}
                     </div>
@@ -18139,7 +18258,7 @@ function Workspace({
                   ) : null}
                   {insetLayout ? null : usageFooter}
                 </div>
-                {insetLayout ? (
+                {
                   // Part of the card: the project tools beside the
                   // workspace, behind a hairline.
                   <div
@@ -18147,17 +18266,35 @@ function Workspace({
                     inert={rightPanelClosing || undefined}
                     className={
                       insetRightPanelShown
-                        ? "relative flex h-full shrink-0 flex-col overflow-hidden border-l border-stroke max-[900px]:absolute max-[900px]:inset-y-0 max-[900px]:right-0 max-[900px]:z-20 max-[900px]:max-w-full max-[900px]:bg-background-base"
+                        ? "relative flex h-full shrink-0 flex-col overflow-hidden border-l border-stroke max-[1100px]:absolute max-[1100px]:inset-y-0 max-[1100px]:right-0 max-[1100px]:z-20 max-[1100px]:max-w-full max-[1100px]:bg-background-base"
                         : "hidden"
                     }
                   >
-                    <WorkspaceContextTabs tab={workspaceContextTab} onChange={setWorkspaceContextTab} onClose={onToggleRightPanel}>
-                      {workspaceContextTab === "goal" ? <WorkspaceGoals project={sidebarCwd} sessions={sessions} usage={usage.snapshot} onOpenMono={onOpenRailMono} decisionActions={decisionActions} /> : null}
-                      {workspaceContextTab === "worktree" ? <WorkspaceWorktree project={sidebarCwd} path={contextWorktree && sameProjectPath(contextWorktree.project, sidebarCwd) ? contextWorktree.path : undefined} sessions={sessions} onOpen={tree => onSelectProjectWorktree(sidebarCwd, tree)} onChanges={path => onOpenWorktreeChanges(sidebarCwd, path)} onRemove={onRemoveWorktree} /> : null}
+                    <WorkspaceContextTabs tab={workspaceContextTab} onChange={tab => { setWorkspaceContextTab(tab); if (tab === "changes") setRightPanelTabState("changes"); }} onClose={onToggleRightPanel}>
+                      {workspaceContextTab === "goal" ? <WorkspaceGoals project={sidebarCwd} sessions={sessions} usage={usage.snapshot} onOpenMono={onOpenRailMono} decisionActions={decisionActions} goalAction={renderGoalAction} /> : null}
+                      {workspaceContextTab === "worktree" && looksLikeProject(sidebarCwd) ? <WorkspaceWorktree project={sidebarCwd} path={projectWorktree?.path ?? sidebarCwd} sessions={sessions} onRunScript={onRunProjectScript} onOpen={tree => onSelectProjectWorktree(sidebarCwd, tree)} onChanges={path => onOpenWorktreeChanges(sidebarCwd, path)} onRemove={onRemoveWorktree} /> : null}
+                      {workspaceContextTab === "changes" && rightPanelTab === "changes" && looksLikeProject(sidebarCwd) ? <WorkspaceChanges key={projectWorktree?.path ?? sidebarCwd} path={projectWorktree?.path ?? sidebarCwd} onOpen={() => onOpenWorktreeChanges(sidebarCwd, projectWorktree?.path ?? sidebarCwd)} /> : null}
+                      {(workspaceContextTab === "worktree" || workspaceContextTab === "changes") && !looksLikeProject(sidebarCwd) ? <p className="px-4 py-3 text-xs text-content/50">Select a project to view this tab.</p> : null}
+                      {workspaceContextTab === "prs" ? <PullRequestsList compact sessions={sessions} runs={orchestrationRuns} scope={{ project: sidebarCwd }} onOpen={entry => {
+                        const tree = projectCheckoutList.data?.worktrees.find(tree => sameProjectPath(tree.path, entry.cwd));
+                        if (!tree || tree.missing || tree.prunable) { void message("This pull request's worktree is unavailable.", { title: "MonoCode", kind: "warning" }); return; }
+                        onSelectProjectWorktree(sidebarCwd, tree);
+                        setWorkspaceContextTab("worktree");
+                      }} /> : null}
+                      {workspaceContextTab === "activity" ? <div className="flex min-h-0 flex-1 flex-col overflow-y-auto [&_.mono-details-panel]:!w-full [&_.mono-details-panel]:!min-w-0 [&_.mono-details-panel]:!border-l-0">
+                        {monoViewMono && monoViewSession ? <>
+                          {monoViewMono.role ? <MonoTeamActivity monoId={monoViewMono.id} sessions={sessions} runs={orchestrationRuns} statuses={managerPrStatuses} onApproval={onApproval} onQuestion={onQuestionReply} onQuestionInteraction={onQuestionInteraction} /> : null}
+                          {monoActivity && monoActivityView ? <section aria-label="This agent's work" className="flex min-h-40 max-h-80 shrink-0 flex-col overflow-y-auto">{monoActivityView}</section> : null}
+                          {!monoViewMono.role ? <button type="button" className="border-y border-stroke px-4 py-2 text-left text-xs text-content/65 hover:bg-content/5" onClick={() => { setMonoDetailsOpen(open => !open); setMonoOverviewOpen(true); }}>{monoDetailsOpen ? "Show work" : "Details and settings"}</button> : null}
+                          {(monoViewMono.role || monoDetailsOpen) && !monoArtifactPanel && !monoChangesPanel && !monoSessionsPanel ? <><h2 className="border-y border-stroke px-4 py-2 text-xs font-medium">{monoLook(monoViewMono).name} · Details and settings</h2>{monoDetailsPanel}</> : null}
+                          {monoActivityPanel}{monoSessionsPanel}{monoArtifactPanel}{monoChangesPanel}
+                          {!monoViewMono.role && !monoSidebarOpen ? monoOverviewPanel : null}
+                        </> : <><h2 className="px-4 py-3 text-xs font-medium">Team activity</h2>{workspaceTeam(listMonos(), sidebarCwd).manager ? <MonoTeamActivity monoId={workspaceTeam(listMonos(), sidebarCwd).manager!.id} sessions={sessions} runs={orchestrationRuns} statuses={managerPrStatuses} onApproval={onApproval} onQuestion={onQuestionReply} onQuestionInteraction={onQuestionInteraction} /> : <p className="px-4 py-2 text-xs text-content/50">No team configured for this project.</p>}</>}
+                      </div> : null}
                     <div
                       ref={setRightPanelHost}
                       aria-label="Project tools"
-                      className={workspaceContextTab === "tools" ? "flex min-h-0 flex-1 flex-col" : "hidden"}
+                      className={workspaceContextTab === "changes" && rightPanelTab !== "changes" ? "flex min-h-0 flex-1 flex-col" : "hidden"}
                     />
                     </WorkspaceContextTabs>
                     <div
@@ -18176,7 +18313,7 @@ function Workspace({
                       onDoubleClick={rightPanelResize.onDoubleClick}
                     />
                   </div>
-                ) : null}
+                }
               </div>
               {insetLayout
                 ? (usageFooter ??

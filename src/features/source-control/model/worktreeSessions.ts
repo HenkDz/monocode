@@ -1,8 +1,9 @@
 import type { SessionSummary } from "../../sessions/data/sessionStore";
 import { compareSessionSummaries } from "../../sessions/data/sessionHistory";
 import { sameProjectPath } from "../../projects/model/recents";
-import { isEqualOrInside, pathKey } from "../../../shared/lib/paths";
+import { pathKey } from "../../../shared/lib/paths";
 import type { Worktree } from "./worktrees";
+import { chatWorktreePath } from "./chatWorktree";
 import { isProjectManager } from "../../orchestration/model/projectManager";
 import type { OrchestrationRun, OrchestrationTask } from "../../orchestration/model/orchestrationState";
 
@@ -77,19 +78,13 @@ export function worktreeSessionGroups(
       session.archived ||
       teamWorkers.has(session.id) ||
       isProjectManager(session.id) ||
-      (session.orchestrationLeadId && !isProjectManager(session.orchestrationLeadId)) ||
-      session.worktreeRemoved
+      (session.orchestrationLeadId && !isProjectManager(session.orchestrationLeadId))
     )
       continue;
     // A worktree deleted outside MonoCode leaves the session working in the
     // project checkout, so list it there rather than nowhere.
-    const tree =
-      ordered.find((tree) =>
-        isEqualOrInside(session.worktreeCwd || session.cwd, tree.path),
-      ) ??
-      (session.worktreeCwd
-        ? ordered.find((tree) => isEqualOrInside(session.cwd, tree.path))
-        : undefined);
+    const owner = chatWorktreePath(project, session.worktreeCwd || session.cwd, ordered, session.worktreeRemoved);
+    const tree = ordered.find(tree => pathKey(tree.path) === pathKey(owner));
     if (tree) groups.get(pathKey(tree.path))!.push(session);
   }
   for (const sessions of groups.values())

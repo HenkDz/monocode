@@ -113,6 +113,15 @@ it("shows honest unassigned project states without losing the pinned Boss", () =
   expect(host.querySelector('[data-workspace-mono="Atlas"]')).toBeNull();
 });
 
+it("renders the shared Manager next action outside its conversation button", () => {
+  const open = vi.fn(), action = vi.fn();
+  act(() => root.render(createElement(WorkspaceTeam, { roster, project: "C:/repo", states: new Map(), onOpen: open, onCreate: vi.fn(), onDelete: vi.fn(),
+    nextAction: id => id === "Manager" ? createElement("button", { onClick: () => action(id) }, "Manager paused — Continue") : null })));
+  const next = [...host.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Manager paused — Continue")!;
+  expect(next.closest('[data-workspace-mono]')).toBeNull();
+  act(() => next.click()); expect(action).toHaveBeenCalledExactlyOnceWith("Manager"); expect(open).not.toHaveBeenCalled();
+});
+
 it("carries the owning run's pause reason through the canonical state into its member row", () => {
   const run = {
     version: 2, leadId: "manager-run", ownerMonoId: "Manager", cwd: "C:/repo",

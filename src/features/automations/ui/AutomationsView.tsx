@@ -42,7 +42,6 @@ import { SearchableProjectPicker } from "../../projects/ui/SearchableProjectPick
 import { SearchableSelect } from "../../../shared/ui/SearchableSelect";
 import { SkillPromptField } from "../../skills/ui/SkillPromptField";
 import { OverlayNav } from "../../../app/shell/TitleBar";
-import { WindowControls } from "../../../app/shell/WindowControls";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
 import { useTabGroupLogos } from "../../projects/hooks/useTabGroupLogos";
 import {
@@ -172,7 +171,6 @@ export function AutomationsView({
             />
             <span className="min-w-0 truncate text-content">Automations</span>
           </div>
-          {IS_MAC ? null : <WindowControls />}
         </div>
       ) : null}
       <AutomationsContent

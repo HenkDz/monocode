@@ -36,7 +36,7 @@ export function ccfb2ShellExpressions() {
     ts.forEachChild(node, visit);
   };
   visit(ast);
-  if (placements.length !== 2 || !hideControls || !workspaceClass || !workspaceInert || !chromeOpen || !footerOpen || !declarations.has("compactTitleBar")) throw Error("CC-FB2 App chrome seams missing");
+  if (placements.length !== 2 || !hideControls || !workspaceClass || !workspaceInert || !chromeOpen || !footerOpen || !declarations.has("titleBarSpansWindow")) throw Error("CC-FB2 App chrome seams missing");
   return {
     declarations: [...declarations].map(([name, expression]) => `const ${name} = ${expression};`).join("\n"),
     top: placements[0], inner: placements[1], hideControls, workspaceClass, workspaceInert, chromeOpen, footerOpen,

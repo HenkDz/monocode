@@ -1,16 +1,19 @@
 import {
   CheckCircle,
+  CircleAlert,
+  CircleDashed,
   ChevronLeft,
   ChevronRight,
   Code,
   DashboardSquare,
+  FileScript,
   Inbox,
   PanelLeft,
   PanelRightToggle,
-  GitBranch,
   Plus,
   Search,
   Settings,
+  Share,
   StickyNote,
   Terminal,
   X,
@@ -77,9 +80,19 @@ const APP_VIEW_ICONS = {
   automations: Zap,
 };
 
+const PAGE_LABELS = {
+  commandMap: "Command map",
+  decisions: "Decisions",
+  integrations: "Integrations",
+  usage: "Usage",
+};
+const PAGE_ICONS = { commandMap: Share, decisions: CircleAlert, integrations: FileScript, usage: CircleDashed };
+
 export type Tab = {
   id: string;
   appView?: AppView;
+  /** Presentation of the open page; the underlying workspace identity is retained. */
+  page?: keyof typeof PAGE_LABELS;
   /** A Mono open as a tab; its name is the title. */
   mono?: { mascot: string; color: string; status: MonoState["status"] };
   /** Project folder name, e.g. `agent-terminal`. */
@@ -118,6 +131,7 @@ type Props = {
   standaloneTitle?: string;
   activeId: string;
   cwd: string;
+  worktree?: { path: string; branch: string | null };
   /**
    * The Mono filling the main area. It takes the tabs' place in classic mode.
    */
@@ -191,8 +205,8 @@ export function tabCopy(tab: Tab): {
   meta: string;
   tooltip: string;
 } {
-  if (tab.appView) {
-    const headline = APP_VIEW_LABELS[tab.appView];
+  if (tab.page || tab.appView) {
+    const headline = tab.page ? PAGE_LABELS[tab.page] : APP_VIEW_LABELS[tab.appView!];
     return { headline, meta: "", tooltip: headline };
   }
   if (tab.mono) return { headline: tab.title, meta: "", tooltip: tab.title };
@@ -363,7 +377,7 @@ function TitleTabItem({
 }) {
   const { headline, meta, tooltip } = tabCopy(tab);
   const fileIcon = tab.files[0];
-  const AppViewIcon = tab.appView ? APP_VIEW_ICONS[tab.appView] : null;
+  const AppViewIcon = tab.page ? PAGE_ICONS[tab.page] : tab.appView ? APP_VIEW_ICONS[tab.appView] : null;
   const accessibleTooltip =
     (tab.doneHarnesses?.length ?? 0) > 0
       ? `${tooltip} · Response complete`
@@ -737,7 +751,7 @@ export function OverlayNav({
       ) : null}
       {onToggleSidebar ? (
         <IconButton
-          label={`Toggle Sidebar (${MOD}B)`}
+          label={`Toggle Sidebar (${MOD}${SHIFT}B)`}
           onClick={onToggleSidebar}
         >
           <PanelLeft className="size-3.5" strokeWidth={1.75} />
@@ -752,6 +766,7 @@ function TitleBarComponent({
   standaloneTitle,
   activeId,
   cwd,
+  worktree,
   mono,
   onShowMonoDetails,
   onToggleMonoPanel,
@@ -800,7 +815,7 @@ function TitleBarComponent({
   const paneDropArmed = useRef(false);
   const appTabIds = useRef(new Set<string>());
   appTabIds.current = new Set(
-    tabs.filter((tab) => tab.appView || tab.mono).map((tab) => tab.id),
+    tabs.filter((tab) => tab.page || tab.appView || tab.mono).map((tab) => tab.id),
   );
   const externalTabDrop = useMemo<
     ReorderExternalDrop<string> | undefined
@@ -911,8 +926,8 @@ function TitleBarComponent({
   );
   const systemTitle = useMemo(() => {
     const activeName = activeTab
-      ? activeTab.appView
-        ? APP_VIEW_LABELS[activeTab.appView]
+      ? activeTab.page || activeTab.appView
+        ? tabCopy(activeTab).headline
         : activeTab.mono
           ? activeTab.title
           : activeTab.files[0]
@@ -1060,7 +1075,7 @@ function TitleBarComponent({
     projectless &&
     railClosed &&
     Boolean(onOpenInbox || onOpenNotes || onOpenSettings);
-  const showRightPanelToggle = inset && Boolean(onToggleRightPanel);
+  const showRightPanelToggle = Boolean(onToggleRightPanel);
   // Inset project context also belongs beside Mono chats; app views have none.
   const rightPanelOff = rightPanelUnavailable;
   const changesDot = rightPanelDot && !rightPanelOff;
@@ -1070,8 +1085,8 @@ function TitleBarComponent({
     showRightPanelToggle ||
     (mono && (onToggleMonoOverview || onOpenMonoSettings)) ||
     (!IS_MAC && !hideWindowControls) ? (
-      <div className="flex h-full shrink-0 items-stretch">
-        {mono && onToggleMonoPanel ? (
+      <div className="ml-auto flex h-full shrink-0 items-stretch">
+        {mono && onToggleMonoPanel && !showRightPanelToggle ? (
           <div className="flex items-center px-3">
             <IconButton
               label={monoPanelOpen ? "Hide Mono panel" : "Show Mono panel"}
@@ -1098,18 +1113,18 @@ function TitleBarComponent({
           // Clear of the window's right edge, like the traffic lights' inset
           // on the left.
           <div className="flex items-center pl-1.5 pr-3">
-            <IconButton
-              label={
-                changesDot
-                  ? `Toggle right sidebar (${MOD}${SHIFT}B, uncommitted changes)`
-                  : `Toggle right sidebar (${MOD}${SHIFT}B)`
-              }
-              active={rightPanelOpen && !rightPanelOff}
+            <button
+              type="button"
+              aria-label="Panel"
+              title="Toggle panel (Ctrl+B)"
+              aria-pressed={rightPanelOpen && !rightPanelOff}
+              data-tauri-drag-region="false"
+              className="flex items-center gap-1.5 rounded-md border border-stroke px-2 py-1 text-[11px] text-content/65 hover:bg-content/5 aria-pressed:bg-selection aria-pressed:text-content"
               disabled={rightPanelOff}
               onClick={onToggleRightPanel}
             >
               <span className="relative grid">
-                <GitBranch
+                <PanelRightToggle
                   className={`size-3.5 ${changesDot ? "overview-tab-icon-with-dot" : ""}`}
                   strokeWidth={1.75}
                 />
@@ -1120,10 +1135,11 @@ function TitleBarComponent({
                   />
                 ) : null}
               </span>
-            </IconButton>
+              <span>Panel</span>
+            </button>
           </div>
         ) : null}
-        {mono && (onToggleMonoOverview || onOpenMonoSettings) ? (
+        {mono && !showRightPanelToggle && (onToggleMonoOverview || onOpenMonoSettings) ? (
           <MonoViewActions
             name={mono.look.name}
             overviewOpen={monoOverviewOpen}
@@ -1182,7 +1198,7 @@ function TitleBarComponent({
             // Hovering the toggle peeks a collapsed sidebar out.
             <span data-sidebar-peek-trigger className="flex">
               <IconButton
-                label={`Toggle Sidebar (${MOD}B)`}
+                label={`Toggle Sidebar (${MOD}${SHIFT}B)`}
                 onClick={onToggleSessionSidebar}
               >
                 <PanelLeft className="size-3.5" strokeWidth={1.75} />
@@ -1223,13 +1239,21 @@ function TitleBarComponent({
           {trafficLightsVisible ? <div className="w-[78px] shrink-0" /> : null}
           <div className="flex shrink-0 items-center px-1.5">
             <IconButton
-              label={`Toggle Sidebar (${MOD}B)`}
+              label={`Toggle Sidebar (${MOD}${SHIFT}B)`}
               onClick={onToggleSidebar}
             >
               <PanelLeft className="size-3.5" strokeWidth={1.75} />
             </IconButton>
           </div>
         </>
+      ) : null}
+
+      {looksLikeProject(cwd) && !mono && !content && !standaloneTitle ? (
+        <div aria-label="Project and worktree" title={worktree?.path ?? cwd}
+          className="flex min-w-0 max-w-56 shrink items-center gap-2 border-r border-stroke px-3 text-[11px] text-content/50">
+          <span className="truncate font-medium text-content/80">{basename(cwd)}</span>
+          <span>/</span><span className="truncate">{worktree ? basename(worktree.path) : basename(cwd)}</span>
+        </div>
       ) : null}
       {!inset &&
       !sessionSidebarOpen &&
@@ -1240,7 +1264,7 @@ function TitleBarComponent({
             <div className="w-[70px] shrink-0" />
           ) : null}
           <IconButton
-            label={`Toggle Session Sidebar (${MOD}${SHIFT}B)`}
+            label="Toggle Session Sidebar"
             onClick={onToggleSessionSidebar}
           >
             <DashboardSquare className="size-3.5" strokeWidth={1.75} />
@@ -1407,8 +1431,8 @@ function TitleBarComponent({
             </span>
           </div>
         ) : null}
-        {trailingControls}
       </div>
+      {trailingControls}
       {!standaloneTitle && tabMenu && contextTab ? (
         <ExplorerMenu
           x={tabMenu.x}

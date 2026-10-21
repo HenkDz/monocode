@@ -37,11 +37,13 @@ it("uses the current layout when creating a Mono after a layout change", async (
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const declaration = find(node => ts.isVariableDeclaration(node) && node.name.getText(app) === "onCreateMono") as ts.VariableDeclaration;
   const onOpenMono = vi.fn(), setMonoSettingsFor = vi.fn(), setMonoPanelTab = vi.fn(), setMonoDetailsOpen = vi.fn();
+  const setWorkspaceContextTab = vi.fn(), setRightPanelOpenState = vi.fn(), setRightPanelClosing = vi.fn();
   const host = document.createElement("div"), root = createRoot(host);
   let create!: () => void;
   function StateHost({ insetLayout }: { insetLayout: boolean }) {
     create = execute(`${declaration.getText(app)}; return onCreateMono;`.replace(/^onCreateMono/, "const onCreateMono"), {
       useCallback, insetLayout, onOpenMono, setMonoSettingsFor, setMonoPanelTab, setMonoDetailsOpen,
+      setWorkspaceContextTab, setRightPanelOpenState, setRightPanelClosing,
       createMono: () => ({ id: "new-mono" }),
     });
     return null;
@@ -51,9 +53,17 @@ it("uses the current layout when creating a Mono after a layout change", async (
     create();
     expect(setMonoPanelTab).toHaveBeenCalledExactlyOnceWith("details");
     expect(setMonoDetailsOpen).toHaveBeenCalledExactlyOnceWith(true);
+    expect(setWorkspaceContextTab).toHaveBeenCalledExactlyOnceWith("activity");
+    expect(setRightPanelOpenState).toHaveBeenCalledExactlyOnceWith(true);
+    expect(setRightPanelClosing).toHaveBeenCalledExactlyOnceWith(false);
     await act(async () => root.render(createElement(StateHost, { insetLayout: true })));
     create();
     expect(setMonoSettingsFor).toHaveBeenCalledExactlyOnceWith("new-mono");
     expect(setMonoPanelTab).toHaveBeenCalledTimes(1);
+    expect(setMonoDetailsOpen).toHaveBeenCalledTimes(1);
+    expect(setWorkspaceContextTab).toHaveBeenCalledTimes(1);
+    expect(setRightPanelOpenState).toHaveBeenCalledTimes(1);
+    expect(setRightPanelClosing).toHaveBeenCalledTimes(1);
+    expect(onOpenMono).toHaveBeenCalledTimes(2);
   } finally { await act(async () => root.unmount()); vi.unstubAllGlobals(); }
 });

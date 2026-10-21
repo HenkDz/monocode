@@ -58,6 +58,7 @@ vi.mock("@xterm/xterm", () => ({
   },
 }));
 import { TerminalView } from "./TerminalView";
+import { prepareTerminalCommand } from "../model/terminalCommand";
 
 afterEach(() => {
   xterm.options.length = 0;
@@ -78,6 +79,22 @@ function setup() {
   document.body.appendChild(host);
   return { host, root: createRoot(host) };
 }
+
+it("writes a clicked script only after the fresh terminal spawns and consumes it across remount", async () => {
+  const { host, root } = setup();
+  let release!: () => void;
+  pty.spawnPty.mockImplementationOnce(() => new Promise<void>(resolve => { release = resolve; }));
+  prepareTerminalCommand("script-click", "/selected", "npm run test", () => true);
+  try {
+    await act(async () => root.render(createElement(TerminalView, { id: "script-click", cwd: "/selected", active: true })));
+    expect(pty.writePty).not.toHaveBeenCalled();
+    await act(async () => { release(); });
+    expect(pty.writePty).toHaveBeenCalledExactlyOnceWith("script-click", "npm run test\r");
+    await act(async () => root.render(null));
+    await act(async () => root.render(createElement(TerminalView, { id: "script-click", cwd: "/selected", active: true })));
+    expect(pty.writePty).toHaveBeenCalledTimes(1);
+  } finally { await act(async () => root.unmount()); host.remove(); }
+});
 
 it("detects plain HTTP(S) URLs and opens them through the addon callback", async () => {
   const { host, root } = setup();

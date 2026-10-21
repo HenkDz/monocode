@@ -12,6 +12,7 @@ import { attentionHistory, executeAttentionAction, selectAttention, type Attenti
 import "./attentionQueue.css";
 import { AttentionDetails } from "./AttentionDetails";
 import { CircleAlert } from "../../../shared/ui/icons";
+import type { GoalNextStep } from "../model/goalNextAction";
 
 // CC7D shell hook: reuse Team map's full-view lifecycle and request routing.
 export const ATTENTION_QUEUE_SCOPE = "command-center:attention";
@@ -31,12 +32,17 @@ export type AttentionQueueViewProps = {
   onOpenMissionControl?: () => void;
   sourceError?: string;
   presentation?: "page" | "panel";
+  coveredGoalSteps?: readonly GoalNextStep[];
 };
 
-export function AttentionQueueView({ input, callbacks, readInput, open, onClose, onOpenMissionControl, sourceError, presentation = "page" }: AttentionQueueViewProps) {
+export function AttentionQueueView({ input, callbacks, readInput, open, onClose, onOpenMissionControl, sourceError, presentation = "page", coveredGoalSteps }: AttentionQueueViewProps) {
   const titleId = useId();
   const Heading = presentation === "panel" ? "h2" : "h1";
-  const current = useMemo(() => selectAttention(input), [input]);
+  const current = useMemo(() => selectAttention(input).filter(item => !coveredGoalSteps?.some(step => item.status === "open" && (
+    step.action === "continue" && item.source === "continue" && item.leadId === step.managerId ||
+    step.action === "start" && item.source === "manager-request" && item.sessionId === step.sessionId && item.messageId === `manager-request-${step.request?.userMessageId}` ||
+    step.action === "open" && ["approval", "question"].includes(item.source) && step.key === `${item.sessionId}:${item.source}:${item.requestId}`
+  ))), [input, coveredGoalSteps]);
   const [filter, setFilter] = useState<"open" | "history" | AttentionCategory>("open");
   const [receipts, setReceipts] = useState<Record<string, AttentionReceipt>>({});
   const [history, setHistory] = useState<AttentionItem[]>([]);

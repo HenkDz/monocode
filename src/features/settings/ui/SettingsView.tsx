@@ -48,7 +48,6 @@ import { McpSettings } from "./McpSettings";
 import { InboxProviderMark } from "../../inbox/ui/InboxProviderMark";
 import { GithubBudgetUsage } from "../../inbox/ui/GithubBudgetNotice";
 import { RemoveProjectDialog } from "../../projects/ui/RemoveProjectDialog";
-import { WindowControls } from "../../../app/shell/WindowControls";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
 import { useColorScheme } from "../../../shared/hooks/useColorScheme";
 import {
@@ -629,7 +628,6 @@ export function SettingsView({
         >
           {IS_MAC && !besideRail ? <div className="w-[78px] shrink-0" /> : null}
           {settingsHeader}
-          {IS_MAC ? null : <WindowControls />}
         </div>
       )}
 

@@ -31,6 +31,7 @@ type Options = {
     tab: WorkspaceTab,
     sessions: readonly Session[],
   ) => string | null;
+  canReuseSession?: (id: string) => boolean;
   moveSession: (
     id: string,
     tree: Worktree,
@@ -149,6 +150,8 @@ export function useWorkspaceNavigation(options: Options) {
             session &&
             !isManagerTab(tab) &&
             isBlankSession(session) &&
+            view.canReuseSession?.(session.id) !== false &&
+            !session.providerSessionId && !session.queuedMessages?.length && !session.worktreePreparing &&
             sameProjectPath(session.cwd, next.project)
           ) {
             moving.current.add(session.id);

@@ -4,6 +4,7 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type ReactNode,
 } from "react";
 import { ImagePlus, MoreHorizontal, Plus, Trash2 } from "../../shared/ui/icons";
 import { Popover, type PopoverAnchor } from "../../shared/ui/Popover";
@@ -56,6 +57,7 @@ export type MonoRailProps = {
   onDelete: (monoId: string) => void;
   introAvailable?: boolean;
   introCard?: boolean;
+  nextAction?: (monoId: string) => ReactNode;
 };
 
 const IDLE: MonoState = { status: "idle" };

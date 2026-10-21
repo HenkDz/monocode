@@ -43,8 +43,8 @@
 .decision-log-item strong { font-weight: 500; }
 .decision-log-item time { font-size: 10px; }
 .decision-autonomy { font: 11px/1.6 var(--font-sans); }
-.decision-autonomy > div { display: flex; flex-wrap: wrap; gap: 3px; margin: 8px 0; padding: 3px; border: 1px solid var(--color-stroke); border-radius: 7px; }
-.decision-autonomy button { flex: 1; border-radius: 4px; padding: 6px 8px; white-space: nowrap; }
+.decision-autonomy > div { display: grid; grid-template-columns: minmax(0, 1fr); gap: 3px; margin: 8px 0; padding: 3px; border: 1px solid var(--color-stroke); border-radius: 7px; }
+.decision-autonomy button { min-width: 0; border-radius: 4px; padding: 7px 8px; white-space: nowrap; text-align: left; }
 .decision-autonomy button[aria-pressed=true] { background: var(--color-selection-subtle); }
 .decision-autonomy p { color: color-mix(in srgb, var(--color-content) 68%, transparent); }
 .decisions[data-presentation=rail] .decisions-heading { padding: 18px 16px 12px; }

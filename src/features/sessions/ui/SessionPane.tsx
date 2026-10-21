@@ -111,7 +111,7 @@ import { cardSession, openCardSession, subscribeCardSessions } from "../../monos
 import { selectTaskMetrics } from "../../agents/model/agentMetrics";
 import { TaskMetricsLine } from "../../agents/ui/TaskMetricsLine";
 import { presentationText } from "../model/transcriptPresentation";
-import { listDir, revealPath } from "../../../platform/tauri/fs";
+import { basename, listDir, revealPath } from "../../../platform/tauri/fs";
 import { WorkbenchDrawer } from "../../monos/ui/WorkbenchDrawer";
 import { ManagerWorkbenchNote } from "../../monos/ui/ManagerWorkbenchNote";
 import { WorkbenchSessionDetails } from "../../monos/ui/WorkbenchSessionDetails";
@@ -255,6 +255,7 @@ export type SessionPaneProps = {
     attachments: Attachment[],
     options?: ComposerTurnOptions,
   ) => boolean | void;
+  onSubmitStart?: (sessionId: string) => (() => void);
   onSubmitGoal?: (
     sessionId: string,
     text: string,
@@ -427,6 +428,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
   onSaveDraft,
   onRemoveDraft,
   onSubmit,
+  onSubmitStart,
   onSubmitGoal,
   monoGoalRouting,
   onStop,
@@ -1101,7 +1103,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
           !managed &&
           (remote
             ? !remoteSessionStarted
-            : (isEmpty || !!session.workspaceMode) && !session.worktreeCwd)
+            : isEmpty && !session.busy && !session.worktreePreparing && !session.providerSessionId && !(session.queuedMessages?.length))
         }
         workspaceMode={session.workspaceMode}
         worktreeBase={session.worktreeBase}
@@ -1141,6 +1143,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
         onSaveDraft={(text, attachments) =>
           onSaveDraft(session.id, text, attachments)
         }
+        onSubmitStart={onSubmitStart ? () => onSubmitStart(session.id) : undefined}
         onSubmit={(text, attachments, options) => {
           if (!dockComposer) composerDockMotion.captureLaunch();
           return onSubmit(
@@ -1346,6 +1349,15 @@ const LocalSessionPane = memo(function LocalSessionPane({
         ) : (
           <OpusWelcome key={modelWelcome.run} onDone={dismissModelWelcome} />
         )
+      ) : null}
+      {!inSplit && !agent && !workbench && looksLikeProject(session.cwd) ? (
+        <div data-chat-worktree-header className="flex min-w-0 shrink-0 items-center gap-3 border-b border-stroke px-5 py-3 text-[12px]">
+          <span className="min-w-0 flex-1 truncate font-medium text-content/85">{title}</span>
+          <span title={sessionWorkCwd(session)} className="flex min-w-0 max-w-[65%] items-center gap-1.5 rounded-lg border border-stroke bg-content/3 px-2 py-1 text-[11px] text-content/55">
+            <span>in</span><span className="truncate font-medium text-content/80">{basename(sessionWorkCwd(session))}</span>
+            <span className="truncate font-mono text-accent">{session.branch}</span>
+          </span>
+        </div>
       ) : null}
       {inSplit ? (
         <div

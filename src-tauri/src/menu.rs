@@ -391,7 +391,7 @@ fn build(
         app,
         "toggle_sidebar",
         "Toggle Sidebar",
-        "CmdOrCtrl+B",
+        "CmdOrCtrl+Shift+B",
         "App: Toggle Sidebar",
         overrides,
     )?;
@@ -399,7 +399,7 @@ fn build(
         app,
         "toggle_session_sidebar",
         "Toggle Session Sidebar",
-        "CmdOrCtrl+Shift+B",
+        "CmdOrCtrl+B",
         "App: Toggle Session Sidebar",
         overrides,
     )?;

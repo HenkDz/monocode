@@ -208,6 +208,19 @@ it("never uses a Manager as a project's fallback workspace tab", async () => {
   expect(pins.has("tab-project-manager-root")).toBe(false);
 });
 
+it.each([
+  { providerSessionId: "bound-thread" },
+  { queuedMessages: [{ id: "pending", text: "queued", attachments: [] }] },
+  { worktreePreparing: true },
+])("never reuses an empty-looking bound or pending shell when selecting another checkout: %j", async binding => {
+  const source = { ...chat("protected"), ...binding } as Session;
+  await mount([source]);
+  await select(treeA);
+  expect(move).not.toHaveBeenCalled();
+  expect(view.sessions.find(session => session.id === source.id)).toEqual(source);
+  expect(screen().activeTab).toBe("tab-created");
+});
+
 it("serializes A then B and never publishes A after B was requested", async () => {
   const first = deferred(),
     second = deferred();

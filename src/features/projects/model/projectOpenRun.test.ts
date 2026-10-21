@@ -47,6 +47,14 @@ function creates(steps: ProjectOpenStep[]) {
 }
 
 describe("planning a run of folders", () => {
+  it("opens another chat instead of reusing a draft whose Send has begun", () => {
+    const source = blank("sending", "/alpha");
+    const state = workspace([source]);
+    const steps = planProjectOpenRun({ ...state, paths: ["/beta"], canReuseSession: id => id !== source.id });
+    expect(steps[0].action).toBe("create");
+    expect(source.cwd).toBe("/alpha");
+    expect(planProjectOpenRun({ ...state, paths: ["/beta"], canReuseSession: () => true })[0].action).toBe("reuse-blank");
+  });
   it("gives every folder its own session and tab, in selection order", () => {
     const state = workspace();
     const steps = planProjectOpenRun({

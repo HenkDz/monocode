@@ -42,10 +42,12 @@ import {
 } from "../../features/providers/model/rateLimits";
 import { GitBranch, Plus, X } from "../../shared/ui/icons";
 import { workspaceTeam } from "./WorkspaceTeam";
-import { pathKey } from "../../shared/lib/paths";
+import { displayPath, isEqualOrInside, pathKey } from "../../shared/lib/paths";
 import { worktreeTaskSessions } from "../../features/source-control/model/worktreeSessions";
 import { workbenchSessionTask } from "../../features/monos/model/monoNavigation";
 import { ProjectAutonomyControl, type DecisionUiActions } from "../../features/commandCenter/ui/Decisions";
+import { GoalTaskSummary } from "../../features/commandCenter/ui/GoalTaskSummary";
+import { WorktreeQuickActions } from "../../features/source-control/ui/WorktreeQuickActions";
 
 const button =
   "rounded-lg border border-stroke px-2.5 py-1.5 text-[11px] text-content/75 hover:bg-content/5 disabled:opacity-40";
@@ -53,7 +55,35 @@ const heading =
   "px-4 pb-1 pt-5 text-[10px] font-medium uppercase tracking-wider text-content/45";
 const empty = "px-4 py-2 text-[12px] text-content/50";
 
-export type WorkspaceContextTab = "goal" | "worktree" | "tools";
+export type WorkspaceContextTab = "goal" | "worktree" | "changes" | "prs" | "activity";
+export function WorkspaceChanges({ path, onOpen }: { path: string; onOpen: () => void }) {
+  const [result, setResult] = useState<{ path: string; index?: GitDiffIndex; error?: string }>();
+  useEffect(() => {
+    let disposed = false;
+    let generation = 0;
+    const refresh = () => {
+      const request = ++generation;
+      void gitDiffIndex(path).then(index => {
+        if (!disposed && request === generation) setResult({ path, index });
+      }, error => {
+        if (!disposed && request === generation) setResult({ path, error: String(error) });
+      });
+    };
+    refresh();
+    const stop = subscribeGitChanged(refresh);
+    return () => { disposed = true; stop(); };
+  }, [path]);
+  const current = result?.path === path ? result : undefined;
+  return <section role="tabpanel" aria-label="Changed files" className="min-h-0 flex-1 overflow-y-auto p-4">
+    <h2 className="mb-3 text-xs font-medium">Changed files</h2>
+    {current?.error ? <p role="alert" className="text-xs text-danger">Could not refresh changes. {current.error}</p> : !current?.index ? <p role="status" className="text-xs text-content/50">Loading changes…</p> : current.index.files.length ? current.index.files.map(file => <button type="button" key={file.path} title={file.path} onClick={onOpen} className="flex w-full items-center gap-2 border-b border-stroke py-2 text-left text-xs hover:bg-content/5">
+      <span className="shrink-0 font-mono text-content/50">{file.status === "added" || file.status === "untracked" ? "A" : file.status === "deleted" ? "D" : "M"}</span>
+      <span className="min-w-0 flex-1 truncate">{displayPath(file.path, path)}</span>
+      <span className="shrink-0 text-[10px]"><span className="text-green-700 dark:text-green-400">+{file.additions}</span> <span className="text-red-600 dark:text-red-400">−{file.deletions}</span></span>
+    </button>) : <p className="text-xs text-content/50">No changes yet.</p>}
+    <button type="button" className={`${button} mt-4`} onClick={onOpen}>Open diff</button>
+  </section>;
+}
 export function WorkspaceContextTabs({
   tab,
   onChange,
@@ -73,16 +103,16 @@ export function WorkspaceContextTabs({
           aria-label="Project context"
           className="flex min-w-0 flex-1 gap-1 px-2 py-2"
           onKeyDown={(event) => {
-            const tabs: WorkspaceContextTab[] = ["goal", "worktree", "tools"];
+            const tabs: WorkspaceContextTab[] = ["goal", "worktree", "changes", "prs", "activity"];
             const next =
               event.key === "Home"
                 ? 0
                 : event.key === "End"
-                  ? 2
+                  ? tabs.length - 1
                   : event.key === "ArrowRight"
-                    ? (tabs.indexOf(tab) + 1) % 3
+                    ? (tabs.indexOf(tab) + 1) % tabs.length
                     : event.key === "ArrowLeft"
-                      ? (tabs.indexOf(tab) + 2) % 3
+                      ? (tabs.indexOf(tab) + tabs.length - 1) % tabs.length
                       : undefined;
             if (next == null) return;
             event.preventDefault();
@@ -94,9 +124,11 @@ export function WorkspaceContextTabs({
         >
           {(
             [
-              ["goal", "Goal & tasks"],
+              ["goal", "Goal"],
               ["worktree", "Worktree"],
-              ["tools", "Files & changes"],
+              ["changes", "Changes"],
+              ["prs", "PRs"],
+              ["activity", "Activity"],
             ] as const
           ).map(([id, label]) => (
             <button
@@ -115,8 +147,8 @@ export function WorkspaceContextTabs({
         {onClose && (
           <button
             type="button"
-            aria-label="Close project context"
-            title="Close project context"
+            aria-label="Hide panel"
+            title="Hide panel (Ctrl+B)"
             onClick={onClose}
             className="grid size-6 shrink-0 place-items-center rounded-md text-content/50 hover:bg-content/10"
           >
@@ -234,12 +266,14 @@ export function WorkspaceGoals({
   usage,
   onOpenMono,
   decisionActions,
+  goalAction,
 }: {
   project: string;
   sessions: readonly Session[];
   usage?: UsageDashboardSnapshot;
   onOpenMono: (id: string) => void;
   decisionActions?: DecisionUiActions;
+  goalAction?: (goalId: string) => ReactNode;
 }) {
   useSyncExternalStore(subscribeMonos, monosSnapshot);
   useSyncExternalStore(monoManagerGoals.subscribe, monoManagerGoals.snapshot);
@@ -301,6 +335,7 @@ export function WorkspaceGoals({
                   </p>
                 </>
               )}
+              {goalAction?.(goal.id)}
             </div>
           );
         })
@@ -320,7 +355,7 @@ export function WorkspaceGoals({
               key={task.id}
               className="border-b border-stroke px-4 py-2.5 text-[12px]"
             >
-              <p className="break-words">{task.title}</p>
+              <GoalTaskSummary task={task} goalTitle={goals.find(goal => goal.id === task.monoGoalId)?.title} />
               <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] text-content/55">
                 {owner ? (
                   <button
@@ -344,10 +379,10 @@ export function WorkspaceGoals({
       )}
       <h2 className={heading}>This project decides</h2>
       <dl className="space-y-2 px-4 py-2 text-[11px] text-content/60">
-        <div className="flex justify-between gap-3">
+        {!(manager && decisionActions) && <div className="flex justify-between gap-3">
           <dt>Ask me for</dt>
           <dd>Not configured</dd>
-        </div>
+        </div>}
         <div className="flex justify-between gap-3">
           <dt>Decided by team today</dt>
           <dd>Not recorded</dd>
@@ -496,6 +531,11 @@ function WorkspaceWorktreeRow({
       <span className="min-w-0 flex-1 truncate text-left font-mono">
         {tree.branch ?? `Detached ${tree.head.slice(0, 7)}`}
       </span>
+      {!isEqualOrInside(tree.path, project) && (
+        <span title={tree.path} className="shrink-0 text-[9px] text-content/45">
+          outside project
+        </span>
+      )}
       {pr && (
         <span className="max-w-[45%] truncate rounded bg-content/5 px-1.5 py-0.5 text-[9px]">
           #{pr.number} · {label}
@@ -512,9 +552,11 @@ export function WorkspaceWorktree({
   onOpen,
   onChanges,
   onRemove,
+  onRunScript,
 }: {
   project: string;
   path?: string;
+  onRunScript?: (project: string, path: string, name: string) => Promise<void>;
   sessions: readonly Session[];
   onOpen: (tree: Worktree) => void;
   onChanges: (path: string) => void;
@@ -536,7 +578,7 @@ export function WorkspaceWorktree({
     <section
       role="tabpanel"
       aria-label="Worktree"
-      className="min-h-0 flex-1 overflow-y-auto p-4"
+      className="min-h-0 min-w-0 flex-1 overflow-y-auto p-4"
     >
       {tree ? (
         <WorktreeDetails
@@ -544,6 +586,7 @@ export function WorkspaceWorktree({
           project={project}
           tree={tree}
           sessions={sessions}
+          onRunScript={onRunScript}
           onOpen={() => onOpen(tree)}
           onChanges={() => onChanges(tree.path)}
           onRemove={onRemove}
@@ -566,9 +609,11 @@ function WorktreeDetails({
   onChanges,
   onRemove,
   onDeleted,
+  onRunScript,
 }: {
   project: string;
   tree: Worktree;
+  onRunScript?: (project: string, path: string, name: string) => Promise<void>;
   sessions: readonly Session[];
   onOpen: () => void;
   onChanges: () => void;
@@ -628,10 +673,20 @@ function WorktreeDetails({
   const unavailable = tree.missing || tree.prunable;
   return (
     <>
+      {onRunScript ? <WorktreeQuickActions project={project} path={tree.path} unavailable={unavailable} onRun={onRunScript} /> : null}
       <h2 className="flex items-center gap-2 text-[13px] font-medium">
         <GitBranch className="size-4 shrink-0" />
         <span className="break-all">{tree.branch ?? "Detached HEAD"}</span>
       </h2>
+      {!isEqualOrInside(tree.path, project) && (
+        <p
+          title={tree.path}
+          className="mt-1 break-all text-[11px] text-content/55"
+        >
+          Lives in {tree.path}
+          {tree.isMain ? " (the repo's main checkout)" : ""}
+        </p>
+      )}
       <dl className="my-4 space-y-2 text-[11px] text-content/60">
         <div className="flex justify-between gap-3">
           <dt>Owner</dt>
@@ -659,9 +714,19 @@ function WorktreeDetails({
         <div className="flex justify-between gap-3">
           <dt>Local changes</dt>
           <dd>
-            {index
-              ? `${index.files.length} files · +${index.additions} / −${index.deletions}`
-              : "Unavailable"}
+            {index ? (
+              <>
+                {index.files.length} files ·{" "}
+                <span className="text-green-700 dark:text-green-400">
+                  +{index.additions}
+                </span>{" "}
+                <span className="text-red-600 dark:text-red-400">
+                  −{index.deletions}
+                </span>
+              </>
+            ) : (
+              "Unavailable"
+            )}
           </dd>
         </div>
       </dl>
@@ -703,33 +768,76 @@ function WorktreeDetails({
           </p>
         </div>
       ) : (
-        <p className="my-3 text-[12px] text-content/50">
-          No pull request is currently known for this worktree.
-        </p>
+        <div className="my-3 rounded-xl border border-stroke bg-content/3 p-3 text-[12px]">
+          <h3 className="font-medium">No pull request yet</h3>
+          <p className="mb-3 mt-1 text-[11px] text-content/55">
+            Create one when this branch is ready for review.
+          </p>
+          <button
+            type="button"
+            className="rounded-lg bg-content px-3 py-1.5 text-[11px] font-medium text-background-base hover:opacity-85 disabled:opacity-40"
+            disabled={unavailable || !tree.branch}
+            onClick={() => setCreating(true)}
+          >
+            Create PR
+          </button>
+        </div>
       )}
       {index && index.files.length > 0 && (
         <div className="mt-4">
           <h3 className="mb-2 text-[10px] uppercase tracking-wide text-content/45">
             Changed files · local checkout
           </h3>
-          {index.files.map((file) => (
-            <button
-              type="button"
-              key={file.path}
-              title={file.path}
-              onClick={onChanges}
-              className="flex w-full justify-between gap-2 py-1 text-left font-mono text-[10px] text-content/60"
-            >
-              <span className="truncate">{file.path}</span>
-              <span className="shrink-0">
-                +{file.additions} / −{file.deletions}
-              </span>
-            </button>
-          ))}
+          {index.files.map((file) => {
+            const relative = displayPath(file.path, tree.path);
+            const split = relative.lastIndexOf("/");
+            const added =
+              file.status === "added" || file.status === "untracked";
+            return (
+              <button
+                type="button"
+                key={file.path}
+                title={file.path}
+                onClick={onChanges}
+                className="flex w-full min-w-0 items-center gap-2 rounded-md py-1.5 text-left text-[11px] hover:bg-content/5"
+              >
+                <span
+                  data-file-status={file.status}
+                  title={file.status}
+                  aria-label={file.status}
+                  className={`w-3 shrink-0 text-center font-mono text-[9px] ${added ? "text-green-700 dark:text-green-400" : file.status === "deleted" ? "text-red-600 dark:text-red-400" : "text-amber-700 dark:text-amber-400"}`}
+                >
+                  {added ? "A" : file.status === "deleted" ? "D" : "M"}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-medium text-content/85">
+                    {relative.slice(split + 1)}
+                  </span>
+                  {split >= 0 && (
+                    <span className="block truncate text-[10px] text-content/40">
+                      {relative.slice(0, split)}
+                    </span>
+                  )}
+                </span>
+                <span className="shrink-0 font-mono text-[10px]">
+                  <span className="text-green-700 dark:text-green-400">
+                    +{file.additions}
+                  </span>{" "}
+                  <span className="text-red-600 dark:text-red-400">
+                    −{file.deletions}
+                  </span>
+                </span>
+              </button>
+            );
+          })}
         </div>
       )}
-      <div className="mt-4 flex flex-wrap gap-2">
-        <button
+      <div
+        role="group"
+        aria-label="Worktree actions"
+        className="mt-4 flex flex-wrap gap-2 border-t border-stroke pt-3"
+      >
+        {!onRunScript && <><button
           type="button"
           className={button}
           disabled={unavailable}
@@ -748,7 +856,7 @@ function WorktreeDetails({
           }}
         >
           Open folder
-        </button>
+        </button></>}
         <button
           type="button"
           className={button}
@@ -757,16 +865,6 @@ function WorktreeDetails({
         >
           Changes
         </button>
-        {!pr && (
-          <button
-            type="button"
-            className={button}
-            disabled={unavailable || !tree.branch}
-            onClick={() => setCreating(true)}
-          >
-            Create PR
-          </button>
-        )}
         <button
           type="button"
           className={button}

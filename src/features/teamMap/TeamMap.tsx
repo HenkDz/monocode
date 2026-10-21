@@ -26,6 +26,7 @@ import type { OrchestrationRun } from "../orchestration/model/orchestrationState
 import type { GitPr } from "../../platform/tauri/fs";
 import { projectName } from "../../shared/lib/paths";
 import { Minus, Plus, X } from "../../shared/ui/icons";
+import { SearchableSelect } from "../../shared/ui/SearchableSelect";
 import {
   buildTeamMap,
   teamMapEvents,
@@ -261,6 +262,7 @@ export function TreeMap({
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (event.target instanceof Element && event.target.closest('[role="dialog"]')) return;
       event.preventDefault();
       event.stopPropagation();
       if (onDismissSelection?.()) return;
@@ -339,9 +341,9 @@ export function TreeMap({
         </div>
         <div className="team-map-filters">
           {orderedPods.length > 1 && <div className="tree-project-order">
-            <label>Order <select aria-label="Project to reorder" value={orderTarget} onChange={event => setOrderingProject(event.target.value)}>
-              {orderedPods.map(pod => <option key={pod.id} value={pod.id}>{projectName(nodeById.get(pod.id)?.project ?? "") || monoLook(nodeById.get(pod.id)!.mono).name}</option>)}
-            </select></label>
+            <SearchableSelect label="Project to reorder" value={orderTarget} onChange={setOrderingProject}
+              variant="transparent" searchable={false}
+              options={orderedPods.map(pod => ({ value: pod.id, label: projectName(nodeById.get(pod.id)?.project ?? "") || monoLook(nodeById.get(pod.id)!.mono).name }))} />
             <button type="button" aria-label="Move project left" disabled={orderIndex <= 0} onClick={() => moveProject(orderTarget, -1)}>←</button>
             <button type="button" aria-label="Move project right" disabled={orderIndex < 0 || orderIndex === orderedPods.length - 1} onClick={() => moveProject(orderTarget, 1)}>→</button>
           </div>}

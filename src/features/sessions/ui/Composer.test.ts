@@ -1451,7 +1451,7 @@ describe("Composer question focus", () => {
     expect(textarea.value).toBe("");
   });
 
-  it("locks a started session to its worktree while keeping its branch editable", async () => {
+  it("locks a started session to its worktree and branch", async () => {
     await act(async () =>
       root.render(
         createElement(Composer, {
@@ -1473,15 +1473,16 @@ describe("Composer question focus", () => {
     );
 
     const workspace = container.querySelector(
-      '[aria-label="Workspace Worktree"]',
+      '[aria-label^="Working in mc-greeting"]',
     );
-    expect(workspace?.tagName).toBe("DIV");
+    expect(workspace?.tagName).toBe("BUTTON");
+    expect((workspace as HTMLButtonElement).disabled).toBe(true);
     expect(
       container.querySelector('[aria-label="Choose working copy"]'),
     ).toBeNull();
     expect(
       container.querySelector('[aria-label="Branch mc/greeting"]'),
-    ).not.toBeNull();
+    ).toBeNull();
   });
 
   it("toggles a draft between the current checkout and a new worktree", async () => {
@@ -1514,16 +1515,16 @@ describe("Composer question focus", () => {
     );
     const textarea = container.querySelector("textarea")!;
     const workspace = container.querySelector<HTMLButtonElement>(
-      '[aria-label="Workspace Current checkout"]',
+      '[aria-label="Starts in repo main"]',
     )!;
     expect(
       container.querySelector('[aria-label="Branch main"]'),
-    ).not.toBeNull();
+    ).toBeNull();
     await act(async () => workspace.click());
-    expect(document.body.textContent).toContain("Existing worktree…");
+    expect(document.body.textContent).toContain("New worktree from main");
     expect(
       container.querySelector('[aria-label="Branch main"]'),
-    ).not.toBeNull();
+    ).toBeNull();
     await act(async () => workspace.click());
 
     await act(async () =>

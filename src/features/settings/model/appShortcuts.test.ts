@@ -48,7 +48,7 @@ describe("resolveAppShortcut", () => {
       "App: Settings",
     );
     expect(
-      resolveAppShortcut(key({ key: "b", metaKey: true, shiftKey: true })),
+      resolveAppShortcut(key({ key: "b", metaKey: true })),
     ).toBe("App: Toggle Session Sidebar");
   });
 

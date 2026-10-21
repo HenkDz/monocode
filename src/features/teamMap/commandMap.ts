@@ -19,6 +19,7 @@ export type CommandMapDecisions = {
     incomplete: boolean;
     autonomy: ReactNode;
     cards: ReactNode;
+    goalAction?(goalId: string): ReactNode;
   };
 };
 

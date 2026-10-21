@@ -13,6 +13,8 @@ import {
   WorkspaceUsage,
   WorkspaceWorktree,
   WorkspaceWorktrees,
+  WorkspaceChanges,
+  type WorkspaceContextTab,
 } from "./WorkspaceContext";
 
 const mocks = vi.hoisted(() => ({
@@ -60,6 +62,7 @@ vi.mock("../../features/monos/model/monoManagerGoals", () => ({
     subscribe: () => () => {},
     snapshot: () => 0,
     goals: () => mocks.goals,
+    autonomy: () => "medium-and-up",
   },
 }));
 vi.mock("../../features/monos/model/mono", async (importOriginal) => ({
@@ -111,6 +114,23 @@ afterEach(() => {
   host.remove();
   vi.unstubAllGlobals();
 });
+
+it("keeps Changes tied to the selected checkout, ignores stale reads, and opens its diff", async () => {
+  let finishOld!: (value: unknown) => void;
+  mocks.index.mockImplementationOnce(() => new Promise(resolve => { finishOld = resolve; }));
+  const open = vi.fn();
+  await act(async () => root.render(createElement(WorkspaceChanges, { path: "C:/repo/old", onOpen: open })));
+  mocks.index.mockResolvedValueOnce({ files: [{ path: "C:/repo/current/current.ts", status: "added", additions: 17, deletions: 0 }] });
+  await act(async () => root.render(createElement(WorkspaceChanges, { path: "C:/repo/current", onOpen: open })));
+  expect(host.textContent).toContain("current.ts");
+  await act(async () => finishOld({ files: [{ path: "C:/repo/old/foreign.ts", status: "modified", additions: 1, deletions: 1 }] }));
+  expect(host.textContent).not.toContain("foreign.ts");
+  act(() => Array.from(host.querySelectorAll("button")).find(button => button.textContent === "Open diff")!.click());
+  expect(open).toHaveBeenCalledOnce();
+  mocks.index.mockRejectedValueOnce(Error("Checkout unavailable"));
+  await act(async () => root.render(createElement(WorkspaceChanges, { path: "C:/repo/missing", onOpen: open })));
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain("Checkout unavailable");
+});
 const click = (text: string) =>
   act(() =>
     [...host.querySelectorAll("button")]
@@ -132,6 +152,25 @@ const renderTree = async (path = "C:/repo/feature", remove = vi.fn()) => {
   );
   return remove;
 };
+
+it("shows the real project autonomy without a contradictory Not configured placeholder", async () => {
+  mocks.roster = [{ id: "manager", role: "manager", projects: ["C:/repo"], mascot: "cat", color: "blue" } as Mono];
+  const actions = { autonomy: vi.fn(), outcome: vi.fn(), allow: vi.fn(), deny: vi.fn(), resolve: vi.fn(), activate: vi.fn() };
+  await act(async () => root.render(createElement(WorkspaceGoals, { project: "C:/repo", sessions: [], onOpenMono: vi.fn(), decisionActions: actions as never })));
+  expect(host.querySelector('[aria-label="Project decision autonomy"]')).not.toBeNull();
+  expect(host.querySelector('button[aria-pressed="true"]')?.textContent).toBe("Medium & up");
+  expect(host.textContent).not.toContain("Not configured");
+});
+
+it("puts quick actions first and removes legacy Open workspace and duplicate folder controls", async () => {
+  await act(async () => root.render(createElement(WorkspaceWorktree, {
+    project: "C:/repo", path: "C:/repo/feature", sessions: [], onOpen: vi.fn(), onChanges: vi.fn(), onRemove: vi.fn(), onRunScript: vi.fn(),
+  })));
+  expect(host.querySelector('[aria-label="Worktree quick actions"]')).not.toBeNull();
+  expect(host.textContent).toContain("Open in File Explorer");
+  expect(host.textContent).not.toContain("Open workspace"); expect(host.textContent).not.toContain("Open folder");
+  expect(host.querySelector('section')?.firstElementChild?.getAttribute('aria-label')).toBe("Worktree quick actions");
+});
 
 it("opens the existing create/delete review UIs without performing any mutation, and labels unsupported updates", async () => {
   const remove = await renderTree();
@@ -227,6 +266,26 @@ it("keeps goals and tasks scoped to their project and does not invent autonomy o
   expect(host.textContent).toContain("Usage unavailable");
 });
 
+it("uses a one-line task summary and keeps the original prompt, IDs and copy behind Show work", async () => {
+  const prompt = "RAW TASK PROMPT\nFull scope and constraints";
+  mocks.goals = [{ id: "goal", title: "Ship routing", projectId: "C:/repo", state: "running" }] as MonoManagerGoal[];
+  mocks.runs = [{ version: 2, leadId: "engine", cwd: "C:/repo", status: "active", allowedHarnesses: ["claude"], maxWorkers: 1, cli: "mono", continuations: 0, requests: {},
+    tasks: [{ id: "raw-task-id", monoGoalId: "goal", sessionId: "worker-chat", harness: "claude", model: "claude-sonnet", title: prompt, prompt, status: "queued", dependsOn: [], files: [], scopes: [], accepted: false, delivered: false, result: "RAW REPORT" }] }];
+  const copy = vi.fn(async () => {}), next = vi.fn();
+  vi.stubGlobal("navigator", { clipboard: { writeText: copy } });
+  await act(async () => root.render(createElement(WorkspaceGoals, { project: "C:/repo", sessions: [], onOpenMono: vi.fn(),
+    goalAction: id => createElement("button", { onClick: () => next(id) }, "Manager paused — Continue") })));
+  expect(host.querySelector('[data-task-summary]')?.textContent).toBe("Ship routing");
+  expect(host.textContent).not.toContain("RAW TASK PROMPT"); expect(host.textContent).not.toContain("raw-task-id");
+  await act(async () => [...host.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent?.includes("Show work"))!.click());
+  expect(host.querySelector("pre")?.textContent).toContain(prompt); expect(host.textContent).toContain("raw-task-id");
+  await act(async () => [...host.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Copy work")!.click());
+  expect(copy).toHaveBeenCalledWith(expect.stringContaining(prompt));
+  await act(async () => [...host.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Manager paused — Continue")!.click());
+  expect(next).toHaveBeenCalledExactlyOnceWith("goal");
+  expect(host.querySelector("details")).toBeNull();
+});
+
 it("uses only a fresh single associated account for the mini meter, never an aggregate or stale quota", async () => {
   const snapshot: UsageDashboardSnapshot = {
     now: 1,
@@ -271,6 +330,8 @@ it("uses only a fresh single associated account for the mini meter, never an agg
   expect(
     host.querySelector('[role="meter"]')?.getAttribute("aria-valuenow"),
   ).toBe("62");
+  expect(host.querySelector('[role="meter"]')?.getAttribute("title")).toBe("Codex · Studio: 62% left");
+  expect(host.querySelector('[role="meter"]')?.getAttribute("aria-label")).toBe("Codex Studio remaining");
   snapshot.groups[0].accounts[0].freshness = "stale";
   await act(async () =>
     root.render(
@@ -287,7 +348,7 @@ it("uses only a fresh single associated account for the mini meter, never an agg
 it("moves context tabs by keyboard with focus and a separate close control", () => {
   const close = vi.fn();
   function Probe() {
-    const [tab, setTab] = useState<"goal" | "worktree" | "tools">("goal");
+    const [tab, setTab] = useState<WorkspaceContextTab>("goal");
     return createElement(WorkspaceContextTabs, {
       tab,
       onChange: setTab,
@@ -304,9 +365,14 @@ it("moves context tabs by keyboard with focus and a separate close control", () 
   );
   expect(document.activeElement?.textContent).toBe("Worktree");
   expect(document.activeElement?.getAttribute("aria-selected")).toBe("true");
+  expect(host.querySelectorAll('[role="tab"]')).toHaveLength(5);
+  act(() => list.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true })));
+  expect(document.activeElement?.textContent).toBe("Activity");
+  act(() => list.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
+  expect(document.activeElement?.textContent).toBe("Goal");
   act(() =>
     host
-      .querySelector<HTMLButtonElement>('[aria-label="Close project context"]')!
+      .querySelector<HTMLButtonElement>('[aria-label="Hide panel"]')!
       .click(),
   );
   expect(close).toHaveBeenCalledOnce();

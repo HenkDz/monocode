@@ -198,18 +198,18 @@ it.each([true, false])(
   },
 );
 
-it.each(["Boss", "Manager", "Member"])("keeps project context actionable beside %s and disabled on app views", (name) => {
+it.each(["Boss", "Manager", "Member"])("keeps Panel actionable beside %s and respects an explicit unavailable flag", (name) => {
   const onToggleRightPanel = vi.fn();
   const props = { inset: true, mono: { look: { name, mascot: "cat", color: "#6ba", projects: [] }, state: { status: "idle" as const, activity: "Idle" } }, onToggleRightPanel };
   render([], props);
-  const toggle = () => container.querySelector<HTMLButtonElement>('[aria-label^="Toggle right sidebar"]')!;
-  expect(toggle().getAttribute("aria-disabled")).toBe("false");
+  const toggle = () => container.querySelector<HTMLButtonElement>('[aria-label="Panel"]')!;
+  expect(toggle().disabled).toBe(false);
   act(() => toggle().click());
   expect(onToggleRightPanel).toHaveBeenCalledOnce();
   render([], { ...props, rightPanelOpen: true });
   expect(toggle().getAttribute("aria-pressed")).toBe("true");
   render([], { ...props, rightPanelUnavailable: true });
-  expect(toggle().getAttribute("aria-disabled")).toBe("true");
+  expect(toggle().disabled).toBe(true);
   act(() => toggle().click());
   expect(onToggleRightPanel).toHaveBeenCalledOnce();
 });

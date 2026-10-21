@@ -102,6 +102,7 @@ import { ContextMeter } from "./ContextMeter";
 import { AttachmentChip } from "./AttachmentChip";
 import { BranchPicker } from "../../source-control/ui/BranchPicker";
 import { WorktreePicker } from "../../source-control/ui/WorktreePicker";
+import { ChatWorktreePicker } from "../../source-control/ui/ChatWorktreePicker";
 import {
   isWorkspaceModeShortcut,
   WorkspaceIdentity,
@@ -280,6 +281,7 @@ type Props = {
     attachments: Attachment[],
     options?: ComposerTurnOptions,
   ) => boolean | void;
+  onSubmitStart?: () => (() => void);
   /** `draft` opens the side question with the text unsent, for a typed `/btw `. */
   onBtwCommand?: (
     text: string,
@@ -409,6 +411,7 @@ export function Composer({
   onQuestionReply,
   onQuestionInteraction,
   onSubmit,
+  onSubmitStart,
   canSaveDraft = false,
   onSaveDraft,
   onStop,
@@ -447,6 +450,8 @@ export function Composer({
   /** Pasted and dropped files still reading when Send is pressed. */
   const pasteFlightRef = useRef<Promise<void> | null>(null);
   const submitLockRef = useRef(false);
+  const submitReleaseRef = useRef<(() => void) | undefined>(undefined);
+  const [submitting, setSubmitting] = useState(false);
   const positionedInitialDraft = useRef(false);
   const slashRef = useRef<SlashToken | null>(null);
   const mentionRef = useRef<MentionToken | null>(null);
@@ -816,6 +821,7 @@ export function Composer({
       queueMicrotask(() => {
         if (attachmentLifecycleRef.current !== lifecycle) return;
         pasteGenerationRef.current += 1;
+        submitReleaseRef.current?.();
         for (const file of attachmentsRef.current) {
           if (!borrowedAttachmentIdsRef.current.delete(file.id)) {
             revokeAttachment(file);
@@ -951,6 +957,7 @@ export function Composer({
     }
     draftResetTokenRef.current = draftResetToken;
     pasteGenerationRef.current += 1;
+    submitReleaseRef.current?.();
     draftRevisionRef.current += 1;
     if (ref.current) {
       ref.current.value = "";
@@ -1304,9 +1311,17 @@ export function Composer({
   const submit = (value: string) => {
     if (disabled || worktreeRemoved || submitLockRef.current) return;
     submitLockRef.current = true;
-    void completeSubmit(value).finally(() => {
+    setSubmitting(true);
+    const release = onSubmitStart?.();
+    const finish = () => {
+      if (submitReleaseRef.current !== finish) return;
+      submitReleaseRef.current = undefined;
       submitLockRef.current = false;
-    });
+      setSubmitting(false);
+      release?.();
+    };
+    submitReleaseRef.current = finish;
+    void completeSubmit(value).finally(finish);
   };
   const completeSubmit = async (submittedValue: string) => {
     let pending = pasteFlightRef.current;
@@ -1642,6 +1657,7 @@ export function Composer({
       !onWorkspaceModeChange ||
       !enabled ||
       busy ||
+      submitLockRef.current ||
       isImeComposition(e.nativeEvent) ||
       !isWorkspaceModeShortcut(e)
     ) {
@@ -1772,13 +1788,20 @@ export function Composer({
           cwd={cwd}
           recents={recents}
           projectLogoPath={projectLogoPath}
-          enabled={enabled}
-          onCwdChange={onCwdChange}
+          enabled={enabled && !submitting}
+          onCwdChange={path => { if (!submitLockRef.current) onCwdChange(path); }}
           onNewTerminal={worktreeRemoved ? undefined : onNewTerminal}
           onClose={() => ref.current?.focus()}
         />
       ) : null}
-      {hideBranchPicker ? null : draftWorkspace &&
+      {hideBranchPicker ? null : !remote && onWorktreeChange && !worktreeRemoved ? (
+        <ChatWorktreePicker project={cwd} path={executionCwd} branch={branch}
+          draft={!!draftWorkspace} enabled={enabled && !busy && !submitting}
+          pendingBase={workspaceMode === "worktree" ? resolvedWorktreeBase : undefined}
+          onSelect={async tree => { if (!submitLockRef.current) await onWorktreeChange(tree); }}
+          onCreate={onWorkspaceModeChange ? base => { if (!submitLockRef.current) onWorkspaceModeChange("worktree", base); } : undefined}
+          onClose={() => ref.current?.focus()} />
+      ) : draftWorkspace &&
         onWorkspaceModeChange &&
         onWorktreeBaseChange ? (
         <>
@@ -1786,10 +1809,10 @@ export function Composer({
             cwd={executionCwd}
             mode={workspaceMode ?? "current"}
             base={resolvedWorktreeBase}
-            enabled={enabled && !busy}
-            onModeChange={onWorkspaceModeChange}
-            onBaseChange={onWorktreeBaseChange}
-            onSelectWorktree={onWorktreeChange}
+            enabled={enabled && !busy && !submitting}
+            onModeChange={(mode, base) => { if (!submitLockRef.current) onWorkspaceModeChange(mode, base); }}
+            onBaseChange={base => { if (!submitLockRef.current) onWorktreeBaseChange(base); }}
+            onSelectWorktree={onWorktreeChange ? async tree => { if (!submitLockRef.current) await onWorktreeChange(tree); } : undefined}
             onOpenSettings={onManageWorktrees}
             onClose={() => ref.current?.focus()}
           />

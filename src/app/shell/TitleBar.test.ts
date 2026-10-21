@@ -41,6 +41,15 @@ it("renders a standalone Manager header without worktree tabs or tab actions", (
 });
 
 describe("tabCopy", () => {
+  it.each([
+    ["commandMap", "Command map"], ["decisions", "Decisions"],
+    ["integrations", "Integrations"], ["usage", "Usage"],
+  ] as const)("names the %s page without changing its workspace tab identity", (page, label) => {
+    const item = tab({ page, appView: "notes" });
+    expect(tabCopy(item)).toEqual({ headline: label, meta: "", tooltip: label });
+    expect(item.id).toBe("t1");
+  });
+
   it.each(["inbox", "search", "notes", "automations"] as const)(
     "uses a standalone label for the %s app tab",
     (appView) => {

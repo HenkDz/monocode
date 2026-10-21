@@ -25,7 +25,7 @@ const decisions: NonNullable<TeamMapProps["decisions"]> = { needYou: 1, handledT
   project: () => ({ pending: 1, teamPending: 0, incomplete: false, autonomy: <p>Ask me for</p>, cards: <p>Project decisions</p>, goalAction: () => <button>Guarded goal action</button> }) };
 const render = (props: Partial<TeamMapProps> = {}) => act(async () => root.render(<TeamMap sessions={[{ ...newSession("codex", "/app"), id: "current", busy: true }, { ...newSession("codex", "/app"), id: "old" }]} runs={runs} statuses={new Map()} onOpenMono={open} onClose={close} decisions={decisions} onSendManager={send} {...props} />));
 const click = (selector: string) => act(async () => host.querySelector<HTMLButtonElement>(selector)!.click());
-const escape = () => act(async () => host.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+const escape = () => act(async () => host.querySelector('.zoom-map')!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
 const field = () => host.querySelector<HTMLTextAreaElement>("textarea")!;
 const input = (text: string) => act(async () => { Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(field(), text); field().dispatchEvent(new Event("input", { bubbles: true })); });
 

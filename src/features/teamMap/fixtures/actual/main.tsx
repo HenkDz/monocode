@@ -83,7 +83,7 @@ function Fixture() {
     workspaceNavigation: { cancel: noop }, setFilePickerOpen: noop, setSettingsOpen: noop, setSearchViewOpen: noop,
     setInboxViewOpen: noop, setNotesViewOpen: noop, setAutomationsViewOpen: noop,
     MISSION_CONTROL_SCOPE: "mission-control", ATTENTION_QUEUE_SCOPE: "attention-queue", DECISIONS_SCOPE: "decisions", USAGE_DASHBOARD_SCOPE: "usage",
-    TeamMap, sessions, orchestrationRuns: [], managerPrStatuses: new Map(), onOpenMono: (id: string) => opened.push(id), commandMapDecisions,
+    TeamMap, sessions, orchestrationRuns: [], managerPrStatuses: new Map(), onOpenMono: (id: string) => opened.push(id), onOpenRailMono: (id: string) => opened.push(id), commandMapDecisions,
     INTEGRATIONS_SCOPE, capabilityDecisionReason, renderIntegrationRequest: () => null, // Integration rendering has its own actual-App fixture.
     goalNextSteps: [], renderGoalNextAction: () => null, // Existing-goal binding is covered by the separate App goal callback fixture.
   };

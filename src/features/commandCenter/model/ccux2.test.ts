@@ -14,7 +14,8 @@ it("counts real approvals separately and dedupes goal projections without treati
   const command = "git reset --hard 0123456789abcdef0123456789abcdef01234567";
   const blocks: Block[] = [1, 2].map(requestId => ({ id: `approval-${requestId}`, role: "tool", text: command, approval: { requestId } }));
   const session = { ...newSession("codex", "C:/repo"), id: "worker", blocks };
-  const steps = [step("nudge-one"), step("nudge-two"), step("worker:approval:1", "open"), step("start", "start"), step("start", "start")];
+  const start = { ...step("start", "start"), managerMonoId: "other-manager", managerId: "other-engine", sessionId: "other-home" };
+  const steps = [step("nudge-one"), step("nudge-two"), step("worker:approval:1", "open"), start, start];
   const selected = selectNeedsUser([], [session, session], [], view, steps);
   expect(selected.count).toBe(3);
   expect(selected.goals.map(row => row.key)).toEqual(["start"]);

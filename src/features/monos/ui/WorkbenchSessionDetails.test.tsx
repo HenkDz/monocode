@@ -59,8 +59,8 @@ function fact(label: string) {
 }
 
 it("opens the owning Manager through the existing navigation callback for a task/session fault", () => {
-  const task: OrchestrationRun["tasks"][number] = { id: "task", sessionId: "worker", memberId: "member", title: "Review", prompt: "Review", status: "failed", harness: "codex", model: "", files: [], scopes: [], dependsOn: [], error: "task/session state mismatch" };
-  const snapshot = vi.spyOn(orchestrator, "snapshot").mockReturnValue([{ ownerSessionId: "manager", tasks: [task] } as OrchestrationRun]);
+  const task: OrchestrationRun["tasks"][number] = { id: "task", sessionId: "worker", memberId: "member", title: "Review", prompt: "Review", status: "failed", harness: "codex", model: "", files: [], scopes: [], dependsOn: [], result: "", accepted: false, delivered: false, error: "task/session state mismatch" };
+  const snapshot = vi.spyOn(orchestrator, "snapshot").mockReturnValue([{ version: 2, leadId: "manager", ownerSessionId: "manager", cwd: "C:/synthetic", status: "paused", allowedHarnesses: ["codex"], maxWorkers: 1, cli: "synthetic", continuations: 0, requests: {}, tasks: [task] }]);
   const open = vi.spyOn(cards, "openCardSession").mockImplementation(() => {});
   try {
     act(() => root.render(<WorkbenchTask task={task} />));

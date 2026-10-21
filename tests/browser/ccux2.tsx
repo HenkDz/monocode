@@ -54,7 +54,7 @@ const sessions: Session[] = [
 ];
 const command = "git show 0123456789abcdef0123456789abcdef01234567";
 sessions.find(row => row.id === "permission")!.blocks.push(...[1, 2].map(requestId => ({ id: `approval-${requestId}`, role: "tool" as const, text: command, approval: { requestId } })));
-const runs: OrchestrationRun[] = [{ leadId: "manager-home", ownerMonoId: "manager", ownerSessionId: "manager-home", cwd: project, projectManager: true, status: "active", dispatches: [], tasks: ["task", "past-task"].map((id, index) => ({ id, memberId: "atlas", memberName: "Atlas", sessionId: id, title: index ? "Earlier chooser review" : "Chooser focus", prompt: "Preserve keyboard focus and report the result.", status: "completed", accepted: !!index, files: [], scopes: [], dependsOn: [], harness: "codex", model: "", workspace: { id: "feature", projectCwd: project, checkoutCwd: trees[1].path, kind: "worktree", branch: "feature" } })) }];
+const runs: OrchestrationRun[] = [{ version: 2, allowedHarnesses: ["codex"], maxWorkers: 1, cli: "synthetic", continuations: 0, requests: {}, leadId: "manager-home", ownerMonoId: "manager", ownerSessionId: "manager-home", cwd: project, projectManager: true, status: "active", dispatches: [], tasks: ["task", "past-task"].map((id, index) => ({ id, memberId: "atlas", memberName: "Atlas", sessionId: id, title: index ? "Earlier chooser review" : "Chooser focus", prompt: "Preserve keyboard focus and report the result.", status: "completed", accepted: !!index, delivered: true, result: "", files: [], scopes: [], dependsOn: [], harness: "codex", model: "", workspace: { id: "feature", projectCwd: project, checkoutCwd: trees[1].path, kind: "worktree", branch: "feature" } })) }];
 orchestrator.snapshot = () => runs; orchestrator.subscribe = () => () => {};
 orchestrator.forSession = id => runs.find(run => run.tasks.some(task => task.sessionId === id));
 orchestrator.run = id => runs.find(run => run.leadId === id);
@@ -97,6 +97,7 @@ const ports: Record<string, unknown> = {
   monoViewIdRef: { current: null as string | null }, monoViewRequest: { current: 0 }, workspaceSessionRequest: { current: 0 }, lastMonoIdRef: { current: null },
   workerTaskTabs: { current: new Map<string, string>() }, workspacePins: { current: new Map() }, linkedSessionUpdatesRef: { current: new Map() },
   workspaceNavigation: { cancel: noop }, setRecents: noop, rememberProject: () => [], updateMono: noop, saveOpenMono: noop, saveMonoPermissions: noop,
+  homeDir: "C:/synthetic/home", newDefaultSession: () => { throw Error("Opening a member must not create a session"); },
   setFilePickerOpen: noop,
   setMonoTeamRequest: noop, setMonoActivity: noop, setMonoSessions: noop, setMonoShownSession: noop, setMonoShownSessionFocused: noop, setMonoOverviewDocument: noop,
   setProjectTerminalFocused: noop, setComposerFocused: noop, setComposerFocusToken: noop, setMonoPanelTab: noop, setMonoArtifact: noop, setMonoChanges: noop, setWorkspaceContextTab: noop,

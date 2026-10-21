@@ -64,7 +64,8 @@ it("opens the owning Manager through the existing navigation callback for a task
   const open = vi.spyOn(cards, "openCardSession").mockImplementation(() => {});
   try {
     act(() => root.render(<WorkbenchTask task={task} />));
-    expect(host.textContent).toContain("Something got out of sync");
+    expect(host.querySelector('[data-transcript-error="sync"]')).not.toBeNull();
+    expect(host.textContent).toContain("something got out of sync");
     const button = [...host.querySelectorAll("button")].find(button => button.textContent === "Open Manager");
     expect(button).toBeDefined();
     act(() => button!.click());

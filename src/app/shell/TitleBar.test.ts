@@ -25,19 +25,20 @@ function tab(overrides: Partial<Tab> = {}): Tab {
   };
 }
 
-it("renders a standalone Manager header without worktree tabs or tab actions", () => {
+it("keeps the tab strip and close actions visible while a Manager title is active", () => {
   const noop = () => {};
   const html = renderToStaticMarkup(createElement(TitleBar, {
     tabs: [tab({ title: "Worker conversation" }), tab({ id: "manager", title: "Manager" })],
     activeId: "manager", cwd: "/repo", standaloneTitle: "Manager",
-    onToggleSidebar: noop, onSelect: noop, onNew: noop,
+    onToggleSidebar: noop, onSelect: noop,
     onClose: noop, onCloseMany: noop, onReorder: noop,
   }));
-  expect(html).toContain('aria-label="Standalone chat"');
+  expect(html).toContain('data-title-tab-active="true"');
   expect(html).toContain('Manager');
-  expect(html).not.toContain('Worker conversation');
+  expect(html).toContain('Worker conversation');
   expect(html).not.toContain('New session');
-  expect(html).not.toContain('Close Manager');
+  expect(html).toContain('Close Manager');
+  for (const action of ['Minimize window', 'Maximize window', 'Close window']) expect(html).toContain(`aria-label="${action}"`);
 });
 
 describe("tabCopy", () => {

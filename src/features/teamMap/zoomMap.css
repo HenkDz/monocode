@@ -20,6 +20,7 @@
 .zoom-map-viewport { position: relative; flex: 1; min-height: 260px; overflow: hidden; touch-action: none; }
 .zoom-map-viewport[data-focused]:not([data-focused=""]) { overflow-y: auto; overflow-x: hidden; }
 .zoom-map-viewport[data-focused]:not([data-focused=""]) .zoom-map-world { width: 0; height: 0; }
+.zoom-map-viewport:not([data-focused=""]) :is(.zoom-map-links, .zoom-map-boss, .zoom-map-project)[data-dimmed="true"] { display: none; }
 .zoom-map-hint { position: absolute; left: 24px; top: 5px; color: var(--map-faint); font-size: 11px; z-index: 1; pointer-events: none; }
 .zoom-map-world { position: absolute; left: 0; top: 0; width: 1600px; height: 1000px; transform-origin: 0 0; transition: transform .75s cubic-bezier(.22,.8,.2,1); }
 .zoom-map-world[data-moving="true"] { transition: none; }

@@ -41,6 +41,19 @@ it("keeps the tab strip and close actions visible while a Manager title is activ
   for (const action of ['Minimize window', 'Maximize window', 'Close window']) expect(html).toContain(`aria-label="${action}"`);
 });
 
+it("renders a page's header controls alongside reusable page and work tabs", () => {
+  const noop = () => {};
+  const html = renderToStaticMarkup(createElement(TitleBar, {
+    tabs: [tab({ title: "Retained conversation" }), tab({ id: "shell-page:reusable", title: "Decisions", page: "decisions" })],
+    activeId: "shell-page:reusable", content: createElement("div", {}, createElement("input", { "aria-label": "Search settings" }), createElement("button", {}, "Restore defaults")),
+    onToggleSidebar: noop, onSelect: noop, onClose: noop, onCloseMany: noop, onReorder: noop,
+  }));
+  expect(html).toContain('aria-label="Search settings"');
+  expect(html).toContain("Restore defaults");
+  expect(html).toContain("Retained conversation");
+  expect(html).toContain('data-title-tab-active="true"');
+});
+
 describe("tabCopy", () => {
   it.each([
     ["commandMap", "Command map"], ["decisions", "Decisions"],

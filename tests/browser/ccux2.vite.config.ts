@@ -19,7 +19,7 @@ export default defineConfig(async environment => {
         if (!node?.initializer) throw Error(`Missing production App declaration ${name}`);
         return node.initializer;
       };
-      const callbacks = ["onOpenMono", "onSelectHistorySession", "onSelectProjectWorktree", "onNewWorktreeSession", "onSelectTitleTab", "closeViewTab", "onRunProjectScript", "onOpenTeamMap", "onOpenSearch", "onOpenInbox", "onOpenNotes", "onOpenAutomations", "onToggleRightPanel"];
+      const callbacks = ["onOpenMono", "onSelectHistorySession", "onSelectProjectWorktree", "onNewWorktreeSession", "onSelectTitleTab", "onCloseMonoTab", "closeViewTab", "onRunProjectScript", "onOpenTeamMap", "onOpenSearch", "onOpenInbox", "onOpenNotes", "onOpenAutomations", "onToggleRightPanel"];
       const callback = (name: string) => {
         const node = declaration(name);
         if (!ts.isCallExpression(node)) throw Error(`Production callback changed: ${name}`);
@@ -32,7 +32,7 @@ export default defineConfig(async environment => {
       });
       const expressions = ["openPage", "pageTab", "activeWorker", "orderedTitleTabs", "shownViewTabId", "placeholderTab", "nextTitleTabs", "chromeSurfaceOpen", "insetRightPanelShown", "showRightPanelToggle"];
       const titleBar = nodes.find(node => ts.isJsxSelfClosingElement(node) && node.tagName.getText(ast) === "TitleBar") as ts.JsxSelfClosingElement;
-      const props = ["tabs", "mono", "activeId", "standaloneTitle", "cwd", "onShowMonoDetails", "onToggleRightPanel", "rightPanelOpen"];
+      const props = ["tabs", "content", "mono", "activeId", "standaloneTitle", "cwd", "onShowMonoDetails", "onToggleRightPanel", "rightPanelOpen"];
       const selectedProps = props.map(name => {
         const attribute = titleBar.attributes.properties.find(prop => ts.isJsxAttribute(prop) && prop.name.getText(ast) === name) as ts.JsxAttribute;
         if (!attribute?.initializer || !ts.isJsxExpression(attribute.initializer)) throw Error(`Missing production title prop ${name}`);

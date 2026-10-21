@@ -141,8 +141,7 @@ type Props = {
   monoPanelOpen?: boolean;
   /** The full-height Mono details panel owns these while it is open. */
   /**
-   * Takes the tabs' place, as the inset layout's Settings does with its
-   * breadcrumb and actions.
+   * Page breadcrumbs and actions alongside the retained tab strip.
    */
   content?: ReactNode;
   /** Shows or hides the Mono's overview panel beside its chat. */
@@ -1291,13 +1290,14 @@ function TitleBarComponent({
           showProjectButton && !inset ? " border-l border-stroke" : ""
         }`}
       >
-        {content && !tabs.length ? content : mono && !tabs.length ? (
+         {content}
+         {!content && mono && !tabs.length ? (
           <MonoTitle
             look={mono.look}
             state={mono.state}
             onShowDetails={onShowMonoDetails}
           />
-        ) : standaloneTitle && !tabs.length ? (
+         ) : !content && standaloneTitle && !tabs.length ? (
           <div
             className="flex min-w-0 flex-1 items-center px-4 text-xs font-medium text-content/80"
             aria-label="Standalone chat"

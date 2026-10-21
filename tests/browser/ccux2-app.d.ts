@@ -6,6 +6,7 @@ declare module "virtual:ccux2-app" {
     onNewWorktreeSession(project: string, tree: import("../../src/features/source-control/model/worktrees").Worktree): void;
     onSelectTitleTab(id: string): void;
     closeViewTab(id: string): void;
+    onCloseMonoTab(id: string): void;
     onRunProjectScript(project: string, path: string, name: string): Promise<void>;
     onOpenTeamMap(scope?: string): void;
     onOpenSearch(): void;

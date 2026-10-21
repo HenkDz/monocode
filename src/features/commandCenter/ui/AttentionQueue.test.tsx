@@ -38,6 +38,17 @@ const deferred = () => {
 };
 
 describe("Attention queue", () => {
+  it.each([false, true])("leaves Escape to its surrounding drawer when embedded, including empty: %s", async empty => {
+    const close = vi.fn(), outer = vi.fn();
+    window.addEventListener("keydown", outer);
+    try {
+      await act(async () => root.render(<AttentionQueueView input={empty ? { roster: [], sessions: [], runs: [], goals: [] } : inputFor("manager")} callbacks={callbacks()} open integrated presentation="panel" onClose={close} />));
+      const escape = new KeyboardEvent("keydown", { key: "Escape", cancelable: true, bubbles: true });
+      await act(async () => document.body.dispatchEvent(escape));
+      expect(escape.defaultPrevented).toBe(false);
+      expect(close).not.toHaveBeenCalled(); expect(outer).toHaveBeenCalledOnce();
+    } finally { window.removeEventListener("keydown", outer); }
+  });
   it("lets the shared goal row own its exact approval while preserving unrelated blockers", async () => {
     const input = inputFor("manager", "storage");
     const manager = input.sessions.find(session => session.id === "manager")!;

@@ -1,4 +1,4 @@
-import { startTransition, useState } from "react";
+import React, { startTransition, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { bindCCUX2 } from "virtual:ccux2-app";
@@ -30,7 +30,7 @@ import { INTEGRATIONS_SCOPE } from "../../src/features/integrations/model/projec
 import { USAGE_DASHBOARD_SCOPE } from "../../src/features/providers/ui/UsageDashboard";
 import { TeamMap } from "../../src/features/teamMap/TeamMap";
 import { leafIds, newTab, focusedFileTab, isTerminalTab, isFilesystemTab, previewWorkspaceFile } from "../../src/features/workspace/model/layout";
-import { filterTabsForProject, findOpenSessionTab, isManagerTab, workspaceTabCwd } from "../../src/features/workspace/model/workspaceTabGroups";
+import { filterTabsForProject, findOpenSessionTab, isManagerTab, workspaceTabCwd, switchSessionInTab } from "../../src/features/workspace/model/workspaceTabGroups";
 import * as appViews from "../../src/features/workspace/model/appViewTabs";
 import { sameProjectPath, normalizeProjectPath, isLocalProject, isRemoteProjectPath, looksLikeProject, loadRecents, projectRailItems } from "../../src/features/projects/model/recents";
 import { pathKey, projectName, isEqualOrInside } from "../../src/shared/lib/paths";
@@ -43,6 +43,8 @@ import { MonoOrgActivity } from "../../src/features/monos/ui/MonoOrgActivity";
 import { TeamMessage } from "../../src/features/sessions/ui/TeamMessage";
 import { TaskMetricsLine } from "../../src/features/agents/ui/TaskMetricsLine";
 import { AgentTranscript } from "../../src/features/sessions/ui/AgentTranscript";
+import { commandMapDecisions } from "../../src/features/teamMap/commandMapDecisions";
+import { SettingsView } from "../../src/features/settings/ui/SettingsView";
 import "../../src/styles/index.css";
 
 const params = new URLSearchParams(location.search), project = "C:/synthetic/Chooser", now = Date.now();
@@ -97,7 +99,7 @@ const state = {
   tabs, sessions, projectCwd: project, sidebarCwd: project, projectWorktree: trees[1], history: [], orchestrationRuns: runs,
   activeTabId: tabs[1].id, active: sessions.find(row => row.id === "latest"), monoViewId: null as string | null,
   monoViewSession: undefined as Session | undefined, monoViewMono: undefined as Mono | undefined, monoViewTabId: undefined as string | undefined,
-  monoCovers: false, openMonoTabs: ["atlas"], shownMonoTabs: ["atlas"],
+  monoCovers: false, openMonoTabs: params.has('restored') ? [] : ["atlas"], shownMonoTabs: params.has('restored') ? [] : ["atlas"],
   reusablePage: undefined as { page?: appViews.ShellPage; appView?: appViews.AppView } | undefined,
   pageTab: undefined as { page?: appViews.ShellPage; appView?: appViews.AppView } | undefined,
   activeAppView: undefined as appViews.AppView | undefined, settingsOpen: false, searchViewOpen: false, inboxViewOpen: false, notesViewOpen: false, automationsViewOpen: false,
@@ -105,8 +107,9 @@ const state = {
   rightPanelOpen: true, rightPanelClosing: false, monoDetailsOpen: false,
 };
 const ports: Record<string, unknown> = {
+  React,
   ...appViews, startTransition, DECISIONS_SCOPE, INTEGRATIONS_SCOPE, USAGE_DASHBOARD_SCOPE, ATTENTION_QUEUE_SCOPE, MISSION_CONTROL_SCOPE,
-  leafIds, newTab, focusedFileTab, isTerminalTab, isFilesystemTab, previewWorkspaceFile, filterTabsForProject, findOpenSessionTab, isManagerTab, workspaceTabCwd,
+  leafIds, newTab, focusedFileTab, isTerminalTab, isFilesystemTab, previewWorkspaceFile, filterTabsForProject, findOpenSessionTab, isManagerTab, workspaceTabCwd, switchSessionInTab,
   isBlankSession, sessionDisplayTitle, sessionNeedsInput, sessionWorkCwd, workbenchSessionTask, monoLiveState,
   findMono, monoForSession, listMonos, monoWorksOn, monoLook, monoState, sameProjectPath, normalizeProjectPath, looksLikeProject, isLocalProject, isRemoteProjectPath,
   loadRecents, projectRailItems, pathKey, projectName, basename, isEqualOrInside, orderByIds, worktreeSessionGroups, summaryFromSession, sessionActivityAt, orchestrator, packageScripts,
@@ -119,6 +122,7 @@ const ports: Record<string, unknown> = {
   homeDir: "C:/synthetic/home", newDefaultSession: () => { throw Error("Opening a member must not create a session"); },
   setFilePickerOpen: noop,
   setPullRequestsViewScope: noop, setSearchViewFocusToken: noop,
+  setTitleTabOrder: noop,
   setMonoTeamRequest: noop, setMonoActivity: noop, setMonoSessions: noop, setMonoShownSession: noop, setMonoShownSessionFocused: noop, setMonoOverviewDocument: noop,
   setProjectTerminalFocused: noop, setComposerFocused: noop, setComposerFocusToken: noop, setMonoPanelTab: noop, setMonoArtifact: noop, setMonoChanges: noop, setWorkspaceContextTab: noop,
   ensureOpenSession: async (id: string) => sessions.find(row => row.id === id), ensureMonoSession: async (id: string) => sessions.find(row => row.id === findMono(id)?.sessionId),
@@ -146,6 +150,7 @@ const set = <K extends keyof typeof state>(key: K, value: (typeof state)[K] | ((
 for (const key of Object.keys(state) as (keyof typeof state)[]) ports[`set${key[0].toUpperCase()}${key.slice(1)}`] = (value: never) => set(key, value);
 const activate = (id: string) => { state.activeTabId = id; state.monoViewId = null; (ports.monoViewIdRef as { current: string | null }).current = null; update(); };
 Object.assign(ports, {
+  setTabs: (next: typeof tabs) => { tabs.splice(0, tabs.length, ...next); update(); },
   activateTab: activate, setActiveTabId: activate, appendTab: (tab: typeof tabs[number]) => tabs.push(tab),
   focusOpenSession: (id: string) => { const tab = tabs.find(tab => tab.focusedId === id); if (!tab) return false; activate(tab.id); return true; },
   closeMonoView: () => { state.monoViewId = null; (ports.monoViewIdRef as { current: string | null }).current = null; update(); },
@@ -168,11 +173,14 @@ const callbacks: AttentionCallbacks = { inspect: id => { void routes.onSelectHis
 Object.assign(window, { ccux2: { state, routes, events, sessions, tabs, trees, command, zoom: applyUiScale } });
 function Fixture() {
   const [, render] = useState(0); refresh = () => render(value => value + 1);
+  const [settingsHeader, setSettingsHeader] = useState<HTMLElement | null>(null);
+  ports.setSettingsHeaderHost = setSettingsHeader;
   const projection = routes.readTitle(), needs = selectNeedsUser(roster, sessions, runs, view, [], input());
   const title = projection.title;
   ports.displayedTabNavigation = { current: { tabs: title.tabs, activeId: title.activeId, select: routes.onSelectTitleTab } };
   const page = state.reusablePage?.page ?? state.reusablePage?.appView;
-  const attention = <AttentionQueueView input={input()} readInput={input} callbacks={callbacks} open onClose={noop} presentation="panel" integrated items={needs.attention} />;
+  const attention = <AttentionQueueView input={input()} readInput={input} callbacks={callbacks} open onClose={() => { (ports.teamMap as { close(): void }).close(); }} presentation="panel" integrated items={needs.attention} />;
+  const mapDecisions = commandMapDecisions(monoManagerGoals, roster, decisionActions, now, { steps: [], render: () => null, input: input(), attention: () => attention });
   return <div className="flex h-screen min-w-0 flex-col overflow-hidden bg-background-base text-content">
     <TitleBar {...title} inset onSelect={routes.onSelectTitleTab} onClose={routes.closeViewTab} onCloseMany={noop} onReorder={noop} onToggleSidebar={noop} />
     <div className="flex min-h-0 flex-1">
@@ -182,9 +190,10 @@ function Fixture() {
         <WorktreeChats project={project} selectedPath={state.projectWorktree.path} sessions={sessions} history={[]} openSessions={sessions.filter(row => !isBlankSession(row)).map(row => ({ ...summaryFromSession(row), updatedAt: sessionActivityAt(row) }))} activeId={state.active?.id} unseen={new Set()} onSelect={tree => routes.onSelectProjectWorktree(project, tree)} onChat={routes.onSelectHistorySession} onNew={tree => routes.onNewWorktreeSession(project, tree)} onCreate={noop} />
         {([['Command map', undefined], ['Decisions', DECISIONS_SCOPE], ['Integrations', INTEGRATIONS_SCOPE], ['Usage', USAGE_DASHBOARD_SCOPE]] as const).map(([label, scope]) => <RailAction key={label} label={label} icon={CircleAlert} badge={label === 'Decisions' ? needs.count : undefined} onClick={() => routes.onOpenTeamMap(scope)} />)}
         {([['Inbox', routes.onOpenInbox], ['Notes', routes.onOpenNotes], ['Automations', routes.onOpenAutomations], ['Search', routes.onOpenSearch]] as const).map(([label, action]) => <RailAction key={label} label={label} icon={CircleAlert} onClick={action} />)}
+        <RailAction label="Settings" icon={CircleAlert} onClick={() => { (ports.teamMap as { close(): void }).close(); state.activeAppView = undefined; state.searchViewOpen = false; state.inboxViewOpen = false; state.notesViewOpen = false; state.automationsViewOpen = false; set('settingsOpen', true); }} />
       </aside>
       <main className="relative flex min-w-0 flex-1 flex-col overflow-auto">
-        {projection.global ? page === 'decisions' ? <Decisions view={view} roster={roster} actions={decisionActions} attention={attention} attentionCount={needs.count} /> : page === 'commandMap' ? <TeamMap sessions={sessions} runs={runs} statuses={new Map()} onOpenMono={routes.onOpenMono} onClose={noop} /> : <h1 className="p-6">{title.tabs?.find(tab => tab.id === appViews.REUSABLE_PAGE_TAB_ID)?.title}</h1>
+        {state.settingsOpen ? <SettingsView section="appearance" cwd={project} sessions={[]} headerHost={settingsHeader} onClose={() => set('settingsOpen', false)} onOpenSession={noop} onArchiveSession={noop} onDeleteSession={noop} onOpenWhatsNew={noop} /> : projection.global ? page === 'decisions' ? <Decisions view={view} roster={roster} actions={decisionActions} attention={attention} attentionCount={needs.count - view.pending.length} /> : page === 'commandMap' ? <TeamMap sessions={sessions} runs={runs} statuses={new Map()} decisions={mapDecisions} onOpenMono={routes.onOpenMono} onClose={noop} /> : <h1 className="p-6">{title.tabs?.find(tab => tab.id === appViews.REUSABLE_PAGE_TAB_ID)?.title}</h1>
           : state.worktreeOverview ? <div className="m-auto p-6 text-center"><h1>{basename(state.worktreeOverview.tree.path)}</h1><p>No conversations here yet</p><button onClick={() => routes.onNewWorktreeSession(project, state.worktreeOverview!.tree)}>New chat here</button></div>
           : <div className="space-y-4 p-6"><h1 data-current-view>{state.monoViewMono?.name ?? state.active?.title}</h1><p>The selected conversation and its provider identity stay intact.</p><AgentMarkdown text="<details><summary>Command output</summary>\n\nRecovered command output; the final result passed.\n</details>" streaming={false} />
             <button onClick={() => routes.onSelectHistorySession('task')}>Open current assignment</button><button onClick={() => routes.onSelectHistorySession('past-task')}>Open previous assignment</button><button onClick={() => routes.onOpenMono('atlas')}>Tasks and history</button>

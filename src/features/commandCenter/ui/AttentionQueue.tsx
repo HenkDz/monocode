@@ -68,9 +68,9 @@ export function AttentionQueueView({ input, callbacks, readInput, open, onClose,
       if (event.target instanceof Element && event.target.closest("[data-attention-details]")) return;
       event.preventDefault(); event.stopPropagation(); onClose();
     };
-    window.addEventListener("keydown", key, true);
+    if (!integrated && presentation === "page") window.addEventListener("keydown", key, true);
     return () => { clearInterval(timer); window.removeEventListener("keydown", key, true); };
-  }, [open, onClose]);
+  }, [open, onClose, integrated, presentation]);
 
   async function run(item: AttentionItem, action: AttentionAction, payload?: Parameters<typeof executeAttentionAction>[4]) {
     if (pending.current.has(item.id)) throw Error("An action is already pending for this request.");

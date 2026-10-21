@@ -138,8 +138,47 @@ test("project picker stays opaque and tree project opens the approved drawer wit
   for (const title of ['Current goal', 'This project decides', 'Waiting decisions', 'Team & tasks']) await expect(drawer.getByRole('heading', { name: title, exact: true })).toBeVisible();
   await expect(drawer.getByRole('button', { name: /Show work/ })).toHaveCount(1);
   await page.screenshot({ path: `${captures}/tree-project-drawer-1024-light.png` });
-  await drawer.getByRole('button', { name: 'Close project', exact: true }).click();
+  await page.keyboard.press('Escape');
+  await expect(drawer).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'Team map', exact: true })).toBeVisible();
   await expect(project).toBeFocused();
+});
+test("worker page close and restored tabs keep history accessible without accumulating task slots", async ({ page }) => {
+  await page.goto('/tests/browser/ccux2.html');
+  const before = await page.evaluate(() => window.ccux2.tabs.length);
+  for (let index = 0; index < 6; index++) {
+    await page.getByRole('button', { name: 'Open current assignment', exact: true }).click();
+    await page.getByRole('button', { name: 'Open previous assignment', exact: true }).click();
+  }
+  expect(await page.evaluate(() => window.ccux2.tabs.length)).toBe(before);
+  await page.evaluate(() => window.ccux2.routes.onCloseMonoTab('atlas'));
+  expect(await page.evaluate(() => {
+    const task = window.ccux2.tabs.find(tab => tab.focusedId === 'past-task');
+    return !!task && window.ccux2.routes.readTitle().title.tabs.some(tab => tab.id === task.id);
+  })).toBe(true);
+  expect(await page.evaluate(() => window.ccux2.sessions.find(session => session.id === 'task')?.providerSessionId)).toBe('retained-task');
+  await page.goto('/tests/browser/ccux2.html?restored=true');
+  expect(await page.evaluate(() => {
+    const task = window.ccux2.tabs.find(tab => tab.focusedId === 'task');
+    return !!task && window.ccux2.routes.readTitle().title.tabs.some(tab => tab.id === task.id);
+  })).toBe(true);
+  await page.getByRole('button', { name: 'Open current assignment', exact: true }).click();
+  await expect(page.locator('[data-title-tab-active]')).toHaveAttribute('aria-label', 'Atlas');
+});
+test("real inset Settings header portals search and Appearance restore alongside reusable and work tabs", async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  await page.goto('/tests/browser/ccux2.html');
+  await page.locator('aside').first().getByRole('button', { name: 'Decisions', exact: true }).click();
+  await page.locator('aside').first().getByRole('button', { name: 'Settings', exact: true }).click();
+  const header = page.locator('header').first();
+  await expect(header.getByRole('button', { name: 'Restore defaults', exact: true })).toBeVisible();
+  await expect(header.getByRole('combobox', { name: 'Search settings', exact: true })).toBeVisible();
+  await expect(page.locator('[data-context-panel]')).toHaveCount(0);
+  expect(await page.evaluate(() => window.ccux2.routes.readTitle().title.tabs.some(tab => tab.id === 'shell-page:reusable'))).toBe(true);
+  await header.getByRole('combobox', { name: 'Search settings', exact: true }).fill('font');
+  await expect(page.getByRole('option').first()).toBeVisible();
+  await page.keyboard.press('Escape');
+  await page.screenshot({ path: `${captures}/settings-header-1600-dark.png` });
 });
 test("real SessionPane routes task approval, Queue, Steer and Stop to the worker and preserves its home", async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 1000 });

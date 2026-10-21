@@ -5733,6 +5733,7 @@ function Workspace({
       }
       setWorktreeOverview(undefined);
       const worker = workbenchSessionTask(orchestrator.snapshot(), session.id);
+      const previousWorkerSession = worker?.memberId ? workerTaskTabs.current.get(worker.memberId) : undefined;
       if (worker?.memberId && findMono(worker.memberId)) {
         workerTaskTabs.current.set(worker.memberId, session.id);
         setOpenMonoTabs(current => current.includes(worker.memberId!) ? current : [...current, worker.memberId!]);
@@ -5797,6 +5798,18 @@ function Workspace({
       if (focusOpenSession(session.id)) {
         if (linkedUpdate) revealLinkedSessionUpdate(session.id, linkedUpdate);
         return;
+      }
+      const previousWorkerTab = previousWorkerSession && findOpenSessionTab(tabsRef.current, sessionsRef.current, previousWorkerSession);
+      if (previousWorkerSession && previousWorkerTab && worker?.sessionId === session.id &&
+        workbenchSessionTask(orchestrator.snapshot(), previousWorkerSession)?.memberId === worker.memberId && leafIds(previousWorkerTab.layout).length === 1 &&
+        !previousWorkerTab.editorPanes.some(pane => pane.files.length) && !(previousWorkerTab.terminalPanes ?? []).some(pane => pane.files.length)) {
+        const next = switchSessionInTab(tabsRef.current, previousWorkerTab.id, previousWorkerSession, session.id);
+        if (next) {
+          workspacePins.current.set(previousWorkerTab.id, workspace?.tree.path ?? sessionWorkCwd(session));
+          setTabs(next); setActiveTabId(previousWorkerTab.id); setComposerFocused(true);
+          if (linkedUpdate) revealLinkedSessionUpdate(session.id, linkedUpdate);
+          return;
+        }
       }
       if (!workspace && replaceBlankPaneWithSession(session)) {
         if (linkedUpdate) revealLinkedSessionUpdate(session.id, linkedUpdate);
@@ -14929,10 +14942,10 @@ function Workspace({
     else if (activeAppView) setReusablePage({ appView: activeAppView });
   }, [openPage, activeAppView]);
   const pageTab = openPage ? { page: openPage } : activeAppView ? { appView: activeAppView } : reusablePage;
-  const activeWorker = !monoCovers && active ? workbenchSessionTask(orchestrationRuns, active.id)?.memberId : undefined;
+  const activeWorker = !monoCovers && active ? shownMonoTabs.find(id => id === workbenchSessionTask(orchestrationRuns, active.id)?.memberId) : undefined;
   const orderedTitleTabs: TitleTab[] = orderByIds(
     [
-      ...deckProjectTabs.filter(tab => !(leafIds(tab.layout).length === 1 && workbenchSessionTask(orchestrationRuns, tab.focusedId)?.memberId)).map((tab) =>
+      ...deckProjectTabs.filter(tab => !(leafIds(tab.layout).length === 1 && shownMonoTabs.includes(workbenchSessionTask(orchestrationRuns, tab.focusedId)?.memberId ?? ""))).map((tab) =>
         toTitleTab(tab, sessions, dirtyFiles, unseenFinishedIds),
       ),
       ...(pageTab ? [{ id: REUSABLE_PAGE_TAB_ID, ...pageTab, project: "", title: pageTab.page ? SHELL_PAGE_LABELS[pageTab.page] : APP_VIEW_LABELS[pageTab.appView!], more: [], sessionCount: 0, harnesses: [], busyHarnesses: [], files: [] } satisfies TitleTab] : []),

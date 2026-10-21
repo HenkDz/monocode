@@ -75,6 +75,16 @@ it("opens Mono chat and moves arrow focus to the nearest card in that direction"
   expect(close).toHaveBeenCalledOnce(); expect(open).toHaveBeenCalledExactlyOnceWith("backend");
 });
 
+it("opens the project drawer and restores focus to its project trigger", async () => {
+  await renders();
+  const trigger = host.querySelector<HTMLButtonElement>('.tree-project-header')!;
+  await act(async () => trigger.click());
+  expect(host.querySelector('.command-map-drawer[role="dialog"]')).not.toBeNull();
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Close project"]')!.click());
+  expect(host.querySelector('.command-map-drawer')).toBeNull();
+  expect(document.activeElement).toBe(trigger);
+});
+
 it("shows team activity separately from the Orchestrator ring and locates attention", async () => {
   localStorage.setItem("monocode:mono-roster", JSON.stringify(roster.map(mono => mono.id === "manager" ? { ...mono, sessionId: "manager-chat" } : mono)));
   const session = { ...newSession("codex", "/app"), id: "manager-chat", busy: true };

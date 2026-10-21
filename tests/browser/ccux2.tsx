@@ -77,7 +77,7 @@ mockIPC((command, args) => {
   if (command === "git_diff_index") return { files: [], additions: 0, deletions: 0 };
   if (command === "git_pr_status") return null;
   if (command === "control_load") return JSON.stringify({ version: 1, goals: [goal], receipts: {} });
-  if (command === "read_text") return JSON.stringify({ scripts: { dev: "vite", test: "vitest run", lint: "eslint ." } });
+  if (command === "read_text_file") return JSON.stringify({ scripts: { dev: "vite", test: "vitest run", lint: "eslint ." } });
   if (command.includes("list") || command.includes("load") || command.includes("files")) return [];
   throw Error(`Blocked synthetic native operation: ${command}`);
 }, { shouldMockEvents: true });

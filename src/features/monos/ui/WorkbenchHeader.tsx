@@ -89,7 +89,7 @@ export function WorkbenchHeader({
   const elapsed = currentTaskMetrics
     ? metrics.startedAt != null && live && metrics.endedAt == null
       ? formatLiveElapsed(metrics.startedAt, now)
-      : metrics.turns === 0 && !metrics.partial
+      : metrics.turns === 0 && !metrics.partial && state.status === "idle"
         ? "Conversation not started"
         : metrics.startedAt != null || metrics.elapsedMs
           ? formatLiveElapsed(0, metrics.elapsedMs)

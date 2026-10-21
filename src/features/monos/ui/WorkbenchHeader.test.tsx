@@ -225,8 +225,8 @@ it("shows only available folder, home and stop actions without redundant focus a
   expect(onStop).toHaveBeenCalledOnce();
 });
 
-it("keeps a queued task's unknown timing separate from the home's completed turn", () => {
-  act(() => root.render(<WorkbenchHeader session={session()} name="Iris" role="Design" state={{status: "queued"}} currentTaskMetrics={{turns: 0, elapsedMs: 0, partial: false}} onDetails={() => {}} />));
-  expect(host.querySelector("[data-workbench-metrics]")?.textContent).toBe("Current task · Conversation not started · Usage");
+it.each(["queued", "waiting-review"] as const)("keeps a %s task's unknown timing separate from the home's completed turn", status => {
+  act(() => root.render(<WorkbenchHeader session={session()} name="Iris" role="Design" state={{status}} currentTaskMetrics={{turns: 0, elapsedMs: 0, partial: false}} onDetails={() => {}} />));
+  expect(host.querySelector("[data-workbench-metrics]")?.textContent).toBe("Current task · Elapsed unavailable · Usage");
   expect(vi.getTimerCount()).toBe(0);
 });

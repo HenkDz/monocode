@@ -119,6 +119,7 @@ export function TreeMap({
   const [size, setSize] = useState({ width: 1100, height: 1250 });
   const viewport = useRef<HTMLDivElement>(null);
   const buttons = useRef(new Map<string, HTMLButtonElement>());
+  const drawerTrigger = useRef<HTMLButtonElement | null>(null);
   const seen = useRef<Set<string>>(undefined);
   const timers = useRef(new Set<ReturnType<typeof setTimeout>>());
   const drag = useRef<{ x: number; y: number; camera: typeof camera }>(
@@ -538,7 +539,7 @@ export function TreeMap({
                 <button type="button" className="tree-project-header"
                   aria-label={`Focus ${manager.project ? projectName(manager.project) : monoLook(manager.mono).name} team`}
                   title="Focus this team. Use the Order controls or Alt + Left or Right to change project order."
-                  onClick={() => { focusPod(pod.id); setOrderingProject(pod.id); onSelectMono?.(pod.id); }}
+                  onClick={event => { drawerTrigger.current = event.currentTarget; focusPod(pod.id); setOrderingProject(pod.id); onSelectMono?.(pod.id); }}
                   onKeyDown={event => {
                     if (!event.altKey || !["ArrowLeft", "ArrowRight"].includes(event.key)) return;
                     event.preventDefault();
@@ -699,7 +700,7 @@ export function TreeMap({
           </div></div>
         )}
       </div>
-      {drawer && <ProjectDrawer project={drawer} goals={goals} runs={runs} sessions={sessions} decisions={decisions?.project(drawer.project, drawer.manager.id)} onClose={() => { setDrawerProject(undefined); buttons.current.get(drawer.manager.id)?.focus(); }} onOpenMono={onOpenMono} />}
+      {drawer && <ProjectDrawer project={drawer} goals={goals} runs={runs} sessions={sessions} decisions={decisions?.project(drawer.project, drawer.manager.id)} onClose={() => { setDrawerProject(undefined); drawerTrigger.current?.focus(); }} onOpenMono={onOpenMono} />}
       <footer className="team-map-timeline" aria-label="Recent crew events">
         <span className="team-map-feed-label">Crew feed</span>
         {feed.length ? (

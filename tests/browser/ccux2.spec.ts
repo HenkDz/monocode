@@ -33,7 +33,7 @@ test("actual App navigation keeps worker identity, real sessions, worktree selec
     expect(await page.evaluate(() => window.ccux2.routes.readTitle().title.tabs?.filter(tab => tab.id === 'shell-page:reusable').length)).toBe(1);
   }
   await page.getByRole('button', { name: 'Worktree empty', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'empty', exact: true })).toBeVisible();
+  await expect(page.locator('main').getByRole('heading', { name: 'empty', exact: true })).toBeVisible();
   await expect(page.getByText('No conversations here yet')).toBeVisible();
   expect(await page.evaluate(() => window.ccux2.events.filter(event => event.action === 'new-chat'))).toEqual([]);
   await page.getByRole('button', { name: 'Worktree feature', exact: true }).click();
@@ -52,7 +52,7 @@ test("canonical Decisions count preserves distinct verbatim approvals and real a
   await expect(page.locator('[data-attention-source="approval"]')).toHaveCount(2);
   const cards = page.locator('[data-attention-source="approval"]');
   for (const card of await cards.all()) {
-    await card.getByRole('button', { name: /evidence/ }).click();
+    await card.getByRole('button', { name: 'Evidence', exact: true }).click();
     await expect(page.getByText('git show 0123456789abcdef0123456789abcdef01234567', { exact: true })).toBeVisible();
     await page.keyboard.press('Escape');
   }
@@ -82,7 +82,7 @@ test("production coordination details, grouped member feed, usage and custom fol
   await page.goto('/tests/browser/ccux2.html?surface=details');
   const goals = page.getByRole('tabpanel', { name: 'Goal & tasks', exact: true });
   await expect(goals.getByRole('button', { name: 'Show details', exact: true })).toHaveCount(1);
-  const goalTitle = goals.locator('p.truncate');
+  const goalTitle = goals.locator('p.truncate.font-medium');
   expect((await goalTitle.innerText()).length).toBeLessThanOrEqual(60);
   await goals.getByRole('button', { name: 'Show details', exact: true }).click();
   await expect(goals.getByRole('button', { name: 'Copy commit 0123456', exact: true })).toHaveAttribute('title', '0123456789abcdef0123456789abcdef01234567');

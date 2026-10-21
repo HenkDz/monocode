@@ -208,7 +208,7 @@ export function ZoomMap({ sessions, runs, statuses, scope, onOpenMono, onClose, 
       <div className="zoom-map-team" aria-label={`${project.name} team`}>{[project.manager, ...project.members].map(node => {
         const look = monoLook(node.mono);
         const state = node.mono.role === "manager" ? mapOwnState(node.mono, runs, sessions) : projectMemberTask(project, node.mono, runs, sessions).state;
-        const active = entries.filter(entry => entry.task.memberId === node.id && entry.task.status === "running");
+        const active = entries.filter(entry => entry.task.memberId === node.id && (entry.state === "working" || entry.state === "review" && !!entry.dispatch && entry.live.status === "waiting-review"));
         return <button type="button" className="zoom-map-mono" key={node.id} onClick={() => { setSelection({ kind: "mono", id: node.id }); setHighlight(undefined); }}>
           <span className="zoom-map-mini-avatar"><PixelMascot name={look.mascot} color={look.color} still className="size-7" /><i data-status={state.status} />{active.length > 1 && <b className="zoom-map-multiplicity">×{active.length}</b>}</span>
           <span><strong>{look.name} <small>{node.mono.role === "manager" ? "Manager" : node.mono.specialty || "Mono"}</small></strong><span>{mapText(active.find(entry => entry.state === "working")?.latest ?? active[0]?.latest ?? state.activity ?? monoStatusLabel(state), 90)}</span></span>

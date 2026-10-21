@@ -20,7 +20,7 @@ for (const [width, height] of [[1600, 950], [3432, 1308]]) {
     await page.screenshot({ path: screenshot(`map-${width}`) });
     await page.getByRole("button", { name: "Open monocode project", exact: true }).click();
     await expect(page.locator(".zoom-map-viewport")).toHaveAttribute("data-focused", "manager-2"); await page.waitForTimeout(800);
-    await expect(page.locator(".zoom-map-multiplicity")).toHaveCount(0);
+    await expect(page.locator(".zoom-map-team")).toContainText("×2");
     await expect(page.locator(".zoom-map-task")).toHaveCount(6);
     await expect(page.getByRole("textbox", { name: "Tell the CC Coordinator what you want" })).toBeEnabled();
     const reading = await page.locator(".zoom-map-world").evaluate(element => new DOMMatrix(getComputedStyle(element).transform).a / 4);
@@ -123,6 +123,8 @@ test("ready task highlights existing merge card and opens existing confirmation 
   await page.locator(".zoom-map-merge").getByRole("button", { name: "Merge pull request", exact: true }).click();
   await expect(page.getByText("Merge this pull request?", { exact: true })).toBeVisible();
   await page.screenshot({ path: screenshot("merge-confirmation") });
+  await page.keyboard.press("Escape"); await expect(page.getByText("Merge this pull request?", { exact: true })).toHaveCount(0);
+  await expect(page.locator('.zoom-map-viewport')).toHaveAttribute('data-focused', 'manager-0');
   expect(await page.evaluate(() => window.ccmapFixture.native.filter(command => command.includes("git_pr_action")))).toEqual([]);
 });
 

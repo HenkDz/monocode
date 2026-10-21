@@ -151,11 +151,14 @@ it("keeps terminal goal history out of lanes and summaries while preserving term
   expect(host.querySelector('.zoom-map-finished')?.textContent).toContain("Done");
 });
 
-it("counts two running tasks, but excludes planned, completed review and cancelled history from multiplicity", async () => {
+it("counts current working and unfinished review tasks, excluding planned and accepted/cancelled history", async () => {
   const tasks = runs[0].tasks;
   await render({ runs: [{ ...runs[0], tasks: [tasks[0], { ...tasks[1], status: "running" }] }] }); await click('[aria-label="Open app project"]');
   expect(host.querySelector('.zoom-map-multiplicity')?.textContent).toBe("×2");
-  await render({ runs: [{ ...runs[0], tasks: [tasks[0], { ...tasks[1], status: "completed" }, { ...tasks[1], id: "cancelled", status: "cancelled" }] }] });
+  const reviewing = { ...tasks[1], status: "completed" as const, lastDispatchId: "review-current" };
+  await render({ runs: [{ ...runs[0], tasks: [tasks[0], reviewing], dispatches: [...runs[0].dispatches!, { id: "review-current", taskId: reviewing.id, state: "completed", startedAt: 4 }] }] });
+  expect(host.querySelector('.zoom-map-multiplicity')?.textContent).toBe("×2");
+  await render({ runs: [{ ...runs[0], tasks: [tasks[0], { ...reviewing, accepted: true, acceptedDispatchId: "review-current", completionOutcome: "no-changes" }, { ...tasks[1], id: "cancelled", status: "cancelled" }] }] });
   expect(host.querySelector('.zoom-map-multiplicity')).toBeNull();
 });
 

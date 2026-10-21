@@ -13,7 +13,8 @@ export type CommandMapDecisions = {
   handledToday: number;
   incomplete: boolean;
   rail: ReactNode;
-  project(project: string, managerId: string): {
+  railFor?(openProject: (projectId: string) => void): ReactNode;
+  project(project: string, managerId: string, openProject?: (projectId: string) => void): {
     pending: number;
     teamPending: number;
     incomplete: boolean;

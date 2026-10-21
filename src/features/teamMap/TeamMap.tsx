@@ -40,7 +40,7 @@ import { treeLayout, TREE_MIN_READABLE_ZOOM, TREE_NODE_WIDTH as TEAM_MAP_NODE_WI
 import { focusTeamMap, teamMapCompact } from "./camera";
 import "./teamMap.css";
 import "./treeMap.css";
-import { OrbitMap } from "./OrbitMap";
+import { ZoomMap } from "./ZoomMap";
 import { EdgePulse } from "./EdgePulse";
 import { loadOrbitPreferences, saveOrbitPreferences } from "./orbit";
 import type { CommandMapDecisions } from "./commandMap";
@@ -58,6 +58,7 @@ export type TeamMapProps = {
   onClose: () => void;
   decisions?: CommandMapDecisions;
   bossGoal?: BossGoalRoute;
+  onSendManager?: (managerId: string, project: string, text: string) => Promise<boolean>;
 };
 type Props = TeamMapProps & { onToggleView?: () => void; onSelectMono?: (id: string) => void; selectedMonoId?: string; onDismissSelection?: () => boolean };
 type MapEvent = ReturnType<typeof teamMapEvents>[number];
@@ -753,5 +754,5 @@ export function TeamMap(props: TeamMapProps) {
   };
   return view === "tree"
     ? <TreeMap {...props} onToggleView={toggle} />
-    : <OrbitMap {...props} onToggleView={toggle} />;
+    : <ZoomMap {...props} onToggleView={toggle} />;
 }

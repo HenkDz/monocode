@@ -8,6 +8,7 @@ import { newSession } from "../sessions/model/session";
 import { monoManagerGoals } from "../monos/model/monoManagerGoals";
 import { getMonoTranscriptPage, type MonoTranscriptPage } from "../sessions/data/sessionStore";
 import { TeamMap, type TeamMapProps } from "./TeamMap";
+import { OrbitMap } from "./OrbitMap";
 import { ORBIT_PREFERENCES_KEY } from "./orbit";
 
 vi.mock("@tauri-apps/api/core", async original => ({ ...await original<object>(), invoke: vi.fn(async () => null) }));
@@ -31,7 +32,7 @@ let reducedMotion = false;
 let width = 1100;
 let resize: () => void;
 const open = vi.fn(), close = vi.fn();
-const renderMap = (props: Partial<TeamMapProps> = {}) => act(async () => root.render(<TeamMap sessions={[]} runs={runs} statuses={new Map()} onOpenMono={open} onClose={close} {...props} />));
+const renderMap = (props: Partial<TeamMapProps> = {}) => act(async () => root.render(<OrbitMap sessions={[]} runs={runs} statuses={new Map()} onOpenMono={open} onClose={close} onToggleView={() => {}} {...props} />));
 const button = (label: string) => host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
 const click = (label: string) => act(async () => button(label).click());
 const key = (element: EventTarget, value: string, shiftKey = false) => act(async () => element.dispatchEvent(new KeyboardEvent("keydown", { key: value, shiftKey, bubbles: true, cancelable: true })));
@@ -56,9 +57,9 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); localStorage.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 it("defaults to the Command map and keeps the saved Tree view available", async () => {
-  await renderMap();
+  await act(async () => root.render(<TeamMap sessions={[]} runs={runs} statuses={new Map()} onOpenMono={open} onClose={close} />));
   expect(host.querySelector("h1")?.textContent).toBe("Command map");
-  expect(host.querySelectorAll(".command-map-project")).toHaveLength(2);
+  expect(host.querySelectorAll(".zoom-map-project")).toHaveLength(2);
   await act(async () => [...host.querySelectorAll<HTMLButtonElement>("button")].find(node => node.textContent === "Tree")!.click());
   expect(JSON.parse(localStorage.getItem(ORBIT_PREFERENCES_KEY)!).view).toBe("tree");
   expect(host.querySelector(".team-map-canvas")).not.toBeNull();
@@ -150,17 +151,17 @@ it("keeps a prompt copied into a task title, full reports and artifacts inside S
   expect(host.querySelector("details")).toBeNull();
 });
 
-it("renders the same supplied goal action in the goal panel and Manager row", async () => {
+it("renders the supplied guarded goal action once in the goal panel", async () => {
   vi.spyOn(monoManagerGoals, "goals").mockReturnValue([{ id: "goal", managerId: "engine", title: "Next step", state: "running", updatedAt: 1 } as ReturnType<typeof monoManagerGoals.goals>[number]]);
   const action = vi.fn();
   await renderMap({ decisions: { ...decisions, project: path => ({ ...decisions.project(path, "manager"), goalAction: id => <button type="button" onClick={() => action(id)}>Manager paused — Continue</button> }) } });
   await click("Open app project");
   const buttons = [...host.querySelectorAll<HTMLButtonElement>('button')].filter(button => button.textContent === "Manager paused — Continue");
-  expect(buttons).toHaveLength(2);
+  expect(buttons).toHaveLength(1);
   expect(host.querySelector('.command-map-goal button')).toBe(buttons[0]);
-  expect(host.querySelector('.command-map-manager-chat button')).toBe(buttons[1]);
-  await act(async () => buttons[0].click()); await act(async () => buttons[1].click());
-  expect(action.mock.calls).toEqual([["goal"], ["goal"]]);
+  expect(host.querySelector('.command-map-manager-chat')?.textContent).not.toContain("Manager paused — Continue");
+  await act(async () => buttons[0].click());
+  expect(action.mock.calls).toEqual([["goal"]]);
 });
 
 it("uses existing Manager/member/Boss navigation and closes the surface", async () => {

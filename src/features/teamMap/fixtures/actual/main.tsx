@@ -77,7 +77,7 @@ function Fixture() {
     ensureMonoSession: (id: string, host: Parameters<typeof ensureMonoSession>[1]) => {
       sessionSetup.push(id); return ensureMonoSession(id, { ...host, workspace: async () => "C:/synthetic/monos/boss" });
     },
-    homeDir: async () => "C:/synthetic/home", saveMonoPermissions: async () => {}, newDefaultSession: (cwd: string) => newSession("codex", cwd),
+    homeDir: async () => "C:/synthetic/home", saveMonoPermissions: async () => {}, newDefaultSession: (cwd: string) => newSession("codex", cwd), selectedProviderAccountId: () => undefined,
     sessionsRef, setSessions, submitSessionRef, submitSession: submit, submitMonoGoalRef: goalPort, sameProjectPath,
     monoLook, monoGoalRoutingContext, remoteProjectFor: () => undefined, recents: [{ path: project }], projectKey,
     workspaceNavigation: { cancel: noop }, setFilePickerOpen: noop, setSettingsOpen: noop, setSearchViewOpen: noop,

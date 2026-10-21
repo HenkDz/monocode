@@ -21,7 +21,8 @@ export function commandMapDecisions(ledger: MonoManagerGoals, roster: readonly M
     handledToday: view.handledToday,
     incomplete: incomplete(view),
     rail: <Decisions view={view} roster={roster} actions={actions} presentation="rail" goalActions={rows.filter(step => !step.decisionId).map(step => goals?.render(step))} goalActionCount={extraCount(rows, view)} attention={goals?.attention?.()} attentionCount={needs.attention.filter(item => item.status === "open").length} />,
-    project(projectId, managerId) {
+    railFor: openProject => <Decisions view={view} roster={roster} actions={{ ...actions, openProject }} presentation="rail" goalActions={rows.filter(step => !step.decisionId).map(step => goals?.render(step))} goalActionCount={extraCount(rows, view)} attention={goals?.attention?.()} attentionCount={needs.attention.filter(item => item.status === "open").length} />,
+    project(projectId, managerId, openProject) {
       const managers = roster.filter(mono => mono.id === managerId && mono.role === "manager" && mono.archivedAt == null &&
         mono.projects.some(project => pathKey(project) === pathKey(projectId)));
       const scoped = selectDecisionView(ledger, managers, now, projectId);
@@ -35,7 +36,7 @@ export function commandMapDecisions(ledger: MonoManagerGoals, roster: readonly M
         autonomy: managers.length ? <ProjectAutonomyControl managerId={managerId} projectId={projectId} value={ledger.autonomy(managerId, projectId)} actions={actions} />
           : <p className="command-map-muted">Autonomy unavailable</p>,
         goalAction: goalId => { const step = steps.find(step => step.goalId === goalId); return step && goals?.render(step); },
-        cards: managers.length ? <Decisions view={scoped} roster={roster} actions={actions} presentation="rail" goalActions={rows.filter(step => !step.decisionId && needs.goals.some(row => row.key === step.key)).map(step => goals?.render(step))} goalActionCount={extraCount(needs.goals.filter(row => pathKey(row.projectId) === pathKey(projectId)), scoped)} attention={goals?.attention?.(projectId)} attentionCount={attentionCount} />
+        cards: managers.length ? <Decisions view={scoped} roster={roster} actions={openProject ? { ...actions, openProject } : actions} presentation="rail" goalActions={rows.filter(step => !step.decisionId && needs.goals.some(row => row.key === step.key)).map(step => goals?.render(step))} goalActionCount={extraCount(needs.goals.filter(row => pathKey(row.projectId) === pathKey(projectId)), scoped)} attention={goals?.attention?.(projectId)} attentionCount={attentionCount} />
           : <p className="command-map-muted">Decision history unavailable</p>,
       };
     },

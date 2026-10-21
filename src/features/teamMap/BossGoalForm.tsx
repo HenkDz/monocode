@@ -7,22 +7,27 @@ export type BossGoalRoute = {
   submit: (text: string, submission: MonoGoalSubmission) => Promise<boolean>;
 };
 
-export function BossGoalForm({ route }: { route?: BossGoalRoute }) {
-  const [text, setText] = useState("");
+export function BossGoalForm({ route, manager }: { route?: BossGoalRoute; manager?: { id: string; name: string; send?: (text: string) => Promise<boolean> } }) {
+  const target = manager?.id ?? route?.context.ownerId ?? "boss";
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const text = drafts[target] ?? "";
+  const setText = (value: string) => setDrafts(previous => ({ ...previous, [target]: value }));
+  const available = manager ? !!manager.send : !!route;
+  const recipient = manager?.name ?? "Boss";
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string>();
   const pending = useRef(false);
   const retained = useRef<{ signature: string; submission: MonoGoalSubmission; rejected: boolean } | null>(null);
 
   async function send() {
-    if (!route || !text.trim() || pending.current) return;
+    if (!available || !text.trim() || pending.current) return;
     const source = text;
-    const signature = JSON.stringify([route.context.ownerId, source]);
+    const signature = JSON.stringify([target, source]);
     pending.current = true;
     setSending(true);
     setError(undefined);
     try {
-      if (retained.current?.signature !== signature || retained.current.rejected) {
+      if (!manager && route && (retained.current?.signature !== signature || retained.current.rejected)) {
         const choice = { mode: "goal", override: "grand" } as const;
         const decision = decideNewMonoGoalRoute({ text: source, attachmentCount: 0, choice, context: route.context });
         retained.current = { signature, rejected: false, submission: {
@@ -30,9 +35,9 @@ export function BossGoalForm({ route }: { route?: BossGoalRoute }) {
           requestId: crypto.randomUUID(), userMessageId: crypto.randomUUID(),
         } };
       }
-      const accepted = await route.submit(source, retained.current.submission);
+      const accepted = manager ? await manager.send!(source) : await route!.submit(source, retained.current!.submission);
       if (!accepted) {
-        retained.current.rejected = true;
+        if (retained.current) retained.current.rejected = true;
         setError("Request was not accepted. Your draft is still here.");
         return;
       }
@@ -46,18 +51,18 @@ export function BossGoalForm({ route }: { route?: BossGoalRoute }) {
     }
   }
 
-  return <form className="command-map-ask" aria-label="Tell the Boss" onSubmit={event => { event.preventDefault(); void send(); }}>
+  return <form className="command-map-ask" data-manager={!!manager} aria-label={`Tell the ${recipient}`} onSubmit={event => { event.preventDefault(); void send(); }}>
     <div>
-      <span aria-hidden="true">✦</span>
-      <textarea rows={1} aria-label="Tell the Boss what you want" placeholder="Tell the Boss what you want…"
-        value={text} disabled={!route || sending} onChange={event => { setText(event.target.value); setError(undefined); }}
+      <span className="command-map-recipient">{manager ? "🧭" : "✦"} {recipient}</span>
+      <textarea rows={1} aria-label={`Tell the ${recipient} what you want`} placeholder={`Tell the ${recipient} what you want…`}
+        value={text} disabled={!available || sending} onChange={event => { setText(event.target.value); setError(undefined); }}
         onKeyDown={event => {
           if (event.key !== "Enter" || event.shiftKey || isImeComposition(event.nativeEvent)) return;
           event.preventDefault(); void send();
         }} />
-      <button type="submit" disabled={!route || sending || !text.trim()}>{sending ? "Sending…" : "Send"}</button>
+      <button type="submit" disabled={!available || sending || !text.trim()}>{sending ? "Sending…" : "Send"}</button>
     </div>
-    {!route && <p>Boss requests are unavailable. Open the Boss chat to continue.</p>}
+    {!available && <p>{recipient} requests are unavailable. Open the {recipient} chat to continue.</p>}
     {error && <p role="alert">{error}</p>}
   </form>;
 }

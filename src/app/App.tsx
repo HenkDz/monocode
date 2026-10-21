@@ -13583,6 +13583,34 @@ function Workspace({
   };
   const mapBoss = listMonos().find(mono => mono.role === "orchestrator" && mono.archivedAt == null);
   const mapBossContext = mapBoss && goalRoutingForMono(mapBoss.id);
+  const submitMapManager = async (managerId: string, project: string, text: string) => {
+    const manager = findMono(managerId);
+    const current = () => {
+      const live = findMono(managerId);
+      if (!live || live.archivedAt != null || live.role !== "manager" ||
+        !live.projects.some(path => sameProjectPath(path, project)) ||
+        !sameProjectPath(live.managerProject ?? live.projects[0] ?? "", project) ||
+        live.managerEngineId !== manager?.managerEngineId)
+        throw Error("That project's Manager changed. Review the current Manager before sending.");
+      return live;
+    };
+    const original = current();
+    const originalSession = sessionsRef.current.find(session => session.id === original.sessionId);
+    const binding = (session: Session) => JSON.stringify([session.id, session.harness, session.cwd, session.worktreeCwd, session.providerAccountId]);
+    const expected = originalSession && binding(originalSession);
+    const selectedAccount = selectedProviderAccountId("codex", project);
+    const session = await ensureMonoSession(managerId, {
+      home: homeDir, load: ensureOpenSession, save: saveMonoPermissions, create: newDefaultSession,
+      add: created => { sessionsRef.current = [...sessionsRef.current, created]; setSessions(sessionsRef.current); },
+    });
+    if (!session) return false;
+    const live = current(), loaded = sessionsRef.current.find(entry => entry.id === session.id);
+    if (original.sessionId && original.sessionId !== session.id || live.sessionId !== session.id || !loaded ||
+      binding(loaded) !== binding(session) || expected && expected !== binding(loaded) ||
+      selectedProviderAccountId("codex", project) !== selectedAccount || !sameProjectPath(loaded.cwd, project))
+      throw Error("The Manager conversation or account changed. Your draft is still here.");
+    return submitSessionRef.current(session.id, text, []);
+  };
   submitMonoGoalRef.current = async (sessionId, text, attachments, submission, recovery) => {
     const mono = monoForSession(sessionId);
     if (!mono || mono.id !== submission.ownerId || mono.role !== "orchestrator")
@@ -17812,7 +17840,7 @@ function Workspace({
                   : decisionLoaded !== decisionLoadKey && <p role="status" className="px-6 py-3 text-sm">Loading decisions…</p>}
                 <TeamMap key={teamMap.scope ?? "org"} sessions={sessions} runs={orchestrationRuns} statuses={managerPrStatuses} scope={teamMap.scope} onClose={teamMap.close} onOpenMono={id => void onOpenRailMono(id)}
                   decisions={!decisionError && decisionLoaded === decisionLoadKey ? commandMapDecisions(monoManagerGoals, listMonos(), decisionActions, Date.now(), { steps: goalNextSteps, render: renderGoalNextAction, input: attentionInput, attention: renderNeedsUserAttention }) : undefined}
-                  bossGoal={mapBossContext ? { context: mapBossContext, submit: submitBossGoal } : undefined} />
+                  bossGoal={mapBossContext ? { context: mapBossContext, submit: submitBossGoal } : undefined} onSendManager={submitMapManager} />
               </div>}
                   <div
                     className={

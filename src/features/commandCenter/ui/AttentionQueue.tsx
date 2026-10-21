@@ -112,7 +112,7 @@ export function AttentionQueueView({ input, callbacks, readInput, open, onClose,
       {item.sessionIds.length > 1 && <p className="aq-owner">Affects {item.sessionIds.length} conversations: {item.sessionIds.join(", ")}</p>}
       {item.detail && item.source !== "storage" && !(item.source === "question" && item.route === "user") && <pre className="aq-evidence">{item.detail}</pre>}
     </>;
-    return <article className="aq-item" key={item.id} aria-label={item.title} data-attention-source={item.source} data-attention-status={item.status} aria-busy={receipt?.status === "pending"}>
+    return <article className="aq-item" tabIndex={-1} key={item.id} aria-label={item.title} data-task-id={item.taskId} data-session-id={item.sessionId} data-attention-source={item.source} data-attention-status={item.status} aria-busy={receipt?.status === "pending"}>
       <span className="aq-symbol" aria-hidden="true">{item.category === "decision" ? "?" : item.category === "failure" ? "×" : "!"}</span>
       <div className="aq-body"><header><h2>{item.title}</h2><span className="aq-state">{settled ? item.status === "resolved" ? "Resolved" : item.status === "replaced" ? "Replaced request" : "No longer available" : agentLiveStateLabel(item.state)}</span></header>
         {presentation === "page" ? evidence : <><p className="aq-path">{item.project} · {item.owner} · {item.route === "user" ? "User-owned request" : "Routed through lead"}</p>

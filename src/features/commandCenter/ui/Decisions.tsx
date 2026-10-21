@@ -29,7 +29,7 @@ export function DecisionCard({ item, roster, actions, sentInitially = false, sen
     }, error => setNotice(error instanceof Error && /already being sent|no longer needs/.test(error.message) ? "Answer already sent or no longer needed" : `Couldn't reach ${optionId === undefined ? "Boss" : target} — try again`))
       .finally(() => { pending.current = false; setBusy(false); });
   };
-  return <article className="decision-card" aria-labelledby={titleId} data-decision-ui data-sent={sent || undefined}>
+  return <article className="decision-card" tabIndex={-1} aria-labelledby={titleId} data-decision-ui data-task-id={decision.taskId} data-session-id={decision.requesterSessionId} data-sent={sent || undefined}>
     <ol className="decision-chain" aria-label="Escalation chain">{decision.escalationChain.map(entry => <li key={entry.id} data-level={entry.level}>{decisionActorName(roster, entry.id)}</li>)}</ol>
     <h2 id={titleId}>{decision.question}</h2>
     <p className="decision-meta"><span className="decision-impact" data-impact={decision.impact}>{decision.impact === "med" ? "Medium" : decision.impact === "high" ? "High" : "Low"} impact</span><span>{projectName(decision.projectId)}</span></p>

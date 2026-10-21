@@ -15,7 +15,7 @@ import { X } from "../../shared/ui/icons";
 import type { OrbitProject } from "./orbit";
 import { goalProgress, mapText, projectGoals, projectMemberTask, type CommandMapDecisions } from "./commandMap";
 
-function WorkTrace({ session, recordedModel }: { session: Session; recordedModel?: TurnModel }) {
+export function WorkTrace({ session, recordedModel }: { session: Session; recordedModel?: TurnModel }) {
   const transcript = useMonoTranscript(session, true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
@@ -123,7 +123,6 @@ export function ProjectDrawer({ project, goals, runs, sessions, decisions, onClo
         <h3>Waiting decisions</h3>{decisions?.cards ?? <p className="command-map-muted">Decision history unavailable</p>}</section>
       <section><h3>Team & tasks</h3>{project.members.length ? project.members.map(node => <MemberTask key={node.id} project={project} node={node} runs={runs} sessions={sessions} onOpenMono={onOpenMono} />) : <p className="command-map-muted">No members assigned yet</p>}</section>
       <section className="command-map-manager-chat"><h3>Manager chat</h3>
-        {goalAction}
         {managerReply ? <p>{mapText(presentationText(managerReply.text), 600)}</p> : <p className="command-map-muted">No loaded Manager reply</p>}
         <button type="button" onClick={() => onOpenMono(project.manager.id)}>Message {mapText(look.name, 80)}</button>
       </section>

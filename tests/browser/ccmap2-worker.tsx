@@ -9,6 +9,7 @@ import { WorkerConversationPicker } from "../../src/features/monos/ui/WorkerConv
 import { publishCardSessions } from "../../src/features/monos/model/monoCards";
 import { orchestrator } from "../../src/features/orchestration/model/orchestration";
 import { TeamMap } from "../../src/features/teamMap/TeamMap";
+import { OrbitMap } from "../../src/features/teamMap/OrbitMap";
 import { Modal } from "../../src/shared/ui/Modal";
 import { TitleBar } from "../../src/app/shell/TitleBar";
 import { WorkspaceGoals } from "../../src/app/shell/WorkspaceContext";
@@ -47,7 +48,7 @@ const props: Omit<SessionPaneProps, "session" | "visible" | "focused" | "inSplit
 Object.assign(h, { React, WorkerConversationPicker, SessionPane, Modal, TeamMapHeaderAction: () => null, sessionPaneProps: props });
 publishCardSessions(f.sessions.map(session => ({ id: session.id, title: session.title, harness: session.harness, busy: !!session.busy, needsInput: false, liveState: selectAgentLiveState(session) })), h.openCard);
 function Fixture() {
-  const [, update] = useState(0), [goalPanel, setGoalPanel] = useState(false);
+  const [, update] = useState(0), [goalPanel, setGoalPanel] = useState(false), [drawerMap, setDrawerMap] = useState(false);
   f.onRefresh(() => update(value => value + 1)); h.refreshFocus();
   useEffect(() => h.registerEscape(), []);
   useEffect(() => { h.recordVisit(); }, [h.monoViewId, h.workerPages]);
@@ -59,13 +60,14 @@ function Fixture() {
       onToggleSidebar={noop} onSelect={h.onSelectTitleTab} onClose={noop} onCloseMany={noop} onReorder={noop} />
     <nav style={{ display: "flex", gap: 12, padding: 10, fontSize: 12, flexWrap: "wrap", flex: "none" }}>
       <button onClick={() => h.onOpenRailMono("worker")}>Sidebar Vale</button><button onClick={() => h.onSelectTitleTab(h.monoTabId("worker"))}>Title Vale</button>
-      <button onClick={() => { h.teamMap.open = true; f.refresh(); }}>Map</button><button onClick={() => setGoalPanel(value => !value)}>Goal panel</button>
+      <button onClick={() => { setDrawerMap(false); h.teamMap.open = true; f.refresh(); }}>Map</button>
+      <button onClick={() => { setDrawerMap(true); h.teamMap.open = true; f.refresh(); }}>Project drawer</button><button onClick={() => setGoalPanel(value => !value)}>Goal panel</button>
       <button onClick={() => h.onOpenApprovalSession("task-a")}>Notification A</button><button onClick={() => h.openReminderSession("past-a")}>Reminder history</button>
       <button onClick={() => h.onVisitBack()}>Back</button><button onClick={() => h.onVisitForward()}>Forward</button>
       <output data-shell-state>{JSON.stringify({ mono: h.monoViewId, active: h.activeSessionId, tabs: h.tabs.map((tab: any) => tab.id), monoTabs: h.openMonoTabs })}</output>
     </nav>
     <div style={{ flex: 1, minHeight: 0, display: "flex", position: "relative" }}>
-      {h.teamMap.open ? <TeamMap sessions={h.sessions} runs={h.orchestrationRuns} statuses={new Map()} onClose={h.teamMap.close} onOpenMono={h.onOpenRailMono} />
+      {h.teamMap.open ? React.createElement(drawerMap ? OrbitMap : TeamMap, { sessions: h.sessions, runs: h.orchestrationRuns, statuses: new Map(), onClose: h.teamMap.close, onOpenMono: h.onOpenRailMono, onToggleView: noop })
         : <div style={{ position: "relative", flex: 1, minWidth: 0 }}>{h.renderPages()}</div>}
       {goalPanel && <div style={{ width: 270, overflow: "auto" }}><WorkspaceGoals project={f.project} sessions={h.sessions} onOpenMono={h.onOpenRailMono} /></div>}
     </div>

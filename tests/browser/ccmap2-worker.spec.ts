@@ -47,6 +47,17 @@ test("B real assignment Open and activity saved attempt stay on one page; queued
   expect((await page.evaluate(() => (window as any).ccmap2Worker.state())).active).toBeUndefined(); expect(errors).toEqual([]);
 });
 
+test("A real project drawer saved task opens exact history independently of the current assignment", async ({ page }) => {
+  const errors = await fixture(page); await page.getByRole("button", { name: "Project drawer", exact: true }).click();
+  await page.getByRole("button", { name: "Open project project", exact: true }).click();
+  const member = page.locator('.command-map-task').filter({ has: page.getByRole("button", { name: "Vale", exact: true }) });
+  await member.getByRole("button", { name: /Show work/ }).click();
+  await member.getByLabel("Vale work attempt", { exact: true }).selectOption("a-1");
+  await expect(member).toContainText("History · Task a · dispatch a-1 · completed");
+  await member.getByRole("button", { name: "Vale", exact: true }).click(); await selected(page, "past-a");
+  expect(errors).toEqual([]);
+});
+
 test("C notification, reminder and approval session interceptors render exact current/history", async ({ page }) => {
   const errors = await fixture(page); await page.getByRole("button", { name: "Notification A" }).click(); await selected(page, "task-a");
   await page.getByRole("button", { name: "Reminder history" }).click(); await selected(page, "past-a");
@@ -107,7 +118,7 @@ test("H real composer, approvals and Escape target only selected task; placehold
   expect((await page.evaluate(() => (window as any).ccmap2Worker.events)).filter((event: any) => event.action === "stop")).toEqual([{ action: "stop", id: "task-a" }]);
   await open(page, "a", "task-a"); await page.evaluate(() => (window as any).ccmap2Worker.approval());
   await expect(page.getByLabel("Command awaiting approval", { exact: true })).toHaveText("exact worker approval");
-  await page.getByRole("button", { name: "Allow once", exact: true }).click();
+  await page.getByRole("button", { name: "Allow", exact: true }).click();
   expect(await page.evaluate(() => (window as any).ccmap2Worker.events)).toContainEqual(expect.objectContaining({ action: "approval", id: "task-a", requestId: 42 }));
   await page.screenshot({ path: `${evidence}/worker-task-approval.png` }); expect(errors).toEqual([]);
 });

@@ -47,12 +47,14 @@ function MemberTask({ project, node, runs, sessions, onOpenMono }: {
   const evidence = selectedHistory ? sessions.find(session => session.id === selectedHistory.dispatch.sessionId) : session;
   const historical = selectedHistory && selectedHistory.dispatch.id !== dispatch?.id;
   const report = selectedHistory ? workbenchSessionTask(owned, selectedHistory.dispatch.sessionId) : task;
+  const target = selectedHistory ? { taskId: selectedHistory.dispatch.taskId, sessionId: selectedHistory.dispatch.sessionId }
+    : task ? { taskId: task.id, sessionId: dispatch?.sessionId ?? task.sessionId } : undefined;
   const steps = evidence?.blocks.filter(block => !block.internal && !block.draft && block.role !== "handoff" && (presentationText(block.monoTeamMessage?.text ?? block.text).trim() || block.tool || block.image || block.attachments?.length || block.taskList || block.plan)).length;
   const look = monoLook(node.mono);
   return <article className="command-map-task" data-status={state.status}>
     <PixelMascot name={look.mascot} color={look.color} still className="size-6" />
     <div>
-      <div className="command-map-task-heading"><button type="button" onClick={() => onOpenMono(node.id, task ? { taskId: task.id, sessionId: selectedHistory?.dispatch.sessionId ?? dispatch?.sessionId ?? task.sessionId } : undefined)}>{look.name}</button><span>{mapText(monoStatusLabel(state), 100)}</span></div>
+      <div className="command-map-task-heading"><button type="button" onClick={() => onOpenMono(node.id, target)}>{look.name}</button><span>{mapText(monoStatusLabel(state), 100)}</span></div>
       <p className="command-map-task-summary">{task ? activityTaskTitle(task) : "No assigned task"}</p>
       {state.liveState?.reason === "paused" && <p className="command-map-muted">{state.liveState.detail}</p>}
       <button type="button" className="command-map-fold" aria-expanded={expanded} aria-controls={foldId} onClick={() => setExpanded(!expanded)}>
@@ -71,7 +73,7 @@ function MemberTask({ project, node, runs, sessions, onOpenMono }: {
           { id: report.reviewArtifactId ?? report.reviewVerdict?.artifactId, label: "Review" },
           { id: report.prSummaryArtifactId, label: "PR summary" },
         ]} />}
-        {evidence ? <WorkTrace key={evidence.id} session={evidence} recordedModel={(selectedHistory?.dispatch ?? dispatch)?.turnModel} /> : <p>Recorded conversation is not loaded. <button type="button" onClick={() => onOpenMono(node.id, task ? { taskId: task.id, sessionId: selectedHistory?.dispatch.sessionId ?? dispatch?.sessionId ?? task.sessionId } : undefined)}>Open Workbench</button></p>}
+        {evidence ? <WorkTrace key={evidence.id} session={evidence} recordedModel={(selectedHistory?.dispatch ?? dispatch)?.turnModel} /> : <p>Recorded conversation is not loaded. <button type="button" onClick={() => onOpenMono(node.id, target)}>Open Workbench</button></p>}
       </div>}
     </div>
   </article>;

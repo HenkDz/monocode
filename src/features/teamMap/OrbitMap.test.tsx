@@ -57,12 +57,36 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); localStorage.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 it("defaults to the Command map and keeps the saved Tree view available", async () => {
+  localStorage.setItem(ORBIT_PREFERENCES_KEY, JSON.stringify({ view: "tree" }));
   await act(async () => root.render(<TeamMap sessions={[]} runs={runs} statuses={new Map()} onOpenMono={open} onClose={close} />));
   expect(host.querySelector("h1")?.textContent).toBe("Command map");
   expect(host.querySelectorAll(".zoom-map-project")).toHaveLength(2);
-  await act(async () => [...host.querySelectorAll<HTMLButtonElement>("button")].find(node => node.textContent === "Tree")!.click());
+  await click("Map options");
+  await act(async () => document.querySelector<HTMLButtonElement>('[role="menuitem"]')!.click());
   expect(JSON.parse(localStorage.getItem(ORBIT_PREFERENCES_KEY)!).view).toBe("tree");
+  expect(JSON.parse(localStorage.getItem(ORBIT_PREFERENCES_KEY)!).mapView).toBe("classic");
   expect(host.querySelector(".team-map-canvas")).not.toBeNull();
+});
+
+it("opens the exact saved task from a member's different current assignment in the drawer", async () => {
+  const current = { ...runs[0].tasks[0], activeDispatchId: "current", lastDispatchId: "current" };
+  const old = { ...current, id: "old-task", sessionId: "old-session", status: "completed", activeDispatchId: undefined, lastDispatchId: "old" };
+  const retained = { ...runs[0], tasks: [current, old], dispatches: [
+    { id: "old", taskId: "old-task", sessionId: "old-session", state: "completed", startedAt: 1, updatedAt: 2 },
+    { id: "current", taskId: current.id, sessionId: current.sessionId, state: "running", startedAt: 3, updatedAt: 4 },
+  ] } as OrchestrationRun;
+  await renderMap({ runs: [retained] }); await click("Open app project");
+  const member = host.querySelector('.command-map-task')!;
+  await act(async () => member.querySelector<HTMLButtonElement>('.command-map-fold')!.click());
+  const attempts = member.querySelector<HTMLSelectElement>('select')!;
+  await act(async () => { attempts.value = "old"; attempts.dispatchEvent(new Event("change", { bubbles: true })); });
+  await act(async () => member.querySelector<HTMLButtonElement>('.command-map-task-heading button')!.click());
+  expect(open).toHaveBeenLastCalledWith("backend", { taskId: "old-task", sessionId: "old-session" });
+  await act(async () => [...member.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === "Open Workbench")!.click());
+  expect(open.mock.calls).toEqual([
+    ["backend", { taskId: "old-task", sessionId: "old-session" }],
+    ["backend", { taskId: "old-task", sessionId: "old-session" }],
+  ]);
 });
 
 it("places Boss above projects and derives whole-line working activity", async () => {

@@ -93,7 +93,7 @@ await monoManagerGoals.hydrate('manager');
 const noop = () => {}, view: DecisionView = { pending: [], log: [], teamPending: 0, handledToday: 0, pruned: 0, skipped: 0 };
 if (params.has('priority')) view.pending.push({ managerId: 'manager', decision: { version: 1, type: 'decision', id: 'ledger', projectId: project, goalId: goal.id, requestingMonoId: 'atlas', requesterSessionId: 'task', escalationChain: [{ id: 'manager', level: 'manager' }, { id: 'user', level: 'user' }], status: 'waiting', answererId: 'user', createdAt: now, question: 'Which review path should we take?', impact: 'high', context: 'The existing ask stays pending', operation: 'work', options: [{ id: 'review', label: 'Review the proposal' }] } });
 const decisionActions: DecisionUiActions = { answer: async () => ({ logFailed: false }), autonomy: async () => {}, openProject: noop };
-let refresh = noop, focus: { path: string; branch: string | null } | undefined;
+let refresh = noop, focus: { path: string; branch: string | null } | undefined = { path: trees[1].path, branch: trees[1].branch };
 const tabs = [newTab("older"), newTab("latest"), newTab("task")];
 const state = {
   tabs, sessions, projectCwd: project, sidebarCwd: project, projectWorktree: trees[1], history: [], orchestrationRuns: runs,

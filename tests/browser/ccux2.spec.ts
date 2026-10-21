@@ -108,7 +108,7 @@ test("production coordination details, grouped member feed, usage and custom fol
   await expect(feed.getByRole('link', { name: 'Review notes' })).toHaveCount(3);
   await expect(feed.getByRole('link', { name: 'Review notes' }).first()).toHaveAttribute('href', 'https://example.com/review');
   await expect(page.locator('main [data-task-metrics]')).toContainText('Usage');
-  await expect(page.locator('main [data-task-metrics] span[title]')).toHaveAttribute('title', '1,240 in / 240 out tokens');
+  await expect(page.locator('main [data-task-metrics]').getByText('Usage', { exact: true })).toHaveAttribute('title', '1,240 in / 240 out tokens');
   await expect(page.locator('main details, main summary')).toHaveCount(0);
   const work = page.locator('[data-transcript-turn-work] > button');
   await expect(work).toContainText('Worked for 14m');
@@ -212,7 +212,7 @@ for (const [width, theme, zoom] of [[1600, 'dark', 1], [1024, 'light', 1], [480,
     await page.goto(`/tests/browser/ccux2.html?theme=${theme}`);
     await expect(page.locator('[data-current-view]')).toBeVisible();
     if (zoom !== 1) await page.evaluate(value => window.ccux2.zoom(value), zoom);
-    for (const route of ['conversation', 'Decisions', 'Command map']) {
+    for (const route of ['conversation', 'Decisions', 'Command map', 'Settings']) {
       if (route !== 'conversation') await page.locator('aside').first().getByRole('button', { name: route, exact: true }).click();
       for (const name of ['Minimize window', 'Maximize window', 'Close window']) {
         const button = page.getByRole('button', { name, exact: true });

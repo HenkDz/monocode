@@ -5,7 +5,7 @@ import { newSession } from "../sessions/model/session";
 import { prStatusKey } from "../source-control/hooks/usePrStatus";
 import { buildTeamMap } from "./model";
 import { orbitProjects } from "./orbit";
-import { mapCamera, mapTaskState, projectCamera, projectMapTasks, projectPoint, zoomCamera } from "./zoomMap";
+import { mapCamera, mapTaskState, projectCamera, projectMapTasks, projectPoint, zoomCamera } from "./zoomMapModel";
 
 const roster = [{ id: "manager", role: "manager" as const, managerEngineId: "engine", managerProject: "/app", projects: ["/app"], mascot: "cat", color: "#aaa" }];
 const project = orbitProjects(buildTeamMap({ roster, runs: [], sessions: [] }).nodes)[0];

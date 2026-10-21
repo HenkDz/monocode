@@ -17,7 +17,7 @@ import { mapOwnState, mapText, projectGoals, projectMemberTask } from "./command
 import { buildTeamMap } from "./model";
 import { orbitProjects, loadOrbitPreferences, type OrbitProject } from "./orbit";
 import { WorkTrace } from "./ProjectDrawer";
-import { mapCamera, projectCamera, projectMapTasks, projectPoint, TASK_FLOW, TASK_LABEL, zoomCamera, type MapCamera, type MapTask } from "./zoomMap";
+import { mapCamera, projectCamera, projectMapTasks, projectPoint, TASK_FLOW, TASK_LABEL, zoomCamera, type MapCamera, type MapTask } from "./zoomMapModel";
 import type { TeamMapProps } from "./TeamMap";
 import "./zoomMap.css";
 

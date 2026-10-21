@@ -145,6 +145,7 @@ it("keeps terminal goal history out of lanes and summaries while preserving term
   vi.mocked(monoManagerGoals.goals).mockReturnValue([{ ...goal, state: "done" }]);
   await act(async () => root.render(null));
   await render({ runs: [{ ...runs[0], tasks: [done] }] });
+  await click('[aria-label="Open app project"]');
   expect(host.querySelectorAll('.zoom-map-lane')).toHaveLength(0);
   expect(host.querySelector('.zoom-map-empty')?.textContent).toContain("No active goal");
   expect(host.querySelector('.zoom-map-finished')?.textContent).toContain("Done");

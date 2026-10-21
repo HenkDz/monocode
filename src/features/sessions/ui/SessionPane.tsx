@@ -196,6 +196,7 @@ import { sessionAuthDiagnostics } from "../model/sessionAuthDiagnostics";
 
 export type SessionPaneProps = {
   session: Session;
+  workerPage?: { owner: import("../../monos/model/mono").Mono; task?: import("../../orchestration/model/orchestrationState").OrchestrationTask };
   workspaceSwitchingSessionId?: string;
   reviewUndoLocked?: boolean;
   visible: boolean;
@@ -403,6 +404,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
   remoteSessionStarted = false,
   allowedModelHarnesses,
   session,
+  workerPage,
   workspaceSwitchingSessionId,
   reviewUndoLocked = false,
   visible,
@@ -597,14 +599,14 @@ const LocalSessionPane = memo(function LocalSessionPane({
     .flatMap((run) => run.tasks)
     .find((task) => task.sessionId === session.id && task.memberId);
   const savedMemberTask = memberTask ?? workbenchSessionTask(orchestrationRuns, session.id);
-  const workbenchMember = isMember
+  const workbenchMember = workerPage?.owner ?? (isMember
     ? mono
     : savedMemberTask
       ? findMono(savedMemberTask.memberId ?? "")
-      : undefined;
-  const workbench = isMember || (!mono && !!savedMemberTask);
+      : undefined);
+  const workbench = !!workerPage || isMember || (!mono && !!savedMemberTask);
   const workbenchLook = workbenchMember ? monoLook(workbenchMember) : undefined;
-  const workbenchTask = isMember ? assignedTask : savedMemberTask;
+  const workbenchTask = workerPage?.task ? savedMemberTask?.id === workerPage.task.id ? savedMemberTask : workerPage.task : isMember ? assignedTask : savedMemberTask;
   const workbenchState =
     liveTask
       ? liveTaskSession?.liveState ?? selectAgentLiveState(undefined, { task: liveTask, tasks: liveTaskRun?.tasks, runStatus: liveTaskRun?.status, pauseReason: liveTaskRun?.lastPauseReason })
@@ -1412,9 +1414,10 @@ const LocalSessionPane = memo(function LocalSessionPane({
           {workbench && (
             <WorkbenchHeader
               session={session}
-              name={isMember ? (workbenchLook?.name ?? "Member") : coordinationSummary(workbenchTask?.title ?? title, 60)}
+              workerPage={!!workerPage}
+              name={workerPage || isMember ? (workbenchLook?.name ?? "Member") : coordinationSummary(workbenchTask?.title ?? title, 60)}
               role={
-                isMember
+                workerPage || isMember
                   ? (workbenchMember?.specialty ?? "Team member")
                   : ""
               }
@@ -1423,9 +1426,9 @@ const LocalSessionPane = memo(function LocalSessionPane({
               state={workbenchState}
               task={!isMember}
               memberName={workbenchLook?.name ?? workbenchTask?.memberName ?? "Member"}
-              onHome={!isMember && workbenchMember?.sessionId ? () => openCardSession(workbenchMember.sessionId!) : undefined}
+              onHome={!workerPage && !isMember && workbenchMember?.sessionId ? () => openCardSession(workbenchMember.sessionId!) : undefined}
               currentTaskMetrics={currentTaskMetrics}
-              onViewLive={liveTask ? () => openCardSession(liveTask.sessionId) : undefined}
+              onViewLive={!workerPage && liveTask ? () => openCardSession(liveTask.sessionId) : undefined}
               onStop={session.busy && workspaceSwitchingSessionId !== session.id ? () => onStop(session.id) : undefined}
               onOpenWorktree={checkout && availableCheckout === checkout ? () => {
                 setFolderError(undefined);
@@ -1704,7 +1707,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
                 />
                 {remoteSessionLoading ? null : isEmpty ? (
                   workbench ? (
-                    liveTask ? <div className="ccwb1-live-work">
+                    liveTask && !workerPage ? <div className="ccwb1-live-work">
                       <h3>{workbenchLook?.name ?? "Member"} is {liveTask.status === "queued" ? "queued for" : "working on"}</h3>
                       <p>{presentationText(liveTask.title)}</p>
                       <TaskMetricsLine metrics={currentTaskMetrics} state={workbenchState} showState={false} />
@@ -2190,7 +2193,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
                     <p role="status" className="cc7u-delivery">
                       {memberDelivery}
                     </p>
-                    <span aria-label="Composer target">{workbenchLook?.name ?? workbenchTask?.memberName ?? "Member"} · {isMember ? "Home" : "Task"}</span>
+                    <span aria-label="Composer target">{workbenchLook?.name ?? workbenchTask?.memberName ?? "Member"} · {workerPage?.task ? coordinationSummary(workerPage.task.title, 60) : isMember || workerPage ? "Home" : "Task"}</span>
                     </div>
                   )}
                 </div>

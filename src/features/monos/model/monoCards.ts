@@ -162,7 +162,7 @@ export type CardSession = {
 
 type SessionIndex = {
   sessions: Map<string, CardSession>;
-  open?: (sessionId: string) => void;
+  open?: (sessionId: string, target?: import("./workerPage").WorkerTaskTarget) => void;
 };
 
 const index: SessionIndex = { sessions: new Map() };
@@ -171,7 +171,7 @@ const INDEX_CHANGED = "monocode:mono-card-sessions";
 /** The app keeps session cards current by publishing what they point at. */
 export function publishCardSessions(
   sessions: CardSession[],
-  open: (sessionId: string) => void,
+  open: (sessionId: string, target?: import("./workerPage").WorkerTaskTarget) => void,
 ): void {
   index.sessions = new Map(sessions.map((session) => [session.id, session]));
   index.open = open;
@@ -186,8 +186,8 @@ export function cardSessionsSnapshot(): ReadonlyMap<string, CardSession> {
   return index.sessions;
 }
 
-export function openCardSession(sessionId: string): void {
-  index.open?.(sessionId);
+export function openCardSession(sessionId: string, target?: import("./workerPage").WorkerTaskTarget): void {
+  index.open?.(sessionId, target);
 }
 
 export function subscribeCardSessions(onChange: () => void): () => void {

@@ -54,7 +54,7 @@ export type TeamMapProps = {
   runs: readonly OrchestrationRun[];
   statuses: ReadonlyMap<string, GitPr | null>;
   scope?: string;
-  onOpenMono: (id: string) => void;
+  onOpenMono: (id: string, target?: import("../monos/model/workerPage").WorkerTaskTarget | null) => void;
   onClose: () => void;
   decisions?: CommandMapDecisions;
   bossGoal?: BossGoalRoute;

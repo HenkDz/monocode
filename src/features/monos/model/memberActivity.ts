@@ -29,6 +29,7 @@ export type MemberActivityEvent = {
   | { block: Block; task?: never; label?: never; error?: never }
   | {
       task: OrchestrationTask;
+      sessionId?: string;
       label: string;
       error?: string;
       block?: never;
@@ -119,6 +120,7 @@ export function memberActivityEvents(
           id: `dispatch:${run.leadId}:${dispatch.id}:outcome`,
           kind,
           task,
+          sessionId: dispatch.sessionId,
           label:
             dispatch.state === "cancelled"
               ? "Cancelled"

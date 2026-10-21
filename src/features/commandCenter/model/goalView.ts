@@ -8,7 +8,7 @@ import { selectAgentMetrics, selectDelegationEdges, selectGoalMetrics, selectTas
   type AgentMetrics, type DelegationEdge } from "../../agents/model/agentMetrics";
 import { currentTurnIndex } from "../../agents/model/turnMetrics";
 
-export type GoalTarget = { monoId?: string; sessionId?: string; requestSessionId?: string };
+export type GoalTarget = { monoId?: string; sessionId?: string; requestSessionId?: string; taskId?: string };
 export function agentInitials(name: string, role?: string, project = ""): string {
   const words = name.trim().split(/\s+/);
   return (role === "manager" && project ? `${project[0]}M`
@@ -19,7 +19,9 @@ export function openGoalTarget(target: GoalTarget, routes: {
   request: (id: string) => void;
   mono: (id: string) => void | Promise<void>;
   session: (id: string) => void | Promise<void>;
+  task?: (target: { taskId: string; sessionId?: string }) => void | Promise<void>;
 }) {
+  if (target.taskId && routes.task) return routes.task({ taskId: target.taskId, sessionId: target.requestSessionId ?? target.sessionId });
   if (target.requestSessionId) {
     routes.close();
     return routes.request(target.requestSessionId);
@@ -164,7 +166,7 @@ export function selectGoalViews(input: GoalViewInput): GoalViewModel {
         members.push({ name, state });
       const reviewed = task.reviewOf && workerRun.tasks.find(candidate => candidate.id === task.reviewOf!.taskId);
       return { id: `${workerRun.leadId}:${task.id}`, monoId: task.memberId, role: "worker", name,
-        state, activity: task.title, target: sessionId ? (state.status === "needs-you" ? { requestSessionId: sessionId } : { sessionId }) : member ? { monoId: member.id } : undefined,
+        state, activity: task.title, target: { taskId: task.id, sessionId },
         metrics: selectTaskMetrics(task, workerRun.dispatches ?? [], input.sessions, now),
         elapsedMs: attempts.find(attempt => attempt.edge.id === latest?.id)?.elapsedMs, elapsedLabel: "Attempt elapsed",
         attempts, review: task.reviewOf ? { ...task.reviewOf, title: reviewed?.title ?? "Unknown task",

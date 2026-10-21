@@ -336,7 +336,7 @@ export function MemberDetails({
       <section className="border-t border-stroke px-4 py-3" aria-label="Member tasks">
         <h3 className="mb-2 text-xs text-content/60">Recent tasks</h3>
         {tasks.length ? tasks.map(task => (
-          <button key={task.id} type="button" onClick={() => openCardSession(task.sessionId)}
+          <button key={task.id} type="button" onClick={() => openCardSession(task.sessionId, { taskId: task.id, sessionId: task.sessionId })}
             className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-content/5 focus-visible:outline-accent">
             <span className="min-w-0 flex-1 truncate" title={task.title}>{task.title}</span><span className="shrink-0 text-content/50">{managerTaskLifecycle(task, taskPrStatus(task, statuses), sessions.get(task.sessionId)?.needsInput)[0]}</span>
           </button>

@@ -16,6 +16,9 @@ import { resolveMonoRolePermissions, snapshotMonoWorkerPermissions } from "../fe
 import { archiveMonoConversation, archiveProjectMonos, offerProjectMonoRestore, projectMonoTeam } from "../features/monos/model/monoArchive";
 import { loadMonoView, saveMonoView, monoForView, monoViewProject, memberDetailsView, selectedOrgMono, monoLiveState, workbenchSessionTask } from "../features/monos/model/monoNavigation";
 import { WorkbenchDrawer } from "../features/monos/ui/WorkbenchDrawer";
+import { workerPageTasks, workerTaskView, workerTaskForSession, migrateWorkerTaskTabs, type WorkerTaskTarget, type WorkerPageSelection } from "../features/monos/model/workerPage";
+import { WorkerConversationPicker } from "../features/monos/ui/WorkerConversationPicker";
+import { Modal } from "../shared/ui/Modal";
 import { worktreeSessionGroups } from "../features/source-control/model/worktreeSessions";
 import { sessionActivityAt } from "../features/sessions/model/sessionActivity";
 import { MonoTeamActivity } from "../features/monos/ui/MonoTeamActivity";
@@ -1561,7 +1564,22 @@ function Workspace({
   const [openAppViews, setOpenAppViews] = useState<AppView[]>([]);
   // Monos open as title tabs in the inset layout, by Mono id.
   const [openMonoTabs, setOpenMonoTabs] = useState<string[]>([]);
-  const workerTaskTabs = useRef(new Map<string, string>());
+  const [workerPages, setWorkerPages] = useState<Record<string, WorkerPageSelection>>({});
+  const workerPagesRef = useRef(workerPages);
+  workerPagesRef.current = workerPages;
+  const setWorkerPage = useCallback((ownerId: string, value: WorkerPageSelection) => {
+    workerPagesRef.current = { ...workerPagesRef.current, [ownerId]: value };
+    setWorkerPages(workerPagesRef.current);
+  }, []);
+  const workerSelectedSessionIdRef = useRef<string | undefined>(undefined);
+  const [workerPageError, setWorkerPageError] = useState<string>();
+  const workerNavigationRef = useRef<(ownerId: string, target?: WorkerTaskTarget | null) => Promise<void>>(async () => {});
+  const workerVisitTargets = useRef(new Map<string, { ownerId: string; target: WorkerTaskTarget | null }>());
+  const [workerLayoutReady, setWorkerLayoutReady] = useState(false);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setWorkerLayoutReady(true), 3000);
+    return () => window.clearTimeout(timer);
+  }, []);
   const [worktreeOverview, setWorktreeOverview] = useState<{ project: string; tree: Worktree }>();
   const [reusablePage, setReusablePage] = useState<{ page?: ShellPage; appView?: AppView }>();
   const [titleTabOrder, setTitleTabOrder] = useState(() =>
@@ -1820,6 +1838,8 @@ function Workspace({
     () => new Map(),
   );
   const [history, setHistory] = useState<SessionSummary[]>(() => bootHistory);
+  const workerHistoryRef = useRef(history);
+  workerHistoryRef.current = history;
   const [, refreshRemoteTabTitles] = useState(0);
   useEffect(() => {
     const updated = () => refreshRemoteTabTitles((value) => value + 1);
@@ -2328,6 +2348,15 @@ function Workspace({
   const monoViewSession = monoViewId
     ? sessions.find((session) => session.id === monoViewId)
     : undefined;
+  const workerPageOwner = monoViewId ? monoForSession(monoViewId) : undefined;
+  const workerPageSelection = workerPageOwner && workerPages[workerPageOwner.id];
+  const workerSelectedView = workerPageSelection?.target ? workerTaskView(orchestrationRuns, workerPageSelection.target) : undefined;
+  const workerSelectedSession = workerPageError || workerPageOwner?.archivedAt != null || workerPageSelection?.status === "unavailable" ? undefined : workerPageSelection?.target
+    ? workerPageSelection.status === "ready" && workerSelectedView?.ownerId === workerPageOwner?.id && workerPageOwner?.archivedAt == null
+      ? sessions.find(session => session.id === workerSelectedView.sessionId && !history.some(entry => entry.id === session.id && entry.archived))
+      : undefined
+    : monoViewSession;
+  workerSelectedSessionIdRef.current = workerSelectedSession?.id;
   const monoCovers = !!monoViewId;
   // The open Mono's title tab, in the inset layout.
   const monoViewTabId = useMemo(() => {
@@ -2601,14 +2630,14 @@ function Workspace({
   const approvalSessionIds = approvalSessionIdsRef.current;
 
   const activeSessionId =
-    searchViewOpen || notesViewOpen || automationsViewOpen || settingsOpen
+    workerPageError || searchViewOpen || notesViewOpen || automationsViewOpen || settingsOpen
       ? undefined
       : inboxViewOpen
         ? inboxAskPortal?.sessionId
         : shownMonoSessionId && monoShownSessionFocused
           ? shownMonoSessionId
           : monoViewId
-            ? monoViewSession?.id
+            ? workerSelectedSession?.id
             : active?.id;
   const activeSessionIdRef = useRef(activeSessionId);
   activeSessionIdRef.current = activeSessionId;
@@ -3233,9 +3262,13 @@ function Workspace({
   }, []);
 
   useEffect(() => {
-    const memberHomes = listMonos().filter(mono => mono.role === "member" && mono.archivedAt == null && mono.sessionId).map(mono => mono.sessionId!);
-    const openIds = new Set([...tabs.map((tab) => tab.id), ...memberHomes]);
-    const activeVisit = monoViewId && memberHomes.includes(monoViewId) ? monoViewId : activeTabId;
+    const owner = monoViewId ? monoForSession(monoViewId) : undefined;
+    const target = owner && workerPages[owner.id]?.target;
+    const visit = owner && (owner.role === "member" || target || workerPageTasks(orchestrator.snapshot(), owner.id).length)
+      ? `worker-view:${JSON.stringify([owner.id, target?.taskId ?? null, target?.sessionId ?? null])}` : undefined;
+    if (owner && visit) workerVisitTargets.current.set(visit, { ownerId: owner.id, target: target ?? null });
+    const openIds = new Set([...tabs.map(tab => tab.id), ...[...workerVisitTargets.current].filter(([, entry]) => findMono(entry.ownerId)?.archivedAt == null).map(([id]) => id)]);
+    const activeVisit = visit ?? activeTabId;
     let next = pruneTabVisitHistory(tabVisitRef.current, openIds, activeVisit);
     if (tabVisitFromHistoryRef.current) {
       tabVisitFromHistoryRef.current = false;
@@ -3243,7 +3276,7 @@ function Workspace({
       next = recordTabVisit(next, activeVisit);
     }
     commitTabVisit(pruneTabVisitHistory(next, openIds, activeVisit));
-  }, [activeTabId, monoViewId, monosSnap, commitTabVisit, tabs]);
+  }, [activeTabId, monoViewId, workerPages, monosSnap, commitTabVisit, tabs]);
 
   /** `cwd` scopes group inheritance: a tab from another project starts alone. */
   const insertBeside = useCallback(
@@ -4750,64 +4783,28 @@ function Workspace({
   }, [activateTab, activeTabId, deckProjectTabs]);
 
   const onVisitBack = useCallback(() => {
-    if (monoViewIdRef.current && monoForSession(monoViewIdRef.current)?.role !== "member") {
-      activateTab(activeTabIdRef.current);
-      return;
-    }
-    const openIds = new Set([...tabsRef.current.map((tab) => tab.id), ...listMonos().filter(mono => mono.role === "member" && mono.archivedAt == null && mono.sessionId).map(mono => mono.sessionId!)]);
-    const pruned = pruneTabVisitHistory(
-      tabVisitRef.current,
-      openIds,
-      monoViewIdRef.current ?? activeTabIdRef.current,
-    );
+    const openIds = new Set([...tabsRef.current.map(tab => tab.id), ...[...workerVisitTargets.current].filter(([, entry]) => findMono(entry.ownerId)?.archivedAt == null).map(([id]) => id)]);
+    const pruned = pruneTabVisitHistory(tabVisitRef.current, openIds, tabVisitRef.current.current);
     const next = tabVisitBack(pruned);
     if (!next || !openIds.has(next.current)) return;
     tabVisitFromHistoryRef.current = true;
     commitTabVisit(next);
-    if (monoForSession(next.current)?.role === "member") {
-      workspaceSessionRequest.current++;
-      workspaceNavigation.cancel();
-      monoViewRequest.current++;
-      monoViewIdRef.current = next.current;
-      setMonoViewId(next.current);
-      setMonoActivity(null);
-      setMonoSessions(null);
-      setMonoShownSessionFocused(false);
-      setProjectTerminalFocused(false);
-      setComposerFocused(true);
-      setComposerFocusToken((token) => token + 1);
-    } else activateTab(next.current);
-  }, [activateTab, commitTabVisit, workspaceNavigation.cancel]);
+    const worker = workerVisitTargets.current.get(next.current);
+    if (worker) void workerNavigationRef.current(worker.ownerId, worker.target);
+    else activateTab(next.current);
+  }, [activateTab, commitTabVisit]);
 
   const onVisitForward = useCallback(() => {
-    if (monoViewIdRef.current && monoForSession(monoViewIdRef.current)?.role !== "member") {
-      activateTab(activeTabIdRef.current);
-      return;
-    }
-    const openIds = new Set([...tabsRef.current.map((tab) => tab.id), ...listMonos().filter(mono => mono.role === "member" && mono.archivedAt == null && mono.sessionId).map(mono => mono.sessionId!)]);
-    const pruned = pruneTabVisitHistory(
-      tabVisitRef.current,
-      openIds,
-      monoViewIdRef.current ?? activeTabIdRef.current,
-    );
+    const openIds = new Set([...tabsRef.current.map(tab => tab.id), ...[...workerVisitTargets.current].filter(([, entry]) => findMono(entry.ownerId)?.archivedAt == null).map(([id]) => id)]);
+    const pruned = pruneTabVisitHistory(tabVisitRef.current, openIds, tabVisitRef.current.current);
     const next = tabVisitForward(pruned);
     if (!next || !openIds.has(next.current)) return;
     tabVisitFromHistoryRef.current = true;
     commitTabVisit(next);
-    if (monoForSession(next.current)?.role === "member") {
-      workspaceSessionRequest.current++;
-      workspaceNavigation.cancel();
-      monoViewRequest.current++;
-      monoViewIdRef.current = next.current;
-      setMonoViewId(next.current);
-      setMonoActivity(null);
-      setMonoSessions(null);
-      setMonoShownSessionFocused(false);
-      setProjectTerminalFocused(false);
-      setComposerFocused(true);
-      setComposerFocusToken((token) => token + 1);
-    } else activateTab(next.current);
-  }, [activateTab, commitTabVisit, workspaceNavigation.cancel]);
+    const worker = workerVisitTargets.current.get(next.current);
+    if (worker) void workerNavigationRef.current(worker.ownerId, worker.target);
+    else activateTab(next.current);
+  }, [activateTab, commitTabVisit]);
 
   const onActivate = useCallback(
     (slot: number) => {
@@ -4822,12 +4819,13 @@ function Workspace({
 
   const onFocusPane = useCallback(
     (paneId: string) => {
-      if (paneId === monoViewIdRef.current) {
+      if (monoViewIdRef.current && paneId === workerSelectedSessionIdRef.current) {
         setMonoShownSessionFocused(false);
         setProjectTerminalFocused(false);
         setComposerFocused(true);
         return;
       }
+      if (monoViewIdRef.current && paneId !== workerSelectedSessionIdRef.current && (paneId === monoViewIdRef.current || workerTaskForSession(orchestrator.snapshot(), paneId))) return;
       if (paneId === shownMonoSessionIdRef.current) {
         setMonoShownSessionFocused(true);
         setProjectTerminalFocused(false);
@@ -5509,50 +5507,134 @@ function Workspace({
   }, []);
 
   const onOpenMono = useCallback(
-    async (monoId: string) => {
+    async (monoId: string, target?: WorkerTaskTarget | null) => {
+      const original = findMono(monoId);
+      if (!original) {
+        if (target) { monoViewRequest.current++; teamMap.close(); setWorkerPageError("This worker or Manager is no longer available. The task conversation was not changed."); }
+        return;
+      }
+      setWorkerPageError(undefined);
+      const remembered = workerPagesRef.current[monoId];
+      const explicit = target !== undefined || remembered?.explicit === true;
+      const selected = target !== undefined ? target : remembered?.explicit ? remembered.target
+        : original.role === "member" ? workerPageTasks(orchestrator.snapshot(), monoId)
+          .find(({ task }) => ["queued", "running", "cancelling", "blocked", "interrupted"].includes(task.status))?.task : null;
+      const intent = selected ? { taskId: "taskId" in selected ? selected.taskId : selected.id,
+        sessionId: selected.sessionId } : null;
+      const view = intent && workerTaskView(orchestrator.snapshot(), intent);
+      // Freeze the attempt before awaiting; a retry must never become the requested conversation.
+      if (intent && view) intent.sessionId = view.sessionId;
+      const relation = (candidate: ReturnType<typeof workerTaskView>) => candidate &&
+        `${candidate.ownerId}:${candidate.task.id}:${candidate.sessionId}:${candidate.dispatch?.id ?? candidate.task.activeDispatchId ?? candidate.task.lastDispatchId ?? ""}`;
+      const expected = relation(view || undefined);
+      const request = ++monoViewRequest.current;
+      workerSelectedSessionIdRef.current = undefined;
+      setWorkerPage(monoId, { target: intent, status: "loading", opened: remembered?.opened ?? [], explicit });
+      const currentOwner = () => {
+        const owner = findMono(monoId);
+        return request === monoViewRequest.current && owner && owner.archivedAt == null &&
+          (!original.sessionId || owner.sessionId === original.sessionId) ? owner : undefined;
+      };
+      const currentTask = () => !intent || !!expected && relation(workerTaskView(orchestrator.snapshot(), intent)) === expected;
       setWorktreeOverview(undefined);
       teamMap.close();
       setMonoTeamRequest(0);
-      updateMono(monoId, (mono) => ({ ...mono, lastUsedAt: Date.now() }));
       workspaceSessionRequest.current++;
-      setMonoActivity(null);
       workspaceNavigation.cancel();
-      const request = ++monoViewRequest.current;
       lastMonoIdRef.current = monoId;
+      setMonoActivity(null);
+      setMonoSessions(null);
+      setMonoShownSession(null);
+      setMonoShownSessionFocused(false);
+      setMonoDetailsOpen(false);
+      setMonoArtifact(null);
+      setMonoChanges(null);
       setSettingsOpen(false);
-      const session = await ensureMonoSession(monoId, {
-        home: homeDir,
-        load: ensureOpenSession, save: saveMonoPermissions,
-        create: (path) => newDefaultSession(path),
-        add: (created) => {
-          sessionsRef.current = [...sessionsRef.current, created];
-          setSessions(sessionsRef.current);
-        },
-      });
-      if (!session || request !== monoViewRequest.current || !findMono(monoId)) return;
-      // What the last Mono had open over its overview is its own; another
-      // Mono opens on its list.
-      if (monoViewIdRef.current !== session.id) {
-        setMonoShownSession(null);
-        setMonoShownSessionFocused(false);
-        setMonoOverviewDocument(null);
+      setFilePickerOpen(false);
+      const arrive = (homeId: string) => {
+        if (monoViewIdRef.current !== homeId) {
+          setMonoShownSession(null); setMonoShownSessionFocused(false); setMonoOverviewDocument(null);
+        }
+        monoViewIdRef.current = homeId;
+        setMonoViewId(homeId);
+        saveOpenMono(monoId);
+        setSearchViewOpen(false); setInboxViewOpen(false); setNotesViewOpen(false); setAutomationsViewOpen(false);
+        setOpenMonoTabs(current => [...new Set([...current, monoId])]);
+        setProjectTerminalFocused(false);
+      };
+      // An existing page can show loading/unavailable immediately, without exposing Home input.
+      if (original.sessionId) arrive(original.sessionId);
+      if (original.archivedAt != null) {
+        if (!original.sessionId) setWorkerPageError("This worker is archived.");
+        setWorkerPage(monoId, { target: intent, status: "unavailable", error: "This worker is archived.", opened: remembered?.opened ?? [], explicit });
+        return;
       }
-      monoViewIdRef.current = session.id;
-      saveOpenMono(monoId);
-      // App views close with the Mono's arrival, not before the await, so
-      // the workspace tab never shows between them.
-      setSearchViewOpen(false);
-      setInboxViewOpen(false);
-      setNotesViewOpen(false);
-      setAutomationsViewOpen(false);
-      setMonoViewId(session.id);
-      setOpenMonoTabs((current) => current.includes(monoId) ? current : [...current, monoId]);
-      setProjectTerminalFocused(false);
-      setComposerFocused(true);
-      setComposerFocusToken((token) => token + 1);
+      if (intent && (!view || view.ownerId !== monoId)) {
+        setWorkerPage(monoId, { target: intent, status: "unavailable", error: "This task or saved attempt is no longer available for this worker.", opened: remembered?.opened ?? [], explicit });
+        if (!original.sessionId) setWorkerPageError("This task or saved attempt is no longer available for this worker.");
+        return;
+      }
+      const session = await ensureMonoSession(monoId, {
+        home: homeDir, load: ensureOpenSession, save: saveMonoPermissions,
+        create: path => newDefaultSession(path),
+        add: created => { sessionsRef.current = [...sessionsRef.current, created]; setSessions(sessionsRef.current); },
+      });
+      if (!session || !currentOwner()) return;
+      arrive(session.id);
+      if (!currentTask() || intent && view?.ownerId !== monoId) {
+        setWorkerPage(monoId, { target: intent, status: "unavailable", error: "This task or saved attempt is no longer available for this worker.", opened: remembered?.opened ?? [], explicit });
+        return;
+      }
+      if (!intent) {
+        setWorkerPage(monoId, { target: null, status: "ready", opened: remembered?.opened ?? [], explicit });
+      } else {
+        const selectedId = intent.sessionId;
+        const archived = () => workerHistoryRef.current.some(entry => entry.id === selectedId && entry.archived);
+        let loaded: Session | null = null;
+        let error: string | undefined;
+        try { if (selectedId && !archived()) loaded = await ensureOpenSession(selectedId); }
+        catch (reason) { error = `Conversation unavailable: ${String(reason)}`; }
+        if (!currentOwner() || monoViewIdRef.current !== session.id || !currentTask()) return;
+        const notStarted = !loaded && view?.task.status === "queued" && !view.dispatch;
+        setWorkerPage(monoId, { target: intent, status: loaded && !archived() || notStarted ? "ready" : "unavailable", explicit,
+          error: archived() ? "This conversation is archived." : error ?? (!loaded && !notStarted ? "This conversation is no longer available." : undefined),
+          opened: [...new Set([...(workerPagesRef.current[monoId]?.opened ?? []), ...(loaded && !archived() ? [loaded.id] : [])])] });
+      }
+      if (!currentOwner()) return;
+      setComposerFocused(true); setComposerFocusToken(token => token + 1);
     },
-    [ensureOpenSession, workspaceNavigation.cancel],
+    [ensureOpenSession, workspaceNavigation.cancel, setWorkerPage],
   );
+  const openWorkerTask = useCallback((memberId: string, target?: WorkerTaskTarget | null) => onOpenMono(memberId, target), [onOpenMono]);
+  workerNavigationRef.current = openWorkerTask;
+  const openWorkerSession = useCallback((sessionId: string) => {
+    const view = workerTaskForSession(orchestrator.snapshot(), sessionId);
+    if (!view) return undefined;
+    return openWorkerTask(view.ownerId ?? view.task.memberId ?? "", { taskId: view.task.id, sessionId });
+  }, [openWorkerTask]);
+
+  const workerLayoutMigrated = useRef(false);
+  useEffect(() => {
+    if (!workerLayoutReady || workerLayoutMigrated.current) return;
+    workerLayoutMigrated.current = true;
+    const migrated = migrateWorkerTaskTabs(tabsRef.current, activeTabIdRef.current, orchestrator.snapshot());
+    if (migrated.tabs !== tabsRef.current) {
+      tabsRef.current = [...migrated.tabs];
+      setTabs([...migrated.tabs]);
+    }
+    const selected = migrated.selected;
+    const owner = selected?.ownerId && findMono(selected.ownerId);
+    if (!selected || !owner?.sessionId) return;
+    monoViewRequest.current++;
+    monoViewIdRef.current = owner.sessionId;
+    setMonoViewId(owner.sessionId);
+    setOpenMonoTabs(current => [...new Set([...current, owner.id])]);
+    const loaded = sessionsRef.current.some(session => session.id === selected.sessionId);
+    setWorkerPage(owner.id, { target: { taskId: selected.task.id, sessionId: selected.sessionId },
+      status: loaded ? "ready" : "unavailable", error: loaded ? undefined : "Conversation not loaded. Select this assignment to open it.",
+      opened: loaded ? [selected.sessionId] : [], explicit: true });
+    setProjectTerminalFocused(false);
+  }, [workerLayoutReady, setWorkerPage]);
 
   // A Mono open when the app last closed opens again; a moved window keeps
   // what it carried.
@@ -5709,6 +5791,8 @@ function Workspace({
       sessionId: string,
       workspace?: { project: string; tree: Worktree; orphaned?: boolean },
     ) => {
+      const workerOpening = !workspace && openWorkerSession(sessionId);
+      if (workerOpening) return workerOpening;
       teamMap.close();
       const request = ++workspaceSessionRequest.current;
       workspaceNavigation.cancel();
@@ -5733,12 +5817,6 @@ function Workspace({
         return;
       }
       setWorktreeOverview(undefined);
-      const worker = workbenchSessionTask(orchestrator.snapshot(), session.id);
-      const previousWorkerSession = worker?.memberId ? workerTaskTabs.current.get(worker.memberId) : undefined;
-      if (worker?.memberId && findMono(worker.memberId)) {
-        workerTaskTabs.current.set(worker.memberId, session.id);
-        setOpenMonoTabs(current => current.includes(worker.memberId!) ? current : [...current, worker.memberId!]);
-      }
       const parentId =
         session.orchestrationLeadId ??
         orchestrator.forSession(sessionId)?.leadId;
@@ -5800,18 +5878,6 @@ function Workspace({
         if (linkedUpdate) revealLinkedSessionUpdate(session.id, linkedUpdate);
         return;
       }
-      const previousWorkerTab = previousWorkerSession && findOpenSessionTab(tabsRef.current, sessionsRef.current, previousWorkerSession);
-      if (previousWorkerSession && previousWorkerTab && worker?.sessionId === session.id &&
-        workbenchSessionTask(orchestrator.snapshot(), previousWorkerSession)?.memberId === worker.memberId && leafIds(previousWorkerTab.layout).length === 1 &&
-        !previousWorkerTab.editorPanes.some(pane => pane.files.length) && !(previousWorkerTab.terminalPanes ?? []).some(pane => pane.files.length)) {
-        const next = switchSessionInTab(tabsRef.current, previousWorkerTab.id, previousWorkerSession, session.id);
-        if (next) {
-          workspacePins.current.set(previousWorkerTab.id, workspace?.tree.path ?? sessionWorkCwd(session));
-          setTabs(next); setActiveTabId(previousWorkerTab.id); setComposerFocused(true);
-          if (linkedUpdate) revealLinkedSessionUpdate(session.id, linkedUpdate);
-          return;
-        }
-      }
       if (!workspace && replaceBlankPaneWithSession(session)) {
         if (linkedUpdate) revealLinkedSessionUpdate(session.id, linkedUpdate);
         return;
@@ -5826,6 +5892,7 @@ function Workspace({
     [
       appendTab,
       ensureOpenSession,
+      openWorkerSession,
       onOpenMono,
       focusOpenSession,
       replaceBlankPaneWithSession,
@@ -5856,13 +5923,15 @@ function Workspace({
   }, [onOpenMono]);
   const onOpenMonoLaunchedSession = useCallback(
     async (sessionId: string) => {
+      const workerOpening = openWorkerSession(sessionId);
+      if (workerOpening) return workerOpening;
       const session = await ensureOpenSession(sessionId);
       if (!session) throw new Error("This session is no longer available.");
       closeMonoView();
       setSidebarTab("sessions", session.cwd);
       await onSelectHistorySession(sessionId);
     },
-    [ensureOpenSession, closeMonoView, setSidebarTab, onSelectHistorySession],
+    [ensureOpenSession, closeMonoView, setSidebarTab, onSelectHistorySession, openWorkerSession],
   );
 
   // A launched session opens over the overview, where it can be followed,
@@ -5870,6 +5939,8 @@ function Workspace({
   // the Mono started; opening the one already shown hides it again.
   const showMonoLaunchedSession = useCallback(
     async (monoSessionId: string, launchedId: string) => {
+      const workerOpening = openWorkerSession(launchedId);
+      if (workerOpening) return workerOpening;
       if (shownMonoSessionIdRef.current === launchedId) {
         setMonoShownSession(null);
         return;
@@ -5911,6 +5982,8 @@ function Workspace({
 
   const openReminderSession = useCallback(
     async (sessionId: string) => {
+      const opening = openWorkerSession(sessionId);
+      if (opening) return opening;
       const session = await ensureOpenSession(sessionId);
       if (!session)
         throw new Error("This conversation is no longer available.");
@@ -5925,7 +5998,7 @@ function Workspace({
       setRecents(rememberProject(session.cwd));
       await onSelectHistorySession(sessionId);
     },
-    [ensureOpenSession, onSelectHistorySession],
+    [ensureOpenSession, onSelectHistorySession, openWorkerSession],
   );
 
   const ensureReminderSessionsSaved = useCallback(
@@ -12285,8 +12358,8 @@ function Workspace({
   useEffect(() => {
     const onEscape = (event: KeyboardEvent) => {
       const focusedBusySessionId = () => {
-        const agentId = monoViewIdRef.current;
-        if (agentId) {
+        const agentId = monoViewIdRef.current ? workerSelectedSessionIdRef.current : undefined;
+        if (monoViewIdRef.current) {
           return sessionsRef.current.find((session) => session.id === agentId)
             ?.busy
             ? agentId
@@ -12403,6 +12476,8 @@ function Workspace({
 
   const onOpenApprovalSession = useCallback(
     (sessionId: string) => {
+      const view = workerTaskForSession(orchestrator.snapshot(), sessionId);
+      if (view) return view.ownerId ? openWorkerTask(view.ownerId, { taskId: view.task.id, sessionId }) : undefined;
       const ownerMono = monoForSession(orchestrator.ownerSession(sessionId));
       if (ownerMono) {
         return onOpenMono(ownerMono.id); // CC7D: retain async navigation errors for action receipts.
@@ -12422,7 +12497,7 @@ function Workspace({
         return onSelectHistorySession(sessionId);
       }
     },
-    [focusOpenSession, onSelectHistorySession, onOpenMono],
+    [focusOpenSession, onSelectHistorySession, onOpenMono, openWorkerTask],
   );
 
   useEffect(() => {
@@ -14934,7 +15009,14 @@ function Workspace({
           readOnly: session.readOnly,
         };
       }),
-      (id) => {
+      (id, target) => {
+        if (target) {
+          const view = workerTaskView(orchestrator.snapshot(), target);
+          if (view?.ownerId) void openWorkerTask(view.ownerId, target);
+          return;
+        }
+        const workerOpening = openWorkerSession(id);
+        if (workerOpening) return;
         id = orchestrator.ownerSession(id);
         const session = sessionsRef.current.find(
           (session) => session.id === id,
@@ -14946,7 +15028,7 @@ function Workspace({
         else void onSelectHistorySession(id);
       },
     );
-  }, [sessions, orchestrationRuns, onOpenProjectManager, onSelectHistorySession, onOpenMono]);
+  }, [sessions, orchestrationRuns, onOpenProjectManager, onSelectHistorySession, onOpenMono, openWorkerSession, openWorkerTask]);
   useEffect(() => {
     const reply = (event: Event) => {
       const { monoId, text } = (
@@ -14972,10 +15054,9 @@ function Workspace({
     else if (activeAppView) setReusablePage({ appView: activeAppView });
   }, [openPage, activeAppView]);
   const pageTab = openPage ? { page: openPage } : activeAppView ? { appView: activeAppView } : reusablePage;
-  const activeWorker = !monoCovers && active ? shownMonoTabs.find(id => id === workbenchSessionTask(orchestrationRuns, active.id)?.memberId) : undefined;
   const orderedTitleTabs: TitleTab[] = orderByIds(
     [
-      ...deckProjectTabs.filter(tab => !(leafIds(tab.layout).length === 1 && shownMonoTabs.includes(workbenchSessionTask(orchestrationRuns, tab.focusedId)?.memberId ?? ""))).map((tab) =>
+      ...deckProjectTabs.filter(tab => workerLayoutReady || !leafIds(tab.layout).some(id => workerTaskForSession(orchestrationRuns, id) || sessions.find(session => session.id === id)?.blocks.some(block => block.monoSource))).map((tab) =>
         toTitleTab(tab, sessions, dirtyFiles, unseenFinishedIds),
       ),
       ...(pageTab ? [{ id: REUSABLE_PAGE_TAB_ID, ...pageTab, project: "", title: pageTab.page ? SHELL_PAGE_LABELS[pageTab.page] : APP_VIEW_LABELS[pageTab.appView!], more: [], sessionCount: 0, harnesses: [], busyHarnesses: [], files: [] } satisfies TitleTab] : []),
@@ -14983,7 +15064,7 @@ function Workspace({
         const mono = findMono(monoId);
         // Like the sidebar's Monos, a Mono's tab shows in the projects it
         // works on; it keeps its place for when the project comes back.
-        if (!mono || !monoWorksOn(mono, sidebarCwd)) return [];
+        if (!mono || !monoWorksOn(mono, sidebarCwd) && mono.sessionId !== monoViewId) return [];
         const look = monoLook(mono);
         return [
           {
@@ -15321,6 +15402,8 @@ function Workspace({
       setSearchViewOpen(false);
       setNotesViewOpen(false);
       setAutomationsViewOpen(false);
+      const opening = openWorkerSession(sessionId);
+      if (opening) return opening;
       setInboxViewOpen(false);
       const cwd =
         sessionsRef.current.find((session) => session.id === sessionId)?.cwd ??
@@ -15357,7 +15440,7 @@ function Workspace({
       setSidebarTab("sessions", cwd);
       void onSelectHistorySession(sessionId);
     },
-    [history, onSelectHistorySession],
+    [history, onSelectHistorySession, openWorkerSession],
   );
 
   const onRepairNotNeeded = useCallback(async (attempt: TrackedCiRepair, state: "merged" | "closed") => {
@@ -15687,7 +15770,7 @@ function Workspace({
       setAutomationsViewOpen(false);
       return;
     }
-    if (monoViewIdRef.current && monoForSession(monoViewIdRef.current)?.role !== "member") {
+    if (monoViewIdRef.current && monoForSession(monoViewIdRef.current)?.role !== "member" && !workerPageTasks(orchestrator.snapshot(), monoForSession(monoViewIdRef.current)?.id ?? "").length) {
       closeMonoView();
       setComposerFocused(true);
       return;
@@ -15852,12 +15935,6 @@ function Workspace({
       }
       const monoId = monoForTab(id);
       if (monoId) {
-        const sessionId = workerTaskTabs.current.get(monoId);
-        const tab = sessionId && findOpenSessionTab(tabsRef.current, sessionsRef.current, sessionId);
-        if (tab && findMono(monoId)?.role === "member") {
-          teamMap.close(); setSearchViewOpen(false); setSettingsOpen(false); setInboxViewOpen(false); setNotesViewOpen(false); setAutomationsViewOpen(false);
-          activateTab(tab.id); return;
-        }
         void onOpenMono(monoId);
         return;
       }
@@ -15899,7 +15976,7 @@ function Workspace({
         ? (monoViewTabId ?? "")
         : activeAppView
           ? appViewTabId(activeAppView)
-          : activeWorker ? monoTabId(activeWorker) : activeTabId,
+          : activeTabId,
     select: onSelectTitleTab,
   };
 
@@ -17211,15 +17288,15 @@ function Workspace({
     ),
   );
   const onOpenRailMono = useCallback(
-    async (monoId: string) => {
-      const opening = onOpenMono(monoId);
+    async (monoId: string, target?: WorkerTaskTarget | null) => {
+      const opening = target === undefined ? onOpenMono(monoId) : openWorkerTask(monoId, target);
       const request = monoViewRequest.current;
       await opening;
       if (request !== monoViewRequest.current || monoViewIdRef.current !== findMono(monoId)?.sessionId) return;
       setMonoPanelTab("details");
       setMonoDetailsOpen(false); setWorkspaceContextTab("activity");
     },
-    [onOpenMono],
+    [onOpenMono, openWorkerTask],
   );
   const onDeleteRailMono = useCallback(
     (monoId: string) => void onDeleteMono(monoId),
@@ -17390,7 +17467,7 @@ function Workspace({
           ? (monoViewTabId ?? "")
           : insetLayout && activeAppView
             ? appViewTabId(activeAppView)
-            : activeWorker ? monoTabId(activeWorker) : activeTabId
+            : activeTabId
       }
       standaloneTitle={settingsOpen ? "Settings" : worktreeOverview ? basename(worktreeOverview.tree.path) : !teamMap.open && !monoCovers && managerActive ? "Manager" : undefined}
       cwd={chromeSurfaceOpen ? "" : sidebarCwd}
@@ -17802,6 +17879,7 @@ function Workspace({
                     continueManager: id => orchestrator.continueManager(id), continueRequest: continueAttentionRequest, inspect: id => { teamMap.close(); return onOpenApprovalSession(id); }, inspectAutomation: () => onOpenAutomations() }} />}
                 onClose={teamMap.close} onOpenTarget={target => openGoalTarget(target, {
                   close: teamMap.close, request: onOpenApprovalSession, mono: onOpenMono, session: onOpenMonoLaunchedSession,
+                  task: target => { const view = workerTaskView(orchestrator.snapshot(), target); if (view?.ownerId) return openWorkerTask(view.ownerId, target); },
                 })} />
               {/* CC7D shell hook: existing sources and execution callbacks only. */}
               {teamMap.open && teamMap.scope === DECISIONS_SCOPE && <>
@@ -17840,7 +17918,7 @@ function Workspace({
               {teamMap.open && teamMap.scope !== MISSION_CONTROL_SCOPE && teamMap.scope !== ATTENTION_QUEUE_SCOPE && teamMap.scope !== DECISIONS_SCOPE && teamMap.scope !== USAGE_DASHBOARD_SCOPE && teamMap.scope !== INTEGRATIONS_SCOPE && <div className="flex min-h-0 min-w-0 flex-1 flex-col">
                 {decisionError ? <p role="alert" className="px-6 py-3 text-sm">{decisionError} <button type="button" onClick={() => { setDecisionError(undefined); setDecisionRefresh(value => value + 1); }}>Try again</button></p>
                   : decisionLoaded !== decisionLoadKey && <p role="status" className="px-6 py-3 text-sm">Loading decisions…</p>}
-                <TeamMap key={teamMap.scope ?? "org"} sessions={sessions} runs={orchestrationRuns} statuses={managerPrStatuses} scope={teamMap.scope} onClose={teamMap.close} onOpenMono={id => void onOpenRailMono(id)}
+                <TeamMap key={teamMap.scope ?? "org"} sessions={sessions} runs={orchestrationRuns} statuses={managerPrStatuses} scope={teamMap.scope} onClose={teamMap.close} onOpenMono={(id, target) => void onOpenRailMono(id, target)}
                   decisions={!decisionError && decisionLoaded === decisionLoadKey ? commandMapDecisions(monoManagerGoals, listMonos(), decisionActions, Date.now(), { steps: goalNextSteps, render: renderGoalNextAction, input: attentionInput, attention: renderNeedsUserAttention }) : undefined}
                   bossGoal={mapBossContext ? { context: mapBossContext, submit: submitBossGoal } : undefined} onSendManager={submitMapManager} />
               </div>}
@@ -18049,72 +18127,48 @@ function Workspace({
                                     </div>
                                   </div>
                                 ))}
-                                {sessions
-                                  .filter((session) =>
-                                    isMonoSession(session.id),
-                                  )
-                                  .map((session) => {
-                                    const visible = monoViewId === session.id;
-                                    return (
-                                      <div
-                                        key={session.id}
-                                        data-mono-view={session.id}
-                                        aria-hidden={!visible}
-                                        inert={!visible || undefined}
-                                        className={
-                                          visible
-                                            ? "absolute inset-0 flex h-full min-h-0 flex-col"
-                                            : "hidden"
-                                        }
-                                      >
-                                        <div className="flex shrink-0 flex-wrap items-center justify-end gap-1 px-2.5 py-2 empty:hidden">
-                                        <TeamMapHeaderAction monoId={monoForSession(session.id)?.id} onOpen={onOpenTeamMap} />
-                                        </div>
-                                         <SessionPane
-                                          {...sessionPaneProps}
-                                          session={session}
-                                          monoGoalRouting={goalRoutingForMono(monoForSession(session.id)?.id ?? "")}
-                                          monoState={monoRail.states.get(monoForSession(session.id)?.id ?? "")}
-                                          visible={visible}
-                                          focused={
-                                            visible &&
-                                            !projectTerminalFocused &&
-                                            !monoShownSessionActive
-                                          }
-                                          inSplit={false}
-                                          addToChatTarget={visible}
-                                          composerFocused={
-                                            visible &&
-                                            composerFocused &&
-                                            !projectTerminalFocused &&
-                                            !monoShownSessionActive
-                                          }
-                                          composerFocusToken={
-                                            composerFocusToken
-                                          }
-                                          onShowMonoActivity={
-                                            onShowMonoActivity
-                                          }
-                                          onOpenArtifact={onOpenMonoArtifact}
-                                          onOpenDiff={onOpenMonoDiff}
-                                          onCommitChanges={onCommitMonoChanges}
-                                          monoActivityTurnId={
-                                            insetLayout && !monoViewMono?.role ? monoActivityShownTurnId : monoSidebarOpen && (!monoViewMono?.role || monoPanelTab === "activity") ? selectedMonoActivity?.turnId : undefined
-                                          }
-                                          onOpenMonoSession={onOpenMonoSession}
-                                          monoLaunchedSessions={
-                                            visible
-                                              ? monoLaunchedSessions
-                                              : undefined
-                                          }
-                                          openMonoSessionId={shownMonoSessionId}
-                                          // The inset footer stays under a
-                                          // Mono and shows its usage.
-                                          monoComposerUsage={!insetLayout}
-                                        />
-                                      </div>
-                                    );
-                                  })}
+                                {workerPageError && <Modal title="Conversation unavailable" onClose={() => setWorkerPageError(undefined)}><p className="p-4 text-sm">{workerPageError}</p></Modal>}
+                                {sessions.filter(session => isMonoSession(session.id)).map(home => {
+                                  const owner = monoForSession(home.id)!;
+                                  const page = workerPages[owner.id];
+                                  const target = page?.target;
+                                  const view = target ? workerTaskView(orchestrationRuns, target) : undefined;
+                                  const visible = monoViewId === home.id;
+                                  const picker = owner.role === "member" || !!target || !!page?.opened.length;
+                                  const unavailable = owner.archivedAt != null || page?.status === "unavailable" || !!target && (!view || view.ownerId !== owner.id);
+                                  const selectedId = unavailable ? undefined : target ? page?.status === "ready" ? view?.sessionId : undefined : home.id;
+                                  const selected = sessions.find(session => session.id === selectedId && !history.some(entry => entry.id === session.id && entry.archived));
+                                  const ids = new Set([home.id, ...(page?.opened ?? [])]);
+                                  const location = target && (view?.dispatch?.workspace ?? view?.task.workspace)?.checkoutCwd;
+                                  return <div key={home.id} data-mono-view={home.id} aria-hidden={!visible} inert={!visible || undefined}
+                                    className={visible ? "absolute inset-0 flex h-full min-h-0 flex-col" : "hidden"}>
+                                    <div className="flex shrink-0 flex-wrap items-center justify-end gap-1 px-2.5 py-2 empty:hidden"><TeamMapHeaderAction monoId={owner.id} onOpen={onOpenTeamMap} /></div>
+                                    {picker && <WorkerConversationPicker ownerId={owner.id} runs={orchestrationRuns} target={target ?? null} onSelect={target => void openWorkerTask(owner.id, target)} />}
+                                    {location && <p className="cc-worker-location" title={location}>in {projectName(location)}</p>}
+                                    {!selected && <section className="cc-worker-placeholder" aria-live="polite">
+                                      <h2>{monoLook(owner).name}</h2><h3>{view?.task.title ?? "Task unavailable"}</h3>
+                                      <p>{unavailable ? page?.error ?? "This task or saved attempt is no longer available." : page?.status === "loading" ? "Loading conversation…" : view?.task.status === "queued" && !view.dispatch ? "Not started yet" : "This conversation is no longer available or is archived."}</p>
+                                    </section>}
+                                    {sessions.filter(session => ids.has(session.id)).map(session => {
+                                      const shown = visible && selected?.id === session.id;
+                                      return <div key={session.id} data-worker-conversation={session.id} aria-hidden={!shown} inert={!shown || undefined} className={shown ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
+                                        <SessionPane {...sessionPaneProps} session={session}
+                                          workerPage={picker ? { owner, task: session.id !== home.id ? (view?.sessionId === session.id ? view.task : workerTaskForSession(orchestrationRuns, session.id)?.task) : undefined } : undefined}
+                                          monoGoalRouting={session.id === home.id ? goalRoutingForMono(owner.id) : undefined}
+                                          monoState={session.id === home.id ? monoRail.states.get(owner.id) : undefined}
+                                          visible={shown} focused={shown && !projectTerminalFocused && !monoShownSessionActive}
+                                          inSplit={false} addToChatTarget={shown}
+                                          composerFocused={shown && composerFocused && !projectTerminalFocused && !monoShownSessionActive}
+                                          composerFocusToken={composerFocusToken}
+                                          onShowMonoActivity={onShowMonoActivity} onOpenArtifact={onOpenMonoArtifact}
+                                          onOpenDiff={onOpenMonoDiff} onCommitChanges={onCommitMonoChanges}
+                                          monoActivityTurnId={insetLayout && !monoViewMono?.role ? monoActivityShownTurnId : monoSidebarOpen && (!monoViewMono?.role || monoPanelTab === "activity") ? selectedMonoActivity?.turnId : undefined}
+                                          onOpenMonoSession={onOpenMonoSession} monoLaunchedSessions={shown ? monoLaunchedSessions : undefined}
+                                          openMonoSessionId={shownMonoSessionId} monoComposerUsage={!insetLayout} />
+                                      </div>;
+                                    })}
+                                  </div>;
+                                })}
                               </div>
                             </div>
                           </div>

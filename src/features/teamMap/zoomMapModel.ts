@@ -17,9 +17,7 @@ export function mapGoalTitle(goal: MonoManagerGoal, sessions: readonly Session[]
   const title = session?.title?.trim();
   if (session && title && title.length <= 120 && title !== goal.title.trim() && !canReplaceSessionTitle(title, session.harness, titleFromPrompt(goal.title, session.harness)) && !/^(new (chat|session)|untitled|chat|session)$/i.test(title))
     return coordinationSummary(sessionDisplayTitle(title, session.harness));
-  const first = goal.title.trim().split(/\r?\n/)[0];
-  return first && first.length <= 80 && !/^(continue|resume|finish|complete)\b.*\b(authorized|already|previous|remaining)\b/i.test(first)
-    ? coordinationSummary(first) : "Goal";
+  return "Goal";
 }
 
 export const TASK_FLOW = ["planned", "working", "review", "ready", "done"] as const;
@@ -77,7 +75,7 @@ export function mapCamera(size: MapSize, count: number): MapCamera {
 }
 export function projectCamera(size: MapSize, point: { x: number; y: number }, content?: MapSize) {
   const reading = Math.min(1.2, Math.max(.8, (size.height - 180) / 620));
-  const width = Math.max(1000, Math.min(1800, (size.width - 80) / reading));
+  const width = size.width < 848 ? Math.max(280, (size.width - 48) / reading) : Math.max(1000, Math.min(1800, (size.width - 80) / reading));
   const actual = content?.width || width;
   // Fit the rendered width; tall boards retain reading size and scroll vertically.
   const scale = Math.min(reading, Math.max(1, size.width - 48) / actual) * 4;

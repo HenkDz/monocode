@@ -83,6 +83,11 @@
 .zoom-map-goal > small { color: var(--map-muted); }
 .zoom-map-goal > button { color: var(--color-accent); margin-top: 10px; font-size: 12px; }
 .zoom-map-cell { display: flex; flex-direction: column; gap: 8px; border-left: 1px dashed var(--color-stroke); padding-left: 10px; min-height: 56px; }
+.zoom-map-board[data-compact="true"] .zoom-map-columns { display: none; }
+.zoom-map-board[data-compact="true"] .zoom-map-lane { grid-template-columns: repeat(2,minmax(0,1fr)); }
+.zoom-map-board[data-compact="true"] .zoom-map-goal { grid-column: 1 / -1; overflow-wrap: anywhere; }
+.zoom-map-board[data-compact="true"] .zoom-map-cell { min-width: 0; }
+.zoom-map-board[data-compact="true"] .zoom-map-cell::before { content: attr(data-stage); color: var(--map-faint); font-size: 11px; }
 .zoom-map-task { display: flex; flex-direction: column; gap: 7px; text-align: left; width: 100%; padding: 10px 11px; border: 1px solid var(--color-stroke); background: var(--map-panel); border-radius: 12px; }
 .zoom-map-task:hover { border-color: color-mix(in srgb, var(--color-accent) 35%, var(--color-stroke)); }
 .zoom-map-task strong { font-size: 12px; font-weight: 500; width: 100%; min-width: 0; }
@@ -158,6 +163,12 @@
   .command-map-recipient { max-width: 135px; font-size: 11px; }
   .zoom-map-top .command-map-vitals { gap: 6px 12px; }
 }
+.zoom-map[data-stacked="true"] { display: flex; flex-direction: column; overflow-y: auto; }
+.zoom-map[data-stacked="true"] .zoom-map-main { flex: none; height: min(780px,calc(100vh - 72px)); min-height: 560px; }
+.zoom-map[data-stacked="true"] .zoom-map-rail { flex: none; min-height: 260px; overflow: visible; border-left: 0; border-top: 1px solid var(--color-stroke); }
+.zoom-map[data-stacked="true"] .command-map-ask { width: calc(100% - 28px); margin-bottom: 12px; }
+.zoom-map[data-stacked="true"] .zoom-map-top { padding: 12px 16px; gap: 10px; }
+.zoom-map[data-stacked="true"] .zoom-map-top .command-map-vitals { order: 2; width: 100%; gap: 6px 12px; font-size: 11px; }
 @media (prefers-reduced-motion: reduce) {
   .zoom-map-world { transition: none; }
   .zoom-map-project, .zoom-map-links { transition: opacity .15s; }

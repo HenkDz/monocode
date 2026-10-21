@@ -37,7 +37,7 @@ export function WorkTrace({ session, recordedModel }: { session: Session; record
 
 function MemberTask({ project, node, runs, sessions, onOpenMono }: {
   project: OrbitProject; node: OrbitProject["manager"]; runs: readonly OrchestrationRun[];
-  sessions: readonly Session[]; onOpenMono: (id: string) => void;
+  sessions: readonly Session[]; onOpenMono: (id: string, target?: import("../monos/model/workerPage").WorkerTaskTarget | null) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [evidenceDispatchId, setEvidenceDispatchId] = useState<string>();
@@ -52,7 +52,7 @@ function MemberTask({ project, node, runs, sessions, onOpenMono }: {
   return <article className="command-map-task" data-status={state.status}>
     <PixelMascot name={look.mascot} color={look.color} still className="size-6" />
     <div>
-      <div className="command-map-task-heading"><button type="button" onClick={() => onOpenMono(node.id)}>{look.name}</button><span>{mapText(monoStatusLabel(state), 100)}</span></div>
+      <div className="command-map-task-heading"><button type="button" onClick={() => onOpenMono(node.id, task ? { taskId: task.id, sessionId: selectedHistory?.dispatch.sessionId ?? dispatch?.sessionId ?? task.sessionId } : undefined)}>{look.name}</button><span>{mapText(monoStatusLabel(state), 100)}</span></div>
       <p className="command-map-task-summary">{task ? activityTaskTitle(task) : "No assigned task"}</p>
       {state.liveState?.reason === "paused" && <p className="command-map-muted">{state.liveState.detail}</p>}
       <button type="button" className="command-map-fold" aria-expanded={expanded} aria-controls={foldId} onClick={() => setExpanded(!expanded)}>
@@ -71,7 +71,7 @@ function MemberTask({ project, node, runs, sessions, onOpenMono }: {
           { id: report.reviewArtifactId ?? report.reviewVerdict?.artifactId, label: "Review" },
           { id: report.prSummaryArtifactId, label: "PR summary" },
         ]} />}
-        {evidence ? <WorkTrace key={evidence.id} session={evidence} recordedModel={(selectedHistory?.dispatch ?? dispatch)?.turnModel} /> : <p>Recorded conversation is not loaded. <button type="button" onClick={() => onOpenMono(node.id)}>Open Workbench</button></p>}
+        {evidence ? <WorkTrace key={evidence.id} session={evidence} recordedModel={(selectedHistory?.dispatch ?? dispatch)?.turnModel} /> : <p>Recorded conversation is not loaded. <button type="button" onClick={() => onOpenMono(node.id, task ? { taskId: task.id, sessionId: selectedHistory?.dispatch.sessionId ?? dispatch?.sessionId ?? task.sessionId } : undefined)}>Open Workbench</button></p>}
       </div>}
     </div>
   </article>;
@@ -80,7 +80,7 @@ function MemberTask({ project, node, runs, sessions, onOpenMono }: {
 export function ProjectDrawer({ project, goals, runs, sessions, decisions, onClose, onOpenMono }: {
   project: OrbitProject; goals: readonly MonoManagerGoal[]; runs: readonly OrchestrationRun[];
   sessions: readonly Session[]; decisions?: ReturnType<CommandMapDecisions["project"]>;
-  onClose: () => void; onOpenMono: (id: string) => void;
+  onClose: () => void; onOpenMono: (id: string, target?: import("../monos/model/workerPage").WorkerTaskTarget | null) => void;
 }) {
   const titleId = useId();
   const panel = useRef<HTMLElement>(null);
@@ -124,7 +124,7 @@ export function ProjectDrawer({ project, goals, runs, sessions, decisions, onClo
       <section><h3>Team & tasks</h3>{project.members.length ? project.members.map(node => <MemberTask key={node.id} project={project} node={node} runs={runs} sessions={sessions} onOpenMono={onOpenMono} />) : <p className="command-map-muted">No members assigned yet</p>}</section>
       <section className="command-map-manager-chat"><h3>Manager chat</h3>
         {managerReply ? <p>{mapText(presentationText(managerReply.text), 600)}</p> : <p className="command-map-muted">No loaded Manager reply</p>}
-        <button type="button" onClick={() => onOpenMono(project.manager.id)}>Message {mapText(look.name, 80)}</button>
+        <button type="button" onClick={() => onOpenMono(project.manager.id, null)}>Message {mapText(look.name, 80)}</button>
       </section>
     </div>
   </section>;

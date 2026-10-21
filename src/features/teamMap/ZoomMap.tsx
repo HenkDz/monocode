@@ -40,7 +40,7 @@ function TaskChips({ entry }: { entry: MapTask }) {
     {entry.task.prUrl && <span>PR {entry.pr ? `#${entry.pr.number}` : entry.task.prUrl.split("/").pop()}</span>}</span>;
 }
 
-function TaskDetail({ entry, sessions, onOpenMono }: { entry: MapTask; sessions: TeamMapProps["sessions"]; onOpenMono: (id: string) => void }) {
+function TaskDetail({ entry, sessions, onOpenMono }: { entry: MapTask; sessions: TeamMapProps["sessions"]; onOpenMono: TeamMapProps["onOpenMono"] }) {
   const [attemptId, setAttemptId] = useState("");
   const history = entry.run.dispatches?.filter(attempt => attempt.taskId === entry.task.id) ?? [];
   const selected = history.find(attempt => attempt.id === attemptId) ?? entry.dispatch;
@@ -62,7 +62,7 @@ function TaskDetail({ entry, sessions, onOpenMono }: { entry: MapTask; sessions:
       ]} />
       {evidence ? <WorkTrace key={evidence.id} session={evidence} recordedModel={selected?.turnModel} /> : <p>Recorded conversation is not loaded. Open conversation to inspect it.</p>}
     </WorkDisclosure>
-    {(entry.task.memberId ?? entry.run.ownerMonoId) && <button type="button" onClick={() => onOpenMono((entry.task.memberId ?? entry.run.ownerMonoId)!)}>Open conversation</button>}
+    {(entry.task.memberId ?? entry.run.ownerMonoId) && <button type="button" onClick={() => onOpenMono((entry.task.memberId ?? entry.run.ownerMonoId)!, { taskId: entry.task.id, sessionId: selected?.sessionId ?? entry.task.sessionId })}>Open conversation</button>}
   </>;
 }
 
@@ -87,6 +87,8 @@ export function ZoomMap({ sessions, runs, statuses, scope, onOpenMono, onClose, 
   const [content, setContent] = useState({ id: "", width: 0, height: 0 });
   const boardElement = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ width: 1200, height: 760 });
+  const mapElement = useRef<HTMLElement>(null);
+  const [mapWidth, setMapWidth] = useState(1200);
   const [camera, setCamera] = useState<MapCamera>(() => mapCamera(size, projects.length));
   const [moving, setMoving] = useState(false);
   const [reducedMotion, setReducedMotion] = useState(() => window.matchMedia("(prefers-reduced-motion: reduce)").matches);
@@ -115,7 +117,7 @@ export function ZoomMap({ sessions, runs, statuses, scope, onOpenMono, onClose, 
   const bossX = Math.min(4, Math.max(1, projects.length)) * 190 + 40;
   const count = decisions ? `${decisions.incomplete ? "≥" : ""}${decisions.needYou + ready.length}` : undefined;
   const goalList = focused ? projectGoals(focused, goals) : projects.flatMap(project => projectGoals(project, goals));
-  const openChat = (id: string) => { onClose(); onOpenMono(id); };
+  const openChat: TeamMapProps["onOpenMono"] = (id, target) => { onClose(); onOpenMono(id, target); };
   const leave = () => { const id = focusedIdRef.current; setFocusedId(undefined); setSelection(undefined); setHighlight(undefined); wheelLock.current = Date.now() + 700; if (id) buttons.current.get(id)?.focus({ preventScroll: true }); };
   const enter = (id: string) => { setFocusedId(id); setSelection(undefined); setHighlight(undefined); setApproach(undefined); wheelLock.current = Date.now() + 900; };
   const zoomToProject = (projectId: string) => { const project = projects.find(project => projectKey(project.project) === projectKey(projectId)); if (project) enter(project.manager.id); };
@@ -134,8 +136,12 @@ export function ZoomMap({ sessions, runs, statuses, scope, onOpenMono, onClose, 
   useEffect(() => {
     const element = viewport.current;
     if (!element) return;
-    const resize = () => setSize({ width: element.clientWidth || 1200, height: element.clientHeight || 760 });
+    const resize = () => {
+      setSize(previous => previous.width === element.clientWidth && previous.height === element.clientHeight ? previous : { width: element.clientWidth || 1200, height: element.clientHeight || 760 });
+      if (mapElement.current) setMapWidth(mapElement.current.clientWidth);
+    };
     resize(); const observer = new ResizeObserver(resize); observer.observe(element);
+    if (mapElement.current) observer.observe(mapElement.current);
     return () => observer.disconnect();
   }, []);
   useLayoutEffect(() => {
@@ -229,7 +235,7 @@ export function ZoomMap({ sessions, runs, statuses, scope, onOpenMono, onClose, 
     const lanes: { goal?: MonoManagerGoal; tasks: MapTask[] }[] = projectGoals(project, activeGoals).map(goal => ({ goal, tasks: entries.filter(entry => entry.task.monoGoalId === goal.id) }));
     const unmatched = entries.filter(entry => TASK_FLOW.slice(0, 4).includes(entry.state as typeof TASK_FLOW[number]) && !lanes.some(lane => lane.goal?.id === entry.task.monoGoalId));
     if (unmatched.length) lanes.push({ tasks: unmatched });
-    return <div className="zoom-map-board" ref={boardElement}>
+    return <div className="zoom-map-board" ref={boardElement} data-compact={!!fitted && fitted.width < 1000}>
       <button type="button" className="zoom-map-you-inline" onClick={leave}>You <b>{count ?? "—"}</b></button>
       <div className="zoom-map-team" aria-label={`${project.name} team`}>{[project.manager, ...project.members].map(node => {
         const look = monoLook(node.mono);
@@ -246,7 +252,7 @@ export function ZoomMap({ sessions, runs, statuses, scope, onOpenMono, onClose, 
           <p>{lane.tasks.length ? taskCount(lane.tasks) : "No recorded tasks"}</p><Segments tasks={lane.tasks} onHover={setHighlight} />
           {lane.goal && <button type="button" onClick={() => { setSelection({ kind: "goal", id: lane.goal!.id }); setHighlight(undefined); }}>Open goal →</button>}
         </div>
-        {TASK_FLOW.slice(0, 4).map(state => <div className="zoom-map-cell" key={state} aria-label={`${TASK_LABEL[state]} tasks`}>{lane.tasks.filter(entry => entry.state === state).map(card)}</div>)}
+        {TASK_FLOW.slice(0, 4).map(state => <div className="zoom-map-cell" key={state} data-stage={TASK_LABEL[state]} aria-label={`${TASK_LABEL[state]} tasks`}>{lane.tasks.filter(entry => entry.state === state).map(card)}</div>)}
       </section>)}
       {!!finished.length && <div className="zoom-map-finished" aria-label="Finished and stopped tasks">
         <b>● Done</b>{finished.slice(0, expandedDone ? undefined : 4).map(entry => <button type="button" key={entry.key} className="zoom-map-done-chip" data-task={entry.task.id} data-state={entry.state}
@@ -269,7 +275,7 @@ export function ZoomMap({ sessions, runs, statuses, scope, onOpenMono, onClose, 
     return () => window.removeEventListener("keydown", escape);
   });
 
-  return <section className="team-map-shell zoom-map" aria-label="Command map" data-reduced-motion={reducedMotion} onKeyDown={escape}>
+  return <section ref={mapElement} className="team-map-shell zoom-map" aria-label="Command map" data-stacked={mapWidth < 1100} data-reduced-motion={reducedMotion} onKeyDown={escape}>
     <div className="zoom-map-main">
       <header className="zoom-map-top"><h1>Command map</h1><div className="command-map-vitals" aria-label="Team vitals">
         <span><b>{tasks.filter(entry => entry.state === "working").length}</b> working</span>
@@ -299,7 +305,7 @@ export function ZoomMap({ sessions, runs, statuses, scope, onOpenMono, onClose, 
             <path d={`M${bossX},160 L${bossX},208`} />{projects.map((project, i) => { const point = projectPoint(i); const active = projectTasks[i].tasks.some(entry => entry.state === "working") || mapOwnState(project.manager.mono, runs, sessions).status === "working"; return <path key={project.manager.id} data-working={active} d={`M${bossX},296 C${bossX},390 ${point.x},365 ${point.x},${point.y - 70}`} />; })}
           </svg>
           <button type="button" className="zoom-map-you" inert={focused ? true : undefined} style={{ left: bossX, top: 130 }} onClick={leave}>You <b>{count ?? "—"}</b></button>
-          {boss && <button type="button" className="zoom-map-boss" inert={focused ? true : undefined} data-dimmed={!!focused} style={{ left: bossX, top: 240 }} onClick={() => openChat(boss.id)}><PixelMascot name={monoLook(boss.mono).mascot} color={monoLook(boss.mono).color} still className="size-14" /><strong>Boss</strong><small>{monoStatusLabel(mapOwnState(boss.mono, runs, sessions))}</small></button>}
+          {boss && <button type="button" className="zoom-map-boss" inert={focused ? true : undefined} data-dimmed={!!focused} style={{ left: bossX, top: 240 }} onClick={() => openChat(boss.id, null)}><PixelMascot name={monoLook(boss.mono).mascot} color={monoLook(boss.mono).color} still className="size-14" /><strong>Boss</strong><small>{monoStatusLabel(mapOwnState(boss.mono, runs, sessions))}</small></button>}
           {projects.map((project, i) => {
             const point = projectPoint(i), look = monoLook(project.manager.mono), entries = projectTasks[i].tasks;
             const data = decisions?.project(project.project, project.manager.id), active = entries.filter(entry => entry.state === "working").length;
@@ -338,7 +344,7 @@ export function ZoomMap({ sessions, runs, statuses, scope, onOpenMono, onClose, 
         {visibleReady.map(entry => { const record = prs.find(record => projectKey(record.cwd) === projectKey((entry.dispatch?.workspace ?? entry.task.workspace)?.checkoutCwd ?? "") && record.pr.url === entry.pr?.url && !record.unavailable); return <article className="zoom-map-merge" key={entry.key} tabIndex={-1} data-merge-task={entry.key} data-selected={selection?.kind === "railTask" && selection.key === entry.key} data-flash={flash === entry.key}>
           <small>{entry.task.memberName ?? "Mono"} → {entry.run.projectName ?? "Manager"} → You</small><h3>Review &amp; merge · {entry.title}</h3><p>Approved current head · checks pass. Merging is your call.</p>
           {record ? <WorktreePrActions entry={record} sessionId={entry.dispatch?.sessionId ?? entry.task.sessionId} taskId={entry.task.id} /> : <p>Open conversation to refresh the recorded PR review.</p>}
-          <button type="button" onClick={() => openChat(entry.task.memberId ?? entry.run.ownerMonoId!)}>Open conversation</button>
+          <button type="button" onClick={() => openChat(entry.task.memberId ?? entry.run.ownerMonoId!, { taskId: entry.task.id, sessionId: entry.dispatch?.sessionId ?? entry.task.sessionId })}>Open conversation</button>
           {!focused && <button type="button" onClick={() => { const project = projectTasks.find(row => row.tasks.some(task => task.key === entry.key)); if (project) enter(project.project.manager.id); }}>Zoom to project →</button>}
         </article>; })}
         {scopedDecisions ? scopedDecisions.cards : decisions?.railFor?.(zoomToProject) ?? decisions?.rail ?? <p className="zoom-map-muted">Decision history unavailable</p>}

@@ -23,6 +23,7 @@ type Props = {
   color?: string;
   state: AgentLiveState;
   currentTaskMetrics?: AgentMetrics;
+  workerPage?: boolean;
   task?: boolean;
   memberName?: string;
   onHome?: () => void;
@@ -56,6 +57,7 @@ export function WorkbenchHeader({
   color,
   state,
   currentTaskMetrics,
+  workerPage,
   task,
   memberName,
   onHome,
@@ -128,7 +130,7 @@ export function WorkbenchHeader({
         />
       </div>
       <div className="cc7u-header-identity">
-        <div className="ccwb1-view-identity">
+        {!workerPage && <div className="ccwb1-view-identity">
           <span>{task ? "Task" : "Home chat"}</span>
           {onHome && (
             <button type="button" onClick={onHome}>
@@ -136,7 +138,7 @@ export function WorkbenchHeader({
               {memberName} · Tasks & history
             </button>
           )}
-        </div>
+        </div>}
         <div className="cc7u-header-name">
           <h2>{name}</h2>
           <span>{role}</span>

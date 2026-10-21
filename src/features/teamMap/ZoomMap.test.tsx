@@ -18,7 +18,7 @@ function registerAppEscape(onStop: (id: string) => void) {
     ts.forEachChild(node, visit);
   };
   visit(ast); expect(effects).toHaveLength(1);
-  const ports = { monoViewIdRef: { current: "busy" }, sessionsRef: { current: [{ id: "busy", busy: true }] }, activeTabIdRef: { current: "tab" }, tabsRef: { current: [] }, projectTerminalFocusedRef: { current: false }, focusedBusyAgentSessionId, shouldStopFocusedTurnOnEscape, deferUnhandledEscape, onStop };
+  const ports = { monoViewIdRef: { current: "busy" }, workerSelectedSessionIdRef: { current: "busy" }, sessionsRef: { current: [{ id: "busy", busy: true }] }, activeTabIdRef: { current: "tab" }, tabsRef: { current: [] }, projectTerminalFocusedRef: { current: false }, focusedBusyAgentSessionId, shouldStopFocusedTurnOnEscape, deferUnhandledEscape, onStop };
   return new Function(...Object.keys(ports), ts.transpile(`return (${effects[0]})();`, { target: ts.ScriptTarget.ES2022 }))(...Object.values(ports)) as () => void;
 }
 
@@ -84,6 +84,19 @@ it("keeps selected task outline and exact current/history evidence, then clears 
   await escape(); expect(host.querySelector('.zoom-map-detail')).toBeNull(); expect(host.querySelector('.zoom-map-viewport')?.getAttribute("data-focused")).toBe("manager");
   await escape(); expect(host.querySelector('.zoom-map-viewport')?.getAttribute("data-focused")).toBe("");
   expect(document.activeElement).toBe(host.querySelector('[aria-label="Open app project"]')); expect(close).not.toHaveBeenCalled();
+});
+
+it("passes the exact current or chosen saved attempt through task Open, including memberless Manager tasks", async () => {
+  await render(); await click('[aria-label="Open app project"]'); await click('[data-task="one"]');
+  const conversation = () => [...host.querySelectorAll<HTMLButtonElement>('.zoom-map-detail button')].find(button => button.textContent === "Open conversation")!;
+  await act(async () => conversation().click()); expect(open).toHaveBeenLastCalledWith("worker", { taskId: "one", sessionId: "current" });
+  const attempt = host.querySelector<HTMLSelectElement>('[aria-label="Work attempt"]')!;
+  await act(async () => { attempt.value = "old"; attempt.dispatchEvent(new Event("change", { bubbles: true })); });
+  await act(async () => conversation().click());
+  expect(open).toHaveBeenLastCalledWith("worker", { taskId: "one", sessionId: "old" });
+  await render({ runs: [{ ...runs[0], tasks: [{ ...runs[0].tasks[0], memberId: undefined }] }] });
+  await click('[data-task="one"]'); await act(async () => conversation().click());
+  expect(open).toHaveBeenLastCalledWith("manager", { taskId: "one", sessionId: "current" });
 });
 
 it("clears task selection for goal details and renders its guarded action exactly once", async () => {

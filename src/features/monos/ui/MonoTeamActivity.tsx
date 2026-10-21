@@ -197,7 +197,7 @@ export function MonoTeamActivity({
               run.leadId,
             task.id,
           )
-        : openCardSession(task.sessionId);
+        : openCardSession(task.sessionId, { taskId: task.id, sessionId: task.sessionId });
     const metrics = selectTaskMetrics(task, run.dispatches ?? [], sessions, now);
     const state = selectAgentLiveState(session, { task, tasks: run.tasks, runStatus: run.status });
     return (

@@ -77,7 +77,10 @@ it("uses only the exact first-turn title and safe CC-UX2 summaries, never long r
   expect(mapGoalTitle(goal, [{ ...session, title: raw }])).toBe("Goal");
   expect(mapGoalTitle(goal, [])).toBe("Goal");
   expect(mapGoalTitle({ ...goal, userMessageId: undefined } as unknown as MonoManagerGoal, [{ ...session, blocks: [] }])).toBe("Goal");
-  expect(mapGoalTitle({ ...goal, title: "Profile routing\nLong detailed instructions" }, [])).toBe("Profile routing");
+  for (const title of ["Profile routing\nLong detailed instructions", "and complete the already authorized migration", "...e and complete the already authorized migration"]) {
+    expect(mapGoalTitle({ ...goal, title }, [])).toBe("Goal");
+    expect(mapGoalTitle({ ...goal, title }, [{ ...session, blocks: [{ ...session.blocks[0], id: "other" }, ...session.blocks] }])).toBe("Goal");
+  }
 });
 
 it("keeps the pointer's world coordinate stable during partial zoom and fits arbitrary project rows", () => {

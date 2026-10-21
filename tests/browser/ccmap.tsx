@@ -141,7 +141,7 @@ function Fixture() {
   };
   useEffect(() => teamMap.show(), []);
   const ports = { React, useState, useRef, useEffect, useCallback, useSyncExternalStore, subscribeMonos, monosSnapshot, monoManagerGoals, listMonos, findMono, teamMap, sendDecisionFromClick,
-    monoViewIdRef, activeTabIdRef, tabsRef, projectTerminalFocusedRef, focusedBusyAgentSessionId, shouldStopFocusedTurnOnEscape, deferUnhandledEscape, onStop: (id: string) => { stops.push(id); },
+    monoViewIdRef, workerSelectedSessionIdRef: monoViewIdRef, activeTabIdRef, tabsRef, projectTerminalFocusedRef, focusedBusyAgentSessionId, shouldStopFocusedTurnOnEscape, deferUnhandledEscape, onStop: (id: string) => { stops.push(id); },
     ensureOpenSession: async (id: string) => { await preparation; return sessionsRef.current.find(session => session.id === id); }, ensureMonoSession,
     homeDir: async () => "C:/synthetic/home", saveMonoPermissions: async () => {}, newDefaultSession: (cwd: string) => newSession("codex", cwd), selectedProviderAccountId: () => "fixture-account", PROVIDER_ACCOUNT_PROVIDERS,
     sessionsRef, setSessions, submitSessionRef, submitSession: submit, submitMonoGoalRef: { current: async (_id: string, _text: string, _attachments: unknown[], request: MonoGoalSubmission) => { bossGoals.push(request); return true; } },

@@ -268,7 +268,7 @@ export function WorkspaceGoals({
   project: string;
   sessions: readonly Session[];
   usage?: UsageDashboardSnapshot;
-  onOpenMono: (id: string) => void;
+  onOpenMono: (id: string, target?: import("../../features/monos/model/workerPage").WorkerTaskTarget | null) => void;
   decisionActions?: DecisionUiActions;
   goalAction?: (goalId: string) => ReactNode;
 }) {
@@ -345,7 +345,7 @@ export function WorkspaceGoals({
             sessions.find((session) => session.id === task.sessionId),
             { task, tasks: run.tasks, runStatus: run.status, pauseReason: run.lastPauseReason },
           );
-          const owner = roster.find((mono) => mono.id === task.memberId);
+          const owner = roster.find((mono) => mono.id === (task.memberId ?? run.ownerMonoId)) ?? manager;
           return (
             <div
               key={task.id}
@@ -357,7 +357,7 @@ export function WorkspaceGoals({
                   <button
                     type="button"
                     className="hover:text-content"
-                    onClick={() => onOpenMono(owner.id)}
+                    onClick={() => onOpenMono(owner.id, { taskId: task.id, sessionId: run.dispatches?.find(dispatch => dispatch.id === (task.activeDispatchId ?? task.lastDispatchId) && dispatch.taskId === task.id)?.sessionId ?? task.sessionId })}
                   >
                     {monoLook(owner).name}
                   </button>

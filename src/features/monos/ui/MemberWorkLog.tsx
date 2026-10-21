@@ -272,7 +272,7 @@ export function MemberWorkLog({
               className={`${button} shrink-0 bg-content/8 font-medium`}
               onClick={(event) => {
                 event.currentTarget.focus();
-                openCardSession(task.sessionId);
+                openCardSession(task.sessionId, { taskId: task.id, sessionId: task.sessionId });
               }}
             >
               Open
@@ -370,7 +370,7 @@ export function MemberWorkLog({
                       className="min-w-0 truncate text-left text-xs font-medium hover:text-accent focus-visible:outline-accent"
                       onClick={(click) => {
                         click.currentTarget.focus();
-                        openCardSession(event.task.sessionId);
+                        openCardSession(event.sessionId ?? event.task.sessionId, { taskId: event.task.id, sessionId: event.sessionId ?? event.task.sessionId });
                       }}
                     >
                       {event.label}
@@ -398,8 +398,8 @@ export function MemberWorkLog({
                         className={`${button} mt-1 text-xs text-content/75`}
                         onClick={() =>
                           actions
-                            ? actions.open(event.task.sessionId)
-                            : openCardSession(event.task.sessionId)
+                            ? actions.open(event.sessionId ?? event.task.sessionId)
+                            : openCardSession(event.sessionId ?? event.task.sessionId, { taskId: event.task.id, sessionId: event.sessionId ?? event.task.sessionId })
                         }
                       >
                         Open worker session

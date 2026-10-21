@@ -150,7 +150,7 @@ export function selectGoalTimeline(input: GoalViewInput & { goalId: string }): G
     for (const dispatch of dispatches) {
       const edge = edges.find(edge => edge.id === dispatch.id && edge.managerId === run.leadId)!;
       const lane: TimelineLane = { id: `${run.leadId}:${dispatch.id}`, name: node.name, role: "worker", assignment: task.title,
-        attempt: dispatch.id, state: dispatch.state, target: { sessionId: dispatch.sessionId }, review: node.review, spans: [] };
+        attempt: dispatch.id, state: dispatch.state, target: { taskId: task.id, sessionId: dispatch.sessionId }, review: node.review, spans: [] };
       if (conflicts.get(run.leadId)?.has(dispatch.id)) lane.spans.push({ id: "conflict", kind: "unknown", label: "Conflicting dispatch receipts",
         detail: "Disagreeing immutable timestamps remain unknown; no duration inferred from conflicting boundaries." });
       const session = sessionById.get(dispatch.sessionId);

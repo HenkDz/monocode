@@ -573,7 +573,7 @@ export function SettingsView({
   const settingsHeader = (
     <>
       <div
-        className={`flex min-w-0 flex-1 items-center gap-2 text-[13px] ${
+        className={`flex min-w-0 flex-1 items-center gap-2 text-[13px] max-[700px]:overflow-hidden ${
           inTitleBar ? "pr-3 pl-1" : "px-3"
         }`}
       >
@@ -586,7 +586,7 @@ export function SettingsView({
         </span>
       </div>
       <div
-        className={`flex shrink-0 items-center gap-1.5 ${
+        className={`flex shrink-0 items-center gap-1.5 max-[700px]:min-w-0 max-[700px]:shrink ${
           inTitleBar ? "pr-4" : "pr-2"
         }`}
         data-tauri-drag-region="false"
@@ -594,11 +594,12 @@ export function SettingsView({
         {section === "appearance" ? (
           <button
             type="button"
+            aria-label="Restore defaults"
             onClick={appearance.restoreDefaults}
             className="flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-[12px] text-content/50 hover:bg-content/10 hover:text-content"
           >
             <RotateCcw className="size-3.5" strokeWidth={1.75} />
-            Restore defaults
+            <span className="max-[700px]:sr-only">Restore defaults</span>
           </button>
         ) : null}
         <SettingsSearch onReveal={onReveal} />
@@ -766,8 +767,8 @@ function SettingsSearch({
   };
 
   return (
-    <div ref={root} className="relative shrink-0">
-      <label className="flex h-7 w-48 items-center gap-2 rounded-md border border-content/10 px-2 text-content/45 focus-within:border-content/20">
+    <div ref={root} className="relative shrink-0 max-[700px]:min-w-0 max-[700px]:shrink">
+      <label className="flex h-7 w-48 max-[700px]:max-w-full items-center gap-2 rounded-md border border-content/10 px-2 text-content/45 focus-within:border-content/20">
         <Search className="size-3.5 shrink-0" strokeWidth={1.75} />
         <input
           ref={input}

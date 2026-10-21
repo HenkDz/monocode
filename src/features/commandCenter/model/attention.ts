@@ -87,7 +87,9 @@ export function selectAttention(input: AttentionInput): AttentionItem[] {
     }
     for (const block of session.blocks) {
       if (!block.approval) continue;
-      const id = identity(session.id, session.providerSessionId, "approval", block.id, block.approval.requestId);
+      const id = identity(session.id, session.providerSessionId, "approval", block.approval.requestId);
+      // Acknowledged requests can retain older pending transcript copies.
+      if (items.get(id)?.status === "resolved" && !block.approval.decided) continue;
       add({ ...context, id, revision: identity(id, block.text, JSON.stringify(block.tool), block.approval.decided), source: "approval", category: "approval",
         title: block.tool?.title || "Permission request", detail: [block.text, block.tool?.detail, block.approval.autoApprovalReason].filter(Boolean).join("\n"), requestId: block.approval.requestId,
         createdAt: block.startedAt ?? block.sentAt,

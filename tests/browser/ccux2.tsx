@@ -66,6 +66,7 @@ const sessions: Session[] = [
 ];
 const command = "git show 0123456789abcdef0123456789abcdef01234567";
 sessions.find(row => row.id === "permission")!.blocks.push(...[1, 2].map(requestId => ({ id: `approval-${requestId}`, role: "tool" as const, text: command, approval: { requestId } })));
+if (params.has('copies')) sessions.find(row => row.id === 'permission')!.blocks = ['copy-a', 'copy-b'].map(id => ({ id, role: 'tool', text: command, approval: { requestId: 91 } }));
 const runs: OrchestrationRun[] = [{ version: 2, allowedHarnesses: ["codex"], maxWorkers: 1, cli: "synthetic", continuations: 0, requests: {}, leadId: "manager-home", ownerMonoId: "manager", ownerSessionId: "manager-home", cwd: project, projectManager: true, status: "active", dispatches: [], tasks: ["task", "past-task"].map((id, index) => ({ id, memberId: "atlas", memberName: "Atlas", sessionId: id, title: index ? "Earlier chooser review" : "Chooser focus", prompt: "Preserve keyboard focus and report the result.", status: "completed", accepted: !!index, delivered: true, result: "", files: [], scopes: [], dependsOn: [], harness: "codex", model: "", workspace: { id: "feature", projectCwd: project, checkoutCwd: trees[1].path, kind: "worktree", branch: "feature" } })) }];
 if (params.has('priority')) {
   sessions.find(row => row.id === 'permission')!.blocks = [];

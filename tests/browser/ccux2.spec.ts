@@ -77,6 +77,22 @@ test("one Run menu keeps confirmation, cancellation and exact checkout command",
   await page.getByRole('menuitem', { name: /Run tests/ }).click();
   await expect.poll(() => page.evaluate(() => window.ccux2.events.filter(event => event.action === 'terminal'))).toEqual([{ action: 'terminal', value: { cwd: 'C:/synthetic/Chooser/feature', command: 'npm run test' } }]);
 });
+test("repeated provider approval copies produce one canonical card and one exact callback", async ({ page }) => {
+  await page.goto('/tests/browser/ccux2.html?copies=true');
+  const sidebar = page.locator('aside').first().getByRole('button', { name: 'Decisions', exact: true });
+  await expect(sidebar.locator('span[aria-hidden]')).toHaveText('1');
+  await sidebar.click();
+  await expect(page.locator('.decisions-heading')).toContainText('1 need you');
+  const card = page.locator('[data-attention-source="approval"]');
+  await expect(card).toHaveCount(1);
+  await page.screenshot({ path: `${captures}/approval-copies-one-card-1600-dark.png` });
+  await card.getByRole('button', { name: 'Evidence', exact: true }).click();
+  await expect(page.getByText('git show 0123456789abcdef0123456789abcdef01234567', { exact: true })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await card.getByRole('button', { name: 'Allow once', exact: true }).evaluate(button => { (button as HTMLButtonElement).click(); (button as HTMLButtonElement).click(); });
+  await expect(page.locator('.decisions-heading')).toContainText('All clear');
+  expect(await page.evaluate(() => window.ccux2.events.filter(event => event.action === 'approval'))).toEqual([{ action: 'approval', value: { id: 'permission', requestId: 91, decision: 'allow' } }]);
+});
 test("approval-first canonical projection agrees across sidebar, badge, header and cards with a retained Manager request", async ({ page }) => {
   for (const priority of ['active', 'paused']) {
     await page.goto(`/tests/browser/ccux2.html?priority=${priority}`);
@@ -221,6 +237,18 @@ for (const [width, theme, zoom] of [[1600, 'dark', 1], [1024, 'light', 1], [480,
       }
       const corner = (await page.getByRole('button', { name: 'Close window', exact: true }).boundingBox())!;
       expect(corner.y).toBe(0); expect(Math.round(corner.x + corner.width)).toBe(width);
+      if (route === 'Settings') {
+        const header = page.locator('header').first();
+        const search = header.getByRole('combobox', { name: 'Search settings', exact: true });
+        const restore = header.getByRole('button', { name: 'Restore defaults', exact: true });
+        for (const control of [search, restore]) {
+          await expect(control).toBeInViewport();
+          expect(await control.evaluate(element => { const box = element.getBoundingClientRect(); return element.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2)); })).toBe(true);
+        }
+        await search.fill('font');
+        await expect(page.getByRole('option').first()).toBeVisible();
+        await page.keyboard.press('Escape');
+      }
       await page.screenshot({ path: `${captures}/${route}-${width}-${theme}-${zoom}.png` });
     }
   });

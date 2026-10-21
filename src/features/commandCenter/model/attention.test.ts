@@ -55,6 +55,29 @@ const automation = (extra: Partial<Automation> = {}): Automation => ({ id: "auto
   lastRunAt: 100, lastRunStatus: "failed", lastRunError: "Launch failed", lastSessionId: "automation-session", createdAt: 10, updatedAt: 100, ...extra });
 
 describe("attention projection", () => {
+  it("deduplicates streamed copies by session/provider/request while preserving exact commands and distinct requests", () => {
+    const command = 'printf "$HOME" 0123456789abcdef0123456789abcdef01234567';
+    const copies = ["copy-a", "copy-b"].map(id => approval({ id, text: command, approval: { requestId: 91 } }));
+    const source = session("repeated", { blocks: copies });
+    const rows = selectAttention(input({ sessions: [source] }));
+    expect(rows).toHaveLength(1); expect(rows[0]).toMatchObject({ requestId: 91, detail: expect.stringContaining(command) });
+    expect(from("approval", input({ sessions: [{ ...source, blocks: [copies[0]] }] })).id).toBe(rows[0].id);
+    expect(selectAttention(input({ sessions: [{ ...source, blocks: [...copies, approval({ id: "distinct", text: command, approval: { requestId: 92 } })] }] }))).toHaveLength(2);
+    expect(from("approval", input({ sessions: [{ ...source, providerSessionId: "another-provider" }] })).id).not.toBe(rows[0].id);
+    expect(selectAttention(input({ sessions: [source, { ...source, id: "another-session" }] }))).toHaveLength(2);
+  });
+
+  it("does not reopen an acknowledged provider request when an older pending copy remains", async () => {
+    const pending = approval({ id: "copy-pending", approval: { requestId: 91 } });
+    const original = input({ sessions: [session("repeated", { blocks: [pending] })] }), calls = callbacks();
+    const item = from("approval", original);
+    for (const blocks of [[{ ...pending, id: "copy-resolved", approval: { requestId: 91, decided: "allow" as const } }, pending], [pending, { ...pending, id: "copy-resolved", approval: { requestId: 91, decided: "allow" as const } }]]) {
+      const fresh = { ...original, sessions: [{ ...original.sessions[0], blocks }] };
+      expect(from("approval", fresh).status).toBe("resolved");
+      await expect(executeAttentionAction(item, "allow", fresh, calls)).rejects.toThrow("no longer available");
+    }
+    expect(calls.approval).not.toHaveBeenCalled();
+  });
   it("deduplicates shared requests by exact session identity while retaining all linked goals", () => {
     const lead = session("lead", { blocks: [turn("lead-turn"), approval()] });
     const data = input({ sessions: [lead, lead], roster: [mono("manager", { role: "manager", sessionId: "lead" })],

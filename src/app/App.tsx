@@ -17333,7 +17333,7 @@ function Workspace({
           <div
             ref={setSettingsHeaderHost}
             data-settings-title
-            className="flex h-full min-w-0 flex-1"
+            className="flex h-full min-w-0 flex-1 max-[700px]:overflow-hidden"
           />
         ) : undefined
       }

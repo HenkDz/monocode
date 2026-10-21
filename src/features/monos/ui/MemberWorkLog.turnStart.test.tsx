@@ -93,7 +93,8 @@ it("keeps actual accepted preparation and settled preparation failure without a 
   now = 60_100;
   const view = await render(accepted);
   try {
-    expect(view.metrics().textContent).toBe("Conversation not started · Tokens unavailable · Thinking");
+    expect(view.metrics().textContent).toBe("Elapsed unavailable · Usage · Thinking");
+    expect(view.metrics().querySelector("span[title]")?.getAttribute("title")).toBe("Tokens unavailable");
     now = 3100;
     fail(new Error("Preparation failed"));
     await vi.waitFor(() => expect(f.saved().dispatches![0].stage).toBe("settled"));
@@ -102,7 +103,8 @@ it("keeps actual accepted preparation and settled preparation failure without a 
     expect(settled.dispatches![0].turnStartedAt).toBeUndefined();
     vi.mocked(orchestrator.snapshot).mockReturnValue([settled]);
     await act(async () => view.root.render(<MemberWorkLog member={member} />));
-    expect(view.metrics().textContent).toBe("Elapsed unavailable · Tokens unavailable · Failed");
+    expect(view.metrics().textContent).toBe("Elapsed unavailable · Usage · Failed");
+    expect(view.metrics().querySelector("span[title]")?.getAttribute("title")).toBe("Tokens unavailable");
     expect(f.host.submit).not.toHaveBeenCalled();
   } finally { await act(async () => view.root.unmount()); }
 });
@@ -121,7 +123,8 @@ it.each([0, 5000])("retains an actually observed start at zero and completed dur
   await vi.waitFor(() => expect(f.saved().dispatches![0].turnStartedAt).toBe(0));
   const view = await render(f.saved());
   try {
-    expect(view.metrics().textContent).toBe("1s · Tokens unavailable · Thinking");
+    expect(view.metrics().textContent).toBe("1s · Usage · Thinking");
+    expect(view.metrics().querySelector("span[title]")?.getAttribute("title")).toBe("Tokens unavailable");
     worker.blocks[0] = { ...worker.blocks[0], durationMs, turnMetrics: { endedAt: durationMs, inputTokens: 1000, cacheReadTokens: 900, outputTokens: 0 } };
     now = durationMs + 30_000;
     f.complete({ status: "completed", text: "Done" });
@@ -133,7 +136,9 @@ it.each([0, 5000])("retains an actually observed start at zero and completed dur
     vi.mocked(orchestrator.snapshot).mockReturnValue(restored.snapshot());
     await act(async () => view.root.render(<MemberWorkLog member={member} />));
     expect(selectTaskMetrics(task, restored.run("lead")!.dispatches!, []).elapsedMs).toBe(durationMs);
-    expect(view.metrics().textContent).toBe(`${durationMs ? "5s" : "1s"} · 1,000 in / 900 cached / 0 out tokens · Waiting review`);
+    expect(restored.run("lead")!.dispatches![0]).toMatchObject({ turnStartedAt: 0, durationMs });
+    expect(view.metrics().textContent).toBe(`${durationMs ? "5s" : "1s"} · Usage · Waiting review`);
+    expect(view.metrics().querySelector("span[title]")?.getAttribute("title")).toBe("1,000 in / 900 cached / 0 out tokens");
     expect(view.metrics().title).toContain("Total input (including cache) 1,000");
     expect(view.metrics().title).toContain("Cached 900");
   } finally { await act(async () => view.root.unmount()); }
@@ -158,7 +163,8 @@ it.each(["failed", "start_unknown"] as const)("keeps a persisted legacy %s attem
   const view = await render(restored.run("lead")!);
   try {
     expect(restored.run("lead")!.dispatches![0].turnStartedAt).toBeUndefined();
-    expect(view.metrics().textContent).toMatch(/^Elapsed unavailable · 0 in \/ 0 cached \/ 0 out tokens/);
+    expect(view.metrics().textContent).toBe("Elapsed unavailable · Usage · Failed");
+    expect(view.metrics().querySelector("span[title]")?.getAttribute("title")).toBe("0 in / 0 cached / 0 out tokens");
     expect(view.metrics().title).toContain("Total input (including cache) 0");
   } finally { await act(async () => view.root.unmount()); }
 });
@@ -179,7 +185,11 @@ it.each([false, true])("does not reuse an earlier goal's clock for a new accepte
   vi.mocked(cardSession).mockImplementation(id => id === sessionId ? { id, taskMetrics: { [task.id]: totals } } as ReturnType<typeof cardSession> : undefined);
   const view = await render(run);
   try {
-    expect(view.metrics().textContent).toBe("Elapsed unavailable · 100 in / 90 cached / 10 out tokens · Thinking");
+    expect(view.metrics().textContent).toBe("Elapsed unavailable · Usage · Thinking");
+    expect(view.metrics().querySelector("span[title]")?.getAttribute("title")).toBe("100 in / 90 cached / 10 out tokens");
+    expect(view.metrics().title).toContain("Total input (including cache) 100");
+    expect(totals.elapsedMs).toBe(5000);
+    expect(selectTaskMetrics(task, [run.dispatches![1]], []).startedAt).toBeUndefined();
     expect(task.monoGoalId).toBe("new-goal");
     expect(task.sessionId).toBe(sessionId);
     expect(run.dispatches![1].turnStartedAt).toBeUndefined();

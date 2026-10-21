@@ -690,9 +690,10 @@ it("shows a blocked queue reason while keeping historical state and task metrics
     expect(review.querySelector("[data-task-status]")?.textContent).toBe(
       "In review",
     );
-    expect(review.querySelector("[data-task-metrics]")?.textContent).toContain(
+    expect(review.querySelector('[data-task-metrics] span[title]')?.getAttribute("title")).toBe(
       "4,000 in / 200 out tokens",
     );
+    expect(review.querySelector("[data-task-metrics]")?.textContent).toBe("5s · Usage · Waiting review");
     expect(review.querySelector("[data-task-metrics]")?.textContent).toContain(
       "Waiting review",
     );
@@ -789,17 +790,29 @@ it("renders the Brief with keyboard expansion and sanitized report using existin
     await act(async () => root.render(<WorkbenchTask task={{ ...base, readOnly: true, checkoutBaseline: { inheritedChangedPaths: ["one", "two"] } as OrchestrationTask["checkoutBaseline"] }} />));
     const brief = host.querySelector('[aria-label="Task brief"]')!;
     const toggle = brief.querySelector<HTMLButtonElement>("button")!;
-    expect(brief.textContent).toContain("Assignment instructions");
+    expect(brief.textContent).toContain(base.title);
+    expect(brief.textContent).not.toContain(base.prompt);
     expect(brief.textContent).toContain("Read-only");
     expect(brief.textContent).toContain("2 inherited changes");
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     expect(brief.querySelector("details, summary")).toBeNull();
     expect(document.getElementById(toggle.getAttribute("aria-controls")!)?.getAttribute("data-expanded")).toBe("false");
-    await act(async () => toggle.click());
+    await act(async () => { toggle.focus(); toggle.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); toggle.click(); });
+    expect(document.activeElement).toBe(toggle);
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
-    expect(toggle.textContent).toContain("Show less");
+    expect(toggle.textContent).toContain("Hide work");
+    expect(document.getElementById(toggle.getAttribute("aria-controls")!)?.getAttribute("data-expanded")).toBe("true");
+    expect(brief.textContent).toContain(base.prompt);
     const report = host.querySelector(".mono-run-report")!;
-    expect(report.querySelector("details summary")?.textContent).toBe("Verification");
+    const verification = report.querySelector<HTMLButtonElement>('[data-work-disclosure] button')!;
+    expect(verification.textContent).toBe("Show work · Verification");
+    expect(verification.getAttribute("aria-expanded")).toBe("false");
+    expect(document.getElementById(verification.getAttribute("aria-controls")!)?.hidden).toBe(true);
+    await act(async () => verification.click());
+    expect(verification.getAttribute("aria-expanded")).toBe("true");
+    expect(document.getElementById(verification.getAttribute("aria-controls")!)?.hidden).toBe(false);
+    expect(document.getElementById(verification.getAttribute("aria-controls")!)?.textContent).toContain("Checks passed.");
+    expect(report.querySelector("details, summary")).toBeNull();
     expect(report.querySelector(".markdown-code-shell")).not.toBeNull();
     expect(report.textContent).toContain("const checked = true;");
     expect(report.querySelector("script")).toBeNull();
@@ -893,7 +906,8 @@ it("keeps a prepared failed launch distinct from a recorded conversation turn", 
     expect(
       host.querySelector('[data-member-task="launch"] [data-task-metrics]')
         ?.textContent,
-    ).toContain("Conversation not started");
+    ).toContain("Elapsed unavailable");
+    expect(host.querySelector('[data-member-task="launch"] [data-task-metrics]')?.textContent).not.toMatch(/Conversation not started|[0-9]+s/);
     expect(host.querySelector('[data-member-task="launch"] [data-transcript-error]')).toBeNull();
     expect(host.querySelector('[data-member-task="launch"] [data-task-reason]')?.textContent).not.toContain("Storage not available");
     await act(async () => host.querySelector<HTMLButtonElement>('[data-member-task="launch"] button')!.click());

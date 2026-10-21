@@ -88,6 +88,7 @@ export function ProjectDrawer({ project, goals, runs, sessions, decisions, onClo
   const currentGoals = projectGoals(project, goals);
   const [goalId, setGoalId] = useState(currentGoals[0]?.id);
   const goal = currentGoals.find(entry => entry.id === goalId) ?? currentGoals[0];
+  const goalAction = goal && decisions?.goalAction?.(goal.id);
   const progress = goalProgress(project, goal, runs);
   const look = monoLook(project.manager.mono);
   const managerSession = sessions.find(session => session.id === project.manager.mono.sessionId);
@@ -115,12 +116,14 @@ export function ProjectDrawer({ project, goals, runs, sessions, decisions, onClo
       <section className="command-map-goal"><h3>Current goal</h3>
         {currentGoals.length > 1 && <select aria-label="Project goal" value={goal?.id} onChange={event => setGoalId(event.target.value)}>{currentGoals.map(entry => <option key={entry.id} value={entry.id}>{mapText(entry.title, 100)} · {entry.state}</option>)}</select>}
         <p title={goal?.title}>{goal ? coordinationSummary(goal.title, 60) : !decisions || decisions.incomplete ? "Goal history unavailable" : "No recorded goal yet"}</p>
+        {goalAction}
         {progress ? <><progress aria-label="Accepted goal tasks" max={progress.total} value={progress.accepted} /><p className="command-map-muted">{progress.accepted} of {progress.total} tasks accepted · {progress.percent}%</p></> : <p className="command-map-muted">Progress unavailable</p>}
       </section>
       <section data-decision-ui><h3>This project decides</h3>{decisions?.autonomy ?? <p className="command-map-muted">Autonomy unavailable</p>}
         <h3>Waiting decisions</h3>{decisions?.cards ?? <p className="command-map-muted">Decision history unavailable</p>}</section>
       <section><h3>Team & tasks</h3>{project.members.length ? project.members.map(node => <MemberTask key={node.id} project={project} node={node} runs={runs} sessions={sessions} onOpenMono={onOpenMono} />) : <p className="command-map-muted">No members assigned yet</p>}</section>
       <section className="command-map-manager-chat"><h3>Manager chat</h3>
+        {goalAction}
         {managerReply ? <p>{mapText(presentationText(managerReply.text), 600)}</p> : <p className="command-map-muted">No loaded Manager reply</p>}
         <button type="button" onClick={() => onOpenMono(project.manager.id)}>Message {mapText(look.name, 80)}</button>
       </section>

@@ -10,7 +10,7 @@ import { deliverCrewMessage } from "./monoCrewEvents";
 import { teamMessageEnvelope } from "./monoOrg";
 import type { OrchestrationRun, OrchestrationTask } from "../../orchestration/model/orchestrationState";
 import { newSession } from "../../sessions/model/session";
-import { selectDecisionView, endedDecisionSources, decisionCountsByProject } from "../../commandCenter/model/decisionView";
+import { selectDecisionView, selectNeedsUser, endedDecisionSources, decisionCountsByProject } from "../../commandCenter/model/decisionView";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 const roster: Mono[] = [
@@ -111,7 +111,16 @@ it("counts lite asks and paused Manager Continue on the same Decisions destinati
   const run = { leadId: "engine", ownerMonoId: "manager", ownerSessionId: managerChat.id, projectManager: true, status: "paused", cwd: "/project", tasks: [] as OrchestrationTask[] } as OrchestrationRun;
   const view = selectDecisionView(f.ledger, roster, Date.now());
   expect(decisionCountsByProject(roster, [managerChat], [run], { ...view, pending: [] }).get("/project")).toBe(1);
-  expect(decisionCountsByProject(roster, [managerChat], [run], view).get("/project")).toBe(2);
+  const needs = selectNeedsUser(roster, [managerChat], [run], view);
+  expect(decisionCountsByProject(roster, [managerChat], [run], view).get("/project")).toBe(1);
+  expect(needs.count).toBe(1);
+  expect(needs.pending).toEqual(view.pending);
+  expect(needs.attention.filter(item => item.status === "open")).toEqual([]);
+  const distinct = { ...view, pending: [...view.pending, { ...view.pending[0], decision: { ...view.pending[0].decision, id: "different-ask" } }] };
+  expect(decisionCountsByProject(roster, [managerChat], [run], distinct).get("/project")).toBe(2);
+  const answered = { ...view, pending: [] };
+  expect(selectNeedsUser(roster, [managerChat], [run], answered).attention.filter(item => item.status === "open").map(item => item.source)).toEqual(["continue"]);
+  expect(decisionCountsByProject(roster, [managerChat], [run], answered).get("/project")).toBe(1);
 });
 it("closes asks on task/goal end, and never makes legacy rows sendable", async () => {
   const f = fixture(); await f.ledger.recordDecision("manager", ask());
@@ -171,7 +180,9 @@ it("leaves the accepted Stop, Continue and ordinary queue implementations exactl
   expect(current).toContain("submitSessionRef.current(targetSessionId, plainText, attachments)");
   expect(current).toContain("endedDecisionSources(monoManagerGoals.goals(), orchestrationRuns)");
   expect(current).toContain("decisionCountsByProject(listMonos(), sessions, orchestrationRuns");
-  expect(current).toContain("attention={<AttentionQueue");
+  expect(current).toContain("attention={renderNeedsUserAttention()}");
+  expect(current).toContain("const renderNeedsUserAttention = (projectId?: string) => {");
+  expect(current).toContain("<AttentionQueue");
   expect(current).toContain("prepareDecisionMessage(teamMessage, source.id, projectId, roster, monoManagerGoals");
   expect(current).toContain("typeof input.projectId === \"string\" ? input.projectId : undefined");
   expect(current).toContain("teamMessageEnvelope(actor, route.target, deliveryTopic, messageText");

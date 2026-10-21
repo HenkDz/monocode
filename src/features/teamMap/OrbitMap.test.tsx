@@ -157,6 +157,8 @@ it("renders the same supplied goal action in the goal panel and Manager row", as
   await click("Open app project");
   const buttons = [...host.querySelectorAll<HTMLButtonElement>('button')].filter(button => button.textContent === "Manager paused — Continue");
   expect(buttons).toHaveLength(2);
+  expect(host.querySelector('.command-map-goal button')).toBe(buttons[0]);
+  expect(host.querySelector('.command-map-manager-chat button')).toBe(buttons[1]);
   await act(async () => buttons[0].click()); await act(async () => buttons[1].click());
   expect(action.mock.calls).toEqual([["goal"], ["goal"]]);
 });

@@ -216,6 +216,8 @@ it("filters one flat member timeline and keeps injected protocol and diagnostics
     expect(openCardSession).toHaveBeenCalledWith(task.sessionId);
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     await act(async () => root.render(<WorkbenchTask task={task} />));
+    expect(host.textContent).not.toContain("Check reconciliation.");
+    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Task brief"] button[aria-expanded="false"]')!.click());
     expect(host.textContent).toContain(
       "Check reconciliation.",
     );
@@ -327,6 +329,9 @@ it("opens the exact assignment when different Managers reuse a task identity", a
     expect(openCardSession).toHaveBeenCalledWith("worker-b");
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     await act(async () => root.render(<WorkbenchTask task={runs[1].tasks[0]} />));
+    expect(host.textContent).toContain("Assignment b");
+    expect(host.textContent).not.toContain("Instructions b");
+    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Task brief"] button[aria-expanded="false"]')!.click());
     expect(host.textContent).toContain("Instructions b");
     expect(host.textContent).not.toContain("Instructions a");
   } finally {

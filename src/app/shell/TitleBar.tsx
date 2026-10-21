@@ -1306,7 +1306,7 @@ function TitleBarComponent({
           </div>
         ) : (
           <div
-            className={`relative h-full min-w-0 flex-[0_1_auto] overflow-hidden${content ? " max-[700px]:max-w-[45%]" : ""}`}
+            className={`relative h-full min-w-0 flex-[0_1_auto] overflow-hidden${content ? " max-w-[45%]" : ""}`}
             onWheel={(event) => {
               const el = tabStripRef.current;
               if (!el || el.scrollWidth <= el.clientWidth) return;

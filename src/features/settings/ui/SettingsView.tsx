@@ -573,7 +573,7 @@ export function SettingsView({
   const settingsHeader = (
     <>
       <div
-        className={`flex min-w-0 flex-1 items-center gap-2 text-[13px] max-[700px]:overflow-hidden ${
+        className={`flex min-w-0 flex-1 items-center gap-2 overflow-hidden text-[13px] ${
           inTitleBar ? "pr-3 pl-1" : "px-3"
         }`}
       >
@@ -586,7 +586,7 @@ export function SettingsView({
         </span>
       </div>
       <div
-        className={`flex shrink-0 items-center gap-1.5 max-[700px]:min-w-0 max-[700px]:shrink ${
+        className={`flex min-w-0 shrink items-center gap-1.5 ${
           inTitleBar ? "pr-4" : "pr-2"
         }`}
         data-tauri-drag-region="false"
@@ -767,8 +767,8 @@ function SettingsSearch({
   };
 
   return (
-    <div ref={root} className="relative shrink-0 max-[700px]:min-w-0 max-[700px]:shrink">
-      <label className="flex h-7 w-48 max-[700px]:max-w-full items-center gap-2 rounded-md border border-content/10 px-2 text-content/45 focus-within:border-content/20">
+    <div ref={root} className="relative min-w-0 shrink">
+      <label className="flex h-7 w-48 max-w-full items-center gap-2 rounded-md border border-content/10 px-2 text-content/45 focus-within:border-content/20">
         <Search className="size-3.5 shrink-0" strokeWidth={1.75} />
         <input
           ref={input}

@@ -5,7 +5,9 @@ import { newSession } from "../sessions/model/session";
 import { prStatusKey } from "../source-control/hooks/usePrStatus";
 import { buildTeamMap } from "./model";
 import { orbitProjects } from "./orbit";
-import { mapCamera, mapTaskState, mapTodaySentence, projectCamera, projectMapTasks, projectPoint, zoomCamera } from "./zoomMapModel";
+import { mapCamera, mapGoalTitle, mapTaskState, mapTodaySentence, projectCamera, projectMapTasks, projectPoint, zoomCamera } from "./zoomMapModel";
+import { titleFromPrompt } from "../sessions/model/session";
+import type { MonoManagerGoal } from "../monos/model/monoManagerGoals";
 
 const roster = [{ id: "manager", role: "manager" as const, managerEngineId: "engine", managerProject: "/app", projects: ["/app"], mascot: "cat", color: "#aaa" }];
 const project = orbitProjects(buildTeamMap({ roster, runs: [], sessions: [] }).nodes)[0];
@@ -52,8 +54,30 @@ it("caps fitted reading size and grows width instead of type on ultrawide screen
   const wide = projectCamera({ width: 3052, height: 1050 }, projectPoint(0));
   const narrow = projectCamera({ width: 390, height: 450 }, projectPoint(0));
   expect(regular.width).toBeGreaterThanOrEqual(1000); expect(wide.width).toBe(1800); expect(wide.camera.scale / 4).toBe(1.2);
-  expect(narrow.width).toBe(1000); expect(narrow.camera.scale / 4).toBe(.8);
+  expect(narrow.width).toBe(1000); expect(narrow.camera.scale / 4).toBeCloseTo(.342);
   expect(regular.camera.scale / 4).toBeGreaterThanOrEqual(.8);
+});
+
+it("fits measured overflow width and leaves tall content at the width-capped reading scale", () => {
+  const size = { width: 1220, height: 740 }, point = projectPoint(0);
+  const fit = projectCamera(size, point, { width: 2100, height: 4000 });
+  const left = fit.camera.x + (point.x - fit.width / 8) * fit.camera.scale;
+  expect(left).toBeCloseTo(24);
+  expect(left + 2100 * fit.camera.scale / 4).toBeCloseTo(size.width - 24);
+  expect(fit.camera.scale / 4).toBeGreaterThan(.5);
+});
+
+it("uses only the exact first-turn title and safe CC-UX2 summaries, never long raw continuation prompts", () => {
+  const raw = "Continue and complete the already authorized Build profile routing and one-time Open with workflow. ".repeat(4);
+  const goal = { id: "goal", userMessageId: "origin", title: raw } as MonoManagerGoal;
+  const session = { ...newSession("codex", "/app"), title: "Browser profile routing", blocks: [{ id: "origin", role: "user" as const, text: raw }] };
+  expect(mapGoalTitle(goal, [session])).toBe("Browser profile routing");
+  expect(mapGoalTitle(goal, [{ ...session, blocks: [{ ...session.blocks[0], id: "other" }, ...session.blocks] }])).toBe("Goal");
+  expect(mapGoalTitle(goal, [{ ...session, title: titleFromPrompt(raw, "codex") }])).toBe("Goal");
+  expect(mapGoalTitle(goal, [{ ...session, title: raw }])).toBe("Goal");
+  expect(mapGoalTitle(goal, [])).toBe("Goal");
+  expect(mapGoalTitle({ ...goal, userMessageId: undefined } as unknown as MonoManagerGoal, [{ ...session, blocks: [] }])).toBe("Goal");
+  expect(mapGoalTitle({ ...goal, title: "Profile routing\nLong detailed instructions" }, [])).toBe("Profile routing");
 });
 
 it("keeps the pointer's world coordinate stable during partial zoom and fits arbitrary project rows", () => {

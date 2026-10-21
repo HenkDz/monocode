@@ -356,7 +356,7 @@ export function TreeMap({
             <button type="button" aria-label="Move project left" disabled={orderIndex <= 0} onClick={() => moveProject(orderTarget, -1)}>←</button>
             <button type="button" aria-label="Move project right" disabled={orderIndex < 0 || orderIndex === orderedPods.length - 1} onClick={() => moveProject(orderTarget, 1)}>→</button>
           </div>}
-          {onToggleView && <button type="button" onClick={onToggleView}>Orbit</button>}
+          {onToggleView && <button type="button" onClick={onToggleView}>Map</button>}
           <button type="button" title="Restore readable spacing and keep your project order" onClick={() => { setFocusedPod(undefined); setCamera(readableCamera(size.width)); viewport.current?.scrollTo?.({ left: 0, top: 0 }); }}>Arrange</button>
           {!listLayout && <div className="team-map-zoom">
             <button
@@ -746,13 +746,17 @@ export function TreeMap({
 }
 
 export function TeamMap(props: TeamMapProps) {
-  const [view, setView] = useState(() => loadOrbitPreferences().view);
+  const [view, setView] = useState(() => loadOrbitPreferences().mapView ?? "map");
+  useEffect(() => {
+    const preferences = loadOrbitPreferences();
+    if (!preferences.mapView) saveOrbitPreferences({ ...preferences, mapView: "map" });
+  }, []);
   const toggle = () => {
-    const next = view === "orbit" ? "tree" : "orbit";
+    const next = view === "map" ? "classic" : "map";
     setView(next);
-    saveOrbitPreferences({ ...loadOrbitPreferences(), view: next });
+    saveOrbitPreferences({ ...loadOrbitPreferences(), mapView: next });
   };
-  return view === "tree"
+  return view === "classic"
     ? <TreeMap {...props} onToggleView={toggle} />
     : <ZoomMap {...props} onToggleView={toggle} />;
 }

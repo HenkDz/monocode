@@ -156,9 +156,9 @@ export function AttentionQueueView({ input, callbacks, readInput, open, onClose,
     {!integrated && <header className="aq-toolbar"><div>{presentation === "page" && <p className="aq-eyebrow">Command center</p>}<Heading className="aq-title" id={titleId}>Attention</Heading>{presentation === "page" && <p>Requests and blockers across your loaded conversations and team runs.</p>}</div>
       <div className="aq-actions">{presentation === "page" && onOpenMissionControl && <button type="button" onClick={onOpenMissionControl}>Back to goals</button>}<button type="button" onClick={onClose}>{presentation === "panel" ? "Close" : "Back to conversation"}</button></div>
     </header>}
-    <div className="aq-scroll"><nav className="aq-filters" aria-label="Attention filters">{filters.map(([value, label]) => <button type="button" key={value} aria-pressed={filter === value} onClick={() => setFilter(value)}>
+    <div className="aq-scroll">{!integrated && <nav className="aq-filters" aria-label="Attention filters">{filters.map(([value, label]) => <button type="button" key={value} aria-pressed={filter === value} onClick={() => setFilter(value)}>
       {label} · {all.filter(item => value === "history" ? item.status !== "open" : item.status === "open" && (value === "open" || item.category === value)).length}
-    </button>)}</nav>
+    </button>)}</nav>}
       {!integrated && <p className="aq-coverage">Blockers first, then oldest recorded request. Task failures need review in their lead; retry preserves the failed attempt.</p>}
       {sourceError && <p className="aq-receipt" role="alert">{sourceError}</p>}
       {visible.map(row)}

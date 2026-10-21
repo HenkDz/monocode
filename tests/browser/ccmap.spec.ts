@@ -21,10 +21,14 @@ for (const [width, height] of [[1600, 950], [3432, 1308]]) {
     await page.getByRole("button", { name: "Open monocode project", exact: true }).click();
     await expect(page.locator(".zoom-map-viewport")).toHaveAttribute("data-focused", "manager-2"); await page.waitForTimeout(800);
     await expect(page.locator(".zoom-map-team")).toContainText("×2");
-    await expect(page.locator(".zoom-map-task")).toHaveCount(6);
+    await expect(page.locator(".zoom-map-task")).toHaveCount(4);
+    await expect(page.locator(".zoom-map-done-chip")).toHaveCount(2);
     await expect(page.getByRole("textbox", { name: "Tell the CC Coordinator what you want" })).toBeEnabled();
     const reading = await page.locator(".zoom-map-world").evaluate(element => new DOMMatrix(getComputedStyle(element).transform).a / 4);
-    expect(reading).toBeGreaterThanOrEqual(.8); expect(reading).toBeLessThanOrEqual(1.2);
+    expect(reading).toBeGreaterThan(0); expect(reading).toBeLessThanOrEqual(1.2);
+    const boardBounds = (await page.locator('.zoom-map-board').boundingBox())!, viewportBounds = (await page.locator('.zoom-map-viewport').boundingBox())!;
+    expect(boardBounds.x).toBeGreaterThanOrEqual(viewportBounds.x);
+    expect(boardBounds.x + boardBounds.width).toBeLessThanOrEqual(viewportBounds.x + viewportBounds.width);
     const designWidth = await page.locator(".zoom-map-board-wrap:not([hidden])").evaluate(element => (element as HTMLElement).offsetWidth);
     expect(designWidth).toBeGreaterThanOrEqual(1000); expect(designWidth).toBeLessThanOrEqual(1800);
     if (width === 3432) expect(designWidth).toBe(1800);
@@ -144,7 +148,8 @@ test("actual App Escape never stops hidden busy work in composer, rail or body a
   expect(await page.evaluate(() => document.activeElement === document.body)).toBe(true);
   await page.keyboard.press("Escape"); await expect(viewport).toHaveAttribute("data-focused", "");
   await page.waitForTimeout(30); expect(await page.evaluate(() => window.ccmapFixture.stops)).toEqual([]);
-  await page.getByRole('button', { name: 'Close team map' }).click(); await expect(page.locator('.zoom-map')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Map options' }).click();
+  await page.getByRole('menuitem', { name: 'Close team map' }).click(); await expect(page.locator('.zoom-map')).toHaveCount(0);
   await page.keyboard.press('Escape'); await expect.poll(() => page.evaluate(() => window.ccmapFixture.stops)).toEqual(['worker-2-2']);
 });
 
@@ -171,7 +176,8 @@ test("retained completed and cancelled goals do not become active lanes or summa
   await expect(page.locator('.zoom-map-lane[aria-label="Calm navigation & summaries (CC-UX2)"]')).toHaveCount(0);
   await expect(page.locator('.zoom-map-lane[aria-label="Integrations: Composio (V4b)"]')).toHaveCount(0);
   await expect(page.locator('.zoom-map-lane[aria-label="Tasks without active goal"]')).toHaveCount(1);
-  await expect(page.locator('.zoom-map-task')).toHaveCount(6);
+  await expect(page.locator('.zoom-map-task')).toHaveCount(4);
+  await expect(page.locator('.zoom-map-done-chip')).toHaveCount(2);
   await expect(page.locator('.zoom-map-finished')).toContainText('Done');
   await page.screenshot({ path: screenshot('terminal-only-board') });
   await page.getByRole('button', { name: 'Show whole map' }).click();

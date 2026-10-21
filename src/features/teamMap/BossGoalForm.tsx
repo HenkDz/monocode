@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { isImeComposition } from "../../shared/lib/keyboard";
 import { decideNewMonoGoalRoute, type MonoGoalRoutingContext, type MonoGoalSubmission } from "../monos/model/monoGoalRouting";
 
@@ -11,6 +11,13 @@ export function BossGoalForm({ route, manager }: { route?: BossGoalRoute; manage
   const target = manager?.id ?? route?.context.ownerId ?? "boss";
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const text = drafts[target] ?? "";
+  const textarea = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    const element = textarea.current;
+    if (!element) return;
+    element.style.height = "auto";
+    element.style.height = `${element.scrollHeight}px`;
+  }, [text, target]);
   const setText = (value: string) => setDrafts(previous => ({ ...previous, [target]: value }));
   const available = manager ? !!manager.send : !!route;
   const recipient = manager?.name ?? "Boss";
@@ -53,14 +60,14 @@ export function BossGoalForm({ route, manager }: { route?: BossGoalRoute; manage
 
   return <form className="command-map-ask" data-manager={!!manager} aria-label={`Tell the ${recipient}`} onSubmit={event => { event.preventDefault(); void send(); }}>
     <div>
-      <span className="command-map-recipient">{manager ? "🧭" : "✦"} {recipient}</span>
-      <textarea rows={1} aria-label={`Tell the ${recipient} what you want`} placeholder={`Tell the ${recipient} what you want…`}
+      <span className="command-map-recipient" title={recipient}>{manager ? "🧭 Manager" : "✦ Boss"}</span>
+      <textarea ref={textarea} rows={1} aria-label={`Tell the ${recipient} what you want`} placeholder={`Tell the ${recipient} what you want…`}
         value={text} disabled={!available || sending} onChange={event => { setText(event.target.value); setError(undefined); }}
         onKeyDown={event => {
           if (event.key !== "Enter" || event.shiftKey || isImeComposition(event.nativeEvent)) return;
           event.preventDefault(); void send();
         }} />
-      <button type="submit" disabled={!available || sending || !text.trim()}>{sending ? "Sending…" : "Send"}</button>
+      <button type="submit" aria-label={sending ? "Sending…" : "Send"} disabled={!available || sending || !text.trim()}>{sending ? "Sending…" : "Enter ↵"}</button>
     </div>
     {!available && <p>{recipient} requests are unavailable. Open the {recipient} chat to continue.</p>}
     {error?.target === target && <p role="alert">{error.message}</p>}

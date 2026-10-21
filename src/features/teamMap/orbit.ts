@@ -8,6 +8,7 @@ export type OrbitPreferences = {
   order: string[];
   focus?: string;
   view: "orbit" | "tree";
+  mapView?: "map" | "classic";
 };
 export type OrbitProject = {
   manager: TeamMapNode;
@@ -223,6 +224,7 @@ export function loadOrbitPreferences(
         : [],
       focus: typeof value?.focus === "string" ? value.focus : undefined,
       view: value?.view === "tree" ? "tree" : "orbit",
+      ...(value?.mapView === "map" || value?.mapView === "classic" ? { mapView: value.mapView } : {}),
     };
   } catch {
     return { order: [], view: "orbit" };

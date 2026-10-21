@@ -266,6 +266,14 @@ describe("Attention queue", () => {
     expect(mission).toHaveBeenCalledOnce();
   });
 
+  it("keeps the filter grid on the full Attention page and omits it in the integrated map rail", async () => {
+    await act(async () => root.render(<AttentionQueueView input={inputFor("manager")} callbacks={callbacks()} open integrated presentation="panel" onClose={() => {}} />));
+    expect(host.querySelector('.aq-filters')).toBeNull();
+    expect(button('Allow once')).not.toBeNull();
+    await act(async () => root.render(<AttentionQueueView input={inputFor("manager")} callbacks={callbacks()} open onClose={() => {}} />));
+    expect(host.querySelectorAll('.aq-filters button')).toHaveLength(6);
+  });
+
   it.each(["synchronous", "asynchronous"] as const)("keeps %s approval errors visible and enables a deliberate retry", async kind => {
     const calls = callbacks();
     calls.approval = vi.fn(kind === "synchronous" ? () => { throw Error("Permission reply failed"); }

@@ -4,12 +4,23 @@ import { selectAgentLiveState } from "../agents/model/agentLiveState";
 import { activityTaskEvent, activityTaskTitle } from "../monos/model/monoTeamActivity";
 import { managerPrReady, managerTaskFinished, taskPrStatus } from "../orchestration/model/projectManager";
 import type { OrchestrationRun, OrchestrationTask } from "../orchestration/model/orchestrationState";
-import type { Session } from "../sessions/model/session";
+import { canReplaceSessionTitle, sessionDisplayTitle, titleFromPrompt, type Session } from "../sessions/model/session";
 import { pullRequestReady } from "../source-control/model/pullRequests";
 import type { OrbitProject } from "./orbit";
 import { monoLook, type Mono } from "../monos/model/mono";
 import { coordinationSummary } from "../sessions/model/transcriptPresentation";
 import type { TeamMapEvent } from "./model";
+import type { MonoManagerGoal } from "../monos/model/monoManagerGoals";
+
+export function mapGoalTitle(goal: MonoManagerGoal, sessions: readonly Session[]) {
+  const session = goal.userMessageId ? sessions.find(session => session.blocks.find(block => block.role === "user")?.id === goal.userMessageId) : undefined;
+  const title = session?.title?.trim();
+  if (session && title && title.length <= 120 && title !== goal.title.trim() && !canReplaceSessionTitle(title, session.harness, titleFromPrompt(goal.title, session.harness)) && !/^(new (chat|session)|untitled|chat|session)$/i.test(title))
+    return coordinationSummary(sessionDisplayTitle(title, session.harness));
+  const first = goal.title.trim().split(/\r?\n/)[0];
+  return first && first.length <= 80 && !/^(continue|resume|finish|complete)\b.*\b(authorized|already|previous|remaining)\b/i.test(first)
+    ? coordinationSummary(first) : "Goal";
+}
 
 export const TASK_FLOW = ["planned", "working", "review", "ready", "done"] as const;
 export const TASK_LABEL = { planned: "Planned", working: "Working", review: "In review", ready: "Ready to merge", done: "Done", failed: "Failed", blocked: "Blocked", interrupted: "Interrupted", cancelled: "Cancelled", closed: "Closed without merging" };
@@ -64,12 +75,13 @@ export function mapCamera(size: MapSize, count: number): MapCamera {
   const scale = Math.min(size.width / width, Math.max(200, size.height - 70) / height);
   return { scale, x: (size.width - width * scale) / 2, y: 25 };
 }
-export function projectCamera(size: MapSize, point: { x: number; y: number }) {
+export function projectCamera(size: MapSize, point: { x: number; y: number }, content?: MapSize) {
   const reading = Math.min(1.2, Math.max(.8, (size.height - 180) / 620));
   const width = Math.max(1000, Math.min(1800, (size.width - 80) / reading));
-  // Narrow windows pan across the board instead of shrinking type below reading size.
-  const scale = reading * 4;
-  return { width, camera: { scale, x: size.width < 850 ? 24 - (point.x - width / 8) * scale : size.width / 2 - point.x * scale,
+  const actual = content?.width || width;
+  // Fit the rendered width; tall boards retain reading size and scroll vertically.
+  const scale = Math.min(reading, Math.max(1, size.width - 48) / actual) * 4;
+  return { width, camera: { scale, x: (size.width - actual * scale / 4) / 2 - (point.x - width / 8) * scale,
     y: 80 - (point.y + 12) * scale } };
 }
 export function zoomCamera(camera: MapCamera, x: number, y: number, scale: number): MapCamera {

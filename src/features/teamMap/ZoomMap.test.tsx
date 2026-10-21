@@ -64,7 +64,8 @@ it("zooms in place and uses one project-filtered rail, with real multiplicity an
   expect(world.style.transform).not.toBe(before); expect(host.querySelector('[role="dialog"]')).toBeNull();
   expect(host.querySelector(".zoom-map-multiplicity")).toBeNull();
   expect(host.querySelector(".zoom-map-columns")?.textContent).toBe("GoalPlannedWorkingIn reviewReady to merge");
-  expect(host.querySelectorAll(".zoom-map-task")).toHaveLength(3);
+  expect(host.querySelectorAll(".zoom-map-task")).toHaveLength(2);
+  expect(host.querySelectorAll(".zoom-map-done-chip")).toHaveLength(1);
   expect(host.querySelector(".zoom-map-finished")?.textContent).toContain("Failed");
   expect(host.querySelector(".zoom-map-rail")?.textContent).toContain("Project decisions");
   expect(field().getAttribute("aria-label")).toBe("Tell the Mira what you want");
@@ -187,4 +188,27 @@ it("uses ordinary exact-text Manager send, preserves per-recipient drafts and re
   await click('[aria-label="Open app project"]'); expect(field().value).toContain("Exact manager request");
   await act(async () => host.querySelector('form')!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
   expect(field().value).toBe("");
+});
+
+it("defaults legacy views to Map once and retains deliberate Classic selection and other preferences", async () => {
+  localStorage.setItem("monocode:team-map-orbit", JSON.stringify({ view: "tree", order: ["manager"], focus: "manager" }));
+  await render(); expect(host.querySelector('.zoom-map')).not.toBeNull();
+  expect(JSON.parse(localStorage.getItem("monocode:team-map-orbit")!)).toMatchObject({ mapView: "map", view: "tree", order: ["manager"], focus: "manager" });
+  await click('[aria-label="Map options"]');
+  await act(async () => document.querySelector<HTMLButtonElement>('[role="menuitem"]')!.click());
+  expect(host.querySelector('.zoom-map')).toBeNull();
+  await act(async () => root.render(null)); await render(); expect(host.querySelector('.zoom-map')).toBeNull();
+  await act(async () => [...host.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Map")!.click());
+  await act(async () => root.render(null)); await render(); expect(host.querySelector('.zoom-map')).not.toBeNull();
+});
+
+it("keeps terminal work compact and expands the newest chips without losing task detail identity", async () => {
+  const terminal = Array.from({ length: 9 }, (_, index) => ({ ...runs[0].tasks[2], id: `failed-${index}`, title: `Failed work ${index}` }));
+  await render({ runs: [{ ...runs[0], tasks: terminal }] }); await click('[aria-label="Open app project"]');
+  expect(host.querySelectorAll('.zoom-map-finished .zoom-map-task')).toHaveLength(0);
+  expect(host.querySelectorAll('.zoom-map-done-chip')).toHaveLength(4);
+  await act(async () => [...host.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === '+5 more')!.click());
+  expect(host.querySelectorAll('.zoom-map-done-chip')).toHaveLength(9);
+  await click('[data-task="failed-8"]');
+  expect(host.querySelector('.zoom-map-detail')?.textContent).toContain('Failed work 8');
 });

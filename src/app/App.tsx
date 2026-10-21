@@ -5520,8 +5520,7 @@ function Workspace({
         : original.role === "member" ? workerPageTasks(orchestrator.snapshot(), monoId)
           .filter(({ task }) => ["queued", "running", "cancelling", "blocked", "interrupted"].includes(task.status))
           .map(view => ({ taskId: view.task.id, sessionId: view.sessionId }))[0] : null;
-      const intent = selected ? { taskId: "taskId" in selected ? selected.taskId : selected.id,
-        sessionId: selected.sessionId } : null;
+      const intent = selected ? { taskId: selected.taskId, sessionId: selected.sessionId } : null;
       const view = intent && workerTaskView(orchestrator.snapshot(), intent);
       // Freeze the attempt before awaiting; a retry must never become the requested conversation.
       if (intent && view) intent.sessionId = view.sessionId;

@@ -20,7 +20,7 @@ for (const [width, height] of [[1600, 950], [3432, 1308]]) {
     await page.screenshot({ path: screenshot(`map-${width}`) });
     await page.getByRole("button", { name: "Open monocode project", exact: true }).click();
     await expect(page.locator(".zoom-map-viewport")).toHaveAttribute("data-focused", "manager-2"); await page.waitForTimeout(800);
-    await expect(page.locator(".zoom-map-team")).toContainText("×2");
+    await expect(page.locator(".zoom-map-multiplicity")).toHaveCount(0);
     await expect(page.locator(".zoom-map-task")).toHaveCount(6);
     await expect(page.getByRole("textbox", { name: "Tell the CC Coordinator what you want" })).toBeEnabled();
     const reading = await page.locator(".zoom-map-world").evaluate(element => new DOMMatrix(getComputedStyle(element).transform).a / 4);
@@ -111,10 +111,64 @@ test("ready task highlights existing merge card and opens existing confirmation 
   await page.goto(fixture); await page.getByRole("button", { name: "Open browser-link-4 project", exact: true }).click(); await page.waitForTimeout(800);
   await page.locator('[data-task="task-0-2"]').click();
   await expect(page.locator(".zoom-map-detail")).toHaveCount(0); await expect(page.locator(".zoom-map-merge")).toHaveAttribute("data-selected", "true");
+  await page.locator('.zoom-map-lane .zoom-map-segments > span[title^="Fix 3 review comments"]').hover();
+  await page.getByRole("heading", { name: "Command map", exact: true }).hover();
+  await expect(page.locator('[data-task="task-0-2"]')).toHaveAttribute("data-selected", "true");
+  await expect(page.locator('.zoom-map-merge')).toHaveCount(1);
+  await page.screenshot({ path: screenshot("selected-after-hover") });
+  await page.keyboard.press("Escape");
+  await expect(page.locator('[data-task="task-0-2"]')).toHaveAttribute("data-selected", "false");
+  await expect(page.locator('.zoom-map-viewport')).toHaveAttribute("data-focused", "manager-0");
+  await page.locator('[data-task="task-0-2"]').click();
   await page.locator(".zoom-map-merge").getByRole("button", { name: "Merge pull request", exact: true }).click();
   await expect(page.getByText("Merge this pull request?", { exact: true })).toBeVisible();
   await page.screenshot({ path: screenshot("merge-confirmation") });
   expect(await page.evaluate(() => window.ccmapFixture.native.filter(command => command.includes("git_pr_action")))).toEqual([]);
+});
+
+test("actual App Escape never stops hidden busy work in composer, rail or body after pan, then cleans up", async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 950 }); await page.goto(fixture);
+  await page.getByRole("textbox", { name: "Tell the Boss what you want" }).press("Escape");
+  await expect(page.locator('.zoom-map')).toHaveCount(1);
+  await page.getByRole("button", { name: "Open monocode project", exact: true }).click(); await page.waitForTimeout(800);
+  await page.locator('[data-task="task-2-2"]').click(); await page.getByRole('button', { name: 'Show work', exact: true }).click();
+  const railField = page.getByRole('combobox', { name: 'Work attempt' }); await expect(railField).toBeVisible(); await railField.press("Escape");
+  await expect(page.locator('.zoom-map-detail')).toHaveCount(1);
+  await expect(page.locator('.zoom-map-viewport')).toHaveAttribute("data-focused", "manager-2");
+  await page.getByRole('button', { name: '← Needs you', exact: true }).click();
+  const viewport = page.locator('.zoom-map-viewport'), world = page.locator('.zoom-map-world'), before = await world.getAttribute('style'), box = (await viewport.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height - 20); await page.mouse.down(); await page.mouse.move(box.x + box.width / 2 + 70, box.y + box.height - 45); await page.mouse.up();
+  expect(await world.getAttribute('style')).not.toBe(before);
+  expect(await page.evaluate(() => document.activeElement === document.body)).toBe(true);
+  await page.keyboard.press("Escape"); await expect(viewport).toHaveAttribute("data-focused", "");
+  await page.waitForTimeout(30); expect(await page.evaluate(() => window.ccmapFixture.stops)).toEqual([]);
+  await page.getByRole('button', { name: 'Close team map' }).click(); await expect(page.locator('.zoom-map')).toHaveCount(0);
+  await page.keyboard.press('Escape'); await expect.poll(() => page.evaluate(() => window.ccmapFixture.stops)).toEqual(['worker-2-2']);
+});
+
+test("retained completed and cancelled goals do not become active lanes or summaries", async ({ page }) => {
+  await page.goto(fixture);
+  await page.evaluate(async () => {
+    const { monoManagerGoals: ledger } = await import('/src/features/monos/model/monoManagerGoals.ts');
+    const goal = ledger.goals('manager-2')[0];
+    ledger.goals('manager-2').push({ ...goal, id: 'independent-done-history', title: 'Completed historical goal', state: 'done', createdAt: 1, updatedAt: 2 }, { ...goal, id: 'cancelled-history', title: 'Cancelled historical goal', state: 'cancelled', createdAt: 1, updatedAt: 2 });
+    await ledger.recordDecision('manager-2', { ...ledger.decisions('manager-2')[0], id: 'independent-refresh', question: 'Independent synthetic refresh' });
+  });
+  await expect(page.locator('.zoom-map-goal-line').filter({ hasText: /Completed historical goal|Cancelled historical goal/ })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Open monocode project', exact: true }).click(); await page.waitForTimeout(800);
+  await expect(page.locator('.zoom-map-lane')).toHaveCount(2);
+  await expect(page.locator('.zoom-map-lane[aria-label="Completed historical goal"]')).toHaveCount(0);
+  await expect(page.locator('.zoom-map-lane[aria-label="Cancelled historical goal"]')).toHaveCount(0);
+  await expect(page.locator('.zoom-map-finished')).toContainText('Done');
+  await page.screenshot({ path: screenshot('completed-history') });
+  await page.evaluate(async () => {
+    const { monoManagerGoals: ledger } = await import('/src/features/monos/model/monoManagerGoals.ts');
+    ledger.goals('manager-2').forEach(goal => { goal.state = 'done'; });
+    await ledger.recordDecision('manager-2', { ...ledger.decisions('manager-2')[0], id: 'terminal-refresh' });
+  });
+  await expect(page.locator('.zoom-map-lane[aria-label="Calm navigation & summaries (CC-UX2)"]')).toHaveCount(0);
+  await expect(page.locator('.zoom-map-lane[aria-label="Integrations: Composio (V4b)"]')).toHaveCount(0);
+  await expect(page.locator('.zoom-map-finished')).toContainText('Done');
 });
 
 for (const [width, theme, reduced] of [[390, "dark", false], [1600, "light", false], [1600, "dark", true]] as const) {

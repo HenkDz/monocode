@@ -25,6 +25,7 @@ import { GoalNextAction } from "../../src/features/commandCenter/ui/GoalNextActi
 import { selectGoalNextAction, runGoalNextAction, type GoalNextStep } from "../../src/features/commandCenter/model/goalNextAction";
 import { selectDecisionView, selectNeedsUser } from "../../src/features/commandCenter/model/decisionView";
 import { AttentionQueueView } from "../../src/features/commandCenter/ui/AttentionQueue";
+import { deferUnhandledEscape, focusedBusyAgentSessionId, shouldStopFocusedTurnOnEscape } from "../../src/features/workspace/model/tabKeys";
 import "../../src/styles/index.css";
 
 const query = new URLSearchParams(location.search), now = Date.now();
@@ -85,7 +86,7 @@ localStorage.setItem("monocode:crew-messages", JSON.stringify([
   { id: "today-2", managerId: "manager-0", senderId: "member-0-1", recipientId: "manager-0", topic: "review", text: "Sentinel approved the foreground change", summary: "Sentinel approved the foreground change", at: now - 120000 },
   { id: "today-3", managerId: "manager-1", senderId: "member-1-0", recipientId: "manager-1", topic: "question", text: "Nova asked about XLS support", summary: "Nova asked about XLS support", at: now - 180000 },
 ]));
-const sends: { sessionId: string; text: string; attachments: unknown[] }[] = [], bossGoals: MonoGoalSubmission[] = [], native: string[] = [];
+const sends: { sessionId: string; text: string; attachments: unknown[] }[] = [], bossGoals: MonoGoalSubmission[] = [], native: string[] = [], stops: string[] = [];
 let refuse = false, releasePrepare: (() => void) | undefined, preparation: Promise<void> | undefined;
 mockIPC((command, args) => {
   native.push(command);
@@ -94,7 +95,7 @@ mockIPC((command, args) => {
   if (command === "artifacts_get" || command === "artifact_get") return null;
   throw Error(`Unexpected native fixture operation ${command}`);
 });
-const controls = { sends, bossGoals, native, refuse: (value: boolean) => { refuse = value; },
+const controls = { sends, bossGoals, native, stops, refuse: (value: boolean) => { refuse = value; },
   hold: () => { preparation = new Promise(resolve => { releasePrepare = resolve; }); }, release: () => { releasePrepare?.(); preparation = undefined; },
   archive: (id: string) => saveMonoTeamRoster(listMonos(true).map(mono => mono.id === id ? { ...mono, archivedAt: now } : mono)),
 };
@@ -104,6 +105,7 @@ const noop = () => {};
 function Fixture() {
   const teamMap = useTeamMap(), [sessions, setSessions] = useState(initialSessions);
   const sessionsRef = useRef(sessions); sessionsRef.current = sessions;
+  const monoViewIdRef = useRef("worker-2-2"), activeTabIdRef = useRef("synthetic-tab"), tabsRef = useRef([]), projectTerminalFocusedRef = useRef(false);
   useSyncExternalStore(monoManagerGoals.subscribe, monoManagerGoals.snapshot);
   const submit = async (sessionId: string, text: string, attachments: unknown[]) => { if (refuse) return false; sends.push({ sessionId, text, attachments }); return true; };
   const submitSessionRef = useRef(submit); submitSessionRef.current = submit;
@@ -116,6 +118,7 @@ function Fixture() {
   };
   useEffect(() => teamMap.show(), []);
   const ports = { React, useState, useRef, useEffect, useCallback, useSyncExternalStore, subscribeMonos, monosSnapshot, monoManagerGoals, listMonos, findMono, teamMap, sendDecisionFromClick,
+    monoViewIdRef, activeTabIdRef, tabsRef, projectTerminalFocusedRef, focusedBusyAgentSessionId, shouldStopFocusedTurnOnEscape, deferUnhandledEscape, onStop: (id: string) => { stops.push(id); },
     ensureOpenSession: async (id: string) => { await preparation; return sessionsRef.current.find(session => session.id === id); }, ensureMonoSession,
     homeDir: async () => "C:/synthetic/home", saveMonoPermissions: async () => {}, newDefaultSession: (cwd: string) => newSession("codex", cwd), selectedProviderAccountId: () => "fixture-account", PROVIDER_ACCOUNT_PROVIDERS,
     sessionsRef, setSessions, submitSessionRef, submitSession: submit, submitMonoGoalRef: { current: async (_id: string, _text: string, _attachments: unknown[], request: MonoGoalSubmission) => { bossGoals.push(request); return true; } },

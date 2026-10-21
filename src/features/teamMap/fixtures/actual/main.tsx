@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect, useCallback, useSyncExternalStore }
 import { createRoot } from "react-dom/client";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import AppMapHost from "virtual:app-map-host";
+import { deferUnhandledEscape, focusedBusyAgentSessionId, shouldStopFocusedTurnOnEscape } from "../../../workspace/model/tabKeys";
 import { listMonos, findMono, monoLook, subscribeMonos, monosSnapshot, saveMonoTeamRoster } from "../../../monos/model/mono";
 import { monoManagerGoals } from "../../../monos/model/monoManagerGoals";
 import { sendDecisionFromClick } from "../../../monos/model/monoDecisionUi";
@@ -60,6 +61,7 @@ function Fixture() {
   const teamMap = useTeamMap();
   const [sessions, setSessions] = useState<Session[]>([{ ...newSession("codex", project), id: "worker-chat" }]);
   const sessionsRef = useRef(sessions); sessionsRef.current = sessions;
+  const monoViewIdRef = useRef("worker-chat"), activeTabIdRef = useRef("fixture"), tabsRef = useRef([]), projectTerminalFocusedRef = useRef(false);
   const submit = async (sessionId: string, text: string, attachments: unknown[]) => {
     if (refuse) return false;
     sends.push({ sessionId, text, attachments }); return true;
@@ -72,6 +74,7 @@ function Fixture() {
   } };
   useEffect(() => teamMap.show(), []);
   const ports = {
+    monoViewIdRef, activeTabIdRef, tabsRef, projectTerminalFocusedRef, focusedBusyAgentSessionId, shouldStopFocusedTurnOnEscape, deferUnhandledEscape, onStop: noop,
     React, useState, useRef, useEffect, useCallback, useSyncExternalStore,
     subscribeMonos, monosSnapshot, monoManagerGoals, listMonos, findMono, teamMap, sendDecisionFromClick,
     ensureOpenSession: async (id: string) => sessionsRef.current.find(session => session.id === id),

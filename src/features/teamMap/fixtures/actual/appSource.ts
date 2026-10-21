@@ -17,16 +17,20 @@ export function appMapHostSource() {
   const effects = nodes.filter(node => ts.isExpressionStatement(node) && ts.isCallExpression(node.expression) && node.expression.expression.getText(ast) === "useEffect" &&
     (node.getText(ast).includes("setDecisionLoaded(decisionLoadKey)") || node.getText(ast).includes("midnight.setHours")));
   if (effects.length !== 2) throw Error("App hydration/clock seams changed");
+  const escape = nodes.filter(node => ts.isExpressionStatement(node) && ts.isCallExpression(node.expression) && node.expression.expression.getText(ast) === "useEffect" && node.getText(ast).includes('window.addEventListener("keydown", onEscape)'));
+  if (escape.length !== 1) throw Error("App Escape seam changed");
   const branch = nodes.find(node => ts.isBinaryExpression(node) && ts.isJsxElement(node.right) && node.getText(ast).startsWith("teamMap.open && teamMap.scope !== MISSION_CONTROL_SCOPE") && node.getText(ast).includes("<TeamMap key="));
   if (!branch) throw Error("Missing ordinary App map branch");
   const bindings = ["React", "useState", "useRef", "useEffect", "useCallback", "useSyncExternalStore", "subscribeMonos", "monosSnapshot", "monoManagerGoals", "listMonos", "findMono", "teamMap", "sendDecisionFromClick", "ensureOpenSession", "ensureMonoSession", "homeDir", "saveMonoPermissions", "newDefaultSession", "sessionsRef", "setSessions", "submitSessionRef", "submitSession", "submitMonoGoalRef", "sameProjectPath", "monoLook", "monoGoalRoutingContext", "remoteProjectFor", "recents", "projectKey", "workspaceNavigation", "setFilePickerOpen", "setSettingsOpen", "setSearchViewOpen", "setInboxViewOpen", "setNotesViewOpen", "setAutomationsViewOpen", "MISSION_CONTROL_SCOPE", "ATTENTION_QUEUE_SCOPE", "DECISIONS_SCOPE", "USAGE_DASHBOARD_SCOPE", "INTEGRATIONS_SCOPE", "capabilityDecisionReason", "renderIntegrationRequest", "TeamMap", "sessions", "orchestrationRuns", "managerPrStatuses", "onOpenMono", "commandMapDecisions", "goalNextSteps", "renderGoalNextAction"];
   bindings.push("attentionInput", "renderNeedsUserAttention", "selectedProviderAccountId", "PROVIDER_ACCOUNT_PROVIDERS", "onOpenRailMono");
+  bindings.push("monoViewIdRef", "activeTabIdRef", "tabsRef", "projectTerminalFocusedRef", "focusedBusyAgentSessionId", "shouldStopFocusedTurnOnEscape", "deferUnhandledEscape", "onStop");
   const body = `function AppMapHost(ports) {
     const {${bindings.join(",")}} = ports;
     const monosSnap = useSyncExternalStore(subscribeMonos, monosSnapshot);
     useSyncExternalStore(monoManagerGoals.subscribe, monoManagerGoals.snapshot);
     ${statements.join("\n")}
     ${effects.map(node => node.getText(ast)).join("\n")}
+    ${escape[0].getText(ast)}
     ${["onOpenTeamMap", "decisionActions", "goalRoutingForMono", "submitBossGoal", "mapBoss", "mapBossContext", "submitMapManager"].map(name => `const ${declaration(name).getText(ast)};`).join("\n")}
     return ${branch.getText(ast)};
   }`;

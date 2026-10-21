@@ -6,6 +6,21 @@ import { monoManagerGoals } from "../monos/model/monoManagerGoals";
 import type { OrchestrationRun } from "../orchestration/model/orchestrationState";
 import { newSession } from "../sessions/model/session";
 import { TeamMap, type TeamMapProps } from "./TeamMap";
+import { readFileSync } from "node:fs";
+import ts from "typescript";
+import { deferUnhandledEscape, focusedBusyAgentSessionId, shouldStopFocusedTurnOnEscape } from "../workspace/model/tabKeys";
+
+function registerAppEscape(onStop: (id: string) => void) {
+  const ast = ts.createSourceFile("App.tsx", readFileSync("src/app/App.tsx", "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const effects: string[] = [];
+  const visit = (node: ts.Node) => {
+    if (ts.isExpressionStatement(node) && ts.isCallExpression(node.expression) && node.expression.expression.getText(ast) === "useEffect" && node.getText(ast).includes('window.addEventListener("keydown", onEscape)')) effects.push(node.expression.arguments[0].getText(ast));
+    ts.forEachChild(node, visit);
+  };
+  visit(ast); expect(effects).toHaveLength(1);
+  const ports = { monoViewIdRef: { current: "busy" }, sessionsRef: { current: [{ id: "busy", busy: true }] }, activeTabIdRef: { current: "tab" }, tabsRef: { current: [] }, projectTerminalFocusedRef: { current: false }, focusedBusyAgentSessionId, shouldStopFocusedTurnOnEscape, deferUnhandledEscape, onStop };
+  return new Function(...Object.keys(ports), ts.transpile(`return (${effects[0]})();`, { target: ts.ScriptTarget.ES2022 }))(...Object.values(ports)) as () => void;
+}
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => null) }));
 vi.mock("./ProjectDrawer", () => ({ WorkTrace: ({ session }: { session: { id: string } }) => <p data-trace-session={session.id}>Recorded work {session.id}</p>, ProjectDrawer: () => null }));
@@ -47,7 +62,7 @@ it("zooms in place and uses one project-filtered rail, with real multiplicity an
   expect(host.querySelectorAll(".zoom-map-rail")).toHaveLength(1);
   await click('[aria-label="Open app project"]');
   expect(world.style.transform).not.toBe(before); expect(host.querySelector('[role="dialog"]')).toBeNull();
-  expect(host.querySelector(".zoom-map-team")?.textContent).toContain("×2");
+  expect(host.querySelector(".zoom-map-multiplicity")).toBeNull();
   expect(host.querySelector(".zoom-map-columns")?.textContent).toBe("GoalPlannedWorkingIn reviewReady to merge");
   expect(host.querySelectorAll(".zoom-map-task")).toHaveLength(3);
   expect(host.querySelector(".zoom-map-finished")?.textContent).toContain("Failed");
@@ -89,6 +104,58 @@ it("highlights the canonical needs-you card instead of duplicating task details"
   await act(async () => [...host.querySelectorAll<HTMLButtonElement>('.zoom-map-detail button')].find(button => button.textContent?.startsWith("Review the feature"))!.click());
   expect(host.querySelector('.zoom-map-detail')).toBeNull();
   expect(host.querySelectorAll('[data-task-id="one"]')).toHaveLength(1);
+  const other = host.querySelector<HTMLElement>('.zoom-map-lane .zoom-map-segments > span[title^="Review another"]')!;
+  await act(async () => { other.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })); });
+  await act(async () => { other.dispatchEvent(new MouseEvent("mouseout", { bubbles: true })); });
+  expect(host.querySelector('[data-task="one"]')?.getAttribute("data-selected")).toBe("true");
+  await escape(); expect(host.querySelector('[data-task="one"]')?.getAttribute("data-selected")).toBe("false");
+  expect(host.querySelector('.zoom-map-viewport')?.getAttribute("data-focused")).toBe("manager");
+});
+
+it("consumes field and body Escape before the actual App Stop effect, and removes its fallback on unmount", async () => {
+  const stop = vi.fn(), cleanup = registerAppEscape(stop);
+  try {
+    await render({ decisions: { ...decisions, project: () => ({ ...decisions.project("/app", "manager"), cards: <input aria-label="Rail answer" /> }) } });
+    await click('[aria-label="Open app project"]');
+    for (const target of [field(), host.querySelector<HTMLInputElement>('[aria-label="Rail answer"]')!]) {
+      await act(async () => { target.focus(); target.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); await new Promise(resolve => setTimeout(resolve, 10)); });
+      expect(stop).not.toHaveBeenCalled(); expect(host.querySelector('.zoom-map-viewport')?.getAttribute("data-focused")).toBe("manager");
+    }
+    const handled = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }); handled.preventDefault();
+    await act(async () => { window.dispatchEvent(handled); });
+    expect(host.querySelector('.zoom-map-viewport')?.getAttribute("data-focused")).toBe("manager");
+    await act(async () => { document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); await new Promise(resolve => setTimeout(resolve, 10)); });
+    expect(stop).not.toHaveBeenCalled(); expect(host.querySelector('.zoom-map-viewport')?.getAttribute("data-focused")).toBe("");
+    await act(async () => root.render(null));
+    document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); await new Promise(resolve => setTimeout(resolve, 10));
+    expect(stop).toHaveBeenCalledExactlyOnceWith("busy");
+  } finally { cleanup(); }
+});
+
+it("keeps terminal goal history out of lanes and summaries while preserving terminal task truth", async () => {
+  const goal = monoManagerGoals.goals()[0];
+  vi.mocked(monoManagerGoals.goals).mockReturnValue([goal, { ...goal, id: "done-history", title: "Completed historical goal", state: "done" }, { ...goal, id: "cancelled-history", title: "Cancelled historical goal", state: "cancelled" }]);
+  const done = { ...runs[0].tasks[0], id: "done", status: "completed" as const, activeDispatchId: undefined, lastDispatchId: "accepted", accepted: true, acceptedDispatchId: "accepted", completionOutcome: "no-changes" as const };
+  await render({ runs: [{ ...runs[0], tasks: [...runs[0].tasks, done, { ...done, id: "cancelled", status: "cancelled" }] }] });
+  expect(host.querySelector('.zoom-map-summary')?.textContent).not.toContain("historical goal");
+  await click('[aria-label="Open app project"]');
+  expect(host.querySelectorAll('.zoom-map-lane')).toHaveLength(1);
+  expect(host.querySelector('.zoom-map-finished')?.textContent).toContain("Done"); expect(host.querySelector('.zoom-map-finished')?.textContent).toContain("Cancelled");
+  expect(monoManagerGoals.goals()).toHaveLength(3);
+  vi.mocked(monoManagerGoals.goals).mockReturnValue([{ ...goal, state: "done" }]);
+  await act(async () => root.render(null));
+  await render({ runs: [{ ...runs[0], tasks: [done] }] });
+  expect(host.querySelectorAll('.zoom-map-lane')).toHaveLength(0);
+  expect(host.querySelector('.zoom-map-empty')?.textContent).toContain("No active goal");
+  expect(host.querySelector('.zoom-map-finished')?.textContent).toContain("Done");
+});
+
+it("counts two running tasks, but excludes planned, completed review and cancelled history from multiplicity", async () => {
+  const tasks = runs[0].tasks;
+  await render({ runs: [{ ...runs[0], tasks: [tasks[0], { ...tasks[1], status: "running" }] }] }); await click('[aria-label="Open app project"]');
+  expect(host.querySelector('.zoom-map-multiplicity')?.textContent).toBe("×2");
+  await render({ runs: [{ ...runs[0], tasks: [tasks[0], { ...tasks[1], status: "completed" }, { ...tasks[1], id: "cancelled", status: "cancelled" }] }] });
+  expect(host.querySelector('.zoom-map-multiplicity')).toBeNull();
 });
 
 it("keeps partial zoom-out after wheel lock expires and exits only past the relative threshold", async () => {

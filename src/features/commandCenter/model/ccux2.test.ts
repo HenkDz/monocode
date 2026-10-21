@@ -4,6 +4,8 @@ import { distinctGoalNextActions, type GoalNextStep } from "./goalNextAction";
 import { newSession, type Block } from "../../sessions/model/session";
 import { coordinationSummary, presentationText } from "../../sessions/model/transcriptPresentation";
 import { sessionActivityAt } from "../../sessions/model/sessionActivity";
+import type { Mono } from "../../monos/model/mono";
+import type { OrchestrationRun } from "../../orchestration/model/orchestrationState";
 
 const view: DecisionView = { pending: [], log: [], teamPending: 0, handledToday: 0, pruned: 0, skipped: 0 };
 const step = (key: string, action: GoalNextStep["action"] = "chat"): GoalNextStep => ({ key, action, goalId: key, projectId: "C:/repo", managerMonoId: "manager", managerId: "engine", sessionId: "worker", label: "Open", revision: key });
@@ -28,6 +30,22 @@ it("uses recorded activity clocks and saved order instead of the time a session 
   expect(sessionActivityAt(session)).toBe(30);
   expect(sessionActivityAt(session, 40)).toBe(40);
   expect(sessionActivityAt(newSession("codex", "C:/repo"), 7)).toBe(7);
+});
+
+it("keeps Manager continuation behind exact native approvals and dedupes its retained recovery", () => {
+  const manager: Mono = { id: "manager", sessionId: "manager-home", role: "manager", projects: ["C:/repo"], mascot: "cat", color: "blue" };
+  const recovery = { monoId: manager.id, sessionId: manager.sessionId!, managerId: "engine", projectId: "C:/repo", userMessageId: "original", state: "pending" as const };
+  const session = { ...newSession("codex", "C:/repo"), id: manager.sessionId!, blocks: [{ id: "original", role: "user" as const, text: "Existing goal" }, { id: "manager-request-original", role: "system" as const, text: "Resume", managerRequestRecovery: recovery }] };
+  const run: OrchestrationRun = { version: 2, leadId: "engine", ownerMonoId: manager.id, ownerSessionId: session.id, projectManager: true, cwd: "C:/repo", status: "paused", allowedHarnesses: ["codex"], maxWorkers: 1, cli: "synthetic", continuations: 0, requests: {}, tasks: [] };
+  const steps = [{ ...step("engine:continue", "continue"), sessionId: session.id }, { ...step("engine:continue", "continue"), sessionId: session.id }];
+  const paused = selectNeedsUser([manager], [session], [run], view, steps);
+  expect(paused.count).toBe(1);
+  expect(paused.attention.filter(item => item.status === "open").map(item => item.source)).toEqual(["continue"]);
+  const approvals: Block[] = [1, 2].map(requestId => ({ id: `a-${requestId}`, role: "tool", text: "same exact command", approval: { requestId } }));
+  const blocked = selectNeedsUser([manager], [{ ...session, blocks: [...session.blocks, ...approvals] }], [run], view, steps);
+  expect(blocked.count).toBe(2);
+  expect(blocked.goals).toHaveLength(0);
+  expect(blocked.attention.filter(item => item.status === "open").map(item => item.requestId)).toEqual([1, 2]);
 });
 
 it("bounds coordination copy while keeping original source and command text intact", () => {

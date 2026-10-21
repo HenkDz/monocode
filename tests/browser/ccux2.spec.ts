@@ -56,7 +56,7 @@ test("canonical Decisions count preserves distinct verbatim approvals and real a
     await expect(page.getByText('git show 0123456789abcdef0123456789abcdef01234567', { exact: true })).toBeVisible();
     await page.keyboard.press('Escape');
   }
-  await cards.first().getByRole('button', { name: 'Allow', exact: true }).click();
+  await cards.first().getByRole('button', { name: 'Allow once', exact: true }).click();
   await expect(page.locator('.decisions-heading')).toContainText('1 need you');
   expect(await page.evaluate(() => window.ccux2.events.filter(event => event.action === 'approval'))).toEqual([{ action: 'approval', value: { id: 'permission', requestId: 1, decision: 'allow' } }]);
   await page.getByRole('button', { name: 'Decision log', exact: true }).click();
@@ -76,6 +76,20 @@ test("one Run menu keeps confirmation, cancellation and exact checkout command",
   page.once('dialog', dialog => dialog.accept());
   await page.getByRole('menuitem', { name: /Run tests/ }).click();
   await expect.poll(() => page.evaluate(() => window.ccux2.events.filter(event => event.action === 'terminal'))).toEqual([{ action: 'terminal', value: { cwd: 'C:/synthetic/Chooser/feature', command: 'npm run test' } }]);
+});
+test("approval-first canonical projection agrees across sidebar, badge, header and cards with a retained Manager request", async ({ page }) => {
+  for (const priority of ['active', 'paused']) {
+    await page.goto(`/tests/browser/ccux2.html?priority=${priority}`);
+    const sidebar = page.locator('aside').first().getByRole('button', { name: 'Decisions', exact: true });
+    await expect(sidebar.locator('span[aria-hidden]')).toHaveText('2');
+    await sidebar.click();
+    await expect(page.locator('.decisions-heading')).toContainText('2 need you');
+    await expect(page.locator('.decision-card')).toHaveCount(1);
+    await expect(page.locator('[data-attention-status="open"]')).toHaveCount(1);
+    await expect(page.locator('[data-attention-status="open"]')).toHaveAttribute('data-attention-source', 'approval');
+    await expect(page.getByRole('button', { name: /Continue this request|Continue Manager/ })).toHaveCount(0);
+    await expect(page.getByText('Which review path should we take?', { exact: true })).toBeVisible();
+  }
 });
 test("production coordination details, grouped member feed, usage and custom folds stay calm", async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 1000 });

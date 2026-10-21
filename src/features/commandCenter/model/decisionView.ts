@@ -11,13 +11,26 @@ import { selectAttention, type AttentionInput, type AttentionItem } from "./atte
 /** Stable request identity is shared by counts and cards; prose never identifies an approval. */
 export function selectNeedsUser(roster: readonly Mono[], sessions: readonly Session[], runs: readonly OrchestrationRun[], view: DecisionView, steps: readonly GoalNextStep[] = [], input?: AttentionInput) {
   const team = teamDecisions(roster, sessions, runs);
-  const attention = selectAttention(input ?? { roster, sessions, runs, goals: [] });
+  const rawAttention = selectAttention(input ?? { roster, sessions, runs, goals: [] });
+  const pending = [...new Map(view.pending.map(item => [`decision:${item.managerId}:${item.decision.id}`, item])).values()];
+  const hasPriorityRequest = (managerId: string | undefined, leadId: string | undefined, sessionId: string) =>
+    pending.some(row => row.managerId === managerId) || rawAttention.some(candidate => candidate.status === "open" && ["approval", "question"].includes(candidate.source) &&
+      (candidate.sessionId === sessionId || !!leadId && candidate.leadId === leadId));
+  const attention = rawAttention.filter(item => {
+    if (item.status !== "open" || !["manager-request", "continue"].includes(item.source)) return true;
+    const request = sessions.find(session => session.id === item.sessionId)?.blocks.find(block => block.id === item.messageId)?.managerRequestRecovery;
+    const run = runs.find(run => run.leadId === (request?.managerId ?? item.leadId));
+    const managerId = request?.monoId ?? run?.ownerMonoId;
+    // Coordination resumes are fallback actions; existing approvals and ledger asks stay first.
+    if (hasPriorityRequest(managerId, run?.leadId, item.sessionId)) return false;
+    return item.source !== "manager-request" || !run || run.status !== "paused" && !run.managerTurnId && !run.tasks.some(task => ["running", "cancelling"].includes(task.status));
+  });
   const attentionKey = (item: AttentionItem) => item.source === "approval" || item.source === "question" ? `${item.sessionId}:${item.source}:${item.requestId}`
     : item.source === "continue" ? `${item.leadId}:continue` : item.source === "manager-request" ? `manager-request:${item.sessionId}:${item.messageId?.replace(/^manager-request-/, "")}` : item.id;
   const open = attention.filter(item => item.status === "open");
-  const pending = [...new Map(view.pending.map(item => [`decision:${item.managerId}:${item.decision.id}`, item])).values()];
   const known = new Set([...open.map(attentionKey), ...pending.map(item => `decision:${item.managerId}:${item.decision.id}`)]);
-  const goals = [...new Map(steps.filter(step => step.action !== "chat" && !known.has(step.key)).map(step => [step.key, step])).values()];
+  const goals = [...new Map(steps.filter(step => step.action !== "chat" && !known.has(step.key) &&
+    (!["start", "continue"].includes(step.action) || !hasPriorityRequest(step.managerMonoId, step.managerId, step.sessionId))).map(step => [step.key, step])).values()];
   const projectFor = (item: AttentionItem) => {
     const run = runs.find(run => run.leadId === item.leadId || run.tasks.some(task => item.sessionIds.includes(task.sessionId)));
     const owner = roster.find(mono => item.sessionIds.includes(mono.sessionId ?? ""));

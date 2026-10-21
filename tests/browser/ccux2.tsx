@@ -65,6 +65,12 @@ const sessions: Session[] = [
 const command = "git show 0123456789abcdef0123456789abcdef01234567";
 sessions.find(row => row.id === "permission")!.blocks.push(...[1, 2].map(requestId => ({ id: `approval-${requestId}`, role: "tool" as const, text: command, approval: { requestId } })));
 const runs: OrchestrationRun[] = [{ version: 2, allowedHarnesses: ["codex"], maxWorkers: 1, cli: "synthetic", continuations: 0, requests: {}, leadId: "manager-home", ownerMonoId: "manager", ownerSessionId: "manager-home", cwd: project, projectManager: true, status: "active", dispatches: [], tasks: ["task", "past-task"].map((id, index) => ({ id, memberId: "atlas", memberName: "Atlas", sessionId: id, title: index ? "Earlier chooser review" : "Chooser focus", prompt: "Preserve keyboard focus and report the result.", status: "completed", accepted: !!index, delivered: true, result: "", files: [], scopes: [], dependsOn: [], harness: "codex", model: "", workspace: { id: "feature", projectCwd: project, checkoutCwd: trees[1].path, kind: "worktree", branch: "feature" } })) }];
+if (params.has('priority')) {
+  sessions.find(row => row.id === 'permission')!.blocks = [];
+  sessions.find(row => row.id === 'task')!.blocks.push({ id: 'worker-approval', role: 'tool', text: command, approval: { requestId: 7 } });
+  sessions.find(row => row.id === 'manager-home')!.blocks.push({ id: 'manager-request-original', role: 'system', text: 'Continue the retained request', managerRequestRecovery: { monoId: 'manager', sessionId: 'manager-home', managerId: 'manager-home', projectId: project, userMessageId: 'original', state: 'pending' } });
+  if (params.get('priority') === 'paused') runs[0].status = 'paused';
+}
 orchestrator.snapshot = () => runs; orchestrator.subscribe = () => () => {};
 orchestrator.forSession = id => runs.find(run => run.tasks.some(task => task.sessionId === id));
 orchestrator.run = id => runs.find(run => run.leadId === id);
@@ -83,6 +89,7 @@ mockIPC((command, args) => {
 }, { shouldMockEvents: true });
 await monoManagerGoals.hydrate('manager');
 const noop = () => {}, view: DecisionView = { pending: [], log: [], teamPending: 0, handledToday: 0, pruned: 0, skipped: 0 };
+if (params.has('priority')) view.pending.push({ managerId: 'manager', decision: { version: 1, type: 'decision', id: 'ledger', projectId: project, goalId: goal.id, requestingMonoId: 'atlas', requesterSessionId: 'task', escalationChain: [{ id: 'manager', level: 'manager' }, { id: 'user', level: 'user' }], status: 'waiting', answererId: 'user', createdAt: now, question: 'Which review path should we take?', impact: 'high', context: 'The existing ask stays pending', operation: 'work', options: [{ id: 'review', label: 'Review the proposal' }] } });
 const decisionActions: DecisionUiActions = { answer: async () => ({ logFailed: false }), autonomy: async () => {}, openProject: noop };
 let refresh = noop, focus: { path: string; branch: string | null } | undefined;
 const tabs = [newTab("older"), newTab("latest"), newTab("task")];

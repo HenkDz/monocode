@@ -54,7 +54,7 @@ function TaskDetail({ entry, sessions, onOpenMono }: { entry: MapTask; sessions:
       {history.length > 0 && <select aria-label="Work attempt" value={selected?.id ?? ""} onChange={event => setAttemptId(event.target.value)}>{history.map(attempt => <option key={attempt.id} value={attempt.id}>{attempt.id === entry.dispatch?.id ? "Current" : "Saved"} · {attempt.id} · {attempt.state}</option>)}</select>}
       <p>{historical ? "Saved attempt" : "Current assignment"} · Task {entry.task.id} · dispatch {selected?.id ?? "unavailable"}</p>
       <pre>{presentationText(entry.task.prompt)}</pre>
-      {(historical ? selected?.result : entry.task.result) && <p>{presentationText((historical ? selected?.result : entry.task.result)!)}</p>
+      {(historical ? selected?.result : entry.task.result) && <p>{presentationText((historical ? selected?.result : entry.task.result)!)}</p>}
       {entry.task.error && <p role="alert">{entry.task.error}</p>}
       <OrgArtifactLinks monoId={entry.task.memberId ?? entry.run.ownerMonoId ?? ""} links={[
         { id: entry.task.reportArtifactId, label: "Report" }, { id: entry.task.reviewArtifactId ?? entry.task.reviewVerdict?.artifactId, label: "Review" }, { id: entry.task.prSummaryArtifactId, label: "PR summary" },

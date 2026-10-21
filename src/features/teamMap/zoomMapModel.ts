@@ -34,8 +34,9 @@ export function projectMapTasks(project: OrbitProject, runs: readonly Orchestrat
   return runs.filter(run => (run.ownerMonoId ? run.ownerMonoId === project.manager.id :
     !!project.manager.mono.managerEngineId && run.leadId === project.manager.mono.managerEngineId) &&
     (!run.cwd || projectKey(run.cwd) === projectKey(project.project))).flatMap(run => run.tasks.map(task => {
-    const dispatch = run.dispatches?.find(entry => entry.id === (task.activeDispatchId ?? task.lastDispatchId) && entry.taskId === task.id);
-    const session = sessions.find(entry => entry.id === (dispatch?.sessionId ?? task.sessionId));
+    const dispatchId = task.activeDispatchId ?? task.lastDispatchId;
+    const dispatch = run.dispatches?.find(entry => entry.id === dispatchId && entry.taskId === task.id);
+    const session = sessions.find(entry => entry.id === (dispatch?.sessionId ?? (!dispatchId ? task.sessionId : undefined)));
     const pr = taskPrStatus(task, statuses);
     const member = project.members.find(node => node.id === task.memberId);
     return { key: JSON.stringify([run.leadId, task.id]), run, task, dispatch, session, pr, state: mapTaskState(task, pr),

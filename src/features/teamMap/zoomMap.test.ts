@@ -42,6 +42,9 @@ it("selects every owned task and the exact current dispatch session, excluding f
   expect(result).toHaveLength(2); expect(result[0].session).toBe(worker); expect(result[0].dispatch?.id).toBe("current");
   expect(result[0].state).toBe("ready"); expect(result[0].live.status).toBeDefined();
   expect(result[1].task.id).toBe("second");
+  const stale = { ...newSession("codex", "/app"), id: "old-worker", busy: true };
+  const unknown = projectMapTasks(project, [{ ...run, dispatches: [] }], [stale], statuses);
+  expect(unknown[0].session).toBeUndefined();
 });
 
 it("caps fitted reading size and grows width instead of type on ultrawide screens", () => {

@@ -93,6 +93,20 @@ test("actual App rejects Manager archive during awaited preparation", async ({ p
   expect(await page.evaluate(() => window.ccmapFixture.sends)).toEqual([]);
 });
 
+test("canonical decision zoom stays in place and preserves native click and exact ordinary answer text", async ({ page }) => {
+  await page.goto(fixture);
+  const card = page.getByRole("article", { name: "Support the legacy XLS invoice template?" });
+  await card.getByRole("button", { name: "Open project" }).click();
+  await expect(page.locator(".zoom-map-viewport")).toHaveAttribute("data-focused", "manager-1"); await page.waitForTimeout(800);
+  await page.locator('[data-task="task-1-1"]').click();
+  await expect(page.locator(".zoom-map-detail")).toHaveCount(0); await expect(card).toBeFocused();
+  const choice = card.getByRole("button", { name: "CSV only, announce deprecation Recommended" });
+  await choice.dispatchEvent("click"); await expect(card.getByRole("alert")).toContainText("Couldn't reach Nova");
+  expect(await page.evaluate(() => window.ccmapFixture.sends)).toEqual([]);
+  await choice.click();
+  expect(await page.evaluate(() => window.ccmapFixture.sends)).toEqual([{ sessionId: "worker-1-1", text: 'Decision on your question "Support the legacy XLS invoice template?": go with "CSV only, announce deprecation".', attachments: [] }]);
+});
+
 test("ready task highlights existing merge card and opens existing confirmation without executing", async ({ page }) => {
   await page.goto(fixture); await page.getByRole("button", { name: "Open browser-link-4 project", exact: true }).click(); await page.waitForTimeout(800);
   await page.locator('[data-task="task-0-2"]').click();

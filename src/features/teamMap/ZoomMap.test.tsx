@@ -84,7 +84,7 @@ it("highlights the canonical needs-you card instead of duplicating task details"
   await click('[aria-label="Open app project"]'); await click('[data-task="one"]');
   expect(host.querySelector('.zoom-map-detail')).toBeNull(); expect(host.querySelectorAll('[data-task-id="one"]')).toHaveLength(1);
   expect(host.querySelector('[data-task="one"]')?.getAttribute("data-selected")).toBe("true");
-  await act(async () => [...host.querySelectorAll<HTMLButtonElement>('.zoom-map-mono')].find(button => button.textContent?.includes("Vale"))!.click());
+  await act(async () => [...host.querySelectorAll<HTMLButtonElement>('.zoom-map-mono')].find(button => button.querySelector('strong')?.textContent?.startsWith("Vale"))!.click());
   expect(host.querySelector('.zoom-map-detail')?.textContent).toContain("Vale");
   await act(async () => [...host.querySelectorAll<HTMLButtonElement>('.zoom-map-detail button')].find(button => button.textContent?.startsWith("Review the feature"))!.click());
   expect(host.querySelector('.zoom-map-detail')).toBeNull();

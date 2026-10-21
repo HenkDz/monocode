@@ -118,6 +118,7 @@ const ports: Record<string, unknown> = {
   chooseProjectAddition: async () => ({ project }), sessionForProjectAddition: (session: Session) => session, persistSession: noop, isProjectManager: (id: string) => id === "manager-home",
   replaceBlankPaneWithSession: () => false, setSessions: noop,
   removingWorktreePaths: { current: new Set() }, worktreeFocus: () => focus, setWorktreeFocus: (_project: string, next: typeof focus) => { focus = next; state.projectWorktree = trees.find(tree => tree.path === (next?.path ?? project))!; },
+  listWorktrees: async () => ({ defaultRoot: project, worktrees: trees }),
   ask: async () => window.confirm("Run this script in the selected checkout?"), openProjectTerminal: (cwd: string, command: string) => events.push({ action: "terminal", value: { cwd, command } }),
   loadNotesEnabled: () => true, rightPanelOpenRef: { current: true }, saveRightPanelOpen: noop,
 };

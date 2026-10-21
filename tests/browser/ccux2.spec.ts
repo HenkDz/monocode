@@ -2,7 +2,10 @@ import { expect, test } from "@playwright/test";
 import type { AppRoutes } from "virtual:ccux2-app";
 import type { Session } from "../../src/features/sessions/model/session";
 import type { WorkspaceTab } from "../../src/features/workspace/model/layout";
-declare global { interface Window { ccux2: { routes: AppRoutes; sessions: Session[]; tabs: WorkspaceTab[]; events: { action: string; value?: unknown }[]; zoom(value: number): Promise<number> } } }
+declare global { interface Window {
+  ccux2: { routes: AppRoutes; sessions: Session[]; tabs: WorkspaceTab[]; events: { action: string; value?: unknown }[]; zoom(value: number): Promise<number> };
+  ccwb1: { events: { action: string; id?: string; text?: string; options?: { followUpBehavior?: string }; behavior?: string }[] };
+} }
 const captures = "../cc-program/ccux2/evidence/captures";
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => Object.defineProperty(navigator, "platform", { value: "Win32" }));
@@ -73,6 +76,82 @@ test("one Run menu keeps confirmation, cancellation and exact checkout command",
   page.once('dialog', dialog => dialog.accept());
   await page.getByRole('menuitem', { name: /Run tests/ }).click();
   await expect.poll(() => page.evaluate(() => window.ccux2.events.filter(event => event.action === 'terminal'))).toEqual([{ action: 'terminal', value: { cwd: 'C:/synthetic/Chooser/feature', command: 'npm run test' } }]);
+});
+test("production coordination details, grouped member feed, usage and custom folds stay calm", async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  await page.goto('/tests/browser/ccux2.html?surface=details');
+  const goals = page.getByRole('tabpanel', { name: 'Goal & tasks', exact: true });
+  await expect(goals.getByRole('button', { name: 'Show details', exact: true })).toHaveCount(1);
+  const goalTitle = goals.locator('p.truncate');
+  expect((await goalTitle.innerText()).length).toBeLessThanOrEqual(60);
+  await goals.getByRole('button', { name: 'Show details', exact: true }).click();
+  await expect(goals.getByRole('button', { name: 'Copy commit 0123456', exact: true })).toHaveAttribute('title', '0123456789abcdef0123456789abcdef01234567');
+  await expect(page.locator('[data-team-message="manager"]')).not.toContainText('11111111-2222-3333-4444-555555555555');
+  const feed = page.locator('main li').filter({ hasText: 'Atlas · 3 updates' });
+  await expect(feed).toHaveCount(1);
+  await expect(page.locator('main')).not.toContainText('Unrelated member message');
+  await feed.getByRole('button', { name: /Show work/ }).click();
+  await expect(feed.getByRole('link', { name: 'Review notes' })).toHaveCount(3);
+  await expect(feed.getByRole('link', { name: 'Review notes' }).first()).toHaveAttribute('href', 'https://example.com/review');
+  await expect(page.locator('main [data-task-metrics]')).toContainText('Usage');
+  await expect(page.locator('main [data-task-metrics] span[title]')).toHaveAttribute('title', '1,240 in / 240 out tokens');
+  await expect(page.locator('main details, main summary')).toHaveCount(0);
+  const work = page.locator('[data-transcript-turn-work] > button');
+  await expect(work).toContainText('Worked for 14m');
+  await expect(work).not.toContainText('failed');
+  await work.click();
+  await expect(page.locator('[data-transcript-work-details]')).toContainText('Temporary command failure');
+  await page.screenshot({ path: `${captures}/coordination-details-1600-dark.png` });
+});
+test("project picker stays opaque and tree project opens the approved drawer with focus return", async ({ page }) => {
+  await page.setViewportSize({ width: 1024, height: 900 });
+  await page.goto('/tests/browser/ccux2.html?theme=light');
+  const picker = page.getByRole('button', { name: /^Switch project/ });
+  await picker.click();
+  await expect(picker).not.toHaveAttribute('title');
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('textbox')).toBeVisible();
+  expect(await dialog.evaluate(element => getComputedStyle(element).backgroundColor)).not.toBe('rgba(0, 0, 0, 0)');
+  await page.screenshot({ path: `${captures}/opaque-picker-1024-light.png` });
+  await page.keyboard.press('Escape');
+  await page.locator('aside').first().getByRole('button', { name: 'Command map', exact: true }).click();
+  const tree = page.getByRole('button', { name: 'Tree', exact: true });
+  if (await tree.count()) await tree.click();
+  const project = page.getByRole('button', { name: 'Focus Chooser team', exact: true });
+  await project.click();
+  const drawer = page.getByRole('dialog', { name: 'Chooser', exact: true });
+  await expect(drawer).toBeVisible();
+  for (const title of ['Current goal', 'This project decides', 'Waiting decisions', 'Team & tasks']) await expect(drawer.getByRole('heading', { name: title, exact: true })).toBeVisible();
+  await expect(drawer.getByRole('button', { name: /Show work/ })).toHaveCount(1);
+  await page.screenshot({ path: `${captures}/tree-project-drawer-1024-light.png` });
+  await drawer.getByRole('button', { name: 'Close project', exact: true }).click();
+  await expect(project).toBeFocused();
+});
+test("real SessionPane routes task approval, Queue, Steer and Stop to the worker and preserves its home", async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  await page.goto('/tests/browser/ccwb1-workbench.html?state=approval');
+  const header = page.locator('[data-workbench-header]:visible');
+  await expect(header).toBeVisible();
+  await header.getByRole('button', { name: 'View live', exact: true }).click();
+  await expect(page.locator('[data-view]')).toContainText('task-session');
+  await expect(page.getByLabel('Command awaiting approval', { exact: true })).toHaveText("printf 'verbatim approval'");
+  await page.getByRole('button', { name: 'Stop', exact: true }).click();
+  expect(await page.evaluate(() => window.ccwb1.events)).toContainEqual({ action: 'stop', id: 'task-session' });
+  await header.getByRole('button', { name: 'Iris · Tasks & history', exact: true }).click();
+  await expect(page.locator('[data-view]')).toContainText('iris-home');
+  await page.goto('/tests/browser/ccwb1-workbench.html');
+  await page.locator('[data-workbench-header]:visible').getByRole('button', { name: 'View live', exact: true }).click();
+  const delivery = page.getByRole('group', { name: 'Message delivery' });
+  const input = page.locator('[data-session-composer] textarea:visible');
+  await input.fill('Check the new evidence');
+  for (const mode of ['Queue', 'Steer']) {
+    await delivery.getByRole('button', { name: mode, exact: true }).click();
+    await page.getByRole('button', { name: 'Send', exact: true }).click();
+    expect(await page.evaluate(() => window.ccwb1.events)).toContainEqual(expect.objectContaining({ action: 'submit', id: 'task-session', text: 'Check the new evidence', behavior: mode.toLowerCase(), options: expect.objectContaining({ followUpBehavior: mode.toLowerCase() }) }));
+  }
+  await page.screenshot({ path: `${captures}/real-session-pane-task-1600-dark.png` });
+  expect(errors).toEqual([]);
 });
 for (const [width, theme, zoom] of [[1600, 'dark', 1], [1024, 'light', 1], [480, 'dark', 1], [1600, 'light', 2]] as const) {
   test(`production shell frames and reachable window corners ${width} ${theme} ${zoom * 100}%`, async ({ page }) => {

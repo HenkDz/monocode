@@ -32,7 +32,7 @@ for (const width of [1440, 640])
       const header = page.locator("[data-workbench-header]:visible");
       await expect(header).toContainText("Home chat");
       await expect(header).toContainText("Current task");
-      await expect(header).toContainText("8.4k in");
+      await expect(header).toContainText("Usage");
       await expect(
         page.getByRole("button", { name: "Stop", exact: true }),
       ).toHaveCount(0);
@@ -62,7 +62,7 @@ for (const width of [1440, 640])
       await expect(page.locator("[data-view]")).toContainText("task-session");
       await expect(page.locator('[role="dialog"]')).toHaveCount(0);
       await expect(header).toContainText("Design profile management");
-      await expect(header).toContainText("Back to Iris home");
+      await expect(header).toContainText("Iris · Tasks & history");
       await expect(
         page.getByText(
           "I will check the profile list and switching behavior, then map the controls to the existing settings flow.",
@@ -131,7 +131,7 @@ for (const width of [1440, 640])
       await expect(brief).toContainText("Read-only");
       await expect(brief).toContainText("9 inherited changes");
       const expand = brief.locator("button[aria-expanded]");
-      await expect(expand).toContainText("Show full brief");
+      await expect(expand).toContainText("Show work");
       await expand.focus();
       await page.keyboard.press("Enter");
       await expect(expand).toHaveAttribute("aria-expanded", "true");
@@ -198,7 +198,7 @@ for (const width of [1440, 640])
       await page.getByRole("button", { name: "Forward", exact: true }).click();
       await expect(page.locator("[data-view]")).toContainText("task-session");
       await page
-        .getByRole("button", { name: "Back to Iris home", exact: true })
+        .getByRole("button", { name: "Iris · Tasks & history", exact: true })
         .click();
       await expect(page.locator("[data-view]")).toContainText("iris-home");
       await task(page);
@@ -265,7 +265,7 @@ test("a delayed folder check cannot reveal a task folder after its pane becomes 
     .getByRole("button", { name: "Open worktree", exact: true })
     .click();
   await page
-    .getByRole("button", { name: "Back to Iris home", exact: true })
+    .getByRole("button", { name: "Iris · Tasks & history", exact: true })
     .click();
   await expect(page.locator("[data-view]")).toContainText("iris-home");
   await expect(page.locator('[data-session-drop="task-session"]')).toHaveCount(

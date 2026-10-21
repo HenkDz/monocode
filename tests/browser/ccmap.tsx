@@ -119,6 +119,7 @@ const controls = { sends, bossGoals, native, stops, refuse: (value: boolean) => 
     for (let i = 0; i < 22; i++) runs[2].tasks.push({ ...template, id: `arriving-${i}`, title: `New incoming task ${i}`, activeDispatchId: undefined, lastDispatchId: undefined, status: "queued" });
     refreshFixture();
   },
+  renameTitle: (title: string) => { runs[2].tasks[2].title = title; refreshFixture(); },
 };
 declare global { interface Window { ccmapFixture: typeof controls } }
 window.ccmapFixture = controls;

@@ -16,12 +16,12 @@ export function MapTitle({ title }: { title: string }) {
       const words = title.split(/\s+/), height = parseFloat(getComputedStyle(node).lineHeight) * 2;
       probe.textContent = title;
       let result = title;
-      if (node.clientWidth && Number.isFinite(height) && probe.scrollHeight > height + 1) {
+      if (node.clientWidth && Number.isFinite(height) && (probe.scrollHeight > height + 1 || probe.scrollWidth > node.clientWidth + 1)) {
         let low = 0, high = words.length;
         while (low < high) {
           const middle = Math.ceil((low + high) / 2);
           probe.textContent = `${words.slice(0, middle).join(" ")}…`;
-          if (probe.scrollHeight <= height + 1) low = middle; else high = middle - 1;
+          if (probe.scrollHeight <= height + 1 && probe.scrollWidth <= node.clientWidth + 1) low = middle; else high = middle - 1;
         }
         result = low ? `${words.slice(0, low).join(" ")}…` : "…";
       }

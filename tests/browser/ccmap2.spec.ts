@@ -104,3 +104,28 @@ test('legacy default migrates once, accessible Classic choice and Map survive re
   await expect(page.locator('.zoom-map')).toHaveCount(0); await page.reload(); await expect(page.locator('.zoom-map')).toHaveCount(0);
   await page.getByRole('button', { name: 'Map', exact: true }).click(); await page.reload(); await expect(page.locator('.zoom-map')).toHaveCount(1);
 });
+
+test('hover tooltip leaves the card center clickable, keyboard selects its exact history and menu remains interactive', async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 950 }); await page.goto(fixture);
+  await page.getByRole('button', { name: 'Open monocode project', exact: true }).click(); await fitted(page);
+  const card = page.locator('[data-task="task-2-2"]'), title = card.locator('.zoom-map-title');
+  await title.hover(); await expect(page.getByRole('tooltip')).toBeVisible();
+  expect(await title.evaluate(element => {
+    const box = element.getBoundingClientRect();
+    return document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2)?.closest('[data-task]')?.getAttribute('data-task');
+  })).toBe('task-2-2');
+  await page.screenshot({ path: join(evidence, 'tooltip-hit-1600.png') });
+  await title.click(); await expect(page.locator('.zoom-map-detail')).toContainText('Release gates and review');
+  await page.keyboard.press('Escape'); await card.focus(); await page.keyboard.press('Enter');
+  await page.getByRole('button', { name: 'Show work', exact: true }).click();
+  await expect(page.locator('.zoom-map-detail')).toContainText('Task task-2-2 · dispatch dispatch-2-2');
+  await page.getByRole('combobox', { name: 'Work attempt' }).press('Escape');
+  await expect(page.locator('.zoom-map-detail')).toHaveCount(1);
+  await page.getByRole('button', { name: '← Needs you', exact: true }).click();
+  await page.getByRole('button', { name: 'Map options' }).click(); await page.getByRole('menuitem', { name: 'Classic view' }).click();
+  await page.getByRole('button', { name: 'Map', exact: true }).click();
+  await page.getByRole('button', { name: 'Open monocode project', exact: true }).click(); await fitted(page);
+  await page.evaluate(() => window.ccmapFixture.renameTitle('X'.repeat(140)));
+  await expect(title).toHaveText('…'); await card.focus();
+  await expect(page.getByRole('tooltip')).toHaveText('X'.repeat(140));
+});

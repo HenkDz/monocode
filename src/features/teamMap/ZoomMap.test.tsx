@@ -140,6 +140,15 @@ it("does not route a saved task to another task's canonical card sharing its ses
   expect(host.querySelector('[data-trace-session="current"]')).not.toBeNull();
 });
 
+it("retains the intended session fallback for a canonical card without a task ID", async () => {
+  await render({ decisions: { ...decisions, project: () => ({ ...decisions.project("/app", "manager"), cards: <article tabIndex={-1} data-session-id="current">Session approval</article> }) } });
+  await click('[aria-label="Open app project"]'); await click('[data-task="one"]');
+  await act(async () => { await new Promise(resolve => requestAnimationFrame(resolve)); });
+  expect(host.querySelector('.zoom-map-detail')).toBeNull();
+  expect(document.activeElement).toBe(host.querySelector('[data-session-id="current"]'));
+  expect(host.querySelector('[data-task="one"]')?.getAttribute('data-selected')).toBe('true');
+});
+
 it("keeps terminal goal history out of lanes and summaries while preserving terminal task truth", async () => {
   const goal = monoManagerGoals.goals()[0];
   vi.mocked(monoManagerGoals.goals).mockReturnValue([goal, { ...goal, id: "done-history", title: "Completed historical goal", state: "done" }, { ...goal, id: "cancelled-history", title: "Cancelled historical goal", state: "cancelled" }]);

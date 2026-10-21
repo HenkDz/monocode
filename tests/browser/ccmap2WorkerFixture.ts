@@ -9,7 +9,7 @@ import { monoLiveState } from "../../src/features/monos/model/monoNavigation";
 import { newSession, sessionWorkCwd, sessionNeedsInput, sessionDisplayTitle, type Session } from "../../src/features/sessions/model/session";
 import { isBlankSession } from "../../src/features/projects/model/projectReturn";
 import { orderByIds } from "../../src/shared/lib/reorder";
-import { basename } from "../../src/shared/lib/paths";
+import { basename } from "../../src/platform/tauri/fs";
 import type { OrchestrationRun, OrchestrationTask } from "../../src/features/orchestration/model/orchestrationState";
 import { sameProjectPath, normalizeProjectPath, isRemoteProjectPath } from "../../src/features/projects/model/recents";
 import { projectName, isEqualOrInside } from "../../src/shared/lib/paths";
@@ -48,7 +48,7 @@ export function createWorkerFixture(bind: (host: any) => unknown) {
     monoWorksOn, monoLiveState, sessionNeedsInput, sessionDisplayTitle, isBlankSession, orderByIds, basename, isRemoteProjectPath,
     remoteSessionFor: () => undefined, remotePendingWorktree: () => undefined,
     useMemo: (calculate: () => unknown) => calculate(), startTransition: (callback: () => void) => callback(),
-    monosEnabled: true, dirtyFiles: new Set(), unseenFinishedIds: new Set(), titleTabOrder: [], sidebarCwd: project,
+    monosEnabled: true, monosSnap: 0, dirtyFiles: new Set(), unseenFinishedIds: new Set(), titleTabOrder: [], sidebarCwd: project,
     activeAppView: undefined, openPage: undefined, displayedTabNavigation: { current: {} },
     focusedBusyAgentSessionId, shouldStopFocusedTurnOnEscape, deferUnhandledEscape,
     workerPages: {}, workerPagesRef: { current: {} }, workerPageError: undefined,

@@ -178,10 +178,11 @@ it("C10 restored composer autofocus before hydration selects task and keeps a us
   vi.useFakeTimers();
   const f = fixture(), h = f.h, tabs = restoreWorkerBoot(f), sessions = JSON.stringify(h.sessions);
   const retained = tabs.slice(2);
+  h.refreshFocus(); h.refreshShell();
   h.setWorkerLayoutReady = (ready: boolean) => { h.workerLayoutReady = ready; h.migrate(); };
   const cleanup = h.scheduleWorkerLayout();
   try {
-    h.onFocusPane("task-a");
+    await act(async () => h.onFocusPane("task-a"));
     expect(h.monoViewRequest.current).toBe(0);
     await act(async () => { await vi.advanceTimersByTimeAsync(2999); });
     expect(h.tabs).toBe(tabs); expect(h.workerPages.worker).toBeUndefined();

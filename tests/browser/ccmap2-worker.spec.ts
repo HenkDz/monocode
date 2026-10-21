@@ -205,8 +205,11 @@ test("C10 restored six-tab boot autofocus before real hydration keeps shell and 
   await expect.poll(() => page.evaluate(() => window.ccmap2Worker.host.workerLayoutReady)).toBe(true);
   const state = await page.evaluate(() => {
     const f = window.ccmap2Worker, h = f.host;
-    return { tabs: h.tabs, active: h.activeTabId, activeRef: h.activeTabIdRef.current, sessions: JSON.stringify(h.sessions), target: h.workerPages.worker?.target, mono: h.monoViewId, events: f.events };
+    return { tabs: h.tabs, active: h.activeTabId, activeRef: h.activeTabIdRef.current, sessions: JSON.stringify(h.sessions), target: h.workerPages.worker?.target, mono: h.monoViewId, events: f.events,
+      focus: (f as any).bootFocus, requests: h.monoViewRequest.current, visibleMain: document.querySelectorAll('main > [aria-hidden="false"]').length, sidebar: h.sidebarOpen, titleTabs: h.nextTitleTabs.map((tab: { id: string }) => tab.id) };
   });
+  await test.info().attach("boot-state", { body: JSON.stringify({ state, errors }, null, 2), contentType: "application/json" });
+  await page.screenshot({ path: `${evidence}/c10-boot-after-timer.png` });
   expect(state.tabs).toEqual(initial.survivors);
   expect(state.active).toBe(initial.survivors[2].id); expect(state.activeRef).toBe(state.active);
   expect(state.tabs.some((tab: { id: string }) => tab.id === state.active)).toBe(true);

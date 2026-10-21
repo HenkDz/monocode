@@ -9,10 +9,10 @@ import { selectTaskMetrics } from "../model/agentMetrics";
 import type { OrchestrationDispatch, OrchestrationTask } from "../../orchestration/model/orchestrationState";
 
 it("does not describe a recorded assignment in review as an unstarted conversation", () => {
-  const html = renderToStaticMarkup(<TaskMetricsLine metrics={{ turns: 0, partial: false }} state={{ status: "waiting-review" }} />);
+  const html = renderToStaticMarkup(<TaskMetricsLine metrics={{ turns: 0, elapsedMs: 0, partial: false }} state={{ status: "waiting-review" }} />);
   expect(html).toContain("Elapsed unavailable");
   expect(html).not.toContain("Conversation not started");
-  expect(html).toContain("In review");
+  expect(html).toContain('data-agent-state="waiting-review"');
 });
 
 it.each(["running", "completed"] as const)("leaves an unretained %s turn clock unavailable rather than claiming no conversation", status => {

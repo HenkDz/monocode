@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 // @ts-expect-error Actual App source is transformed by the fixture plugin.
 import { bindWorkerApp } from "virtual:ccmap2-worker";
-import { createWorkerFixture } from "./ccmap2WorkerFixture";
+import { createWorkerFixture, restoreWorkerBoot } from "./ccmap2WorkerFixture";
 import { SessionPane, type SessionPaneProps } from "../../src/features/sessions/ui/SessionPane";
 import { WorkerConversationPicker } from "../../src/features/monos/ui/WorkerConversationPicker";
 import { publishCardSessions } from "../../src/features/monos/model/monoCards";
@@ -20,6 +20,9 @@ import { selectAgentLiveState } from "../../src/features/agents/model/agentLiveS
 import "../../src/styles/index.css";
 
 const f = createWorkerFixture(bindWorkerApp), h = f.host, noop = () => {};
+const boot = new URLSearchParams(location.search).has("boot");
+const bootStarted = performance.now(), bootFocus: { id: string; elapsed: number; ready: boolean; mono: string | null }[] = [];
+if (boot) restoreWorkerBoot(f);
 mockWindows("main");
 mockIPC((command) => {
   if (command === "git_branches") return { current: "feature", local: [], remote: [] };
@@ -46,12 +49,35 @@ const props: Omit<SessionPaneProps, "session" | "visible" | "focused" | "inSplit
   onQuestionReply: noop, onOpenFile: noop, onOpenDiff: noop, onOpenPlan: noop, onBuildPlan: noop, onNewTerminal: noop,
 };
 Object.assign(h, { React, WorkerConversationPicker, SessionPane, Modal, TeamMapHeaderAction: () => null, sessionPaneProps: props });
+h.renderWorkspacePane = (tab: any) => {
+  const session = h.sessions.find((session: any) => session.id === tab.focusedId);
+  return session ? <SessionPane {...props} session={session} visible={tab.id === h.activeTabId && !h.monoCovers}
+    focused={tab.id === h.activeTabId && !h.monoCovers} inSplit={false} composerFocused={h.composerFocused && !h.monoCovers}
+    onFocus={id => { bootFocus.push({ id, elapsed: performance.now() - bootStarted, ready: h.workerLayoutReady, mono: h.monoViewId }); h.onFocusPane(id); }} />
+    : <div>Retained editor {tab.focusedId}</div>;
+};
 publishCardSessions(f.sessions.map(session => ({ id: session.id, title: session.title, harness: session.harness, busy: !!session.busy, needsInput: false, liveState: selectAgentLiveState(session) })), h.openCard);
 function Fixture() {
   const [, update] = useState(0), [goalPanel, setGoalPanel] = useState(false), [drawerMap, setDrawerMap] = useState(false);
   f.onRefresh(() => update(value => value + 1)); h.refreshFocus();
+  if (boot) h.refreshShell();
   useEffect(() => h.registerEscape(), []);
+  useEffect(() => {
+    if (!boot) return;
+    h.setWorkerLayoutReady = (ready: boolean) => { h.workerLayoutReady = ready; h.migrate(); f.refresh(); };
+    return h.scheduleWorkerLayout();
+  }, []);
   useEffect(() => { h.recordVisit(); }, [h.monoViewId, h.workerPages]);
+  if (boot) return <div style={{ position: "fixed", inset: 0, display: "flex", flexDirection: "column" }}>
+    <div data-startup-title><TitleBar tabs={h.nextTitleTabs} activeId={h.titleActiveId} standaloneTitle={h.standaloneTitle} mono={h.titleMono}
+      cwd={f.project} inset hideWindowControls onSelect={h.onSelectTitleTab} onClose={h.onCloseDisplayedTab}
+      onCloseMany={noop} onReorder={noop} onToggleSidebar={noop} /></div>
+    <nav><button onClick={() => h.onRailBack()}>Back</button><button onClick={() => h.closeViewTab(h.monoTabId("worker"))}>Close worker tab</button></nav>
+    <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
+      {h.sidebarOpen && <aside data-startup-sidebar style={{ width: 180 }}><button onClick={() => h.onOpenRailMono("worker")}>Vale</button></aside>}
+      <main style={{ flex: 1, position: "relative" }}>{h.renderWorkspaceTabs()}{h.renderPages()}</main>
+    </div>
+  </div>;
   return <div style={{ position: "fixed", inset: 0, display: "flex", flexDirection: "column", background: "var(--color-background-base)", color: "var(--color-content)" }}>
     <TitleBar tabs={[{ id: h.tabs[0]?.id ?? "workspace", title: "Unrelated", project: "project", more: [], sessionCount: 1, harnesses: [], busyHarnesses: [], files: [] },
       ...h.openMonoTabs.map((id: string) => ({ id: h.monoTabId(id), title: h.monoLook(h.findMono(id)).name, project: "", more: [], sessionCount: 0, harnesses: [], busyHarnesses: [], files: [], mono: { mascot: "cat", color: "#a5bbd1", status: "idle" as const } }))]}
@@ -74,6 +100,7 @@ function Fixture() {
   </div>;
 }
 Object.assign(window, { ccmap2Worker: { ...f, open: h.openWorkerTask, state: () => ({ mono: h.monoViewId, active: h.activeSessionId, targets: h.workerPages, tabs: h.tabs, monoTabs: h.openMonoTabs }),
+  bootFocus,
   approval: () => { h.setSessions(h.sessions.map((session: any) => session.id === "task-a" ? { ...session, blocks: [...session.blocks, { id: "approval", role: "approval", text: "exact worker approval", approval: { requestId: 42 } }] } : session)); },
 } });
 createRoot(document.getElementById("root")!).render(<Fixture />);

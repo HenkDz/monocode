@@ -3,7 +3,7 @@ import React, { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { bindWorkerApp } from "../../tests/browser/ccmap2WorkerPaths";
-import { createWorkerFixture } from "../../tests/browser/ccmap2WorkerFixture";
+import { createWorkerFixture, restoreWorkerBoot } from "../../tests/browser/ccmap2WorkerFixture";
 import { WorkerConversationPicker } from "../features/monos/ui/WorkerConversationPicker";
 import { leaf, leafIds, newTab, type WorkspaceTab } from "../features/workspace/model/layout";
 import { monoTabId } from "../features/workspace/model/appViewTabs";
@@ -167,10 +167,58 @@ it.each(["Home", "pending"])("P2 migration detaches old task leaves without repl
   f.events.length = 0;
   await act(async () => f.h.migrate());
   expect(f.h.tabs).toEqual([unrelated]); expect(f.h.workerPages.worker).toBe(selection);
+  expect(f.h.activeTabId).toBe(unrelated.id); expect(f.h.activeTabIdRef.current).toBe(unrelated.id);
   expect(f.h.monoViewRequest.current).toBe(generation); expect(f.events).toEqual([]);
   expect(JSON.stringify(f.h.sessions)).toBe(sessions);
   if (kind === "pending") await act(async () => { f.release("task-b"); await pending; });
   expect(f.h.activeSessionId).toBe(kind === "Home" ? "worker-home" : "task-b");
+});
+
+it("C10 restored composer autofocus before hydration selects task and keeps a usable workspace beneath Back/close", async () => {
+  vi.useFakeTimers();
+  const f = fixture(), h = f.h, tabs = restoreWorkerBoot(f), sessions = JSON.stringify(h.sessions);
+  const retained = tabs.slice(2);
+  h.setWorkerLayoutReady = (ready: boolean) => { h.workerLayoutReady = ready; h.migrate(); };
+  const cleanup = h.scheduleWorkerLayout();
+  try {
+    h.onFocusPane("task-a");
+    expect(h.monoViewRequest.current).toBe(0);
+    await act(async () => { await vi.advanceTimersByTimeAsync(2999); });
+    expect(h.tabs).toBe(tabs); expect(h.workerPages.worker).toBeUndefined();
+    await act(async () => { await vi.advanceTimersByTimeAsync(2); });
+    expect(h.tabs).toEqual(retained); expect(h.activeTabId).toBe(retained[2].id);
+    expect(h.activeTabIdRef.current).toBe(h.activeTabId);
+    expect(h.monoViewId).toBe("worker-home");
+    expect(h.workerPages.worker.target).toEqual({ taskId: "a", sessionId: "task-a" });
+    expect(h.sidebarOpen).toBe(true); expect(h.deckProjectTabs).toContain(retained[2]);
+    expect(f.visible().map(node => node.dataset.workerConversation)).toEqual(["task-a"]);
+    expect(JSON.stringify(h.sessions)).toBe(sessions); expect(f.events).toEqual([]);
+    await act(async () => { h.onSelectTitleTab(h.activeTabId); h.recordVisit(); });
+    await f.open("worker", { taskId: "a", sessionId: "task-a" });
+    await act(async () => h.onRailBack());
+    expect(h.monoViewId).toBeNull(); expect(h.activeTabId).toBe(retained[2].id);
+    await f.open("worker", { taskId: "a", sessionId: "task-a" });
+    await act(async () => h.closeMonoView());
+    expect(h.tabs.some((tab: WorkspaceTab) => tab.id === h.activeTabId)).toBe(true);
+    expect(h.sidebarOpen).toBe(true);
+  } finally { cleanup(); vi.useRealTimers(); }
+});
+
+it.each(["all-task", "foreign-and-Manager"])("C10 %s tabs seed one blank current-project tab without deleting sessions or changing navigation intent", async kind => {
+  const f = fixture(), h = f.h, tabs = restoreWorkerBoot(f);
+  h.tabs = h.tabsRef.current = kind === "all-task" ? tabs.slice(0, 2) : tabs.slice(0, 4);
+  h.workerLayoutReady = true;
+  const sessions = [...h.sessions], retained = h.tabs.slice(2);
+  await act(async () => h.migrate());
+  expect(h.tabs.slice(0, retained.length)).toEqual(retained);
+  expect(h.tabs).toHaveLength(retained.length + 1);
+  const blank = h.tabs.at(-1), session = h.sessions.find((session: any) => session.id === blank.focusedId);
+  expect(session.cwd).toBe(f.project); expect(session.blocks).toEqual([]);
+  expect(h.sessions.slice(0, sessions.length)).toEqual(sessions); expect(h.sessions).toHaveLength(sessions.length + 1);
+  expect(h.activeTabId).toBe(blank.id); expect(h.activeTabIdRef.current).toBe(blank.id);
+  expect(h.workerPages.worker.target).toEqual({ taskId: "a", sessionId: "task-a" });
+  expect(f.events).toEqual([]);
+  const migrated = h.tabs; await act(async () => h.migrate()); expect(h.tabs).toBe(migrated);
 });
 
 it("H Escape stops only the selected busy session; nonbusy/placeholder/hidden Home cannot own Stop or focus", async () => {

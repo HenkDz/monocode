@@ -2,11 +2,16 @@ import * as worker from "../../src/features/monos/model/workerPage";
 import * as visits from "../../src/features/workspace/model/tabVisitHistory";
 import * as layout from "../../src/features/workspace/model/layout";
 import * as tabIds from "../../src/features/workspace/model/appViewTabs";
-import { findOpenSessionTab } from "../../src/features/workspace/model/workspaceTabGroups";
-import { findMono, listMonos, monoForSession, monoLook, monoState, isMonoSession, type Mono } from "../../src/features/monos/model/mono";
-import { newSession, sessionWorkCwd, type Session } from "../../src/features/sessions/model/session";
+import { findOpenSessionTab, filterTabsForProject, isManagerTab, workspaceTabCwd, workspaceTabWorktree } from "../../src/features/workspace/model/workspaceTabGroups";
+import { isProjectManager } from "../../src/features/orchestration/model/projectManager";
+import { findMono, listMonos, monoForSession, monoLook, monoState, monoWorksOn, isMonoSession, type Mono } from "../../src/features/monos/model/mono";
+import { monoLiveState } from "../../src/features/monos/model/monoNavigation";
+import { newSession, sessionWorkCwd, sessionNeedsInput, sessionDisplayTitle, type Session } from "../../src/features/sessions/model/session";
+import { isBlankSession } from "../../src/features/projects/model/projectReturn";
+import { orderByIds } from "../../src/shared/lib/reorder";
+import { basename } from "../../src/shared/lib/paths";
 import type { OrchestrationRun, OrchestrationTask } from "../../src/features/orchestration/model/orchestrationState";
-import { sameProjectPath, normalizeProjectPath } from "../../src/features/projects/model/recents";
+import { sameProjectPath, normalizeProjectPath, isRemoteProjectPath } from "../../src/features/projects/model/recents";
 import { projectName, isEqualOrInside } from "../../src/shared/lib/paths";
 import { focusedBusyAgentSessionId, shouldStopFocusedTurnOnEscape, deferUnhandledEscape } from "../../src/features/workspace/model/tabKeys";
 
@@ -37,7 +42,14 @@ export function createWorkerFixture(bind: (host: any) => unknown) {
   const pending = new Map<string, () => void>();
   const deferred = new Set<string>();
   const host: any = {
-    ...worker, ...visits, ...layout, ...tabIds, findOpenSessionTab, findMono, listMonos, monoForSession, monoLook, monoState, isMonoSession, projectName,
+    ...worker, ...visits, ...layout, ...tabIds, findOpenSessionTab, filterTabsForProject, isManagerTab, workspaceTabCwd, findMono, listMonos, monoForSession, monoLook, monoState, isMonoSession, projectName,
+    projectCwd: project, projectCwdRef: { current: project }, projectWorktree: undefined, tabWorkspace: workspaceTabWorktree,
+    sessionSidebarOpen: true, worktreeOverview: undefined, sessionDefaults: sessions[2],
+    monoWorksOn, monoLiveState, sessionNeedsInput, sessionDisplayTitle, isBlankSession, orderByIds, basename, isRemoteProjectPath,
+    remoteSessionFor: () => undefined, remotePendingWorktree: () => undefined,
+    useMemo: (calculate: () => unknown) => calculate(), startTransition: (callback: () => void) => callback(),
+    monosEnabled: true, dirtyFiles: new Set(), unseenFinishedIds: new Set(), titleTabOrder: [], sidebarCwd: project,
+    activeAppView: undefined, openPage: undefined, displayedTabNavigation: { current: {} },
     focusedBusyAgentSessionId, shouldStopFocusedTurnOnEscape, deferUnhandledEscape,
     workerPages: {}, workerPagesRef: { current: {} }, workerPageError: undefined,
     workerSelectedSessionIdRef: { current: undefined }, workerNavigationRef: { current: noop }, workerVisitTargets: { current: new Map() },
@@ -66,7 +78,7 @@ export function createWorkerFixture(bind: (host: any) => unknown) {
       if (deferred.has(id)) await new Promise<void>(resolve => pending.set(id, resolve));
       return host.sessionsRef.current.find((session: Session) => session.id === owner?.sessionId);
     },
-    newDefaultSession: () => { throw Error("No synthetic session creation allowed"); }, homeDir: async () => "C:/synthetic", saveMonoPermissions: noop, saveOpenMono: noop,
+    newDefaultSession: (cwd: string, runtimeMode?: Session["runtimeMode"]) => ({ ...newSession("codex", cwd), runtimeMode }), homeDir: async () => "C:/synthetic", saveMonoPermissions: noop, saveOpenMono: noop,
     setWorkerPages(value: any) { host.workerPages = value; refresh(); },
     setWorkerPageError(value: any) { host.workerPageError = value; refresh(); },
     setMonoViewId(id: string | null) { host.monoViewId = id; host.monoViewSession = host.sessions.find((s: Session) => s.id === id); host.monoViewMono = monoForSession(id ?? ""); refresh(); },
@@ -80,10 +92,12 @@ export function createWorkerFixture(bind: (host: any) => unknown) {
     setWorktreeFocus: (...args: any[]) => events.push({ action: "worktree", args }),
     chooseProjectAddition: async () => { events.push({ action: "project-addition" }); return { project }; },
     looksLikeProject: () => true, projectRailItems: () => [], loadRecents: () => [], sessionForProjectAddition: (s: Session) => s,
-    setRecents: noop, rememberProject: () => [], isProjectManager: () => false, normalizeProjectPath, sameProjectPath, isEqualOrInside, sessionWorkCwd,
+    setRecents: noop, rememberProject: () => [], isProjectManager, normalizeProjectPath, sameProjectPath, isEqualOrInside, sessionWorkCwd,
     focusOpenSession: (id: string) => { events.push({ action: "focus-workspace", id }); return false; }, replaceBlankPaneWithSession: () => false,
     appendTab(tab: any) { host.tabs.push(tab); events.push({ action: "append-tab" }); },
     setActiveTabId(id: string) { events.push({ action: "activate-tab", id }); host.activeTabId = id; host.activeTabIdRef.current = id; },
+    setActiveTabIdState(id: string) { host.activeTabId = id; refresh(); },
+    setTitleTabOrder(update: any) { host.titleTabOrder = update(host.titleTabOrder); },
     activateTab(id: string) { host.closeMonoView(); host.setActiveTabId(id); },
     workspacePins: { current: new Map() }, linkedSessionUpdatesRef: { current: new Map() }, persistSession: () => events.push({ action: "persist" }),
     onStop: (id: string) => events.push({ action: "stop", id }),
@@ -102,4 +116,19 @@ export function createWorkerFixture(bind: (host: any) => unknown) {
     defer: (id: string) => deferred.add(id),
     release: (id: string) => { deferred.delete(id); pending.get(id)?.(); pending.delete(id); },
   };
+}
+
+/** C8-shaped synthetic snapshot: task, review, Manager, foreign chat, ordinary chat, map-like editor. */
+export function restoreWorkerBoot(f: ReturnType<typeof createWorkerFixture>) {
+  const h = f.host;
+  const manager = { ...f.sessions[1], id: "project-manager-fixture" };
+  const foreign = { ...f.sessions[6], id: "foreign-chat", cwd: "C:/synthetic/other-project" };
+  h.sessions = h.sessionsRef.current = [...f.sessions, manager, foreign];
+  const map = { ...layout.newTab("map-editor"), editorPanes: [{ id: "map-editor", files: [{ id: "map", path: "C:/synthetic/map.md", cwd: f.project }], activeFileId: "map" }] };
+  h.tabs = h.tabsRef.current = [layout.newTab("task-a"), layout.newTab("past-a"), layout.newTab(manager.id), layout.newTab(foreign.id), layout.newTab("unrelated"), map];
+  h.activeTabId = h.activeTabIdRef.current = h.tabs[0].id;
+  h.tabVisitRef.current = visits.emptyTabVisitHistory(h.activeTabId);
+  h.composerFocused = true;
+  h.workerLayoutReady = false;
+  return h.tabs;
 }

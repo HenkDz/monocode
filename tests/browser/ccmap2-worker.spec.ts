@@ -184,12 +184,57 @@ test("P2 migration preserves newer Home and its visible input and Stop ownership
     h.migrate();
   });
   await selected(page, "worker-home");
+  expect(await page.evaluate(() => { const h = window.ccmap2Worker.host; return h.tabs.some((tab: { id: string }) => tab.id === h.activeTabId && tab.id === h.activeTabIdRef.current); })).toBe(true);
   const home = page.locator('[data-worker-conversation="worker-home"]:visible');
   await expect(home.locator('[data-session-composer] textarea:visible')).toBeVisible();
   await page.locator("[data-workbench-header]:visible h2").click(); await page.keyboard.press("Escape");
   await expect.poll(async () => (await page.evaluate(() => window.ccmap2Worker.events)).filter((event: { action: string }) => event.action === "stop")).toEqual([{ action: "stop", id: "worker-home" }]);
   expect((await page.evaluate(() => window.ccmap2Worker.state())).targets.worker.target).toBeNull();
   await page.screenshot({ path: `${evidence}/migration-keeps-home.png` }); expect(errors).toEqual([]);
+});
+
+test("C10 restored six-tab boot autofocus before real hydration keeps shell and underlying workspace after Back and title close", async ({ page }) => {
+  const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
+  await page.route("**/*", route => new URL(route.request().url()).hostname === "127.0.0.1" ? route.continue() : route.abort());
+  await page.goto("/tests/browser/ccmap2-worker.html?boot=c8");
+  const initial = await page.evaluate(() => {
+    const h = window.ccmap2Worker.host;
+    return { sessions: JSON.stringify(h.sessions), survivors: h.tabs.slice(2), active: h.activeTabId };
+  });
+  await expect.poll(() => page.evaluate(() => (window.ccmap2Worker as any).bootFocus.some((focus: any) => focus.id === "task-a" && !focus.ready && focus.mono === null && focus.elapsed < 3000))).toBe(true);
+  await expect.poll(() => page.evaluate(() => window.ccmap2Worker.host.workerLayoutReady)).toBe(true);
+  const state = await page.evaluate(() => {
+    const f = window.ccmap2Worker, h = f.host;
+    return { tabs: h.tabs, active: h.activeTabId, activeRef: h.activeTabIdRef.current, sessions: JSON.stringify(h.sessions), target: h.workerPages.worker?.target, mono: h.monoViewId, events: f.events };
+  });
+  expect(state.tabs).toEqual(initial.survivors);
+  expect(state.active).toBe(initial.survivors[2].id); expect(state.activeRef).toBe(state.active);
+  expect(state.tabs.some((tab: { id: string }) => tab.id === state.active)).toBe(true);
+  expect(state.target).toEqual({ taskId: "a", sessionId: "task-a" }); expect(state.mono).toBe("worker-home");
+  expect(state.sessions).toBe(initial.sessions); expect(state.events).toEqual([]);
+  const assertShell = async () => {
+    await expect(page.locator('[data-startup-sidebar]')).toBeVisible();
+    await expect(page.locator('[data-startup-title] [data-title-tab-strip]')).toBeVisible();
+    await expect(page.locator('[data-startup-title] [data-title-tab-id]').first()).toBeVisible();
+    await expect(page.locator('main > [data-workspace-tab]:visible, main > [data-mono-view]:visible')).toHaveCount(1);
+    const box = await page.locator('main > [data-workspace-tab]:visible, main > [data-mono-view]:visible').boundingBox();
+    expect(box?.width).toBeGreaterThan(0); expect(box?.height).toBeGreaterThan(0);
+  };
+  await assertShell();
+  await expect(page.locator('main [data-worker-conversation="task-a"]:visible [data-session-drop="task-a"]')).toBeVisible();
+  await page.screenshot({ path: `${evidence}/c10-boot-worker.png` });
+  await page.locator(`[data-title-tab-id="${state.active}"] button`).first().click();
+  await expect(page.locator(`main > [data-workspace-tab="${state.active}"]`)).toBeVisible();
+  await page.evaluate(async () => { await window.ccmap2Worker.host.onOpenRailMono("worker"); });
+  await expect(page.locator('[data-mono-view="worker-home"]')).toBeVisible();
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await expect(page.locator(`main > [data-workspace-tab="${state.active}"]`)).toBeVisible(); await assertShell();
+  await page.evaluate(async () => { await window.ccmap2Worker.host.onOpenRailMono("worker"); });
+  await expect(page.locator('[data-mono-view="worker-home"]')).toBeVisible();
+  await page.getByRole("button", { name: "Close worker tab", exact: true }).click();
+  await expect(page.locator('main > [data-workspace-tab]:visible')).toHaveCount(1); await assertShell();
+  expect(await page.evaluate(() => { const h = window.ccmap2Worker.host; return h.tabs.some((tab: { id: string }) => tab.id === h.activeTabId && tab.id === h.activeTabIdRef.current); })).toBe(true);
+  await page.screenshot({ path: `${evidence}/c10-boot-closed.png` }); expect(errors).toEqual([]);
 });
 
 test("P2 retry keeps exact saved conversation in History and permits explicit group browsing", async ({ page }) => {

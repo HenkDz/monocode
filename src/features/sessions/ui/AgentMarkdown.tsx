@@ -27,6 +27,7 @@ import {
   useIsCodeFenceIncomplete,
   type BlockProps,
   type Components,
+  type ExtraProps,
 } from "streamdown";
 import type { Pluggable, PluggableList } from "unified";
 import {
@@ -601,7 +602,7 @@ function MarkdownPictureSource({
 }
 
 const MARKDOWN_COMPONENTS = {
-  details: ({ children, open }: ComponentProps<"details">) => {
+  details: ({ children, open }: ComponentProps<"details"> & ExtraProps) => {
     const parts = Children.toArray(children);
     const summary = parts.find(part => isValidElement<ComponentProps<"summary">>(part) && part.type === "summary");
     return <WorkDisclosure title={isValidElement<ComponentProps<"summary">>(summary) ? summary.props.children : undefined} initialOpen={!!open}>{parts.filter(part => part !== summary)}</WorkDisclosure>;

@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
 import { WorkDisclosure } from "./WorkDisclosure";
 import { ShortHashes } from "./ShortHashes";
-const copy = vi.fn(async () => {});
+const copy = vi.fn(async (_text: string) => {});
 vi.mock("../../platform/tauri/clipboard", () => ({ copyText: (text: string) => copy(text) }));
 
 it("keeps work behind an accessible button and copies full commit values from short labels", async () => {

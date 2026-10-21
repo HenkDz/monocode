@@ -3,6 +3,18 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { AgentMarkdown } from "./AgentMarkdown";
 
+it.each([false, true])("keeps markdown details in the custom work fold (open: %s)", open => {
+  const markup = renderToStaticMarkup(createElement(AgentMarkdown, {
+    text: `<details${open ? " open" : ""}><summary>Original command</summary><p>Full unabridged output.</p></details>`,
+  }));
+  expect(markup).toContain("data-work-disclosure");
+  expect(markup).toContain(`aria-expanded="${open}"`);
+  expect(markup).toContain(open ? "Hide work" : "Show work");
+  expect(markup).toContain("Original command");
+  expect(markup).toContain("Full unabridged output.");
+  expect(markup).not.toMatch(/<(details|summary)\b/);
+});
+
 describe("AgentMarkdown text direction", () => {
   it("detects direction independently for RTL and LTR blocks", () => {
     const markup = renderToStaticMarkup(

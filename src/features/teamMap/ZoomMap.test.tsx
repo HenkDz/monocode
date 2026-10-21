@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
 import { monoManagerGoals } from "../monos/model/monoManagerGoals";
-import type { OrchestrationRun } from "../orchestration/model/orchestrationState";
+import { orchestrationWorkspace, type OrchestrationRun } from "../orchestration/model/orchestrationState";
 import { newSession } from "../sessions/model/session";
 import { TeamMap, type TeamMapProps } from "./TeamMap";
 import { readFileSync } from "node:fs";
@@ -156,7 +156,7 @@ it("counts current working and unfinished review tasks, excluding planned and ac
   await render({ runs: [{ ...runs[0], tasks: [tasks[0], { ...tasks[1], status: "running" }] }] }); await click('[aria-label="Open app project"]');
   expect(host.querySelector('.zoom-map-multiplicity')?.textContent).toBe("×2");
   const reviewing = { ...tasks[1], status: "completed" as const, lastDispatchId: "review-current" };
-  await render({ runs: [{ ...runs[0], tasks: [tasks[0], reviewing], dispatches: [...runs[0].dispatches!, { id: "review-current", taskId: reviewing.id, state: "completed", startedAt: 4 }] }] });
+  await render({ runs: [{ ...runs[0], tasks: [tasks[0], reviewing], dispatches: [...runs[0].dispatches!, { id: "review-current", taskId: reviewing.id, sessionId: reviewing.sessionId, workspace: orchestrationWorkspace(runs[0]), state: "completed", stage: "settled", startedAt: 4, updatedAt: 4 }] }] });
   expect(host.querySelector('.zoom-map-multiplicity')?.textContent).toBe("×2");
   await render({ runs: [{ ...runs[0], tasks: [tasks[0], { ...reviewing, accepted: true, acceptedDispatchId: "review-current", completionOutcome: "no-changes" }, { ...tasks[1], id: "cancelled", status: "cancelled" }] }] });
   expect(host.querySelector('.zoom-map-multiplicity')).toBeNull();

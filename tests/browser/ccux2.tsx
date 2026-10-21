@@ -38,6 +38,11 @@ import { basename } from "../../src/platform/tauri/fs";
 import { orderByIds } from "../../src/shared/lib/reorder";
 import { packageScripts } from "../../src/features/projects/model/packageScripts";
 import { applyUiScale } from "../../src/features/settings/model/uiScale";
+import { monoManagerGoals, type MonoManagerGoal } from "../../src/features/monos/model/monoManagerGoals";
+import { MonoOrgActivity } from "../../src/features/monos/ui/MonoOrgActivity";
+import { TeamMessage } from "../../src/features/sessions/ui/TeamMessage";
+import { TaskMetricsLine } from "../../src/features/agents/ui/TaskMetricsLine";
+import { AgentTranscript } from "../../src/features/sessions/ui/AgentTranscript";
 import "../../src/styles/index.css";
 
 const params = new URLSearchParams(location.search), project = "C:/synthetic/Chooser", now = Date.now();
@@ -47,6 +52,11 @@ const roster: Mono[] = [
   { id: "atlas", name: "Atlas", role: "member", reportsTo: "manager", sessionId: "atlas-home", projects: [project], mascot: "cat", color: "#4fd1a1" },
 ];
 localStorage.setItem("monocode:mono-roster", JSON.stringify(roster));
+localStorage.setItem("monocode:crew-messages", JSON.stringify([
+  ...[1, 2, 3].map(index => ({ id: `update-${index}`, managerId: 'manager', senderId: 'atlas', recipientId: 'manager', topic: 'review', text: `[Review notes](https://example.com/review) update ${index}`, summary: 'Review notes are ready', at: now + index })),
+  { id: 'unrelated', managerId: 'manager', senderId: 'other', recipientId: 'manager', topic: 'other', text: 'Unrelated member message', at: now },
+]));
+const goal: MonoManagerGoal = { id: 'goal', monoId: 'manager', projectId: project, managerId: 'manager-home', userMessageId: 'goal-user', requestId: 'goal-request', title: 'Finish chooser focus and preserve the existing navigation contract while checking commit 0123456789abcdef0123456789abcdef01234567', state: 'running', prUrls: [], createdAt: now, updatedAt: now };
 const trees: Worktree[] = [project, `${project}/feature`, `${project}/empty`].map((path, index) => ({ path, branch: ["main", "feature", "empty"][index], head: "0123456789abcdef0123456789abcdef01234567", isMain: !index, locked: false, prunable: false, missing: false, dirty: false, unpushed: 0, sessionIds: [] }));
 const sessions: Session[] = [
   ...roster.map(mono => ({ ...newSession("codex", project), id: mono.sessionId!, title: mono.name })),
@@ -65,11 +75,13 @@ mockIPC((command, args) => {
   if (command.startsWith("plugin:window|")) { events.push({ action: command, value: args }); return null; }
   if (command === "git_worktrees") return { defaultRoot: project, worktrees: trees };
   if (command === "git_diff_index") return { files: [], additions: 0, deletions: 0 };
-  if (command === "git_pr_status" || command === "control_load") return null;
+  if (command === "git_pr_status") return null;
+  if (command === "control_load") return JSON.stringify({ version: 1, goals: [goal], receipts: {} });
   if (command === "read_text") return JSON.stringify({ scripts: { dev: "vite", test: "vitest run", lint: "eslint ." } });
   if (command.includes("list") || command.includes("load") || command.includes("files")) return [];
   throw Error(`Blocked synthetic native operation: ${command}`);
 }, { shouldMockEvents: true });
+await monoManagerGoals.hydrate('manager');
 const noop = () => {}, view: DecisionView = { pending: [], log: [], teamPending: 0, handledToday: 0, pruned: 0, skipped: 0 };
 const decisionActions: DecisionUiActions = { answer: async () => ({ logFailed: false }), autonomy: async () => {}, openProject: noop };
 let refresh = noop, focus: { path: string; branch: string | null } | undefined;
@@ -99,6 +111,7 @@ const ports: Record<string, unknown> = {
   workspaceNavigation: { cancel: noop }, setRecents: noop, rememberProject: () => [], updateMono: noop, saveOpenMono: noop, saveMonoPermissions: noop,
   homeDir: "C:/synthetic/home", newDefaultSession: () => { throw Error("Opening a member must not create a session"); },
   setFilePickerOpen: noop,
+  setPullRequestsViewScope: noop, setSearchViewFocusToken: noop,
   setMonoTeamRequest: noop, setMonoActivity: noop, setMonoSessions: noop, setMonoShownSession: noop, setMonoShownSessionFocused: noop, setMonoOverviewDocument: noop,
   setProjectTerminalFocused: noop, setComposerFocused: noop, setComposerFocusToken: noop, setMonoPanelTab: noop, setMonoArtifact: noop, setMonoChanges: noop, setWorkspaceContextTab: noop,
   ensureOpenSession: async (id: string) => sessions.find(row => row.id === id), ensureMonoSession: async (id: string) => sessions.find(row => row.id === findMono(id)?.sessionId),
@@ -167,6 +180,12 @@ function Fixture() {
           : state.worktreeOverview ? <div className="m-auto p-6 text-center"><h1>{basename(state.worktreeOverview.tree.path)}</h1><p>No conversations here yet</p><button onClick={() => routes.onNewWorktreeSession(project, state.worktreeOverview!.tree)}>New chat here</button></div>
           : <div className="space-y-4 p-6"><h1 data-current-view>{state.monoViewMono?.name ?? state.active?.title}</h1><p>The selected conversation and its provider identity stay intact.</p><AgentMarkdown text="<details><summary>Command output</summary>\n\nRecovered command output; the final result passed.\n</details>" streaming={false} />
             <button onClick={() => routes.onSelectHistorySession('task')}>Open current assignment</button><button onClick={() => routes.onSelectHistorySession('past-task')}>Open previous assignment</button><button onClick={() => routes.onOpenMono('atlas')}>Tasks and history</button>
+            {params.get('surface') === 'details' && <>
+              <TeamMessage message={{ id: 'manager', name: 'Manager', mascot: 'fox', color: '#88aaff', topic: 'Chooser review', text: 'Finish the chooser review. ' + 'Keep navigation and focus stable. '.repeat(20) + '11111111-2222-3333-4444-555555555555' }} cwd={project} />
+              <TaskMetricsLine metrics={{ turns: 1, elapsedMs: 840000, startedAt: now - 840000, endedAt: now, inputTokens: 1240, outputTokens: 240, partial: false }} state={{ status: 'waiting-review' }} />
+              <MonoOrgActivity rootId="atlas" roster={roster} runs={runs} sessions={sessions} now={now} view="feed" />
+              <AgentTranscript blocks={[{ id: 'user', role: 'user', text: 'Check chooser focus', startedAt: now - 840000, durationMs: 840000 }, ...Array.from({ length: 3 }, (_, index) => ({ id: `retry-${index}`, role: 'tool' as const, text: 'Temporary command failure', tool: { kind: 'shell', status: 'failed' as const, detail: 'Retry succeeded later' } })), { id: 'final', role: 'assistant', text: 'The final check passed.' }]} />
+            </>}
           </div>}
       </main>
       {projection.contextVisible && <aside data-context-panel className="w-80 shrink-0 overflow-auto border-l border-stroke max-[900px]:w-56 max-[600px]:hidden">

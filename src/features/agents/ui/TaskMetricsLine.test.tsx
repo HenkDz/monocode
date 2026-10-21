@@ -8,6 +8,13 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { selectTaskMetrics } from "../model/agentMetrics";
 import type { OrchestrationDispatch, OrchestrationTask } from "../../orchestration/model/orchestrationState";
 
+it("does not describe a recorded assignment in review as an unstarted conversation", () => {
+  const html = renderToStaticMarkup(<TaskMetricsLine metrics={{ turns: 0, partial: false }} state={{ status: "waiting-review" }} />);
+  expect(html).toContain("Elapsed unavailable");
+  expect(html).not.toContain("Conversation not started");
+  expect(html).toContain("In review");
+});
+
 it.each(["running", "completed"] as const)("leaves an unretained %s turn clock unavailable rather than claiming no conversation", status => {
   const task = { id: "task", sessionId: "worker", status } as OrchestrationTask;
   const dispatch = { id: "dispatch", taskId: task.id, sessionId: task.sessionId, state: status,

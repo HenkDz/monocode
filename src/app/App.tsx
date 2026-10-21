@@ -4840,7 +4840,7 @@ function Workspace({
         !tabsRef.current.some((tab) => leafIds(tab.layout).includes(paneId))
       )
         return;
-      closeMonoView();
+      if (monoViewIdRef.current) closeMonoView();
       if (
         tabsRef.current.find((tab) => tab.id === activeTabIdRef.current)
           ?.focusedId !== paneId
@@ -5629,8 +5629,22 @@ function Workspace({
     workerLayoutMigrated.current = true;
     const migrated = migrateWorkerTaskTabs(tabsRef.current, activeTabIdRef.current, orchestrator.snapshot());
     if (migrated.tabs !== tabsRef.current) {
-      tabsRef.current = [...migrated.tabs];
-      setTabs([...migrated.tabs]);
+      const nextTabs = [...migrated.tabs];
+      if (!nextTabs.some(tab => tab.id === activeTabIdRef.current)) {
+        let fallback = filterTabsForProject(nextTabs, sessionsRef.current, projectCwdRef.current).find(tab => !isManagerTab(tab));
+        if (!fallback) {
+          const session = newDefaultSession(projectCwdRef.current, sessionDefaults?.runtimeMode);
+          fallback = newTab(session.id);
+          sessionsRef.current = [...sessionsRef.current, session];
+          setSessions(sessionsRef.current);
+          nextTabs.push(fallback);
+        }
+        // Repair underneath the worker page without issuing a navigation request.
+        activeTabIdRef.current = fallback.id;
+        setActiveTabIdState(fallback.id);
+      }
+      tabsRef.current = nextTabs;
+      setTabs(nextTabs);
     }
     if (monoViewRequest.current || workspaceSessionRequest.current) return;
     const selected = migrated.selected;
@@ -5645,7 +5659,7 @@ function Workspace({
       status: loaded ? "ready" : "unavailable", error: loaded ? undefined : "Conversation not loaded. Select this assignment to open it.",
       opened: loaded ? [selected.sessionId] : [], explicit: true });
     setProjectTerminalFocused(false);
-  }, [workerLayoutReady, setWorkerPage]);
+  }, [workerLayoutReady, setWorkerPage, sessionDefaults?.runtimeMode]);
 
   // A Mono open when the app last closed opens again; a moved window keeps
   // what it carried.

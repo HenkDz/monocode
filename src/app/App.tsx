@@ -5518,7 +5518,8 @@ function Workspace({
       const explicit = target !== undefined || remembered?.explicit === true;
       const selected = target !== undefined ? target : remembered?.explicit ? remembered.target
         : original.role === "member" ? workerPageTasks(orchestrator.snapshot(), monoId)
-          .find(({ task }) => ["queued", "running", "cancelling", "blocked", "interrupted"].includes(task.status))?.task : null;
+          .filter(({ task }) => ["queued", "running", "cancelling", "blocked", "interrupted"].includes(task.status))
+          .map(view => ({ taskId: view.task.id, sessionId: view.sessionId }))[0] : null;
       const intent = selected ? { taskId: "taskId" in selected ? selected.taskId : selected.id,
         sessionId: selected.sessionId } : null;
       const view = intent && workerTaskView(orchestrator.snapshot(), intent);

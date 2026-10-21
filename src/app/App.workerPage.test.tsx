@@ -161,6 +161,17 @@ it("D implicit default is recomputed on reopen; an explicit Home stays Home", as
   await f.open("worker", null); await f.open("worker"); expect(f.h.activeSessionId).toBe("worker-home");
 });
 
+it("D default and Current choose the canonical recorded dispatch when the task session field is stale", async () => {
+  const f = fixture(); f.run.tasks.find(task => task.id === "b")!.sessionId = "stale-session";
+  await f.open("worker"); f.assertTask("worker", "task-b");
+  const button = [...mount.querySelectorAll<HTMLButtonElement>('.cc-worker-assignments button')].find(button => button.textContent?.includes("Assignment b"))!;
+  expect(button.getAttribute("aria-pressed")).toBe("true");
+  await f.open("worker", null);
+  await act(async () => mount.querySelector<HTMLButtonElement>('[role="tab"][id$="-current"]')!.click());
+  await act(async () => [...mount.querySelectorAll<HTMLButtonElement>('.cc-worker-assignments button')].find(button => button.textContent?.includes("Assignment b"))!.click());
+  f.assertTask("worker", "task-b");
+});
+
 it("H session-list shortcuts select the worker conversation in place, and explicit worktree/plain/non-PM routes retain their path", async () => {
   const f = fixture(); await f.open("worker", { taskId: "a", sessionId: "task-a" });
   await act(async () => { f.h.onNavigateSessionList(1, true); }); f.assertTask("worker", "past-a");

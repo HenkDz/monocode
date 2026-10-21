@@ -14,7 +14,7 @@ export function WorkerConversationPicker({ ownerId, runs, target, onSelect }: {
   const [group, setGroup] = useState<"home" | "current" | "history">(target ? "current" : "home");
   const id = useId();
   useEffect(() => {
-    setGroup(!target ? "home" : current.some(({ task }) => task.id === target.taskId && (!target.sessionId || task.sessionId === target.sessionId)) ? "current" : "history");
+    setGroup(!target ? "home" : current.some(view => view.task.id === target.taskId && (!target.sessionId || view.sessionId === target.sessionId)) ? "current" : "history");
   }, [target?.taskId, target?.sessionId]);
   const history = tasks.flatMap(view => {
     const attempts = (view.run.dispatches ?? []).filter(d => d.taskId === view.task.id).sort((a, b) => a.startedAt - b.startedAt);
@@ -35,8 +35,8 @@ export function WorkerConversationPicker({ ownerId, runs, target, onSelect }: {
       </button>)}
     </div>
     <div id={`${id}-list`} role="tabpanel" aria-labelledby={`${id}-${group}`} className="cc-worker-assignments">
-      {group !== "home" && (rows.length ? rows.map(({ task, dispatch, attempt }) => {
-        const sessionId = group === "history" ? dispatch?.sessionId ?? task.sessionId : task.sessionId;
+      {group !== "home" && (rows.length ? rows.map(({ task, dispatch, attempt, sessionId: currentSessionId }) => {
+        const sessionId = group === "history" ? dispatch?.sessionId ?? currentSessionId : currentSessionId;
         const at = dispatch?.finishedAt ?? dispatch?.startedAt;
         return <button type="button" key={`${task.id}:${sessionId}`} aria-pressed={target?.taskId === task.id && (!target.sessionId || target.sessionId === sessionId)} onClick={() => onSelect({ taskId: task.id, sessionId })}>
           <strong>{coordinationSummary(task.title, 80)}</strong><span>{group === "history" ? dispatch?.state ?? task.status : task.status}{attempt != null ? ` · Attempt ${attempt}` : ""}{at != null ? ` · ${new Date(at).toLocaleString()}` : ""}</span>

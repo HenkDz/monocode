@@ -42,7 +42,7 @@ for (const [width, height] of [[1600, 950], [1710, 1390], [3432, 1308]]) {
     expect(await page.locator('.zoom-map-links').evaluate(element => getComputedStyle(element).display)).not.toBe('none');
     expect(await page.locator('.zoom-map-world').evaluate(element => getComputedStyle(element).transitionDuration)).not.toBe('0s');
     await page.getByRole('button', { name: 'Open monocode project', exact: true }).click(); await fitted(page);
-    await expect(page.locator('.zoom-map-lane[aria-label="Connector contract"]')).toHaveCount(1);
+    await expect(page.locator('.zoom-map-lane[aria-label="Goal"]')).toHaveCount(1);
     await expect(page.locator('.zoom-map-lane[aria-label="Browser profile routing"]')).toHaveCount(1);
     await expect(page.locator('.zoom-map-board')).not.toContainText(/RAW_MULTILINE_SENTINEL|UNRELATED_TITLE_SENTINEL|already authorized/);
     await expect(page.locator('.zoom-map-done-chip')).toHaveCount(4);

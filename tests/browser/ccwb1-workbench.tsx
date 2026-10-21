@@ -268,6 +268,7 @@ const host: any = {
     throw Error("No new sessions");
   },
   setMonoTeamRequest: noop,
+  setWorktreeOverview: noop,
   setMonoActivity: noop,
   setMonoSessions: noop,
   setMonoShownSessionFocused: noop,

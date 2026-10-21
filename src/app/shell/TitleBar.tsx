@@ -925,6 +925,7 @@ function TitleBarComponent({
     [activeId, tabs],
   );
   const systemTitle = useMemo(() => {
+    if (standaloneTitle) return `${standaloneTitle} — MonoCode`;
     const activeName = activeTab
       ? activeTab.page || activeTab.appView
         ? tabCopy(activeTab).headline
@@ -942,7 +943,7 @@ function TitleBarComponent({
       return `${project} — MonoCode`;
     }
     return "MonoCode";
-  }, [activeTab, cwd]);
+  }, [activeTab, cwd, standaloneTitle]);
 
   useEffect(() => {
     document.title = systemTitle;
@@ -1086,6 +1087,7 @@ function TitleBarComponent({
     (mono && (onToggleMonoOverview || onOpenMonoSettings)) ||
     (!IS_MAC && !hideWindowControls) ? (
       <div className="ml-auto flex h-full shrink-0 items-stretch">
+        {mono && onShowMonoDetails && <div className="flex items-center px-1"><IconButton label={`${mono.look.name} settings`} onClick={onShowMonoDetails}><Settings className="size-3.5" /></IconButton></div>}
         {mono && onToggleMonoPanel && !showRightPanelToggle ? (
           <div className="flex items-center px-3">
             <IconButton
@@ -1289,7 +1291,7 @@ function TitleBarComponent({
           showProjectButton && !inset ? " border-l border-stroke" : ""
         }`}
       >
-        {content ? content : mono ? (
+        {content ? content : mono && !tabs.length ? (
           <MonoTitle
             look={mono.look}
             state={mono.state}

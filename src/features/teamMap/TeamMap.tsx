@@ -45,6 +45,9 @@ import { EdgePulse } from "./EdgePulse";
 import { loadOrbitPreferences, saveOrbitPreferences } from "./orbit";
 import type { CommandMapDecisions } from "./commandMap";
 import type { BossGoalRoute } from "./BossGoalForm";
+import { ProjectDrawer } from "./ProjectDrawer";
+import { orbitProjects } from "./orbit";
+import "./commandMap.css";
 
 export type TeamMapProps = {
   sessions: readonly Session[];
@@ -76,6 +79,7 @@ export function TreeMap({
   onSelectMono,
   selectedMonoId,
   onDismissSelection,
+  decisions,
 }: Props) {
   const rosterSnapshot = useSyncExternalStore(subscribeMonos, monosSnapshot);
   const messageSnapshot = useSyncExternalStore(
@@ -91,6 +95,7 @@ export function TreeMap({
   const goals = useMemo(() => monoManagerGoals.goals(), [goalsSnapshot]);
   const [wholeOrg, setWholeOrg] = useState(false);
   const [focusedPod, setFocusedPod] = useState<string | undefined>(scope);
+  const [drawerProject, setDrawerProject] = useState<string>();
   const activeScope = wholeOrg ? undefined : scope;
   const scopedMono = roster.find((mono) => mono.id === activeScope);
   const scopedProject = scopedMono?.role === "manager"
@@ -142,6 +147,7 @@ export function TreeMap({
     [roster, runs, sessions, statuses, activeScope, project, messages, goals],
   );
   const feed = useMemo(() => teamMapFeed(events, roster), [events, roster]);
+  const drawer = orbitProjects(map.nodes).find(project => project.manager.id === drawerProject);
   const nodeById = new Map(map.nodes.map((node) => [node.mono.id, node]));
   const podBounds = map.pods.find((pod) => pod.id === focusedPod);
   const orderedPods = map.pods.filter(pod => {
@@ -205,6 +211,7 @@ export function TreeMap({
     setProject("");
   };
   const focusPod = (id: string) => {
+    setDrawerProject(id);
     setFocusedPod(id);
     setHovered(undefined);
     const pod = map.pods.find((pod) => pod.id === id);
@@ -692,6 +699,7 @@ export function TreeMap({
           </div></div>
         )}
       </div>
+      {drawer && <ProjectDrawer project={drawer} goals={goals} runs={runs} sessions={sessions} decisions={decisions?.project(drawer.project, drawer.manager.id)} onClose={() => { setDrawerProject(undefined); buttons.current.get(drawer.manager.id)?.focus(); }} onOpenMono={onOpenMono} />}
       <footer className="team-map-timeline" aria-label="Recent crew events">
         <span className="team-map-feed-label">Crew feed</span>
         {feed.length ? (

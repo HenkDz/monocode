@@ -6,7 +6,7 @@ import {
   subscribeCrewMessages,
 } from "../model/monoCrewEvents";
 import { WorkbenchDrawer } from "./WorkbenchDrawer";
-import { presentationText } from "../../sessions/model/transcriptPresentation";
+import { coordinationSummary, presentationText } from "../../sessions/model/transcriptPresentation";
 
 export function ManagerWorkbenchNote({ member }: { member: Mono }) {
   useSyncExternalStore(subscribeCrewMessages, crewMessagesSnapshot);
@@ -21,7 +21,7 @@ export function ManagerWorkbenchNote({ member }: { member: Mono }) {
   return (
     <aside className="cc7u-manager-note" aria-label="Latest Manager message">
       <h3>From Manager</h3>
-      <p>{presentationText(message.text)}</p>
+      <p>{coordinationSummary(message.text)}</p>
       <button type="button" onClick={(event) => {
         event.currentTarget.focus();
         setOpened(true);

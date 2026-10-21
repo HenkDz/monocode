@@ -79,7 +79,7 @@ it("shows failed launch and only the last recorded turn's compact counters", () 
   expect(host.textContent).toContain("Failed · Review couldn’t start");
   const line = host.querySelector<HTMLElement>("[data-workbench-metrics]")!;
   expect(line.textContent).toBe(
-    "Last conversation turn · 1m 37s · 326.6k in · 2.3k out",
+    "Last conversation turn · 1m 37s · Usage",
   );
   expect(line.textContent).not.toContain("cached");
   expect(line.title).toContain(
@@ -133,7 +133,7 @@ it("ticks a running conversation and stops when the turn is saved", () => {
   };
   render(value, { status: "running-tool", detail: "Checking files" });
   expect(host.textContent).toContain(
-    "Current conversation turn · 1s · 100 in · 0 out",
+    "Current conversation turn · 1s · Usage",
   );
   act(() => vi.advanceTimersByTime(2000));
   expect(host.textContent).toContain("Current conversation turn · 3s");
@@ -149,7 +149,7 @@ it("ticks a running conversation and stops when the turn is saved", () => {
 it("keeps zero and unknown measurements honest", () => {
   render(session({ blocks: [] }), { status: "idle" });
   expect(host.querySelector("[data-workbench-metrics]")!.textContent).toBe(
-    "No conversation turn recorded",
+    "Choose an assignment or start a conversation",
   );
   render(
     session({
@@ -165,7 +165,7 @@ it("keeps zero and unknown measurements honest", () => {
     }),
   );
   expect(host.querySelector("[data-workbench-metrics]")!.textContent).toBe(
-    "Last conversation turn · Elapsed unavailable · 0 in · Output unavailable",
+    "Last conversation turn · Elapsed unavailable · Usage",
   );
   act(() => vi.advanceTimersByTime(20_000));
   expect(host.textContent).toContain("Elapsed unavailable");
@@ -187,7 +187,7 @@ it("does not attribute queued message metrics or assignment time to the conversa
     detail: "Worker assignment running",
   });
   expect(host.querySelector("[data-workbench-metrics]")!.textContent).toBe(
-    "Last conversation turn · 1m 37s · 326.6k in · 2.3k out",
+    "Last conversation turn · 1m 37s · Usage",
   );
   expect(vi.getTimerCount()).toBe(0);
 });
@@ -203,7 +203,7 @@ it("uses a later recorded turn when its timing is unavailable", () => {
   });
   render(value);
   expect(host.querySelector("[data-workbench-metrics]")!.textContent).toBe(
-    "Last conversation turn · Elapsed unavailable · 500 in · 0 out",
+    "Last conversation turn · Elapsed unavailable · Usage",
   );
   expect(workbenchTurn(value)?.id).toBe("later");
   expect(value.blocks.map((block) => block.id)).toEqual(["turn", "later"]);
@@ -217,9 +217,9 @@ it("shows only available folder, home and stop actions without redundant focus a
   const onHome = vi.fn(), onStop = vi.fn();
   act(() => root.render(<WorkbenchHeader session={session()} name="Task title" role="" state={{status: "thinking"}} task memberName="Iris" onHome={onHome} onStop={onStop} onDetails={actions.onDetails} />));
   expect(host.textContent).toContain("Task");
-  expect(host.textContent).toContain("Back to Iris home");
+  expect(host.textContent).toContain("Iris · Tasks & history");
   expect(host.textContent).not.toContain("Open worktree");
-  expect([...host.querySelectorAll("button")].map(button => button.textContent)).toEqual(["Back to Iris home", "Stop", "Details"]);
+  expect([...host.querySelectorAll("button")].map(button => button.textContent)).toEqual(["Iris · Tasks & history", "Stop", "Details"]);
   act(() => host.querySelectorAll<HTMLButtonElement>("button").forEach(button => button.click()));
   expect(onHome).toHaveBeenCalledOnce();
   expect(onStop).toHaveBeenCalledOnce();
@@ -227,6 +227,6 @@ it("shows only available folder, home and stop actions without redundant focus a
 
 it("keeps a queued task's unknown timing separate from the home's completed turn", () => {
   act(() => root.render(<WorkbenchHeader session={session()} name="Iris" role="Design" state={{status: "queued"}} currentTaskMetrics={{turns: 0, elapsedMs: 0, partial: false}} onDetails={() => {}} />));
-  expect(host.querySelector("[data-workbench-metrics]")?.textContent).toBe("Current task · Conversation not started · Tokens unavailable");
+  expect(host.querySelector("[data-workbench-metrics]")?.textContent).toBe("Current task · Conversation not started · Usage");
   expect(vi.getTimerCount()).toBe(0);
 });

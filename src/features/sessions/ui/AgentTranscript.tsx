@@ -6,6 +6,7 @@ import { TeamMessage } from "./TeamMessage";
 import { ArtifactText } from "../../artifacts/ui/ArtifactReference";
 import { isUserMessage, teamMessage } from "../model/teamMessage";
 import { presentationDigest, presentationTeamMessage, presentationText } from "../model/transcriptPresentation";
+import { WorkDisclosure } from "../../../shared/ui/WorkDisclosure";
 import { transcriptError } from "../model/transcriptError";
 import {
   ArrowUp,
@@ -2598,14 +2599,7 @@ function UserMessageBlock({
                 </button>
               ) : null}
               {block.ciContext ? (
-                <details
-                  className="group/ci mt-2 min-w-0 border-t border-content/10 pt-2"
-                  onClick={(event) => event.stopPropagation()}
-                >
-                  <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 rounded text-xs text-content/50 transition-colors hover:text-content/80 focus-visible:outline focus-visible:outline-1 focus-visible:outline-content/40 [&::-webkit-details-marker]:hidden">
-                    <ChevronRight className="size-3 shrink-0 transition-transform group-open/ci:rotate-90" />
-                    <span>CI context</span>
-                  </summary>
+                <WorkDisclosure title="CI context">
                   <p className="mt-2 text-xs text-content/50">
                     CI instructions and failure details included with this
                     request.
@@ -2613,7 +2607,7 @@ function UserMessageBlock({
                   <pre className="mt-2 max-h-72 min-w-0 overflow-auto overscroll-contain rounded-md bg-content/5 p-2.5 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-words text-content/70">
                     {block.ciContext}
                   </pre>
-                </details>
+                </WorkDisclosure>
               ) : null}
               {block.draft ? (
                 <div className="mt-2 flex items-center justify-between gap-4 border-t border-dashed border-content/20 pt-2">
@@ -2753,10 +2747,11 @@ function CompactTurnWork({ turnId, compact, show, open, active, live, startedAt,
     <button type="button" className="compact-work-toggle" aria-label={open ? "Hide the work" : "Show the work"} aria-expanded={open} aria-controls={bodyId} onClick={onToggle}>
       {active ? <span className="compact-work-spinner" aria-hidden="true" /> : null}
       <span className="compact-work-label">{formatWorkingDuration(active ? elapsed : durationMs ?? null, undefined, !active)}</span>
-      <ChevronRight className={`size-3.5 shrink-0 transition-transform ${open ? "rotate-90" : ""}`} aria-hidden="true" />
-      {active ? <span className="compact-current-action" title={waitingDetail ?? action}>{action}</span> : counts ? <span className="compact-work-counts">{counts}</span> : null}
+      <span className="shrink-0 text-xs">{open ? "Hide work" : "Show work"}</span>
+      {active ? <span className="compact-current-action" title={waitingDetail ?? action}>{action}</span> : null}
     </button>
     <div id={bodyId} data-transcript-work-details hidden={!open}>
+      {open && counts && <p className="mb-2 text-xs text-content/60">Recorded work · {counts}</p>}
       {open ? <ol className="compact-work-timeline" aria-label="Activity in chronological order">
         {segments.map(segment => <li key={segment[0].id} data-transcript-search-item data-transcript-search-current={segment.some(block => block.id === searchCurrent) || undefined} data-mono-activity-block={segment[0].id}>
           {segment[0].tool ? <CompactToolGroup blocks={segment} live={live} cwd={cwd} searchCurrent={searchCurrent} onOpenFile={onOpenFile} onOpenDiff={onOpenDiff} /> : segment[0].role === "reasoning" ? (

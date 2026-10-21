@@ -1,6 +1,8 @@
 import { isHarnessAuthError } from "../../../integrations/harness/core/authSupport";
 
 export function transcriptError(error: string) {
+  if (/task\/session state mismatch|session is unavailable or already running/i.test(error))
+    return { family: "sync", title: "Something got out of sync", cause: "The task and its conversation disagree about the current state.", action: "Open the Manager to review the next step before retrying." };
   if (
     /private mono storage|storage.*(?:launch|mismatch|repair|blocked)|codex.*storage|storage.*codex/i.test(
       error,

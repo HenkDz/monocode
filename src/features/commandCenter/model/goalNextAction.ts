@@ -58,7 +58,7 @@ export type GoalActionHost = {
   pending: Set<string>; accepted: Set<string>;
 };
 
-export const distinctGoalNextActions = (steps: readonly GoalNextStep[]) => [...new Map(steps.map(step => [step.key, step])).values()];
+export const distinctGoalNextActions = (steps: readonly GoalNextStep[]) => [...new Map(steps.filter(step => step.action !== "chat").map(step => [step.key, step])).values()];
 
 export async function runGoalNextAction(event: Event, step: GoalNextStep, host: GoalActionHost): Promise<void> {
   assertDecisionUiGesture(event);

@@ -21,8 +21,10 @@ import {
 } from "../../orchestration/model/projectManager";
 import { usePrStatusCache } from "../../source-control/hooks/usePrStatus";
 import type { GitPr } from "../../../platform/tauri/fs";
-import { ArtifactText } from "../../artifacts/ui/ArtifactReference";
 import { ManagerUpdates } from "./ManagerUpdates";
+import { coordinationSummary } from "../../sessions/model/transcriptPresentation";
+import { AgentMarkdown } from "../../sessions/ui/AgentMarkdown";
+import { WorkDisclosure } from "../../../shared/ui/WorkDisclosure";
 
 export function crewFeed(
   roster: readonly Mono[],
@@ -285,9 +287,8 @@ export function MonoOrgActivity({
                       className="size-4 shrink-0"
                     />
                   )}
-                  <span title={event.text} className="min-w-0 flex-1 truncate">
-                    <ArtifactText text={event.text} monoId={event.memberId} />
-                  </span>
+                  <div className="min-w-0 flex-1"><p>{event.count > 1 ? `${mono ? monoLook(mono).name : "Team"} · ${event.count} updates` : coordinationSummary(event.text)}</p>
+                    <WorkDisclosure title={event.count > 1 ? coordinationSummary(event.text, 60) : undefined}><AgentMarkdown text={event.detail} cwd={sessions.find(session => session.id === mono?.sessionId)?.cwd} /></WorkDisclosure></div>
                 </li>
               );
             })}
@@ -350,19 +351,16 @@ export function orgCrewFeed(
     if (mono.role === "manager" && orgDescendants(roster, rootId).has(mono.id))
       managerIds.add(mono.id);
   const feed = [
-    ...crewFeed(roster, runs, statuses, sessions),
-    ...crewMessages()
-      .filter((event) => managerIds.has(event.managerId))
-      .map((event) => ({
-        id: event.id,
-        at: event.at,
-        memberId: event.senderId,
-        text:
-          event.summary ??
-          `${roster.find((m) => m.id === event.senderId)?.name ?? "Teammate"} asked ${roster.find((m) => m.id === event.recipientId)?.name ?? "a teammate"} · ${event.topic}: ${event.text}`,
-      })),
+    ...crewFeed(roster, runs, statuses, sessions).filter(event => root?.role !== "member" || event.memberId === rootId).map(event => ({ ...event, count: 1, detail: event.text })),
   ]
-    .sort((a, b) => a.at - b.at || a.id.localeCompare(b.id))
-    .slice(-40);
-  return feed;
+  ;
+  const grouped = new Map<string, (typeof feed)[number]>();
+  for (const event of crewMessages().filter(event => managerIds.has(event.managerId) && (root?.role !== "member" || event.senderId === rootId || event.recipientId === rootId))) {
+    const key = JSON.stringify([event.senderId, event.recipientId, event.topic]);
+    const previous = grouped.get(key);
+    const text = event.summary ?? `${roster.find(m => m.id === event.senderId)?.name ?? "Teammate"} · ${event.topic}`;
+    grouped.set(key, { id: previous?.id ?? event.id, at: Math.max(previous?.at ?? 0, event.at), memberId: event.senderId,
+      text, count: (previous?.count ?? 0) + 1, detail: [previous?.detail, event.text].filter(Boolean).join("\n\n") });
+  }
+  return [...feed, ...grouped.values()].sort((a, b) => a.at - b.at || a.id.localeCompare(b.id)).slice(-40);
 }

@@ -14,6 +14,7 @@ import type { GitPr } from "../../../platform/tauri/fs";
 export const TEAM_ACTIVITY_SECTIONS = [
   "Needs you",
   "Work in progress",
+  "Waiting",
   "Ready to merge",
   "Recently finished",
 ] as const;
@@ -107,7 +108,7 @@ export function teamActivityTasks(
             ? "Needs you"
             : managerPrReady(task, pr)
               ? "Ready to merge"
-              : "Work in progress";
+              : ["running", "cancelling"].includes(task.status) ? "Work in progress" : "Waiting";
       const existing = tasks.get(task.id);
       const updatedAt = (entry: {
         run: OrchestrationRun;

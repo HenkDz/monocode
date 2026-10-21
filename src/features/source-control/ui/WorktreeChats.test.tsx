@@ -17,7 +17,7 @@ it("shows removed chats under main with a custom settled fold and hidden-worktre
   try {
     await act(async () => root.render(<WorktreeChats project="C:/project" selectedPath="C:/linked-main" sessions={[hidden as never]} history={[summary]} openSessions={[{ ...summary, id: "hidden", worktreeCwd: "C:/worker" }]} unseen={new Set()} onSelect={() => {}} onChat={() => {}} onNew={() => {}} onCreate={() => {}} />));
     expect(host.querySelector('[aria-label="Needs your attention"]')).not.toBeNull();
-    const fold = [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Settled"))!;
+    const fold = [...host.querySelectorAll("button")].find(button => button.textContent?.includes("settled"))!;
     expect(fold.getAttribute("aria-expanded")).toBe("false");
     await act(async () => fold.click());
     expect(host.textContent).toContain("Earlier chat"); expect(host.textContent).toContain("worktree removed");

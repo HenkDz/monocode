@@ -399,6 +399,7 @@ function Fixture() {
   const [app] = useState(() => {
     const host: any = {
       insetLayout: true, insetLayoutRef: { current: true }, settingsOpen: false, activeAppView: undefined,
+      chromeSurfaceOpen: false, setWorktreeOverview: noop,
       sidebarCwd: project, looksLikeProject: (path: string) => path.startsWith("C:/synthetic/"),
       rightPanelOpen: loadRightPanelOpen(), rightPanelClosing: false,
       rightPanelOpenRef: { current: loadRightPanelOpen() }, rightPanelToggleRef: { current: null },

@@ -32,11 +32,6 @@ type Props = {
   onDetails: () => void;
 };
 
-const compact = new Intl.NumberFormat("en", {
-  notation: "compact",
-  maximumFractionDigits: 1,
-});
-
 export function workbenchTurn(session: Session) {
   const index = currentTurnIndex(session);
   return session.blocks
@@ -104,10 +99,6 @@ export function WorkbenchHeader({
       : turn?.durationMs != null
         ? formatLiveElapsed(0, turn.durationMs)
         : "Elapsed unavailable";
-  const counts =
-    metrics.inputTokens == null && metrics.outputTokens == null
-      ? "Tokens unavailable"
-      : `${metrics.inputTokens == null ? "Input unavailable" : `${compact.format(metrics.inputTokens).toLowerCase()} in`} · ${metrics.outputTokens == null ? "Output unavailable" : `${compact.format(metrics.outputTokens).toLowerCase()} out`}`;
   const headerState =
     state.reason === "storage"
       ? {
@@ -142,7 +133,7 @@ export function WorkbenchHeader({
           {onHome && (
             <button type="button" onClick={onHome}>
               <ArrowLeft className="size-3" />
-              Back to {memberName} home
+              {memberName} · Tasks & history
             </button>
           )}
         </div>
@@ -164,8 +155,8 @@ export function WorkbenchHeader({
           }
         >
           {turn || currentTaskMetrics
-            ? `${currentTaskMetrics ? "Current task" : `${live ? "Current" : "Last"} conversation turn`} · ${elapsed} · ${counts}`
-            : "No conversation turn recorded"}
+            ? `${currentTaskMetrics ? "Current task" : `${live ? "Current" : "Last"} conversation turn`} · ${elapsed} · Usage`
+            : "Choose an assignment or start a conversation"}
         </p>
       </div>
       <div className="cc7u-header-actions">

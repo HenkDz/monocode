@@ -1,12 +1,12 @@
 import { useId, useState } from "react";
-import { ChevronDown } from "../../../shared/ui/icons";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { projectName } from "../../../shared/lib/paths";
 import type { WorkbenchSessionTask } from "../model/monoNavigation";
 import { OrgArtifactLinks } from "../../artifacts/ui/OrgArtifactLinks";
 import { AgentMarkdown } from "../../sessions/ui/AgentMarkdown";
 import { TranscriptError } from "../../sessions/ui/TranscriptError";
-import { presentationText } from "../../sessions/model/transcriptPresentation";
+import { coordinationSummary, presentationText } from "../../sessions/model/transcriptPresentation";
+import { ShortHashes } from "../../../shared/ui/ShortHashes";
 
 export function WorkbenchTask({ task }: { task: WorkbenchSessionTask }) {
   const [expanded, setExpanded] = useState(false);
@@ -36,7 +36,7 @@ export function WorkbenchTask({ task }: { task: WorkbenchSessionTask }) {
         <p id={id} data-expanded={expanded}>
           {task.historical
             ? "Brief and artifacts for this previous dispatch were not saved."
-            : presentationText(task.prompt)}
+            : expanded ? <ShortHashes text={presentationText(task.prompt)} /> : coordinationSummary(task.title || task.prompt)}
         </p>
         {!task.historical && (
           <button
@@ -46,10 +46,9 @@ export function WorkbenchTask({ task }: { task: WorkbenchSessionTask }) {
             onClick={() => setExpanded(!expanded)}
           >
             <span>
-              {expanded ? "Show less" : "Show full brief"}
+              {expanded ? "Hide work" : "Show work"}
               <small>Scope, constraints and deliverables</small>
             </span>
-            <ChevronDown className={`size-4 ${expanded ? "rotate-180" : ""}`} />
           </button>
         )}
       </section>

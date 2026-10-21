@@ -7,7 +7,7 @@ import { workbenchSessionTask } from "../monos/model/monoNavigation";
 import { activityTaskTitle } from "../monos/model/monoTeamActivity";
 import { OrgArtifactLinks } from "../artifacts/ui/OrgArtifactLinks";
 import { ManagerUpdates } from "../monos/ui/ManagerUpdates";
-import { presentationText } from "../sessions/model/transcriptPresentation";
+import { coordinationSummary, presentationText } from "../sessions/model/transcriptPresentation";
 import type { Session, TurnModel } from "../sessions/model/session";
 import type { OrchestrationRun } from "../orchestration/model/orchestrationState";
 import type { MonoManagerGoal } from "../monos/model/monoManagerGoals";
@@ -114,7 +114,7 @@ export function ProjectDrawer({ project, goals, runs, sessions, decisions, onClo
     <div className="command-map-drawer-scroll">
       <section className="command-map-goal"><h3>Current goal</h3>
         {currentGoals.length > 1 && <select aria-label="Project goal" value={goal?.id} onChange={event => setGoalId(event.target.value)}>{currentGoals.map(entry => <option key={entry.id} value={entry.id}>{mapText(entry.title, 100)} · {entry.state}</option>)}</select>}
-        <p>{goal ? mapText(goal.title, 600) : !decisions || decisions.incomplete ? "Goal history unavailable" : "No recorded goal yet"}</p>
+        <p title={goal?.title}>{goal ? coordinationSummary(goal.title, 60) : !decisions || decisions.incomplete ? "Goal history unavailable" : "No recorded goal yet"}</p>
         {progress ? <><progress aria-label="Accepted goal tasks" max={progress.total} value={progress.accepted} /><p className="command-map-muted">{progress.accepted} of {progress.total} tasks accepted · {progress.percent}%</p></> : <p className="command-map-muted">Progress unavailable</p>}
         {goal && decisions?.goalAction?.(goal.id)}
       </section>

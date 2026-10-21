@@ -28,7 +28,8 @@ it("refuses a dispatch clock without a canonical recorded turn while retaining z
     state={{ status: "failed" }}
   />);
   expect(html).toContain("Elapsed unavailable");
-  expect(html).toContain("Recorded 0 in / 0 cached / 0 out tokens");
+  expect(html).toContain('title="0 in / 0 cached / 0 out tokens"');
+  expect(html).toContain(">Usage</span>");
   expect(html).not.toContain("3s");
 });
 
@@ -65,7 +66,7 @@ it("starts ticking only when the canonical turn is observed, including a zero st
     await act(async () => root.render(<TaskMetricsLine metrics={{ ...metrics, startedAt: 0 }} startedAt={0} state={{ status: "thinking" }} />));
     expect(vi.getTimerCount()).toBe(1);
     await act(async () => vi.advanceTimersByTime(2000));
-    expect(host.textContent).toContain("2s · Tokens unavailable · Thinking");
+    expect(host.textContent).toContain("2s · Usage · Thinking");
   } finally {
     await act(async () => root.unmount());
     vi.useRealTimers();
@@ -116,7 +117,7 @@ it("shows completed elapsed time and separate provider counters without assuming
         compactions: 1, partial: false, inputTokenConvention: "total-including-cache" }}
       state={{ status: "done" }}
     />));
-    expect(host.textContent).toBe("1m 5s · 100 in / 90 cached / 10 out tokens · Done");
+    expect(host.textContent).toBe("1m 5s · Usage · Done");
     expect(host.querySelector("p")?.title).toContain("Cached 90");
     expect(host.querySelector("p")?.title).toContain("Model calls 2");
     expect(host.querySelector("p")?.title).toContain("Total input (including cache) 100");
@@ -133,7 +134,7 @@ it("shows unavailable metrics and a queued storage blocker honestly", async () =
     await act(async () => root.render(<TaskMetricsLine
       state={{ status: "blocked", reason: "storage", detail: "Queued message cannot start" }}
     />));
-    expect(host.textContent).toContain("Elapsed unavailable · Tokens unavailable · Blocked");
+    expect(host.textContent).toContain("Elapsed unavailable · Usage · Blocked");
     expect(host.textContent).not.toContain("Idle");
     expect(host.querySelector("p")?.title).toContain("Queued message cannot start");
   } finally {
@@ -153,9 +154,9 @@ it("keeps the elapsed clock advancing for a running retry", async () => {
       startedAt={20_000}
       state={{ status: "thinking" }}
     />));
-    expect(host.textContent).toContain("10s · Tokens unavailable · Thinking");
+    expect(host.textContent).toContain("10s · Usage · Thinking");
     await act(async () => vi.advanceTimersByTime(5000));
-    expect(host.textContent).toContain("15s · Tokens unavailable · Thinking");
+    expect(host.textContent).toContain("15s · Usage · Thinking");
   } finally {
     await act(async () => root.unmount());
     vi.useRealTimers();
@@ -171,7 +172,7 @@ it("leaves an inactive historical turn with no end unavailable", async () => {
       metrics={{ turns: 1, elapsedMs: 0, startedAt: 1000, partial: true }}
       state={{ status: "done" }}
     />));
-    expect(host.textContent).toBe("Elapsed unavailable · Tokens unavailable · Done");
+    expect(host.textContent).toBe("Elapsed unavailable · Usage · Done");
   } finally {
     await act(async () => root.unmount());
     vi.unstubAllGlobals();
@@ -191,7 +192,7 @@ it("omits a repeated visible state while preserving the metrics tooltip", async 
         />,
       ),
     );
-    expect(host.textContent).toBe("Elapsed unavailable · Tokens unavailable");
+    expect(host.textContent).toBe("Elapsed unavailable · Usage");
     expect(host.querySelector("p")?.title).toBe("Blocked · storage");
   } finally {
     await act(async () => root.unmount());

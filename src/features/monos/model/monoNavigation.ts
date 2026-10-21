@@ -62,7 +62,7 @@ export function memberMonoState(runs: readonly OrchestrationRun[], memberId: str
   const own = session && monoState({ ...session, codexStorageError: session.codexStorageError ?? workerSession?.codexStorageError });
   const worker = monoState(workerSession, { task, tasks: run?.tasks ?? tasks, runStatus: run?.status, pauseReason: run?.lastPauseReason });
   if (own?.status === "needs-you" || worker.status === "needs-you") return own?.status === "needs-you" ? own : worker;
-  if (own && own.liveState?.status !== "idle") return own;
+  if (own && (session?.busy || own.status === "blocked" || !task && own.liveState?.status !== "idle")) return own;
   return worker;
 }
 
@@ -102,8 +102,7 @@ export function monoLiveState(roster: readonly Mono[], runs: readonly Orchestrat
 export function selectedOrgMono(sessionId: string | undefined, viewId: string | null, _runs: readonly OrchestrationRun[]) {
   const mono = monoForView(viewId) ?? monoForView(sessionId);
   if (mono) return mono.id;
-  // A worker is a different pane from the member's durable chat.
-  return undefined;
+  return workbenchSessionTask(_runs, sessionId ?? "")?.memberId;
 }
 
 export function loadMonoView(windowLabel: string): string | null {

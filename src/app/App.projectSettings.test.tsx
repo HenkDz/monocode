@@ -91,7 +91,7 @@ function fixture() {
     onWindowsSandboxChange: noop, onResetMono: noop, saveSettingsSection: vi.fn(), startTransition: (run: () => void) => run(),
   };
   for (const key of ["monoViewId", "monoTeamRequest", "monoActivity", "monoShownSession", "monoShownSessionFocused", "monoOverviewDocument",
-    "workspaceContextTab", "rightPanelOpenState", "rightPanelClosing", "monoPanelTab", "monoDetailsOpen", "monoSessions", "monoArtifact", "monoChanges", "settingsOpen", "filePickerOpen", "searchViewOpen",
+    "worktreeOverview", "workspaceContextTab", "rightPanelOpenState", "rightPanelClosing", "monoPanelTab", "monoDetailsOpen", "monoSessions", "monoArtifact", "monoChanges", "settingsOpen", "filePickerOpen", "searchViewOpen",
     "inboxViewOpen", "notesViewOpen", "automationsViewOpen", "settingsSection", "settingsAnchor", "notificationProjectPath", "composerFocused",
     "composerFocusToken", "projectTerminalFocused", "sessions"]) {
     scope[`set${key[0].toUpperCase()}${key.slice(1)}`] = vi.fn((value: any) => { scope[key] = typeof value === "function" ? value(scope[key]) : value; });
@@ -152,15 +152,18 @@ it("keeps the actual Sidebar App Settings callback on global settings", () => {
   f.noLaunch();
 });
 
-it.each(["onOpenRailMono", "onOpenProjectManager"])("routes actual %s to Activity with embedded settings and no separate member sidebar", async entry => {
+it.each(["onOpenRailMono", "onOpenProjectManager"])("routes actual %s to Activity and keeps settings behind its explicit action (CC-UX2 supersedes automatic settings)", async entry => {
   const f = fixture();
   const open = entry === "onOpenProjectManager" ? f.scope.onOpenProjectManager : callback(entry, f.scope);
   await act(async () => open(entry === "onOpenProjectManager" ? f.projects[1] : "manager-1"));
   expect(f.scope.workspaceContextTab).toBe("activity");
-  expect(f.scope.rightPanelOpenState).toBe(true);
+  expect(f.scope.monoDetailsOpen).toBe(false);
   await f.render();
-  expect(container.querySelectorAll("[data-mono-details]")).toHaveLength(1);
+  expect(container.querySelectorAll("[data-mono-details]")).toHaveLength(0);
   expect(container.querySelector("aside.mono-details-panel")).toBeNull();
+  await act(async () => f.gear(f.projects[1]));
+  await f.render();
+  expect(f.scope.monoDetailsOpen).toBe(true);
   expect(container.querySelector('[data-model-project]')?.getAttribute("data-model-project")).toBe(f.projects[1]);
   f.noLaunch();
 });

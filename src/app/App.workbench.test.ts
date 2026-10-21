@@ -64,6 +64,7 @@ function deliveryHost(choice?: "queue" | "steer") {
     selectedProviderAccountId: () => undefined,
     window,
     setQueueDispatchVersion: noop,
+    setWorktreeOverview: noop,
     turnGen: { current: new Map([["home", 1]]) },
     upsertSession: vi.fn(async () => null),
     prepareAttachments: async (files: unknown) => files,

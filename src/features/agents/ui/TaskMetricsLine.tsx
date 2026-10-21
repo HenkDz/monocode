@@ -62,8 +62,7 @@ export function TaskMetricsLine({
             ? formatLiveElapsed(0, metrics!.elapsedMs)
             : formatLiveElapsed(startedAt, endedAt)}
       {" · "}
-      {metrics?.partial && counts.length ? "Recorded " : ""}
-      {tokens}
+      <span title={tokens}>Usage</span>
       {showState && (
         <>
           {" · "}

@@ -177,7 +177,7 @@ export function agentLiveStateLabel(state: AgentLiveState): string {
     case "blocked": return `Blocked · ${state.reason === "usage-limit" ? "usage limit" : state.reason || "error"}`;
     case "needs-you": return "Needs you";
     case "idle": return "Idle";
-    case "done": return "Done";
+    case "done": return state.detail === "Cancelled" ? "Cancelled" : "Done";
     case "failed": return "Failed";
   }
 }

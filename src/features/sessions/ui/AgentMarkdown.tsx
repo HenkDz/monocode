@@ -2,6 +2,7 @@ import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   createContext,
+  Children,
   isValidElement,
   memo,
   useCallback,
@@ -77,6 +78,7 @@ import {
 import { parseStreamingMarkdown } from "./streamingMarkdown";
 import { HighlightedCodeBlock } from "./HighlightedCodeBlock";
 import { presentationText } from "../model/transcriptPresentation";
+import { WorkDisclosure } from "../../../shared/ui/WorkDisclosure";
 import { TranscriptPacing, TranscriptVisibility } from "./transcriptVisibility";
 import { usePacedReveal } from "../../settings/model/displayPrefs";
 import {
@@ -599,6 +601,11 @@ function MarkdownPictureSource({
 }
 
 const MARKDOWN_COMPONENTS = {
+  details: ({ children, open }: ComponentProps<"details">) => {
+    const parts = Children.toArray(children);
+    const summary = parts.find(part => isValidElement<ComponentProps<"summary">>(part) && part.type === "summary");
+    return <WorkDisclosure title={isValidElement<ComponentProps<"summary">>(summary) ? summary.props.children : undefined} initialOpen={!!open}>{parts.filter(part => part !== summary)}</WorkDisclosure>;
+  },
   a: MarkdownLink,
   code: MarkdownCode,
   img: MarkdownImage,

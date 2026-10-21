@@ -6,6 +6,7 @@ export const APP_VIEW_LABELS = {
 } as const;
 
 export type AppView = keyof typeof APP_VIEW_LABELS;
+export const REUSABLE_PAGE_TAB_ID = "shell-page:reusable";
 
 export const SHELL_PAGE_LABELS = { commandMap: "Command map", decisions: "Decisions", integrations: "Integrations", usage: "Usage" } as const;
 export type ShellPage = keyof typeof SHELL_PAGE_LABELS;
@@ -38,7 +39,7 @@ export function monoForTab(id: string): string | undefined {
 
 /** Whether a title tab is a view of its own rather than a workspace tab. */
 export function isViewTab(id: string): boolean {
-  return !!appViewForTab(id) || !!monoForTab(id) || !!shellPageForTab(id);
+  return id === REUSABLE_PAGE_TAB_ID || !!appViewForTab(id) || !!monoForTab(id) || !!shellPageForTab(id);
 }
 
 /** Keep the shared order and append newly opened tabs regardless of type. */

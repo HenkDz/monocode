@@ -1,7 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { basename } from "../../../platform/tauri/fs";
 import { isEqualOrInside, pathKey } from "../../../shared/lib/paths";
-import { ChevronDown, ChevronRight, Plus } from "../../../shared/ui/icons";
+import { Plus } from "../../../shared/ui/icons";
 import { useProjectWorktrees } from "../hooks/useProjectWorktrees";
 import { usePrStatus } from "../hooks/usePrStatus";
 import { worktreeSessionGroups } from "../model/worktreeSessions";
@@ -49,12 +49,12 @@ function WorktreeChatGroup({ tree, trees, rows, selected, sessions, activeId, un
     const state = session ? selectAgentLiveState(session) : undefined;
     const working = !!state && ["thinking", "running-tool", "compacting"].includes(state.status);
     const attention = !!state && ["needs-you", "blocked", "failed", "waiting-review"].includes(state.status);
-    const settled = !working && !attention && !unseen.has(row.id) && row.id !== activeId && !row.draft;
+    const settled = !working && !attention && !unseen.has(row.id) && !row.draft;
     const turn = session ? session.blocks[currentTurnIndex(session)] : undefined;
     const elapsed = turn?.startedAt ? Math.max(0, Math.floor((now - turn.startedAt) / 60_000)) : undefined;
     const label = working ? `Working${elapsed == null ? "" : ` · ${elapsed}m`}`
       : state?.status === "done" || unseen.has(row.id) ? "Answered"
-      : state?.status === "idle" || !state ? (row.draft ? "Draft" : "Ready for you") : agentLiveStateLabel(state);
+      : settled ? "Settled" : state?.status === "idle" || !state ? (row.draft ? "Draft" : "Ready for you") : agentLiveStateLabel(state);
     const removed = row.worktreeRemoved || !!row.worktreeCwd && !trees.some(tree => isEqualOrInside(row.worktreeCwd!, tree.path));
     return { row, settled, working, attention, label, removed };
   });
@@ -77,8 +77,8 @@ function WorktreeChatGroup({ tree, trees, rows, selected, sessions, activeId, un
     </button>
     {selected && <div className="pb-1.5 pl-6 pr-1.5">
       {items.filter(item => !item.settled).map(renderChat)}
-      {!!settled.length && <button type="button" aria-expanded={expanded} onClick={() => setExpanded(!expanded)} className="flex w-full items-center gap-1 rounded-lg px-2 py-1 text-[10px] text-content/45 hover:bg-content/5">{expanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}Settled ({settled.length})</button>}
-      {expanded && settled.map(renderChat)}
+      {!!settled.length && <button type="button" aria-expanded={expanded} onClick={() => setExpanded(!expanded)} className="flex w-full items-center gap-1 rounded-lg px-2 py-1 text-[10px] text-content/45 hover:bg-content/5">{expanded ? "Hide" : "Show"} {settled.length} settled</button>}
+      {settled.filter(item => expanded || item.row.id === activeId).map(renderChat)}
       <button type="button" onClick={onNew} className="flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-[11px] text-accent hover:bg-content/5"><Plus className="size-3" />New chat here</button>
     </div>}
   </div>;

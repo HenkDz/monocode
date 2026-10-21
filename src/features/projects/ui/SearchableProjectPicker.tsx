@@ -129,11 +129,11 @@ export function SearchableProjectPicker({
         className ? ` ${className}` : ""
       }`}
     >
-      <AgentDetailTooltip detail={activeMono?.state?.liveState && agentLiveStateTooltip(activeMono.state.liveState)}>
+      <AgentDetailTooltip detail={!open && activeMono?.state?.liveState ? agentLiveStateTooltip(activeMono.state.liveState) : undefined}>
       <button
         type="button"
         title={
-          compact
+          compact || open
             ? undefined
             : activeMono
               ? `${activeMono.name}\n${monoLiveStatusLabel(activeMono.state ?? { status: activeMono.status ?? "idle" })}`
@@ -412,7 +412,7 @@ export function ProjectPickerPopover({
       aria-label={label}
       onDismiss={projectMenuActive || flyout ? undefined : onDismiss}
       onKeyDown={onPickerKeyDown}
-      className="flex flex-col overflow-hidden"
+      className="flex flex-col overflow-hidden !bg-background-base shadow-xl"
     >
       <label className="flex h-11 shrink-0 items-center gap-2.5 border-b border-stroke px-3 text-content/45 focus-within:text-content/70">
         <Search className="size-4 shrink-0" strokeWidth={1.75} />

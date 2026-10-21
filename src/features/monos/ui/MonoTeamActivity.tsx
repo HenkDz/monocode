@@ -10,6 +10,7 @@ import { selectTaskMetrics } from "../../agents/model/agentMetrics";
 import { TaskMetricsLine, taskMetricsDetail } from "../../agents/ui/TaskMetricsLine";
 import { AgentDetailTooltip } from "../../agents/ui/AgentDetailTooltip";
 import { listMonos, monoLook, monoState } from "../model/mono";
+import { monoLiveState } from "../model/monoNavigation";
 import { ArtifactText } from "../../artifacts/ui/ArtifactReference";
 import {
   activityTaskEvent,
@@ -308,9 +309,9 @@ export function MonoTeamActivity({
       key: "Work in progress",
       label: "Working",
       count:
-        tasks.filter((entry) => entry.section === "Work in progress").length +
-        waitingCount,
+        roster.filter(mono => ids.has(mono.id) && monoLiveState(roster, runs, sessions, mono.id).status === "working").length,
     },
+    { key: "Waiting", label: "Waiting / review", count: tasks.filter(entry => entry.section === "Waiting").length + waitingCount },
     {
       key: "Ready to merge",
       label: "Ready",
@@ -430,7 +431,7 @@ export function MonoTeamActivity({
               hidden={
                 active === "Feed" ||
                 (!projectTasks.some((entry) => entry.section === active) &&
-                  !(active === "Work in progress" && waiting.length) &&
+                  !(active === "Waiting" && waiting.length) &&
                   !(active === "Needs you" && pending.length))
               }
               className="space-y-3"
@@ -465,7 +466,7 @@ export function MonoTeamActivity({
                   (entry) => entry.section === section,
                 );
                 const unassigned =
-                  section === "Work in progress" ? waiting : [];
+                  section === "Waiting" ? waiting : [];
                 if (!entries.length && !unassigned.length) return null;
                 const label =
                   section === "Work in progress"

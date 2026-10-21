@@ -15,7 +15,7 @@ import { collectWorkspaceSnapshot, parseWorkspaceSnapshot, hydrateWorkspaceSnaps
 import type { Worktree } from "../features/source-control/model/worktrees";
 import { pathKey, isEqualOrInside } from "../shared/lib/paths";
 import { worktreeSessionGroups } from "../features/source-control/model/worktreeSessions";
-import { shellPageTabId, shellPageForTab, appViewTabId, isViewTab } from "../features/workspace/model/appViewTabs";
+import { shellPageTabId, shellPageForTab, appViewTabId, isViewTab, REUSABLE_PAGE_TAB_ID } from "../features/workspace/model/appViewTabs";
 
 const ast = ts.createSourceFile("App.tsx", readFileSync("src/app/App.tsx", "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const nodes: ts.Node[] = []; const visit = (node: ts.Node) => { nodes.push(node); ts.forEachChild(node, visit); }; visit(ast);
@@ -43,7 +43,7 @@ it("actual App new-chat callback starts in the visibly selected worktree", () =>
   const store = new SessionStateStore([]);
   const appendTab = vi.fn(); const active = vi.fn();
   setWorktreeFocus("C:/repo", { path: "C:/repo/child", branch: "child" });
-  const action = callback("onNew", { teamMap: { close: vi.fn() }, setSearchViewOpen: vi.fn(), setInboxViewOpen: vi.fn(), setNotesViewOpen: vi.fn(), setAutomationsViewOpen: vi.fn(),
+  const action = callback("onNew", { setWorktreeOverview: vi.fn(), teamMap: { close: vi.fn() }, setSearchViewOpen: vi.fn(), setInboxViewOpen: vi.fn(), setNotesViewOpen: vi.fn(), setAutomationsViewOpen: vi.fn(),
     sidebarCwd: "C:/repo", newWorkspaceSession, sessionDefaults: {}, newTab, setSessions: store.setState, appendTab, setActiveTabId: active, setComposerFocused: vi.fn() });
   action();
   expect(sessionWorkCwd(store.snapshot()[0])).toBe("C:/repo/child");
@@ -136,13 +136,13 @@ it("actual App script callback runs only after confirmation against the exact se
 
 it("opens and closes shell pages under their own title-tab identities through actual App callbacks", () => {
   const open = vi.fn();
-  const select = callback("onSelectTitleTab", { shellPageForTab, onOpenTeamMap: open, DECISIONS_SCOPE: "decision-scope", INTEGRATIONS_SCOPE: "integration-scope", USAGE_DASHBOARD_SCOPE: "usage-scope" });
+  const select = callback("onSelectTitleTab", { setWorktreeOverview: vi.fn(), REUSABLE_PAGE_TAB_ID, shellPageForTab, onOpenTeamMap: open, DECISIONS_SCOPE: "decision-scope", INTEGRATIONS_SCOPE: "integration-scope", USAGE_DASHBOARD_SCOPE: "usage-scope" });
   for (const [page, scope] of [["commandMap", undefined], ["decisions", "decision-scope"], ["integrations", "integration-scope"], ["usage", "usage-scope"]] as const) {
     const id = shellPageTabId(page); expect(isViewTab(id)).toBe(true); select(id); expect(open).toHaveBeenLastCalledWith(scope);
   }
   let pages = ["commandMap", "decisions"], order = ["chat", "shell-page:commandMap", "shell-page:decisions"];
   const close = vi.fn(), neighbor = vi.fn();
-  const action = callback("closeViewTab", { shellPageForTab, setOpenShellPages: (update: (value: string[]) => string[]) => { pages = update(pages); }, setTitleTabOrder: (update: (value: string[]) => string[]) => { order = update(order); },
+  const action = callback("closeViewTab", { REUSABLE_PAGE_TAB_ID, shellPageForTab, setOpenShellPages: (update: (value: string[]) => string[]) => { pages = update(pages); }, setTitleTabOrder: (update: (value: string[]) => string[]) => { order = update(order); },
     displayedTabNavigation: { current: { activeId: "shell-page:decisions", tabs: order.map(id => ({ id })), select: neighbor } }, teamMap: { close }, nextDisplayedTabAfterClose: () => "chat" });
   action("shell-page:decisions"); expect(pages).toEqual(["commandMap"]); expect(order).toEqual(["chat", "shell-page:commandMap"]);
   expect(close).toHaveBeenCalledOnce(); expect(neighbor).toHaveBeenCalledWith("chat");

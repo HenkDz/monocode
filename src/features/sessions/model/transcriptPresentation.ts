@@ -1,5 +1,17 @@
 import { parseTeamMessage } from "./teamMessage";
 
+/** Compact coordination copy only; never use for commands or user code. */
+export function coordinationSummary(text: string, limit = 120): string {
+  const clean = presentationText(text).replace(/```[\s\S]*?```/g, " ")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, "")
+    .replace(/\b[0-9a-f]{40,64}\b/gi, hash => hash.slice(0, 7))
+    .replace(/<[^>]*>|^[#>*\s-]+/g, "").replace(/\s+/g, " ").trim();
+  if (/task\/session state mismatch|session is unavailable or already running/i.test(clean))
+    return "Something got out of sync. Open the Manager to review the next step.";
+  return clean.length > limit ? `${clean.slice(0, limit - 1).trimEnd()}…` : clean;
+}
+
 // shortcut: known app protocol tags, extend this list when prompt envelopes change.
 const INTERNAL_TAGS =
   "monocode_context|monocode_project_manager|monocode_orchestration|monocode_assignment|org_chart|mono_authority|authority_core|monocode_app|team_sender|cli_input|monocode_cli_input|app_cli_input|artifact_rules|org_task_artifacts|worker_engine_rules|member_soul|member_memory|implementation_report|mono|soul|memory";

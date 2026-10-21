@@ -40,7 +40,7 @@ import {
   clampUsedPercent,
   formatUsagePercent,
 } from "../../features/providers/model/rateLimits";
-import { GitBranch, Plus, X } from "../../shared/ui/icons";
+import { GitBranch, Plus } from "../../shared/ui/icons";
 import { workspaceTeam } from "./WorkspaceTeam";
 import { displayPath, isEqualOrInside, pathKey } from "../../shared/lib/paths";
 import { worktreeTaskSessions } from "../../features/source-control/model/worktreeSessions";
@@ -48,6 +48,15 @@ import { workbenchSessionTask } from "../../features/monos/model/monoNavigation"
 import { ProjectAutonomyControl, type DecisionUiActions } from "../../features/commandCenter/ui/Decisions";
 import { GoalTaskSummary } from "../../features/commandCenter/ui/GoalTaskSummary";
 import { WorktreeQuickActions } from "../../features/source-control/ui/WorktreeQuickActions";
+import { coordinationSummary } from "../../features/sessions/model/transcriptPresentation";
+import { ShortHashes } from "../../shared/ui/ShortHashes";
+
+function GoalTitle({ title }: { title: string }) {
+  const [open, setOpen] = useState(false);
+  return <><p className="truncate font-medium" title={coordinationSummary(title, 60)}>{coordinationSummary(title, 60) || "Untitled goal"}</p>
+    <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className="mt-1 rounded text-[11px] text-content/60 hover:text-content focus-visible:outline-accent">{open ? "Hide details" : "Show details"}</button>
+    {open && <p className="mt-2 whitespace-pre-wrap [overflow-wrap:anywhere]"><ShortHashes text={title} /></p>}</>;
+}
 
 const button =
   "rounded-lg border border-stroke px-2.5 py-1.5 text-[11px] text-content/75 hover:bg-content/5 disabled:opacity-40";
@@ -87,7 +96,6 @@ export function WorkspaceChanges({ path, onOpen }: { path: string; onOpen: () =>
 export function WorkspaceContextTabs({
   tab,
   onChange,
-  onClose,
   children,
 }: {
   tab: WorkspaceContextTab;
@@ -144,17 +152,6 @@ export function WorkspaceContextTabs({
             </button>
           ))}
         </div>
-        {onClose && (
-          <button
-            type="button"
-            aria-label="Hide panel"
-            title="Hide panel (Ctrl+B)"
-            onClick={onClose}
-            className="grid size-6 shrink-0 place-items-center rounded-md text-content/50 hover:bg-content/10"
-          >
-            <X className="size-3.5" />
-          </button>
-        )}
       </div>
       {children}
     </div>
@@ -307,7 +304,6 @@ export function WorkspaceGoals({
       aria-label="Goal & tasks"
       className="min-h-0 flex-1 overflow-y-auto pb-4"
     >
-      {manager && decisionActions && <div className="px-4 pt-4"><ProjectAutonomyControl managerId={manager.id} projectId={project} value={monoManagerGoals.autonomy(manager.id, project)} actions={decisionActions} /></div>}
       <h2 className={heading}>Goal</h2>
       {goals.length ? (
         goals.map((goal) => {
@@ -320,7 +316,7 @@ export function WorkspaceGoals({
               key={goal.id}
               className="mx-4 mb-2 rounded-xl border border-stroke bg-content/3 p-3 text-[12px]"
             >
-              <p className="font-medium">{goal.title}</p>
+              <GoalTitle title={goal.title} />
               <p className="mt-1 text-[11px] text-content/55">{goal.state}</p>
               {!!scoped.length && (
                 <>
@@ -378,6 +374,7 @@ export function WorkspaceGoals({
         <p className={empty}>No recorded tasks yet.</p>
       )}
       <h2 className={heading}>This project decides</h2>
+      {manager && decisionActions && <div className="px-4 pt-4"><ProjectAutonomyControl managerId={manager.id} projectId={project} value={monoManagerGoals.autonomy(manager.id, project)} actions={decisionActions} /></div>}
       <dl className="space-y-2 px-4 py-2 text-[11px] text-content/60">
         {!(manager && decisionActions) && <div className="flex justify-between gap-3">
           <dt>Ask me for</dt>
@@ -673,7 +670,6 @@ function WorktreeDetails({
   const unavailable = tree.missing || tree.prunable;
   return (
     <>
-      {onRunScript ? <WorktreeQuickActions project={project} path={tree.path} unavailable={unavailable} onRun={onRunScript} /> : null}
       <h2 className="flex items-center gap-2 text-[13px] font-medium">
         <GitBranch className="size-4 shrink-0" />
         <span className="break-all">{tree.branch ?? "Detached HEAD"}</span>
@@ -783,6 +779,7 @@ function WorktreeDetails({
           </button>
         </div>
       )}
+      {onRunScript ? <WorktreeQuickActions project={project} path={tree.path} unavailable={unavailable} onRun={onRunScript} /> : null}
       {index && index.files.length > 0 && (
         <div className="mt-4">
           <h3 className="mb-2 text-[10px] uppercase tracking-wide text-content/45">

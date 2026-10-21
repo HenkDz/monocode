@@ -64,7 +64,7 @@ export function worktreeSessionGroups(
       ...saved,
       ...session,
       createdAt: saved?.createdAt ?? session.createdAt,
-      updatedAt: saved?.updatedAt ?? session.updatedAt,
+      updatedAt: Math.max(saved?.updatedAt ?? 0, session.updatedAt),
     });
   }
   const groups = new Map<string, SessionSummary[]>(

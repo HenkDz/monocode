@@ -14,7 +14,10 @@ import { monoEngineId } from "../features/monos/model/monoEngines";
 import { resolveMonoRoleEffort, snapshotMonoWorkerEffort, switchMonoRoleEffort } from "../features/monos/model/monoRoleEffort";
 import { resolveMonoRolePermissions, snapshotMonoWorkerPermissions } from "../features/monos/model/monoRolePermissions";
 import { archiveMonoConversation, archiveProjectMonos, offerProjectMonoRestore, projectMonoTeam } from "../features/monos/model/monoArchive";
-import { loadMonoView, saveMonoView, monoForView, monoViewProject, memberDetailsView, selectedOrgMono, monoLiveState } from "../features/monos/model/monoNavigation";
+import { loadMonoView, saveMonoView, monoForView, monoViewProject, memberDetailsView, selectedOrgMono, monoLiveState, workbenchSessionTask } from "../features/monos/model/monoNavigation";
+import { WorkbenchDrawer } from "../features/monos/ui/WorkbenchDrawer";
+import { worktreeSessionGroups } from "../features/source-control/model/worktreeSessions";
+import { sessionActivityAt } from "../features/sessions/model/sessionActivity";
 import { MonoTeamActivity } from "../features/monos/ui/MonoTeamActivity";
 import { WorkspaceContextTabs, WorkspaceGoals, WorkspaceWorktree, WorkspaceChanges, WorkspaceUsage, type WorkspaceContextTab } from "./shell/WorkspaceContext";
 import { WorktreeChats } from "../features/source-control/ui/WorktreeChats";
@@ -37,10 +40,11 @@ import { createMonoUsageFailoverController } from "../features/monos/model/monoU
 import { MissionCommandBar } from "../features/commandCenter/ui/MissionCommandBar";
 import { AttentionQueue, ATTENTION_QUEUE_SCOPE } from "../features/commandCenter/ui/AttentionQueue";
 import { Decisions, DECISIONS_SCOPE, type DecisionUiActions } from "../features/commandCenter/ui/Decisions";
-import { selectDecisionView, endedDecisionSources, decisionCountsByProject } from "../features/commandCenter/model/decisionView";
+import { selectDecisionView, selectNeedsUser, endedDecisionSources, decisionCountsByProject } from "../features/commandCenter/model/decisionView";
 import { prepareDecisionMessage } from "../features/monos/model/monoDecisions";
 import { sendDecisionFromClick } from "../features/monos/model/monoDecisionUi";
-import { selectGoalNextAction, runGoalNextAction, distinctGoalNextActions, type GoalNextStep } from "../features/commandCenter/model/goalNextAction";
+import { selectGoalNextAction, runGoalNextAction, type GoalNextStep } from "../features/commandCenter/model/goalNextAction";
+import { useAttentionSources } from "../features/commandCenter/model/useAttentionSources";
 import { GoalNextAction } from "../features/commandCenter/ui/GoalNextAction";
 import { ManagerUpdates } from "../features/monos/ui/ManagerUpdates";
 import { openGoalTarget } from "../features/commandCenter/model/goalView";
@@ -235,6 +239,7 @@ import { MonoActivityPanel } from "../features/monos/ui/MonoActivityPanel";
 import { MonoSessionsPanel } from "../features/monos/ui/MonoSessionsPanel";
 import {
   APP_VIEW_LABELS,
+  REUSABLE_PAGE_TAB_ID,
   appViewForTab,
   appViewTabId,
   isViewTab,
@@ -614,7 +619,7 @@ import {
 } from "../features/workspace/model/workspaceTabGroups";
 import { applyAddToChatRequest } from "../features/sessions/model/addChatToWorkspace";
 import { newWorkspaceSession } from "./model/newWorkspaceSession";
-import { boundWorktreeTabs, chatTabWorktree } from "../features/source-control/model/chatWorktree";
+import { chatTabWorktree } from "../features/source-control/model/chatWorktree";
 import { packageScripts } from "../features/projects/model/packageScripts";
 import { prepareTerminalCommand } from "../features/terminal/model/terminalCommand";
 import {
@@ -1232,7 +1237,6 @@ function filesInWorkspaceTabs(tabs: readonly WorkspaceTab[]): FilePaneTab[] {
 }
 
 /** Stable empty tab list for the title bar while a Mono is in full view. */
-const NO_TITLE_TABS: [] = [];
 
 /** Native sheet. `window.confirm` is swallowed when a macOS menu accelerator fires. */
 function confirmDiscardUnsaved(message: string): Promise<boolean> {
@@ -1556,6 +1560,9 @@ function Workspace({
   const [openAppViews, setOpenAppViews] = useState<AppView[]>([]);
   // Monos open as title tabs in the inset layout, by Mono id.
   const [openMonoTabs, setOpenMonoTabs] = useState<string[]>([]);
+  const workerTaskTabs = useRef(new Map<string, string>());
+  const [worktreeOverview, setWorktreeOverview] = useState<{ project: string; tree: Worktree }>();
+  const [reusablePage, setReusablePage] = useState<{ page?: ShellPage; appView?: AppView }>();
   const [titleTabOrder, setTitleTabOrder] = useState(() =>
     tabs.map((tab) => tab.id),
   );
@@ -1620,7 +1627,7 @@ function Workspace({
   );
   const [rightPanelOpen, setRightPanelOpenState] = useState(true);
   const [workspaceContextTab, setWorkspaceContextTab] = useState<WorkspaceContextTab>("goal");
-  const [openShellPages, setOpenShellPages] = useState<ShellPage[]>([]);
+  const [, setOpenShellPages] = useState<ShellPage[]>([]);
   const [rightPanelTab, setRightPanelTabState] =
     useState<RightPanelTab>(loadRightPanelTab);
   // A closed panel keeps its contents until it has slid out.
@@ -1766,7 +1773,7 @@ function Workspace({
   // A deleted Mono, or Monos turned off, drop their tabs.
   const shownMonoTabs = useMemo(
     () =>
-      insetLayout && monosEnabled
+      monosEnabled
         ? openMonoTabs.filter((monoId) => findMono(monoId))
         : [],
     // The roster is read through its snapshot.
@@ -1778,11 +1785,11 @@ function Workspace({
     setTitleTabOrder((order) =>
       reconcileTitleTabOrder(order, [
         ...tabs.map((tab) => tab.id),
-        ...openAppViews.map(appViewTabId),
+        ...(reusablePage ? [REUSABLE_PAGE_TAB_ID] : []),
         ...shownMonoTabs.map(monoTabId),
       ]),
     );
-  }, [insetLayout, tabs, openAppViews, shownMonoTabs]);
+  }, [insetLayout, tabs, reusablePage, shownMonoTabs]);
   /** A Mono hides the terminal, so reaching for one leaves it. */
   const leaveCoveringMono = useCallback(() => {
     if (monoViewIdRef.current) closeMonoView();
@@ -1904,10 +1911,8 @@ function Workspace({
   );
   // Persist the existing union, including hidden checkouts; only rendering is scoped.
   const keepWorkspaceTab = useCallback(() => true, []);
-  useEffect(() => {
-    setTabs(current => boundWorktreeTabs(current, sessionsRef.current, activeTabId, tabWorktreeOf));
-  }, [tabs, activeTabId, tabWorktreeOf]);
   useLayoutEffect(() => {
+    if (worktreeOverview) return;
     const tab = tabs.find(tab => tab.id === activeTabId);
     if (!tab || isManagerTab(tab) || !isLocalProject(projectCwd)) return;
     const project = workspaceTabCwd(tab, sessions);
@@ -1919,7 +1924,7 @@ function Workspace({
     const session = sessions.find(session => session.id === tab.focusedId);
     const tree = projectCheckoutList.data?.worktrees.find(tree => sameProjectPath(tree.path, path));
     setWorktreeFocus(project, sameProjectPath(path, project) ? undefined : { path, branch: tree?.branch ?? session?.branch ?? null });
-  }, [activeTabId, projectCwd, tabs, sessions, tabWorkspace, projectCheckoutList.data]);
+  }, [activeTabId, projectCwd, tabs, sessions, tabWorkspace, projectCheckoutList.data, worktreeOverview]);
 
   const workspaceNavigation = useWorkspaceNavigation({
     project: projectCwd,
@@ -3364,6 +3369,7 @@ function Workspace({
   );
 
   const onNew = useCallback(() => {
+    setWorktreeOverview(undefined);
     teamMap.close();
     setSearchViewOpen(false);
     setInboxViewOpen(false);
@@ -5503,6 +5509,7 @@ function Workspace({
 
   const onOpenMono = useCallback(
     async (monoId: string) => {
+      setWorktreeOverview(undefined);
       teamMap.close();
       setMonoTeamRequest(0);
       updateMono(monoId, (mono) => ({ ...mono, lastUsedAt: Date.now() }));
@@ -5538,11 +5545,7 @@ function Workspace({
       setNotesViewOpen(false);
       setAutomationsViewOpen(false);
       setMonoViewId(session.id);
-      if (insetLayoutRef.current) {
-        setOpenMonoTabs((current) =>
-          current.includes(monoId) ? current : [...current, monoId],
-        );
-      }
+      setOpenMonoTabs((current) => current.includes(monoId) ? current : [...current, monoId]);
       setProjectTerminalFocused(false);
       setComposerFocused(true);
       setComposerFocusToken((token) => token + 1);
@@ -5727,6 +5730,12 @@ function Workspace({
       if (mono) {
         await onOpenMono(mono.id);
         return;
+      }
+      setWorktreeOverview(undefined);
+      const worker = workbenchSessionTask(orchestrator.snapshot(), session.id);
+      if (worker?.memberId && findMono(worker.memberId)) {
+        workerTaskTabs.current.set(worker.memberId, session.id);
+        setOpenMonoTabs(current => current.includes(worker.memberId!) ? current : [...current, worker.memberId!]);
       }
       const parentId =
         session.orchestrationLeadId ??
@@ -7056,16 +7065,6 @@ function Workspace({
     [onWorktreeChange],
   );
 
-  const onSelectWorkspace = useCallback(
-    (focus?: WorktreeFocus) => {
-      workspaceSessionRequest.current++;
-      closeMonoView();
-      setProjectCwd(sidebarCwdRef.current);
-      workspaceNavigation.selectWorkspace(sidebarCwdRef.current, focus);
-    },
-    [workspaceNavigation.selectWorkspace, closeMonoView],
-  );
-
   /**
    * Open a run of folders from one snapshot, committed in a single transition.
    *
@@ -7203,20 +7202,29 @@ function Workspace({
       teamMap.close();
       setSearchViewOpen(false); setInboxViewOpen(false); setNotesViewOpen(false); setAutomationsViewOpen(false); setSettingsOpen(false);
       workspaceSessionRequest.current++;
-      openResolvedProjects([project]);
-      workspaceNavigation.selectWorkspace(
-        project,
-        sameProjectPath(tree.path, project)
-          ? undefined
-          : { path: tree.path, branch: tree.branch },
-      );
+      workspaceNavigation.cancel();
+      closeMonoView();
+      setProjectCwd(project);
+      setRecents(rememberProject(project));
+      setWorktreeFocus(project, sameProjectPath(tree.path, project) ? undefined : { path: tree.path, branch: tree.branch });
+      setWorktreeOverview({ project, tree });
+      const rows = worktreeSessionGroups(project, [tree], history, sessionsRef.current.filter(session => !isBlankSession(session)).map(session => ({ ...summaryFromSession(session), updatedAt: sessionActivityAt(session, history.find(row => row.id === session.id)?.updatedAt) })), orchestrator.snapshot()).get(pathKey(tree.path)) ?? [];
+      const latest = rows.find(row => !row.draft && !row.worktreeRemoved);
+      if (latest) void onSelectHistorySession(latest.id, { project, tree });
     },
-    [openResolvedProjects, workspaceNavigation.selectWorkspace],
+    [history, onSelectHistorySession, closeMonoView, workspaceNavigation.cancel],
   );
+
+  const onSelectWorkspace = useCallback((focus?: WorktreeFocus) => {
+    const project = sidebarCwdRef.current;
+    const tree = projectCheckoutList.data?.worktrees.find(tree => sameProjectPath(tree.path, focus?.path ?? project));
+    if (tree) onSelectProjectWorktree(project, tree);
+  }, [projectCheckoutList.data, onSelectProjectWorktree]);
 
   const onNewWorktreeSession = useCallback(
     (project: string, tree: Worktree, options?: WorktreeSessionOptions) => {
       if (tree.missing) return;
+      setWorktreeOverview(undefined);
       teamMap.close();
       workspaceSessionRequest.current++;
       workspaceNavigation.cancel();
@@ -14795,7 +14803,7 @@ function Workspace({
         await opening;
         if (request !== monoViewRequest.current || monoViewIdRef.current !== findMono(mono.id)?.sessionId) return;
         setMonoPanelTab("details");
-        setMonoDetailsOpen(true); setWorkspaceContextTab("activity"); setRightPanelOpenState(true); setRightPanelClosing(false);
+        setMonoDetailsOpen(false); setWorkspaceContextTab("activity");
         return;
       }
       closeMonoView();
@@ -14916,27 +14924,18 @@ function Workspace({
     : teamMap.scope === ATTENTION_QUEUE_SCOPE || teamMap.scope === MISSION_CONTROL_SCOPE ? undefined
     : "commandMap";
   useEffect(() => { if (openPage) setOpenShellPages(current => current.includes(openPage) ? current : [...current, openPage]); }, [openPage]);
+  useEffect(() => {
+    if (openPage) setReusablePage({ page: openPage });
+    else if (activeAppView) setReusablePage({ appView: activeAppView });
+  }, [openPage, activeAppView]);
+  const pageTab = openPage ? { page: openPage } : activeAppView ? { appView: activeAppView } : reusablePage;
+  const activeWorker = !monoCovers && active ? workbenchSessionTask(orchestrationRuns, active.id)?.memberId : undefined;
   const orderedTitleTabs: TitleTab[] = orderByIds(
     [
-      ...deckProjectTabs.map((tab) =>
+      ...deckProjectTabs.filter(tab => !(leafIds(tab.layout).length === 1 && workbenchSessionTask(orchestrationRuns, tab.focusedId)?.memberId)).map((tab) =>
         toTitleTab(tab, sessions, dirtyFiles, unseenFinishedIds),
       ),
-      ...openShellPages.map((page): TitleTab => ({ id: shellPageTabId(page), page, project: "", title: SHELL_PAGE_LABELS[page], more: [], sessionCount: 0, harnesses: [], busyHarnesses: [], files: [] })),
-      ...(insetLayout
-        ? openAppViews
-            .filter((view) => view !== "notes" || notesEnabled)
-            .map((view): TitleTab => ({
-              id: appViewTabId(view),
-              appView: view,
-              project: "",
-              title: APP_VIEW_LABELS[view],
-              more: [],
-              sessionCount: 0,
-              harnesses: [],
-              busyHarnesses: [],
-              files: [],
-            }))
-        : []),
+      ...(pageTab ? [{ id: REUSABLE_PAGE_TAB_ID, ...pageTab, project: "", title: pageTab.page ? SHELL_PAGE_LABELS[pageTab.page] : APP_VIEW_LABELS[pageTab.appView!], more: [], sessionCount: 0, harnesses: [], busyHarnesses: [], files: [] } satisfies TitleTab] : []),
       ...shownMonoTabs.flatMap((monoId): TitleTab[] => {
         const mono = findMono(monoId);
         // Like the sidebar's Monos, a Mono's tab shows in the projects it
@@ -15091,6 +15090,7 @@ function Workspace({
         const run = runs.get(session.id);
         return {
           ...summaryFromSession(session),
+          updatedAt: sessionActivityAt(session, history.find(row => row.id === session.id)?.updatedAt),
           ...(run
             ? { orchestration: summarizeOrchestration(run, sessions) }
             : {}),
@@ -15121,7 +15121,7 @@ function Workspace({
       }
     }
     return rows;
-  }, [sessions, tabs, orchestrationRuns]);
+  }, [sessions, tabs, orchestrationRuns, history]);
 
   const openProjectSessionRows = useMemo(
     () =>
@@ -15476,7 +15476,12 @@ function Workspace({
   const goalNextSteps = useStableValue(useMemo(() => monoManagerGoals.goals().flatMap(goal => {
     const step = readGoalNextAction(goal.id); return step ? [step] : [];
   }), [readGoalNextAction, sessions, orchestrationRuns, monosSnap, decisionRevision]));
-  const goalNextRows = useMemo(() => distinctGoalNextActions(goalNextSteps), [goalNextSteps]);
+  const attentionSources = useAttentionSources(true);
+  const attentionInput = useMemo(() => ({ roster: listMonos(), sessions, runs: orchestrationRuns, goals: monoManagerGoals.goals(),
+    selectedAccount: (session: Session) => selectedProviderAccountId("codex", session.cwd), isLocalSession: (session: Session) => !remoteProjectFor(session.cwd),
+    repairs: attentionSources.repairs, automations: attentionSources.automations }), [sessions, orchestrationRuns, monosSnap, decisionRevision, attentionSources.repairs, attentionSources.automations]);
+  const needsUser = useMemo(() => selectNeedsUser(listMonos(), sessions, orchestrationRuns, selectDecisionView(monoManagerGoals, listMonos(), Date.now()), goalNextSteps, attentionInput), [sessions, orchestrationRuns, monosSnap, decisionRevision, goalNextSteps, attentionInput]);
+  const goalNextRows = needsUser.goals;
   const onGoalNextAction = useCallback((event: Event, step: GoalNextStep) => runGoalNextAction(event, step, {
     read: () => readGoalNextAction(step.goalId),
     open: async id => { teamMap.close(); await onOpenApprovalSession(id); },
@@ -15487,20 +15492,17 @@ function Workspace({
   }), [readGoalNextAction, teamMap.close, onOpenApprovalSession, onOpenTeamMap]);
   const renderGoalNextAction = useCallback((step: GoalNextStep) => <GoalNextAction key={step.revision} step={step} onAction={onGoalNextAction} />, [onGoalNextAction]);
   const renderGoalAction = useCallback((goalId: string) => {
-    const step = goalNextSteps.find(step => step.goalId === goalId); return step ? renderGoalNextAction(step) : null;
-  }, [goalNextSteps, renderGoalNextAction]);
+    const step = goalNextSteps.find(step => step.goalId === goalId);
+    return step?.action === "chat" && monoViewId === step.sessionId && !teamMap.open && !activeAppView ? <p className="text-[11px] text-content/60">{step.message}</p> : step ? renderGoalNextAction(step) : null;
+  }, [goalNextSteps, renderGoalNextAction, monoViewId, teamMap.open, activeAppView]);
   const renderManagerGoalAction = useCallback((monoId: string) => {
     const manager = findMono(monoId);
     if (manager?.role !== "manager") return null;
-    const step = goalNextRows.find(step => step.managerMonoId === monoId);
+    const step = goalNextSteps.find(step => step.managerMonoId === monoId);
     const events = orchestrationRuns.filter(run => run.ownerMonoId === monoId || run.leadId === manager.managerEngineId).flatMap(run => run.wakeState?.events.filter(event => event.acknowledgedAt == null) ?? []);
-    return step || events.length ? <>{step && renderGoalNextAction(step)}{!!events.length && <div className="px-2 pb-2 text-[11px] text-content/60"><ManagerUpdates monoId={monoId} events={events} /></div>}</> : null;
-  }, [goalNextRows, renderGoalNextAction, orchestrationRuns, monosSnap]);
-  const additionalGoalDecisionCount = useMemo(() => {
-    const known = new Set([...teamDecisions(listMonos(), sessions, orchestrationRuns).map(item => item.key),
-      ...selectDecisionView(monoManagerGoals, listMonos(), Date.now()).pending.map(item => `decision:${item.managerId}:${item.decision.id}`)]);
-    return goalNextRows.filter(step => !known.has(step.key)).length;
-  }, [goalNextRows, sessions, orchestrationRuns, monosSnap, decisionRevision]);
+    return step || events.length ? <>{step && (step.action === "chat" ? <p className="px-2 text-[11px] text-content/60">{step.message}</p> : renderGoalNextAction(step))}{!!events.length && <div className="px-2 pb-2 text-[11px] text-content/60"><ManagerUpdates monoId={monoId} events={events} /></div>}</> : null;
+  }, [goalNextSteps, renderGoalNextAction, orchestrationRuns, monosSnap]);
+  const additionalGoalDecisionCount = needsUser.goals.length;
 
   const onOpenAutomationSession = useCallback(
     async (sessionId: string) => {
@@ -15784,6 +15786,13 @@ function Workspace({
 
   const onSelectTitleTab = useCallback(
     (id: string) => {
+      setWorktreeOverview(undefined);
+      if (id === REUSABLE_PAGE_TAB_ID) {
+        const page = pageTab?.page;
+        if (page) onOpenTeamMap(({ commandMap: undefined, decisions: DECISIONS_SCOPE, integrations: INTEGRATIONS_SCOPE, usage: USAGE_DASHBOARD_SCOPE })[page]);
+        else if (pageTab?.appView) ({ search: onOpenSearch, inbox: onOpenInbox, notes: onOpenNotes, automations: onOpenAutomations })[pageTab.appView]();
+        return;
+      }
       const page = shellPageForTab(id);
       if (page) {
         const scopes = { commandMap: undefined, decisions: DECISIONS_SCOPE, integrations: INTEGRATIONS_SCOPE, usage: USAGE_DASHBOARD_SCOPE };
@@ -15791,6 +15800,12 @@ function Workspace({
       }
       const monoId = monoForTab(id);
       if (monoId) {
+        const sessionId = workerTaskTabs.current.get(monoId);
+        const tab = sessionId && findOpenSessionTab(tabsRef.current, sessionsRef.current, sessionId);
+        if (tab && findMono(monoId)?.role === "member") {
+          teamMap.close(); setSearchViewOpen(false); setSettingsOpen(false); setInboxViewOpen(false); setNotesViewOpen(false); setAutomationsViewOpen(false);
+          activateTab(tab.id); return;
+        }
         void onOpenMono(monoId);
         return;
       }
@@ -15820,18 +15835,19 @@ function Workspace({
       onOpenNotes,
       onOpenAutomations,
       onOpenTeamMap,
+      pageTab,
     ],
   );
 
   displayedTabNavigation.current = {
     tabs: insetLayout ? titleTabs : [],
-    activeId: openPage ? shellPageTabId(openPage) : settingsOpen
+    activeId: openPage || activeAppView ? REUSABLE_PAGE_TAB_ID : settingsOpen
       ? ""
       : monoCovers
         ? (monoViewTabId ?? "")
         : activeAppView
           ? appViewTabId(activeAppView)
-          : activeTabId,
+          : activeWorker ? monoTabId(activeWorker) : activeTabId,
     select: onSelectTitleTab,
   };
 
@@ -15879,6 +15895,14 @@ function Workspace({
   );
   const closeViewTab = useCallback(
     (id: string, selectNeighbor?: boolean) => {
+      if (id === REUSABLE_PAGE_TAB_ID) {
+        setReusablePage(undefined); setOpenAppViews([]); setOpenShellPages([]);
+        teamMap.close(); setSearchViewOpen(false); setInboxViewOpen(false); setNotesViewOpen(false); setAutomationsViewOpen(false);
+        const navigation = displayedTabNavigation.current;
+        const next = selectNeighbor !== false ? nextDisplayedTabAfterClose(navigation.tabs, navigation.activeId, id) : undefined;
+        if (next) navigation.select?.(next);
+        return;
+      }
       const page = shellPageForTab(id);
       if (page) {
         setOpenShellPages(current => current.filter(entry => entry !== page));
@@ -17116,8 +17140,8 @@ function Workspace({
   }, [monosSnap, sessions, monoReplies.counts, orchestrationRuns]);
   const monoRail = useStableValue(monoRailState);
   const workspaceDecisionCounts = useMemo(() => {
-    return decisionCountsByProject(listMonos(), sessions, orchestrationRuns, selectDecisionView(monoManagerGoals, listMonos(), Date.now()), goalNextSteps);
-  }, [monosSnap, sessions, orchestrationRuns, decisionRevision, goalNextSteps]);
+    return decisionCountsByProject(listMonos(), sessions, orchestrationRuns, selectDecisionView(monoManagerGoals, listMonos(), Date.now()), goalNextSteps, attentionInput);
+  }, [monosSnap, sessions, orchestrationRuns, decisionRevision, goalNextSteps, attentionInput]);
   const workspaceRoster = workspaceTeam(listMonos(), sidebarCwd);
   const workspaceMonoIds = new Set([...(workspaceRoster.manager ? [workspaceRoster.manager.id] : []), ...workspaceRoster.members.map(mono => mono.id)]);
   const workspaceWorking = [...workspaceMonoIds].filter(id => monoRail.states.get(id)?.status === "working").length;
@@ -17141,7 +17165,7 @@ function Workspace({
       await opening;
       if (request !== monoViewRequest.current || monoViewIdRef.current !== findMono(monoId)?.sessionId) return;
       setMonoPanelTab("details");
-      setMonoDetailsOpen(true); setWorkspaceContextTab("activity"); setRightPanelOpenState(true); setRightPanelClosing(false);
+      setMonoDetailsOpen(false); setWorkspaceContextTab("activity");
     },
     [onOpenMono],
   );
@@ -17194,7 +17218,7 @@ function Workspace({
   const titleBarInBody = false;
   // Matches when the sidebar portals Explorer or Changes into the panel.
   const insetRightPanelShown =
-    rightPanelOpen || rightPanelClosing;
+    !chromeSurfaceOpen && (rightPanelOpen || rightPanelClosing);
   // The right panel grows from the card's edge and pushes the workspace. Its
   // own contents keep their full width and ride its edge.
   // A reversal mid-slide starts from wherever the width currently is.
@@ -17263,7 +17287,7 @@ function Workspace({
   }, [rightPanelClosing, rightPanelOpen]);
   // The same shared stats the sidebar's Changes tab reads, so the toggle
   // that opens it can carry its dot.
-  const showRightPanelToggle = true;
+  const showRightPanelToggle = !chromeSurfaceOpen;
   rightPanelToggleRef.current =
     showRightPanelToggle
       ? onToggleRightPanel
@@ -17281,7 +17305,7 @@ function Workspace({
     <TitleBar
       // A Mono in full view stands apart from the project's tabs, except
       // in the inset layout, where it is one of them.
-      tabs={monoCovers && !insetLayout && !teamMap.open ? NO_TITLE_TABS : titleTabs}
+      tabs={titleTabs}
       content={
         insetLayout && settingsOpen ? (
           <div
@@ -17310,16 +17334,14 @@ function Workspace({
       }
       hideWindowControls={false}
       activeId={
-        openPage ? shellPageTabId(openPage) : monoViewSession && (!teamMap.open || insetLayout)
-          ? insetLayout
-            ? (monoViewTabId ?? "")
-            : ""
+        openPage || activeAppView ? REUSABLE_PAGE_TAB_ID : monoViewSession && (!teamMap.open || insetLayout)
+          ? (monoViewTabId ?? "")
           : insetLayout && activeAppView
             ? appViewTabId(activeAppView)
-            : activeTabId
+            : activeWorker ? monoTabId(activeWorker) : activeTabId
       }
-      standaloneTitle={!teamMap.open && !monoCovers && managerActive ? "Manager" : undefined}
-      cwd={sidebarCwd}
+      standaloneTitle={settingsOpen ? "Settings" : worktreeOverview ? basename(worktreeOverview.tree.path) : !teamMap.open && !monoCovers && managerActive ? "Manager" : undefined}
+      cwd={chromeSurfaceOpen ? "" : sidebarCwd}
       worktree={projectWorktree}
       projectRailOpen={projectRailOpen}
       sessionSidebarOpen={sessionSidebarOpen}
@@ -17731,10 +17753,9 @@ function Workspace({
                 })} />
               {/* CC7D shell hook: existing sources and execution callbacks only. */}
               {teamMap.open && teamMap.scope === DECISIONS_SCOPE && <>
-                <div className="flex gap-5 px-6 pt-4 text-xs text-content/65"><button type="button" onClick={teamMap.close}>Back to conversation</button><button type="button" onClick={() => onOpenTeamMap(ATTENTION_QUEUE_SCOPE)}>Approvals &amp; blockers</button><button type="button" onClick={() => onOpenTeamMap(INTEGRATIONS_SCOPE)}>Integrations</button></div>
-                <Decisions view={selectDecisionView(monoManagerGoals, listMonos(), Date.now())} roster={listMonos()} actions={decisionActions} error={decisionError}
+                <Decisions view={{ ...selectDecisionView(monoManagerGoals, listMonos(), Date.now()), pending: needsUser.pending }} roster={listMonos()} actions={decisionActions} error={decisionError}
                   goalActions={goalNextRows.filter(step => !step.decisionId).map(renderGoalNextAction)} goalActionCount={additionalGoalDecisionCount}
-                  attentionCount={teamDecisions(listMonos(), sessions, orchestrationRuns).length}
+                  attentionCount={needsUser.attention.filter(item => item.status === "open").length}
                   attention={<AttentionQueue sessions={sessions} runs={orchestrationRuns} coveredGoalSteps={goalNextRows} open presentation="panel"
                     readSessions={() => sessionsRef.current} readRuns={() => orchestrator.snapshot()}
                     selectedAccount={session => selectedProviderAccountId("codex", session.cwd)}
@@ -17903,15 +17924,21 @@ function Workspace({
                               style={{ gridArea: "main" }}
                             >
                               <div className="relative min-h-0 min-w-0 flex-1">
+                                {worktreeOverview && <section data-worktree-overview className="absolute inset-0 flex min-h-0 flex-col overflow-y-auto p-6" aria-label="Worktree overview">
+                                  <h1 className="text-lg font-semibold">{basename(worktreeOverview.tree.path)}</h1>
+                                  <p className="my-3 text-sm text-content/60">No recent chat here. Start one when you’re ready.</p>
+                                  <button type="button" className="mb-5 w-fit rounded-lg bg-content px-3 py-2 text-sm text-background-base" onClick={() => onNewWorktreeSession(worktreeOverview.project, worktreeOverview.tree)}>New chat here</button>
+                                  <WorkspaceWorktree project={worktreeOverview.project} path={worktreeOverview.tree.path} sessions={sessions} onRunScript={onRunProjectScript} onOpen={tree => onSelectProjectWorktree(worktreeOverview.project, tree)} onChanges={path => onOpenWorktreeChanges(worktreeOverview.project, path)} onRemove={onRemoveWorktree} />
+                                </section>}
                                 {tabs.map((tab) => (
                                   <div
                                     key={tab.id}
                                     data-workspace-tab={tab.id}
                                     aria-hidden={
-                                      tab.id !== activeTabId || monoCovers
+                                      tab.id !== activeTabId || monoCovers || !!worktreeOverview
                                     }
                                     className={
-                                      tab.id === activeTabId && !monoCovers
+                                      tab.id === activeTabId && !monoCovers && !worktreeOverview
                                         ? "absolute inset-0 flex h-full min-h-0 flex-col"
                                         : "hidden"
                                     }
@@ -17921,6 +17948,7 @@ function Workspace({
                                         {...sessionPaneProps}
                                         visible={
                                           tab.id === activeTabId &&
+                                          !worktreeOverview &&
                                           !inboxViewOpen &&
                                           !monoCovers
                                         }
@@ -18076,6 +18104,7 @@ function Workspace({
                         </main>
                       </div>
                       {monoSettingsDialog}
+                      {monoViewMono && monoDetailsOpen && !chromeSurfaceOpen && <WorkbenchDrawer title={`${monoLook(monoViewMono).name} · Settings`} onClose={() => setMonoDetailsOpen(false)}>{monoDetailsPanel}</WorkbenchDrawer>}
                       {workspacePanelSide === "right" && !insetLayout ? <div ref={setWorkspacePanelHost} className="contents" /> : null}
                     </div>
                   </div>
@@ -18270,7 +18299,7 @@ function Workspace({
                         : "hidden"
                     }
                   >
-                    <WorkspaceContextTabs tab={workspaceContextTab} onChange={tab => { setWorkspaceContextTab(tab); if (tab === "changes") setRightPanelTabState("changes"); }} onClose={onToggleRightPanel}>
+                    <WorkspaceContextTabs tab={workspaceContextTab} onChange={tab => { setWorkspaceContextTab(tab); if (tab === "changes") setRightPanelTabState("changes"); }}>
                       {workspaceContextTab === "goal" ? <WorkspaceGoals project={sidebarCwd} sessions={sessions} usage={usage.snapshot} onOpenMono={onOpenRailMono} decisionActions={decisionActions} goalAction={renderGoalAction} /> : null}
                       {workspaceContextTab === "worktree" && looksLikeProject(sidebarCwd) ? <WorkspaceWorktree project={sidebarCwd} path={projectWorktree?.path ?? sidebarCwd} sessions={sessions} onRunScript={onRunProjectScript} onOpen={tree => onSelectProjectWorktree(sidebarCwd, tree)} onChanges={path => onOpenWorktreeChanges(sidebarCwd, path)} onRemove={onRemoveWorktree} /> : null}
                       {workspaceContextTab === "changes" && rightPanelTab === "changes" && looksLikeProject(sidebarCwd) ? <WorkspaceChanges key={projectWorktree?.path ?? sidebarCwd} path={projectWorktree?.path ?? sidebarCwd} onOpen={() => onOpenWorktreeChanges(sidebarCwd, projectWorktree?.path ?? sidebarCwd)} /> : null}
@@ -18286,7 +18315,6 @@ function Workspace({
                           {monoViewMono.role ? <MonoTeamActivity monoId={monoViewMono.id} sessions={sessions} runs={orchestrationRuns} statuses={managerPrStatuses} onApproval={onApproval} onQuestion={onQuestionReply} onQuestionInteraction={onQuestionInteraction} /> : null}
                           {monoActivity && monoActivityView ? <section aria-label="This agent's work" className="flex min-h-40 max-h-80 shrink-0 flex-col overflow-y-auto">{monoActivityView}</section> : null}
                           {!monoViewMono.role ? <button type="button" className="border-y border-stroke px-4 py-2 text-left text-xs text-content/65 hover:bg-content/5" onClick={() => { setMonoDetailsOpen(open => !open); setMonoOverviewOpen(true); }}>{monoDetailsOpen ? "Show work" : "Details and settings"}</button> : null}
-                          {(monoViewMono.role || monoDetailsOpen) && !monoArtifactPanel && !monoChangesPanel && !monoSessionsPanel ? <><h2 className="border-y border-stroke px-4 py-2 text-xs font-medium">{monoLook(monoViewMono).name} · Details and settings</h2>{monoDetailsPanel}</> : null}
                           {monoActivityPanel}{monoSessionsPanel}{monoArtifactPanel}{monoChangesPanel}
                           {!monoViewMono.role && !monoSidebarOpen ? monoOverviewPanel : null}
                         </> : <><h2 className="px-4 py-3 text-xs font-medium">Team activity</h2>{workspaceTeam(listMonos(), sidebarCwd).manager ? <MonoTeamActivity monoId={workspaceTeam(listMonos(), sidebarCwd).manager!.id} sessions={sessions} runs={orchestrationRuns} statuses={managerPrStatuses} onApproval={onApproval} onQuestion={onQuestionReply} onQuestionInteraction={onQuestionInteraction} /> : <p className="px-4 py-2 text-xs text-content/50">No team configured for this project.</p>}</>}

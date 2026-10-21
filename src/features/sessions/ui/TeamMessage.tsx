@@ -3,7 +3,7 @@ import { PixelMascot } from "../../projects/ui/PixelMascot";
 import { AgentMarkdown } from "./AgentMarkdown";
 import type { teamMessage } from "../model/teamMessage";
 import { listMonos, monoLook } from "../../monos/model/mono";
-import { presentationText } from "../model/transcriptPresentation";
+import { coordinationSummary, presentationText } from "../model/transcriptPresentation";
 
 export function TeamMessage({ message, cwd }: { message: NonNullable<ReturnType<typeof teamMessage>>; cwd?: string }) {
   const [expanded, setExpanded] = useState(false);
@@ -15,7 +15,7 @@ export function TeamMessage({ message, cwd }: { message: NonNullable<ReturnType<
       <PixelMascot name={look?.mascot ?? message.mascot} color={look?.color ?? message.color} still className="size-6 shrink-0" />
       <strong>{presentationText(message.name)}</strong><span className="truncate text-content/50">{presentationText(message.topic)}</span>
     </div>
-    <AgentMarkdown className={long && !expanded ? "line-clamp-4" : undefined} text={presentationText(message.text)} cwd={cwd} />
-    {long && <button type="button" className="mt-1 text-xs text-content/65 hover:underline" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>{expanded ? "Show less" : "Show more"}</button>}
+    <AgentMarkdown text={expanded ? presentationText(message.text) : coordinationSummary(message.text)} cwd={cwd} />
+    {(long || coordinationSummary(message.text) !== presentationText(message.text)) && <button type="button" className="mt-1 text-xs text-content/65 hover:underline" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>{expanded ? "Hide work" : "Show work"}</button>}
   </div>;
 }

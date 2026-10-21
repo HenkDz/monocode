@@ -119,9 +119,10 @@ it("keeps exact approval bytes and decision callbacks outside the fold even for 
 it("counts nonfatal failures quietly and reveals the failed command and diagnostics inside expanded work", () => {
   const failed: Block = { ...command, tool: { ...command.tool, status: "failed", detail: "exit code 101: missing import" } };
   render([user, failed, answer]);
-  expect(toggle().textContent).toContain("1 failed command");
+  expect(toggle().textContent).not.toContain("failed command");
   expect(container.textContent).not.toContain("exit code 101");
   act(() => toggle().click());
+  expect(container.textContent).toContain("1 failed command");
   expect(container.querySelector('[data-compact-tool-call="tool"]')?.textContent).toContain("cargo check");
   expect(container.textContent).toContain("missing import");
 });

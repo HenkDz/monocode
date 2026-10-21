@@ -49,6 +49,7 @@ test("C notification, reminder and approval session interceptors render exact cu
   const errors = await fixture(page); await page.getByRole("button", { name: "Notification A" }).click(); await selected(page, "task-a");
   await page.getByRole("button", { name: "Reminder history" }).click(); await selected(page, "past-a");
   await page.evaluate(async () => { await (window as any).ccmap2Worker.host.onSelectHistorySession("task-b"); }); await selected(page, "task-b");
+  await page.evaluate(async () => { await (window as any).ccmap2Worker.host.onOpenInboxSession("past-a"); }); await selected(page, "past-a");
   expect(errors).toEqual([]);
 });
 
@@ -73,6 +74,23 @@ test("F memberless task uses canonical Manager page and real task provider ident
   await selected(page, "manager-task", "manager"); await expect(page.locator("[data-workbench-header]:visible h2")).toHaveText("Mira");
   expect(await page.evaluate(() => { const f = (window as any).ccmap2Worker; const s = f.host.sessions.find((s: any) => s.id === "manager-task"); return { mono: f.host.monoForSession(s.id), account: s.providerAccountId, provider: s.providerSessionId }; })).toEqual({ mono: undefined, account: "account-manager-task", provider: "provider-manager-task" });
   expect(errors).toEqual([]);
+});
+
+test("G actual migration detaches recognized attempt leaves once, retains mixed/deleted-run panes and calls no lifecycle", async ({ page }) => {
+  const errors = await fixture(page);
+  const state = await page.evaluate(() => {
+    const f = (window as any).ccmap2Worker, h = f.host;
+    const mixed = { ...h.newTab("past-a"), id: "mixed", layout: { type: "split", id: "split", dir: "right", sizes: [.3, .4, .3], children: [h.leaf("past-a"), h.leaf("unrelated"), h.leaf("editor")] },
+      editorPanes: [{ id: "editor", files: [{ id: "file", path: "C:/retained-draft", cwd: f.project }], activeFileId: "file" }] };
+    h.tabs = h.tabsRef.current = [h.newTab("task-a"), mixed, h.newTab("deleted-run-session")]; h.activeTabIdRef.current = "mixed";
+    f.events.length = 0; const sessions = JSON.stringify(h.sessions); h.migrate(); const once = h.tabs; h.migrate();
+    return { tabs: h.tabs.map((tab: any) => ({ ids: h.leafIds(tab.layout), files: tab.editorPanes })), active: h.activeSessionId, target: h.workerPages.worker.target,
+      sameSessions: sessions === JSON.stringify(h.sessions), once: once === h.tabs, events: f.events };
+  });
+  expect(state.tabs).toHaveLength(2); expect(state.tabs[0].ids).toEqual(["unrelated", "editor"]); expect(state.tabs[0].files[0].files[0].path).toBe("C:/retained-draft");
+  expect(state.tabs[1].ids).toEqual(["deleted-run-session"]); expect(state.target).toEqual({ taskId: "a", sessionId: "past-a" });
+  expect(state.sameSessions).toBe(true); expect(state.once).toBe(true); expect(state.events).toEqual([]);
+  await expect(page.locator('[data-worker-conversation="past-a"] [data-session-drop="past-a"]')).toBeVisible(); expect(errors).toEqual([]);
 });
 
 test("H real composer, approvals and Escape target only selected task; placeholders/nonbusy cannot stop busy Home", async ({ page }) => {

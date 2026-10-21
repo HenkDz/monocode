@@ -11,7 +11,7 @@ export function workerAppDeclarations() {
     if (!node?.initializer) throw Error(`Missing production worker seam: ${name}`);
     return node;
   };
-  const names = ["setWorkerPage", "onOpenMono", "openWorkerTask", "openWorkerSession", "closeMonoView", "onSelectHistorySession", "onOpenApprovalSession", "onFocusPane", "onOpenMonoLaunchedSession", "showMonoLaunchedSession", "openReminderSession", "onOpenRailMono", "onSelectTitleTab", "onVisitBack", "onVisitForward"];
+  const names = ["setWorkerPage", "onOpenMono", "openWorkerTask", "openWorkerSession", "closeMonoView", "onSelectHistorySession", "onOpenApprovalSession", "onOpenInboxSession", "onFocusPane", "onOpenMonoLaunchedSession", "showMonoLaunchedSession", "openReminderSession", "onOpenRailMono", "onSelectTitleTab", "onVisitBack", "onVisitForward", "onNavigateSessionList"];
   const callbacks = names.map(name => {
     const node = declaration(name);
     if (!ts.isCallExpression(node.initializer!)) throw Error(`Worker callback changed: ${name}`);
@@ -25,6 +25,8 @@ export function workerAppDeclarations() {
   };
   const expression = nodes.find(node => ts.isJsxExpression(node) && node.expression?.getText(ast).startsWith("sessions.filter(session => isMonoSession(session.id)).map(home =>")) as ts.JsxExpression | undefined;
   if (!expression?.expression) throw Error("Production worker page JSX missing");
+  const errorView = nodes.find(node => ts.isJsxExpression(node) && node.expression?.getText(ast).startsWith("workerPageError && <Modal")) as ts.JsxExpression | undefined;
+  if (!errorView?.expression) throw Error("Production unavailable notice missing");
   const publish = nodes.find(node => ts.isCallExpression(node) && node.expression.getText(ast) === "publishCardSessions") as ts.CallExpression | undefined;
   if (!publish) throw Error("Production card opener missing");
   const focus = ["workerPageOwner", "workerPageSelection", "workerSelectedView", "workerSelectedSession", "activeSessionId"]
@@ -36,7 +38,7 @@ export function workerAppDeclarations() {
     host.registerEscape = ${effect('window.addEventListener("keydown", onEscape)')};
     host.openCard = ${publish.arguments[1].getText(ast)};
     host.refreshFocus = function() { ${focus} workerSelectedSessionIdRef.current = workerSelectedSession?.id; };
-    host.renderPages = function() { return ${expression.expression.getText(ast)}; };`;
+    host.renderPages = function() { return React.createElement(React.Fragment, null, ${errorView.expression.getText(ast)}, ${expression.expression.getText(ast)}); };`;
   return ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.React } }).outputText;
 }
 

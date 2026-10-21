@@ -1,4 +1,5 @@
 import { listMonos, monoForSession } from "./mono";
+import { savedDispatchTask } from "./monoNavigation";
 import type { OrchestrationRun } from "../../orchestration/model/orchestrationState";
 import { leafIds, removePane, type WorkspaceTab } from "../../workspace/model/layout";
 
@@ -13,6 +14,7 @@ export type WorkerPageSelection = {
 
 /** Presentation identity only; never substitutes the owner home for a task session. */
 export function workerTaskView(runs: readonly OrchestrationRun[], target: WorkerTaskTarget) {
+  if (runs.filter(run => run.tasks.some(task => task.id === target.taskId)).length > 1) return undefined;
   for (const run of runs) {
     const task = run.tasks.find(task => task.id === target.taskId);
     if (!task) continue;
@@ -23,7 +25,8 @@ export function workerTaskView(runs: readonly OrchestrationRun[], target: Worker
     if (sessionId && sessionId !== task.sessionId && !dispatch) return undefined;
     const ownerId = task.memberId ?? run.ownerMonoId ?? monoForSession(run.ownerSessionId ?? run.leadId)?.id
       ?? listMonos().find(mono => mono.role === "manager" && mono.managerEngineId === run.leadId)?.id;
-    return { run, task, dispatch, sessionId, ownerId };
+    const historical = dispatch && (current ? dispatch.id !== current.id : sessionId !== task.sessionId);
+    return { run, task, dispatch, sessionId, ownerId, conversationTask: historical && dispatch ? savedDispatchTask(task, dispatch) : task };
   }
 }
 

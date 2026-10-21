@@ -9,6 +9,7 @@ import { WorkerConversationPicker } from "../../src/features/monos/ui/WorkerConv
 import { publishCardSessions } from "../../src/features/monos/model/monoCards";
 import { orchestrator } from "../../src/features/orchestration/model/orchestration";
 import { TeamMap } from "../../src/features/teamMap/TeamMap";
+import { Modal } from "../../src/shared/ui/Modal";
 import { WorkspaceGoals } from "../../src/app/shell/WorkspaceContext";
 import { monoManagerGoals } from "../../src/features/monos/model/monoManagerGoals";
 import { registerHarness } from "../../src/integrations/harness/core/registry";
@@ -42,7 +43,7 @@ const props: Omit<SessionPaneProps, "session" | "visible" | "focused" | "inSplit
   onApproval: (id, requestId, decision) => { f.events.push({ action: "approval", id, requestId, decision }); },
   onQuestionReply: noop, onOpenFile: noop, onOpenDiff: noop, onOpenPlan: noop, onBuildPlan: noop, onNewTerminal: noop,
 };
-Object.assign(h, { React, WorkerConversationPicker, SessionPane, TeamMapHeaderAction: () => null, sessionPaneProps: props });
+Object.assign(h, { React, WorkerConversationPicker, SessionPane, Modal, TeamMapHeaderAction: () => null, sessionPaneProps: props });
 publishCardSessions(f.sessions.map(session => ({ id: session.id, title: session.title, harness: session.harness, busy: !!session.busy, needsInput: false, liveState: selectAgentLiveState(session) })), h.openCard);
 function Fixture() {
   const [, update] = useState(0), [goalPanel, setGoalPanel] = useState(false);
@@ -65,6 +66,6 @@ function Fixture() {
   </div>;
 }
 Object.assign(window, { ccmap2Worker: { ...f, open: h.openWorkerTask, state: () => ({ mono: h.monoViewId, active: h.activeSessionId, targets: h.workerPages, tabs: h.tabs, monoTabs: h.openMonoTabs }),
-  approval: () => { h.sessions.find((session: any) => session.id === "task-a").blocks.push({ id: "approval", role: "approval", text: "exact worker approval", approval: { requestId: 42 } }); f.refresh(); },
+  approval: () => { h.setSessions(h.sessions.map((session: any) => session.id === "task-a" ? { ...session, blocks: [...session.blocks, { id: "approval", role: "approval", text: "exact worker approval", approval: { requestId: 42 } }] } : session)); },
 } });
 createRoot(document.getElementById("root")!).render(<Fixture />);

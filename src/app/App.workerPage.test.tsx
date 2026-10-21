@@ -14,8 +14,8 @@ beforeEach(() => { vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true); localStorage
 afterEach(async () => { await act(async () => root.unmount()); mount.remove(); localStorage.clear(); vi.unstubAllGlobals(); });
 function fixture() {
   const f = createWorkerFixture(bindWorkerApp), h = f.host;
-  Object.assign(h, { React, WorkerConversationPicker, TeamMapHeaderAction: () => null,
-    SessionPane: (props: any) => <section data-actual-pane={props.session.id} data-focused={props.focused} data-add-to-chat={props.addToChatTarget} data-composer={props.composerFocused}>{props.session.blocks[0]?.text}<button onClick={() => props.onFocus(props.session.id)}>Focus</button></section>,
+  Object.assign(h, { React, WorkerConversationPicker, TeamMapHeaderAction: () => null, Modal: ({ title, children }: any) => <div role="dialog" aria-modal="true">{title}{children}</div>,
+    SessionPane: (props: any) => <section data-actual-pane={props.session.id} data-task-state={props.workerPage?.task?.status} data-focused={props.focused} data-add-to-chat={props.addToChatTarget} data-composer={props.composerFocused}>{props.session.blocks[0]?.text}<button onClick={() => props.onFocus(props.session.id)}>Focus</button></section>,
     sessionPaneProps: { onFocus: h.onFocusPane },
   });
   f.onRefresh(() => root.render(<>{h.renderPages()}</>));
@@ -52,7 +52,7 @@ it("B assignment/activity/card callback uses exact attempt metadata including qu
 
 it("C history/approval/notification/timeline/reminder intercept before load/focus/project fallbacks", async () => {
   const f = fixture();
-  for (const name of ["onSelectHistorySession", "onOpenApprovalSession", "onOpenMonoLaunchedSession", "openReminderSession"]) {
+  for (const name of ["onSelectHistorySession", "onOpenApprovalSession", "onOpenInboxSession", "onOpenMonoLaunchedSession", "openReminderSession"]) {
     await act(async () => { await f.h[name]("past-a"); }); f.assertTask("worker", "past-a");
   }
   await act(async () => { await openGoalTarget({ taskId: "a", sessionId: "task-a" }, { close: vi.fn(), request: f.h.onOpenApprovalSession, mono: f.h.onOpenMono, session: f.h.onOpenMonoLaunchedSession,
@@ -130,4 +130,44 @@ it("H gone/archived/mismatched targets show unavailable without a Home or worksp
   await f.open("worker", { taskId: "a", sessionId: "task-a" }); expect(mount.textContent).toContain("archived");
   await f.open("worker", { taskId: "a", sessionId: "task-b" }); expect(mount.textContent).toContain("no longer available for this worker");
   expect(f.h.activeSessionId).toBeUndefined(); expect(f.h.tabs).toHaveLength(1);
+});
+
+it("H archive metadata from another project is checked before loading, and a removed worker stays unavailable", async () => {
+  const f = fixture(); f.h.invoke = async () => [{ id: "task-a", archived: true }];
+  await f.open("worker", { taskId: "a", sessionId: "task-a" });
+  expect(mount.textContent).toContain("archived"); expect(f.events.filter(e => e.action === "load" && e.id === "task-a")).toEqual([]);
+  localStorage.setItem("monocode:mono-roster", JSON.stringify(f.roster.filter(owner => owner.id !== "worker")));
+  await f.open("worker", { taskId: "a", sessionId: "task-a" });
+  expect(mount.querySelector('[role="dialog"]')?.textContent).toContain("no longer available"); expect(f.h.activeSessionId).toBeUndefined();
+});
+
+it("H retry during load retains only the requested saved attempt and its recorded display state", async () => {
+  const f = fixture(); f.defer("task-a");
+  let pending!: Promise<void>; await act(async () => { pending = f.h.openWorkerTask("worker", { taskId: "a", sessionId: "task-a" }); });
+  const task = f.run.tasks.find(task => task.id === "a")!;
+  task.sessionId = "replacement"; task.activeDispatchId = "a-3";
+  f.run.dispatches!.find(dispatch => dispatch.id === "a-2")!.state = "cancelled";
+  f.run.dispatches!.push({ ...f.run.dispatches![1], id: "a-3", sessionId: "replacement", state: "running", startedAt: 500 });
+  await act(async () => { f.release("task-a"); await pending; });
+  f.assertTask("worker", "task-a"); expect(mount.querySelector('[data-actual-pane="task-a"]')?.getAttribute("data-task-state")).toBe("cancelled");
+  expect(task.status).toBe("running"); expect(task.sessionId).toBe("replacement");
+});
+
+it("D implicit default is recomputed on reopen; an explicit Home stays Home", async () => {
+  const f = fixture(); await f.open("worker"); f.assertTask("worker", "task-b");
+  const task = f.run.tasks.find(task => task.id === "a")!;
+  f.run.dispatches!.find(dispatch => dispatch.id === task.activeDispatchId)!.startedAt = 500;
+  await f.open("worker"); f.assertTask("worker", "task-a");
+  await f.open("worker", null); await f.open("worker"); expect(f.h.activeSessionId).toBe("worker-home");
+});
+
+it("H session-list shortcuts select the worker conversation in place, and explicit worktree/plain/non-PM routes retain their path", async () => {
+  const f = fixture(); await f.open("worker", { taskId: "a", sessionId: "task-a" });
+  await act(async () => { f.h.onNavigateSessionList(1, true); }); f.assertTask("worker", "past-a");
+  const workspace = { project: f.project, tree: { path: f.foreign, missing: false, branch: "feature" } };
+  await act(async () => { await f.h.onSelectHistorySession("task-a", workspace); });
+  expect(f.events.some(event => event.action === "worktree")).toBe(true); expect(f.events.some(event => event.action === "append-tab")).toBe(true);
+  const plain = fixture(); await act(async () => { await plain.h.onSelectHistorySession("unrelated"); }); expect(plain.events.some(event => event.action === "append-tab")).toBe(true);
+  const nonPm = fixture(); nonPm.h.orchestrationRuns = [{ ...nonPm.run, projectManager: false, ownerMonoId: undefined, ownerSessionId: "plain-lead", leadId: "plain-lead", tasks: [{ ...nonPm.run.tasks[0], memberId: undefined }] }];
+  await act(async () => { await nonPm.h.onSelectHistorySession("task-a"); }); expect(nonPm.events.some(event => event.action === "append-tab")).toBe(true);
 });

@@ -5823,7 +5823,7 @@ function Workspace({
       }
       const mono = monoForSession(session.id);
       if (mono) {
-        await onOpenMono(mono.id);
+        await onOpenMono(mono.id, null);
         return;
       }
       setWorktreeOverview(undefined);
@@ -12487,10 +12487,10 @@ function Workspace({
   const onOpenApprovalSession = useCallback(
     (sessionId: string) => {
       const view = workerTaskForSession(orchestrator.snapshot(), sessionId);
-      if (view) return view.ownerId ? openWorkerTask(view.ownerId, { taskId: view.task.id, sessionId }) : undefined;
+      if (view) return openWorkerTask(view.ownerId ?? view.task.memberId ?? "", { taskId: view.task.id, sessionId });
       const ownerMono = monoForSession(orchestrator.ownerSession(sessionId));
       if (ownerMono) {
-        return onOpenMono(ownerMono.id); // CC7D: retain async navigation errors for action receipts.
+        return onOpenMono(ownerMono.id, null); // CC7D: retain async navigation errors for action receipts.
       }
       const parentId =
         sessionsRef.current.find((session) => session.id === sessionId)
@@ -15032,7 +15032,7 @@ function Workspace({
           (session) => session.id === id,
         );
         const mono = monoForSession(id);
-        if (mono) void onOpenMono(mono.id);
+        if (mono) void onOpenMono(mono.id, null);
         else if (session && isProjectManager(id))
           void onOpenProjectManager(session.cwd);
         else void onSelectHistorySession(id);
@@ -15443,6 +15443,8 @@ function Workspace({
 
   const onOpenInboxSession = useCallback(
     (sessionId: string) => {
+      const opening = openWorkerSession(sessionId);
+      if (opening) return opening;
       setInboxViewOpen(false);
       const cwd =
         sessionsRef.current.find((session) => session.id === sessionId)?.cwd ??
@@ -18176,7 +18178,7 @@ function Workspace({
                                       const shown = visible && selected?.id === session.id;
                                       return <div key={session.id} data-worker-conversation={session.id} aria-hidden={!shown} inert={!shown || undefined} className={shown ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
                                         <SessionPane {...sessionPaneProps} session={session}
-                                          workerPage={picker ? { owner, task: session.id !== home.id ? (view?.sessionId === session.id ? view.task : workerTaskForSession(orchestrationRuns, session.id)?.task) : undefined } : undefined}
+                                          workerPage={picker ? { owner, task: session.id !== home.id ? (view?.sessionId === session.id ? view.conversationTask : workerTaskForSession(orchestrationRuns, session.id)?.conversationTask) : undefined } : undefined}
                                           monoGoalRouting={session.id === home.id ? goalRoutingForMono(owner.id) : undefined}
                                           monoState={session.id === home.id ? monoRail.states.get(owner.id) : undefined}
                                           visible={shown} focused={shown && !projectTerminalFocused && !monoShownSessionActive}

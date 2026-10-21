@@ -606,7 +606,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
       : undefined);
   const workbench = !!workerPage || isMember || (!mono && !!savedMemberTask);
   const workbenchLook = workbenchMember ? monoLook(workbenchMember) : undefined;
-  const workbenchTask = workerPage?.task ? savedMemberTask?.id === workerPage.task.id ? savedMemberTask : workerPage.task : isMember ? assignedTask : savedMemberTask;
+  const workbenchTask = workerPage?.task ?? (isMember ? assignedTask : savedMemberTask);
   const workbenchState =
     liveTask
       ? liveTaskSession?.liveState ?? selectAgentLiveState(undefined, { task: liveTask, tasks: liveTaskRun?.tasks, runStatus: liveTaskRun?.status, pauseReason: liveTaskRun?.lastPauseReason })

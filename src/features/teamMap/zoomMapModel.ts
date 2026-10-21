@@ -47,7 +47,7 @@ export const projectPoint = (index: number) => ({ x: 230 + index % 4 * 380, y: 5
 export function mapCamera(size: MapSize, count: number): MapCamera {
   const width = Math.min(4, Math.max(1, count)) * 380 + 80;
   const height = 730 + Math.max(0, Math.ceil(count / 4) - 1) * 310;
-  const scale = Math.min(size.width / width, Math.max(200, size.height - 70) / height, 1.2);
+  const scale = Math.min(size.width / width, Math.max(200, size.height - 70) / height);
   return { scale, x: (size.width - width * scale) / 2, y: 25 };
 }
 export function projectCamera(size: MapSize, point: { x: number; y: number }) {

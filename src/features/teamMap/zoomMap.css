@@ -114,6 +114,7 @@
 .zoom-map-rail .decisions-scroll { overflow: visible; padding: 0; }
 .zoom-map-rail .decisions-tabs { padding: 0 0 12px; }
 .zoom-map-rail .decision-card { margin: 0 0 12px; }
+.zoom-map-rail[data-has-merges="true"] .decision-empty { display: none; }
 .zoom-map-back { align-self: flex-start; color: var(--color-accent); font-size: 12px; }
 .zoom-map-detail, .zoom-map-merge { border: 1px solid var(--color-stroke); background: var(--map-panel); border-radius: 14px; padding: 16px; overflow-wrap: anywhere; }
 .zoom-map-detail h2, .zoom-map-merge h3 { font-size: 14px; font-weight: 600; margin-bottom: 8px; }
@@ -147,4 +148,5 @@
   .zoom-map-world { transition: none; }
   .zoom-map-project, .zoom-map-links { transition: opacity .15s; }
   .zoom-map *, .zoom-map *::after { animation: none !important; scroll-behavior: auto !important; }
+  .zoom-map .zoom-map-board-wrap { animation: zoom-map-reveal .15s ease-out !important; }
 }

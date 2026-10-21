@@ -108,7 +108,14 @@ for (const [width, theme, reduced] of [[390, "dark", false], [1600, "light", fal
     await page.setViewportSize({ width, height: 950 }); await page.emulateMedia({ reducedMotion: reduced ? "reduce" : "no-preference" });
     await page.goto(`${fixture}?theme=${theme}`); const project = page.getByRole("button", { name: "Open monocode project", exact: true }); await project.focus(); await page.keyboard.press("Enter");
     await expect(page.locator(".zoom-map-viewport")).toHaveAttribute("data-focused", "manager-2"); await page.waitForTimeout(reduced ? 100 : 800);
-    if (reduced) expect(await page.locator(".zoom-map-world").evaluate(element => getComputedStyle(element).transitionDuration)).toBe("0s");
+    if (reduced) {
+      expect(await page.locator(".zoom-map-world").evaluate(element => getComputedStyle(element).transitionDuration)).toBe("0s");
+      expect(await page.locator(".zoom-map-board-wrap:not([hidden])").evaluate(element => getComputedStyle(element).animationName)).toBe("zoom-map-reveal");
+    }
+    if (width === 390) {
+      expect(await page.locator(".zoom-map-viewport").evaluate(element => element.scrollLeft)).toBe(0);
+      const goal = await page.locator('.zoom-map-goal').first().boundingBox(); expect(goal!.x).toBeGreaterThanOrEqual(0);
+    }
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: screenshot(`project-${width}-${theme}-reduce-${reduced}`) });
     await page.keyboard.press("Escape"); await expect(project).toBeFocused(); await expect(page.locator(".zoom-map-viewport")).toHaveAttribute("data-focused", "");

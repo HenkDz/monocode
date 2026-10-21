@@ -4,6 +4,7 @@ import { expect, it, vi } from "vitest";
 import type { Mono } from "../features/monos/model/mono";
 import { newSession, type Session } from "../features/sessions/model/session";
 import { sameProjectPath } from "../features/projects/model/recents";
+import { PROVIDER_ACCOUNT_PROVIDERS } from "../features/providers/model/providerAccounts";
 
 // Execute the actual changed App callback with delayed session preparation ports.
 const ast = ts.createSourceFile("App.tsx", readFileSync("src/app/App.tsx", "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
@@ -18,7 +19,7 @@ function fixture() {
   const submit = vi.fn(async () => true);
   let account = "selected-account", prepare: () => Promise<Session | undefined> = async () => chat;
   const ports = { findMono: (id: string) => id === "manager" ? manager : undefined, sameProjectPath, sessionsRef,
-    selectedProviderAccountId: () => account, ensureMonoSession: vi.fn(async () => prepare()), homeDir: async () => "C:/synthetic/home",
+    selectedProviderAccountId: () => account, PROVIDER_ACCOUNT_PROVIDERS, ensureMonoSession: vi.fn(async () => prepare()), homeDir: async () => "C:/synthetic/home",
     ensureOpenSession: async () => chat, saveMonoPermissions: async () => {}, newDefaultSession: newSession, setSessions: vi.fn(), submitSessionRef: { current: submit } };
   const send = new Function(...Object.keys(ports), ts.transpile(`return ${callback}`, { target: ts.ScriptTarget.ES2022 }))(...Object.values(ports)) as (managerId: string, project: string, text: string) => Promise<boolean>;
   return { send, submit, chat, sessionsRef, ports, update: (change: Partial<Mono>) => { manager = { ...manager, ...change }; },
@@ -30,7 +31,7 @@ it("sends exact ordinary user text to the bound Manager conversation, including 
   expect(f.submit).toHaveBeenCalledExactlyOnceWith("chat", "  Exact user request\nkeep source  ", []);
 });
 
-it.each(["archive", "role", "project", "engine", "session", "account", "provider-session", "selected-account", "cwd", "worktree", "removed-session"])("rejects %s drift after asynchronous session preparation without sending", async change => {
+it.each(["archive", "role", "project", "engine", "session", "account", "storage-account", "provider-session", "selected-account", "cwd", "worktree", "removed-session"])("rejects %s drift after asynchronous session preparation without sending", async change => {
   const f = fixture();
   f.prepare(async () => {
     if (change === "archive") f.update({ archivedAt: 1 });
@@ -39,7 +40,7 @@ it.each(["archive", "role", "project", "engine", "session", "account", "provider
     if (change === "engine") f.update({ managerEngineId: "replacement" });
     if (change === "session") f.update({ sessionId: "replacement" });
     if (change === "selected-account") f.account("new-account");
-    const mutation: Partial<Session> = change === "account" ? { providerAccountId: "new-account" } : change === "provider-session" ? { providerSessionId: "new-provider-chat" } : change === "cwd" ? { cwd: "C:/other" } : change === "worktree" ? { worktreeCwd: "C:/other-wt" } : {};
+    const mutation: Partial<Session> = change === "account" ? { providerAccountId: "new-account" } : change === "storage-account" ? { codexStorageAccountId: "new-account" } : change === "provider-session" ? { providerSessionId: "new-provider-chat" } : change === "cwd" ? { cwd: "C:/other" } : change === "worktree" ? { worktreeCwd: "C:/other-wt" } : {};
     f.sessionsRef.current = change === "removed-session" ? [] : [{ ...f.chat, ...mutation }];
     return f.chat;
   });

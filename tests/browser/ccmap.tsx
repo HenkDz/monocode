@@ -11,6 +11,7 @@ import { monoGoalRoutingContext, type MonoGoalSubmission } from "../../src/featu
 import { sameProjectPath } from "../../src/features/projects/model/recents";
 import { projectKey } from "../../src/shared/lib/paths";
 import { newSession, type Session } from "../../src/features/sessions/model/session";
+import { PROVIDER_ACCOUNT_PROVIDERS } from "../../src/features/providers/model/providerAccounts";
 import type { OrchestrationRun, OrchestrationTask } from "../../src/features/orchestration/model/orchestrationState";
 import { TeamMap } from "../../src/features/teamMap/TeamMap";
 import { commandMapDecisions } from "../../src/features/teamMap/commandMapDecisions";
@@ -116,7 +117,7 @@ function Fixture() {
   useEffect(() => teamMap.show(), []);
   const ports = { React, useState, useRef, useEffect, useCallback, useSyncExternalStore, subscribeMonos, monosSnapshot, monoManagerGoals, listMonos, findMono, teamMap, sendDecisionFromClick,
     ensureOpenSession: async (id: string) => { await preparation; return sessionsRef.current.find(session => session.id === id); }, ensureMonoSession,
-    homeDir: async () => "C:/synthetic/home", saveMonoPermissions: async () => {}, newDefaultSession: (cwd: string) => newSession("codex", cwd), selectedProviderAccountId: () => "fixture-account",
+    homeDir: async () => "C:/synthetic/home", saveMonoPermissions: async () => {}, newDefaultSession: (cwd: string) => newSession("codex", cwd), selectedProviderAccountId: () => "fixture-account", PROVIDER_ACCOUNT_PROVIDERS,
     sessionsRef, setSessions, submitSessionRef, submitSession: submit, submitMonoGoalRef: { current: async (_id: string, _text: string, _attachments: unknown[], request: MonoGoalSubmission) => { bossGoals.push(request); return true; } },
     sameProjectPath, monoLook, monoGoalRoutingContext, remoteProjectFor: () => undefined, recents: paths.map(path => ({ path })), projectKey,
     workspaceNavigation: { cancel: noop }, setFilePickerOpen: noop, setSettingsOpen: noop, setSearchViewOpen: noop, setInboxViewOpen: noop, setNotesViewOpen: noop, setAutomationsViewOpen: noop,

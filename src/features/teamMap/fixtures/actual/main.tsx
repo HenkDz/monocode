@@ -10,6 +10,7 @@ import { monoGoalRoutingContext, type MonoGoalSubmission } from "../../../monos/
 import { sameProjectPath } from "../../../projects/model/recents";
 import { projectKey } from "../../../../shared/lib/paths";
 import { newSession, type Session } from "../../../sessions/model/session";
+import { PROVIDER_ACCOUNT_PROVIDERS } from "../../../providers/model/providerAccounts";
 import { TeamMap } from "../../TeamMap";
 import { commandMapDecisions } from "../../commandMapDecisions";
 import { capabilityDecisionReason } from "../../../integrations/model/integrationCapabilities";
@@ -77,7 +78,7 @@ function Fixture() {
     ensureMonoSession: (id: string, host: Parameters<typeof ensureMonoSession>[1]) => {
       sessionSetup.push(id); return ensureMonoSession(id, { ...host, workspace: async () => "C:/synthetic/monos/boss" });
     },
-    homeDir: async () => "C:/synthetic/home", saveMonoPermissions: async () => {}, newDefaultSession: (cwd: string) => newSession("codex", cwd), selectedProviderAccountId: () => undefined,
+    homeDir: async () => "C:/synthetic/home", saveMonoPermissions: async () => {}, newDefaultSession: (cwd: string) => newSession("codex", cwd), selectedProviderAccountId: () => undefined, PROVIDER_ACCOUNT_PROVIDERS,
     sessionsRef, setSessions, submitSessionRef, submitSession: submit, submitMonoGoalRef: goalPort, sameProjectPath,
     monoLook, monoGoalRoutingContext, remoteProjectFor: () => undefined, recents: [{ path: project }], projectKey,
     workspaceNavigation: { cancel: noop }, setFilePickerOpen: noop, setSettingsOpen: noop, setSearchViewOpen: noop,

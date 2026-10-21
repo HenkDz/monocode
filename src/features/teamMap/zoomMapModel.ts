@@ -56,7 +56,7 @@ export function projectCamera(size: MapSize, point: { x: number; y: number }) {
   // Narrow windows pan across the board instead of shrinking type below reading size.
   const scale = reading * 4;
   return { width, camera: { scale, x: size.width < 850 ? 24 - (point.x - width / 8) * scale : size.width / 2 - point.x * scale,
-    y: 90 - (point.y + 32) * scale } };
+    y: 80 - (point.y + 12) * scale } };
 }
 export function zoomCamera(camera: MapCamera, x: number, y: number, scale: number): MapCamera {
   return { scale, x: x - (x - camera.x) * scale / camera.scale, y: y - (y - camera.y) * scale / camera.scale };

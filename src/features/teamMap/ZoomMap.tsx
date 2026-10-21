@@ -250,7 +250,7 @@ export function ZoomMap({ sessions, runs, statuses, scope, onOpenMono, onClose, 
                   {!projectGoals(project, goals).length && <small>{!data || data.incomplete ? "Goal history unavailable" : "No recorded goal"}</small>}
                 </span>
               </button>
-              <div id={`board-${project.manager.id}`} className="zoom-map-board-wrap" hidden={focused !== project} style={{ left: point.x - (focused === project ? fitted!.width : 1000) / 8, top: point.y + 32, width: focused === project ? fitted!.width : 1000 }}>{focused === project && board(project, entries)}</div>
+              <div id={`board-${project.manager.id}`} className="zoom-map-board-wrap" hidden={focused !== project} style={{ left: point.x - (focused === project ? fitted!.width : 1000) / 8, top: point.y + 12, width: focused === project ? fitted!.width : 1000 }}>{focused === project && board(project, entries)}</div>
             </div>;
           })}
           {!projects.length && <p className="zoom-map-empty">Your projects will appear here when they have a Manager.</p>}

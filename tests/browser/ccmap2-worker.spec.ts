@@ -174,3 +174,43 @@ test("P2 Manager Home keeps normal real SessionPane controls after a memberless 
   await expect(page.getByRole("tab", { name: "Home", exact: true })).toHaveAttribute("aria-selected", "true");
   await page.screenshot({ path: `${evidence}/manager-home-normal.png` }); expect(errors).toEqual([]);
 });
+
+test("P2 migration preserves newer Home and its visible input and Stop ownership", async ({ page }) => {
+  const errors = await fixture(page);
+  await page.evaluate(async () => {
+    const f = window.ccmap2Worker, h = f.host, old = h.newTab("task-a");
+    h.tabs = h.tabsRef.current = [old, h.tabs[0]]; h.activeTabIdRef.current = old.id;
+    await h.openWorkerTask("worker", null); f.events.length = 0;
+    h.migrate();
+  });
+  await selected(page, "worker-home");
+  const home = page.locator('[data-worker-conversation="worker-home"]:visible');
+  await expect(home.locator('[data-session-composer] textarea:visible')).toBeVisible();
+  await page.locator("[data-workbench-header]:visible h2").click(); await page.keyboard.press("Escape");
+  await expect.poll(async () => (await page.evaluate(() => window.ccmap2Worker.events)).filter((event: { action: string }) => event.action === "stop")).toEqual([{ action: "stop", id: "worker-home" }]);
+  expect((await page.evaluate(() => window.ccmap2Worker.state())).targets.worker.target).toBeNull();
+  await page.screenshot({ path: `${evidence}/migration-keeps-home.png` }); expect(errors).toEqual([]);
+});
+
+test("P2 retry keeps exact saved conversation in History and permits explicit group browsing", async ({ page }) => {
+  const errors = await fixture(page);
+  await page.evaluate(() => {
+    const f = window.ccmap2Worker; f.defer("task-a");
+    f.host.pendingA = f.host.openWorkerTask("worker", { taskId: "a", sessionId: "task-a" });
+  });
+  await page.evaluate(async () => {
+    const f = window.ccmap2Worker, task = f.run.tasks.find(task => task.id === "a"), dispatch = f.run.dispatches?.find(dispatch => dispatch.id === "a-2");
+    if (!task || !dispatch) throw Error("Missing retry fixture identity");
+    task.sessionId = "replacement"; task.activeDispatchId = "a-3"; dispatch.state = "cancelled";
+    f.run.dispatches?.push({ ...dispatch, id: "a-3", sessionId: "replacement", state: "running", startedAt: 500 });
+    f.refresh(); f.release("task-a"); await f.host.pendingA;
+  });
+  await selected(page, "task-a");
+  await expect(page.getByRole("tab", { name: "History", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator('.cc-worker-assignments button[aria-pressed="true"]')).toContainText("cancelled");
+  await page.getByRole("tab", { name: "Current (3)", exact: true }).click();
+  await page.evaluate(() => window.ccmap2Worker.refresh());
+  await expect(page.getByRole("tab", { name: "Current (3)", exact: true })).toHaveAttribute("aria-selected", "true");
+  await selected(page, "task-a");
+  await page.screenshot({ path: `${evidence}/retry-keeps-saved-attempt.png` }); expect(errors).toEqual([]);
+});

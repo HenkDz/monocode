@@ -154,6 +154,25 @@ it("G one-time migration detaches current/any-attempt leaves, preserves mixed pa
   expect(f.events).toEqual([]); expect(JSON.stringify(f.sessions)).toBe(original);
 });
 
+it.each(["Home", "pending"])("P2 migration detaches old task leaves without replacing newer %s intent", async kind => {
+  const f = fixture(), old = newTab("task-a"), unrelated = newTab("unrelated");
+  f.h.tabs = f.h.tabsRef.current = [old, unrelated]; f.h.activeTabIdRef.current = old.id;
+  if (kind === "pending") f.defer("task-b");
+  let pending: Promise<void> | undefined;
+  await act(async () => {
+    pending = f.h.openWorkerTask("worker", kind === "Home" ? null : { taskId: "b", sessionId: "task-b" });
+    if (kind === "Home") await pending;
+  });
+  const selection = f.h.workerPages.worker, generation = f.h.monoViewRequest.current, sessions = JSON.stringify(f.h.sessions);
+  f.events.length = 0;
+  await act(async () => f.h.migrate());
+  expect(f.h.tabs).toEqual([unrelated]); expect(f.h.workerPages.worker).toBe(selection);
+  expect(f.h.monoViewRequest.current).toBe(generation); expect(f.events).toEqual([]);
+  expect(JSON.stringify(f.h.sessions)).toBe(sessions);
+  if (kind === "pending") await act(async () => { f.release("task-b"); await pending; });
+  expect(f.h.activeSessionId).toBe(kind === "Home" ? "worker-home" : "task-b");
+});
+
 it("H Escape stops only the selected busy session; nonbusy/placeholder/hidden Home cannot own Stop or focus", async () => {
   const f = fixture(), cleanup = f.h.registerEscape();
   const esc = async () => act(async () => { document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); await new Promise(resolve => setTimeout(resolve, 10)); });
@@ -206,6 +225,11 @@ it("H retry during load retains only the requested saved attempt and its recorde
   await act(async () => { f.release("task-a"); await pending; });
   f.assertTask("worker", "task-a"); expect(mount.querySelector('[data-actual-pane="task-a"]')?.getAttribute("data-task-state")).toBe("cancelled");
   expect(task.status).toBe("running"); expect(task.sessionId).toBe("replacement");
+  expect(mount.querySelector('[role="tab"][id$="-history"]')?.getAttribute("aria-selected")).toBe("true");
+  await act(async () => mount.querySelector<HTMLButtonElement>('[role="tab"][id$="-current"]')?.click());
+  await f.render();
+  expect(mount.querySelector('[role="tab"][id$="-current"]')?.getAttribute("aria-selected")).toBe("true");
+  f.assertTask("worker", "task-a");
 });
 
 it("D implicit default is recomputed on reopen; an explicit Home stays Home", async () => {

@@ -11,11 +11,12 @@ export function WorkerConversationPicker({ ownerId, runs, target, onSelect }: {
 }) {
   const tasks = workerPageTasks(runs, ownerId);
   const current = tasks.filter(({ task }) => ["queued", "running", "cancelling", "blocked", "interrupted"].includes(task.status));
-  const [group, setGroup] = useState<"home" | "current" | "history">(target ? "current" : "home");
+  const selectedGroup = !target ? "home" : current.some(view => view.task.id === target.taskId && (!target.sessionId || view.sessionId === target.sessionId)) ? "current" : "history";
+  const [group, setGroup] = useState<"home" | "current" | "history">(selectedGroup);
   const id = useId();
   useEffect(() => {
-    setGroup(!target ? "home" : current.some(view => view.task.id === target.taskId && (!target.sessionId || view.sessionId === target.sessionId)) ? "current" : "history");
-  }, [target?.taskId, target?.sessionId]);
+    setGroup(selectedGroup);
+  }, [target?.taskId, target?.sessionId, selectedGroup]);
   const history = tasks.flatMap<(typeof tasks)[number] & { attempt: number | undefined }>(view => {
     const attempts = (view.run.dispatches ?? []).filter(d => d.taskId === view.task.id).sort((a, b) => a.startedAt - b.startedAt);
     return attempts.length ? attempts.map((dispatch, index) => ({ ...view, dispatch, attempt: attempts.length > 1 ? index + 1 : undefined }))

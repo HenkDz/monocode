@@ -5632,6 +5632,7 @@ function Workspace({
       tabsRef.current = [...migrated.tabs];
       setTabs([...migrated.tabs]);
     }
+    if (monoViewRequest.current || workspaceSessionRequest.current) return;
     const selected = migrated.selected;
     const owner = selected?.ownerId ? findMono(selected.ownerId) : undefined;
     if (!selected || !owner?.sessionId) return;

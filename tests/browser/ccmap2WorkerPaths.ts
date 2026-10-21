@@ -29,7 +29,12 @@ export function workerAppDeclarations() {
   if (!errorView?.expression) throw Error("Production unavailable notice missing");
   const publish = nodes.find(node => ts.isCallExpression(node) && node.expression.getText(ast) === "publishCardSessions") as ts.CallExpression | undefined;
   if (!publish) throw Error("Production card opener missing");
-  const focus = ["workerPageOwner", "workerPageSelection", "workerSelectedView", "workerSelectedSession", "activeSessionId"]
+  const title = declaration("workspaceTitleBar").initializer as ts.ParenthesizedExpression;
+  const jsx = ts.isParenthesizedExpression(title) ? title.expression : title;
+  if (!ts.isJsxSelfClosingElement(jsx)) throw Error("Production TitleBar seam changed");
+  const mono = jsx.attributes.properties.find(attr => ts.isJsxAttribute(attr) && attr.name.getText(ast) === "mono") as ts.JsxAttribute;
+  const titleMono = (mono.initializer as ts.JsxExpression).expression!.getText(ast);
+  const focus = ["monoViewSession", "monoCovers", "monoViewMono", "workerPageOwner", "workerPageSelection", "workerSelectedView", "workerSelectedSession", "activeSessionId"]
     .map(name => `host.${name} = ${declaration(name).initializer!.getText(ast)};`).join("\n");
   const source = callbacks.join("\n") + `
     host.workerNavigationRef.current = host.openWorkerTask;
@@ -37,7 +42,7 @@ export function workerAppDeclarations() {
     host.migrate = ${effect("const migrated = migrateWorkerTaskTabs")};
     host.registerEscape = ${effect('window.addEventListener("keydown", onEscape)')};
     host.openCard = ${publish.arguments[1].getText(ast)};
-    host.refreshFocus = function() { ${focus} workerSelectedSessionIdRef.current = workerSelectedSession?.id; };
+    host.refreshFocus = function() { ${focus} workerSelectedSessionIdRef.current = workerSelectedSession?.id; host.titleMono = ${titleMono}; };
     host.renderPages = function() { return React.createElement(React.Fragment, null, ${errorView.expression.getText(ast)}, ${expression.expression.getText(ast)}); };`;
   return ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.React } }).outputText;
 }

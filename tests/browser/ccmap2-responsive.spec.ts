@@ -2,6 +2,23 @@ import { expect, test } from "@playwright/test";
 import { writeFileSync } from "node:fs";
 const evidence = process.env.CCMAP_EVIDENCE!;
 test.setTimeout(120000);
+test("actual goal headings use exact linked title or neutral Goal for short, clipped and multiline prompts", async ({ page }) => {
+  await page.goto("/tests/browser/ccmap.html?real=1");
+  await page.getByRole("button", { name: "Open monocode project", exact: true }).click();
+  await expect(page.locator('.zoom-map-lane[aria-label="Browser profile routing"]')).toHaveCount(1);
+  for (const raw of ["and complete the already authorized migration", "...e and complete the already authorized migration", "Migration details\nRAW_MULTILINE_SENTINEL"]) {
+    await page.evaluate(async raw => {
+      const { monoManagerGoals } = await import("/src/features/monos/model/monoManagerGoals.ts");
+      const goal = monoManagerGoals.goals().find((goal: any) => goal.id === "goal-2-1")!;
+      goal.title = raw;
+      (window as any).ccmapFixture.renameTitle("Refresh actual goal header");
+    }, raw);
+    await expect(page.locator('.zoom-map-lane[aria-label="Goal"] h3')).toHaveText("Goal");
+    await expect(page.locator('.zoom-map-board')).not.toContainText(raw.split("\n")[0]);
+    await expect(page.locator('.zoom-map-lane[aria-label="Browser profile routing"]')).toHaveCount(1);
+  }
+  await page.screenshot({ path: `${evidence}/neutral-goal-heading.png` });
+});
 for (const [width, height] of [[800, 950], [1600, 950], [1710, 1390], [3432, 1308]]) {
   test(`actual sidebar width, readable fit and tall reachability ${width}x${height}`, async ({ page }) => {
     const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));

@@ -8,6 +8,7 @@ const fixture = async (page: Page) => {
   await page.route("**/*", route => new URL(route.request().url()).hostname === "127.0.0.1" ? route.continue() : route.abort());
   await page.goto("/tests/browser/ccmap2-worker.html");
   await expect(page.getByRole("button", { name: "Sidebar Vale" })).toBeVisible();
+  await expect(page.getByLabel("Project and worktree", { exact: true })).toHaveCount(1);
   return errors;
 };
 const open = (page: Page, taskId: string, sessionId?: string, owner = "worker") => page.evaluate(async ({ owner, taskId, sessionId }) => { await (window as any).ccmap2Worker.open(owner, { taskId, sessionId }); }, { owner, taskId, sessionId });
@@ -20,6 +21,7 @@ const selected = async (page: Page, sessionId: string, owner = "worker") => {
   expect(events.filter((event: any) => ["sidebar", "project", "worktree", "project-addition", "append-tab", "activate-tab", "focus-workspace", "persist"].includes(event.action))).toEqual([]);
   await expect(page.locator("[data-workbench-header]:visible")).toHaveCount(1);
   await expect(page.locator(".ccwb1-view-identity:visible")).toHaveCount(0);
+  await expect(page.getByLabel("Project and worktree", { exact: true })).toHaveCount(0);
 };
 
 test("A real map task and Goal owner open their exact conversation in the real worker pane", async ({ page }) => {

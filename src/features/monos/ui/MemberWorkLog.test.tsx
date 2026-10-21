@@ -125,7 +125,7 @@ it("links task reports, reviews and PR summaries while keeping artifact reports 
         .querySelector<HTMLButtonElement>('[data-task-open]')!
         .click(),
     );
-    expect(openCardSession).toHaveBeenCalledWith(task.sessionId);
+    expect(openCardSession).toHaveBeenCalledWith(task.sessionId, { taskId: task.id, sessionId: task.sessionId });
     await act(async () => root.render(<WorkbenchTask task={task} />));
     expect(
       container.querySelector('.mono-run-report'),
@@ -161,7 +161,7 @@ it("opens the exact worker directly without a detail popup", async () => {
     await act(async () => root.render(<MemberWorkLog member={member} />));
     expect(host.textContent).not.toContain("Assignment instructions");
     await act(async () => host.querySelector<HTMLButtonElement>("[data-task-open]")!.click());
-    expect(openCardSession).toHaveBeenCalledWith("worker");
+    expect(openCardSession).toHaveBeenCalledWith("worker", { taskId: base.id, sessionId: "worker" });
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(host.querySelector("details")).toBeNull();
   } finally { await act(async () => root.unmount()); }
@@ -393,7 +393,7 @@ it("pages large histories five at a time, prioritizes attention and reaches ever
         .querySelector<HTMLButtonElement>('button[data-task-open]')!
         .click(),
     );
-    expect(openCardSession).toHaveBeenCalledWith("worker");
+    expect(openCardSession).toHaveBeenCalledWith("worker", { taskId: last.getAttribute("data-member-task"), sessionId: "worker" });
     expect(lastTitle).toContain("Past assignment");
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     await act(async () =>
@@ -466,7 +466,7 @@ it("keeps direct navigation available when a current task moves into History", a
     ] as unknown as OrchestrationRun[]);
     await act(async () => root.render(<MemberWorkLog member={member} />));
     expect(host.querySelectorAll("[data-member-task]")).toHaveLength(0);
-    expect(openCardSession).toHaveBeenCalledWith("worker");
+    expect(openCardSession).toHaveBeenCalledWith("worker", { taskId: base.id, sessionId: "worker" });
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     await act(async () =>
       host
@@ -758,7 +758,7 @@ it("opens queued workers and cancels the exact task with pending and retryable e
         .find((button) => button.textContent === "Open")!
         .click(),
     );
-    expect(openCardSession).toHaveBeenCalledWith(task.sessionId);
+    expect(openCardSession).toHaveBeenCalledWith(task.sessionId, { taskId: task.id, sessionId: task.sessionId });
     await act(async () => cancelButton().click());
     expect(cancel).toHaveBeenCalledWith("engine", task.id);
     expect(cancelButton().disabled).toBe(true);
@@ -911,7 +911,7 @@ it("keeps a prepared failed launch distinct from a recorded conversation turn", 
     expect(host.querySelector('[data-member-task="launch"] [data-transcript-error]')).toBeNull();
     expect(host.querySelector('[data-member-task="launch"] [data-task-reason]')?.textContent).not.toContain("Storage not available");
     await act(async () => host.querySelector<HTMLButtonElement>('[data-member-task="launch"] button')!.click());
-    expect(openCardSession).toHaveBeenCalledWith("worker");
+    expect(openCardSession).toHaveBeenCalledWith("worker", { taskId: "launch", sessionId: "worker" });
     await act(async () => root.render(<WorkbenchTask task={{ ...base, status: "failed", error: "Storage not available" }} />));
     const reader = host;
     expect(reader.querySelector('[data-transcript-error]')).not.toBeNull();

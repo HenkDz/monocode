@@ -2,7 +2,8 @@ import * as worker from "../../src/features/monos/model/workerPage";
 import * as visits from "../../src/features/workspace/model/tabVisitHistory";
 import * as layout from "../../src/features/workspace/model/layout";
 import * as tabIds from "../../src/features/workspace/model/appViewTabs";
-import { findMono, listMonos, monoForSession, monoLook, isMonoSession, type Mono } from "../../src/features/monos/model/mono";
+import { findOpenSessionTab } from "../../src/features/workspace/model/workspaceTabGroups";
+import { findMono, listMonos, monoForSession, monoLook, monoState, isMonoSession, type Mono } from "../../src/features/monos/model/mono";
 import { newSession, sessionWorkCwd, type Session } from "../../src/features/sessions/model/session";
 import type { OrchestrationRun, OrchestrationTask } from "../../src/features/orchestration/model/orchestrationState";
 import { sameProjectPath, normalizeProjectPath } from "../../src/features/projects/model/recents";
@@ -36,7 +37,7 @@ export function createWorkerFixture(bind: (host: any) => unknown) {
   const pending = new Map<string, () => void>();
   const deferred = new Set<string>();
   const host: any = {
-    ...worker, ...visits, ...layout, ...tabIds, findMono, listMonos, monoForSession, monoLook, isMonoSession, projectName,
+    ...worker, ...visits, ...layout, ...tabIds, findOpenSessionTab, findMono, listMonos, monoForSession, monoLook, monoState, isMonoSession, projectName,
     focusedBusyAgentSessionId, shouldStopFocusedTurnOnEscape, deferUnhandledEscape,
     workerPages: {}, workerPagesRef: { current: {} }, workerPageError: undefined,
     workerSelectedSessionIdRef: { current: undefined }, workerNavigationRef: { current: noop }, workerVisitTargets: { current: new Map() },

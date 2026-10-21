@@ -167,10 +167,10 @@ it("renders the supplied guarded goal action once in the goal panel", async () =
 it("uses existing Manager/member/Boss navigation and closes the surface", async () => {
   await renderMap(); await click("Open app project");
   await act(async () => [...host.querySelectorAll<HTMLButtonElement>("button")].find(node => node.textContent === "Message App Manager")!.click());
-  expect(open).toHaveBeenCalledWith("manager"); expect(close).toHaveBeenCalledOnce();
+  expect(open).toHaveBeenCalledWith("manager", null); expect(close).toHaveBeenCalledOnce();
   open.mockClear(); close.mockClear();
   await click("Open chat with Orchestrator");
-  expect(open).toHaveBeenCalledExactlyOnceWith("boss"); expect(close).toHaveBeenCalledOnce();
+  expect(open).toHaveBeenCalledExactlyOnceWith("boss", undefined); expect(close).toHaveBeenCalledOnce();
 });
 
 it("keeps every project available at narrow widths and gives arrow keys real focus targets", async () => {

@@ -10,6 +10,7 @@ import { publishCardSessions } from "../../src/features/monos/model/monoCards";
 import { orchestrator } from "../../src/features/orchestration/model/orchestration";
 import { TeamMap } from "../../src/features/teamMap/TeamMap";
 import { Modal } from "../../src/shared/ui/Modal";
+import { TitleBar } from "../../src/app/shell/TitleBar";
 import { WorkspaceGoals } from "../../src/app/shell/WorkspaceContext";
 import { monoManagerGoals } from "../../src/features/monos/model/monoManagerGoals";
 import { registerHarness } from "../../src/integrations/harness/core/registry";
@@ -51,6 +52,11 @@ function Fixture() {
   useEffect(() => h.registerEscape(), []);
   useEffect(() => { h.recordVisit(); }, [h.monoViewId, h.workerPages]);
   return <div style={{ position: "fixed", inset: 0, display: "flex", flexDirection: "column", background: "var(--color-background-base)", color: "var(--color-content)" }}>
+    <TitleBar tabs={[{ id: h.tabs[0]?.id ?? "workspace", title: "Unrelated", project: "project", more: [], sessionCount: 1, harnesses: [], busyHarnesses: [], files: [] },
+      ...h.openMonoTabs.map((id: string) => ({ id: h.monoTabId(id), title: h.monoLook(h.findMono(id)).name, project: "", more: [], sessionCount: 0, harnesses: [], busyHarnesses: [], files: [], mono: { mascot: "cat", color: "#a5bbd1", status: "idle" as const } }))]}
+      activeId={h.monoViewId ? h.monoTabId(h.monoForSession(h.monoViewId)?.id ?? "") : h.tabs[0]?.id} mono={h.titleMono}
+      cwd={f.project} worktree={{ path: f.foreign, branch: "feature" }} inset hideWindowControls
+      onToggleSidebar={noop} onSelect={h.onSelectTitleTab} onClose={noop} onCloseMany={noop} onReorder={noop} />
     <nav style={{ display: "flex", gap: 12, padding: 10, fontSize: 12, flexWrap: "wrap", flex: "none" }}>
       <button onClick={() => h.onOpenRailMono("worker")}>Sidebar Vale</button><button onClick={() => h.onSelectTitleTab(h.monoTabId("worker"))}>Title Vale</button>
       <button onClick={() => { h.teamMap.open = true; f.refresh(); }}>Map</button><button onClick={() => setGoalPanel(value => !value)}>Goal panel</button>

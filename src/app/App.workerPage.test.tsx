@@ -169,5 +169,8 @@ it("H session-list shortcuts select the worker conversation in place, and explic
   expect(f.events.some(event => event.action === "worktree")).toBe(true); expect(f.events.some(event => event.action === "append-tab")).toBe(true);
   const plain = fixture(); await act(async () => { await plain.h.onSelectHistorySession("unrelated"); }); expect(plain.events.some(event => event.action === "append-tab")).toBe(true);
   const nonPm = fixture(); nonPm.h.orchestrationRuns = [{ ...nonPm.run, projectManager: false, ownerMonoId: undefined, ownerSessionId: "plain-lead", leadId: "plain-lead", tasks: [{ ...nonPm.run.tasks[0], memberId: undefined }] }];
+  nonPm.h.orchestrator.forSession = () => nonPm.h.orchestrationRuns[0];
+  nonPm.h.sessionsRef.current.push({ ...nonPm.sessions[6], id: "plain-lead" }); nonPm.h.setInspectedWorkerId = vi.fn();
   await act(async () => { await nonPm.h.onSelectHistorySession("task-a"); }); expect(nonPm.events.some(event => event.action === "append-tab")).toBe(true);
+  expect(nonPm.h.setInspectedWorkerId).toHaveBeenCalledWith("task-a"); expect(nonPm.h.tabs.at(-1).focusedId).toBe("plain-lead");
 });

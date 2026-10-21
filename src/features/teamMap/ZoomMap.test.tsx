@@ -133,6 +133,13 @@ it("consumes field and body Escape before the actual App Stop effect, and remove
   } finally { cleanup(); }
 });
 
+it("does not route a saved task to another task's canonical card sharing its session", async () => {
+  await render({ decisions: { ...decisions, project: () => ({ ...decisions.project("/app", "manager"), cards: <article tabIndex={-1} data-task-id="different" data-session-id="current">Different task</article> }) } });
+  await click('[aria-label="Open app project"]'); await click('[data-task="one"]');
+  expect(host.querySelector('.zoom-map-detail')?.textContent).toContain('Review the feature');
+  expect(host.querySelector('[data-trace-session="current"]')).not.toBeNull();
+});
+
 it("keeps terminal goal history out of lanes and summaries while preserving terminal task truth", async () => {
   const goal = monoManagerGoals.goals()[0];
   vi.mocked(monoManagerGoals.goals).mockReturnValue([goal, { ...goal, id: "done-history", title: "Completed historical goal", state: "done" }, { ...goal, id: "cancelled-history", title: "Cancelled historical goal", state: "cancelled" }]);

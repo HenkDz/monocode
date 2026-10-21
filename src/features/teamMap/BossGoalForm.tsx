@@ -16,7 +16,8 @@ export function BossGoalForm({ route, manager }: { route?: BossGoalRoute; manage
     const element = textarea.current;
     if (!element) return;
     element.style.height = "auto";
-    element.style.height = `${element.scrollHeight}px`;
+    element.style.height = text ? `${element.scrollHeight}px` : "20px";
+    element.style.overflowY = text ? "auto" : "hidden";
   }, [text, target]);
   const setText = (value: string) => setDrafts(previous => ({ ...previous, [target]: value }));
   const available = manager ? !!manager.send : !!route;

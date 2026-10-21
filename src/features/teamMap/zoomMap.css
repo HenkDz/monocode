@@ -88,6 +88,8 @@
 .zoom-map-title-anchor { display: block; min-width: 0; }
 .zoom-map-title { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; line-height: 18px; max-height: 36px; word-break: normal; overflow-wrap: normal; }
 .zoom-map-title-tooltip { padding: 8px 12px; font-size: 12px; overflow-wrap: anywhere; }
+/* The tooltip frame must let the original card receive the entire click. */
+[data-popover-side]:has(.zoom-map-title-tooltip) { pointer-events: none; }
 .zoom-map-task em { color: #c59847; font-style: normal; font-weight: 400; }
 .zoom-map-task-owner { display: flex; align-items: center; gap: 6px; color: var(--map-muted); font-size: 11px; }
 .zoom-map-live { width: 7px; height: 7px; border-radius: 50%; background: #7aa2ff; box-shadow: 0 0 0 3px #7aa2ff22; margin-left: auto; animation: zoom-map-pulse 1.6s infinite; }

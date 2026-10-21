@@ -60,6 +60,7 @@ for (const [width, height] of [[1600, 950], [1710, 1390], [3432, 1308]]) {
     expect(fullTitle![display!.length - 1]).toBe(' ');
     expect(await card.locator('.zoom-map-title').evaluate(element => element.getBoundingClientRect().height / (new DOMMatrix(getComputedStyle(document.querySelector('.zoom-map-world')!).transform).a / 4))).toBeLessThanOrEqual(36.1);
     await card.focus(); await expect(page.getByRole('tooltip')).toHaveText(fullTitle!);
+    expect(await page.getByRole('tooltip').evaluate(element => getComputedStyle(element.parentElement!).pointerEvents)).toBe('none');
     await page.getByRole('button', { name: 'Map options' }).focus();
     await page.screenshot({ path: join(evidence, `real-project-${width}.png`) });
     await page.getByRole('button', { name: '+13 more', exact: true }).click();

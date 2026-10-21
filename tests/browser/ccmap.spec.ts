@@ -196,6 +196,7 @@ for (const [width, theme, reduced] of [[390, "dark", false], [1600, "light", fal
       expect(await page.locator(".zoom-map-board-wrap:not([hidden])").evaluate(element => getComputedStyle(element).animationName)).toBe("zoom-map-reveal");
     }
     if (width === 390) {
+      expect((await page.locator('.command-map-ask > div').boundingBox())!.height).toBeLessThan(55);
       expect(await page.locator(".zoom-map-viewport").evaluate(element => element.scrollLeft)).toBe(0);
       const goal = await page.locator('.zoom-map-goal').first().boundingBox(); expect(goal!.x).toBeGreaterThanOrEqual(0);
     }

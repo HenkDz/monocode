@@ -203,7 +203,7 @@ export function ZoomMap({ sessions, runs, statuses, scope, onOpenMono, onClose, 
     const entry = tasks.find(entry => entry.key === pendingTask);
     if (!entry) return;
     // Inspect the current canonical rail after returning from another detail.
-    const card = [...(rail.current?.querySelectorAll<HTMLElement>("[data-task-id],[data-session-id]") ?? [])].find(card => card.dataset.taskId === entry.task.id || !!entry.session && card.dataset.sessionId === entry.session.id);
+    const card = [...(rail.current?.querySelectorAll<HTMLElement>("[data-task-id],[data-session-id]") ?? [])].find(card => card.dataset.taskId ? card.dataset.taskId === entry.task.id : !!entry.session && card.dataset.sessionId === entry.session.id);
     if (entry.state === "ready" || card) {
       setSelection({ kind: "railTask", key: entry.key }); setFlash(entry.key);
       requestAnimationFrame(() => {

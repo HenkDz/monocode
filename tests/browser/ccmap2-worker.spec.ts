@@ -67,7 +67,9 @@ test("C notification, reminder and approval session interceptors render exact cu
 });
 
 test("D E real switcher keyboard/default/title and Back/Forward retain exact local selection and drafts", async ({ page }) => {
-  const errors = await fixture(page); await page.getByRole("button", { name: "Sidebar Vale" }).click(); await selected(page, "task-b");
+  const errors = await fixture(page);
+  await page.evaluate(() => { (window as any).ccmap2Worker.run.tasks.find((task: any) => task.id === "b").sessionId = "stale-session"; });
+  await page.getByRole("button", { name: "Sidebar Vale" }).click(); await selected(page, "task-b");
   await page.getByRole("tab", { name: "Home", exact: true }).click(); await selected(page, "worker-home");
   const home = page.locator('[data-worker-conversation="worker-home"] textarea:visible').last(); await home.fill("Keep Home draft");
   await page.getByRole("tab", { name: "Home", exact: true }).focus(); await page.keyboard.press("ArrowRight");

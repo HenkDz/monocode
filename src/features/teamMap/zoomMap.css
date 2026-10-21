@@ -44,7 +44,7 @@
 .zoom-map-goal-line { display: grid; grid-template-columns: minmax(0,1fr) auto; width: 100%; gap: 4px 8px; text-align: left; font-size: 12px; }
 .zoom-map-goal-line > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .zoom-map-goal-line small { font-size: 10px; color: var(--map-faint); }
-.zoom-map-project[data-focused="true"] { transform: translate(-50%,-50%) scale(.25); }
+.zoom-map-project[data-focused="true"] { transform: translate(-50%,-50%) scale(.25); background: none; cursor: default; }
 .zoom-map-project[data-focused="true"] .zoom-map-summary { display: none; }
 .zoom-map-project[data-focused="true"] .zoom-map-avatar { display: none; }
 .zoom-map-segments { display: flex; gap: 3px; grid-column: 1 / -1; width: 100%; margin-top: 4px; }
@@ -97,6 +97,7 @@
 .zoom-map-finished > div { max-width: 240px; }
 .zoom-map-finished small { color: var(--task-color); font-size: 10px; }
 .zoom-map-finished .zoom-map-task { opacity: .8; }
+.zoom-map-you-shortcut { color: #c59847; }
 .zoom-map-camera-controls { position: absolute; right: 16px; bottom: 140px; display: flex; flex-direction: column; gap: 6px; z-index: 2; }
 .zoom-map-camera-controls button { width: 32px; height: 32px; border: 1px solid var(--color-stroke); border-radius: 9px; background: var(--map-panel); color: var(--map-muted); }
 .zoom-map .command-map-ask { margin: 12px auto 18px; width: min(700px,calc(100% - 60px)); z-index: 2; }

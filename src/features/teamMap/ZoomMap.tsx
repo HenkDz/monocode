@@ -215,8 +215,8 @@ export function ZoomMap({ sessions, runs, statuses, scope, onOpenMono, onClose, 
         </button>;
       })}</div>
       <div className="zoom-map-columns"><span>Goal</span>{TASK_FLOW.slice(0, 4).map(state => <span key={state}><i data-state={state} />{TASK_LABEL[state]}</span>)}</div>
-      {lanes.map(lane => <section className="zoom-map-lane" key={lane.goal?.id ?? "unassigned"} aria-label={lane.goal?.title ?? "Tasks without recorded goal"}>
-        <div className="zoom-map-goal"><h3>{lane.goal ? coordinationSummary(lane.goal.title, 90) : "Tasks without recorded goal"}</h3>
+      {lanes.map(lane => <section className="zoom-map-lane" key={lane.goal?.id ?? "unassigned"} aria-label={lane.goal?.title ?? "Tasks without active goal"}>
+        <div className="zoom-map-goal"><h3>{lane.goal ? coordinationSummary(lane.goal.title, 90) : "Tasks without active goal"}</h3>
           <p>{lane.tasks.length ? taskCount(lane.tasks) : "No recorded tasks"}</p><Segments tasks={lane.tasks} onHover={setHighlight} />
           {lane.goal && <button type="button" onClick={() => { setSelection({ kind: "goal", id: lane.goal!.id }); setHighlight(undefined); }}>Open goal →</button>}
         </div>

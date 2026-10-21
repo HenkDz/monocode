@@ -170,7 +170,14 @@ test("retained completed and cancelled goals do not become active lanes or summa
   });
   await expect(page.locator('.zoom-map-lane[aria-label="Calm navigation & summaries (CC-UX2)"]')).toHaveCount(0);
   await expect(page.locator('.zoom-map-lane[aria-label="Integrations: Composio (V4b)"]')).toHaveCount(0);
+  await expect(page.locator('.zoom-map-lane[aria-label="Tasks without active goal"]')).toHaveCount(1);
+  await expect(page.locator('.zoom-map-task')).toHaveCount(6);
   await expect(page.locator('.zoom-map-finished')).toContainText('Done');
+  await page.screenshot({ path: screenshot('terminal-only-board') });
+  await page.getByRole('button', { name: 'Show whole map' }).click();
+  const summary = page.getByRole('button', { name: 'Open monocode project', exact: true });
+  await expect(summary).toContainText('No active goal'); await expect(summary.locator('.zoom-map-goal-line')).toHaveCount(0);
+  await page.screenshot({ path: screenshot('terminal-only-summary') });
 });
 
 for (const [width, theme, reduced] of [[390, "dark", false], [1600, "light", false], [1600, "dark", true]] as const) {

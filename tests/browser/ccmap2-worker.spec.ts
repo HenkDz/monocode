@@ -1,5 +1,12 @@
 import { expect, test, type Page } from "@playwright/test";
 import { mkdirSync } from "node:fs";
+import type { createWorkerFixture } from "./ccmap2WorkerFixture";
+import type { WorkerPageSelection } from "../../src/features/monos/model/workerPage";
+declare global {
+  interface Window {
+    ccmap2Worker: ReturnType<typeof createWorkerFixture> & { state: () => { active?: string; targets: Record<string, WorkerPageSelection> } };
+  }
+}
 const evidence = process.env.CCMAP_EVIDENCE ?? "target/ccmap2-worker";
 mkdirSync(evidence, { recursive: true });
 test.setTimeout(120000);
@@ -132,4 +139,38 @@ test("H delayed A to B/Home/close never applies stale selection; unavailable has
   await open(page, "gone", "gone-session"); await expect(page.locator('.cc-worker-placeholder:visible')).toContainText("no longer available");
   expect((await page.evaluate(() => (window as any).ccmap2Worker.state())).active).toBeUndefined();
   await page.screenshot({ path: `${evidence}/worker-unavailable.png` }); expect(errors).toEqual([]);
+});
+
+test("P2 queued task starts visibly and Escape stops only its real selected pane", async ({ page }) => {
+  const errors = await fixture(page); await open(page, "queued", "queued-session");
+  await expect(page.getByText("Not started yet", { exact: true })).toBeVisible();
+  await page.evaluate(() => {
+    const f = window.ccmap2Worker, h = f.host;
+    const task = f.run.tasks.find(task => task.id === "queued");
+    if (!task) throw Error("Missing queued fixture task");
+    task.status = "running";
+    h.setSessions([...h.sessions, { ...h.sessions.find((session: { id: string }) => session.id === "task-a"), id: "queued-session",
+      blocks: [{ id: "queued-start", role: "user", text: "Exact started queued conversation" }] }]);
+  });
+  await selected(page, "queued-session");
+  await expect(page.locator('[data-worker-conversation="queued-session"]')).toContainText("Exact started queued conversation");
+  expect((await page.evaluate(() => window.ccmap2Worker.state())).targets.worker.opened).toEqual([]);
+  await page.locator("[data-workbench-header]:visible h2").click(); await page.keyboard.press("Escape");
+  await expect.poll(async () => (await page.evaluate(() => window.ccmap2Worker.events)).filter((event: { action: string }) => event.action === "stop")).toEqual([{ action: "stop", id: "queued-session" }]);
+  await page.screenshot({ path: `${evidence}/queued-started-visible.png` }); expect(errors).toEqual([]);
+});
+
+test("P2 Manager Home keeps normal real SessionPane controls after a memberless task", async ({ page }) => {
+  const errors = await fixture(page); await open(page, "direct", "manager-task", "manager");
+  await selected(page, "manager-task", "manager");
+  await page.getByRole("tab", { name: "Home", exact: true }).click();
+  const home = page.locator('[data-worker-conversation="manager-home"]:visible [data-session-drop="manager-home"]');
+  await expect(home).toBeVisible();
+  await expect(home).not.toHaveAttribute("data-member-workbench", "true");
+  await expect(home.locator('[data-workbench-header], [data-member-work], [aria-label="Composer target"]')).toHaveCount(0);
+  await expect(home.locator('[data-session-composer] textarea:visible')).toBeVisible();
+  await expect(home).toContainText("Exact conversation manager-home");
+  expect((await page.evaluate(() => window.ccmap2Worker.state())).active).toBe("manager-home");
+  await expect(page.getByRole("tab", { name: "Home", exact: true })).toHaveAttribute("aria-selected", "true");
+  await page.screenshot({ path: `${evidence}/manager-home-normal.png` }); expect(errors).toEqual([]);
 });

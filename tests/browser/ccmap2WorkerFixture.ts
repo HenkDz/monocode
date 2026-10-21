@@ -28,8 +28,8 @@ export function createWorkerFixture(bind: (host: any) => unknown) {
   a.activeDispatchId = "a-2"; b.activeDispatchId = "b-1";
   const run: OrchestrationRun = { version: 2, leadId: "engine", ownerMonoId: "manager", ownerSessionId: "manager-home", cwd: project, projectManager: true, status: "active", allowedHarnesses: ["codex"], maxWorkers: 1, cli: "fixture", continuations: 0, requests: {}, tasks: [a, b, queued, gone, direct], dispatches: [
     { id: "a-1", taskId: "a", sessionId: "past-a", state: "completed", stage: "settled", workspace, startedAt: 100, updatedAt: 200, finishedAt: 200 },
-    { id: "a-2", taskId: "a", sessionId: "task-a", state: "running", stage: "dispatched", workspace, startedAt: 300, updatedAt: 300 },
-    { id: "b-1", taskId: "b", sessionId: "task-b", state: "running", stage: "dispatched", workspace, startedAt: 400, updatedAt: 400 },
+    { id: "a-2", taskId: "a", sessionId: "task-a", state: "running", stage: "turn_submitted", workspace, startedAt: 300, updatedAt: 300 },
+    { id: "b-1", taskId: "b", sessionId: "task-b", state: "running", stage: "turn_submitted", workspace, startedAt: 400, updatedAt: 400 },
   ] };
   const events: any[] = [];
   const tabs = [layout.newTab("unrelated")];

@@ -2352,7 +2352,7 @@ function Workspace({
   const workerPageSelection = workerPageOwner && workerPages[workerPageOwner.id];
   const workerSelectedView = workerPageSelection?.target ? workerTaskView(orchestrationRuns, workerPageSelection.target) : undefined;
   const workerSelectedSession = workerPageError || workerPageOwner?.archivedAt != null || workerPageSelection?.status === "unavailable" ? undefined : workerPageSelection?.target
-    ? workerPageSelection.status === "ready" && workerSelectedView?.ownerId === workerPageOwner?.id && workerPageOwner?.archivedAt == null
+    ? workerPageSelection.status === "ready" && workerSelectedView && workerSelectedView.ownerId === workerPageOwner?.id && workerPageOwner?.archivedAt == null
       ? sessions.find(session => session.id === workerSelectedView.sessionId && !history.some(entry => entry.id === session.id && entry.archived))
       : undefined
     : monoViewSession;
@@ -5633,7 +5633,7 @@ function Workspace({
       setTabs([...migrated.tabs]);
     }
     const selected = migrated.selected;
-    const owner = selected?.ownerId && findMono(selected.ownerId);
+    const owner = selected?.ownerId ? findMono(selected.ownerId) : undefined;
     if (!selected || !owner?.sessionId) return;
     monoViewRequest.current++;
     monoViewIdRef.current = owner.sessionId;
@@ -18163,7 +18163,7 @@ function Workspace({
                                   const unavailable = owner.archivedAt != null || page?.status === "unavailable" || !!target && (!view || view.ownerId !== owner.id);
                                   const selectedId = unavailable ? undefined : target ? page?.status === "ready" ? view?.sessionId : undefined : home.id;
                                   const selected = sessions.find(session => session.id === selectedId && !history.some(entry => entry.id === session.id && entry.archived));
-                                  const ids = new Set([home.id, ...(page?.opened ?? [])]);
+                                  const ids = new Set([home.id, ...(page?.opened ?? []), ...(selectedId ? [selectedId] : [])]);
                                   const location = target && (view?.dispatch?.workspace ?? view?.task.workspace)?.checkoutCwd;
                                   return <div key={home.id} data-mono-view={home.id} aria-hidden={!visible} inert={!visible || undefined}
                                     className={visible ? "absolute inset-0 flex h-full min-h-0 flex-col" : "hidden"}>
@@ -18178,7 +18178,7 @@ function Workspace({
                                       const shown = visible && selected?.id === session.id;
                                       return <div key={session.id} data-worker-conversation={session.id} aria-hidden={!shown} inert={!shown || undefined} className={shown ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
                                         <SessionPane {...sessionPaneProps} session={session}
-                                          workerPage={picker ? { owner, task: session.id !== home.id ? (view?.sessionId === session.id ? view.conversationTask : workerTaskForSession(orchestrationRuns, session.id)?.conversationTask) : undefined } : undefined}
+                                          workerPage={picker && (session.id !== home.id || owner.role === "member") ? { owner, task: session.id !== home.id ? (view?.sessionId === session.id ? view.conversationTask : workerTaskForSession(orchestrationRuns, session.id)?.conversationTask) : undefined } : undefined}
                                           monoGoalRouting={session.id === home.id ? goalRoutingForMono(owner.id) : undefined}
                                           monoState={session.id === home.id ? monoRail.states.get(owner.id) : undefined}
                                           visible={shown} focused={shown && !projectTerminalFocused && !monoShownSessionActive}

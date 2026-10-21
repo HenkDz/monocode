@@ -15,7 +15,7 @@ afterEach(async () => { await act(async () => root.unmount()); mount.remove(); l
 function fixture() {
   const f = createWorkerFixture(bindWorkerApp), h = f.host;
   Object.assign(h, { React, WorkerConversationPicker, TeamMapHeaderAction: () => null, Modal: ({ title, children }: any) => <div role="dialog" aria-modal="true">{title}{children}</div>,
-    SessionPane: (props: any) => <section data-actual-pane={props.session.id} data-task-state={props.workerPage?.task?.status} data-focused={props.focused} data-add-to-chat={props.addToChatTarget} data-composer={props.composerFocused}>{props.session.blocks[0]?.text}<button onClick={() => props.onFocus(props.session.id)}>Focus</button></section>,
+    SessionPane: (props: any) => <section data-actual-pane={props.session.id} data-worker-page={!!props.workerPage} data-task-state={props.workerPage?.task?.status} data-focused={props.focused} data-add-to-chat={props.addToChatTarget} data-composer={props.composerFocused}>{props.session.blocks[0]?.text}<button onClick={() => props.onFocus(props.session.id)}>Focus</button></section>,
     sessionPaneProps: { onFocus: h.onFocusPane },
   });
   f.onRefresh(() => root.render(<>{h.renderPages()}</>));
@@ -84,6 +84,61 @@ it("E switcher supports arrow keys, all Current tasks, saved attempt N and Back/
 it("F memberless task opens its canonical Manager conversation in place", async () => {
   const f = fixture(); await act(async () => { await f.h.onSelectHistorySession("manager-task"); });
   f.assertTask("manager", "manager-task"); expect(f.h.workerPages.manager.target.taskId).toBe("direct");
+});
+
+it("E history keeps saved attempts and tasks without dispatches selectable from Home", async () => {
+  const f = fixture(); await f.open("worker", null);
+  await act(async () => mount.querySelector<HTMLButtonElement>('[role="tab"][id$="-history"]')?.click());
+  const rows = [...mount.querySelectorAll<HTMLButtonElement>('.cc-worker-assignments button')];
+  expect(rows).toHaveLength(4);
+  expect(rows.every(row => row.getAttribute("aria-pressed") === "false")).toBe(true);
+  const saved = rows.find(row => row.textContent?.includes("Attempt 1"));
+  expect(saved).toBeDefined();
+  await act(async () => saved?.click()); f.assertTask("worker", "past-a");
+  const gone = [...mount.querySelectorAll<HTMLButtonElement>('.cc-worker-assignments button')].find(row => row.textContent?.includes("Assignment gone"));
+  expect(gone).toBeDefined();
+  await act(async () => gone?.click());
+  expect(f.h.workerPages.worker.target).toEqual({ taskId: "gone", sessionId: "gone-session" });
+  expect(f.h.activeSessionId).toBeUndefined(); expect(f.visible()).toHaveLength(0);
+  expect(mount.textContent).toContain("no longer available");
+});
+
+it("H a ready selection whose task disappears has no actionable session", async () => {
+  const f = fixture(); await f.open("worker", { taskId: "a", sessionId: "task-a" });
+  f.run.tasks = f.run.tasks.filter(task => task.id !== "a");
+  await f.render();
+  expect(f.h.activeSessionId).toBeUndefined(); expect(f.visible()).toHaveLength(0);
+  expect(mount.textContent).toContain("no longer available");
+});
+
+it("P2 queued task becomes visible when its session arrives and only that visible session owns Escape", async () => {
+  const f = fixture(), cleanup = f.h.registerEscape();
+  try {
+    await f.open("worker", { taskId: "queued", sessionId: "queued-session" });
+    expect(f.visible()).toHaveLength(0); expect(f.h.workerPages.worker.opened).toEqual([]);
+    const task = f.run.tasks.find(task => task.id === "queued");
+    if (!task) throw Error("Missing queued fixture task");
+    task.status = "running";
+    await act(async () => f.h.setSessions([...f.h.sessions, { ...f.sessions[2], id: "queued-session" }]));
+    await f.render(); f.assertTask("worker", "queued-session");
+    expect(f.h.workerPages.worker.opened).toEqual([]);
+    await act(async () => {
+      mount.querySelector<HTMLButtonElement>('[data-worker-conversation="queued-session"] button')?.click();
+      document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+      await new Promise(resolve => setTimeout(resolve, 10));
+    });
+    expect(f.events.filter(event => event.action === "stop")).toEqual([{ action: "stop", id: "queued-session" }]);
+  } finally { cleanup(); }
+});
+
+it("P2 Manager Home keeps its normal pane after selecting a memberless task", async () => {
+  const f = fixture(); await f.open("manager", { taskId: "direct", sessionId: "manager-task" });
+  f.assertTask("manager", "manager-task");
+  expect(mount.querySelector('[data-actual-pane="manager-task"]')?.getAttribute("data-worker-page")).toBe("true");
+  await f.open("manager", null); f.assertTask("manager", "manager-home");
+  expect(mount.querySelector('[data-actual-pane="manager-home"]')?.getAttribute("data-worker-page")).toBe("false");
+  await f.open("worker", null);
+  expect(mount.querySelector('[data-actual-pane="worker-home"]')?.getAttribute("data-worker-page")).toBe("true");
 });
 
 it("G one-time migration detaches current/any-attempt leaves, preserves mixed panes/deleted-run tabs and makes zero lifecycle calls", async () => {

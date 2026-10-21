@@ -16,7 +16,7 @@ export function WorkerConversationPicker({ ownerId, runs, target, onSelect }: {
   useEffect(() => {
     setGroup(!target ? "home" : current.some(view => view.task.id === target.taskId && (!target.sessionId || view.sessionId === target.sessionId)) ? "current" : "history");
   }, [target?.taskId, target?.sessionId]);
-  const history = tasks.flatMap(view => {
+  const history = tasks.flatMap<(typeof tasks)[number] & { attempt: number | undefined }>(view => {
     const attempts = (view.run.dispatches ?? []).filter(d => d.taskId === view.task.id).sort((a, b) => a.startedAt - b.startedAt);
     return attempts.length ? attempts.map((dispatch, index) => ({ ...view, dispatch, attempt: attempts.length > 1 ? index + 1 : undefined }))
       : current.includes(view) ? [] : [{ ...view, attempt: undefined }];
@@ -38,7 +38,7 @@ export function WorkerConversationPicker({ ownerId, runs, target, onSelect }: {
       {group !== "home" && (rows.length ? rows.map(({ task, dispatch, attempt, sessionId: currentSessionId }) => {
         const sessionId = group === "history" ? dispatch?.sessionId ?? currentSessionId : currentSessionId;
         const at = dispatch?.finishedAt ?? dispatch?.startedAt;
-        return <button type="button" key={`${task.id}:${sessionId}`} aria-pressed={target?.taskId === task.id && (!target.sessionId || target.sessionId === sessionId)} onClick={() => onSelect({ taskId: task.id, sessionId })}>
+        return <button type="button" key={`${task.id}:${sessionId}`} aria-pressed={target !== null && target.taskId === task.id && (!target.sessionId || target.sessionId === sessionId)} onClick={() => onSelect({ taskId: task.id, sessionId })}>
           <strong>{coordinationSummary(task.title, 80)}</strong><span>{group === "history" ? dispatch?.state ?? task.status : task.status}{attempt != null ? ` · Attempt ${attempt}` : ""}{at != null ? ` · ${new Date(at).toLocaleString()}` : ""}</span>
         </button>;
       }) : <p>{group === "current" ? "No current assignments." : "No saved tasks."}</p>)}
